@@ -1,5 +1,5 @@
 import { clsx } from 'clsx'
-import { Layers, GitBranch, Box, ChevronRight, Pause } from 'lucide-react'
+import { Layers, GitBranch, Box, ChevronRight } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
 import {
@@ -11,9 +11,10 @@ import {
   getCrossplaneResourceRefs,
   getBoundXRRef,
   isClaim,
-  isCrossplanePaused,
+  getCrossplaneConditionTone,
   type CrossplaneResourceRef,
 } from '../resource-utils-crossplane'
+import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import { kindToPluralWithGroup } from '../../../utils/navigation'
 import type { StatusBadge } from '../resource-utils'
 
@@ -98,20 +99,12 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses, compo
   const resourceRefs = composedRefs ?? getCrossplaneResourceRefs(data)
   const claim = isClaim(data)
   const boundXR = claim ? getBoundXRRef(data) : null
-  const paused = isCrossplanePaused(data)
   const alertVariant = status.level === 'unhealthy' || status.level === 'alert' ? status.level : null
   const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
-      {paused && (
-        <AlertBanner
-          variant="warning"
-          icon={Pause}
-          title="Reconciliation paused"
-          message="The crossplane.io/paused annotation is set. Composed resources will not be reconciled until the annotation is removed."
-        />
-      )}
+      <CrossplanePauseNotice data={data} />
 
       {alertVariant && reason && !operationalIssuesShown && (
         <AlertBanner
@@ -190,7 +183,7 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses, compo
         )}
       </Section>
 
-      <ConditionsSection conditions={data?.status?.conditions} />
+      <ConditionsSection conditions={data?.status?.conditions} getConditionTone={condition => getCrossplaneConditionTone(data, condition)} />
     </>
   )
 }

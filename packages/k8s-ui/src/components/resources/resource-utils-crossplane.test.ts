@@ -675,3 +675,48 @@ describe('isCrossplanePaused', () => {
 
 // Pluralization moved to the shared kindToPlural in utils/navigation.ts
 // (discovery-aware, handles provider-defined irregular plurals).
+
+describe('Crossplane pause and independent status evidence', () => {
+  function paused(conditions: any[], annotation = 'true') {
+    return {
+      metadata: { generation: 9, annotations: { 'crossplane.io/paused': annotation } },
+      spec: { providerConfigRef: { name: 'default' } },
+      status: { conditions },
+    }
+  }
+  const pause = { type: 'Synced', status: 'False', reason: 'ReconcilePaused', message: 'pause observation', observedGeneration: 1 }
+
+  it('keeps acknowledged pause neutral with recorded availability despite generation changes', () => {
+    const resource = paused([{ type: 'Ready', status: 'True' }, pause])
+    expect(getCrossplaneStatus(resource)).toMatchObject({ text: 'Ready (reported)', level: 'neutral' })
+    expect(getCrossplaneStatusReason(resource)).toBeNull()
+  })
+
+  it.each([undefined, 'Unknown'])('does not invent provisioning or readiness when acknowledged pause has Ready=%s', status => {
+    const resource = paused([...(status ? [{ type: 'Ready', status }] : []), pause])
+    expect(getCrossplaneStatus(resource)).toMatchObject({ text: 'Readiness unknown', level: 'neutral' })
+  })
+
+  it('preserves the independent Ready failure and its message over the pause observation', () => {
+    const resource = paused([pause, { type: 'Ready', status: 'False', reason: 'Unavailable', message: 'external API access denied' }])
+    expect(getCrossplaneStatus(resource)).toMatchObject({ text: 'Unavailable', level: 'unhealthy' })
+    expect(getCrossplaneStatusReason(resource)).toBe('external API access denied')
+  })
+
+  it('does not mask a reconcile error with requested pause', () => {
+    const resource = paused([{ type: 'Ready', status: 'True' }, { ...pause, reason: 'ReconcileError', message: 'credentials rejected' }])
+    expect(getCrossplaneStatus(resource)).toMatchObject({ text: 'Out of sync', level: 'alert' })
+    expect(getCrossplaneStatusReason(resource)).toBe('credentials rejected')
+  })
+
+  it('keeps uncorroborated controller pause as an alert without inventing a failed resume', () => {
+    const resource = paused([pause], 'false')
+    expect(getCrossplaneStatus(resource)).toMatchObject({ text: 'ReconcilePaused', level: 'alert' })
+    expect(getCrossplaneStatusReason(resource)).toBe('pause observation')
+  })
+
+  it('preserves terminating over pause and recorded readiness', () => {
+    const resource = paused([{ type: 'Ready', status: 'True' }, pause])
+    expect(getCrossplaneStatus({ ...resource, metadata: { ...resource.metadata, deletionTimestamp: '2026-10-26T08:00:00Z' } })).toMatchObject({ text: 'Terminating', level: 'degraded' })
+  })
+})

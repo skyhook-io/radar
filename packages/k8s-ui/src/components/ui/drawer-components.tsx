@@ -295,9 +295,9 @@ function isConditionHealthy(cond: { type?: string; status?: string }): boolean {
   return inverted ? cond.status === 'False' : cond.status === 'True'
 }
 
-export type ConditionTone = 'ok' | 'warning' | 'fail' | 'unknown'
+export type ConditionTone = 'ok' | 'warning' | 'fail' | 'unknown' | 'neutral'
 
-export function defaultConditionTone(cond: { type?: string; status?: string }): ConditionTone {
+export function defaultConditionTone(cond: { type?: string; status?: string }): Exclude<ConditionTone, 'neutral'> {
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
   return isConditionHealthy(cond) ? 'ok' : 'fail'
 }
@@ -342,6 +342,7 @@ export function ConditionsSection({
             const isOk = tone === 'ok'
             const isWarning = tone === 'warning'
             const isFail = tone === 'fail'
+            const isNeutral = tone === 'neutral'
             return (
               <div key={cond.type} className={clsx(
                 'flex items-start py-1.5 pr-1 text-sm relative',
@@ -355,12 +356,14 @@ export function ConditionsSection({
                 {/* Timeline dot */}
                 <span className={clsx(
                   'w-3 h-3 rounded-full flex items-center justify-center shrink-0 mt-1 z-10 ring-2 ring-theme-surface',
-                  isOk ? 'bg-emerald-500/20 text-emerald-500 dark:bg-emerald-500/30'
+                  isNeutral ? 'bg-theme-elevated text-theme-text-tertiary'
+                    : isOk ? 'bg-emerald-500/20 text-emerald-500 dark:bg-emerald-500/30'
                     : tone === 'unknown' ? 'bg-gray-400/20 text-gray-400 dark:bg-gray-400/30'
                     : isWarning ? 'bg-amber-500/25 text-amber-600 dark:text-amber-400 dark:bg-amber-500/35'
                     : 'bg-red-500/25 text-red-500 dark:bg-red-500/35'
                 )}>
-                  {isOk ? <Check className="w-2 h-2" strokeWidth={4} />
+                  {isNeutral ? <Minus className="w-2 h-2" strokeWidth={4} />
+                    : isOk ? <Check className="w-2 h-2" strokeWidth={4} />
                     : tone === 'unknown' ? <Minus className="w-2 h-2" strokeWidth={4} />
                     : isWarning ? <AlertTriangle className="w-2 h-2" strokeWidth={4} />
                     : <X className="w-2 h-2" strokeWidth={4} />}
@@ -369,7 +372,8 @@ export function ConditionsSection({
                 <div className="min-w-0 flex-1 pl-2">
                   <span className={clsx(
                     'font-medium text-[13px]',
-                    isOk ? 'text-theme-text-primary'
+                    isNeutral ? 'text-theme-text-secondary'
+                      : isOk ? 'text-theme-text-primary'
                       : tone === 'unknown' ? 'text-theme-text-secondary'
                         : isWarning ? 'text-amber-600 dark:text-amber-400'
                           : 'text-red-600 dark:text-red-400'

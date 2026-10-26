@@ -1,0 +1,86 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { expect, it, vi } from 'vitest'
+import { ManagedResourceRenderer } from './ManagedResourceRenderer'
+import { CompositeRenderer } from './CompositeRenderer'
+import { ManagedResourceCell, CompositeResourceCell } from './crossplane-cells'
+import { CrossplanePauseNotice } from './CrossplanePauseContext'
+import { WorkloadView } from '../../workload/WorkloadView'
+import { diagnoseHealthHint, getResourceStatus } from '../../shared/ResourceRendererDispatch'
+import { getCellFilterValue } from '../resource-utils'
+import { getCrossplanePauseState } from '../resource-utils-crossplane'
+
+const pause = { type: 'Synced', status: 'False', reason: 'ReconcilePaused', message: 'controller pause observation' }
+const base = {
+  apiVersion: 'test.crossplane.io/v1', kind: 'Bucket',
+  metadata: { name: 'archive', namespace: 'test', annotations: { 'crossplane.io/paused': 'true' } },
+  spec: { providerConfigRef: { name: 'default' } },
+  status: { conditions: [{ type: 'Ready', status: 'True' }, pause] },
+}
+
+it.each([
+  ['MR', ManagedResourceRenderer, base.spec],
+  ['XR', CompositeRenderer, { resourceRefs: [] }],
+  ['Claim', CompositeRenderer, { resourceRef: { kind: 'Archive', name: 'archive-xr' }, compositionRef: { name: 'archive' } }],
+] as const)('shows one muted own-reconciler explanation for %s, no warning or failing pause', (_kind, Renderer, spec) => {
+  const html = renderToStaticMarkup(<Renderer data={{ ...base, spec }} />)
+  expect(html).toContain("This resource&#x27;s controller last reported reconciliation paused")
+  expect(html).toContain('Readiness and errors are last reported')
+  expect(html).toContain('ReconcilePaused')
+  expect(html).not.toContain('failing')
+  expect(html).not.toContain('text-red-')
+  expect(html).not.toContain('bg-red-')
+  expect(html).not.toContain('status-warning')
+  expect(html).not.toContain('Composed resources will not')
+  expect(html).not.toContain('Their own controllers')
+})
+
+it('retains one independent failing condition and its real banner message', () => {
+  const data = { ...base, status: { conditions: [pause, { type: 'Ready', status: 'False', reason: 'Unavailable', message: 'external API access denied' }] } }
+  const html = renderToStaticMarkup(<ManagedResourceRenderer data={data} />)
+  expect(html).toContain('1 failing')
+  expect(html).toContain('Unavailable')
+  expect(html.match(/external API access denied/g)).toHaveLength(2)
+  expect(html.match(/controller pause observation/g)).toHaveLength(1)
+})
+
+it.each([undefined, 'True', 'Unknown', 'ReconcileError'])('distinguishes requested intent with Synced=%s', synced => {
+  const conditions = synced ? [{ type: 'Synced', status: synced === 'ReconcileError' ? 'False' : synced, reason: synced }] : []
+  const data = { ...base, status: { conditions } }
+  expect(getCrossplanePauseState(data)).toBe('requested')
+  const html = renderToStaticMarkup(<ManagedResourceRenderer data={data} />)
+  expect(html).toContain('the recorded conditions do not confirm the pause')
+  expect(html).not.toContain('controller last reported reconciliation paused')
+})
+
+it('warns specifically about requested deletion without promising a blocker or changing status', () => {
+  const data = { ...base, metadata: { ...base.metadata, deletionTimestamp: '2026-10-26T08:00:00Z' } }
+  const html = renderToStaticMarkup(<CrossplanePauseNotice data={data} />)
+  expect(html).toContain('Deletion has been requested. Paused reconciliation may defer')
+  expect(html).toContain('text-warning-text')
+  expect(getResourceStatus('buckets', data)?.text).toBe('Terminating')
+})
+
+it.each([false, true])('keeps pause context in the %s expanded header', expanded => {
+  const html = renderToStaticMarkup(<WorkloadView kind="buckets" namespace="test" name="archive" expanded={expanded} onBack={vi.fn()} resource={base} />)
+  expect(html).toContain('Reconciliation paused')
+  expect(html).toContain('Ready (reported)')
+})
+
+it.each([
+  [ManagedResourceCell, base.spec],
+  [CompositeResourceCell, { resourceRefs: [] }],
+] as const)('keeps independent status and neutral pause chip in rows and status filters', (Cell, spec) => {
+  const resource = { ...base, spec }
+  const html = renderToStaticMarkup(<Cell resource={resource} column="status" />)
+  expect(html).toContain('Ready (reported)')
+  expect(html).toContain('Paused')
+  expect(getCellFilterValue(resource, 'status', 'buckets')).toBe('Ready (reported)')
+  const failed = { ...resource, status: { conditions: [pause, { type: 'Ready', status: 'False', reason: 'Unavailable' }] } }
+  expect(getCellFilterValue(failed, 'status', 'buckets')).toBe('Unavailable')
+  expect(renderToStaticMarkup(<Cell resource={failed} column="status" />)).toContain('Paused')
+})
+
+it('gives composed-resource status and Diagnose the same quiet recorded state', () => {
+  expect(getResourceStatus('buckets', base)).toMatchObject({ text: 'Ready (reported)', level: 'neutral' })
+  expect(diagnoseHealthHint('buckets', base)).toBe('unknown')
+})

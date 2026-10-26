@@ -62,6 +62,8 @@ import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesSho
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { midTruncate } from '../../utils/format'
+import { isManagedResource, isComposite } from '../resources/resource-utils-crossplane'
+import { CrossplanePauseChip } from '../resources/renderers/CrossplanePauseContext'
 import { hpaStateLabel } from '../resources/resource-utils-hpa'
 import {
   cronToHuman,
@@ -835,6 +837,7 @@ export function WorkloadView({
     ? getWorkloadDisplayStatus(resource, apiKind, workloadPods)
     : null
   const rolloutActivity = rolloutDisplay?.activity ?? null
+  const crossplaneResource = isManagedResource(resource) || isComposite(resource)
   // A 404 with a cached copy: the object was deleted while this view was
   // open. Everything below that copy describes the past.
   const resourceGone = Boolean(resource) && isFetchError(resourceError) && resourceError.status === 404
@@ -975,6 +978,7 @@ export function WorkloadView({
                   {status.text}
                 </span>
               )}
+              {!resourceGone && crossplaneResource && <CrossplanePauseChip data={resource} />}
             </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
               {diagnoseAction}
@@ -1201,6 +1205,7 @@ export function WorkloadView({
                 {status.text}
               </span>
             )}
+            {!resourceGone && crossplaneResource && <CrossplanePauseChip data={resource} />}
             {!resourceGone && statusNote}
           </>
         )

@@ -7,6 +7,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
+import type { ConditionTone } from '../ui/drawer-components'
 
 interface CrossplaneCondition {
   type: string
@@ -138,13 +139,23 @@ export function getDeletionPolicy(data: any): string | null {
   return data?.spec?.crossplane?.deletionPolicy ?? data?.spec?.deletionPolicy ?? null
 }
 
-/**
- * Crossplane convention: setting `crossplane.io/paused: "true"` on any MR/XR/Claim
- * stops the provider from reconciling it. Universal across every provider, so
- * surfacing it as a chip on every Crossplane resource is high-leverage.
- */
 export function isCrossplanePaused(data: any): boolean {
   return data?.metadata?.annotations?.['crossplane.io/paused'] === 'true'
+}
+
+export function isExpectedCrossplanePauseCondition(data: any, condition: CrossplaneCondition): boolean {
+  return isCrossplanePaused(data) && condition.type === 'Synced'
+    && condition.status === 'False' && condition.reason === 'ReconcilePaused'
+}
+
+export function getCrossplanePauseState(data: any): 'requested' | 'acknowledged' | null {
+  if (!isCrossplanePaused(data)) return null
+  return (data?.status?.conditions ?? []).some((condition: CrossplaneCondition) => isExpectedCrossplanePauseCondition(data, condition))
+    ? 'acknowledged' : 'requested'
+}
+
+export function getCrossplaneConditionTone(data: any, condition: CrossplaneCondition): ConditionTone | undefined {
+  return isExpectedCrossplanePauseCondition(data, condition) ? 'neutral' : undefined
 }
 
 /**
@@ -190,11 +201,14 @@ export function getCrossplaneStatus(data: any): StatusBadge {
   if (!ready && !synced) {
     return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
   }
-  if (synced?.status === 'False') {
-    return { text: 'Out of sync', color: healthColors.alert, level: 'alert' }
+  if (synced?.status === 'False' && !isExpectedCrossplanePauseCondition(data, synced)) {
+    return { text: synced.reason === 'ReconcilePaused' ? 'ReconcilePaused' : 'Out of sync', color: healthColors.alert, level: 'alert' }
   }
   if (ready?.status === 'False') {
     return { text: ready.reason || 'Not ready', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (getCrossplanePauseState(data) === 'acknowledged') {
+    return { text: ready?.status === 'True' ? 'Ready (reported)' : 'Readiness unknown', color: healthColors.neutral, level: 'neutral' }
   }
   if (ready?.status === 'True' && synced?.status === 'True') {
     return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
@@ -212,7 +226,8 @@ export function getCrossplaneStatus(data: any): StatusBadge {
  */
 export function getCrossplaneStatusReason(data: any): string | null {
   const ready = findCondition(data, 'Ready')
-  const synced = findCondition(data, 'Synced')
+  const reportedSynced = findCondition(data, 'Synced')
+  const synced = reportedSynced && !isExpectedCrossplanePauseCondition(data, reportedSynced) ? reportedSynced : undefined
   if (synced && synced.status !== 'True' && synced.message) return synced.message
   if (ready && ready.status !== 'True' && ready.message) return ready.message
   if (synced && synced.status !== 'True' && synced.reason) return synced.reason

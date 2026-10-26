@@ -1,4 +1,4 @@
-import { Box, Settings, Cloud, ScrollText, Pause, Layers } from 'lucide-react'
+import { Box, Settings, Cloud, ScrollText, Layers } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { CodeViewer } from '../../ui/CodeViewer'
 import {
@@ -8,9 +8,10 @@ import {
   getExternalName,
   getManagementPolicies,
   getDeletionPolicy,
-  isCrossplanePaused,
+  getCrossplaneConditionTone,
   getComposingXRRef,
 } from '../resource-utils-crossplane'
+import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import { kindToPluralWithGroup } from '../../../utils/navigation'
 
 interface ManagedResourceRendererProps {
@@ -34,7 +35,6 @@ export function ManagedResourceRenderer({ data, onNavigate }: ManagedResourceRen
   const deletionPolicy = getDeletionPolicy(data)
   const apiGroup = extractApiGroup(data?.apiVersion)
   const namespace = data?.metadata?.namespace || ''
-  const paused = isCrossplanePaused(data)
   const composingXR = getComposingXRRef(data)
 
   const forProvider = data?.spec?.forProvider
@@ -45,14 +45,7 @@ export function ManagedResourceRenderer({ data, onNavigate }: ManagedResourceRen
 
   return (
     <>
-      {paused && (
-        <AlertBanner
-          variant="warning"
-          icon={Pause}
-          title="Reconciliation paused"
-          message="The crossplane.io/paused annotation is set. The provider will not reconcile this resource until the annotation is removed."
-        />
-      )}
+      <CrossplanePauseNotice data={data} />
 
       {alertVariant && statusReason && !operationalIssuesShown && (
         <AlertBanner
@@ -126,7 +119,7 @@ export function ManagedResourceRenderer({ data, onNavigate }: ManagedResourceRen
         </Section>
       )}
 
-      <ConditionsSection conditions={data?.status?.conditions} />
+      <ConditionsSection conditions={data?.status?.conditions} getConditionTone={condition => getCrossplaneConditionTone(data, condition)} />
     </>
   )
 }

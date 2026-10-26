@@ -61,6 +61,8 @@ Full Skyhook brand scale: `--color-skyhook-50` (`#EBF2FA`) through `--color-skyh
 | Error | `--color-error` | `#EF4444` | Unhealthy, failed, crashloop |
 | Info | `--color-info` | `#3B82F6` | Completed, informational |
 
+Crossplane’s declared reconciliation pause is neutral context alongside recorded readiness and independent errors. A requested operation that pause may defer, such as deletion cleanup, gets an inline warning.
+
 ### Selection/Highlight
 | Token | CSS Variable | Use for |
 |-------|-------------|---------|
