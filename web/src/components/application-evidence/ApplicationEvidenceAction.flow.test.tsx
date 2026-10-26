@@ -84,12 +84,12 @@ it('keeps an open observation and validated targets after a permission retry fai
   expect(document.body.textContent).toContain('Endpoint observations')
 })
 
-it('preserves a replaced-Pod refusal without offering its stale UID after a failed refresh', async () => {
+it.each(['target_changed', 'pod_not_running', 'container_not_running'])('preserves a %s refusal without offering its stale target after a failed refresh', async reason => {
   state.fetch.mockResolvedValueOnce(candidates)
   await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Deployment" group="apps" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
   await vi.waitFor(() => expect(host.textContent).toContain('Collect Vault evidence'))
   act(() => host.querySelector('button')!.click())
-  state.fetch.mockResolvedValueOnce({ adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'unavailable', reason: 'target_changed', limitations: [] }).mockRejectedValue(new ApiError('refresh failed', 500))
+  state.fetch.mockResolvedValueOnce({ adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'unavailable', reason, limitations: [] }).mockRejectedValue(new ApiError('refresh failed', 500))
   await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Collect evidence')!.click())
   await vi.waitFor(() => expect(host.textContent).toContain('Could not refresh application evidence'))
   expect(document.body.textContent).toContain('Evidence unavailable')
@@ -128,4 +128,16 @@ it('keeps an optional first-lookup failure quiet until the user has used the fea
   await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Deployment" group="apps" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
   await vi.waitFor(() => expect(state.fetch).toHaveBeenCalledTimes(1))
   expect(host.textContent).toBe('')
+})
+
+it('offers an explicit retry after permission evaluation fails without collecting', async () => {
+  state.fetch.mockResolvedValueOnce({ ...candidates, candidates: [], permissionCheckFailed: true })
+  await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Deployment" group="apps" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toContain('Application evidence permissions could not be verified'))
+  expect(host.textContent).not.toContain('Collect Vault evidence')
+  state.fetch.mockResolvedValue(candidates)
+  await act(async () => [...host.querySelectorAll('button')].find(item => item.textContent === 'Retry permission check')!.click())
+  await vi.waitFor(() => expect(host.textContent).toContain('Collect Vault evidence'))
+  expect(state.fetch.mock.calls.every(([path]) => path.startsWith('/application-evidence/candidates'))).toBe(true)
+  expect(state.fetch.mock.calls.at(-1)![0]).toContain('retryPermissions=true')
 })

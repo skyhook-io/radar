@@ -239,7 +239,7 @@ func TestApplicationEvidenceChecksCandidatesConcurrently(t *testing.T) {
 func TestApplicationEvidencePermissionTimeoutCanBeRetried(t *testing.T) {
 	permissions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(2200 * time.Millisecond):
 		case <-r.Context().Done():
 			return
 		}
@@ -347,5 +347,71 @@ func TestApplicationEvidenceRejectsAmbiguousCustomSubject(t *testing.T) {
 	s.handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, "/api/application-evidence/candidates?kind=Gateway&group=networking.istio.io&namespace=default&name=entry", ""))
 	if w.Code != http.StatusOK || calls != 1 {
 		t.Fatalf("explicit group: calls=%d status=%d body=%s", calls, w.Code, w.Body)
+	}
+}
+
+func TestApplicationEvidencePermissionFailuresRemainRetryable(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
+	var failing atomic.Bool
+	failing.Store(true)
+	permissions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failing.Load() {
+			http.Error(w, "authorizer unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","status":{"allowed":true}}`))
+	}))
+	defer permissions.Close()
+	api := &applicationEvidenceAPI{
+		operationContext: context.Background,
+		snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: permissions.URL}, "test-context" },
+		currentContext:   func() string { return "test-context" },
+		resolve: func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet {
+			return collector.CandidateSet{SubjectUID: "uid", Candidates: []collector.Candidate{{Application: evidence.Vault, Target: collector.Target{Namespace: "default", Pod: "vault-0", UID: "uid"}}}}
+		},
+		collect: func(context.Context, kubernetes.Interface, *rest.Config, evidence.Adapter, collector.Target) collector.Result {
+			t.Fatal("permission check collected endpoint evidence")
+			return collector.Result{}
+		},
+	}
+	for _, retry := range []bool{false, true} {
+		failing.Store(!retry)
+		w := httptest.NewRecorder()
+		(&Server{applicationEvidence: api}).handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, fmt.Sprintf("/api/application-evidence/candidates?kind=Pod&namespace=default&name=vault-0&retryPermissions=%t", retry), ""))
+		var result applicationEvidenceCandidatesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 || result.PermissionCheckFailed == retry || result.PermissionCheckTimedOut || (len(result.Candidates) == 1) != retry {
+			t.Fatalf("retry=%v status=%d result=%+v", retry, w.Code, result)
+		}
+	}
+}
+
+func TestApplicationEvidenceDoesNotInferAnUndiscoveredSubject(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	api := &applicationEvidenceAPI{
+		operationContext: context.Background,
+		snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: "https://unused.invalid"}, "test-context" },
+		currentContext:   func() string { return "test-context" },
+		resolve: func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet {
+			t.Fatal("resolved an undiscovered custom subject")
+			return collector.CandidateSet{}
+		},
+	}
+	for _, discoveryPresent := range []bool{false, true} {
+		if discoveryPresent {
+			if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w := httptest.NewRecorder()
+		(&Server{applicationEvidence: api}).handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, "/api/application-evidence/candidates?kind=Gateway&namespace=default&name=entry", ""))
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"coverageLimited":true`) {
+			t.Fatalf("discoveryPresent=%v status=%d body=%s", discoveryPresent, w.Code, w.Body)
+		}
 	}
 }

@@ -2,9 +2,11 @@ package runtimeevidence
 
 import (
 	"context"
+	"errors"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/trace"
@@ -258,16 +260,42 @@ func CandidatesFromTrace(deps trace.Deps, tr *trace.Trace) CandidateSet {
 }
 
 func CheckAccess(ctx context.Context, client kubernetes.Interface, target Target) bool {
-	if client == nil || ctx.Err() != nil {
-		return false
+	allowed, err := CheckAccessResult(ctx, client, target)
+	return allowed && err == nil
+}
+
+func CheckAccessResult(ctx context.Context, client kubernetes.Interface, target Target) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	for _, op := range []struct{ verb, sub string }{{"get", ""}, {"create", "portforward"}} {
-		r, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authv1.ResourceAttributes{Namespace: target.Namespace, Verb: op.verb, Resource: "pods", Subresource: op.sub, Name: target.Pod}}}, metav1.CreateOptions{})
-		if err != nil || ctx.Err() != nil || !r.Status.Allowed || r.Status.Denied || r.Status.EvaluationError != "" {
-			return false
-		}
+	if client == nil {
+		return false, errors.New("Kubernetes client unavailable")
 	}
-	return true
+	operations := []struct{ verb, sub string }{{"get", ""}, {"create", "portforward"}}
+	allowed := make([]bool, len(operations))
+	failures := make([]error, len(operations))
+	var checks sync.WaitGroup
+	for i, op := range operations {
+		checks.Add(1)
+		go func() {
+			defer checks.Done()
+			r, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authv1.ResourceAttributes{Namespace: target.Namespace, Verb: op.verb, Resource: "pods", Subresource: op.sub, Name: target.Pod}}}, metav1.CreateOptions{})
+			if err != nil {
+				failures[i] = err
+				return
+			}
+			if r.Status.EvaluationError != "" {
+				failures[i] = errors.New("permission evaluation unavailable")
+				return
+			}
+			allowed[i] = r.Status.Allowed && !r.Status.Denied
+		}()
+	}
+	checks.Wait()
+	if err := errors.Join(append(failures, ctx.Err())...); err != nil {
+		return false, err
+	}
+	return allowed[0] && allowed[1], nil
 }
 
 func ReadinessFailure(p *corev1.Pod, containerName string) bool {

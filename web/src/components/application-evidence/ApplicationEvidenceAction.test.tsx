@@ -32,3 +32,9 @@ describe('application observations', () => {
     expect(html).not.toContain('stuck')
   })
 })
+
+it.each(['pod_not_running', 'container_not_running', 'endpoint_port_not_declared', 'unsupported_image', 'ambiguous_target', 'host_network_unsupported', 'cluster_unavailable', 'invalid_target'])('explains %s without exposing a raw code', reason => {
+  const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, outcome: 'unavailable', reason }} />)
+  expect(html).not.toContain(reason)
+  expect(html).toContain('No conclusion about application health')
+})

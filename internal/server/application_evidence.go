@@ -45,6 +45,7 @@ type applicationEvidenceCandidatesResponse struct {
 	Enabled                 bool   `json:"enabled"`
 	Context                 string `json:"context,omitempty"`
 	PermissionCheckTimedOut bool   `json:"permissionCheckTimedOut,omitempty"`
+	PermissionCheckFailed   bool   `json:"permissionCheckFailed,omitempty"`
 	collector.CandidateSet
 }
 
@@ -107,42 +108,44 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		return
 	}
 	kind, group := strings.TrimSpace(q.Get("kind")), strings.TrimSpace(q.Get("group"))
-	subjectResolved := true
+	subjectResolved := false
 	if builtin, ok := resourceid.BuiltinForName(kind); ok && (group == "" || group == builtin.Group) {
 		kind, group = builtin.Kind, builtin.Group
+		subjectResolved = true
 	} else if discovery := k8s.GetResourceDiscovery(); discovery != nil {
 		if resource, ok := discovery.GetResourceWithGroup(kind, group); ok {
 			resolution := resourceid.ResolveCurrent(resourceid.OptionalGroupReference(group, resource.Kind, q.Get("namespace"), q.Get("name")), discovery)
 			if resolution.OK() && !resolution.Uncertain {
 				kind, group = resolution.Ref.Kind, resolution.Ref.Group
-			} else {
-				subjectResolved = false
-				response.CoverageLimited = true
+				subjectResolved = true
 			}
 		}
 	}
+	response.CoverageLimited = !subjectResolved
 	if subjectResolved {
 		response.CandidateSet = api.resolve(collectionCtx, trace.Deps{
 			Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
 		}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
 	}
-	permissionBudget := 500 * time.Millisecond
+	permissionBudget := 2 * time.Second
 	if q.Get("retryPermissions") == "true" {
-		permissionBudget = 2 * time.Second
+		permissionBudget = 5 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(collectionCtx, permissionBudget)
 	defer cancel()
 	allowedTargets := make([]bool, len(response.Candidates))
+	permissionErrors := make([]error, len(response.Candidates))
 	var checks sync.WaitGroup
 	for i, candidate := range response.Candidates {
 		checks.Add(1)
 		go func() {
 			defer checks.Done()
-			allowedTargets[i] = collector.CheckAccess(ctx, client, candidate.Target)
+			allowedTargets[i], permissionErrors[i] = collector.CheckAccessResult(ctx, client, candidate.Target)
 		}()
 	}
 	checks.Wait()
 	response.PermissionCheckTimedOut = ctx.Err() == context.DeadlineExceeded
+	response.PermissionCheckFailed = !response.PermissionCheckTimedOut && errors.Join(permissionErrors...) != nil
 	allowed := make([]collector.Candidate, 0, len(response.Candidates))
 	for i, candidate := range response.Candidates {
 		if allowedTargets[i] {

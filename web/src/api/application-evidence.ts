@@ -10,6 +10,7 @@ export interface EvidenceCandidate {
 }
 export interface EvidenceCandidates {
   permissionCheckTimedOut?: boolean
+  permissionCheckFailed?: boolean
   enabled: boolean
   context?: string
   subjectUID?: string

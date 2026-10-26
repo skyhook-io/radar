@@ -2,8 +2,13 @@ package runtimeevidence
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/trace"
@@ -114,21 +119,21 @@ func TestCandidateOwnerUIDAndServiceScope(t *testing.T) {
 func TestNamedAdvisoryPermissions(t *testing.T) {
 	for _, allow := range []bool{true, false} {
 		client := fake.NewClientset()
-		count := 0
+		seen := map[string]int{}
 		client.PrependReactor("create", "selfsubjectaccessreviews", func(a kt.Action) (bool, runtime.Object, error) {
 			r := a.(kt.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
 			attrs := r.Spec.ResourceAttributes
-			if attrs.Name != "rabbit" || attrs.Namespace != "lab" || attrs.Resource != "pods" || (count == 0 && attrs.Verb != "get") || (count == 1 && (attrs.Verb != "create" || attrs.Subresource != "portforward")) {
+			if attrs.Name != "rabbit" || attrs.Namespace != "lab" || attrs.Resource != "pods" || (attrs.Verb != "get" || attrs.Subresource != "") && (attrs.Verb != "create" || attrs.Subresource != "portforward") {
 				t.Fatalf("wrong exact access check: %+v", attrs)
 			}
-			count++
+			seen[attrs.Verb+"/"+attrs.Subresource]++
 			return true, &authv1.SelfSubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{Allowed: allow}}, nil
 		})
 		if got := CheckAccess(context.Background(), client, Target{Namespace: "lab", Pod: "rabbit"}); got != allow {
 			t.Fatal(got)
 		}
-		if allow && count != 2 {
-			t.Fatal(count)
+		if seen["get/"] != 1 || seen["create/portforward"] != 1 {
+			t.Fatal(seen)
 		}
 	}
 	if CheckAccess(context.Background(), fake.NewClientset(), Target{Namespace: "lab", Pod: "rabbit"}) {
@@ -210,5 +215,61 @@ func TestRabbitHintRequiresAlarmSpecificProbe(t *testing.T) {
 	p.Spec.Containers[0].ReadinessProbe.Exec.Command = []string{"gosu", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_local_alarms"}
 	if !RelevantReadinessFailure(p, evidence.RabbitMQ, "rabbit") {
 		t.Fatal("alarm-specific readiness omitted")
+	}
+}
+
+func TestAccessResultSeparatesDenialFromUnavailableEvaluation(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		status                 authv1.SubjectAccessReviewStatus
+		err                    error
+		wantAllowed, wantError bool
+	}{
+		{name: "allowed", status: authv1.SubjectAccessReviewStatus{Allowed: true}, wantAllowed: true},
+		{name: "denied", status: authv1.SubjectAccessReviewStatus{Denied: true}},
+		{name: "not allowed"},
+		{name: "transport", err: errors.New("connection unavailable"), wantError: true},
+		{name: "evaluation", status: authv1.SubjectAccessReviewStatus{Allowed: true, EvaluationError: "authorizer unavailable"}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewClientset()
+			client.PrependReactor("create", "selfsubjectaccessreviews", func(kt.Action) (bool, runtime.Object, error) {
+				return true, &authv1.SelfSubjectAccessReview{Status: tc.status}, tc.err
+			})
+			allowed, err := CheckAccessResult(context.Background(), client, Target{Namespace: "lab", Pod: "rabbit"})
+			if allowed != tc.wantAllowed || (err != nil) != tc.wantError {
+				t.Fatalf("allowed=%v error=%v", allowed, err)
+			}
+			if got := CheckAccess(context.Background(), client, Target{Namespace: "lab", Pod: "rabbit"}); got != tc.wantAllowed {
+				t.Fatalf("boolean caller changed fail-closed behavior: %v", got)
+			}
+		})
+	}
+}
+
+func TestNamedPermissionChecksShareOneConcurrentBudget(t *testing.T) {
+	var arrived atomic.Int32
+	ready := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if arrived.Add(1) == 2 {
+			close(ready)
+		}
+		select {
+		case <-ready:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","status":{"allowed":true}}`))
+	}))
+	defer server.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if allowed, err := CheckAccessResult(ctx, client, Target{Namespace: "lab", Pod: "rabbit"}); !allowed || err != nil {
+		t.Fatalf("checks did not run concurrently: allowed=%v error=%v", allowed, err)
 	}
 }
