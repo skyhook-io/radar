@@ -281,7 +281,7 @@ func TestExecServerInstructions(t *testing.T) {
 	t.Logf("exec=false instructions=%d characters", len([]rune(off)))
 	SetExecToolsEnabled(true)
 	on := serverInstructions(true)
-	if on != investigation.GeneralGuidanceExec || !strings.Contains(on, "each only if listed:") || !strings.Contains(on, "Pod checks: exec_pod, if listed.") {
+	if on != investigation.GeneralGuidanceExec || !strings.Contains(on, "each only if listed:") || !strings.Contains(on, "Pod checks: exec_pod if listed.") {
 		t.Fatal("missing conditional exec routing")
 	}
 	if n := len([]rune(on)); n != 3439 {
