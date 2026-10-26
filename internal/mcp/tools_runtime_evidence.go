@@ -60,8 +60,14 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 	if adapter != evidence.RabbitMQ && adapter != evidence.NATS && adapter != evidence.Vault {
 		return nil, nil, fmt.Errorf("application must be rabbitmq, nats, or vault")
 	}
-	operationCtx := k8s.OperationContext()
-	if k8s.ContextOperationInProgress() {
+	var operationCtx context.Context
+	var config *rest.Config
+	if !k8s.CaptureClusterReads(func() {
+		operationCtx = k8s.OperationContext()
+		if current := k8s.ConfigFromContext(ctx); current != nil {
+			config = rest.CopyConfig(current)
+		}
+	}) {
 		return nil, nil, fmt.Errorf("Kubernetes connection is changing; retry application evidence collection after it completes")
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -71,11 +77,9 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 	if operationCtx.Err() != nil {
 		return nil, nil, fmt.Errorf("Kubernetes context changed; no application evidence retained")
 	}
-	config := k8s.ConfigFromContext(ctx)
 	if config == nil {
 		return nil, nil, fmt.Errorf("Kubernetes connection unavailable; no runtime evidence collected")
 	}
-	config = rest.CopyConfig(config)
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Kubernetes client unavailable; no runtime evidence collected")
