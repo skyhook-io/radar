@@ -121,5 +121,5 @@ func argoApplication(v string) (resourceid.Ref, bool) {
 	} else {
 		ref.Name = v
 	}
-	return ref, ref.Name != "" && (ref.Namespace != "" || !strings.Contains(v, "_"))
+	return ref, ref.Name != "" && !strings.Contains(ref.Name, "_") && (ref.Namespace != "" || !strings.Contains(v, "_"))
 }
