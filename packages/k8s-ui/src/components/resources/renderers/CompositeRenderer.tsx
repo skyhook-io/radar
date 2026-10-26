@@ -12,9 +12,10 @@ import {
   getBoundXRRef,
   isClaim,
   getCrossplaneConditionTone,
+  getCrossplanePauseState,
   type CrossplaneResourceRef,
 } from '../resource-utils-crossplane'
-import { CrossplanePauseNotice } from './CrossplanePauseContext'
+import { CrossplanePauseNotice, CrossplanePauseChip } from './CrossplanePauseContext'
 import { kindToPluralWithGroup } from '../../../utils/navigation'
 import type { StatusBadge } from '../resource-utils'
 
@@ -34,6 +35,7 @@ export interface ComposedRefStatus {
   ref: CrossplaneResourceRef
   /** undefined means we haven't fetched yet (or the host doesn't support it) */
   status?: StatusBadge
+  pauseState?: ReturnType<typeof getCrossplanePauseState>
   /** true while the fetch is in flight */
   loading?: boolean
   /** 404 — composed resource not created yet (normal during reconciliation) */
@@ -256,6 +258,7 @@ function ComposedRefRow({
         <span className="text-xs text-theme-text-tertiary truncate max-w-[8rem] shrink-0 text-right">{ref_.namespace}</span>
       )}
       <StatusCellInline statusEntry={statusEntry} />
+      <CrossplanePauseChip state={statusEntry?.pauseState ?? null} compact />
       <ChevronRight className="w-3.5 h-3.5 text-theme-text-tertiary shrink-0" />
     </div>
   )

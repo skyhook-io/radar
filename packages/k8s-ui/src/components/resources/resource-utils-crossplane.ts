@@ -155,7 +155,7 @@ export function getCrossplanePauseState(data: any): 'requested' | 'acknowledged'
 }
 
 export function getCrossplaneConditionTone(data: any, condition: CrossplaneCondition): ConditionTone | undefined {
-  return isExpectedCrossplanePauseCondition(data, condition) ? 'neutral' : undefined
+  return (isManagedResource(data) || isComposite(data)) && isExpectedCrossplanePauseCondition(data, condition) ? 'neutral' : undefined
 }
 
 /**

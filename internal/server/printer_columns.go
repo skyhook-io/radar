@@ -22,6 +22,7 @@ import (
 // spec.versions[].additionalPrinterColumns.
 type printerColumn struct {
 	Name        string `json:"name"`
+	JSONPath    string `json:"jsonPath"`
 	Type        string `json:"type"`
 	Format      string `json:"format,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -192,7 +193,7 @@ func tableFromCRD(ctx context.Context, crd *unstructured.Unstructured, version s
 			continue
 		}
 		columns = append(columns, printerColumn{
-			Name: def.Name, Type: def.Type, Format: def.Format,
+			Name: def.Name, JSONPath: defs[i-1].JSONPath, Type: def.Type, Format: def.Format,
 			Description: vendorDescription(defs, i), Priority: def.Priority,
 		})
 		keptIdx = append(keptIdx, i)

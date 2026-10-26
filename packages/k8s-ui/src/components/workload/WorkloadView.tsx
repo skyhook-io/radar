@@ -62,7 +62,7 @@ import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesSho
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { midTruncate } from '../../utils/format'
-import { isManagedResource, isComposite } from '../resources/resource-utils-crossplane'
+import { isManagedResource, isComposite, getCrossplanePauseState } from '../resources/resource-utils-crossplane'
 import { CrossplanePauseChip } from '../resources/renderers/CrossplanePauseContext'
 import { hpaStateLabel } from '../resources/resource-utils-hpa'
 import {
@@ -978,7 +978,7 @@ export function WorkloadView({
                   {status.text}
                 </span>
               )}
-              {!resourceGone && crossplaneResource && <CrossplanePauseChip data={resource} />}
+              {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
             </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
               {diagnoseAction}
@@ -1205,7 +1205,7 @@ export function WorkloadView({
                 {status.text}
               </span>
             )}
-            {!resourceGone && crossplaneResource && <CrossplanePauseChip data={resource} />}
+            {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
             {!resourceGone && statusNote}
           </>
         )

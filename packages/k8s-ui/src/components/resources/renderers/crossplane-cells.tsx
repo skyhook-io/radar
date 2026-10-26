@@ -2,7 +2,6 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
-import { CrossplanePauseChip } from './CrossplanePauseContext'
 import {
   getCrossplaneStatus,
   getCrossplaneStatusReason,
@@ -36,7 +35,7 @@ function StatusBadge({ resource, getStatus }: { resource: any; getStatus: (r: an
 export function ManagedResourceCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status':
-      return <div className="flex flex-col items-start gap-1"><StatusBadge resource={resource} getStatus={getCrossplaneStatus} /><CrossplanePauseChip data={resource} compact /></div>
+      return <StatusBadge resource={resource} getStatus={getCrossplaneStatus} />
     case 'external': {
       const name = getExternalName(resource)
       if (!name) return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -61,7 +60,7 @@ export function ManagedResourceCell({ resource, column }: { resource: any; colum
 export function CompositeResourceCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status':
-      return <div className="flex flex-col items-start gap-1"><StatusBadge resource={resource} getStatus={getCrossplaneStatus} /><CrossplanePauseChip data={resource} compact /></div>
+      return <StatusBadge resource={resource} getStatus={getCrossplaneStatus} />
     case 'composition': {
       const ref = getCompositionRef(resource)
       if (!ref) return <span className="text-sm text-theme-text-tertiary">-</span>

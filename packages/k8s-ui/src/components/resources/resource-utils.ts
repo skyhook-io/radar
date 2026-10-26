@@ -2406,6 +2406,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'helmrepositories') return getHelmRepositoryType(resource)
       return resource.spec?.type || resource.type || ''
     case 'status':
+      if (isManagedResource(resource) || isComposite(resource)) return getCrossplaneStatus(resource).text
       if (kindLower === 'pods') return getPodStatus(resource).text
       if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'rollouts'].includes(kindLower)) {
         let status: StatusBadge
@@ -2531,7 +2532,6 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'scheduledbackups' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGScheduledBackupStatus(resource).text
       if (kindLower === 'poolers' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGPoolerStatus(resource).text
       if (kindLower === 'istiogateways') return _getIstioGatewayStatus(resource).text
-      if (isManagedResource(resource) || isComposite(resource)) return getCrossplaneStatus(resource).text
       // Generic CRDs. Must read the same text the cell renders or the dropdown
       // offers strings that appear on no row — hence the shared derivation.
       return getGenericResourceStatus(resource)?.text ?? ''

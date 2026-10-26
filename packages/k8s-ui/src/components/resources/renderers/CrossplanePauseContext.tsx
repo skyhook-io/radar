@@ -9,8 +9,7 @@ function pauseDescription(state: 'requested' | 'acknowledged'): string {
     : "The pause annotation is set for this resource; the recorded conditions do not confirm the pause. Changes may be deferred while paused. Readiness and errors are last reported."
 }
 
-export function CrossplanePauseChip({ data, compact = false }: { data: any; compact?: boolean }) {
-  const state = getCrossplanePauseState(data)
+export function CrossplanePauseChip({ state, compact = false }: { state: ReturnType<typeof getCrossplanePauseState>; compact?: boolean }) {
   if (!state) return null
   return (
     <Tooltip content={pauseDescription(state)}>
@@ -27,10 +26,13 @@ export function CrossplanePauseNotice({ data }: { data: any }) {
   if (!state) return null
   if (data?.metadata?.deletionTimestamp) {
     return (
-      <p className="flex items-start gap-1.5 text-sm text-warning-text">
-        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
-        Deletion has been requested. Paused reconciliation may defer this resource’s controller cleanup.
-      </p>
+      <div className="space-y-1">
+        <p className="flex items-start gap-1.5 text-sm text-warning-text">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
+          Deletion has been requested. Paused reconciliation may defer this resource’s controller cleanup.
+        </p>
+        <p className="text-sm text-theme-text-tertiary">{pauseDescription(state)}</p>
+      </div>
     )
   }
   return <p className="text-sm text-theme-text-tertiary">{pauseDescription(state)}</p>

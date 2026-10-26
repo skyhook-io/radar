@@ -65,7 +65,7 @@ func TestTableFromCRD_EvaluatesAndTypesCells(t *testing.T) {
 	if len(columns) != 3 {
 		t.Fatalf("want 3 columns, got %d (%+v)", len(columns), columns)
 	}
-	if columns[0].Name != "Phase" || columns[1].Type != "integer" {
+	if columns[0].Name != "Phase" || columns[1].Type != "integer" || columns[1].JSONPath != ".status.replicas" {
 		t.Errorf("column metadata not forwarded: %+v", columns)
 	}
 	if got := cells["a"]; len(got) != 3 || got[0] != "Running" || got[1] != int64(3) || got[2] != true {
@@ -88,7 +88,7 @@ func TestTableFromCRD_DropsColumnsRadarAlreadyRenders(t *testing.T) {
 	items := []*unstructured.Unstructured{pcObj("a", map[string]any{"spec": map[string]any{"host": "h", "port": int64(80)}})}
 
 	columns, cells := tableFromCRD(context.Background(), crd, "v1", items)
-	if len(columns) != 2 || columns[0].Name != "Host" || columns[1].Name != "Port" {
+	if len(columns) != 2 || columns[0].Name != "Host" || columns[1].Name != "Port" || columns[0].JSONPath != ".spec.host" || columns[1].JSONPath != ".spec.port" {
 		t.Fatalf("Age/Namespace must be dropped, got %+v", columns)
 	}
 	if got := cells["a"]; len(got) != 2 || got[0] != "h" || got[1] != int64(80) {
@@ -417,5 +417,35 @@ func TestTableFromCRD_DescriptionComesFromTheCRDNotTheConvertor(t *testing.T) {
 		if strings.Contains(c.Description, "JSONPath format") {
 			t.Errorf("column %q leaked the convertor's synthetic description: %q", c.Name, c.Description)
 		}
+	}
+}
+
+func TestPrinterColumnResponsePreservesConditionSource(t *testing.T) {
+	path := `.status.conditions[?(@.type=='Synced')].status`
+	columns, cells := tableFromCRD(context.Background(), crdWith("v1", []map[string]any{
+		pcCol("Synced", path, "string", 0),
+		pcCol("Ready", ".status.unrelated", "boolean", 0),
+	}), []*unstructured.Unstructured{pcObj("a", map[string]any{"status": map[string]any{
+		"conditions": []any{map[string]any{"type": "Synced", "status": "False"}},
+		"unrelated":  false,
+	}})})
+	encoded, err := json.Marshal(resourceTableResponse{Columns: columns, Cells: cells})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Columns []struct {
+			Name     string `json:"name"`
+			JSONPath string `json:"jsonPath"`
+		} `json:"columns"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Columns) != 2 || decoded.Columns[0].JSONPath != path || decoded.Columns[1].JSONPath != ".status.unrelated" {
+		t.Fatalf("column source lost or paired incorrectly: %s", encoded)
+	}
+	if cells["a"][0] != "False" || cells["a"][1] != false {
+		t.Fatalf("the converter must preserve raw values: %#v", cells)
 	}
 }

@@ -15,6 +15,7 @@ import {
   type DiagnosisPodLogEntry,
   diagnosisSeverityTone,
 } from "../diagnoseEvidenceTypes";
+import { getCrossplaneConditionTone } from "@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane";
 import { investigationResourceEvidenceSummary } from "../investigationResourceEvidenceModel";
 import { kindToPluralWithGroup } from "../../../utils/navigation";
 import { pluralToKind } from "@skyhook-io/k8s-ui";
@@ -669,7 +670,7 @@ export function addResourceObservation(
       (available !== undefined && available < desired) ||
       (replicas?.unavailable ?? 0) > 0);
   const adverseCondition = (context?.statusSummary?.conditions ?? []).some(
-    (condition) => defaultConditionTone(condition) === "fail",
+    (condition) => (getCrossplaneConditionTone(resource, condition) ?? defaultConditionTone(condition)) === "fail",
   );
   const gitOpsAdverse = Boolean(
     gitOpsDiagnosis &&

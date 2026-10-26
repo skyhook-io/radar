@@ -69,18 +69,30 @@ it.each([false, true])('keeps pause context in the %s expanded header', expanded
 it.each([
   [ManagedResourceCell, base.spec],
   [CompositeResourceCell, { resourceRefs: [] }],
-] as const)('keeps independent status and neutral pause chip in rows and status filters', (Cell, spec) => {
+] as const)('keeps independent primary status in cells and status filters', (Cell, spec) => {
   const resource = { ...base, spec }
   const html = renderToStaticMarkup(<Cell resource={resource} column="status" />)
   expect(html).toContain('Ready (reported)')
-  expect(html).toContain('Paused')
   expect(getCellFilterValue(resource, 'status', 'buckets')).toBe('Ready (reported)')
+  expect(getCellFilterValue(resource, 'status', 'certificates')).toBe('Ready (reported)')
   const failed = { ...resource, status: { conditions: [pause, { type: 'Ready', status: 'False', reason: 'Unavailable' }] } }
   expect(getCellFilterValue(failed, 'status', 'buckets')).toBe('Unavailable')
-  expect(renderToStaticMarkup(<Cell resource={failed} column="status" />)).toContain('Paused')
+  expect(renderToStaticMarkup(<Cell resource={failed} column="status" />)).toContain('Unavailable')
 })
 
 it('gives composed-resource status and Diagnose the same quiet recorded state', () => {
   expect(getResourceStatus('buckets', base)).toMatchObject({ text: 'Ready (reported)', level: 'neutral' })
   expect(diagnoseHealthHint('buckets', base)).toBe('unknown')
+})
+
+it('keeps pause context on a composed child beside its independent status', () => {
+  const ref = { apiVersion: base.apiVersion, kind: base.kind, name: 'child', namespace: 'test' }
+  const html = renderToStaticMarkup(<CompositeRenderer
+    data={{ ...base, spec: { resourceRefs: [ref] } }}
+    composedRefStatuses={new Map([[`${ref.apiVersion}/${ref.kind}/${ref.namespace}/${ref.name}`, {
+      ref, status: { text: 'Unavailable', color: 'status-unhealthy', level: 'unhealthy' }, pauseState: 'acknowledged',
+    }]])}
+  />)
+  expect(html).toContain('Unavailable')
+  expect(html).toContain('Paused')
 })

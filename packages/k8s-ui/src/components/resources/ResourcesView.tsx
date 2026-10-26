@@ -208,7 +208,8 @@ import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell, CNPGObjectStoreCell, CNPGDeclarativeCell, CNPGImageCatalogCell } from './renderers/cnpg-cells'
 import { isApiGroup, CNPG_GROUP } from './resource-utils-cnpg'
 import { ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
-import { isManagedResource, isComposite } from './resource-utils-crossplane'
+import { isManagedResource, isComposite, getCrossplanePauseState } from './resource-utils-crossplane'
+import { CrossplanePauseChip } from './renderers/CrossplanePauseContext'
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
 import { KnativeServiceCell, ConfigurationCell as KnativeConfigurationCell, RevisionCell as KnativeRevisionCell, RouteCell as KnativeRouteCell, BrokerCell, TriggerCell, EventTypeCell, PingSourceCell, ApiServerSourceCell, ContainerSourceCell, SinkBindingCell, ChannelCell, InMemoryChannelCell, SubscriptionCell, SequenceCell, ParallelCell, DomainMappingCell, ServerlessServiceCell, KnativeIngressCell, KnativeCertificateCell } from './renderers/knative-cells'
 import { IngressRouteCell, MiddlewareCell, TraefikServiceCell, ServersTransportCell, TLSOptionCell } from './renderers/traefik-cells'
@@ -3135,12 +3136,12 @@ function buildPrinterColumn(def: PrinterColumnDef, index: number, table: Printer
       // A column the vendor named Ready/Healthy/Established carries the only
       // scannable signal these kinds have — they have no curated Status column.
       // Rendering it as grey text would leave a screen of uniform "True".
-      const tone = printerCellTone(def, value)
+      const tone = printerCellTone(def, value, resource)
       if (tone) {
         return (
           // The value, not the column's description — the header tooltip
           // carries that. A cell tooltip exists to reveal a truncated value.
-          <Tooltip content={text}>
+          <Tooltip content={tone === 'neutral' ? `${text} · Last reported while reconciliation is paused` : text}>
             <span className={clsx('badge', healthColors[tone])}>{text}</span>
           </Tooltip>
         )
@@ -7399,6 +7400,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
           )}
         </Tooltip>
         <CopyNameButton name={meta.name} />
+        {(isManagedResource(resource) || isComposite(resource)) && <CrossplanePauseChip state={getCrossplanePauseState(resource)} compact />}
         {findingMatch && (
           <Tooltip content={findingMatch.text}>
             <span className="shrink-0 text-xs italic text-theme-text-tertiary cursor-help">
@@ -7447,6 +7449,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
+  if (column === 'status') {
+    if (isManagedResource(resource)) return <ManagedResourceCell resource={resource} column={column} />
+    if (isComposite(resource)) return <CompositeResourceCell resource={resource} column={column} />
+  }
   if (group && !hasCuratedColumns(kind, group)) {
     return <GenericCell resource={resource} column={column} />
   }
