@@ -125,7 +125,7 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     remote: "Radar can't confirm it deploys to this cluster",
     missing: 'no such manager here',
     'not-recording': 'Helm records an installation, rather than continuously reconciling it',
-    unresolved: 'no manager of that name here lists this resource; it may be managed from another cluster',
+    unresolved: 'Radar found no manager of that name listing this resource; it may be managed from another cluster',
     withheld: "you can't view it",
     unchecked: "Radar couldn't check its status",
   }

@@ -29,7 +29,7 @@ describe('manager answer chip', () => {
     ['remote', "This resource's label names Application argocd/a, but Radar can't confirm it deploys to this cluster."],
     ['missing', "This resource's label names Application argocd/a, but there's no such Application here."],
     ['withheld', "This resource's label names Application argocd/a, but you can't view it."],
-    ['unresolved', "This resource's label names Application argocd/a, but no Application of that name here lists it; it may be managed from another cluster."],
+    ['unresolved', "This resource's label names Application argocd/a, but Radar found no Application of that name listing it; it may be managed from another cluster."],
     ['unchecked', "This resource's label names Application argocd/a, but Radar couldn't check its status."],
   ] as const)('claimed explains %s', (check, reason) => {
     const html = render({ state: 'claimed', lead: a, direct: { object, claims: [{ ...claim, check }] } })
