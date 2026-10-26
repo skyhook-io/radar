@@ -2300,7 +2300,7 @@ function WorkloadOverviewTab({
 
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
             <div className="space-y-4">
-              <div className="grid items-start gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+              <div className="grid items-start gap-4 phone:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
                 <div className="space-y-4">
                   {showServingPath && (
                     <ServingConfigurationCard
@@ -2393,7 +2393,7 @@ function WorkloadOverviewTab({
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
           <div className="space-y-4">
             <CurrentStateCard resource={resource} apiKind={apiKind} readiness={readiness} />
-            <div className="grid items-start gap-4 2xl:grid-cols-2">
+            <div className="grid items-start gap-4 phone:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-2">
               {overviewShape === 'cronjob' ? (
                 <CronJobRunsCard
                   resource={resource}
@@ -2433,7 +2433,7 @@ function WorkloadOverviewTab({
               />
             ) : null}
             {extraContent && (
-              <div className="grid items-start gap-4 2xl:grid-cols-2">
+              <div className="grid items-start gap-4 phone:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-2">
                 {extraContent}
               </div>
             )}
