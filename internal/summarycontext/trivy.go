@@ -86,6 +86,11 @@ func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured, can
 			scanned.Missing = true
 			return nil, scanned
 		}
+		// The walk reads the Pod's controller (a ReplicaSet) before the
+		// workload above it: the caller must be able to read that hop too.
+		if c := controllerRef(pod.OwnerReferences); c != nil && !may(schema.FromAPIVersionAndKind(c.APIVersion, c.Kind).Group, c.Kind) {
+			return nil, scanned
+		}
 		if w, ok := k8s.PodWorkload(cache, pod); ok && may(w.Group, w.Kind) {
 			return resourcecontext.ManagedByFromOwner(w.Kind, w.Group, ns, w.Name), scanned
 		}

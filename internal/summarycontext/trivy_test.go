@@ -6,6 +6,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -31,9 +32,13 @@ func scanTargetCache(t *testing.T) *k8s.ResourceCache {
 		}
 	}
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", UID: "uid-db"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "web-new-a", Namespace: "shop", UID: "uid-web-new-a",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-new", UID: "uid-web-new", Controller: &controller}},
+	}}
 	core, err := k8score.NewResourceCache(k8score.CacheConfig{
-		Client:        fake.NewClientset(rs("web-new", 3), rs("web-old", 0), sts),
-		ResourceTypes: map[string]bool{k8score.ReplicaSets: true, k8score.StatefulSets: true},
+		Client:        fake.NewClientset(rs("web-new", 3), rs("web-old", 0), sts, pod),
+		ResourceTypes: map[string]bool{k8score.ReplicaSets: true, k8score.StatefulSets: true, k8score.Pods: true},
 		DeferredTypes: map[string]bool{},
 	})
 	if err != nil {
@@ -45,7 +50,8 @@ func scanTargetCache(t *testing.T) *k8s.ResourceCache {
 	for {
 		rsList, _ := cache.ReplicaSets().List(labels.Everything())
 		stsList, _ := cache.StatefulSets().List(labels.Everything())
-		if len(rsList) == 2 && len(stsList) == 1 {
+		podList, _ := cache.Pods().List(labels.Everything())
+		if len(rsList) == 2 && len(stsList) == 1 && len(podList) == 1 {
 			return cache
 		}
 		if time.Now().After(deadline) {
@@ -172,5 +178,23 @@ func TestTrivyScanTargetReadsOnlyWhatTheCallerMay(t *testing.T) {
 	managedBy, scanned = trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true), deny("Deployment"))
 	if managedBy == nil || managedBy.Kind != "ReplicaSet" || scanned.Replicas == nil {
 		t.Fatalf("hidden Deployment: managedBy %+v; want the readable ReplicaSet, not its hidden parent", managedBy)
+	}
+}
+
+// A Pod report reaches the workload through the Pod's ReplicaSet: a caller
+// who can't read that ReplicaSet doesn't get the workload it leads to.
+func TestTrivyPodReportNeedsItsReplicaSetToBeReadable(t *testing.T) {
+	cache := scanTargetCache(t)
+	report := func() *unstructured.Unstructured {
+		u := scanReport("Pod", "web-new-a", false)
+		u.SetOwnerReferences(nil)
+		return u
+	}
+	if m, _ := trivyScanTarget(cache, report(), nil); m == nil || m.Kind != "Deployment" {
+		t.Fatalf("scenario: a readable chain resolves the Deployment, got %+v", m)
+	}
+	noRS := func(_, kind, _ string) bool { return kind != "ReplicaSet" }
+	if m, _ := trivyScanTarget(cache, report(), noRS); m != nil {
+		t.Fatalf("hidden ReplicaSet: managedBy %+v; want none", m)
 	}
 }
