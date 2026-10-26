@@ -335,10 +335,8 @@ func managerAnswer(a ownership.ManagerAnswer) *ManagerAnswer {
 		out.Stop = &ManagerChainStop{At: refOf(a.Stop.At), State: a.Stop.Owner.State.String()}
 		switch a.Stop.Owner.State {
 		case ownership.OwnerGone, ownership.OwnerReplaced, ownership.OwnerUnknown:
-			if a.Stop.Owner.Ref.Name != "" {
-				owner := refOf(a.Stop.Owner.Ref)
-				out.Stop.Owner = &owner
-			}
+			// The reference on an object the caller reads names it.
+			out.Stop.Owner = namedOwner(ownership.OwnerAnswer{Reference: &a.Stop.Reference, Resolution: a.Stop.Owner})
 			out.Stop.Reason = string(a.Stop.Owner.Gap.Reason)
 		}
 	}

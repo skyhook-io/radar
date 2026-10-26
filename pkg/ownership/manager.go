@@ -3,6 +3,8 @@ package ownership
 import (
 	"slices"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -141,8 +143,10 @@ type ManagerAnswer struct {
 // ChainStop is a controller reference a walk up the chain couldn't follow.
 type ChainStop struct {
 	// At is the last object the walk reached, whose reference it is.
-	At    resourceid.Ref
-	Owner OwnerResolution
+	At resourceid.Ref
+	// Reference is At's controller reference, as At's metadata has it.
+	Reference metav1.OwnerReference
+	Owner     OwnerResolution
 }
 
 // Manager says what manages ref: the local managers whose lists name it and
@@ -176,7 +180,13 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 	switch {
 	case chain.UnfollowedReference != nil:
 		a.ChainEnd = ChainEndUnfollowed
-		a.Stop = &ChainStop{At: chain.Chain[len(chain.Chain)-1], Owner: *chain.UnfollowedReference}
+		at := chain.Chain[len(chain.Chain)-1]
+		a.Stop = &ChainStop{At: at, Owner: *chain.UnfollowedReference}
+		if read, _ := v.read(at); read.State == Present {
+			if i := slices.IndexFunc(read.Object.OwnerReferences, isController); i >= 0 {
+				a.Stop.Reference = read.Object.OwnerReferences[i]
+			}
+		}
 	case chain.Cycle:
 		a.ChainEnd = ChainEndCycle
 	case chain.Truncated:

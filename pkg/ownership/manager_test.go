@@ -395,3 +395,15 @@ func TestManagerWithUndecidedAccessIsUnknown(t *testing.T) {
 		t.Fatalf("answer %+v; want unknown with undecided access", got)
 	}
 }
+
+// A controller of a kind discovery can't map stops the walk; the stop keeps
+// the reference that names it, from the metadata of an object the caller reads.
+func TestManagerStopKeepsAnUnmappedControllersReference(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	parent := ownershiptest.Object{Ref: resourceid.Ref{Group: "missing.example.io", Kind: "Parent", Namespace: "shop", Name: "controller-x"}, APIVersion: "missing.example.io/v1", UID: "uid-parent"}
+	pod := b.Add("", "Pod", "shop", "web-1-a", parent.OwnerRef(true))
+	got := view(t, b.World(), ownership.Unrestricted()).Manager(pod.Ref)
+	if got.Stop == nil || got.Stop.Owner.State != ownership.OwnerUnknown || got.Stop.Reference.Kind != "Parent" || got.Stop.Reference.Name != "controller-x" {
+		t.Fatalf("stop %+v; want the unmapped Parent's reference", got.Stop)
+	}
+}
