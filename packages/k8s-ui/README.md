@@ -84,5 +84,10 @@ tooltip. `certaintyGlyph` and `certaintyValueLabel` expose the same vocabulary.
 
 Existing CNPG primitive exports remain available and delegate to these shared implementations.
 
-
 `PrinterColumnDef.jsonPath` optionally carries source provenance from newer Radar servers. The UI does not evaluate it: values still come from the server's table converter. Without it, printer-cell tones stay generic. Crossplane pause qualification only recognizes exact Ready/Synced condition paths and corroborated annotation/condition evidence; same-named unrelated columns retain their normal tones. `ConditionTone` also supports opt-in `neutral`; `defaultConditionTone` retains its original return vocabulary. `ComposedRefStatus.pauseState` optionally supplies recorded Crossplane pause context for a composed-resource row.
+
+`ForceDeleteConfirmDialog.resourceData` optionally supplies the current object for Crossplane pause context. Paused MR/XR/Claim shapes holding a known Crossplane finalizer receive a cleanup warning; the prop does not change confirmation or force-delete behavior. YAML operation context uses the existing baseline and predicted manifests; removing a pause annotation requests resumption rather than proving it.
+
+`YamlReview.mode` distinguishes Apply, strict Create and Update (default: `apply`). Hosts using strict creation should pass `create` so an unpreviewable new document does not imply unknown live pause state. Crossplane operation context reports what the server preview actually keeps or clears; unsupported dry-run documents retain conditional uncertainty rather than treating submitted YAML as a live baseline.
+
+For a single editor target, `YamlReview.resourceData` may retain its raw condition evidence when the review YAML intentionally omits status. `EditableYamlView` binds that snapshot to its preview. It is not used to classify unrelated documents in a batch. Generic Apply with neither a known Crossplane shape nor raw acknowledged pause does not infer a resource’s controller from the annotation alone.

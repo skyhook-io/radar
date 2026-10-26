@@ -328,3 +328,17 @@ it('keeps created-object facts and the edited draft when canceling a file replac
     expect(onClose).not.toHaveBeenCalled()
   } finally { await act(async () => root.unmount()); host.remove() }
 })
+
+it.each(['apply', 'create'] as const)('explains unknown live pause only in direct %s mode without changing submission', async (mode) => {
+  const onApply = vi.fn(async () => [])
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host)
+  const yaml = 'apiVersion: example.test/v1\nkind: Bucket\nmetadata:\n  name: archive\nspec:\n  providerConfigRef:\n    name: default\n'
+  try {
+    await act(async () => root.render(<CreateResourceDialog open onClose={() => {}} initialYaml={yaml} initialMode={mode} lockMode={mode === 'create'} onApply={onApply} isApplying={false} />))
+    expect(document.body.textContent?.includes('Existing pause state is unknown')).toBe(mode === 'apply')
+    const submit = button(mode === 'apply' ? 'Apply' : 'Create')!
+    expect(submit.disabled).toBe(false)
+    await act(async () => submit.click())
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ yaml, mode }))
+  } finally { await act(async () => root.unmount()); host.remove() }
+})

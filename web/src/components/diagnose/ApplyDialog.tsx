@@ -14,6 +14,7 @@ import {
   gitOpsWriteGuardKey,
   type GitOpsWriteGuard,
 } from "@skyhook-io/k8s-ui/utils/gitops-write-guard";
+import { CrossplaneApplyNotice } from "@skyhook-io/k8s-ui/components/ui/CrossplaneOperationNotice";
 import { parseContextName } from "../../utils/context-name";
 import type { Diagnosis, ApplyMutationOutcome } from "../../api/diagnose";
 import { AIMarkdown, CopyButton } from "./AIMarkdown";
@@ -33,6 +34,7 @@ export function ApplyDialog({
   gitOpsGuard,
   onOpenGitOpsOwner,
   confidence,
+  resourceData,
 }: {
   open: boolean;
   onClose: () => void;
@@ -49,6 +51,7 @@ export function ApplyDialog({
   gitOpsGuard?: GitOpsWriteGuard;
   onOpenGitOpsOwner?: () => void;
   confidence?: number;
+  resourceData?: unknown;
 }) {
   const titleId = useId();
   const fixText = fix?.trim();
@@ -144,6 +147,7 @@ export function ApplyDialog({
         )}
       </div>
       <div className="shrink-0 space-y-2 p-4">
+        <CrossplaneApplyNotice resources={[resourceData]} />
         {gitOpsGuard && (
           <GitOpsWriteWarning
             guard={gitOpsGuard}

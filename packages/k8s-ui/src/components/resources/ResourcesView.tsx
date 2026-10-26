@@ -4,6 +4,7 @@ import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, use
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { usePhoneLayout } from '../../hooks/usePhoneLayout'
+import { CrossplaneDeleteNotice } from '../ui/CrossplaneOperationNotice'
 import { Badge } from '../ui/Badge'
 import { PaneLoader } from '../ui/PaneLoader'
 import { DialogPortal } from '../ui/DialogPortal'
@@ -7130,6 +7131,7 @@ export function ResourcesView({
       isLoading={isBulkDeleting}
       isClosable
     >
+      <CrossplaneDeleteNotice resources={checkedItems} force={bulkForceDelete} />
       <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
         <input
           type="checkbox"

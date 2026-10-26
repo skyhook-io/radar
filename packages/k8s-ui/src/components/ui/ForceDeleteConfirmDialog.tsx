@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { ConfirmDialog } from './ConfirmDialog'
 import { AlertBanner } from './drawer-components'
+import { CrossplaneDeleteNotice } from './CrossplaneOperationNotice'
 import { pluralize } from '../../utils/pluralize'
 
 export interface CascadeDependent {
@@ -46,6 +47,7 @@ interface ForceDeleteConfirmDialogProps {
   cascadeRootResolved?: boolean
   cascadePreviewFailed?: boolean
   cascadeDetail?: CascadeDetail
+  resourceData?: unknown
 }
 
 export function ForceDeleteConfirmDialog({
@@ -61,6 +63,7 @@ export function ForceDeleteConfirmDialog({
   cascadeRootResolved,
   cascadeDetail,
   cascadePreviewFailed,
+  resourceData,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
   const orphaning = cascadeDetail?.propagation === 'Orphan' && !forceDelete
@@ -144,6 +147,7 @@ export function ForceDeleteConfirmDialog({
         {!cascadeLoading && !cascadePreviewFailed && !orphaning && cascadeDetail?.coverage?.complete && cascadeDetail.coverage.narrowed && <p className="text-xs text-theme-text-secondary">Only resources Radar observes and you can read are listed.</p>}
         {!cascadeLoading && cascadePreviewFailed && <AlertBanner variant="warning" title="Deletion preview unavailable" message="Additional resources may be deleted." className="mb-0" />}
         {!cascadeLoading && !cascadePreviewFailed && cascadeDetail?.notEnumerated?.map(item => <p key={item} className="text-xs text-theme-text-secondary">Not enumerated: {item}.</p>)}
+        <CrossplaneDeleteNotice resources={[resourceData]} force={forceDelete} />
 
         <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
           <input

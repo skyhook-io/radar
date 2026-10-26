@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowLeft, Check, Loader2, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { normalizeYamlForReview, splitYamlDocuments } from '../../utils/yaml'
+import { CrossplaneYamlApplyNotice } from './CrossplaneOperationNotice'
 import { Badge } from './Badge'
 import { StatusDot } from './status-tone'
 import { YamlDiffEditor } from './YamlEditor'
@@ -25,6 +26,9 @@ export interface YamlPreviewResult {
 
 export interface YamlReviewProps {
   submittedYaml: string
+  mode?: 'apply' | 'create' | 'update'
+  /** Review YAML omits status; raw evidence is bound to one editor target. */
+  resourceData?: unknown
   originalYaml?: string
   documents: YamlPreviewResult[]
   nonAtomic?: boolean
@@ -85,6 +89,8 @@ export function reviewedResourceVersionsForPreview(documents: YamlPreviewResult[
 
 export function YamlReview({
   submittedYaml,
+  mode = 'apply',
+  resourceData,
   originalYaml,
   documents,
   nonAtomic = false,
@@ -363,6 +369,7 @@ export function YamlReview({
       </div>
 
       <div className="shrink-0 border-t border-theme-border bg-theme-elevated/80 px-4 py-3">
+        <CrossplaneYamlApplyNotice yaml={submittedYaml} baselineYaml={originalYaml} previewDocuments={documents} mode={mode} resourceData={resourceData} />
         {changedSinceReview && (
           <AlertBanner
             variant="warning"

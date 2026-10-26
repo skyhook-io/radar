@@ -61,6 +61,9 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Badge, gitOpsRouteForOwner, type GitOpsWrite } from "@skyhook-io/k8s-ui";
+import { useResource } from "../../api/client";
+import { getApiBase } from "../../api/config";
+import { kindToPluralWithGroup } from "../../utils/navigation";
 import { useGitOpsWriteGuard } from "../../hooks/useGitOpsWriteGuard";
 import {
   Send,
@@ -963,6 +966,13 @@ export function InvestigationView({
       declaredManager: run.managedBy,
       enabled: confirmApply,
     });
+  const applyTarget = useResource<unknown>(
+    confirmApply ? kindToPluralWithGroup(kind, run.group) : "",
+    namespace,
+    name,
+    run.group || undefined,
+    { enabled: confirmApply, cacheScope: getApiBase() },
+  );
   const navigateRouter = useNavigate();
   const {
     owner: applyOwner,
@@ -2583,6 +2593,7 @@ export function InvestigationView({
               ]?.precondition
             : undefined
         }
+        resourceData={applyTarget.data}
         gitOpsGuard={applyGitOpsGuard}
         onOpenGitOpsOwner={openApplyOwner}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}

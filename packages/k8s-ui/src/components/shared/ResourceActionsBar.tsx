@@ -693,6 +693,7 @@ export function ResourceActionsBar({
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDeleteConfirm}
         resourceName={resource.name}
+        resourceData={data}
         resourceKind={displayKindName(resource.kind, data?.kind)}
         namespaceName={resource.namespace}
         isLoading={isDeleting ?? false}

@@ -88,3 +88,24 @@ describe('Deletion preview states', () => {
   expect(document.body.textContent).toContain('Force delete removes the orphan finalizer')
   expect(document.body.textContent).toContain('Garbage collection is expected')
  })
+
+describe('paused Crossplane deletion confirmation', () => {
+  it('keeps context and permissions while changing only the explicit force selection', async () => {
+    const resourceData = { metadata: { name: 'bucket', annotations: { 'crossplane.io/paused': 'true' }, finalizers: ['finalizer.managedresource.crossplane.io'] }, spec: { providerConfigRef: { name: 'default' } } }
+    await act(async () => root.render(<ForceDeleteConfirmDialog {...base} resourceData={resourceData} />))
+    expect(document.body.textContent).toContain('Pause can hold deletion in Terminating')
+    const confirm = [...document.querySelectorAll('button')].find(b => b.textContent === 'Delete')!
+    expect(confirm.disabled).toBe(false)
+    await act(async () => confirm.click())
+    expect(base.onConfirm).toHaveBeenLastCalledWith(false)
+    expect(document.body.textContent).toContain('Kubernetes can accept the deletion request')
+    const force = document.querySelector('input[type="checkbox"]') as HTMLInputElement
+    await act(async () => force.click())
+    expect(document.body.textContent).toContain('Force delete bypasses controller cleanup')
+    const forceConfirm = [...document.querySelectorAll('button')].find(b => b.textContent === 'Force Delete')!
+    await act(async () => forceConfirm.click())
+    expect(base.onConfirm).toHaveBeenLastCalledWith(true)
+    expect(resourceData.metadata.finalizers).toEqual(['finalizer.managedresource.crossplane.io'])
+    expect(resourceData.metadata.annotations['crossplane.io/paused']).toBe('true')
+  })
+})
