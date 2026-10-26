@@ -191,8 +191,8 @@ func TestStrimziDiagnoseSnapshotAndIssuesAgree(t *testing.T) {
 			if body.OperatorSnapshot.State != tc.want || (len(body.RelatedIssues) > 0) != tc.issue {
 				t.Fatalf("snapshot and findings: %s", raw)
 			}
-			if tc.issue && body.RelatedIssues[0].TimingSummary == "" {
-				t.Fatal("curated finding lost public timing shape")
+			if tc.issue && !body.RelatedIssues[0].OnsetUnknown {
+				t.Fatal("curated finding invented a known failure onset")
 			}
 		})
 	}
