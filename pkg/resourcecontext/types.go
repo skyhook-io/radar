@@ -148,7 +148,9 @@ type ManagerContext struct {
 	// "disagree" (a list names it and its metadata names another manager),
 	// "shared" (several lists name it), "claimed" (only its metadata names a
 	// manager), "unknown" (no evidence, and Radar couldn't look everywhere) or
-	// "none" (no evidence in what Radar reads; not "unmanaged").
+	// "none" (no evidence in what Radar reads; not "unmanaged"). A native Helm
+	// release's annotations count only without GitOps evidence: Flux's
+	// helm-controller writes them for the release it manages.
 	State string `json:"state"`
 	// Lead is the manager to look at first, when the state has one.
 	Lead *ContextRef `json:"lead,omitempty"`
@@ -161,6 +163,11 @@ type ManagerContext struct {
 	// Claims are the managers the metadata of the resource, or Via, names,
 	// with what checking each found.
 	Claims []ManagerClaimContext `json:"claims,omitempty"`
+	// AlsoClaimed, with Via, are the managers the metadata of the resource
+	// and of the objects between it and Via names: metadata commonly inherited
+	// from a template or a parent, which didn't settle the question but isn't
+	// disproven either.
+	AlsoClaimed []ManagerClaimContext `json:"alsoClaimed,omitempty"`
 	// Narrowed: the caller may read only part of what could name a manager.
 	Narrowed bool `json:"narrowed,omitempty"`
 }
@@ -170,8 +177,11 @@ type ManagerClaimContext struct {
 	Manager ContextRef `json:"manager"`
 	// Check: "recorded", "omitted" (its list was read and doesn't name the
 	// resource), "unreadable", "remote", "missing", "not-recording" (a native
-	// Helm release), "unresolved" (no namespace) or "withheld".
+	// Helm release), "unresolved" (no namespace), "withheld" (the caller may
+	// not read the manager) or "unchecked" (Radar couldn't read it).
 	Check string `json:"check"`
+	// On is the object whose metadata makes the claim, in AlsoClaimed.
+	On *ContextRef `json:"on,omitempty"`
 }
 
 // ManagedByRef is the compact form of a "managed-by" pointer used in

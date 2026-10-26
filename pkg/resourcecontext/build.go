@@ -1617,11 +1617,30 @@ func managerContext(m *topology.ManagerAnswer) *ManagerContext {
 		out.Via = &via
 	}
 	out.ListedBy = toContextRefs(evidence.Recorders)
-	for _, c := range evidence.Claims {
+	out.Claims = claimContexts(evidence, false)
+	if m.Via != nil {
+		out.AlsoClaimed = claimContexts(m.Direct, true)
+		for _, e := range m.Between {
+			out.AlsoClaimed = append(out.AlsoClaimed, claimContexts(e, true)...)
+		}
+	}
+	return out
+}
+
+// claimContexts are e's claims but the copied ones, which name another object;
+// with on, each says which object makes it.
+func claimContexts(e topology.ManagerEvidence, on bool) []ManagerClaimContext {
+	var out []ManagerClaimContext
+	for _, c := range e.Claims {
 		if c.Copied {
 			continue
 		}
-		out.Claims = append(out.Claims, ManagerClaimContext{Manager: toContextRef(c.Manager), Check: c.Check})
+		cc := ManagerClaimContext{Manager: toContextRef(c.Manager), Check: c.Check}
+		if on {
+			object := toContextRef(e.Object)
+			cc.On = &object
+		}
+		out = append(out, cc)
 	}
 	return out
 }

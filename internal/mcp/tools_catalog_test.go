@@ -249,9 +249,10 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// such uncertainty boundary, and get_runtime_versions' "declared, not
 	// proof" and "unknown, not absent" another, and list_resources' and
 	// get_resource's result shapes, with "only object_not_found means it is
-	// absent", a third.
+	// absent", a third, and get_resource's "manager: none is not unmanaged" a
+	// fourth.
 	const (
-		maxCatalogBytes         = 63200
+		maxCatalogBytes         = 63250
 		maxToolDescriptionBytes = 3000
 	)
 

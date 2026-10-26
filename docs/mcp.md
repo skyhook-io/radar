@@ -959,14 +959,18 @@ kinds of evidence and names no winner they don't support:
 - `listedBy`: the Argo CD Applications and Flux Kustomizations/HelmReleases whose status lists name the resource;
 - `claims`: the managers its own tracking labels and annotations name, each with what checking it found (`recorded`,
   `omitted` when that manager's list was read and doesn't name it, `unreadable`, `remote`, `missing`, `not-recording`
-  for a native Helm release, `unresolved` for a claim with no namespace, `withheld` when you may not read the manager).
+  for a native Helm release, `unresolved` for a claim with no namespace, `withheld` when you may not read the manager,
+  `unchecked` when Radar couldn't read it). A native Helm release's claim counts only without GitOps evidence, since
+  Flux's helm-controller writes the same annotations.
 
 `state` sums them up: `agree` or `listed` (one manager, `lead`), `disagree` (a list names it and its metadata names
 another manager: look at both), `shared` (several lists name it), `claimed` (only metadata names a manager), `unknown`
 (no evidence, and Radar couldn't look everywhere) or `none` (no evidence in what Radar reads — **not** "unmanaged":
 Terraform, `kubectl apply` or a manager in another cluster leave nothing Radar sees). When the resource's own evidence
 doesn't settle it, `via` names the controller ancestor whose evidence answers, as for a Pod whose Deployment an
-Application lists; `listedBy` and `claims` are then that ancestor's. `narrowed: true` means you may read only part of
+Application lists; `listedBy` and `claims` are then that ancestor's, and `alsoClaimed` lists what the resource's own
+metadata (and that of objects in between) names, each `on` its object: commonly inherited from a template, not disproven.
+`lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of
 what could name a manager. `managedBy` keeps its own meaning: the topmost owner the relationship graph links.
 
 ### Node placement context

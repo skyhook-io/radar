@@ -147,7 +147,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"audit findings are static posture and remediation priority, not evidence " +
 			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
 			"(critical|high|medium|low; current built-ins are high|medium), separate " +
-			"from issueSummary's live-operational critical|warning). This is the drill-down " +
+			"from issueSummary's live-operational critical|warning; manager: none is not " +
+			"unmanaged; disagree: check both). This is the drill-down " +
 			"tool, not the best first call for broad incidents. Start with issues, " +
 			"get_dashboard, search, or list_resources to rank candidates; then call " +
 			"get_resource for the exact object. If you are looking for a string across " +
