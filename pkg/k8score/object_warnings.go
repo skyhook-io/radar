@@ -61,7 +61,7 @@ func enrich(obj *unstructured.Unstructured, withManager bool) []string {
 	}
 	var out []string
 
-	if mgr, instance := detectExternalManager(obj); mgr != "" && !(mgr == "Argo CD" && copiedTrackingID(obj, instance)) && (withManager || !answeredManager(mgr)) {
+	if mgr, instance := detectExternalManager(obj); mgr != "" && (withManager || !answeredManager(mgr)) {
 		out = append(out, formatExternalManagerWarning(mgr, instance))
 	}
 
