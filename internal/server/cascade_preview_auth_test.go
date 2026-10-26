@@ -12,6 +12,7 @@ import (
 	"k8s.io/client-go/rest"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -28,9 +29,15 @@ func TestCascadePreviewUsesCallerAndOwnershipWithoutTopology(t *testing.T) {
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "private", Namespace: "default", UID: "private", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "nginx", UID: "deploy-uid-1234"}}}},
 	))
 	withOwnershipDiscovery(t)
+	var switchDuringRead atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Impersonate-User") != "preview-reader" {
 			t.Errorf("missing caller identity: %v", r.Header)
+		}
+		if switchDuringRead.Load() {
+			k8s.CancelOngoingOperations()
+			http.Error(w, "connection switched", http.StatusServiceUnavailable)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"nginx","namespace":"default","uid":"deploy-uid-1234"}}`))
@@ -54,6 +61,12 @@ func TestCascadePreviewUsesCallerAndOwnershipWithoutTopology(t *testing.T) {
 	defer denied.Body.Close()
 	if denied.StatusCode != http.StatusForbidden {
 		t.Fatalf("denied root status=%d", denied.StatusCode)
+	}
+	switchDuringRead.Store(true)
+	switched := env.authGet(t, "/api/resources/deployments/default/nginx/cascade-preview", "preview-reader", "")
+	defer switched.Body.Close()
+	if switched.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("switched preview status=%d", switched.StatusCode)
 	}
 }
 

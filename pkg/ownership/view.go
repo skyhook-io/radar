@@ -3,6 +3,7 @@ package ownership
 import (
 	"cmp"
 	"slices"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -245,7 +246,7 @@ func mayResolveTo(res OwnerResolution, name string, ref resourceid.Ref) bool {
 	case res.Ref != (resourceid.Ref{}):
 		return res.Ref.GroupKind() == ref.GroupKind()
 	}
-	return res.Gap.Kind == ref.GroupKind()
+	return res.Gap.Kind.Group == ref.Group && strings.EqualFold(res.Gap.Kind.Kind, ref.Kind)
 }
 
 // candidates are the objects the search found that the caller may read, each

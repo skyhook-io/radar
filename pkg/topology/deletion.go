@@ -84,10 +84,15 @@ func PreviewDeletion(ctx context.Context, v *ownership.View, obj *unstructured.U
 			break
 		}
 	}
-	storage := p.ControllerTeardown != nil || ref.Group == "" && (ref.Kind == "PersistentVolumeClaim" || ref.Kind == "PersistentVolume")
+	storage := ref.Group == "" && (ref.Kind == "PersistentVolumeClaim" || ref.Kind == "PersistentVolume" || ref.Kind == "Namespace")
+	if teardown := p.ControllerTeardown; teardown != nil {
+		coverage := teardown.Coverage
+		storage = storage || teardown.Destination != "local" || coverage.Membership != ownership.MembersRecorded.String() ||
+			coverage.Missing > 0 || coverage.Withheld > 0 || coverage.Unknown > 0 || coverage.UnavailableReason != ""
+	}
 	for _, objects := range [][]ownership.Observation{a.Dependents, a.Possible, members} {
 		for _, o := range objects {
-			storage = storage || o.Ref.Group == "" && (o.Ref.Kind == "PersistentVolumeClaim" || o.Ref.Kind == "PersistentVolume")
+			storage = storage || o.Ref.Group == "" && (o.Ref.Kind == "PersistentVolumeClaim" || o.Ref.Kind == "PersistentVolume" || o.Ref.Kind == "Namespace")
 		}
 	}
 	if storage {

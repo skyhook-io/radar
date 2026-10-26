@@ -23,6 +23,7 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 		destination                  string
 	}{
 		{"Argo local", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, ownership.MembersRecorded, true, true, "local"},
+		{"Argo local uncached volume", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, ownership.MembersRecorded, true, false, "local"},
 		{"Argo remote", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io/background", map[string]any{"destination": map[string]any{"name": "prod"}}, ownership.MembersRemote, true, false, "remote"},
 		{"Argo unknown", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", nil, ownership.MembersUnreadable, true, false, "unknown"},
 		{"Argo no finalizer", "argoproj.io", "Application", "", nil, ownership.MembersRecorded, false, false, ""},
@@ -36,6 +37,9 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ref := resourceid.Ref{Group: tc.group, Kind: tc.kind, Namespace: "demo", Name: "root"}
 			member := resourceid.Ref{Kind: "ConfigMap", Namespace: "demo", Name: "member"}
+			if tc.name == "Argo local uncached volume" {
+				member.Kind = "PersistentVolumeClaim"
+			}
 			obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": tc.group + "/v1", "kind": tc.kind, "metadata": map[string]any{"name": "root", "namespace": "demo", "uid": "root", "resourceVersion": "1"}}}
 			if tc.spec != nil {
 				obj.Object["spec"] = tc.spec
@@ -45,8 +49,11 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 			}
 			w := ownershiptest.World{Resources: []ownership.ServedResource{
 				{Group: tc.group, Version: "v1", Kind: tc.kind, Resource: "roots", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
-				{Version: "v1", Kind: "ConfigMap", Resource: "configmaps", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+				{Version: "v1", Kind: member.Kind, Resource: strings.ToLower(member.Kind) + "s", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
 			}, Objects: []ownershiptest.Object{{Ref: ref, APIVersion: tc.group + "/v1", UID: types.UID("root"), ResourceVersion: "1", Membership: tc.membership, Members: []resourceid.Ref{member}}, {Ref: member, APIVersion: "v1", UID: "member"}}}
+			if tc.name == "Argo local uncached volume" {
+				w.Objects = w.Objects[:1]
+			}
 			s, _ := ownershiptest.Scan(w).Begin()
 			p := PreviewDeletion(context.Background(), ownership.NewView(s, ownership.Unrestricted()), obj)
 			if !p.RootResolved || (p.ControllerTeardown != nil) != tc.teardown {
@@ -58,8 +65,9 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 			if len(p.Dependents) != 0 {
 				t.Fatalf("inventory became garbage collection: %+v", p)
 			}
-			if p.MayReclaimStorage != tc.teardown {
-				t.Fatalf("controller storage risk = %v, teardown = %v", p.MayReclaimStorage, tc.teardown)
+			wantStorageRisk := tc.teardown && (!tc.resources || tc.destination != "local")
+			if p.MayReclaimStorage != wantStorageRisk {
+				t.Fatalf("controller storage risk = %v, want %v", p.MayReclaimStorage, wantStorageRisk)
 			}
 		})
 	}

@@ -4455,6 +4455,8 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 	obj, err := client.Resource(gvr).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
 		switch {
+		case operation.Err() != nil:
+			s.writeError(w, http.StatusServiceUnavailable, "cluster connection changed during deletion preview")
 		case apierrors.IsForbidden(err):
 			s.writeError(w, http.StatusForbidden, err.Error())
 		case apierrors.IsNotFound(err):
