@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { ConfirmDialog } from './ConfirmDialog'
+import { AlertBanner } from './drawer-components'
 import { pluralize } from '../../utils/pluralize'
 
 export interface CascadeDependent {
@@ -106,7 +107,6 @@ export function ForceDeleteConfirmDialog({
               note="Kubernetes deletes these through their owner references. Finalizers may delay deletion. This is an observation of the current cache, not a guarantee of completion."
             />
           ) : (
-            // An older Radar walked every management link, not only owner references.
             <CascadeDependentsList
               dependents={cascadeDependents}
               title={`May also delete ${pluralize(cascadeDependents.length, 'related resource')}`}
@@ -131,18 +131,18 @@ export function ForceDeleteConfirmDialog({
         )}
 
         {!cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === false && (
-          <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-warning-text">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              Radar couldn&apos;t verify which dependent resources Kubernetes will also delete. Additional resources may be deleted but aren&apos;t shown here.
-            </span>
-          </div>
+          <AlertBanner
+            variant="warning"
+            title="Dependent resources unverified"
+            message="Radar couldn't verify which dependent resources Kubernetes will also delete. Additional resources may be deleted but aren't shown here."
+            className="mb-0"
+          />
         )}
 
         {!cascadeLoading && !cascadePreviewFailed && orphaning && <p className="text-xs text-theme-text-secondary">Keeping the pending orphan policy: owner-reference dependents are orphaned. Controller cleanup may still delete resources.</p>}
         {!cascadeLoading && !cascadePreviewFailed && forceDelete && cascadeDetail?.propagation === 'Orphan' && <p className="text-xs text-warning-text">Force delete removes the orphan finalizer and uses Background propagation. Owner-reference dependents may now be garbage collected.</p>}
         {!cascadeLoading && !cascadePreviewFailed && !orphaning && cascadeDetail?.coverage?.complete && cascadeDetail.coverage.narrowed && <p className="text-xs text-theme-text-secondary">Only resources Radar observes and you can read are listed.</p>}
-        {!cascadeLoading && cascadePreviewFailed && <p className="text-xs text-warning-text">Deletion preview unavailable. Additional resources may be deleted.</p>}
+        {!cascadeLoading && cascadePreviewFailed && <AlertBanner variant="warning" title="Deletion preview unavailable" message="Additional resources may be deleted." className="mb-0" />}
         {!cascadeLoading && !cascadePreviewFailed && cascadeDetail?.notEnumerated?.map(item => <p key={item} className="text-xs text-theme-text-secondary">Not enumerated: {item}.</p>)}
 
         <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
@@ -180,15 +180,17 @@ function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<C
   const what = teardown.action === 'uninstall' ? 'uninstall the Helm release' : 'delete the resources it manages'
   if (force) {
     return (
-      <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
-        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span>
+      <AlertBanner
+        variant="warning"
+        title="Controller cleanup may be skipped"
+        message={<>
           {destinationNotice && <>{destinationNotice} </>}
           {teardown.terminating
             ? `This is already being deleted, so ${teardown.controller} may already be working to ${what}. Force delete removes its finalizer but can't undo that.`
             : `Force delete removes ${teardown.controller}'s finalizer, so ${teardown.controller}'s remaining cleanup may be skipped. Cleanup may already have started; removing the finalizer cannot undo it.`}
-        </span>
-      </div>
+        </>}
+        className="mb-0"
+      />
     )
   }
   const title = teardown.destination === 'unknown'

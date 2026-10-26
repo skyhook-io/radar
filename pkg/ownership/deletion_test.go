@@ -2,6 +2,7 @@ package ownership_test
 
 import (
 	"context"
+	"fmt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"testing"
 
@@ -9,6 +10,26 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
+
+func BenchmarkDeletionLongChain(b *testing.B) {
+	fixture := ownershiptest.NewBuilder()
+	root := fixture.Add("", "ConfigMap", "chain", "0")
+	owner := root
+	for i := 1; i < 1000; i++ {
+		owner = fixture.Add("", "ConfigMap", "chain", fmt.Sprint(i), owner.OwnerRef(false))
+	}
+	session, err := ownershiptest.Scan(fixture.World()).Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		got := ownership.NewView(session, ownership.Unrestricted()).Deletion(context.Background(), root.Ref, 1000)
+		if got.Truncated || len(got.Dependents) != 999 || len(got.Possible) != 0 {
+			b.Fatalf("chain returned %d dependents, %d possible, truncated %v", len(got.Dependents), len(got.Possible), got.Truncated)
+		}
+	}
+}
 
 func TestDeletionSharedOwnersAndUnknowns(t *testing.T) {
 	root := ownershiptest.Object{Ref: at("", "ConfigMap", "alpha", "root"), APIVersion: "v1", UID: "root"}

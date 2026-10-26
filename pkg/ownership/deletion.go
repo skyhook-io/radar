@@ -28,14 +28,13 @@ func (v *View) Deletion(ctx context.Context, ref resourceid.Ref, limit int) Dele
 		return a
 	}
 	objects := map[resourceid.Ref]Observation{ref: a.Subject.Read.Object}
-	queue := []resourceid.Ref{ref}
-	for len(queue) > 0 {
+	order := []resourceid.Ref{ref}
+	for i := 0; i < len(order); i++ {
 		if ctx.Err() != nil {
 			a.Truncated = true
 			break
 		}
-		current := queue[0]
-		queue = queue[1:]
+		current := order[i]
 		children := v.Children(current)
 		a.Gaps = append(a.Gaps, children.Gaps...)
 		a.Narrowed = a.Narrowed || children.Narrowed
@@ -64,7 +63,7 @@ func (v *View) Deletion(ctx context.Context, ref resourceid.Ref, limit int) Dele
 				continue
 			}
 			objects[child.Ref] = child
-			queue = append(queue, child.Ref)
+			order = append(order, child.Ref)
 		}
 	}
 	const (
@@ -73,15 +72,19 @@ func (v *View) Deletion(ctx context.Context, ref resourceid.Ref, limit int) Dele
 		collected
 	)
 	fates := map[resourceid.Ref]int{ref: collected}
-	for r := range objects {
+	ownersByRef := make(map[resourceid.Ref][]OwnerResolution, len(objects))
+	for _, r := range order {
 		if r != ref {
 			fates[r] = possible
+			if ctx.Err() == nil {
+				_, ownersByRef[r] = v.References(r)
+			}
 		}
 	}
 	// Propagate certainty in either direction until shared-owner paths settle.
 	for changed := true; changed; {
 		changed = false
-		for r := range objects {
+		for _, r := range order {
 			if r == ref {
 				continue
 			}
@@ -89,9 +92,8 @@ func (v *View) Deletion(ctx context.Context, ref resourceid.Ref, limit int) Dele
 				a.Truncated = true
 				break
 			}
-			_, owners := v.References(r)
 			fate := collected
-			for _, owner := range owners {
+			for _, owner := range ownersByRef[r] {
 				switch owner.State {
 				case OwnerFound:
 					switch fates[owner.Ref] {
