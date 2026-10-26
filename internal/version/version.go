@@ -368,7 +368,9 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 	result.LatestVersion = strings.TrimPrefix(release.TagName, "v")
 	result.ReleaseURL = release.HTMLURL
 	result.ReleaseNotes = truncateNotes(release.Body, 500)
-	if options.manual && IsDevelopmentBuild() {
+	// An unreleased build (git describe of a commit past a tag, a dirty tree)
+	// parses as a prerelease of its tag, so the tag would always read as newer.
+	if IsDevelopmentBuild() {
 		if _, err := semver.NewVersion(result.LatestVersion); err != nil {
 			result.Error = fmt.Sprintf("invalid latest release version: %v", err)
 			log.Printf("[version] %s", result.Error)

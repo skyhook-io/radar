@@ -823,3 +823,34 @@ func TestManualUpdateCheckSupersedesInFlightAutomaticLookup(t *testing.T) {
 		})
 	}
 }
+
+// A build of a commit past a release tag parses as a prerelease of that tag,
+// so the tag would always read as an update.
+func TestAutomaticCheckOffersNoUpdateToDevelopmentBuilds(t *testing.T) {
+	t.Setenv("RADAR_DISABLE_VERSION_CHECK", "")
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.18.2"})
+	}))
+	defer proxy.Close()
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	for _, current := range []string{"1.18.2-22-ga0694c7fa", "1.18.2-22-ga0694c7fa-dirty", "1.18.2-dirty"} {
+		SetCurrent(current)
+		resetUpdateCache()
+		info := CheckForUpdate(context.Background())
+		if info.UpdateAvail || info.LatestVersion != "1.18.2" || info.Error != "" {
+			t.Errorf("CheckForUpdate with %q = %+v, want latest 1.18.2 and no update", current, info)
+		}
+	}
+	SetCurrent("1.18.1")
+	resetUpdateCache()
+	if info := CheckForUpdate(context.Background()); !info.UpdateAvail {
+		t.Errorf("a release behind the latest got no update: %+v", info)
+	}
+}
