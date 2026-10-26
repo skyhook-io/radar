@@ -513,6 +513,19 @@ describe('manager answer composition', () => {
     expect(g.summary).not.toContain('recreates it')
   })
 
+  // A newer Radar's state with no lead, or one candidate of a kind this UI
+  // can't open, still warns.
+  it.each([
+    ['an unfamiliar state without a lead', { state: 'future-state' as never, direct: { object: subject, recorders: [a] } }],
+    ['an unfamiliar manager kind', { state: 'claimed' as const, lead: { kind: 'Stack', group: 'example.io', namespace: 'x', name: 's' }, direct: { object: subject, claims: [{ manager: { kind: 'Stack', group: 'example.io', namespace: 'x', name: 's' }, source: 'argo-tracking-id' as never, check: 'omitted' as const }] } }],
+  ])('%s still warns on field writes and deletes', (_, manager) => {
+    for (const write of [hibernate, { scope: 'delete' as const }]) {
+      const g = run(manager, [write])
+      expect(g.level).toBe('may-revert')
+      expect(g.requiresAck).toBe(true)
+    }
+  })
+
   it('a state this UI does not know is read as claimed', () => {
     const g = run({ state: 'future-state' as never, lead: a, direct: { object: subject, recorders: [a] } }, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
     expect(g.level).toBe('may-revert')

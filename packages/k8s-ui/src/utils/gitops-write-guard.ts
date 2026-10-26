@@ -453,7 +453,9 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
         (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1 || manager.via && directClaims.length > 0)) {
       return { level: 'may-revert', reason: `${names} may overwrite these fields. A single manager's ignore rules or sync policy cannot exempt this change.${manager.via ? ` The controller also generates it from ${managerRefLabel(manager.via.object)}.` : ''}` }
     }
-    if (owner && manager.state === 'claimed' && !targetOptedOut(input) && (write.scope === 'metadata' || write.scope === 'spec')) {
+    // A candidate this UI can't open (no lead, or a manager kind it doesn't
+    // know) is still a candidate; only a native Helm lead has its own rules.
+    if (manager.state === 'claimed' && candidates.length > 0 && (owner || !input.helmRelease) && !targetOptedOut(input) && (write.scope === 'metadata' || write.scope === 'spec')) {
       return { level: 'may-revert', reason: `This resource's metadata names ${names}, but its recorded membership isn't confirmed. A sync may overwrite this change.` }
     }
   }
@@ -471,7 +473,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   if (manager && write.scope === 'delete') {
     const candidates = managerCandidates(manager)
     if (chainUnread(manager)) return { level: 'may-revert', reason: input.ownershipError! }
-    if (owner && manager.state === 'claimed' && !targetOptedOut(input)) {
+    if (manager.state === 'claimed' && candidates.length > 0 && (owner || !input.helmRelease) && !targetOptedOut(input)) {
       return { level: 'may-revert', reason: `This resource's metadata names ${candidates.map(managerRefLabel).join(' and ')}, but its recorded membership isn't confirmed. A sync may recreate it.` }
     }
     if (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1) {
