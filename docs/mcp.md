@@ -813,6 +813,10 @@ Radar's clock; a farther-future timestamp does not establish expected progress.
 After that window, or when deletion timing is unavailable, the condition remains
 a fallback when no stuck-deletion finding is available. It never takes priority
 over an independent error, including a qualified older-generation observation.
+Deletion itself advances a custom resource's generation. If its top-level
+`status.observedGeneration` then lags, the existing generation gate can withhold
+even a pre-deletion error; only a readable stuck-deletion finding covers the
+prolonged deletion until that gate clears.
 
 Findings start at warning after 10 minutes. At 30 minutes, controller-owned
 finalizers follow this policy:

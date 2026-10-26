@@ -887,6 +887,23 @@ func TestDeletingFallbackDoesNotInventOnset(t *testing.T) {
 	}
 }
 
+func TestDeletionPreservesExistingWholeObjectGenerationGate(t *testing.T) {
+	u := rolloutWithConditions([]map[string]any{{"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "provider was unavailable before deletion"}})
+	u.SetName("example")
+	u.SetNamespace("test")
+	u.SetGeneration(2)
+	u.Object["status"].(map[string]any)["observedGeneration"] = int64(1)
+	deletion := metav1.NewTime(time.Now().Add(-time.Minute))
+	u.SetDeletionTimestamp(&deletion)
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+	for _, grouped := range []bool{false, true} {
+		if got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped}); len(got) != 0 {
+			t.Fatalf("existing whole-object generation policy changed: %+v", got)
+		}
+	}
+}
+
 func TestGenericConditionsDuringDeletion(t *testing.T) {
 	for _, tc := range []struct {
 		name                                                              string
