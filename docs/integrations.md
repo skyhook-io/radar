@@ -1,6 +1,6 @@
-# CRD Integrations
+# Ecosystem Integrations
 
-Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
+Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar adds dedicated capabilities described below, including detail views, topology edges, smart table columns, and AI-optimized summaries. Coverage varies by integration.
 
 ## ConfigMap and Secret reflection (Reflector)
 
@@ -1759,6 +1759,22 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 | DeviceConfig (AMD GPU Operator) | `amd.com/v1alpha1` | Ready condition + component DaemonSet rollout counts |
 
 ---
+
+## Local runtime evidence: RabbitMQ, NATS and Vault
+
+Radar's local MCP tool `collect_application_evidence` reads one Pod's application endpoint after operator approval. It does not add automatic Issues detection or application-specific resource views.
+
+| Integration | Endpoint | Evidence |
+|---|---|---|
+| RabbitMQ | Port 15692, `/metrics` | Disk and memory alarms reported by the selected node. |
+| NATS | Port 8222, `/jsz` | JetStream consumer pending, acknowledgement-pending and redelivery counts. |
+| Vault | Port 8200, `/v1/sys/health` | HTTP status and initialized, sealed and standby state. |
+
+Collection requires Kubernetes Pod-read and port-forward permissions, a recognized image (`rabbitmq`, `nats`, or `hashicorp/vault`), and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must be enabled. Custom ports, TLS and endpoints requiring application credentials are unsupported.
+
+Collection is available only through full local MCP, outside built-in investigations and Apply. Authenticated, remote, hosted and in-cluster deployments are unsupported.
+
+Results describe the selected endpoint at collection time. Unavailable evidence does not establish health or absence of problems. See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation and result interpretation.
 
 ## Any Other CRD
 

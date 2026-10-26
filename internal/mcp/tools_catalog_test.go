@@ -249,9 +249,10 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// such uncertainty boundary, and get_runtime_versions' "declared, not
 	// proof" and "unknown, not absent" another, and list_resources' and
 	// get_resource's result shapes, with "only object_not_found means it is
-	// absent", a third.
+	// absent", a third. The bounded application collector and cached Strimzi
+	// diagnosis contract add 1,153 bytes together, preserving the base headroom.
 	const (
-		maxCatalogBytes         = 63200
+		maxCatalogBytes         = 64353
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -430,8 +431,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		}
 		// diagnose is read-only EXCEPT its optional in_cluster=true arg, which creates
 		// ONE transient, self-destructing probe pod - so it is non-read-only but NOT
-		// destructive (additive + self-deleting). It is the only such tool.
-		if tool.Name == "diagnose" {
+		// destructive (additive + self-deleting). Runtime collection likewise requires explicit network authorization.
+		if tool.Name == "diagnose" || tool.Name == "collect_application_evidence" {
 			if tool.Annotations.ReadOnlyHint {
 				t.Errorf("diagnose must NOT set readOnlyHint=true - in_cluster=true creates a transient pod")
 			}
@@ -676,7 +677,7 @@ func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
 	registered := map[string]bool{}
 	for _, tool := range listRegisteredTools(t) {
 		registered[tool.Name] = true
-		if writes[tool.Name] || allowed[tool.Name] {
+		if writes[tool.Name] || tool.Name == "collect_application_evidence" || allowed[tool.Name] {
 			continue
 		}
 		missing = append(missing, tool.Name)

@@ -326,7 +326,7 @@ export function ClusterHealthCard({
                 <Info className="w-3.5 h-3.5 text-purple-400/60 shrink-0" />
               </button>
             )}
-            <MCPSetupDialog open={mcpDialogOpen} onClose={() => setMcpDialogOpen(false)} mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} />
+            <MCPSetupDialog open={mcpDialogOpen} onClose={() => setMcpDialogOpen(false)} mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} applicationEvidenceAvailable={caps.mcpApplicationEvidence} />
           </div>
 
           {/* Center: Three health rings */}

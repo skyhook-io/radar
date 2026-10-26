@@ -95,6 +95,7 @@ type Server struct {
 	listener                net.Listener
 	updater                 *updater.Updater
 	mcpHandler              http.Handler
+	mcpApplyHandler         http.Handler
 	mcpReadOnlyHandler      http.Handler
 	mcpInvestigationHandler http.Handler
 	diagConfig              *DiagConfig
@@ -211,6 +212,7 @@ type Config struct {
 	StaticFS                embed.FS                    // Embedded frontend files
 	StaticRoot              string                      // Path within StaticFS
 	MCPHandler              http.Handler                // Full MCP server handler (nil = full endpoint disabled)
+	MCPApplyHandler         http.Handler                // built-in apply tools; excludes operator-only collection
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
@@ -253,6 +255,7 @@ func New(cfg Config) *Server {
 		enablePprof:             cfg.EnablePprof,
 		startTime:               time.Now(),
 		mcpHandler:              cfg.MCPHandler,
+		mcpApplyHandler:         cfg.MCPApplyHandler,
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
 		diagConfig:              cfg.DiagConfig,
@@ -983,6 +986,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// letting the MCP handler answer with 405.
 	r.Handle("/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp-apply/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-investigation/.well-known/*", http.NotFoundHandler())
 
@@ -991,6 +995,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Mount("/mcp", s.mcpHandler)
 	} else {
 		r.Mount("/mcp", http.NotFoundHandler())
+	}
+	if s.mcpApplyHandler != nil {
+		r.Mount("/mcp-apply", s.mcpApplyHandler)
+	} else {
+		r.Mount("/mcp-apply", http.NotFoundHandler())
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
@@ -1440,6 +1449,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	caps.MCPEnabled = s.mcpEnabled()
 	caps.MCPReadOnly = s.mcpReadOnly()
+	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{

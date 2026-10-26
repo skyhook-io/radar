@@ -25,6 +25,7 @@ func TestMCPHandlersRefuseCrossSitePosts(t *testing.T) {
 	defer lease.Close()
 	handlers := map[string]http.Handler{
 		"/mcp":               NewHandler(),
+		"/mcp-apply":         NewApplyHandler(),
 		"/mcp-readonly":      NewReadOnlyHandler(),
 		"/mcp-investigation": NewInvestigationHandler(refs),
 	}

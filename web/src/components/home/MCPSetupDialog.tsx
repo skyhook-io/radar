@@ -9,6 +9,7 @@ interface MCPSetupDialogProps {
   open: boolean
   onClose: () => void
   readOnly?: boolean
+  applicationEvidenceAvailable?: boolean
   mcpUrl: string
 }
 
@@ -44,7 +45,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, applicationEvidenceAvailable = false }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -118,7 +119,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false }: MCPS
   const currentPort = Number(window.location.port) || 80
 
   const tools = MCP_TOOL_CATALOG
-    .filter((tool) => !readOnly || !tool.write)
+    .filter((tool) => (!readOnly || !tool.write) && (!tool.localOnly || (!readOnly && applicationEvidenceAvailable)))
     .map((tool) => readOnly && tool.name === 'diagnose'
       ? { ...tool, params: tool.params.filter((param) => param.arg !== 'in_cluster') }
       : tool)

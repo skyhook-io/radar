@@ -564,7 +564,11 @@ func CreateServer(cfg AppConfig) *server.Server {
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
 		if !cfg.MCPReadOnly {
-			serverCfg.MCPHandler = mcppkg.NewHandler()
+			serverCfg.MCPHandler = mcppkg.NewApplyHandler()
+			if !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured {
+				serverCfg.MCPHandler = mcppkg.NewHandler()
+			}
+			serverCfg.MCPApplyHandler = mcppkg.NewApplyHandler()
 		}
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
