@@ -556,7 +556,7 @@ describe('manager answer composition', () => {
   })
 
   it.each(['unknown', 'none'] as const)('server %s replaces client owner, Helm and manager inputs', state => {
-    const negative = { state, direct: { object: subject, unreadable: 1 } }
+    const negative = { state, direct: { object: subject } }
     const g = run(shared, [hibernate], { helmRelease: { namespace: 'db', name: 'old' }, evidence: evidence(selfHeal, [], { manager: negative }) })
     expect(g.level).toBe('none')
     expect(g.owner).toBeNull()
