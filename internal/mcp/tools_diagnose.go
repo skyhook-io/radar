@@ -301,7 +301,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if cache == nil {
 		return nil, nil, errNotConnected()
 	}
-	cache, _, err := resourceReadCache(ctx, kindNorm, input.Group, []string{input.Namespace}, true)
+	cache, _, err := planResourceInventory(ctx, kindNorm, input.Group, []string{input.Namespace}, true)
 	if err != nil {
 		return nil, nil, err
 	}

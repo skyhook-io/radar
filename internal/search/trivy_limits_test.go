@@ -9,10 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/filter"
-
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 // limitsProvider holds one matching report plus a Pod, so a test can tell
@@ -22,6 +25,21 @@ func limitsProvider() *fakeProvider {
 		vulnReport("shop", "replicaset-web-php", "library/php", "8.3", vuln("CVE-2026-109618", "php", "8.3.10", "8.3.36", "CRITICAL")))
 	p.typed = map[string][]runtime.Object{"pods": {newPod("shop", "cve-2026-109618-canary", "php:8.3", nil)}}
 	return p
+}
+
+// hasKindGap reports whether res has a gap with code naming kind.
+func hasKindGap(res Result, code readreason.Code, kind string) bool {
+	for _, gap := range res.Coverage.Gaps {
+		if gap.Code != code || gap.Kinds == nil {
+			continue
+		}
+		for _, k := range gap.Kinds.Names {
+			if k.Kind == kind {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestSearch_FindingsTimeLimitIsReported(t *testing.T) {
@@ -34,10 +52,10 @@ func TestSearch_FindingsTimeLimitIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.IncompleteFindings != FindingsTimeLimit {
-		t.Fatalf("incomplete = %q, want %q", res.IncompleteFindings, FindingsTimeLimit)
+	if !hasKindGap(res, readreason.FindingsScanIncomplete, "VulnerabilityReport") {
+		t.Fatalf("gaps = %+v, want VulnerabilityReport's findings reported as not fully searched", res.Coverage.Gaps)
 	}
-	if got := hitNames(res); !slices.Equal(got, []string{"shop/cve-2026-109618-canary"}) {
+	if got := reportHitNames(res); !slices.Equal(got, []string{"shop/cve-2026-109618-canary"}) {
 		t.Fatalf("hits = %v, want only the Pod", got)
 	}
 }
@@ -70,8 +88,8 @@ func TestSearch_MalformedReportsDoNotBreakSearch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", q, err)
 		}
-		if q == "CVE-2026-109618" && !slices.Equal(hitNames(res), []string{"shop/good"}) {
-			t.Fatalf("hits = %v", hitNames(res))
+		if q == "CVE-2026-109618" && !slices.Equal(reportHitNames(res), []string{"shop/good"}) {
+			t.Fatalf("hits = %v", reportHitNames(res))
 		}
 	}
 }
@@ -83,12 +101,12 @@ func TestSearch_UnconfirmedAccessIsReportedNotDropped(t *testing.T) {
 	}
 	access := &kindAccess{namespaces: []string{"team-a"}, unchecked: []string{"team-b"}}
 	res, err := Search(context.Background(), trivyProvider(vulnGVR, "VulnerabilityReport", reports...), Parse("CVE-2026-109618"),
-		Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+		Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}}, DynamicKindAccess: access.options()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(hitNames(res), []string{"team-a/a"}) || !res.AccessIncomplete {
-		t.Fatalf("hits = %v, access incomplete = %v", hitNames(res), res.AccessIncomplete)
+	if !slices.Equal(reportHitNames(res), []string{"team-a/a"}) || !hasKindGap(res, readreason.UserPermissionCheckFailed, "VulnerabilityReport") {
+		t.Fatalf("hits = %v, gaps = %+v", reportHitNames(res), res.Coverage.Gaps)
 	}
 }
 
@@ -108,7 +126,7 @@ func TestCheckNamespaces(t *testing.T) {
 	}
 	budget := new(atomic.Int32)
 	budget.Store(3)
-	allowed, unchecked := CheckNamespaces([]string{"cached-yes", "cached-no", "fresh", "denied", "fails", "over-budget"}, budget, cached, check)
+	allowed, unchecked := readscope.BudgetedNamespaceAccess(t.Context(), []string{"cached-yes", "cached-no", "fresh", "denied", "fails", "over-budget"}, budget, cached, check)
 	if !slices.Equal(allowed, []string{"cached-yes", "fresh"}) {
 		t.Fatalf("allowed = %v", allowed)
 	}
@@ -119,7 +137,7 @@ func TestCheckNamespaces(t *testing.T) {
 		t.Fatalf("fresh checks = %d, want the budget of 3", checks.Load())
 	}
 	// The budget is shared: a second call in the same search sends nothing.
-	_, unchecked = CheckNamespaces([]string{"fresh2"}, budget, cached, check)
+	_, unchecked = readscope.BudgetedNamespaceAccess(t.Context(), []string{"fresh2"}, budget, cached, check)
 	if !slices.Equal(unchecked, []string{"fresh2"}) || checks.Load() != 3 {
 		t.Fatalf("unchecked = %v, checks = %d", unchecked, checks.Load())
 	}
@@ -135,12 +153,12 @@ func TestSearch_AccessIncompleteDoesNotDependOnTheQuery(t *testing.T) {
 	for _, q := range []string{"CVE-2026-109618", "zzz-no-such-thing"} {
 		access := &kindAccess{namespaces: []string{"team-a"}, unchecked: []string{"team-b"}}
 		res, err := Search(context.Background(), trivyProvider(vulnGVR, "VulnerabilityReport", reports...), Parse(q),
-			Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+			Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}}, DynamicKindAccess: access.options()})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !res.AccessIncomplete || len(res.Hits) != 0 {
-			t.Fatalf("q=%s: hits = %v, access incomplete = %v", q, hitNames(res), res.AccessIncomplete)
+		if !hasKindGap(res, readreason.UserPermissionCheckFailed, "VulnerabilityReport") || len(res.Hits) != 0 {
+			t.Fatalf("q=%s: hits = %v, gaps = %+v", q, reportHitNames(res), res.Coverage.Gaps)
 		}
 		if want := []string{"cluster:vulnerabilityreports", "ns:vulnerabilityreports:[team-a team-b]"}; !slices.Equal(access.asked, want) {
 			t.Fatalf("q=%s: asked = %v, want %v", q, access.asked, want)
@@ -155,12 +173,14 @@ func TestSearch_UnconfirmedAccessToAnUnreadableNamespaceIsReported(t *testing.T)
 	p.dynamicErrNamespaces = map[string]bool{"team-a": true, "team-b": true}
 	access := &kindAccess{namespaces: []string{"team-a"}, unchecked: []string{"team-b"}}
 	res, err := Search(context.Background(), p, Parse("kind:VulnerabilityReport"),
-		Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+		Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}}, DynamicKindAccess: access.options()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.AccessIncomplete || len(res.UnsearchedKinds) != 1 || !slices.Equal(res.UnsearchedKinds[0].Namespaces, []string{"team-a"}) {
-		t.Fatalf("access incomplete = %v, unsearched = %+v", res.AccessIncomplete, res.UnsearchedKinds)
+	// team-a's read failed where the caller may list reports; team-b's
+	// access couldn't be confirmed, so that is its gap instead.
+	if !hasKindGap(res, readreason.ReadError, "VulnerabilityReport") || !hasKindGap(res, readreason.UserPermissionCheckFailed, "VulnerabilityReport") {
+		t.Fatalf("gaps = %+v", res.Coverage.Gaps)
 	}
 }
 
@@ -178,8 +198,8 @@ func TestSearch_FilterSkipsReportsWhoseFindingsWereNotRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Hits) != 0 || res.IncompleteFindings != FindingsTimeLimit {
-		t.Fatalf("hits = %v, incomplete = %q", hitNames(res), res.IncompleteFindings)
+	if len(res.Hits) != 0 || !hasKindGap(res, readreason.FindingsScanIncomplete, "VulnerabilityReport") {
+		t.Fatalf("hits = %v, gaps = %+v", reportHitNames(res), res.Coverage.Gaps)
 	}
 }
 
@@ -201,8 +221,8 @@ func TestSearch_CancellationStopsInsideALargeReport(t *testing.T) {
 	if _, _, _, ok := scoreToken("zzz-no-match", c); ok {
 		t.Fatal("matched")
 	}
-	if scan.reason != FindingsTimeLimit {
-		t.Fatalf("reason = %q", scan.reason)
+	if !scan.exhausted() {
+		t.Fatal("budget not reported spent")
 	}
 	if d := time.Since(start); d > 50*time.Millisecond {
 		t.Fatalf("walk took %v after cancellation", d)
@@ -220,12 +240,12 @@ func TestSearch_NamespaceFilterNarrowsAccessChecks(t *testing.T) {
 	}
 	access := &kindAccess{namespaces: []string{"team-42"}}
 	res, err := Search(context.Background(), trivyProvider(vulnGVR, "VulnerabilityReport", reports...), Parse("ns:team-42 CVE-2026-109618"),
-		Options{Include: IncludeNone, KindAccess: access.options()})
+		Options{Include: IncludeNone, DynamicKindAccess: access.options()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(hitNames(res), []string{"team-42/r"}) {
-		t.Fatalf("hits = %v", hitNames(res))
+	if !slices.Equal(reportHitNames(res), []string{"team-42/r"}) {
+		t.Fatalf("hits = %v", reportHitNames(res))
 	}
 	if want := []string{"cluster:vulnerabilityreports", "ns:vulnerabilityreports:[team-42]"}; !slices.Equal(access.asked, want) {
 		t.Fatalf("asked = %v, want %v", access.asked, want)
@@ -251,11 +271,41 @@ func TestSearch_CancellationStopsInsideAReportOfPassedChecks(t *testing.T) {
 	cancel()
 	walked := 0
 	eachTrivyFinding(report, scan, func(*trivyFinding) bool { walked++; return true })
-	if scan.reason != FindingsTimeLimit || walked != 0 {
-		t.Fatalf("reason = %q, walked = %d", scan.reason, walked)
+	if !scan.exhausted() || walked != 0 {
+		t.Fatalf("exhausted = %v, walked = %d", scan.exhausted(), walked)
 	}
 }
 
 // slowProvider blocks one kind's list until released.
 // A search waiting on a slow list of some other kind doesn't hold the
 // findings slot, so another search can still read findings.
+
+func TestSearch_FindingsTimeLimitAndFilterFailuresAreDistinct(t *testing.T) {
+	defer func(b time.Duration) { findingsBudget = b }(findingsBudget)
+	findingsBudget = -time.Second
+	f, err := filter.CompileObjectFilter(`object.nonexistent == 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Search(context.Background(), limitsProvider(), Parse("CVE-2026-109618"), Options{Include: IncludeNone, Filter: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 0 || res.FilterErrors != 1 || len(res.Coverage.Gaps) != 2 {
+		t.Fatalf("distinct failures: %+v", res)
+	}
+	for _, gap := range res.Coverage.Gaps {
+		switch gap.Code {
+		case readreason.FindingsScanIncomplete:
+			if gap.Objects != nil || gap.Kinds == nil || !slices.Equal(gap.Kinds.Names, []resourceapi.KindRef{{Kind: "VulnerabilityReport", Group: "aquasecurity.github.io"}}) || gap.Namespaces == nil || gap.Namespaces.Extent != resourceapi.ExtentUnknown {
+				t.Errorf("findings gap: %+v", gap)
+			}
+		case readreason.FilterEvalFailed:
+			if gap.Kinds != nil || gap.Namespaces != nil || gap.Objects == nil || !slices.Equal(gap.Objects.Names, []resourceapi.ObjectRef{{Kind: "Pod", Namespace: "shop", Name: "cve-2026-109618-canary"}}) {
+				t.Errorf("CEL gap: %+v", gap)
+			}
+		default:
+			t.Errorf("unexpected gap: %+v", gap)
+		}
+	}
+}

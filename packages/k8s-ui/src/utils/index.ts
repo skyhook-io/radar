@@ -35,5 +35,7 @@ export * from './network-policy'
 export * from './cnpg-backup'
 export * from './url-path'
 export * from './resource-refs'
+export * from './resource-coverage'
+export * from './read-actions'
 
 export * from './grant'

@@ -68,6 +68,7 @@ describe('ResourcesSidebar count visibility', () => {
         onSelectedKindChange={() => {}}
         apiResources={[horizontalPodAutoscaler]}
         resourceCounts={{ 'autoscaling/HorizontalPodAutoscaler': 0 }}
+        resourceCoverage={{ 'autoscaling/HorizontalPodAutoscaler': { status: 'complete', gaps: [], scope: { type: 'all_namespaces' }, read: { type: 'all_namespaces' } } }}
       />
     )
 
@@ -82,6 +83,7 @@ describe('ResourcesSidebar count visibility', () => {
         onSelectedKindChange={() => {}}
         apiResources={[horizontalPodAutoscaler]}
         resourceCounts={{ 'autoscaling/HorizontalPodAutoscaler': 0 }}
+        resourceCoverage={{ 'autoscaling/HorizontalPodAutoscaler': { status: 'complete', gaps: [], scope: { type: 'all_namespaces' }, read: { type: 'all_namespaces' } } }}
       />
     )
 
@@ -96,6 +98,7 @@ describe('ResourcesSidebar count visibility', () => {
         onSelectedKindChange={() => {}}
         apiResources={[horizontalPodAutoscaler]}
         resourceCounts={{ 'autoscaling/HorizontalPodAutoscaler': 0 }}
+        resourceCoverage={{ 'autoscaling/HorizontalPodAutoscaler': { status: 'complete', gaps: [], scope: { type: 'all_namespaces' }, read: { type: 'all_namespaces' } } }}
         pinned={[{ name: 'horizontalpodautoscalers', kind: 'HorizontalPodAutoscaler', group: 'autoscaling' }]}
         isPinned={(name, group) => name === 'horizontalpodautoscalers' && group === 'autoscaling'}
       />
@@ -197,6 +200,33 @@ describe('ResourcesSidebar category workspaces', () => {
   })
 })
 
+describe('ResourcesSidebar counts from a Radar that predates coverage', () => {
+  it('hides an empty kind and shows plain counts, as before coverage', () => {
+    const hidden = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[horizontalPodAutoscaler]} resourceCounts={{ 'autoscaling/HorizontalPodAutoscaler': 0 }} resourceCoverage={{ 'autoscaling/HorizontalPodAutoscaler': { status: 'unknown' } }} />)
+    expect(hidden).not.toContain('HorizontalPodAutoscaler')
+    const shown = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[horizontalPodAutoscaler]} resourceCounts={{ 'autoscaling/HorizontalPodAutoscaler': 23 }} />)
+    expect(shown).toContain('>23</')
+    expect(shown).not.toContain('≥')
+  })
+})
+
+it('sizes the count badge to fit a bounded count in the thousands', () => {
+  const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[horizontalPodAutoscaler]} resourceCounts={{ 'autoscaling/HorizontalPodAutoscaler': 12345 }} resourceCoverage={{ 'autoscaling/HorizontalPodAutoscaler': { status: 'partial', gaps: [], scope: { type: 'all_namespaces' }, read: { type: 'namespaces', namespaces: { names: ['alpha'], count: 1 } } } }} />)
+  const label = `≥${(12345).toLocaleString()}`
+  const badge = html.slice(html.lastIndexOf('<span', html.indexOf(label)), html.indexOf(label))
+  const classes = badge.match(/class="([^"]*)"/)?.[1].split(/\s+/) ?? []
+  expect(classes).toContain('min-w-8')
+  expect(classes).not.toContain('w-8')
+  expect(classes).not.toContain('w-9')
+})
+
+it('keeps a partial zero visible rather than hiding the kind as empty', () => {
+  const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[horizontalPodAutoscaler]} resourceCounts={{ 'autoscaling/HorizontalPodAutoscaler': 0 }} resourceCoverage={{ 'autoscaling/HorizontalPodAutoscaler': { status: 'partial', gaps: [], scope: { type: 'all_namespaces' }, read: { type: 'namespaces', namespaces: { names: ['alpha'], count: 1 } } } }} />)
+  expect(html).toContain('HorizontalPodAutoscaler')
+  expect(html).toContain('–')
+  expect(html).not.toContain('≥0')
+})
+
 describe('sidebarDestinationsMatching', () => {
   const views = ['Clusters', 'Backups', 'Declarations', 'Pooling', 'Operator'].map((label) => ({ id: label, label, onSelect: () => {} }))
   const resources = [{ group: 'postgresql.cnpg.io' }, { group: 'barmancloud.cnpg.io' }]
@@ -214,4 +244,23 @@ describe('sidebarDestinationsMatching', () => {
   it('keeps every view without a term', () => {
     expect(labels('  ')).toHaveLength(5)
   })
+})
+
+it('qualifies the collapsed category total as well as the individual kind', () => {
+  const widget = { name: 'widgets', kind: 'Widget', group: 'read.example.test', version: 'v1', namespaced: true, isCrd: true, verbs: ['get', 'list', 'watch'] }
+  const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[widget]} resourceCounts={{ 'read.example.test/Widget': 3 }} resourceCoverage={{ 'read.example.test/Widget': { status: 'partial', gaps: [], scope: { type: 'all_namespaces' }, read: { type: 'namespaces', namespaces: { names: ['alpha'], count: 1 } } } }} />)
+  const start = html.indexOf('>Test Read Example</span>')
+  expect(start).toBeGreaterThan(-1)
+  expect(html.slice(start, html.indexOf('</button>', start))).toContain('≥3')
+})
+
+it('bounds a category total over kinds Radar collects in only some namespaces', () => {
+  const widget = { name: 'widgets', kind: 'Widget', group: 'read.example.test', version: 'v1', namespaced: true, isCrd: true, verbs: ['get', 'list', 'watch'] }
+  const gadget = { ...widget, name: 'gadgets', kind: 'Gadget' }
+  const collected = (ns: string) => ({ status: 'complete' as const, narrowedBy: ['namespace_collection'], gaps: [], scope: { type: 'namespaces' as const, namespaces: { names: [ns], count: 1 } }, read: { type: 'namespaces' as const, namespaces: { names: [ns], count: 1 } } })
+  const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[widget, gadget]} resourceCounts={{ 'read.example.test/Widget': 3, 'read.example.test/Gadget': 2 }} resourceCoverage={{ 'read.example.test/Widget': collected('alpha'), 'read.example.test/Gadget': collected('beta') }} />)
+  const start = html.indexOf('>Test Read Example</span>')
+  expect(start).toBeGreaterThan(-1)
+  // Each kind is exact where Radar collects it; their sum is exact for no scope.
+  expect(html.slice(start, html.indexOf('</button>', start))).toContain('≥5')
 })

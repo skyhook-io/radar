@@ -11,12 +11,14 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2694,5 +2696,176 @@ func TestFailedListCoverageStaysDisjointAndPresent(t *testing.T) {
 	body = result.StructuredContent.(mcpReadError)
 	if body.Coverage == nil || body.Coverage.Validate() != nil || len(body.Coverage.Gaps) != 1 || body.Coverage.Gaps[0].Namespaces.Extent != resourceapi.ExtentAll {
 		t.Fatalf("an unassessed failure reaches the whole scope: %+v", body.Coverage)
+	}
+}
+
+func TestDynamicBroadListKeepsUnansweredNamespaces(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backoff time.Duration
+		reject  bool
+		want    readreason.Code
+	}{
+		{"active retry with existing informer", time.Hour, false, readreason.KindSyncPending},
+		{"exhausted retry", time.Millisecond, false, readreason.ReadError},
+		{"rejected credentials", 10 * time.Millisecond, true, readreason.RadarCredentialsRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces()...)); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestState)
+			gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+			widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "present"}}}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, widget)
+			var reject atomic.Bool
+			dyn.PrependReactor("list", "widgets", func(a ktesting.Action) (bool, runtime.Object, error) {
+				switch a.GetNamespace() {
+				case "":
+					return true, nil, collectorRefusal(gvr.GroupResource(), "list", "")
+				case "beta":
+					if reject.Load() {
+						return true, nil, apierrors.NewUnauthorized("token rejected")
+					}
+					return true, nil, errors.New("client rate limiter Wait returned an error: rate: Wait(n=1) would exceed context deadline")
+				}
+				return false, nil, nil
+			})
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			d := k8s.GetDynamicResourceCache()
+			d.Stop()
+			core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: dyn, Discovery: k8s.GetResourceDiscovery().ResourceDiscovery, NamespaceFallbacks: []string{"alpha", "beta"}, ProbeRetryBackoff: []time.Duration{tc.backoff}, ProbeRecoveryIntervals: []time.Duration{time.Hour}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.DynamicResourceCache = core
+			if err := d.EnsureWatching(gvr); err != nil {
+				t.Fatal(err)
+			}
+			reject.Store(tc.reject)
+			deadline := time.Now().Add(3 * time.Second)
+			for !d.IsNamespaceSynced(gvr, "alpha") || (tc.backoff != time.Hour && d.Observation(gvr).ProbeRetrying) {
+				if time.Now().After(deadline) {
+					t.Fatalf("scenario did not settle: %+v", d.Observation(gvr))
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if err := d.EnsureWatching(gvr); tc.backoff == time.Hour && err != nil {
+				t.Fatalf("existing informer must make EnsureWatching succeed during active retry: %v", err)
+			}
+			result, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "widgets", Group: gvr.Group, Context: "none"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, cov := listBody(t, result)
+			if len(rows) != 1 || cov.Status != "partial" || !slices.Equal(cov.Read, []string{"alpha"}) || !slices.Equal(cov.Scope, []string{"alpha", "beta"}) || !slices.Equal(cov.Codes, []string{string(tc.want)}) || !slices.Equal(cov.GapNamespaces[string(tc.want)], []string{"beta"}) {
+				t.Fatalf("rows=%+v coverage=%+v", rows, cov)
+			}
+		})
+	}
+}
+
+func TestDynamicBroadListKeepsUnknownProbeExtent(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces()...)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	dyn.PrependReactor("list", "widgets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("client rate limiter Wait returned an error: rate: Wait(n=1) would exceed context deadline")
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	_, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "widgets", Group: gvr.Group, Context: "none"})
+	result, ok := readErrorResult(err)
+	if !ok {
+		t.Fatalf("unclassified read: %v", err)
+	}
+	var body mcpReadError
+	if err := json.Unmarshal([]byte(extractText(t, result)), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.ErrorCode != readreason.KindSyncPending || body.Coverage == nil || body.Coverage.Scope.Type != resourceapi.ScopeAllNamespaces || len(body.Coverage.Gaps) != 1 || body.Coverage.Gaps[0].Namespaces.Extent != resourceapi.ExtentUnknown {
+		t.Fatalf("%+v", body)
+	}
+	if err := body.Coverage.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A caller who can see every namespace and names one that doesn't exist is
+// told so even when it is outside the pin: a mistyped name is the likelier
+// cause, and "outside the pin" would send them to widen the pin to it. An
+// existing namespace outside the pin is still outside_namespace_pin.
+func TestMissingNamespaceOutsideThePinIsNotFound(t *testing.T) {
+	// The Namespace informer holds alpha, beta, gamma, shop and kube-system.
+	setupFakeCacheForFilterTests(t)
+	oldPin, oldTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("alpha")
+	t.Cleanup(func() { k8s.ForceNamespaceScope = oldPin; k8s.SetNamespaceScopeOverride(oldTarget) })
+	codeFor := func(namespace string) readreason.Code {
+		_, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "pods", Namespace: namespace, Context: "none"})
+		var re *readError
+		if !errors.As(err, &re) {
+			t.Fatalf("%s: want a read error, got %v", namespace, err)
+		}
+		return re.code
+	}
+	if got := codeFor("ghost"); got != readreason.NamespaceNotFound {
+		t.Fatalf("missing namespace outside the pin: %q, want %q", got, readreason.NamespaceNotFound)
+	}
+	if got := codeFor("beta"); got != readreason.OutsideNamespacePin {
+		t.Fatalf("existing namespace outside the pin: %q, want %q", got, readreason.OutsideNamespacePin)
+	}
+}
+
+func TestRBACResourceReadsRequireExactNamespaceAccess(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces(
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "alpha"}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "beta"}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "alpha"}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "beta"}},
+	)...)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	ctx := withRestrictedUser(t, "rbac-reader", []string{"alpha", "beta"})
+	perms := getPermCache().Get("rbac-reader", nil)
+	for _, resource := range []string{"roles", "rolebindings"} {
+		for _, verb := range []string{"list", "get"} {
+			perms.SetCanI(verb, "rbac.authorization.k8s.io", resource, "alpha", true)
+			perms.SetCanI(verb, "rbac.authorization.k8s.io", resource, "beta", false)
+		}
+		result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: resource})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Items    []map[string]any     `json:"items"`
+			Coverage resourceapi.Coverage `json:"coverage"`
+		}
+		if err := json.Unmarshal([]byte(extractText(t, result)), &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Items) != 1 || body.Coverage.Status != resourceapi.CoveragePartial || len(body.Coverage.Gaps) != 1 || body.Coverage.Gaps[0].Code != readreason.UserForbidden || !slices.Equal(body.Coverage.Gaps[0].Namespaces.Names, []string{"beta"}) {
+			t.Fatalf("exact list access: %+v", body)
+		}
+		for _, ns := range []string{"alpha", "beta"} {
+			result, _, err := handleGetResource(ctx, nil, getResourceInput{Kind: resource, Namespace: ns, Name: "entry"})
+			if ns == "beta" {
+				if err == nil || !strings.HasPrefix(err.Error(), "user_forbidden:") {
+					t.Fatalf("denied get: %v", err)
+				}
+			} else if err != nil || !strings.Contains(extractText(t, result), "entry") {
+				t.Fatalf("allowed get: %v", err)
+			}
+		}
 	}
 }

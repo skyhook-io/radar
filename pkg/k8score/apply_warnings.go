@@ -12,8 +12,8 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// detectExternalManager inspects labels and annotations for evidence that the
-// resource is reconciled by Helm, Argo CD, Flux, or another controller. Returns
+// detectExternalManager inspects labels and annotations for evidence that
+// Helm, Argo CD, Flux, or another controller manages the resource. Returns
 // the manager display name and a best-effort instance identifier; both empty
 // when nothing was detected. Detection is deliberately conservative — radar and
 // kubectl are not considered "external".
@@ -24,21 +24,21 @@ func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
 	labels := obj.GetLabels()
 	annotations := obj.GetAnnotations()
 
-	if v := annotations["argocd.argoproj.io/instance"]; v != "" {
+	if v := labels["argocd.argoproj.io/instance"]; v != "" {
 		return "Argo CD", v
 	}
 	if v := annotations["argocd.argoproj.io/tracking-id"]; v != "" {
 		return "Argo CD", v
 	}
 
-	if v := annotations["kustomize.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := annotations["kustomize.toolkit.fluxcd.io/namespace"]; ns != "" {
+	if v := labels["kustomize.toolkit.fluxcd.io/name"]; v != "" {
+		if ns := labels["kustomize.toolkit.fluxcd.io/namespace"]; ns != "" {
 			return "Flux (Kustomization)", ns + "/" + v
 		}
 		return "Flux (Kustomization)", v
 	}
-	if v := annotations["helm.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := annotations["helm.toolkit.fluxcd.io/namespace"]; ns != "" {
+	if v := labels["helm.toolkit.fluxcd.io/name"]; v != "" {
+		if ns := labels["helm.toolkit.fluxcd.io/namespace"]; ns != "" {
 			return "Flux (HelmRelease)", ns + "/" + v
 		}
 		return "Flux (HelmRelease)", v
@@ -63,6 +63,10 @@ func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
 	return "", ""
 }
 
+// formatExternalManagerWarning words the warning as what the metadata says, not
+// as a verdict: tracking metadata can be copied from another object or name a
+// manager that no longer lists this one, and native Helm reconciles nothing
+// between upgrades.
 func formatExternalManagerWarning(manager, instance string) string {
 	if manager == "" {
 		return ""
@@ -71,7 +75,10 @@ func formatExternalManagerWarning(manager, instance string) string {
 	if instance != "" {
 		frag = fmt.Sprintf(" (instance: %s)", instance)
 	}
-	return fmt.Sprintf("Resource is reconciled by %s%s. Direct edits may be reverted by the next reconciliation; prefer changing the source of truth (chart values / Application spec / operator CR).", manager, frag)
+	if manager == "Helm" {
+		return fmt.Sprintf("Its metadata says Helm installed it%s. The next helm upgrade or rollback of that release may overwrite direct edits; prefer changing the chart values.", frag)
+	}
+	return fmt.Sprintf("Its tracking metadata names %s%s. If that manager still tracks it, its next sync may revert direct edits; prefer changing the source of truth (Application spec / Git / operator CR).", manager, frag)
 }
 
 // podSpecPath returns the field path that contains the PodSpec for the given

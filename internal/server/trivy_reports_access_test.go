@@ -19,7 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/search"
+	"github.com/skyhook-io/radar/internal/readscope"
 )
 
 var exposedSecretReportGVR = schema.GroupVersionResource{Group: "aquasecurity.github.io", Version: "v1alpha1", Resource: "exposedsecretreports"}
@@ -30,6 +30,7 @@ const leakedMatch = "AWS_ACCESS_KEY_ID=AKIAFAKEFAKEFAKE1234"
 // and other, each carrying a leaked credential in report.secrets[].match.
 func setupExposedSecretReports(t *testing.T) {
 	t.Helper()
+	addPackageNamespaces(t, "legacy", "other")
 	gvr := exposedSecretReportGVR
 	var objs []runtime.Object
 	for _, ns := range []string{"legacy", "other"} {
@@ -85,6 +86,7 @@ func TestProxyAuth_TrivyReportsDeniedWithoutReportRBAC(t *testing.T) {
 	// The fake has no apiserver to answer checks, so bob's denial is seeded.
 	bob.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "", false)
 	bob.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "legacy", false)
+	bob.SetCanI("get", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "legacy", false)
 	env.srv.permCache.Set("bob", nil, bob)
 
 	for _, path := range []string{
@@ -94,8 +96,10 @@ func TestProxyAuth_TrivyReportsDeniedWithoutReportRBAC(t *testing.T) {
 	} {
 		resp := env.authGet(t, path, "bob", "")
 		body := readBody(t, resp)
-		if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != "[]" {
-			t.Errorf("%s: status %d body %s, want 200 []", path, resp.StatusCode, body)
+		// Nothing bob may read was read, so the list fails and says why
+		// rather than answering an empty list.
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, `"error_code":"user_forbidden"`) || strings.Contains(body, leakedMatch) {
+			t.Errorf("%s: status %d body %s, want 403 user_forbidden", path, resp.StatusCode, body)
 		}
 	}
 	for _, path := range []string{
@@ -117,7 +121,7 @@ func TestProxyAuth_TrivyReportsDeniedWithoutReportRBAC(t *testing.T) {
 	}
 
 	resp = env.authGet(t, "/api/resource-counts", "bob", "")
-	var counts ResourceCountsResponse
+	var counts testCounts
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}
@@ -167,12 +171,14 @@ func TestProxyAuth_TrivyReportsFollowReportRBAC(t *testing.T) {
 			env.srv.permCache.Set("reader", nil, perms)
 
 			resp := env.authGet(t, tt.listPath, "reader", "")
-			var items []unstructured.Unstructured
-			if err := json.Unmarshal([]byte(readBody(t, resp)), &items); err != nil {
+			var list struct {
+				Items []unstructured.Unstructured `json:"items"`
+			}
+			if err := json.Unmarshal([]byte(readBody(t, resp)), &list); err != nil {
 				t.Fatal(err)
 			}
 			var got []string
-			for _, u := range items {
+			for _, u := range list.Items {
 				got = append(got, u.GetNamespace())
 			}
 			slices.Sort(got)
@@ -186,7 +192,7 @@ func TestProxyAuth_TrivyReportsFollowReportRBAC(t *testing.T) {
 			}
 
 			resp = env.authGet(t, "/api/resource-counts", "reader", "")
-			var counts ResourceCountsResponse
+			var counts testCounts
 			if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 				t.Fatal(err)
 			}
@@ -223,19 +229,19 @@ func TestProxyAuth_TrivyReportCountsBoundChecks(t *testing.T) {
 	}
 
 	resp := env.authGet(t, "/api/resource-counts", "reader", "")
-	var counts ResourceCountsResponse
+	var counts testCounts
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(counts.Unavailable, key) {
 		t.Fatalf("first load: %s not unavailable (count %d)", key, counts.Counts[key])
 	}
-	if n := reportChecks(); n > search.MaxAccessChecks {
-		t.Fatalf("first load sent %d namespace checks, cap is %d", n, search.MaxAccessChecks)
+	if n := reportChecks(); n > readscope.MaxAccessChecks {
+		t.Fatalf("first load sent %d namespace checks, cap is %d", n, readscope.MaxAccessChecks)
 	}
 
 	resp = env.authGet(t, "/api/resource-counts", "reader", "")
-	counts = ResourceCountsResponse{}
+	counts = testCounts{}
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}
@@ -256,12 +262,36 @@ func TestProxyAuth_TrivyReportCountsUnansweredCheckIsUnavailable(t *testing.T) {
 	env.srv.permCache.Set("reader", nil, &auth.UserPermissions{AllowedNamespaces: nil})
 
 	resp := env.authGet(t, "/api/resource-counts", "reader", "")
-	var counts ResourceCountsResponse
+	var counts testCounts
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}
 	const key = "aquasecurity.github.io/ExposedSecretReport"
 	if !slices.Contains(counts.Unavailable, key) || slices.Contains(counts.Forbidden, key) {
 		t.Fatalf("unavailable=%v forbidden=%v, want %s unavailable only", counts.Unavailable, counts.Forbidden, key)
+	}
+}
+
+// A list over a namespace where the caller may read reports and one where
+// they may not reads the first and reports the second as a gap, without
+// claiming to have read it.
+func TestProxyAuth_TrivyReportsMixedAccessListCoverage(t *testing.T) {
+	setupExposedSecretReports(t)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"legacy", "other"}}
+	perms.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "", false)
+	perms.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "legacy", true)
+	perms.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "other", false)
+	env.srv.permCache.Set("mixed", nil, perms)
+	resp := env.authGet(t, "/api/resources/exposedsecretreports?group=aquasecurity.github.io&namespaces=legacy,other", "mixed", "")
+	var list testResourceListEnvelope
+	if err := json.Unmarshal([]byte(readBody(t, resp)), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Coverage.Read == nil || !slices.Equal(list.Coverage.Read.Namespaces.Names, []string{"legacy"}) {
+		t.Fatalf("items %d, read %+v", len(list.Items), list.Coverage.Read)
+	}
+	if len(list.Coverage.Gaps) != 1 || list.Coverage.Gaps[0].Code != "user_forbidden" || !slices.Equal(list.Coverage.Gaps[0].Namespaces.Names, []string{"other"}) {
+		t.Fatalf("gaps %+v", list.Coverage.Gaps)
 	}
 }
