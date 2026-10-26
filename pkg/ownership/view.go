@@ -521,7 +521,18 @@ func (v *View) recordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 			v.reads[m.Ref] = r
 		}
 		a.Undecided = a.Undecided || r.may == Undecided
-		if r.may == Allowed && r.read.State == Present {
+		if r.may != Allowed {
+			continue
+		}
+		// The view read this manager before the search found it: an earlier
+		// read that couldn't see it, or saw another incarnation, can't vouch
+		// for the list the search read, and isn't silently dropped either.
+		switch {
+		case r.read.State == Unavailable:
+			a.Gaps = append(a.Gaps, r.read.Gap)
+		case r.read.State != Present || r.read.Object.UID != m.UID:
+			a.Gaps = append(a.Gaps, Gap{Kind: m.Ref.GroupKind(), Namespace: m.Ref.Namespace, Reason: readreason.KindSyncPending})
+		default:
 			a.Managers = append(a.Managers, r.read.Object)
 		}
 	}

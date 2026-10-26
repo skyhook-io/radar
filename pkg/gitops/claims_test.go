@@ -90,6 +90,17 @@ func TestTruncatedInstanceLabelNamesTheTrackedApplication(t *testing.T) {
 	}
 }
 
+// Argo CD also trims what no longer ends in a letter or digit after the cut.
+func TestTruncatedInstanceLabelTrimsLikeArgoCD(t *testing.T) {
+	cm := resourceid.Ref{Kind: "ConfigMap", Namespace: "shop", Name: "settings"}
+	full := "team_" + strings.Repeat("a", 57) + "-release"
+	label := strings.TrimRight(full[:63], "-")
+	got := Claims(cm, map[string]string{argoInstanceLabel: label}, map[string]string{argoTrackingIDAnnotation: full + ":/ConfigMap:shop/settings"})
+	if len(label) != 62 || len(got) != 2 || got[0].Manager != got[1].Manager {
+		t.Fatalf("label %q (%d): Claims = %+v; want both to name the tracked Application", label, len(label), got)
+	}
+}
+
 // Argo CD writes its destination namespace into a cluster-scoped object's
 // tracking ID, or none, and ignores it when comparing.
 func TestTrackingIDOfAClusterScopedObject(t *testing.T) {

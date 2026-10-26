@@ -85,8 +85,9 @@ func Claims(object resourceid.Ref, labels, annotations map[string]string) []Clai
 	}
 	if v := labels[argoInstanceLabel]; v != "" {
 		// With annotation+label tracking Argo CD cuts the label to a label
-		// value's 63 characters; the annotation names the Application in full.
-		if len(trackedBy) > maxLabelValue && v == trackedBy[:maxLabelValue] {
+		// value's 63 characters and trims what no longer ends in a letter or
+		// digit; the annotation names the Application in full.
+		if len(trackedBy) > maxLabelValue && v == strings.TrimRightFunc(trackedBy[:maxLabelValue], notAlphanumeric) {
 			v = trackedBy
 		}
 		if app, ok := argoApplication(v); ok {
@@ -136,4 +137,8 @@ func argoApplication(v string) (resourceid.Ref, bool) {
 		ref.Name = v
 	}
 	return ref, ref.Name != "" && !strings.Contains(ref.Name, "_") && (ref.Namespace != "" || !strings.Contains(v, "_"))
+}
+
+func notAlphanumeric(r rune) bool {
+	return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9')
 }
