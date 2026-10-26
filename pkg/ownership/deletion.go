@@ -39,7 +39,23 @@ func (v *View) Deletion(ctx context.Context, ref resourceid.Ref, limit int) Dele
 		children := v.Children(current)
 		a.Gaps = append(a.Gaps, children.Gaps...)
 		a.Narrowed = a.Narrowed || children.Narrowed
-		for _, child := range children.Children {
+		candidates := children.Children
+		if found, searched := v.searches[current]; searched {
+			readable, _, _ := v.candidates(found)
+			for _, c := range readable {
+				for _, owner := range c.OwnerReferences {
+					if owner.UID != objects[current].UID {
+						continue
+					}
+					resolution := v.resolve(c, owner)
+					if resolution.State == OwnerUnknown && mayResolveTo(resolution, owner.Name, current) {
+						candidates = append(candidates, c)
+						break
+					}
+				}
+			}
+		}
+		for _, child := range candidates {
 			if _, seen := objects[child.Ref]; seen {
 				continue
 			}

@@ -66,7 +66,7 @@ func TestDeletionBoundAndCancellation(t *testing.T) {
 }
 
 func TestDeletionCyclesInvalidReferencesAndUnvisitedCoOwner(t *testing.T) {
-	for _, mode := range []string{"cap", "cycle", "unserved", "invalid"} {
+	for _, mode := range []string{"cap", "cycle", "unserved", "unserved reference version", "invalid"} {
 		t.Run(mode, func(t *testing.T) {
 			r := ownershiptest.Object{Ref: at("", "ConfigMap", "alpha", "root"), APIVersion: "v1", UID: "root"}
 			a := ownershiptest.Object{Ref: at("", "ConfigMap", "alpha", "a"), APIVersion: "v1", UID: "a", OwnerReferences: []metav1.OwnerReference{r.OwnerRef(false)}}
@@ -78,6 +78,8 @@ func TestDeletionCyclesInvalidReferencesAndUnvisitedCoOwner(t *testing.T) {
 				limit, certain, possible = 3, 1, 1
 			case "cycle":
 				a.OwnerReferences = append(a.OwnerReferences, b.OwnerRef(false))
+			case "unserved reference version":
+				a.OwnerReferences[0].APIVersion = "v99"
 			case "unserved":
 				a.OwnerReferences = append(a.OwnerReferences, metav1.OwnerReference{APIVersion: "missing.io/v1", Kind: "Ghost", Name: "ghost", UID: "ghost"})
 			case "invalid":
