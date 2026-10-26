@@ -421,8 +421,9 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   const manager = input.manager
   if (manager) {
     const candidates = managerCandidates(manager)
-    const viaGitOps = manager.via && managerCandidates(manager).some(ref => gitOpsOwnerFromRef(ref) !== null)
-    const directClaims = activeManagerClaims(manager.direct).filter(c => !viaGitOps || c.source !== 'helm-release')
+    // A Helm release's annotations on an object answered through an ancestor
+    // are its Deployment's, copied onto it.
+    const directClaims = activeManagerClaims(manager.direct).filter(c => !manager.via || c.source !== 'helm-release')
     const names = dedupeResourceRefs([...candidates, ...(manager.via ? directClaims.map(c => c.manager) : [])]).map(managerRefLabel).join(' and ')
     if (write.scope === 'create-child' && candidates.length) {
       return { level: 'info', reason: `A new object isn't in the GitOps source, so ${names} is not expected to revert it.` }

@@ -530,6 +530,22 @@ describe('manager answer composition', () => {
 })
 
 
+// A ReplicaSet carries its Helm-installed Deployment's release annotations;
+// they are the Deployment's, so the ReplicaSet gets the generated-from note.
+it('a ReplicaSet of a plain Helm Deployment is generated from it, not claimed', () => {
+  const rs = { kind: 'ReplicaSet', group: 'apps', namespace: 'db', name: 'web-1' }
+  const release = { kind: 'HelmRelease', namespace: 'db', name: 'web' }
+  const g = guard({
+    target: rs,
+    manager: { state: 'claimed', lead: release,
+      direct: { object: rs, claims: [{ manager: release, source: 'helm-release', check: 'not-recording', weak: true }] },
+      via: { object: { kind: 'Deployment', group: 'apps', namespace: 'db', name: 'web' }, claims: [{ manager: release, source: 'helm-release', check: 'not-recording' }] } },
+    writes: [hibernate],
+  })
+  expect(g.level).toBe('info')
+  expect(g.requiresAck).toBe(false)
+})
+
 describe('unconfirmed manager boundaries', () => {
   const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'candidate' }
   const claimed: import('../types/core').ManagerAnswer = { state: 'claimed', lead: app, direct: { object: target, claims: [{ manager: app, source: 'argo-tracking-id', check: 'omitted' }] } }
