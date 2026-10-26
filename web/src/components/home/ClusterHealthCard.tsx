@@ -112,6 +112,12 @@ function getPlatformInfo(platform: string): { name: string; icon: string | null 
   if (platformLower.includes('docker')) {
     return { name: 'Docker Desktop', icon: null }
   }
+  if (platformLower === 'nkp') {
+    return { name: 'Nutanix Kubernetes Platform', icon: null }
+  }
+  if (platformLower === 'nutanix') {
+    return { name: 'Nutanix', icon: null }
+  }
   // The Go backend returns "generic" for unrecognized platforms — that
   // literal string is no better than the empty case, so fall back to
   // the friendlier "Kubernetes" label for both. Only pass the platform

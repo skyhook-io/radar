@@ -64,6 +64,21 @@ func TestDetectClusterInfoFallsBackToRKE2ServerVersion(t *testing.T) {
 	}
 }
 
+func TestDetectClusterInfoPrefersNKPOverNodeProvider(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}, Spec: corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0123"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kommander-flux"}},
+	)
+
+	info, err := (&Manager{k8sClient: client}).detectClusterInfo(context.Background())
+	if err != nil {
+		t.Fatalf("detectClusterInfo() error = %v", err)
+	}
+	if info.Platform != "nkp" {
+		t.Errorf("platform = %q, want nkp", info.Platform)
+	}
+}
+
 func TestGenerateRecommendationForCanal(t *testing.T) {
 	recommendation := (&Manager{}).generateRecommendation(&ClusterInfo{CNI: "canal"}, nil)
 	if recommendation == nil {

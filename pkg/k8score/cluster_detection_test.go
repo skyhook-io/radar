@@ -25,6 +25,7 @@ func TestDetectNodePlatform(t *testing.T) {
 		{name: "AWS provider", node: nodeWithProviderID("aws:///zone/node"), want: "eks"},
 		{name: "Azure provider", node: nodeWithProviderID("azure:///subscriptions/node"), want: "aks"},
 		{name: "kind provider", node: nodeWithProviderID("kind://docker/radar/control-plane"), want: "kind"},
+		{name: "Nutanix provider", node: nodeWithProviderID("nutanix://99d71c41-e100-4474-601b-5dd604becea6"), want: "nutanix"},
 		{name: "GKE label", node: nodeWithLabels(map[string]string{"cloud.google.com/gke-nodepool": "default"}), want: "gke"},
 		{name: "EKS nodegroup label", node: nodeWithLabels(map[string]string{"eks.amazonaws.com/nodegroup": "workers"}), want: "eks"},
 		{name: "EKS capacity label", node: nodeWithLabels(map[string]string{"eks.amazonaws.com/capacityType": "ON_DEMAND"}), want: "eks"},
@@ -73,6 +74,8 @@ func TestDetectClusterPlatform(t *testing.T) {
 		{name: "no nodes", client: fake.NewSimpleClientset(), want: "unknown"},
 		{name: "generic node", client: fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}}), want: "generic"},
 		{name: "RKE2 node", client: fake.NewSimpleClientset(nodePtr(nodeWithKubeletVersion("v1.31.7+rke2r1"))), want: "rke2"},
+		{name: "NKP on AWS infrastructure", client: fake.NewSimpleClientset(nodePtr(nodeWithProviderID("aws:///zone/node")), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NKPNamespace}}), want: "nkp"},
+		{name: "Nutanix without NKP", client: fake.NewSimpleClientset(nodePtr(nodeWithProviderID("nutanix://uuid"))), want: "nutanix"},
 		{name: "GKE Autopilot", client: fake.NewSimpleClientset(nodePtr(nodeWithSignals("", "gce://project/zone/node", map[string]string{"cloud.google.com/gke-autopilot": "true"}))), want: "gke-autopilot"},
 	}
 

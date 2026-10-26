@@ -318,6 +318,10 @@ func (m *Manager) detectClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 		}
 	}
 
+	if info.Platform == "generic" && k8score.IsNKP(ctx, m.k8sClient) {
+		info.Platform = "nkp"
+	}
+
 	// Detect platform from nodes
 	nodes, err := m.k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
 	if err != nil {
