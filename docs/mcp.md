@@ -1223,7 +1223,9 @@ a winner the evidence doesn't support ([full rules](ownership.md#what-manages-an
 
 Helm annotations beside an Argo CD or Kustomization manager mean an adopted Helm install: its next upgrade can still
 overwrite a change. With this answer present, the metadata-only manager warning is left out for the claims it weighs.
-`managedBy` keeps its own meaning: the topmost owner the relationship graph links.
+With `manager` present, `resourceContext.managedBy` names only managers it doesn't weigh: the topmost controller or
+another managing controller (a cert-manager Certificate for its Secret), never a second Argo CD, Flux or Helm answer.
+A manager you can't read is left out without a note.
 
 ### Node placement context
 

@@ -2,6 +2,7 @@ package resourcecontext
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -152,5 +153,51 @@ func TestBuildKeepsClaimsOnTheWayWithoutVia(t *testing.T) {
 	m := rc.Manager
 	if m == nil || m.Via != nil || len(m.AlsoClaimed) != 1 || m.AlsoClaimed[0].Manager.Name != "rs-app" || m.AlsoClaimed[0].On == nil || m.AlsoClaimed[0].On.Kind != "ReplicaSet" {
 		t.Fatalf("manager %+v; want the ReplicaSet's claim in alsoClaimed", m)
+	}
+}
+
+// With a manager answer, managedBy keeps only managers the answer doesn't
+// weigh: the GitOps one would be a second answer to the same question.
+func TestBuildManagedByLeavesGitOpsManagersToTheAnswer(t *testing.T) {
+	secret := &corev1.Secret{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls", UID: "uid-tls"},
+	}
+	app := topology.ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "shop"}
+	cert := topology.ResourceRef{Group: "cert-manager.io", Kind: "Certificate", Namespace: "shop", Name: "tls"}
+	build := func(answer *topology.ManagerAnswer) *ResourceContext {
+		return Build(context.Background(), secret, Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
+			rel.ManagedBy = []topology.ResourceRef{app, cert}
+			rel.Ownership = &topology.OwnershipCoverage{Manager: answer}
+		}})
+	}
+	with := build(&topology.ManagerAnswer{State: "listed", Lead: &app, Direct: topology.ManagerEvidence{Object: topology.ResourceRef{Kind: "Secret", Namespace: "shop", Name: "tls"}, Recorders: []topology.ResourceRef{app}}})
+	if len(with.ManagedBy) != 1 || with.ManagedBy[0].Kind != "Certificate" {
+		t.Fatalf("managedBy with an answer = %+v; want only the Certificate", with.ManagedBy)
+	}
+	if without := build(nil); len(without.ManagedBy) != 2 {
+		t.Fatalf("managedBy without an answer = %+v; want both", without.ManagedBy)
+	}
+}
+
+// A managedBy the caller can't read leaves no trace: a note would say that a
+// manager the caller can't see links to this object.
+func TestBuildManagedByHidesUnreadableManagersWithoutANote(t *testing.T) {
+	secret := &corev1.Secret{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls", UID: "uid-tls"},
+	}
+	cert := topology.ResourceRef{Group: "cert-manager.io", Kind: "Certificate", Namespace: "team-b", Name: "tls"}
+	build := func(managedBy []topology.ResourceRef) *ResourceContext {
+		return Build(context.Background(), secret, Options{AccessChecker: denyChecker{group: "cert-manager.io", kind: "Certificate", namespace: "team-b"}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
+			rel.ManagedBy = managedBy
+			rel.Ownership = &topology.OwnershipCoverage{}
+		}})
+	}
+	hidden, none := build([]topology.ResourceRef{cert}), build(nil)
+	a, _ := json.Marshal(hidden)
+	b, _ := json.Marshal(none)
+	if string(a) != string(b) {
+		t.Fatalf("a hidden manager changes the context:\n%s\nvs\n%s", a, b)
 	}
 }

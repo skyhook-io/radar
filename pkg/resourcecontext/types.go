@@ -39,7 +39,11 @@ type ResourceContext struct {
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`
 	Owner      *ContextRef        `json:"owner,omitempty"`
-	ManagedBy  []ContextRef       `json:"managedBy,omitempty"`
+	// ManagedBy is the topmost owner or managing controller the relationship
+	// graph links. With Manager set it names only what Manager doesn't weigh
+	// (Argo CD, Flux and Helm are Manager's), and one the caller can't read is
+	// dropped without an omission note.
+	ManagedBy []ContextRef `json:"managedBy,omitempty"`
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
 	// controller's when its own doesn't settle it.

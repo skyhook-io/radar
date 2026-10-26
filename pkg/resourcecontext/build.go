@@ -238,14 +238,22 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			managedBy = topology.SynthesizeManagedBy(m, ident.Kind, ident.Namespace, ident.Name, nil, nil, nil)
 		}
 	}
+	if answered && rel.Ownership != nil && rel.Ownership.Manager != nil {
+		rc.Manager = managerContext(rel.Ownership.Manager)
+	}
+	// With a manager answer, the GitOps and Helm managers are its to name:
+	// managedBy keeps the rest (a controller, cert-manager), not a second,
+	// metadata-only answer to the same question.
+	if rc.Manager != nil {
+		managedBy = slices.DeleteFunc(slices.Clone(managedBy), answeredManager)
+	}
+	// Unlike the other references, a managedBy the caller can't read leaves no
+	// omission note: the note would say a hidden manager links to this object.
+	// The manager answer's narrowed says the caller sees only part.
 	if len(managedBy) > 0 {
 		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker,
 			toContextRefs(managedBy),
-			"managedBy", omitted)
-	}
-
-	if answered && rel.Ownership != nil && rel.Ownership.Manager != nil {
-		rc.Manager = managerContext(rel.Ownership.Manager)
+			"managedBy", nil)
 	}
 
 	if rel != nil && rel.Owner != nil {
@@ -1682,6 +1690,8 @@ func toContextRefs(refs []topology.ResourceRef) []ContextRef {
 // filterRefs applies the access check to each ref. Denied refs are dropped
 // and one omitted entry is recorded per field (deduped by the tracker).
 // When ac is nil (local-kubeconfig / no auth), every ref passes.
+// filterRefs keeps the refs the caller may read. With omitted, a dropped ref
+// records an rbac_denied note for fieldPath; nil drops silently.
 func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fieldPath string, omitted *omittedTracker) []ContextRef {
 	if len(refs) == 0 {
 		return nil
@@ -1695,13 +1705,28 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 		}
 		out = append(out, r)
 	}
-	if deniedAny {
+	if deniedAny && omitted != nil {
 		omitted.add(fieldPath, OmittedRBACDenied)
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// answeredManager reports whether ref is a manager kind the manager answer
+// weighs: an Argo CD Application, a Flux Kustomization or HelmRelease, or a
+// native Helm release.
+func answeredManager(ref topology.ResourceRef) bool {
+	switch {
+	case ref.Kind == "Application" && ref.Group == "argoproj.io":
+		return true
+	case ref.Kind == "Kustomization" && ref.Group == "kustomize.toolkit.fluxcd.io":
+		return true
+	case ref.Kind == "HelmRelease" && (ref.Group == "helm.toolkit.fluxcd.io" || ref.Group == ""):
+		return true
+	}
+	return false
 }
 
 // FilterSchedulingSummary applies the same reference permissions as Build without
