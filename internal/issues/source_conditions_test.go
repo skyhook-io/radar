@@ -91,6 +91,115 @@ func TestGenericConditionSelectionKeepsActionableFailures(t *testing.T) {
 	}
 }
 
+func TestGenericConditionsRespectExplicitCrossplanePause(t *testing.T) {
+	for _, tc := range []struct {
+		name, annotation, condType, reason, want string
+		failureFirst                             bool
+		independentFailure                       bool
+		current                                  []map[string]any
+	}{
+		{name: "intentional pause", annotation: "true", condType: "Synced", reason: "ReconcilePaused"},
+		{name: "missing annotation", condType: "Synced", reason: "ReconcilePaused", want: "Synced: ReconcilePaused"},
+		{name: "false annotation", annotation: "false", condType: "Synced", reason: "ReconcilePaused", want: "Synced: ReconcilePaused"},
+		{name: "noncanonical annotation", annotation: "True", condType: "Synced", reason: "ReconcilePaused", want: "Synced: ReconcilePaused"},
+		{name: "different condition", annotation: "true", condType: "Ready", reason: "ReconcilePaused", want: "Ready: ReconcilePaused"},
+		{name: "error while paused", annotation: "true", condType: "Synced", reason: "ReconcileError", want: "Synced: ReconcileError"},
+		{name: "independent error after pause", annotation: "true", condType: "Synced", reason: "ReconcilePaused", independentFailure: true, want: "Ready: Unavailable"},
+		{name: "independent error before pause", annotation: "true", condType: "Synced", reason: "ReconcilePaused", independentFailure: true, failureFirst: true, want: "Ready: Unavailable"},
+		{name: "current pause replaces older error", annotation: "true", condType: "Synced", reason: "ReconcileError", current: []map[string]any{{"type": "Synced", "status": "False", "reason": "ReconcilePaused"}}},
+		{name: "current error replaces older pause", annotation: "true", condType: "Synced", reason: "ReconcilePaused", current: []map[string]any{{"type": "Synced", "status": "False", "reason": "ReconcileError"}}, want: "Synced: ReconcileError"},
+		{name: "current unknown replaces older pause", condType: "Synced", reason: "ReconcilePaused", current: []map[string]any{{"type": "Synced", "status": "Unknown"}}},
+		{name: "current true replaces older pause", condType: "Synced", reason: "ReconcilePaused", current: []map[string]any{{"type": "Synced", "status": "True"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conds := []map[string]any{{"type": tc.condType, "status": "False", "reason": tc.reason}}
+			if tc.independentFailure {
+				failure := map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable"}
+				if tc.failureFirst {
+					conds = append([]map[string]any{failure}, conds...)
+				} else {
+					conds = append(conds, failure)
+				}
+			}
+			u := rolloutWithConditions(conds)
+			u.SetName("example")
+			u.SetNamespace("test")
+			if tc.annotation != "" {
+				u.SetAnnotations(map[string]string{"crossplane.io/paused": tc.annotation})
+			}
+			if tc.current != nil {
+				u.Object["status"].(map[string]any)["v1beta2"] = rolloutWithConditions(tc.current).Object["status"]
+			}
+			gvr := schema.GroupVersionResource{Group: "platform.example.com", Version: "v1", Resource: "databases"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Database"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			for _, grouped := range []bool{false, true} {
+				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
+				if tc.want == "" {
+					if len(got) != 0 {
+						t.Fatalf("expected quiet pause, got %+v", got)
+					}
+					continue
+				}
+				if len(got) != 1 || got[0].Reason != tc.want || got[0].Severity != SeverityWarning {
+					t.Fatalf("want warning %q, got %+v", tc.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestCrossplanePauseKeepsIndependentFailureObservation(t *testing.T) {
+	failedAt := time.Now().Add(-8 * time.Minute).UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name                        string
+		stale, unknownTime, lagging bool
+	}{
+		{name: "known onset"},
+		{name: "older generation", stale: true},
+		{name: "unknown onset", unknownTime: true},
+		{name: "existing object generation gate", stale: true, lagging: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable", "message": "last known availability failure"}
+			if !tc.unknownTime {
+				failure["lastTransitionTime"] = failedAt.Format(time.RFC3339)
+			}
+			if tc.stale {
+				failure["observedGeneration"] = int64(1)
+			}
+			u := rolloutWithConditions([]map[string]any{{"type": "Synced", "status": "False", "reason": "ReconcilePaused", "lastTransitionTime": failedAt.Add(-time.Hour).Format(time.RFC3339)}, failure})
+			u.SetName("example")
+			u.SetNamespace("test")
+			u.SetGeneration(2)
+			u.SetAnnotations(map[string]string{"crossplane.io/paused": "true"})
+			if tc.lagging {
+				u.Object["status"].(map[string]any)["observedGeneration"] = int64(1)
+			}
+			gvr := schema.GroupVersionResource{Group: "platform.example.com", Version: "v1", Resource: "databases"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Database"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			for _, grouped := range []bool{false, true} {
+				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
+				if tc.lagging {
+					if len(got) != 0 {
+						t.Fatalf("existing generation gate changed: %+v", got)
+					}
+					continue
+				}
+				message := "last known availability failure"
+				if tc.stale {
+					message = "Condition was last reported for generation 1; current resource generation is 2. " + message
+				}
+				if len(got) != 1 || got[0].Reason != "Ready: Unavailable" || got[0].Message != message || got[0].OnsetUnknown != tc.unknownTime {
+					t.Fatalf("independent observation changed: %+v", got)
+				}
+				if !tc.unknownTime && !got[0].FirstSeen.Equal(failedAt) {
+					t.Fatalf("failure inherited pause timestamp: %v, want %v", got[0].FirstSeen, failedAt)
+				}
+			}
+		})
+	}
+}
+
 func TestCuratedConditionsContinueAfterAnExpectedCondition(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	u := rolloutWithConditions([]map[string]any{

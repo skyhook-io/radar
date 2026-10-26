@@ -79,6 +79,18 @@ export interface ResourcesSidebarProps {
   /** Task destinations keyed by category name (e.g. "CloudNativePG"). A category
    *  with a workspace stays visible even when it has no resources. */
   categoryWorkspaces?: Record<string, SidebarCategoryWorkspace>
+  /** Display settings held by the parent, for a sidebar that unmounts between
+   *  uses (the phone drawer) and should not reset them each time it opens. */
+  displayState?: SidebarDisplayState
+  onDisplayStateChange?: (state: SidebarDisplayState) => void
+  /** Escape in a non-empty kind filter clears it without letting the key
+   *  reach an enclosing dialog, which would close. */
+  containEscape?: boolean
+}
+
+export interface SidebarDisplayState {
+  showEmptyKinds: boolean
+  favoritesExpanded: boolean
 }
 
 // Persisted across remounts so collapsed categories survive tab switches
@@ -250,6 +262,9 @@ export function ResourcesSidebar({
   basePath,
   onKindNavigated,
   categoryWorkspaces,
+  displayState,
+  onDisplayStateChange,
+  containEscape,
 }: ResourcesSidebarProps) {
   // Wraps kind selection to also navigate when basePath/onNavigate are provided
   const selectKind = (kind: SelectedKindInfo) => {
@@ -267,8 +282,13 @@ export function ResourcesSidebar({
     () => persistedExpandedCategories ?? new Set(['Workloads', 'Networking', 'Configuration'])
   )
   useEffect(() => { persistedExpandedCategories = expandedCategories }, [expandedCategories])
-  const [showEmptyKinds, setShowEmptyKinds] = useState(false)
-  const [favoritesExpanded, setFavoritesExpanded] = useState(() => pinned.length > 0)
+  const [ownDisplayState, setOwnDisplayState] = useState<SidebarDisplayState>(() => ({ showEmptyKinds: false, favoritesExpanded: pinned.length > 0 }))
+  const { showEmptyKinds, favoritesExpanded } = displayState ?? ownDisplayState
+  const setDisplayState = (patch: Partial<SidebarDisplayState>) => {
+    const next = { showEmptyKinds, favoritesExpanded, ...patch }
+    if (onDisplayStateChange) onDisplayStateChange(next)
+    else setOwnDisplayState(next)
+  }
   const favoritesDisclosure = useDisclosure(favoritesExpanded)
   // Category sections are mapped inline, so they can't each call useDisclosure;
   // one generated prefix plus the category name keeps aria-controls unique.
@@ -529,6 +549,7 @@ export function ResourcesSidebar({
 
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
+      if (containEscape && kindFilter) e.stopPropagation()
       setKindFilter('')
       setHighlightedIndex(-1)
       ;(e.target as HTMLInputElement).blur()
@@ -546,7 +567,7 @@ export function ResourcesSidebar({
       setKindFilter('')
       onKindNavigated?.()
     }
-  }, [visibleResults.length, highlightedResult, selectKind, onKindNavigated]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visibleResults.length, highlightedResult, selectKind, onKindNavigated, containEscape, kindFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isKindHighlighted = useCallback((name: string, group: string) => {
     return highlightedKind?.name === name && highlightedKind?.group === group
@@ -603,7 +624,7 @@ export function ResourcesSidebar({
         <div className="mb-2">
           <button
             {...favoritesDisclosure.buttonProps}
-            onClick={() => setFavoritesExpanded((v) => !v)}
+            onClick={() => setDisplayState({ favoritesExpanded: !favoritesExpanded })}
             className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
           >
             <CollapseChevron open={favoritesExpanded} className="w-3 h-3" />
@@ -778,7 +799,7 @@ export function ResourcesSidebar({
         {/* Toggle for showing/hiding empty kinds and groups */}
         {hiddenKindsCount > 0 || hiddenGroupsCount > 0 || showEmptyKinds ? (
           <button
-            onClick={() => setShowEmptyKinds(!showEmptyKinds)}
+            onClick={() => setDisplayState({ showEmptyKinds: !showEmptyKinds })}
             className="w-full flex items-center gap-2 px-3 py-2 mt-2 text-xs text-theme-text-tertiary hover:text-theme-text-secondary border-t border-theme-border"
           >
             {showEmptyKinds ? (

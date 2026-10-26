@@ -12,6 +12,7 @@ import { ClusterName } from '../ui/ClusterName'
 import { Input } from '../ui/Input'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
+import { useKeepInViewport } from '../../hooks/useKeepInViewport'
 
 export interface ClusterSwitcherItem {
   id: string
@@ -107,6 +108,8 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useKeepInViewport(menuRef, isOpen)
 
   useImperativeHandle(ref, () => ({
     open: () => {
@@ -284,6 +287,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
 
       {isOpen && (
         <div
+          ref={menuRef}
           className={`absolute top-full ${positionClass} mt-1 z-50 min-w-[280px] max-w-[420px] bg-theme-surface border border-theme-border-light rounded-lg shadow-xl overflow-hidden`}
         >
           {searchable && (

@@ -5,29 +5,47 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/topology"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
-func TestCascadePreviewUsesUserTopologyAndRootReadGate(t *testing.T) {
+func TestCascadePreviewUsesCallerAndOwnershipWithoutTopology(t *testing.T) {
 	env := newAuthTestServer(t)
 	old := k8s.GetConnectionStatus()
 	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	env.srv.permCache.Set("preview-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
 	seedServerSecretListCanI(t, env, "preview-reader", nil, []string{"default"})
-	shared := &topology.Topology{Nodes: []topology.Node{
-		{ID: "deployment/default/root", Kind: topology.KindDeployment, Name: "root", Data: map[string]any{"namespace": "default"}},
-		{ID: "configmap/default/visible", Kind: topology.KindConfigMap, Name: "visible", Data: map[string]any{"namespace": "default"}},
-		{ID: "configmap/hidden/hidden", Kind: topology.KindConfigMap, Name: "hidden", Data: map[string]any{"namespace": "hidden"}},
-		{ID: "secret/default/private", Kind: topology.KindSecret, Name: "private", Data: map[string]any{"namespace": "default"}},
-	}, Edges: []topology.Edge{
-		{Source: "deployment/default/root", Target: "configmap/default/visible", Type: topology.EdgeManages},
-		{Source: "deployment/default/root", Target: "configmap/hidden/hidden", Type: topology.EdgeManages},
-		{Source: "deployment/default/root", Target: "secret/default/private", Type: topology.EdgeManages},
-	}}
-	env.srv.broadcaster.updateCachedTopology(shared, env.srv.broadcaster.topoEpoch.Load())
-	resp := env.authGet(t, "/api/resources/deployments/default/root/cascade-preview", "preview-reader", "")
+	useTestResourceCache(t, kubefake.NewClientset(
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "nginx", Namespace: "default", UID: "deploy-uid-1234"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "visible", Namespace: "default", UID: "visible", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "nginx", UID: "deploy-uid-1234"}}}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "private", Namespace: "default", UID: "private", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "nginx", UID: "deploy-uid-1234"}}}},
+	))
+	withOwnershipDiscovery(t)
+	var switchDuringRead atomic.Bool
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Impersonate-User") != "preview-reader" {
+			t.Errorf("missing caller identity: %v", r.Header)
+		}
+		if switchDuringRead.Load() {
+			k8s.CancelOngoingOperations()
+			http.Error(w, "connection switched", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"nginx","namespace":"default","uid":"deploy-uid-1234"}}`))
+	}))
+	defer api.Close()
+	previous := k8s.SetTestConfig(&rest.Config{Host: api.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(previous) })
+	resp := env.authGet(t, "/api/resources/deployments/default/nginx/cascade-preview", "preview-reader", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", resp.StatusCode)
@@ -36,16 +54,19 @@ func TestCascadePreviewUsesUserTopologyAndRootReadGate(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&preview); err != nil {
 		t.Fatal(err)
 	}
-	if !preview.RootResolved || len(preview.Dependents) != 1 || preview.Dependents[0].Name != "visible" {
+	if !preview.RootResolved || len(preview.Dependents) != 1 || preview.Dependents[0].Name != "visible" || preview.Basis != "ownerReferences" || preview.Coverage == nil || !preview.Coverage.Narrowed {
 		t.Fatalf("preview=%+v", preview)
-	}
-	if len(shared.Nodes) != 4 || len(shared.Edges) != 3 {
-		t.Fatal("modified shared graph")
 	}
 	denied := env.authGet(t, "/api/resources/deployments/hidden/root/cascade-preview", "preview-reader", "")
 	defer denied.Body.Close()
 	if denied.StatusCode != http.StatusForbidden {
 		t.Fatalf("denied root status=%d", denied.StatusCode)
+	}
+	switchDuringRead.Store(true)
+	switched := env.authGet(t, "/api/resources/deployments/default/nginx/cascade-preview", "preview-reader", "")
+	defer switched.Body.Close()
+	if switched.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("switched preview status=%d", switched.StatusCode)
 	}
 }
 

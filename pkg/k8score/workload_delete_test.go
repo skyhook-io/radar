@@ -2,6 +2,7 @@ package k8score
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -105,7 +106,7 @@ func TestDeleteResourcePreservesPendingDeletionPolicy(t *testing.T) {
 					t.Fatalf("%d delete requests, want 1", len(deletes))
 				}
 				got := deletes[0].DeleteOptions
-				if tt.wantBackground {
+				if tt.wantBackground || force {
 					if got.PropagationPolicy == nil || *got.PropagationPolicy != metav1.DeletePropagationBackground {
 						t.Errorf("propagationPolicy = %v, want Background", got.PropagationPolicy)
 					}
@@ -175,6 +176,82 @@ func TestDeleteResourceReadFailureDoesNotBlockDelete(t *testing.T) {
 					t.Errorf("propagationPolicy = %v, want Background", got.PropagationPolicy)
 				}
 			})
+		}
+	}
+}
+
+func TestForceDeleteStopsWhenFinalizersCannotBeStripped(t *testing.T) {
+	apps := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"namespace": "argocd", "name": "shop", "finalizers": []any{"resources-finalizer.argocd.argoproj.io"}},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{apps: "ApplicationList"}, app)
+	client.PrependReactor("patch", "applications", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+	})
+	deleted := false
+	client.PrependReactor("delete", "applications", func(clienttesting.Action) (bool, runtime.Object, error) {
+		deleted = true
+		return false, nil, nil
+	})
+	discovery := &ResourceDiscovery{resourceMap: make(map[string]APIResource), gvrMap: make(map[string]schema.GroupVersionResource)}
+	discovery.AddAPIResource(APIResource{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"delete", "patch"}})
+
+	err := NewWorkloadManager(client, discovery).DeleteResource(context.Background(), DeleteResourceOptions{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "shop", Force: true})
+	if err == nil || deleted {
+		t.Fatalf("err=%v deleted=%v; want an error and no delete", err, deleted)
+	}
+}
+
+func TestForceDeleteSkipsTheFinalizerPatchWhenThereAreNone(t *testing.T) {
+	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	pod := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"namespace": "team", "name": "stuck"},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{pods: "PodList"}, pod)
+	client.PrependReactor("patch", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("admission webhook denied the request"))
+	})
+	discovery := &ResourceDiscovery{resourceMap: make(map[string]APIResource), gvrMap: make(map[string]schema.GroupVersionResource)}
+	discovery.AddAPIResource(APIResource{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"delete", "patch", "get"}})
+
+	if err := NewWorkloadManager(client, discovery).DeleteResource(context.Background(), DeleteResourceOptions{Kind: "Pod", Namespace: "team", Name: "stuck", Force: true}); err != nil {
+		t.Fatalf("force delete of a Pod without finalizers failed on a rejected patch: %v", err)
+	}
+}
+
+func TestDeleteResourceBindsObservedUID(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	for _, force := range []bool{false, true} {
+		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "web", "namespace": "demo", "uid": "original", "resourceVersion": "1"}}}
+		if force {
+			obj.SetFinalizers([]string{"hold"})
+		}
+		dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
+		dyn.PrependReactor("delete", "deployments", func(a clienttesting.Action) (bool, runtime.Object, error) {
+			opts := a.(clienttesting.DeleteAction).GetDeleteOptions()
+			if opts.Preconditions == nil || opts.Preconditions.UID == nil || *opts.Preconditions.UID != "original" {
+				t.Fatalf("unbound delete: %+v", opts)
+			}
+			return false, nil, nil
+		})
+		dyn.PrependReactor("patch", "deployments", func(a clienttesting.Action) (bool, runtime.Object, error) {
+			var patch map[string]any
+			if err := json.Unmarshal(a.(clienttesting.PatchAction).GetPatch(), &patch); err != nil {
+				t.Fatal(err)
+			}
+			m := patch["metadata"].(map[string]any)
+			if m["uid"] != "original" || m["resourceVersion"] != "1" {
+				t.Fatalf("unbound finalizer patch: %+v", m)
+			}
+			return false, nil, nil
+		})
+		discovery := stubDiscovery(t, "Deployment", gvr)
+		discovery.AddAPIResource(APIResource{Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true})
+		if err := NewWorkloadManager(dyn, discovery).DeleteResource(context.Background(), DeleteResourceOptions{Kind: "Deployment", Group: "apps", Namespace: "demo", Name: "web", Force: force}); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

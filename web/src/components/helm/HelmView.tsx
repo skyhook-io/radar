@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
-import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input } from '@skyhook-io/k8s-ui'
+import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
@@ -51,6 +51,11 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
       }),
     [],
   )
+  // Phones hide these columns, so a sort on one of them (set at a wider
+  // width) would order the list with no visible header; fall back to the
+  // server's order there instead.
+  const isPhone = usePhoneLayout()
+  const effectiveSort = isPhone && sort && PHONE_HIDDEN_SORT_KEYS.has(sort.key) ? null : sort
 
   const filteredReleases = useMemo(() => {
     if (!releases) return []
@@ -64,10 +69,10 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
         )
       : releases
 
-    if (!sort) return filtered
-    const factor = sort.dir === 'asc' ? 1 : -1
-    return [...filtered].sort((a, b) => compareReleases(a, b, sort.key) * factor)
-  }, [releases, searchTerm, sort])
+    if (!effectiveSort) return filtered
+    const factor = effectiveSort.dir === 'asc' ? 1 : -1
+    return [...filtered].sort((a, b) => compareReleases(a, b, effectiveSort.key) * factor)
+  }, [releases, searchTerm, effectiveSort])
 
   // Keyboard navigation state
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -78,7 +83,7 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
 
   // Reset highlight when the visible order changes (search or sort) — otherwise
   // the index would point at whatever release shifted into that row.
-  useEffect(() => { setHighlightedIndex(-1) }, [searchTerm, sort])
+  useEffect(() => { setHighlightedIndex(-1) }, [searchTerm, effectiveSort])
 
   // Scroll highlighted row into view
   useEffect(() => {
@@ -301,16 +306,18 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                   )}
                 </div>
               ) : (
+                // On phones the fixed-width columns would leave Name no room;
+                // what they hide is all in the release detail.
                 <table className="w-full table-fixed">
                   <thead className="bg-theme-base sticky top-0 z-10">
                     <tr>
-                      <SortableTh label="Name" sortKey="name" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[28%]" />
-                      <SortableTh label="Namespace" sortKey="namespace" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[18%]" />
-                      <SortableTh label="Chart" sortKey="chart" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[22%]" />
-                      <SortableTh label="App Version" sortKey="appVersion" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-24 hidden xl:table-cell" />
-                      <SortableTh label="Status" sortKey="status" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-40" />
-                      <SortableTh label="Rev" sortKey="revision" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-16" />
-                      <SortableTh label="Updated" sortKey="updated" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-24" />
+                      <SortableTh label="Name" sortKey="name" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-[28%] phone:w-auto" />
+                      <SortableTh label="Namespace" sortKey="namespace" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-[18%] phone:hidden" />
+                      <SortableTh label="Chart" sortKey="chart" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-[22%] phone:hidden" />
+                      <SortableTh label="App Version" sortKey="appVersion" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-24 hidden xl:table-cell" />
+                      <SortableTh label="Status" sortKey="status" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-40 phone:w-[6.5rem]" />
+                      <SortableTh label="Rev" sortKey="revision" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-16 phone:hidden" />
+                      <SortableTh label="Updated" sortKey="updated" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-24 phone:hidden" />
                     </tr>
                   </thead>
                   <tbody className="table-divide-subtle">
@@ -360,6 +367,9 @@ function releaseIdentityKey(release: Pick<HelmRelease, 'namespace' | 'name' | 's
 }
 
 type HelmSortKey = 'name' | 'namespace' | 'chart' | 'appVersion' | 'status' | 'revision' | 'updated'
+
+// Columns the release table hides on phones (the phone: classes on the headers).
+const PHONE_HIDDEN_SORT_KEYS: ReadonlySet<HelmSortKey> = new Set<HelmSortKey>(['namespace', 'chart', 'revision', 'updated'])
 
 function compareReleases(a: HelmRelease, b: HelmRelease, key: HelmSortKey): number {
   let cmp: number
@@ -535,10 +545,10 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
             : 'hover:bg-theme-surface/50'
       )}
     >
-      <td className="px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
+      <td className="px-4 py-3 phone:px-3">
+        <div className="flex min-w-0 items-center gap-2 phone:flex-wrap phone:gap-y-1">
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
-          <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{release.name}</span>
+          <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           {getHealthBadge()}
           {listOperation && <HelmOperationChip operation={listOperation} />}
           {release.managedByFluxHelmRelease && (
@@ -557,13 +567,14 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
             </Tooltip>
           )}
         </div>
+        <span className="hidden truncate pl-6 text-xs text-theme-text-tertiary phone:block">{release.namespace}</span>
       </td>
-      <td className="px-4 py-3 w-[18%]">
+      <td className="px-4 py-3 w-[18%] phone:hidden">
         <Tooltip content={release.namespace}>
           <span className="block truncate text-sm text-theme-text-secondary">{release.namespace}</span>
         </Tooltip>
       </td>
-      <td className="px-4 py-3 w-[22%]">
+      <td className="px-4 py-3 w-[22%] phone:hidden">
         <Tooltip content={`${release.chart}-${release.chartVersion}`}>
           <span className="text-sm text-theme-text-secondary truncate block">
             {release.chart}-{release.chartVersion}
@@ -579,11 +590,11 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           </Tooltip>
         )}
       </td>
-      <td className="px-4 py-3 w-40">
+      <td className="px-4 py-3 w-40 phone:w-[6.5rem] phone:px-3">
         {isHelmReleaseActionable(release.status) ? (
           <Tooltip content="Click row to view rollback / history / logs and recover">
             <span
-              className={clsx('badge inline-flex items-center gap-1', getStatusColor(release.status))}
+              className={clsx('badge inline-flex items-center gap-1 phone:whitespace-normal', getStatusColor(release.status))}
             >
               {release.status}
               <ChevronRight className="w-3 h-3 opacity-70" />
@@ -592,7 +603,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
         ) : (
           <span
             className={clsx(
-              'badge',
+              'badge phone:whitespace-normal',
               getStatusColor(release.status)
             )}
           >
@@ -600,10 +611,10 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           </span>
         )}
       </td>
-      <td className="px-4 py-3 w-16">
+      <td className="px-4 py-3 w-16 phone:hidden">
         <span className="text-sm text-theme-text-secondary">{release.revision}</span>
       </td>
-      <td className="px-4 py-3 w-24">
+      <td className="px-4 py-3 w-24 phone:hidden">
         <Tooltip content={release.updated}>
           <span className="text-sm text-theme-text-secondary">
             {formatAge(release.updated)}
