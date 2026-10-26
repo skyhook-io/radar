@@ -1,6 +1,7 @@
 package ownership_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -406,4 +407,38 @@ func TestManagerStopKeepsAnUnmappedControllersReference(t *testing.T) {
 	if got.Stop == nil || got.Stop.Owner.State != ownership.OwnerUnknown || got.Stop.Reference.Kind != "Parent" || got.Stop.Reference.Name != "controller-x" {
 		t.Fatalf("stop %+v; want the unmapped Parent's reference", got.Stop)
 	}
+}
+
+// Checking a stale claim against a large manager reads that manager's list,
+// not every object in it.
+func TestManagerChecksAClaimWithoutReadingItsManagersMembers(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	var members []resourceid.Ref
+	for i := range 50 {
+		members = append(members, b.Add("", "ConfigMap", "shop", fmt.Sprint("listed-", i)).Ref)
+	}
+	cm := b.Meta(b.Add("", "ConfigMap", "shop", "stale"), nil, map[string]string{trackingID: "argocd_shop:/ConfigMap:shop/stale"})
+	b.Manager(ownership.ArgoApplication, "argocd", "shop", ownership.MembersRecorded, "shop", members...)
+	s, err := ownershiptest.Scan(b.World()).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := &objectCounter{ReadSession: s}
+	got := ownership.NewView(counted, ownership.Unrestricted()).Manager(cm.Ref)
+	if got.State != ownership.ManagerClaimed || checkOf(got.Direct, app("shop")) != ownership.ClaimOmitted {
+		t.Fatalf("answer %+v; want the claim checked as omitted", got)
+	}
+	if counted.objects > 3 {
+		t.Fatalf("%d object reads; want the subject and the manager, not the manager's members", counted.objects)
+	}
+}
+
+type objectCounter struct {
+	ownership.ReadSession
+	objects int
+}
+
+func (s *objectCounter) Object(ref resourceid.Ref) ownership.ObjectRead {
+	s.objects++
+	return s.ReadSession.Object(ref)
 }
