@@ -287,7 +287,11 @@ func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) 
 		if current.Status == "False" && !paused && !isTransientCRDCondition(u, condition.Reason) {
 			isDeleting := condition.Type == "Ready" && condition.Reason == "Deleting"
 			deletion := u.GetDeletionTimestamp()
-			expectedDeletion := isDeleting && deletion != nil && !deletion.IsZero() && !deletion.After(now) && now.Sub(deletion.Time) < health.NodeRemovalWarningAfter
+			expectedDeletion := false
+			if isDeleting && deletion != nil && !deletion.IsZero() {
+				age := now.Sub(deletion.Time)
+				expectedDeletion = age >= -health.NodeRemovalWarningAfter && age < health.NodeRemovalWarningAfter
+			}
 			if !expectedDeletion {
 				isStale := u.GetGeneration() > 0 && condition.ObservedGeneration > 0 && condition.ObservedGeneration < u.GetGeneration()
 				if isStale {

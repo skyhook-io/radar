@@ -862,6 +862,31 @@ func TestDeletionConditionSelectionRetainsSpecificEvidence(t *testing.T) {
 	}
 }
 
+func TestDeletingFallbackDoesNotInventOnset(t *testing.T) {
+	for _, timestamp := range []string{"", time.Now().Add(time.Hour).UTC().Format(time.RFC3339)} {
+		t.Run(timestamp, func(t *testing.T) {
+			u := rolloutWithConditions([]map[string]any{{"type": "Ready", "status": "False", "reason": "Deleting", "lastTransitionTime": timestamp}})
+			u.SetName("example")
+			u.SetNamespace("test")
+			deletion := metav1.NewTime(time.Now().Add(-11 * time.Minute))
+			u.SetDeletionTimestamp(&deletion)
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			var id string
+			for _, grouped := range []bool{false, true} {
+				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
+				if len(got) != 1 || got[0].Reason != "Ready: Deleting" || !got[0].OnsetUnknown || !got[0].FirstSeen.IsZero() || got[0].IssueTiming != "" {
+					t.Fatalf("deletion age invented condition onset: %+v", got)
+				}
+				if id != "" && got[0].ID != id {
+					t.Fatalf("unknown onset changed identity: %s != %s", got[0].ID, id)
+				}
+				id = got[0].ID
+			}
+		})
+	}
+}
+
 func TestGenericConditionsDuringDeletion(t *testing.T) {
 	for _, tc := range []struct {
 		name                                                              string
@@ -875,7 +900,8 @@ func TestGenericConditionsDuringDeletion(t *testing.T) {
 		{name: "ordinary deletion with finalizer", deletionAge: time.Minute, finalizer: true},
 		{name: "no deletion timestamp", missing: true, wantReason: "Ready: Deleting", wantCount: 1},
 		{name: "zero deletion timestamp", zero: true, wantReason: "Ready: Deleting", wantCount: 1},
-		{name: "future deletion timestamp", deletionAge: -time.Minute, wantReason: "Ready: Deleting", wantCount: 1},
+		{name: "small future deletion timestamp", deletionAge: -time.Minute},
+		{name: "far future deletion timestamp", deletionAge: -time.Hour, wantReason: "Ready: Deleting", wantCount: 1},
 
 		{name: "missing timestamp with error", missing: true, failure: true, wantReason: "Synced: ReconcileError", wantCount: 1},
 		{name: "zero timestamp with error", zero: true, failure: true, wantReason: "Synced: ReconcileError", wantCount: 1},

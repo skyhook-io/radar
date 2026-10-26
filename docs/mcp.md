@@ -808,6 +808,8 @@ A `Ready=False/Deleting` condition is expected during the first 10 minutes of
 an actual deletion. This follows Radar's termination warning window, not a
 Kubernetes deadline. Other failure conditions remain eligible under the existing
 condition selector, including its suspension and whole-object generation gates.
+The same window tolerates an API-server deletion timestamp slightly ahead of
+Radar's clock; a farther-future timestamp does not establish expected progress.
 After that window, or when deletion timing is unavailable, the condition remains
 a fallback when no stuck-deletion finding is available. It never takes priority
 over an independent error, including a qualified older-generation observation.
