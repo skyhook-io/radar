@@ -2,6 +2,7 @@ package k8score
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -218,5 +219,39 @@ func TestForceDeleteSkipsTheFinalizerPatchWhenThereAreNone(t *testing.T) {
 
 	if err := NewWorkloadManager(client, discovery).DeleteResource(context.Background(), DeleteResourceOptions{Kind: "Pod", Namespace: "team", Name: "stuck", Force: true}); err != nil {
 		t.Fatalf("force delete of a Pod without finalizers failed on a rejected patch: %v", err)
+	}
+}
+
+func TestDeleteResourceBindsObservedUID(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	for _, force := range []bool{false, true} {
+		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "web", "namespace": "demo", "uid": "original", "resourceVersion": "1"}}}
+		if force {
+			obj.SetFinalizers([]string{"hold"})
+		}
+		dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
+		dyn.PrependReactor("delete", "deployments", func(a clienttesting.Action) (bool, runtime.Object, error) {
+			opts := a.(clienttesting.DeleteAction).GetDeleteOptions()
+			if opts.Preconditions == nil || opts.Preconditions.UID == nil || *opts.Preconditions.UID != "original" {
+				t.Fatalf("unbound delete: %+v", opts)
+			}
+			return false, nil, nil
+		})
+		dyn.PrependReactor("patch", "deployments", func(a clienttesting.Action) (bool, runtime.Object, error) {
+			var patch map[string]any
+			if err := json.Unmarshal(a.(clienttesting.PatchAction).GetPatch(), &patch); err != nil {
+				t.Fatal(err)
+			}
+			m := patch["metadata"].(map[string]any)
+			if m["uid"] != "original" || m["resourceVersion"] != "1" {
+				t.Fatalf("unbound finalizer patch: %+v", m)
+			}
+			return false, nil, nil
+		})
+		discovery := stubDiscovery(t, "Deployment", gvr)
+		discovery.AddAPIResource(APIResource{Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true})
+		if err := NewWorkloadManager(dyn, discovery).DeleteResource(context.Background(), DeleteResourceOptions{Kind: "Deployment", Group: "apps", Namespace: "demo", Name: "web", Force: force}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -360,7 +360,7 @@ function useActionsBarProps(
 
   const {
     data: cascadePreview,
-    isLoading: cascadeLoading,
+    isFetching: cascadeLoading,
     isError: cascadeError,
   } = useCascadeDeletePreview(
     kind,

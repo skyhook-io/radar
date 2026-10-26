@@ -20,7 +20,7 @@ type DeletionAnswer struct {
 // Deletion follows every owner reference, including non-controller references.
 // A live owner outside the deletion prevents collection; an unknown owner makes
 // collection possible. Cycles without a proven path to collection stay possible.
-// limit bounds the objects searched, including survivors. ValidateCaches must
+// limit bounds the objects retained and expanded, including survivors. ValidateCaches must
 // still pass before the answer is used.
 func (v *View) Deletion(ctx context.Context, ref resourceid.Ref, limit int) DeletionAnswer {
 	a := DeletionAnswer{Subject: v.subject(ref)}

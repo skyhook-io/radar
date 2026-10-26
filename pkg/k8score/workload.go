@@ -607,6 +607,10 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
 	}
 	current, readErr := client.Get(ctx, opts.Name, metav1.GetOptions{})
+	if readErr == nil && current.GetUID() != "" {
+		uid := current.GetUID()
+		deleteOpts.Preconditions = &metav1.Preconditions{UID: &uid}
+	}
 	if readErr == nil {
 		if _, pending := PendingDeletionPolicy(current.GetFinalizers()); pending {
 			deleteOpts.PropagationPolicy = nil
@@ -614,7 +618,16 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 	}
 
 	if opts.Force && (readErr != nil || len(current.GetFinalizers()) > 0) {
-		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
+		metadata := map[string]any{"finalizers": nil}
+		if readErr == nil {
+			if current.GetUID() != "" {
+				metadata["uid"] = current.GetUID()
+			}
+			if current.GetResourceVersion() != "" {
+				metadata["resourceVersion"] = current.GetResourceVersion()
+			}
+		}
+		finalizerPatch, _ := json.Marshal(map[string]any{"metadata": metadata})
 		var patchErr error
 		if opts.Namespace != "" {
 			_, patchErr = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})

@@ -4434,11 +4434,20 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, http.StatusBadRequest, "unknown resource kind")
 		return
 	}
-	client := s.getDynamicClientForRequest(r)
+	client, _, operation, captureErr := k8s.DeletionClientSnapshot(r.Context())
+	if captureErr != nil {
+		s.writeError(w, http.StatusServiceUnavailable, captureErr.Error())
+		return
+	}
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client unavailable")
 		return
 	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	stop := context.AfterFunc(operation, cancel)
+	defer stop()
+	r = r.WithContext(ctx)
 	obj, err := client.Resource(gvr).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
 		switch {
@@ -4452,7 +4461,7 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
-	preview := k8s.DeletionPreview(r.Context(), obj, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+	preview := k8s.DeletionPreview(r.Context(), obj, operation, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 
 	s.writeJSON(w, preview)
 }

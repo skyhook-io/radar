@@ -193,8 +193,8 @@ function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<C
   const title = teardown.destination === 'unknown'
     ? `${teardown.controller} has a cleanup finalizer`
     : teardown.action === 'uninstall'
-    ? `${teardown.controller} will also uninstall the Helm release`
-    : `${teardown.controller} will also delete the resources it manages`
+    ? `${teardown.controller} is configured to uninstall the Helm release`
+    : `${teardown.controller} is configured to prune managed resources`
   return (
     <CascadeDependentsList
       dependents={resources}
@@ -213,9 +213,9 @@ function CascadeDependentsList({ dependents, title, note, summary }: { dependent
   const grouped = useMemo(() => {
     const map = new Map<string, string[]>()
     for (const dep of dependents) {
-      const kind = dep.kind
+      const kind = dep.group ? `${dep.kind} (${dep.group})` : dep.kind
       if (!map.has(kind)) map.set(kind, [])
-      map.get(kind)!.push(dep.name)
+      map.get(kind)!.push(dep.namespace ? `${dep.namespace}/${dep.name}` : dep.name)
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
   }, [dependents])
