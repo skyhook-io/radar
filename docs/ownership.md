@@ -52,8 +52,10 @@ ReplicaSet → Deployment, to the nearest ancestor whose evidence does, and repo
 it doesn't stop the walk — when it was copied from another object, or is metadata an object a controller owns commonly
 inherits: an Argo CD instance label from its template, or a Helm release's annotations, which a Deployment copies onto
 its ReplicaSets. When no object on the chain settles it and the object makes no claim that isn't copied, the
-nearest ancestor that makes one answers, as **via**, with the state **claimed**. A walk stops at an owner it
-can't follow and says so.
+nearest ancestor that makes one answers, as **via**, with the state **claimed**; claims farther up stay in
+**between**. A walk stops at an owner it
+can't follow and says so. A manager the request read before its recorder search found it, unavailable then or
+another incarnation, leaves the answer incomplete rather than confirming membership.
 
 The state, first match wins: **shared** (several lists name it), **disagree** (a list names it and a claim names
 another manager), **agree** (one list names it and every claim names that manager), **listed** (one list, no claim),

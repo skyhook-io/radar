@@ -141,10 +141,11 @@ type ManagerAnswer struct {
 	// and the object makes no claim that isn't copied, of the nearest
 	// ancestor that does; State and Lead are then derived from it.
 	Via *ManagerEvidence
-	// Between is the evidence of objects the walk passed, after the object
-	// and before Via (or up the whole walk, without Via), that make claims,
-	// or that Radar couldn't search fully where it could the object's:
-	// evidence that didn't settle the question, kept so an answer can say why.
+	// Between is the evidence of other objects the walk passed, in chain
+	// order, that make claims, or that Radar couldn't search fully where it
+	// could the object's: evidence that didn't settle the question, kept so
+	// an answer can say why. When Via is a fallback to the nearest claim,
+	// claims farther up the chain stay here.
 	Between  []ManagerEvidence
 	ChainEnd ChainEnd
 	// Stop is the controller reference the walk couldn't follow, when
@@ -213,7 +214,7 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 	if !slices.ContainsFunc(a.Direct.Claims, active) {
 		if i := slices.IndexFunc(a.Between, func(e ManagerEvidence) bool { return slices.ContainsFunc(e.Claims, active) }); i >= 0 {
 			e := a.Between[i]
-			a.Via, a.Between = &e, a.Between[:i]
+			a.Via, a.Between = &e, slices.Delete(slices.Clone(a.Between), i, i+1)
 			a.State, a.Lead = derive(e, chainSettled(a) && complete)
 			return a
 		}
