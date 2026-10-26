@@ -14,7 +14,12 @@ describe('manager answer chip', () => {
   it.each(['agree', 'listed'] as const)('%s is Managed by even before the status fetch', state => {
     const html = render({ state, lead: a, direct: { object, recorders: [a] } })
     expect(html).toContain('Managed by')
-    expect(html).toContain('its status lists this resource')
+    expect(html).toContain('Application argocd/a lists this resource in its status.')
+  })
+  it('agree says the tracking metadata names the listing manager, once', () => {
+    const html = render({ state: 'agree', lead: a, direct: { object, recorders: [a], claims: [{ ...claim, manager: { ...a, namespace: '' }, check: 'recorded' }] } })
+    expect(html).toContain("Application argocd/a lists this resource in its status, and this resource's tracking metadata names it.")
+    expect(html.match(/Application/g)?.length).toBe(1)
   })
   it.each([
     ['omitted', "its status doesn't list this resource"],
@@ -33,7 +38,8 @@ describe('manager answer chip', () => {
     const html = render({ state: 'disagree', direct: { object, claims: [claim], recorders: [b] } })
     expect(html).toContain('Tracked by')
     expect(html).toContain("Application argocd/a: its status doesn't list this resource")
-    expect(html).toContain('Application argocd/b: its status lists this resource')
+    expect(html).toContain('Application argocd/b lists this resource in its status')
+    expect(html.indexOf('argocd/a: its status')).toBeLessThan(html.indexOf('argocd/b lists'))
     expect(html).toMatch(/rounded-full[^\"]*bg-amber/)
   })
   it('shared lists multiple names with the lead first', () => {
@@ -61,7 +67,7 @@ describe('manager answer chip', () => {
     expect(html).toContain('Managed by')
     expect(html).toContain('Through Deployment demo/web')
     expect(html).toContain('its own label names Application argocd/a')
-    expect(html).toContain('its own label names Application argocd/middle (copied from another resource)')
+    expect(html).not.toContain('argocd/middle')
   })
 })
 

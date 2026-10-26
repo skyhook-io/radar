@@ -121,13 +121,22 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     unchecked: "Radar couldn't check its status",
   }
   const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
-  const details = claims.map(c => `${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reasons[c.check].replace('this resource', subject)}.`)
-  if (recorders.length) details.push(`${names(recorders)}: ${recorders.length === 1 ? 'its status lists' : 'their statuses list'} ${subject}.`)
+  const details: string[] = []
+  for (const c of claims) {
+    if (c.check === 'recorded') continue
+    details.push(`${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reasons[c.check].replace('this resource', subject)}.`)
+  }
+  if (recorders.length) {
+    // A claim its list confirms adds nothing but the agreement.
+    const confirmed = claims.some(c => c.check === 'recorded')
+    details.push(`${names(recorders)} ${recorders.length === 1 ? 'lists' : 'list'} ${subject} in ${recorders.length === 1 ? 'its status' : 'their statuses'}${confirmed ? `, and ${answer.via ? 'its' : 'this resource\'s'} tracking metadata names ${recorders.length === 1 ? 'it' : 'one of them'}` : ''}.`)
+  }
   if (answer.via) {
     details.push(`Through ${managerRefLabel(answer.via.object)}.`)
     for (const e of [answer.direct, ...(answer.between ?? [])]) {
       for (const c of e.claims ?? []) {
-        details.push(`${managerRefLabel(e.object)}: its own ${c.source.includes('label') ? 'label' : 'annotation'} names ${managerRefLabel(c.manager)}${c.copied ? ' (copied from another resource)' : ''}.`)
+        if (c.copied) continue
+        details.push(`${managerRefLabel(e.object)}: its own ${c.source.includes('label') ? 'label' : 'annotation'} names ${managerRefLabel(c.manager)}.`)
       }
     }
   }
