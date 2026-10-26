@@ -119,6 +119,17 @@ func TestDynamicResourceObservationTracksOnDemandSyncAndExactGVR(t *testing.T) {
 		t.Fatalf("same-named GVR inherited observation from another group: %+v", got)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	started := time.Now()
+	_, waitErr := cache.ListBlockingContext(ctx, observed, "", 3*time.Second)
+	cancel()
+	if waitErr != nil && !errors.Is(waitErr, context.DeadlineExceeded) {
+		t.Fatalf("cancelled caller wait: %v", waitErr)
+	}
+	if time.Since(started) > 2*time.Second || cache.Observation(observed).State != DynamicObservationSyncing {
+		t.Fatal("caller cancellation did not bound the wait independently of the shared watch")
+	}
+
 	close(releaseSync)
 	if !cache.WaitForSync(observed, 3*time.Second) {
 		t.Fatal("on-demand informer did not sync")

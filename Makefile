@@ -156,6 +156,7 @@ clean:
 # Run tests
 test:
 	go test -v ./...
+	cd pkg && go test -v ./...
 
 # Run e2e tests against the current kubeconfig cluster (on-demand, not in CI)
 test-e2e:
@@ -415,6 +416,7 @@ calico-demo-status:
 # Run linter
 lint:
 	go vet ./...
+	cd pkg && go vet ./...
 
 # Type check frontend
 tsc:

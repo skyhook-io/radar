@@ -125,3 +125,23 @@ true
 false
 {{- end -}}
 {{- end -}}
+
+{{/*
+Enrollment mode: Radar joins cloud.hubURL with a shared enrollment key every
+time it starts and holds the token it gets in memory. A configured cloud.token or
+cloud.existingSecret wins, so a token install renders exactly as before.
+*/}}
+{{- define "radar.cloudEnrollmentMode" -}}
+{{- $c := .Values.cloud -}}
+{{- $e := $c.enrollment | default dict -}}
+{{- if and $c.enabled $c.hubURL (or $e.key $e.existingSecret) (not (or $c.token $c.existingSecret)) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "radar.cloudEnrollmentKeySecretName" -}}
+{{- $e := .Values.cloud.enrollment | default dict -}}
+{{- $e.existingSecret | default (printf "%s-cloud-enrollment-key" (include "radar.fullname" .)) -}}
+{{- end -}}

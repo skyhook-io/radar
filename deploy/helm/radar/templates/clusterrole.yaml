@@ -1,8 +1,8 @@
 {{- if and (include "radar.userTokenMode" . | eq "true") (not .Values.cloud.enabled) }}
 {{- fail "auth.kubernetesCredentials=user-token requires cloud.enabled=true: the user's token reaches Radar only through the Radar Cloud tunnel" }}
 {{- end }}
-{{- if and (include "radar.userTokenMode" . | eq "true") (or .Values.cloud.insecureSkipVerify (hasPrefix "ws://" (toString .Values.cloud.url))) }}
-{{- fail "auth.kubernetesCredentials=user-token needs a verified tunnel: people's tokens travel over it, so cloud.insecureSkipVerify must be false and cloud.url must be wss://. Give the control plane a certificate the cluster trusts." }}
+{{- if and (include "radar.userTokenMode" . | eq "true") (or .Values.cloud.insecureSkipVerify (hasPrefix "ws://" (toString .Values.cloud.url)) (and (include "radar.cloudEnrollmentMode" . | eq "true") (hasPrefix "http://" (toString .Values.cloud.hubURL)))) }}
+{{- fail "auth.kubernetesCredentials=user-token needs a verified tunnel: people's tokens travel over it, so cloud.insecureSkipVerify must be false, cloud.url must be wss:// and cloud.hubURL https://. Give the control plane a certificate the cluster trusts." }}
 {{- end }}
 {{- if and (include "radar.userTokenMode" . | eq "true") .Values.cloud.defaultRbac.create }}
 {{- fail "auth.kubernetesCredentials=user-token requires cloud.defaultRbac.create=false: the Hub-role bindings (radar:owner/member/viewer) would grant cluster access to any token whose IdP groups include one of those names. People's access comes from your own RBAC in this mode." }}

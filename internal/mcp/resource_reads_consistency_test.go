@@ -15,6 +15,7 @@ import (
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // A kind Radar first watched namespace by namespace is promoted to one
@@ -87,5 +88,96 @@ func TestDynamicReadRepeatsWhenItsWatchIsReplacedMidRead(t *testing.T) {
 	})
 	if err != nil || len(items) != 1 || reads != 2 {
 		t.Fatalf("got %d rows, err %v, after %d reads; want the loaded replacement's 1 row from a second read", len(items), err, reads)
+	}
+}
+
+// A get that finds its object answers with it even while the store holding it
+// hasn't finished loading: the object exists. Only a miss waits for a complete
+// store. Here every list is held, so the store never loads.
+func TestDynamicGetFoundInALoadingStoreStands(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	present := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.test/v1", "kind": "Widget",
+		"metadata": map[string]any{"name": "present", "namespace": "alpha"},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, present)
+	dyn.PrependReactor("list", "widgets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("initial list held")
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{
+		Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Widget", Namespaced: true,
+		Verbs: []string{"get", "list", "watch"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	obj, err := readDynamicScope(context.Background(), "widgets", gvr.Group, "alpha", "get", func() (*unstructured.Unstructured, error) {
+		return present, nil
+	})
+	if err != nil || obj != present {
+		t.Fatalf("get found in a loading store = %v, %v; want the object", obj, err)
+	}
+	if k8s.GetDynamicResourceCache().IsNamespaceSynced(gvr, "alpha") {
+		t.Fatal("fixture: the store loaded, so this didn't test a loading one")
+	}
+}
+
+func TestDynamicGetRetryHitStandsDuringPromotion(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	present := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"name": "present", "namespace": "alpha"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, present)
+	var allowNamespace, promote atomic.Bool
+	dyn.PrependReactor("list", "widgets", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			if !promote.Load() {
+				return true, nil, collectorRefusal(gvr.GroupResource(), "list", "")
+			}
+		} else if a.(ktesting.ListActionImpl).GetListOptions().Limit == 0 && !allowNamespace.Load() {
+			return true, nil, fmt.Errorf("initial list held")
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Widget", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	d := k8s.GetDynamicResourceCache()
+	if _, err := d.List(gvr, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if d.IsNamespaceSynced(gvr, "alpha") {
+		t.Fatal("fixture already synced")
+	}
+	reads := 0
+	result, err := readDynamicScope(context.Background(), "widgets", gvr.Group, "alpha", "get", func() (*unstructured.Unstructured, error) {
+		reads++
+		if reads == 1 {
+			allowNamespace.Store(true)
+			if !d.WaitForSync(gvr, 5*time.Second) {
+				t.Fatal("namespace did not sync")
+			}
+			return nil, k8score.ErrResourceNotFound
+		}
+		obj, err := d.Get(gvr, "alpha", "present")
+		if err != nil {
+			t.Fatal(err)
+		}
+		promote.Store(true)
+		if err := d.EnsureWatching(gvr); err != nil {
+			t.Fatal(err)
+		}
+		return obj, nil
+	})
+	if err != nil || result == nil || result.GetName() != "present" || reads != 2 {
+		t.Fatalf("get retry: %v, %v, reads=%d", result, err, reads)
 	}
 }

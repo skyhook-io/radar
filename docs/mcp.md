@@ -544,8 +544,9 @@ Both tools return `guidance` as an array of interpretation notes; read notes abo
 
 ## Resource reads: coverage and errors
 
-Every `list_resources` result says what it covers. A list that served nothing,
-and any `get_resource` failure, is an MCP tool error with a code. Workload and
+Every `list_resources` result says what it covers. A list with no usable
+inventory (nothing readable, an oversized result, or a changed connection), and
+any `get_resource` failure, is an MCP tool error with a code. Workload and
 GitOps `diagnose` root reads apply the same readiness checks. Codes are defined
 in `pkg/readreason`, and the coverage types in `pkg/resourceapi`; REST resource
 reads and search use the same codes.
@@ -658,7 +659,7 @@ namespace whose informer has synced is read even while another is loading. A
 namespace you name that Radar doesn't collect, or was refused in, is a gap too;
 on an unscoped request those namespaces narrow it (`namespace_collection`) instead.
 
-Secrets, LimitRanges and Trivy Operator reports need your exact permission
+Secrets, Roles, RoleBindings, LimitRanges and Trivy Operator reports need your exact permission
 on that kind, not just namespace visibility: namespaces you can see but can't
 list them in are a `user_forbidden` gap (or `user_permission_check_failed`
 when the check didn't complete), and a get needs `get` in the namespace. A
@@ -705,14 +706,16 @@ sentence names every cause and the namespaces each affects. When something
 other than your own access narrowed an unscoped request (what Radar collects,
 or its pin), the sentence says that too. A get of an object that isn't there is
 `object_not_found`, and only once Radar has confirmed it read that namespace;
-otherwise the code says why it couldn't look.
+otherwise the code says why it couldn't look. A get that finds its object
+returns it even while that kind is still loading: the object exists, and only
+a miss needs a complete read.
 
 | Code | Meaning | What resolves it |
 |---|---|---|
 | `user_forbidden` | Your own RBAC denies the exact operation. | Your access |
 | `user_no_namespace_access` | Your access reaches no namespace in the request's scope (Radar checks list Pods or Deployments there). | Your access |
 | `user_namespace_not_visible` | A namespace you named is not among those you can see, or does not exist; the code doesn't say which. | Check the name, or your access |
-| `namespace_not_found` | A namespace you named doesn't exist. Only a caller who can see every namespace is told this, and only when Radar collects Namespaces. | Check the name; `list_namespaces` lists them |
+| `namespace_not_found` | A namespace you named doesn't exist. Only a caller who can see every namespace is told this, and only when Radar collects Namespaces. It comes before `outside_namespace_pin`: a mistyped name is the likelier cause. REST lists and gets answer the same way, and a missing namespace beside existing ones is a gap while the others are read. | Check the name; `list_namespaces` lists them |
 | `user_permission_check_failed` | Radar could not complete your permission check. | Retry |
 | `radar_forbidden` | Kubernetes refused Radar's service account or kubeconfig identity. | Radar's access — granting yours does not help |
 | `radar_credentials_rejected` | Kubernetes rejected Radar's credentials, on this read or when Radar connected and checked its access. If a read's rejection persists, Radar's connection goes down and reads report `cluster_disconnected`. One recorded at connect leaves that namespace unread, beside the others, until Radar reconnects. | Refresh Radar's credentials; for one recorded at connect, then reconnect Radar (`POST /api/connection/retry`) |
@@ -765,7 +768,7 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 | `get_dashboard` | Cluster/namespace health overview — resource counts, failing pods, unhealthy workloads, warning-event groups (`warningGroups`, up to 20 recency-ordered; `totalWarningGroups`/`warningGroupsTruncated` signal when more exist), Helm status. Inventory-style triage before drilling in. | `namespace` (optional) |
 | `top_resources` | Live metrics ranked like `kubectl top | sort`, joined with K8s context (status, restarts, owner, requests/limits). Use for CPU/memory/OOM/load symptoms. | `kind` (optional: `pods` default, `workloads`, `nodes`), `namespace` (optional), `sort` (optional: `cpu` default, `memory`), `limit` (optional, default 20, max 100) |
 | `list_resources` | List resources of a kind with minified summaries + per-row `summaryContext` (managedBy / health / issueCount). Returns `{summary, next?, coverage, items}`: a sentence saying what the rows cover and what Radar did not read, what you can do to complete it when you can, then the same as data ([lists](#lists)). | `kind` (required), `group` (optional), `namespace` (optional), `context` (optional: default / `none`) |
-| `search` | Find resources by content/term match (config keys, env refs, images, label values, CRD fields, webhook configs, status messages). Tokens AND'd; secret values and CA bundles never indexed. Supports `kind:`/`ns:`/`label:`/`image:` modifiers (a Kind, its plural, or a kubectl short name of a built-in such as `netpol`, `ing`, `sa`, `quota`) and CEL `filter`. Searches workloads, Pods, Services, Ingresses, IngressClasses, NetworkPolicies, ConfigMaps, Secrets (names only), PVCs, PVs, StorageClasses, HPAs, PDBs, ResourceQuotas, ServiceAccounts, Nodes, Namespaces, Events (with `kind:Event`) and watched CRDs. Trivy Operator reports match by CVE ID with package and installed/fixed versions, SBOM component, failed check ID and scanned image (`image:`); a secret finding's matched text is never indexed or reachable. Free tokens can land on different findings of one report, so use the CEL `report` binding (`report.vulnerabilities.exists(v, …)`) to match a single finding. A report is scan-time evidence: `summaryContext.managedBy` names the workload and `summaryContext.scanned` the scanned object (`missing` means Radar can't find it). By default Trivy Operator deletes an old ReplicaSet's reports after a rollout; with `vulnerabilityScannerScanOnlyCurrentRevisions: false` they stay, and `scanned.replicas: 0` usually marks one (a Deployment scaled to zero also reads 0). Trivy reports are returned only where the caller may list that report kind. RBAC objects (Roles, bindings) and LimitRanges are not searched; use `list_resources`. When a `kind:` filter names a kind search doesn't cover (including a CRD Radar isn't watching yet), or one Radar couldn't read from its cache, the result lists it in `unsearched_kinds` and `kindHint` says what to do instead. Kinds you aren't allowed to list are left out. | `query` (required), `filter` (optional CEL), `limit` (optional) |
+| `search` | Find resources by content/term match (config keys, env refs, images, label values, CRD fields, webhook configs, status messages). Tokens AND'd; secret values and CA bundles never indexed. Supports `kind:`/`ns:`/`label:`/`image:` modifiers (a Kind, its plural, or a kubectl short name of a built-in such as `netpol`, `ing`, `sa`, `quota`) and CEL `filter`. Searches workloads, Pods, Services, Ingresses, IngressClasses, NetworkPolicies, ConfigMaps, Secrets (names only), PVCs, PVs, StorageClasses, HPAs, PDBs, ResourceQuotas, LimitRanges, ServiceAccounts, Roles, RoleBindings, ClusterRoles, ClusterRoleBindings, Nodes, Namespaces, Events (with `kind:Event`) and watched CRDs; a `kind:` term also searches a large CRD Radar watches only on demand. Endpoints, EndpointSlices and Leases are not searched; use `list_resources`. Trivy Operator reports match by CVE ID with package and installed/fixed versions, SBOM component, failed check ID and scanned image (`image:`); a secret finding's matched text is never indexed or reachable. Free tokens can land on different findings of one report, so use the CEL `report` binding (`report.vulnerabilities.exists(v, …)`) to match a single finding. A report is scan-time evidence: `summaryContext.managedBy` names the workload and `summaryContext.scanned` the scanned object (`missing` means Radar can't find it). By default Trivy Operator deletes an old ReplicaSet's reports after a rollout; with `vulnerabilityScannerScanOnlyCurrentRevisions: false` they stay, and `scanned.replicas: 0` usually marks one (a Deployment scaled to zero also reads 0). Trivy reports are returned only where the caller may list that report kind. Every result carries `coverage` (`status`, `narrowedBy`, `gaps`), and a partial result, an empty narrowed one, or one with hits that Radar's namespace collection or pin limited adds `coverageHint`; see [Search coverage](#search-coverage-and-cel-object-filters). | `query` (required), `filter` (optional CEL), `limit` (optional) |
 | `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are not evidence of an active outage. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, detailed issue context, or a Node drain estimate. `include=drain-plan` reuses the read-only REST drain estimator with the caller’s credentials and the removal drawer’s explicit options; it returns up to 100 current pods, full summary counts, `drainPlanTotalPods` and `drainPlanPodsTruncated`. It evaluates Eviction API/PDB eligibility, not controller-specific policy or eviction history. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. `staleEnv` lists env vars that running containers read from a Secret or ConfigMap key and that started before that key's last data write, so they likely still hold the earlier value until restart: on a Secret or ConfigMap it names the consuming Pods, on a Pod or workload its env vars. It is attached with `context=none` too, shows up to 5 rows with `total`, needs `get` on Pods and on the source's kind, and skips volume mounts, which refresh in place. For a Secret write made before Radar started, the row comes from the Secret's managedFields (`evidenceSource: managed_fields_mtime`), names no key, and says the write may not have touched data; ConfigMap rows come only from changes Radar observed. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues,drain-plan`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`; a Pod/template divergence note can still appear in `warnings`, and `staleEnv` still attaches) |
 | `get_topology` | Whole-namespace/cluster topology graph (nodes + edges). Use `summary` format for LLM-friendly text chains. Once you have a suspect root, prefer `get_neighborhood`. | `namespace` (optional), `view` (optional: `traffic` or `resources`), `format` (optional: `graph` or `summary`) |
 | `get_neighborhood` | BFS-expanded topology neighborhood around one known root — cheaper and clearer than `get_topology` for cross-resource failures (routing, selector/endpoint, refs, owner chains). RBAC-filtered. | `kind` (required), `namespace` (optional), `name` (required), `profile` (optional: `auto` default / `all`), `hops` (optional, default 1, max 2) |
@@ -844,6 +847,226 @@ removal because indices change. Removal bypasses controller cleanup and can
 leave Kubernetes resources, infrastructure or storage behind. Dependents with
 their own finalizers can remain stuck even after the controller is restored;
 older VictoriaMetrics operators place such finalizers on managed objects.
+
+### Search coverage and CEL object filters
+
+`search` scans typed resources (including RBAC, ServiceAccounts, NetworkPolicies,
+IngressClasses, LimitRanges and ResourceQuotas) and discovered dynamic kinds,
+including admission webhook configurations. A broad search covers the kinds Radar
+watches. Large custom kinds that Radar doesn't watch until someone asks are searched
+only when a `kind:` term names them: an explicit `kind:` query starts the existing
+bounded on-demand watch and waits briefly for initial sync once CRD discovery is
+ready. Leases, Endpoints and EndpointSlices, which Radar reads directly instead of
+watching, are never warmed; use `list_resources` for them. Alternate built-in groups
+of typed kinds are skipped, so `kind:Event` does not duplicate core Events through
+`events.k8s.io`. Third-party CRDs named Event are searched normally; only built-in
+Events are excluded from broad searches.
+
+REST `GET /api/search` accepts `namespaces` (comma-separated) or `namespace`
+(single); the plural parameter takes precedence. These are explicit namespace
+names, combined as a union with any `ns:` terms in `q`. Hidden, missing and
+outside-pin names produce the same coverage gaps as their `ns:` spelling. An
+empty parsed list adds no names.
+
+Every response includes `coverage`: `{status, narrowedBy?, gaps}`, built from the
+same [gaps and codes](#resource-reads-coverage-and-errors) as resource lists. A
+gap is either about kinds or about namespaces, and states both axes: `kinds`
+(`{count, names}` of `{kind, group}`, an omitted group being core) and
+`namespaces`, each listing every member, past its limit only counting them, or
+giving an extent: `{"extent": "all"}` for every one in the search's scope, or
+`{"extent": "unknown"}` when Radar can't say which. A kind gap reaches all
+namespaces when the kind failed everywhere and an unknown part when only some
+namespaces failed; a namespace gap reaches all kinds only when every searched
+kind was excluded in those namespaces, and otherwise an unknown subset of kinds.
+A gap from an unreadable catalog reaches an unknown set of kinds.
+`filter_eval_failed` names `objects` whose CEL filter evaluation failed.
+`findings_scan_incomplete` lists report `kinds` with
+`namespaces: {"extent": "unknown"}` when the findings scan runs out of time,
+because findings in unscanned reports may still match.
+
+**`status: "partial"` means this result can't rule out a match for what you
+asked: something was loading or failed, a kind or namespace you named couldn't
+be searched, or the filter couldn't be evaluated on some objects. `complete`
+means no such problem was reported. A broad query searches only what your
+access and Radar's collection allow without listing each kind it skipped, so
+`narrowedBy` says when that happened (`user_access`, `namespace_pin`,
+`namespace_collection`, `kind_collection`): even a complete
+search is then no proof that nothing exists outside it.** `kind_collection` means
+kinds Radar isn't watching were skipped; naming one with `kind:` searches it.
+`namespace_collection` means namespaces Radar doesn't collect were skipped. Result limits (`total` vs `total_matched`, MCP
+`narrowHint`) are separate.
+
+What gets reported follows from that:
+
+- **Your access and Radar's setup are the scope of a search, not gaps in it.** A
+  kind-level access, setup or query reason (`user_forbidden`, `radar_forbidden`,
+  `kind_unknown`) is a gap only for a kind a `kind:` term names; on a broad query
+  it adds to `narrowedBy` instead. A namespace reason is a gap only for a
+  namespace an `ns:` term, a REST namespace parameter, or the MCP `namespace`
+  argument names. So `ns:` alone never yields per-kind gaps, and `kind:` alone
+  never yields namespace or collection-scope gaps. A named kind Radar's setup leaves out is
+  `radar_kind_not_collected`. Kinds search never covers are outside every search,
+  so on a broad query they don't add to `narrowedBy`: Endpoints, EndpointSlices and
+  Leases, which Radar reads directly instead of watching, are `kind_not_searchable`
+  (read them with `list_resources`), and APIs that can't be listed and watched are
+  `kind_not_watchable`.
+- **Loading and failures are always reported, folded.** All `kind_sync_pending`
+  kinds become one gap whose `kinds` counts distinct kinds and names none. Each
+  failure reason (`kind_sync_timed_out`, `read_error`,
+  `user_permission_check_failed`, `radar_credentials_rejected`) names its kinds when
+  there are at most five, and otherwise only counts them. A query with `kind:` terms
+  names every kind it reports, exactly.
+- **Only kinds you may read count, and your access comes first.** Your own access is
+  checked before a kind's loading, failed or collection state is reported, so a kind
+  you can't list never shows up as loading for you, and a named kind that neither
+  you nor Radar can read is `user_forbidden` (yours to fix). Radar's own denial
+  (`radar_forbidden`) is reported only when you could read the kind. A kind
+  search never covers (`kind_not_searchable`, `kind_not_watchable`) is reported
+  without a permission check.
+- **While discovery is loading** (API discovery, or the CRD discovery that decides
+  which custom kinds Radar watches), the response carries a `kind_sync_pending`
+  gap whose kinds are `{"extent": "unknown"}` (the set isn't known yet) and no `kind_unknown`: a `kind:`
+  term that matched nothing may simply not be discovered yet. When API discovery
+  failed for some groups, or its last refresh failed and retained an older snapshot,
+  an unmatched `kind:` term is still `kind_unknown`, beside a `read_error` gap whose
+  kinds are unknown: the kind may live in a group Radar couldn't discover. For broad searches, incomplete discovery adds `kind_collection`
+  to `narrowedBy`. Search reads the in-memory discovery snapshot without refreshing it.
+- **A kind Radar doesn't watch yet narrows a broad search** (`kind_collection`),
+  for example one too large to watch eagerly; a `kind:` term warms it and reports
+  what happens. An access check Radar is still retrying is `kind_sync_pending`;
+  one that failed for a reason other than a refusal, or never answered once its
+  retries ran out, is `read_error`, which naming the kind retries. Neither is read
+  as a deliberate limit. A watch that started but hasn't finished loading by its
+  deadline is `kind_sync_timed_out`, which naming the kind can't restart. A
+  namespace Radar's own credentials can't list stays outside its collection: on a
+  broad search it adds `namespace_collection` to `narrowedBy`, and it is
+  `radar_namespace_not_collected` when an `ns:` term names it.
+- **Named kinds may warm within one shared two-second deadline.** Broad searches
+  do not wait for warm-up. Kinds still loading are reported as `kind_sync_pending`.
+  The per-hit `summaryContext` (health, issue count, managedBy) is left out when it
+  can't be built within about three seconds, as right after a restart while
+  custom-resource discovery runs.
+- **A kind Radar watches namespace by namespace is searched where it has
+  loaded.** A namespace whose informer is still loading is a `kind_sync_pending`
+  gap for the kind, and the namespaces that are ready still contribute hits.
+- **When your namespace access couldn't be determined**, namespaced kinds are not
+  searched (fail closed) and the result reports `user_permission_check_failed` (per named
+  kind, or one gap whose kinds are unknown), never a namespace code.
+
+| Code | Reported | Meaning | Next step |
+|---|---|---|---|
+| `kind_sync_pending` | always (folded) | The kind or discovery is still loading, or warming ran out of time. | Retry in a few seconds. |
+| `kind_sync_timed_out` | always (folded) | The kind's initial load missed its deadline; Radar keeps trying. | Retry later; if it persists, inspect Radar's connection and list/watch access. |
+| `read_error` | always (folded) | A list or discovery failure, or an access check that failed or never answered. | Retry; on a broad search, `kind:` re-checks the kind. |
+| `user_permission_check_failed` | always (folded) | Radar could not complete your permission check and failed closed. This is not a denial; authorized namespaces still contribute hits. | Retry. |
+| `radar_credentials_rejected` | always (folded) | Kubernetes rejected Radar's own credentials for the kind. | Whoever runs Radar checks its credentials. |
+| `user_forbidden` | named `kind:` | Your role cannot list the kind in some or all of the searched namespaces. | Ask for access; authorized namespaces still contribute hits. |
+| `radar_forbidden` | named `kind:` | Kubernetes refused Radar's own identity for the kind. | Fix Radar's access; granting the caller access does not help. |
+| `radar_kind_not_collected` | named `kind:` | Radar's setup leaves the kind out. | Use `list_resources`, or change Radar's collection. |
+| `kind_not_searchable` | named `kind:` | Search doesn't cover the kind: Radar reads Endpoints, EndpointSlices and Leases directly instead of watching them. | Use `list_resources` or `get_resource`. |
+| `kind_not_watchable` | named `kind:` | The API can't be listed and watched, so Radar can't collect it. | Read it from the Kubernetes API directly; warming will not help. |
+| `kind_unknown` | named `kind:` | A `kind:` term matched no kind in the discovered catalog: it isn't installed on this cluster, or it is misspelled. Reported in your spelling. | Check the spelling, and whether the API is installed here. |
+| `namespace_not_found` | named `ns:` | The namespace doesn't exist on this cluster. Only a caller who can see every namespace is told this. | Check the name. |
+| `user_namespace_not_visible` | named `ns:` | The namespace isn't among the namespaces you can see, or doesn't exist; the code doesn't say which. | Use a namespace you can see, or ask for access. |
+| `outside_namespace_pin` | named `ns:` | Radar's `--namespace-scope` pin leaves the namespace out. | Radar's `--namespace-scope` setting. |
+| `radar_namespace_not_collected` | named `ns:` | Radar's cache left kinds unsearched there: `kinds.extent` is `all` only if every searched kind was excluded, otherwise `unknown`. | Widen Radar's collection. |
+| `filter_eval_failed` | when the filter fails | The `filter=` expression couldn't be evaluated on some objects Radar read. | Guard missing fields with `has()`. |
+| `findings_scan_incomplete` | when the findings search ran out of time | Radar stopped searching Trivy report findings when its time budget ran out, so a CVE or package may be in a report it left out. | Narrow with `kind:`, `ns:` or a more specific term. |
+
+A namespace gap lists the namespaces you named where kinds were missed for that
+reason, once per code, never per kind. Every combination of its axes was missed;
+`kinds: {"extent": "unknown"}` does not qualify kinds successfully searched there.
+A named namespace that doesn't exist is
+`namespace_not_found` for a caller whose RBAC covers every namespace, never
+searched to a silent empty answer or blamed on the pin (Radar watches
+Namespaces cluster-wide, even under the pin; when it can't list them, existence is
+unknown and the namespace is treated as existing). For anyone else existence is
+never checked, so a namespace outside your RBAC is `user_namespace_not_visible`
+whether or not it exists. Kubernetes refusing Radar's own identity is
+`radar_forbidden` or `radar_credentials_rejected`: either way it is Radar's access
+to fix, not yours.
+
+On a broad search, read-error hints suggest a `kind:` search to re-check; a search that already names the kind reports the failure without
+suggesting the same query.
+
+On MCP, a partial result also carries `coverageHint`: an explanation per reason
+present, most actionable first (a typo, an unsearchable kind, a failing filter,
+loading), at most three sentences and then `+N more reasons.`. A narrowed broad
+search with no hits carries one too, saying it doesn't rule out matches outside
+your access and Radar's collection. A search with hits says so when Radar
+collects some kinds only in some namespaces, or is pinned to one, since those
+limits come from how Radar is installed; the caller's own access is not
+repeated. A named kind denied across the whole
+namespace scope suggests trying `ns:<namespace>`; namespace access may differ,
+so this is a suggestion, not a promise of access. REST never carries it.
+The response is one JSON value, with human-readable `coverageHint` and
+`narrowHint` (when present) before the hits, as with `list_resources`.
+
+```json
+{"coverageHint": "37 kinds were still loading; retry in a few seconds before concluding absence.",
+ "coverage": {"status": "partial", "gaps": [{"code": "kind_sync_pending", "action": "retry", "kinds": {"count": 37}, "namespaces": {"extent": "all"}}]}, …}
+{"coverageHint": "Your access doesn't include all Secrets; this result says nothing about the rest. Try narrowing with ns:<namespace>.",
+ "coverage": {"status": "partial", "gaps": [{"code": "user_forbidden", "action": "user_access", "kinds": {"count": 1, "names": [{"kind": "Secret"}]}, "namespaces": {"extent": "all"}}]}, …}
+{"coverageHint": "Namespace 'payments-prd' doesn't exist on this cluster.",
+ "coverage": {"status": "partial", "gaps": [{"code": "namespace_not_found", "action": "change_request", "kinds": {"extent": "all"}, "namespaces": {"count": 1, "names": ["payments-prd"]}}]}, …}
+{"coverageHint": "No matches within what your access and Radar's collection cover; that does not rule out matches outside them.",
+ "coverage": {"status": "complete", "narrowedBy": ["user_access"], "gaps": []}, …}
+{"coverageHint": "For some kinds, Radar searches only the namespaces it collects; matches for them elsewhere aren't included.",
+ "coverage": {"status": "complete", "narrowedBy": ["namespace_collection"], "gaps": []}, "hits": [ … ]}
+```
+
+`ns:` (and the MCP `namespace` argument) restricts namespaced kinds. A broad `ns:`
+query covers namespaced objects only. A cluster-scoped kind named with `kind:`
+ignores `ns:`, as kubectl ignores `-n` for it. RBAC namespace limits and
+`--namespace-scope` never hide cluster-scoped objects: each cluster-scoped
+kind is gated only by the caller's own list permission for it.
+Coverage is bounded by the discovered catalog; it cannot describe undiscovered APIs.
+Explicit searches share one two-second warmup deadline across matching dynamic
+kinds and namespaces, including permission probes and initial sync. The deadline
+bounds only how long the search waits: a permission probe other requests share
+keeps running, and the watch it grants still starts. A requested namespace can start
+its own watch even when another namespace is already cached. Unfinished warming
+reports `kind_sync_pending` and preserves cached hits from covered namespaces.
+Readiness is judged per namespace: a namespace whose watch is still loading reports
+`kind_sync_pending` (`kind_sync_timed_out` once it misses its deadline) without hiding
+hits from namespaces that are ready.
+
+Ordinary namespaced kinds, including dynamic CRDs, use the same namespace visibility
+policy as resource lists. Secrets, Roles, RoleBindings, LimitRanges and Trivy reports
+use exact caller list gates. These gates try one cluster-wide check, then bounded parallel namespace
+checks only after a denial. Cluster-scoped kinds use an exact cluster-scoped check.
+
+`features.searchCoverage` advertises the coverage response and `object` binding so
+embedding hosts can gate them when connected to an older Radar.
+
+CEL exposes `object` (the cached object with Secret data/stringData removed)
+alongside the existing `kind`,
+`apiVersion`, `metadata`, `spec`, `status`, `labels` and `annotations` shortcuts,
+and `report`: a Trivy report's findings, empty for every other object.
+Shortcuts project from that same object, preserving fields such as node placement,
+Pod IPs, UIDs, generations, finalizers and environment values. Core Secret
+`data`/`stringData` are structurally absent; CEL does not apply Detail pruning or
+environment-value redaction.
+`metadata.namespace` is `""` for cluster-scoped objects. Other missing fields retain
+CEL's normal error semantics; no optional-type extensions are enabled.
+
+Examples:
+
+- RBAC top-level fields: `has(object.subjects) && object.subjects.exists(s, s.kind == "ServiceAccount")`
+- Label membership: `"app" in labels && labels["app"] == "cart"`
+- Multi-source Argo: `kind == "Application" && has(spec.sources) && spec.sources.exists(s, has(s.repoURL) && s.repoURL.contains("github.com"))`
+
+`has()` takes a field selection (`has(object.subjects)`), not a bare variable
+(`has(subjects)`). Use map membership for label keys. Kubernetes omits fields that
+are zero or empty (`status.readyReplicas` on a Deployment with none ready), so guard
+them with `has()`, and match a zero with `!has(x) || x == 0` under a kind check, since
+the bare form also matches every object without that field. Deployments with zero or
+unreported ready replicas:
+`kind == "Deployment" && (!has(status.readyReplicas) || status.readyReplicas == 0)`. Evaluation/activation errors make the result partial, preserve
+`filter_errors` and `filter_error_sample`, and add a `filter_eval_failed` gap whose
+`objects` name the failing `{kind, group, namespace, name}` refs (no namespace at
+cluster scope) when there are at most 20, and otherwise only count them.
+Surviving hits remain available. A valid false predicate is an ordinary non-match.
 
 For `issues`, `unchecked_sources` lists the issue sources Radar couldn't check for this answer, so their issues may be missing; don't read the response as healthy for them. Sources: `helm` (failed or stuck Helm releases), `resources` (built-in kinds such as Pods, workloads, PVCs, HPAs and Nodes), `custom_resources` (failing conditions on custom resources) and `karpenter` (NodePools, NodeClasses, NodeClaims). Reasons: `read_failed`, `kind_sync_pending` (still loading, for example right after Radar starts; ask again shortly), `kind_sync_failed` (loading stalled), and `collector_access_denied` (Kubernetes refused Radar's own identity, so the caller's permissions can't fix it). An entry may carry `kinds` (only those kinds went unchecked) and `namespaces` (only those namespaces failed; the rest are complete). Treat any other source or reason as unchecked too. Read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 

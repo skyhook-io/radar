@@ -2005,6 +2005,22 @@ func (d *DynamicResourceCache) ListReadOnly(gvr schema.GroupVersionResource, nam
 	if err := d.ensureWatching(gvr, namespace); err != nil {
 		return nil, err
 	}
+	return d.readOnlyItems(gvr, namespace)
+}
+
+// ListReadOnlyContext is ListReadOnly with ctx bounding the wait to start
+// watching gvr, as ListContext is to List.
+func (d *DynamicResourceCache) ListReadOnlyContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	if d == nil {
+		return nil, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	if err := d.EnsureWatchingContext(ctx, gvr, namespace); err != nil {
+		return nil, err
+	}
+	return d.readOnlyItems(gvr, namespace)
+}
+
+func (d *DynamicResourceCache) readOnlyItems(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	entries := d.readEntries(gvr, namespace)
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("informer not found for %v", gvr)
@@ -2768,38 +2784,6 @@ func (d *DynamicResourceCache) servedEntries(gvr schema.GroupVersionResource, na
 		return entries, false
 	}
 	return entries, d.servedSynced(entries)
-}
-
-// DynamicReadSource identifies the informers serving reads of one GVR and
-// namespace at a moment: their identity, not a snapshot of their objects.
-// Starting a cluster-wide informer replaces a GVR's namespace informers
-// inside the same cache, so two readiness checks that both pass can describe
-// different informers; a read bracketed by two equal, synced sources was
-// answered by stores that were complete throughout.
-type DynamicReadSource struct {
-	entries []*informerEntry
-}
-
-// Same reports whether s and other are the same informers, in any order.
-func (s DynamicReadSource) Same(other DynamicReadSource) bool {
-	if len(s.entries) != len(other.entries) {
-		return false
-	}
-	for _, e := range s.entries {
-		if !slices.Contains(other.entries, e) {
-			return false
-		}
-	}
-	return true
-}
-
-// ReadSource returns the informers serving reads of gvr in namespace now and
-// whether they answer authoritatively, by IsNamespaceSynced's rules: namespace
-// "" is a cluster-wide read, which only a cluster-wide informer answers. Both
-// come from the same informers, so a replacement between them cannot mix them.
-func (d *DynamicResourceCache) ReadSource(gvr schema.GroupVersionResource, namespace string) (DynamicReadSource, bool) {
-	entries, ok := d.servedEntries(gvr, namespace)
-	return DynamicReadSource{entries: entries}, ok
 }
 
 // ReadableObject gets one object from the informers serving gvr in namespace

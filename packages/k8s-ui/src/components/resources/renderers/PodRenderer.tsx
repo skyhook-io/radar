@@ -87,6 +87,8 @@ interface PodRendererProps {
   // Metrics data injection
   metrics?: { containers?: any[]; timestamp?: string }
   metricsHistory?: { metricsAPIReachable?: boolean; containers?: any[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
+  metricsHistoryLoading?: boolean
+  metricsHistoryError?: Error | null
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
   // Filesystem browser render props
@@ -286,6 +288,8 @@ export function PodRenderer({
   renderPortAction,
   metrics,
   metricsHistory,
+  metricsHistoryLoading,
+  metricsHistoryError,
   metricsUnavailable,
   hideMetricsServer,
   renderImageBrowser,
@@ -320,6 +324,7 @@ export function PodRenderer({
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
   const isRunning = data.status?.phase === 'Running'
+  const isTerminal = data.status?.phase === 'Succeeded' || data.status?.phase === 'Failed'
 
   // Check for problems. Suppressed when the detail already shows the dedicated
   // Operational Issues section (the Issues pipeline covers the same pod failures,
@@ -329,9 +334,10 @@ export function PodRenderer({
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
   const notRunning = data.status?.phase === 'Pending' && ![...containerStatuses, ...initContainerStatuses].some((s: any) => s.state?.running)
   const noUsageYet = notRunning && metricsHistory?.metricsAPIReachable === true && !metricsHistory.collectionError && !metricsHistory.containers?.length && !metrics?.containers?.length
-  const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
+  const showMetricsUnavailable = !isTerminal && !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
   const hasMetricsHistory = !!metricsHistory?.containers?.length
-  const currentMetrics = metricsUnavailable ? undefined : metrics
+  const showTerminalUsage = isTerminal && (metricsHistory !== undefined || metricsHistoryLoading || !!metricsHistoryError || !!metrics || metricsUnavailable)
+  const currentMetrics = isTerminal || metricsUnavailable ? undefined : metrics
 
   // Image filesystem modal state
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
@@ -872,15 +878,30 @@ export function PodRenderer({
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
+      {!hideMetricsServer && !!(showTerminalUsage || currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
+          {isTerminal && (
+            <div className="mb-3 text-sm text-theme-text-tertiary">
+              Live resource usage has ended for this Pod.{metricsHistory && !hasMetricsHistory && !metricsHistoryLoading && !metricsHistoryError && ' No recorded usage is available.'}
+            </div>
+          )}
+          {isTerminal && metricsHistoryLoading && (
+            <p className="mb-3 text-sm text-theme-text-tertiary">Loading recorded usage...</p>
+          )}
+          {isTerminal && metricsHistoryError && (
+            <AlertBanner
+              variant="warning"
+              title={metricsHistory ? 'Recorded usage could not be refreshed' : 'Recorded usage could not be loaded'}
+              message={metricsHistoryError.message}
+            />
+          )}
           {noUsageYet && <MetricsUnavailableNotice noUsageYet />}
           {showMetricsUnavailable && (
             <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} diagnosis={metricsHistory?.metricsUnavailableDiagnosis} />
           )}
           {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
-              <span className="font-medium">Metrics collection error:</span>{' '}
+              <span className="font-medium">{isTerminal ? 'Current cluster metrics collection error:' : 'Metrics collection error:'}</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>
             </div>
           )}

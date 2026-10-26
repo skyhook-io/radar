@@ -1,7 +1,9 @@
 package issues
 
 import (
+	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -163,20 +165,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
-			condition, ok := conditions.FindFalseConditionWithTime(u)
+			condition, ok := findActionableCondition(u)
 			if !ok {
 				continue
 			}
 			condType, reason, msg := condition.Type, condition.Reason, condition.Message
-			// Noise-floor suppression: a False Ready/Available on an object that
-			// is suspended, still reconciling, or whose controller hasn't yet
-			// observed the current spec is NOT a failure — it's in-flight.
-			// Emitting a warning for it is the canonical alert-fatigue trap,
-			// since auto-refresh keeps it permanently lit. Skip those; keep
-			// genuinely-failed objects.
-			if isTransientCRDCondition(u, reason) {
-				continue
-			}
 			severity := SeverityWarning
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
@@ -268,11 +261,39 @@ func detectGatewayConditionIssues(gvr schema.GroupVersionResource, kind string, 
 }
 
 func detectObjectConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, severity Severity, condTypes ...string) []Issue {
-	condition, ok := conditions.FindFalseConditionWithTime(u, condTypes...)
-	if !ok || isTransientCRDCondition(u, condition.Reason) {
+	condition, ok := findActionableCondition(u, condTypes...)
+	if !ok {
 		return nil
 	}
 	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condition.Type, condition.Reason), condition.Message, condition.LastTransitionTime, condition.HasLastTransitionTime, "", u.GetCreationTimestamp().Time)}
+}
+
+func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) (conditions.FalseCondition, bool) {
+	if len(condTypes) == 0 {
+		condTypes = conditions.DefaultFalseConditionTypes
+	}
+	// Spec edits do not prove recovery. Keep older failures as a qualified fallback.
+	var stale conditions.FalseCondition
+	hasStale := false
+	for len(condTypes) > 0 {
+		condition, found := conditions.FindFalseConditionWithTime(u, condTypes...)
+		if !found {
+			break
+		}
+		current, _ := conditions.Find(u, condition.Type)
+		if current.Status == "False" && !isTransientCRDCondition(u, condition.Reason) {
+			if u.GetGeneration() <= 0 || condition.ObservedGeneration <= 0 || condition.ObservedGeneration >= u.GetGeneration() {
+				return condition, true
+			}
+			if !hasStale {
+				condition.Message = strings.TrimSpace(fmt.Sprintf("Condition was last reported for generation %d; current resource generation is %d. %s", condition.ObservedGeneration, u.GetGeneration(), condition.Message))
+				stale, hasStale = condition, true
+			}
+		}
+		// Skip the whole type so an older representation cannot revive an expected condition.
+		condTypes = slices.DeleteFunc(slices.Clone(condTypes), func(candidateType string) bool { return candidateType == condition.Type })
+	}
+	return stale, hasStale
 }
 
 // gwListenerCond is one listener's failing condition within a gateway group.
