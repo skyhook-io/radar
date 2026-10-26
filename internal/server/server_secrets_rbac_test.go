@@ -60,15 +60,7 @@ func TestProxyAuth_SecretsList_NamespaceRestricted_Denied(t *testing.T) {
 
 	resp := env.authGet(t, "/api/resources/secrets", "alice", "")
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-
-	var items []any
-	json.NewDecoder(resp.Body).Decode(&items)
-	if len(items) != 0 {
-		t.Errorf("secret leaked through namespace-only gate: %d items", len(items))
-	}
+	assertResourceReadError(t, resp, http.StatusForbidden, "user_forbidden")
 }
 
 func TestProxyAuth_SecretsList_NamespaceRestricted_Allowed(t *testing.T) {
@@ -86,9 +78,11 @@ func TestProxyAuth_SecretsList_NamespaceRestricted_Allowed(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var items []any
-	json.NewDecoder(resp.Body).Decode(&items)
-	if len(items) == 0 {
+	var response testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) == 0 {
 		t.Errorf("authorized user got 0 secrets, expected the seeded nginx-tls")
 	}
 }
@@ -108,15 +102,7 @@ func TestProxyAuth_SecretsList_ClusterWideShape_NoSecretRBAC(t *testing.T) {
 
 	resp := env.authGet(t, "/api/resources/secrets", "broad-reader", "")
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-
-	var items []any
-	json.NewDecoder(resp.Body).Decode(&items)
-	if len(items) != 0 {
-		t.Errorf("secrets leaked to cluster-wide-pods user without cluster-scope secrets SAR: %d items", len(items))
-	}
+	assertResourceReadError(t, resp, http.StatusForbidden, "user_forbidden")
 }
 
 func TestProxyAuth_SecretsList_ClusterWideShape_WithSecretRBAC(t *testing.T) {
@@ -135,9 +121,11 @@ func TestProxyAuth_SecretsList_ClusterWideShape_WithSecretRBAC(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var items []any
-	json.NewDecoder(resp.Body).Decode(&items)
-	if len(items) == 0 {
+	var response testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) == 0 {
 		t.Errorf("cluster-wide-namespace user with cluster-scope secrets SAR should see all secrets")
 	}
 }
@@ -183,6 +171,7 @@ func TestProxyAuth_SearchSecrets_PerNamespaceFanout(t *testing.T) {
 	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
+	env.srv.permCache.Get("alice", nil).SetCanI("list", "", "secrets", "", false)
 	seedServerSecretListCanI(t, env, "alice", []string{"default"}, nil)
 
 	resp := env.authGet(t, "/api/search?q=kind:Secret", "alice", "")
@@ -217,6 +206,7 @@ func TestProxyAuth_SearchSecrets_NamespaceDenied(t *testing.T) {
 	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
+	env.srv.permCache.Get("alice", nil).SetCanI("list", "", "secrets", "", false)
 	seedServerSecretListCanI(t, env, "alice", nil, []string{"default"})
 
 	resp := env.authGet(t, "/api/search?q=kind:Secret", "alice", "")
@@ -252,18 +242,16 @@ func TestSmokeSecretsList_NoAuthPassthrough(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var items []struct {
-		Metadata struct {
-			Name      string `json:"name"`
-			Namespace string `json:"namespace"`
-		} `json:"metadata"`
+	var response testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatal(err)
 	}
-	json.NewDecoder(resp.Body).Decode(&items)
+	items := response.Items
 
 	want := map[string]string{"nginx-tls": "default", "system-token": "kube-system"}
 	got := make(map[string]string, len(items))
 	for _, it := range items {
-		got[it.Metadata.Name] = it.Metadata.Namespace
+		got[mustNested(t, it, "metadata", "name").(string)] = mustNested(t, it, "metadata", "namespace").(string)
 	}
 	for name, ns := range want {
 		if got[name] != ns {
@@ -291,20 +279,18 @@ func TestProxyAuth_SecretsList_PartialNamespaceAccess(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var items []struct {
-		Metadata struct {
-			Name      string `json:"name"`
-			Namespace string `json:"namespace"`
-		} `json:"metadata"`
+	var response testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatal(err)
 	}
-	json.NewDecoder(resp.Body).Decode(&items)
+	items := response.Items
 
 	var foundNginx, foundSystem bool
 	for _, it := range items {
-		if it.Metadata.Name == "nginx-tls" && it.Metadata.Namespace == "default" {
+		if mustNested(t, it, "metadata", "name") == "nginx-tls" && mustNested(t, it, "metadata", "namespace") == "default" {
 			foundNginx = true
 		}
-		if it.Metadata.Name == "system-token" && it.Metadata.Namespace == "kube-system" {
+		if mustNested(t, it, "metadata", "name") == "system-token" && mustNested(t, it, "metadata", "namespace") == "kube-system" {
 			foundSystem = true
 		}
 	}

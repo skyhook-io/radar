@@ -61,6 +61,45 @@ func useTestResourceCache(t *testing.T, client *fake.Clientset) {
 	}
 }
 
+// testNamespaces is a Namespace for each name. A real cluster has one for
+// every namespace that holds objects, and Radar tells a caller who can see
+// every namespace when a namespace they named doesn't exist.
+func testNamespaces(names ...string) []runtime.Object {
+	out := make([]runtime.Object, 0, len(names))
+	for _, name := range names {
+		out = append(out, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	return out
+}
+
+// addPackageNamespaces adds Namespaces to the package fixture's cluster for
+// one test, and waits until its cache holds them.
+func addPackageNamespaces(t *testing.T, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, err := testFakeClient.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = testFakeClient.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{})
+		})
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, name := range names {
+		for {
+			if cache := k8s.GetResourceCache(); cache != nil && cache.Namespaces() != nil {
+				if _, err := cache.Namespaces().Get(name); err == nil {
+					break
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("namespace %s never reached the cache", name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 func TestMain(m *testing.M) {
 	// The Cloud-funnel rollout gate mints an install ID in ~/.radar on first
 	// use; redirect HOME so no test run touches the developer's real settings.
@@ -615,12 +654,12 @@ func TestSmokeListPods(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var body []any
+	var body testResourceListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if len(body) < 1 {
+	if len(body.Items) < 1 {
 		t.Error("expected at least 1 pod")
 	}
 }
@@ -680,12 +719,12 @@ func TestSmokeListDeployments(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var body []any
+	var body testResourceListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if len(body) < 1 {
+	if len(body.Items) < 1 {
 		t.Error("expected at least 1 deployment")
 	}
 }
@@ -871,8 +910,11 @@ func TestSmokeListResources(t *testing.T) {
 	for _, kind := range kinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
-			var body []any
+			var body testResourceListEnvelope
 			assertOK(t, get(t, "/api/resources/"+kind), &body)
+			if body.Coverage.Status != "complete" || body.Items == nil {
+				t.Fatalf("expected complete list envelope, got %+v", body)
+			}
 		})
 	}
 }
@@ -884,16 +926,19 @@ func TestSmokeListResourcesCaseInsensitive(t *testing.T) {
 	for _, kind := range kinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
-			var body []any
+			var body testResourceListEnvelope
 			assertOK(t, get(t, "/api/resources/"+kind), &body)
+			if body.Coverage.Status != "complete" || body.Items == nil {
+				t.Fatalf("expected complete list envelope, got %+v", body)
+			}
 		})
 	}
 }
 
 func TestSmokeListResourcesNamespaceFilter(t *testing.T) {
-	var body []any
+	var body testResourceListEnvelope
 	assertOK(t, get(t, "/api/resources/deployments?namespace=default"), &body)
-	if len(body) == 0 {
+	if len(body.Items) == 0 {
 		t.Error("expected at least 1 deployment in namespace=default")
 	}
 }

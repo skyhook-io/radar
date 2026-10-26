@@ -304,38 +304,17 @@ func TestNormalizeNilSlice(t *testing.T) {
 	}
 }
 
-func TestWriteEmptyResourceTable_DeniedRequestCarriesNoSchema(t *testing.T) {
-	// An RBAC denial and an authorized-but-empty list both produce zero items,
-	// but only the second may carry columns: resolving them reads the CRD as
-	// Radar's own identity, so answering a denial with them would hand schema
-	// to a caller who cannot list the kind. The envelope shape stays identical
-	// either way.
+func TestWriteResourceListIncludesCoverageWithoutTable(t *testing.T) {
 	s := &Server{}
 	rec := httptest.NewRecorder()
-	s.writeEmptyResourceTable(rec, true, "widgets", "example.com")
-
+	coverage := listTarget{namespaces: []string{"alpha"}}.coverage(nil, nil)
+	s.writeResourceList(rec, httptest.NewRequest("GET", "/api/resources/widgets", nil), nil, false, "widgets", "example.com", []any{}, coverage)
 	var got resourceTableResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
+		t.Fatal(err)
 	}
-	if got.Columns != nil || got.Cells != nil {
-		t.Errorf("a denial must carry no table, got columns %+v cells %+v", got.Columns, got.Cells)
-	}
-	if got.Kind != "widgets" || got.Group != "example.com" {
-		t.Errorf("identity must still be echoed, got %q/%q", got.Kind, got.Group)
-	}
-	// items must be [] and not null, same as every other table-mode response.
-	if !bytes.Contains(rec.Body.Bytes(), []byte(`"items":[]`)) {
-		t.Errorf("items must serialize as [], got %s", rec.Body.String())
-	}
-}
-
-func TestWriteEmptyResourceTable_BareArrayWhenNotTableMode(t *testing.T) {
-	s := &Server{}
-	rec := httptest.NewRecorder()
-	s.writeEmptyResourceTable(rec, false, "widgets", "example.com")
-	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
-		t.Errorf("want a bare array without table mode, got %s", body)
+	if got.Coverage.Status != "complete" || got.Columns != nil || got.Cells != nil || !bytes.Contains(rec.Body.Bytes(), []byte(`"items":[]`)) {
+		t.Fatalf("unexpected envelope: %s", rec.Body.String())
 	}
 }
 

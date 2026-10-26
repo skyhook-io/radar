@@ -77,22 +77,24 @@ export function DetailShell<TId extends string = string>({
       <div className="shrink-0 border-b border-theme-border bg-theme-base">
         {!compactHeader && (
           <>
-            {breadcrumb && <div className="px-6 pt-2.5">{breadcrumb}</div>}
-            <div className={clsx('px-6 flex items-start gap-4', wrapHeader && 'flex-wrap gap-y-2', breadcrumb ? 'pb-3 pt-1.5' : 'py-3')}>
+            {breadcrumb && <div className="px-6 pt-2.5 phone:px-4">{breadcrumb}</div>}
+            {/* Phones always wrap: the identity takes the row beside the back
+                button and the actions drop below it. */}
+            <div className={clsx('px-6 flex items-start gap-4 phone:px-4 phone:flex-wrap phone:gap-x-3 phone:gap-y-2', wrapHeader && 'flex-wrap gap-y-2', breadcrumb ? 'pb-3 pt-1.5' : 'py-3')}>
               {nav}
               {/* Wrapping on, the identity's basis is its one-line width, so the
                   actions move below whenever the whole title line would not fit
                   beside them — never squeezing the name to keep them up. */}
-              <div className={clsx('min-w-0', wrapHeader ? 'flex-auto' : 'flex-1')}>{identity}</div>
+              <div className={clsx('min-w-0 phone:basis-[calc(100%-3rem)]', wrapHeader ? 'flex-auto' : 'flex-1')}>{identity}</div>
               {wrapHeader ? <div className="ml-auto flex shrink-0 items-start gap-4">{headerActions}</div> : headerActions}
             </div>
-            {subheader && <div className="-mt-1 px-6 pb-3">{subheader}</div>}
+            {subheader && <div className="-mt-1 px-6 pb-3 phone:px-4">{subheader}</div>}
           </>
         )}
 
         {/* Tabs (left) + scope controls / actions (right) */}
-        <div className={clsx('flex items-center', compactHeader ? 'px-0' : 'border-t border-theme-border px-6')}>
-          <div ref={stripRef} className={clsx('flex min-w-0 flex-auto overflow-x-auto', compact ? 'gap-0' : 'gap-1')} role="tablist">
+        <div className={clsx('flex items-center phone:flex-wrap', compactHeader ? 'px-0' : 'border-t border-theme-border px-6 phone:px-4')}>
+          <div ref={stripRef} className={clsx('flex min-w-0 flex-auto overflow-x-auto phone:basis-full', compact ? 'gap-0' : 'gap-1')} role="tablist">
             {visibleTabs.map((t) => (
               <DetailShellTabButton key={t.id} active={activeTab === t.id} compact={compact} onClick={() => onTabChange(t.id)}>
                 {!compact && t.icon}
@@ -102,7 +104,7 @@ export function DetailShell<TId extends string = string>({
             ))}
           </div>
           {(scopeControls || tabStripEnd) && (
-            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 pl-2">
+            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 pl-2 phone:py-2">
               {scopeControls}
               {tabStripEnd}
             </div>

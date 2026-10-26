@@ -53,6 +53,29 @@ func NormalizeHubOrigin(raw string) (string, error) {
 	return u.String(), nil
 }
 
+// enrollmentHubOrigin returns origin, already normalized, with the host
+// lowercased and a default port dropped, so "https://Hub.example.com:443"
+// and "https://hub.example.com" show up as one Hub in the logs.
+func enrollmentHubOrigin(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return origin
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	switch {
+	case port != "":
+		u.Host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		u.Host = "[" + host + "]"
+	default:
+		u.Host = host
+	}
+	return u.String()
+}
+
 // ValidateHubOrigin validates the API origin used by the device-flow client.
 // The client sends its device secret in an Authorization header, so plaintext
 // is restricted to explicit loopback hosts.

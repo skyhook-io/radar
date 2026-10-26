@@ -155,3 +155,19 @@ func TestConfigValidateRejectsPlaintextRemoteCloudURL(t *testing.T) {
 		t.Fatalf("Config.validate() = %v, want TLS policy error", err)
 	}
 }
+
+func TestEnrollmentHubOriginIgnoresCaseAndDefaultPort(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://Hub.Example.com":      "https://hub.example.com",
+		"https://hub.example.com:443":  "https://hub.example.com",
+		"https://hub.example.com:8443": "https://hub.example.com:8443",
+		"http://LOCALHOST:80":          "http://localhost",
+		"http://localhost:8080":        "http://localhost:8080",
+		"https://[2001:DB8::1]:443":    "https://[2001:db8::1]",
+		"https://[2001:db8::1]:8443":   "https://[2001:db8::1]:8443",
+	} {
+		if got := enrollmentHubOrigin(in); got != want {
+			t.Errorf("enrollmentHubOrigin(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

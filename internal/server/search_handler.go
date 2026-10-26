@@ -1,15 +1,18 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/search"
+	"github.com/skyhook-io/radar/internal/summarycontext"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 // handleSearch serves GET /api/search.
@@ -19,6 +22,7 @@ import (
 //	q       — search string (free tokens + modifiers: kind:, ns:, label:k=v, image:, cluster:)
 //	limit   — max hits returned (default 50, capped at 500)
 //	include — "summary" (default), "raw", or "none"
+//	namespace, namespaces — explicit namespace names, unioned with ns: terms
 //
 // The returned shape is a search.Result. Per-cluster, no cross-cluster
 // concerns — radar-hub is responsible for fan-out and re-ranking.
@@ -28,6 +32,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query().Get("q")
 	parsed := search.Parse(q)
+	parsed.NSFilter = append(parsed.NSFilter, parseNamespaces(r.URL.Query())...)
 
 	provider := search.NewCacheProvider()
 	if provider == nil {
@@ -35,90 +40,42 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth-filter the namespaces the user can see, then intersect with any
-	// `ns:` modifier parsed from the query. The result both gates the scan
-	// (so listers don't read namespaces outside the user's RBAC) and
-	// constrains the post-hoc match() filter.
+	// Namespaced kinds scan the namespaces the user can see, intersected with
+	// any `ns:` modifier; listers never read namespaces outside the user's
+	// RBAC. Cluster-scoped kinds are gated per kind by CanReadClusterScoped.
 	//
-	// globalNs=1 scans the user's full RBAC ceiling, scoped only by the query's
-	// own `ns:` tokens — the omnibar (⌘K) and Radar Hub's fleet search set it
-	// for a deliberately broad lookup.
-	// It skips parseNamespacesForUser's --namespace-scope clamp: the scope
-	// becomes a hard namespace filter below, so clamping it to the pinned
-	// namespace would drop every cluster-scoped hit (Nodes, PVs, ...) that the
-	// per-kind checks allow; namespaced kinds still come only from the pinned
-	// cache. Still RBAC-bounded (getUserNamespaces filters by the caller's
-	// identity). A plain search never inherits the stored namespace pick either.
-	var allowed []string
-	if r.URL.Query().Get("globalNs") == "1" {
-		allowed = s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
-	} else {
-		allowed = s.parseNamespacesForUser(r)
-	}
-	if readscope.NoNamespaceAccess(allowed) {
-		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
-		return
-	}
-	scanNamespaces := readscope.SelectNamespaces(allowed, parsed.NSFilter)
-	if allowed != nil && len(scanNamespaces) == 0 {
-		// User is namespace-restricted but their `ns:` filter doesn't
-		// intersect — empty result without scanning.
-		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
-		return
-	}
-	parsed.NSFilter = scanNamespaces
+	// A search never inherits the stored namespace pick: it scans the user's
+	// RBAC ceiling within the --namespace-scope pin, narrowed only by the
+	// explicit namespace names in query terms or URL parameters. A named
+	// namespace outside the pin is reported as outside_namespace_pin;
+	// cluster-scoped kinds are still searched under the
+	// pin, gated per kind. globalNs=1 (the omnibar's ⌘K and Radar Hub's fleet
+	// search) is accepted and asks for exactly this.
+	ceiling, namespaceCheckFailed := s.getUserNamespacesWithStatus(r, nil)
 
 	include, err := parseInclude(r.URL.Query().Get("include"))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	skipKinds := s.computeSearchSkipKinds(r)
-	// Secrets are namespaced and get per-namespace RBAC treatment so a user
-	// with per-namespace Secret access (e.g. a Role-bound viewer) sees those
-	// rows in search instead of having Secret dropped at cluster scope.
-	// scanNamespaces (not allowed) is the right input: a user with
-	// AllowedNamespaces==nil (cluster-wide-pods sentinel) who queries
-	// `ns:team-a` should get per-namespace fanout over team-a, not a
-	// cluster-scope `list secrets` SAR — they may have list-secrets in
-	// team-a but not cluster-wide. nil scanNamespaces (truly cluster-wide
-	// query) still routes to the cluster-scope SAR branch.
-	var namespacesByKind map[string][]string
-	switch decision, scoped := s.computeSearchSecretsRBAC(r, scanNamespaces); decision {
-	case "skip":
-		if skipKinds == nil {
-			skipKinds = make(map[string]bool)
-		}
-		skipKinds["Secret"] = true
-	case "override":
-		// scoped ⊆ scanNamespaces ⊆ parsed.NSFilter already (the SAR fanout
-		// iterates scanNamespaces, which is the upstream intersection of
-		// allowed and parsed.NSFilter). Use the SAR result directly.
-		namespacesByKind = map[string][]string{"Secret": scoped}
-	}
-
+	kindRBAC := s.computeSearchKindRBAC(r)
 	opts := search.Options{
-		Limit:      parseLimit(r.URL.Query().Get("limit")),
-		Include:    include,
-		Namespaces: scanNamespaces,
-		// SAR-gate sensitive cluster-scoped kinds (Node, PV, StorageClass,
-		// Namespace) by the END user's identity, not the SA's. The cache
-		// itself reads as the SA so it carries those rows, but exposing
-		// them through search to a namespace-bound viewer would let them
-		// enumerate cluster-scope info their k8s RBAC denies. Secrets get
-		// per-namespace RBAC via NamespacesByKind/SkipKinds above. In
-		// auth-mode=none, computeSearchSkipKinds returns nil and the SA's
-		// own RBAC at the cache lister layer is the only filter.
-		SkipKinds:        skipKinds,
-		NamespacesByKind: namespacesByKind,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			if auth.UserFromContext(r.Context()) == nil {
-				return true
-			}
-			return s.canRead(r, group, resource, "", "list")
+		TypedKindAccess: kindRBAC,
+		Limit:           parseLimit(r.URL.Query().Get("limit")),
+		Include:         include,
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return s.canReadDecision(r, group, resource, "", "list")
 		},
-		KindAccess: s.searchKindAccess(r),
+		DynamicKindAccess: s.searchKindAccess(r, kindRBAC),
 	}
+	var pin *string
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		pin = &target
+	}
+	opts.Selection = search.SelectNamespaces(provider, parsed, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !namespaceCheckFailed}, pin)
+	opts.NamespaceCheckFailed = namespaceCheckFailed
+	scanNamespaces := opts.Selection.Namespaces
 	// summaryContext attaches managedBy/health/issueCount per hit. Build
 	// the per-request closure once (one Compose call + cached topology
 	// snapshot) and let the search executor invoke it per kept hit.
@@ -132,7 +89,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// (CanReadClusterScoped) already constrains which cluster-scoped
 	// kinds are reachable.
 	if r.URL.Query().Get("context") != "none" {
-		if builder := s.newSearchSummaryContextBuilder(r, scanNamespaces); builder != nil {
+		if builder := summarycontext.Within(summarycontext.SearchBudget, func() summarycontext.Builder {
+			return s.newSearchSummaryContextBuilder(r, scanNamespaces)
+		}); builder != nil {
 			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 		}
 	}
@@ -146,11 +105,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := search.Search(r.Context(), provider, parsed, opts)
+	if err == nil && !provider.Current() {
+		err = search.ErrConnectionChanged
+	}
+	if errors.Is(err, search.ErrConnectionChanged) {
+		s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
+		return
+	}
 	if err != nil {
-		// Log before writing per radar's CLAUDE.md convention. Today
-		// Search() never returns an error, but the moment that
-		// changes we want context — the query string itself is the
-		// most useful fingerprint.
 		log.Printf("[search] failed q=%q filter=%q: %v", parsed.Raw, r.URL.Query().Get("filter"), err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

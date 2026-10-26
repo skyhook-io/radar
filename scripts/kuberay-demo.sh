@@ -456,13 +456,13 @@ radar_inventory_ready() {
   local dynamic=false
   [ -z "${group}" ] || dynamic=true
   live="$(kc -n "${DEMO_NS}" get "${kind}${group:+.${group}}" --request-timeout=10s -o json | jq -cS --argjson dynamic "${dynamic}" ".items | ${projection}")" || return 1
-  cached="$(curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/${kind}?group=${group}&namespace=${DEMO_NS}" | jq -cS --argjson dynamic "${dynamic}" "${projection}")" || return 1
+  cached="$(curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/${kind}?group=${group}&namespace=${DEMO_NS}" | jq -cS --argjson dynamic "${dynamic}" 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end |'" ${projection}")" || return 1
   [ "${live}" = "${cached}" ]
 }
 
 radar_revisions_ready() {
   local rayservices rayclusters pods services active pending service_uid
-  rayservices="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayservices?group=ray.io&namespace=${DEMO_NS}")" || return 1
+  rayservices="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayservices?group=ray.io&namespace=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || return 1
   jq -e '
     type == "array" and length == 1 and .[0].apiVersion == "ray.io/v1" and
     .[0].status.numServeEndpoints > 0 and
@@ -474,7 +474,7 @@ radar_revisions_ready() {
   pending="$(jq -r '.[0].status.pendingServiceStatus.rayClusterName' <<<"${rayservices}")"
   service_uid="$(jq -r '.[0].metadata.uid' <<<"${rayservices}")"
 
-  rayclusters="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayclusters?group=ray.io&namespace=${DEMO_NS}")" || return 1
+  rayclusters="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayclusters?group=ray.io&namespace=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || return 1
   jq -e --arg active "${active}" --arg pending "${pending}" --arg uid "${service_uid}" '
     type == "array" and length == 2 and
     ([.[].metadata.name] | sort) == ([$active, $pending] | sort) and
@@ -487,7 +487,7 @@ radar_revisions_ready() {
         (.reason == "CrashLoopBackOff" or .reason == "RunContainerError")))
   ' <<<"${rayclusters}" >/dev/null || { warn "Radar did not return both owned RayClusters with their native conditions" >&2; return 1; }
 
-  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}")" || return 1
+  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || return 1
   jq -e --arg active "${active}" --arg pending "${pending}" '
     type == "array" and
     ([.[] | select(.metadata.labels["ray.io/cluster"] == $active and
@@ -496,7 +496,7 @@ radar_revisions_ready() {
       .metadata.labels["ray.io/group"] == "headgroup" and .metadata.labels["ray.io/node-type"] == "head")] | length) == 1
   ' <<<"${pods}" >/dev/null || { warn "Radar did not expose both controller-created head Pods and their role labels" >&2; return 1; }
 
-  services="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/services?namespace=${DEMO_NS}")" || return 1
+  services="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/services?namespace=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || return 1
   jq -e --arg active "${active}" --arg pending "${pending}" '
     type == "array" and
     any(.[]; .spec.selector["ray.io/cluster"] == $active and .metadata.labels["ray.io/serve"] == "revision-demo-serve") and

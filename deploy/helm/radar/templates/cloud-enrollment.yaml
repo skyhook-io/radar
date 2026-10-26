@@ -1,0 +1,25 @@
+{{- if and (include "radar.cloudEnrollmentMode" . | eq "true") .Values.cloud.enrollment.key }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "radar.cloudEnrollmentKeySecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+type: Opaque
+data:
+  key: {{ .Values.cloud.enrollment.key | b64enc | quote }}
+{{- end }}
+{{- if and (include "radar.cloudEnrollmentMode" . | eq "true") .Values.cloud.caBundle }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- .Values.cloud.caBundle | trimSuffix "\n" | nindent 4 }}
+{{- end }}

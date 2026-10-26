@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -37,25 +38,38 @@ import (
 // Caller should pass a short timeout via ctx — a single ConfigMap GET
 // should resolve in well under a second.
 func DiscoverAPIServerURL(ctx context.Context, client kubernetes.Interface) string {
+	// The agent connect path is best-effort for this field: a transient
+	// read error is as silent as a missing ConfigMap.
+	u, _ := LookupAPIServerURL(ctx, client)
+	return u
+}
+
+// LookupAPIServerURL is DiscoverAPIServerURL, except that a read that failed
+// for another reason than the ConfigMap being absent or forbidden returns an
+// error instead of "". An enrolling Radar names the cluster from this URL, and
+// a name built while the API server was briefly unreachable would rename the
+// cluster in the Hub.
+func LookupAPIServerURL(ctx context.Context, client kubernetes.Interface) (string, error) {
 	if client == nil {
-		return ""
+		return "", nil
 	}
 	cm, err := client.CoreV1().ConfigMaps("kube-public").Get(ctx, "cluster-info", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+		return "", nil
+	}
 	if err != nil {
-		// 404, RBAC, or transient error — all silent. The agent connect
-		// path is best-effort for this field.
-		return ""
+		return "", fmt.Errorf("read kube-public/cluster-info: %w", err)
 	}
 	kubeconfig, ok := cm.Data["kubeconfig"]
 	if !ok || kubeconfig == "" {
-		return ""
+		return "", nil
 	}
 	// clientcmd.Load parses the embedded kubeconfig YAML; we want the
 	// canonical external API server URL that kubeadm writes for THIS
 	// cluster (the one the agent is running in).
 	cfg, err := clientcmd.Load([]byte(kubeconfig))
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	// Prefer the cluster CurrentContext points at — for kubeadm-generated
 	// cluster-info, CurrentContext is set and resolves unambiguously. If
@@ -68,7 +82,7 @@ func DiscoverAPIServerURL(ctx context.Context, client kubernetes.Interface) stri
 		if kubeCtx := cfg.Contexts[cfg.CurrentContext]; kubeCtx != nil && kubeCtx.Cluster != "" {
 			if cluster := cfg.Clusters[kubeCtx.Cluster]; cluster != nil {
 				if u := validClusterServer(cluster.Server); u != "" {
-					return u
+					return u, nil
 				}
 			}
 		}
@@ -84,10 +98,10 @@ func DiscoverAPIServerURL(ctx context.Context, client kubernetes.Interface) stri
 			continue
 		}
 		if u := validClusterServer(cluster.Server); u != "" {
-			return u
+			return u, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // validClusterServer returns the trimmed server URL when it has an

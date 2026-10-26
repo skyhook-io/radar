@@ -155,6 +155,7 @@ func TestResourceCountsSkipsKubernetes137BrowseProbeAboveNamespaceCap(t *testing
 	for i := range namespaces {
 		namespaces[i] = fmt.Sprintf("ns-%d", i)
 	}
+	addPackageNamespaces(t, namespaces...)
 	rec := httptest.NewRecorder()
 	testServerSrv.handleResourceCounts(rec, httptest.NewRequest(http.MethodGet, "/api/resource-counts?namespaces="+strings.Join(namespaces, ","), nil))
 	if rec.Code != http.StatusOK {

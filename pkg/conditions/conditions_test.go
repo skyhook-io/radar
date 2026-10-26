@@ -158,3 +158,19 @@ func TestFind_V1beta2TakesPrecedence(t *testing.T) {
 		t.Fatalf("Find() = (%+v, %v), want v1beta2 condition", got, found)
 	}
 }
+
+func TestFalseConditionPreservesObservedGeneration(t *testing.T) {
+	for _, shape := range []string{"conditions", "v1beta2"} {
+		for _, generation := range []int64{0, 1, 2} {
+			c := map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable", "observedGeneration": generation}
+			status := map[string]any{"conditions": []any{c}}
+			if shape == "v1beta2" {
+				status = map[string]any{"v1beta2": status}
+			}
+			got, found := FindFalseConditionWithTime(cond(status), "Ready")
+			if !found || got.ObservedGeneration != generation {
+				t.Fatalf("shape=%s want generation %d got %+v", shape, generation, got)
+			}
+		}
+	}
+}

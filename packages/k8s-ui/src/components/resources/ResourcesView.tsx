@@ -1,3 +1,5 @@
+import type { ResourceCoverage } from '../../types/resource-coverage'
+import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
 import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
@@ -157,7 +159,7 @@ import {
   printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
 } from './printer-columns'
 import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
-import { pluralize } from '../../utils/pluralize'
+import { englishPlural, isEnglishPlural, pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { formatRelativeAgeTime, parseQuantityToNumber } from '../../utils/format'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
@@ -3364,6 +3366,7 @@ interface ResourcesViewData {
 export const ResourcesViewDataContext = React.createContext<ResourcesViewData>({})
 
 export interface ResourceQueryResult {
+  coverage?: ResourceCoverage
   resourceName?: string
   group?: string
   data?: any[]
@@ -3399,6 +3402,7 @@ interface ResourcesViewProps {
   resourceQueries?: ResourceQueryResult[]
   // Lightweight counts for sidebar badges (from /api/resource-counts)
   resourceCounts?: Record<string, number | null>
+  resourceCoverage?: Record<string, ResourceCoverage>
   resourceForbidden?: string[]
   /** Per-kind reason a forbidden kind is hidden ("rbac_denied" | "unavailable"),
    *  keyed by the same count key as resourceForbidden. Drives RestrictedState copy. */
@@ -3552,6 +3556,7 @@ const DEFAULT_KIND_INFO: SelectedKindInfo = { name: 'pods', kind: 'Pod', group: 
 export const LOADED_RESOURCE_COUNT_TTL_MS = 5 * 60 * 1000
 
 interface LoadedResourceCount {
+  coverage?: ResourceCoverage
   count: number
   expiresAt: number
 }
@@ -3661,6 +3666,22 @@ export function deriveSidebarResourceCounts(
   return results
 }
 
+export function deriveSidebarResourceCoverage(
+  resourceCounts: Record<string, number | null> | undefined,
+  resourceCoverage: Record<string, ResourceCoverage> | undefined,
+  loadedCountCache: LoadedResourceCountCache,
+  now = Date.now(),
+): Record<string, ResourceCoverage> {
+  const result: Record<string, ResourceCoverage> = { ...resourceCoverage }
+  for (const key of Object.keys(resourceCounts ?? {})) {
+    if (!(key in result)) result[key] = { status: 'unknown' }
+  }
+  for (const [key, cached] of Object.entries(loadedCountCache)) {
+    if (!(key in result) && cached.expiresAt > now) result[key] = cached.coverage ?? { status: 'unknown' }
+  }
+  return result
+}
+
 const FILTER_INTENT_PARAMS = [...RESOURCE_LIST_FILTER_PARAMS, 'resource']
 
 /**
@@ -3695,6 +3716,7 @@ export function ResourcesView({
   apiResources: apiResourcesProp,
   resourceQueries: resourceQueriesProp,
   resourceCounts: resourceCountsProp,
+  resourceCoverage: resourceCoverageProp,
   resourceForbidden: resourceForbiddenProp,
   resourceReasons,
   resourceUnavailable: resourceUnavailableProp,
@@ -5166,16 +5188,16 @@ export function ResourcesView({
       }
 
       const existing = next[selectedKindCountKey]
-      if (existing?.count === selectedLoadedResourceCount && existing.expiresAt === expiresAt) {
+      if (existing?.count === selectedLoadedResourceCount && existing.expiresAt === expiresAt && existing.coverage === selectedQuery?.coverage) {
         return changed ? next : prev
       }
 
       return {
         ...next,
-        [selectedKindCountKey]: { count: selectedLoadedResourceCount, expiresAt },
+        [selectedKindCountKey]: { count: selectedLoadedResourceCount, expiresAt, coverage: selectedQuery?.coverage },
       }
     })
-  }, [selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, selectedQuery?.dataUpdatedAt])
+  }, [selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, selectedQuery?.dataUpdatedAt, selectedQuery?.coverage])
 
   // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
@@ -5195,6 +5217,12 @@ export function ResourcesView({
     })
     return results
   }, [useNewCountsMode, resourcesToCount, resourceCountsProp, resourceUnavailableProp, loadedCountCache, selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, resourceQueries])
+
+  const sidebarResourceCoverage = useMemo(() => {
+    const result = deriveSidebarResourceCoverage(resourceCountsProp, resourceCoverageProp, loadedCountCache)
+    if (selectedQueryHasLoadedCount) result[selectedKindCountKey] = selectedQuery?.coverage ?? { status: 'unknown' }
+    return result
+  }, [resourceCountsProp, resourceCoverageProp, loadedCountCache, selectedQueryHasLoadedCount, selectedKindCountKey, selectedQuery?.coverage])
 
   const sidebarResourceUnavailable = useMemo(() => {
     if (!resourceUnavailableProp?.length) {
@@ -6082,6 +6110,7 @@ export function ResourcesView({
           onKindChange={onKindChange}
           apiResources={apiResourcesProp}
           resourceCounts={counts}
+          resourceCoverage={sidebarResourceCoverage}
           resourceForbidden={Array.from(forbiddenKinds)}
           resourceUnavailable={sidebarResourceUnavailable}
           pinned={pinned}
@@ -6548,6 +6577,18 @@ export function ResourcesView({
           </div>
         )}
 
+        {!isLoading && !selectedQueryError && resourceCoverageNotice(selectedQuery?.coverage, isEnglishPlural(selectedKind.kind) ? selectedKind.kind : englishPlural(selectedKind.kind)) && (
+          <div role="status" className="px-4 py-2 text-xs text-warning-text border-b border-theme-border bg-theme-surface">
+            {resourceCoverageNotice(selectedQuery?.coverage, isEnglishPlural(selectedKind.kind) ? selectedKind.kind : englishPlural(selectedKind.kind))}
+          </div>
+        )}
+
+        {!isLoading && !selectedQueryError && resourceNarrowedNotice(selectedQuery?.coverage) && (
+          <div role="status" className="px-4 py-2 text-xs text-theme-text-tertiary border-b border-theme-border bg-theme-surface">
+            {resourceNarrowedNotice(selectedQuery?.coverage)}
+          </div>
+        )}
+
         {!isLoading && !isSelectedForbidden && !largeListGuard && filteredResources.length > 0 && (
           <ActiveFilterBar
             columnFilters={columnFilters}
@@ -6589,7 +6630,7 @@ export function ResourcesView({
                 />
               </div>
             </div>
-          ) : selectedQueryError && !Array.isArray(resources) ? (
+          ) : selectedQueryError && !Array.isArray(resources) && !largeListGuard ? (
             // A failed fetch with no rows to fall back on must not reach the
             // empty state below — it would tell the user the cluster has none.
             <FetchResult
@@ -6609,7 +6650,9 @@ export function ResourcesView({
               <p className="text-sm mt-1 max-w-xl">
                 {largeListGuard.reason === 'count-unavailable'
                   ? 'Radar could not verify this list is small enough to load. Choose a namespace or smaller namespace set to try again.'
-                  : `${largeListGuard.count?.toLocaleString()} ${largeListGuard.kind.toLowerCase()} are in the current scope. Choose a namespace or smaller namespace set to load this view.`}
+                  : largeListGuard.count == null
+                    ? 'This list exceeds the resource limit. Choose a namespace or smaller namespace set to load this view.'
+                    : `${largeListGuard.count.toLocaleString()} ${largeListGuard.kind.toLowerCase()} were read in the current scope. Choose a namespace or smaller namespace set to load this view.`}
               </p>
               <p className="text-xs mt-2 text-theme-text-disabled">
                 Radar limits full table loads to {largeListGuard.limit.toLocaleString()} resources to keep the UI responsive.
@@ -6620,8 +6663,8 @@ export function ResourcesView({
             </div>
           ) : filteredResources.length === 0 ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary">
-              <p>No {selectedKind.kind} found</p>
-              {emptyKindNote(selectedKind.kind, selectedKind.group, resources?.length ?? 0) && (
+              <p>{resourceEmptyMessage(selectedKind.kind, selectedQuery?.coverage, (resources?.length ?? 0) > 0)}</p>
+              {selectedQuery?.coverage?.status !== 'partial' && emptyKindNote(selectedKind.kind, selectedKind.group, resources?.length ?? 0) && (
                 <p className="text-xs mt-2 max-w-md text-center text-theme-text-disabled">
                   {emptyKindNote(selectedKind.kind, selectedKind.group, resources?.length ?? 0)}
                 </p>
