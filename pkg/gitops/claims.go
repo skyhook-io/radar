@@ -23,9 +23,10 @@ var (
 	fluxHelmReleaseKind   = resourceid.GroupKind{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}
 )
 
-// HelmReleaseKind is the kind of a native Helm release a claim names: Helm
-// keeps no object of that kind, so the claim can't be checked against a list.
-var HelmReleaseKind = resourceid.GroupKind{Kind: "HelmRelease"}
+// nativeHelmReleaseKind is the kind of a native Helm release a claim names:
+// Helm keeps no object of that kind, so the claim can't be checked against a
+// list.
+var nativeHelmReleaseKind = resourceid.GroupKind{Kind: "HelmRelease"}
 
 // maxLabelValue is the longest a Kubernetes label value may be.
 const maxLabelValue = 63
@@ -44,7 +45,8 @@ const (
 // Claim is what an object's own metadata says manages it. It is a candidate,
 // not a verdict: a manager decides membership by its own rules (Argo CD's
 // tracking method and installation ID, which Radar may not be able to read),
-// and its status list is the evidence of what it applied.
+// and its status list records what it compared or applied, which for Argo CD
+// can include objects it doesn't sync.
 type Claim struct {
 	// Manager is the manager the metadata names. Its namespace is empty when
 	// the metadata doesn't say, as with an Argo CD instance label naming an
@@ -58,7 +60,9 @@ type Claim struct {
 }
 
 // Claims returns every claim the metadata of object makes, in a fixed order
-// (Flux, Argo CD, Helm). A malformed value makes no claim.
+// (Flux, Argo CD, Helm). A Flux label without its namespace pair or an Argo
+// CD value that doesn't parse makes no claim; names are not otherwise
+// validated, and a Helm release annotation may name no namespace.
 func Claims(object resourceid.Ref, labels, annotations map[string]string) []Claim {
 	var out []Claim
 	if name, ns := labels[fluxHelmNameLabel], labels[fluxHelmNSLabel]; name != "" && ns != "" {
@@ -90,7 +94,7 @@ func Claims(object resourceid.Ref, labels, annotations map[string]string) []Clai
 		}
 	}
 	if name := annotations[helmReleaseNameAnno]; name != "" {
-		out = append(out, Claim{Manager: resourceid.Ref{Kind: HelmReleaseKind.Kind, Namespace: annotations[helmReleaseNSAnno], Name: name}, Source: ClaimHelmRelease})
+		out = append(out, Claim{Manager: resourceid.Ref{Kind: nativeHelmReleaseKind.Kind, Namespace: annotations[helmReleaseNSAnno], Name: name}, Source: ClaimHelmRelease})
 	}
 	return out
 }
