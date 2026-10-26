@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 import { Badge } from '../ui/Badge'
 import { PaneLoader } from '../ui/PaneLoader'
+import { DialogPortal } from '../ui/DialogPortal'
 import { RestrictedState } from '../ui/RestrictedState'
 import { FetchResult } from '../ui/FetchResult'
 import { Input } from '../ui/Input'
@@ -32,6 +34,7 @@ import {
   ListChecks,
   Minus,
   Scale,
+  PanelLeft,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -3743,6 +3746,13 @@ export function ResourcesView({
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
+  // Phones: the 224px kind list would leave the table a sliver, so it lives in
+  // a drawer over the table, opened from the toolbar and closed by a pick.
+  const isPhone = usePhoneLayout()
+  const [kindsDrawerOpen, setKindsDrawerOpen] = useState(false)
+  useEffect(() => {
+    if (!isPhone) setKindsDrawerOpen(false)
+  }, [isPhone])
   // Sync selectedKind from URL when the URL changes (browser back, external sidebar navigation).
   // Deps are URL-derived only — including selectedKind.name/group would race against pending
   // navigation: a sidebar click flips state before navigate() lands, this effect re-reads the
@@ -4318,7 +4328,7 @@ export function ResourcesView({
     category: 'Search',
     scope: 'resources',
     handler: () => searchInputRef.current?.focus(),
-    enabled: tableActive,
+    enabled: tableActive && !kindsDrawerOpen,
   })
 
   // Keyboard navigation: highlighted row state
@@ -4427,6 +4437,8 @@ export function ResourcesView({
     onResourceClick?.(isSelected ? null : stripped)
   }, [onRowSelect, onResourceClick, selectedKind.name, selectedKind.group])
 
+  // Shortcuts here (and the search shortcut above) pause while the phone
+  // kind drawer is open: it's modal, so the table behind it takes no keys.
   useRegisterShortcuts(([
     {
       id: 'resources-nav-down',
@@ -4600,7 +4612,7 @@ export function ResourcesView({
         else searchInputRef.current?.blur()
       },
     },
-  ] as KeyboardShortcut[]).map((sc) => ({ ...sc, enabled: tableActive && (sc.enabled ?? true) })))
+  ] as KeyboardShortcut[]).map((sc) => ({ ...sc, enabled: tableActive && !kindsDrawerOpen && (sc.enabled ?? true) })))
 
   // Refs for accessing filteredResources inside shortcuts (computed later in component)
   const filteredResourceCountRef = useRef(0)
@@ -4610,7 +4622,7 @@ export function ResourcesView({
   const flatKindListRef = useRef<SelectedKindInfo[]>([])
 
   // Sidebar kind navigation: [ = previous kind, ] = next kind
-  useRegisterShortcuts([
+  useRegisterShortcuts(([
     {
       id: 'resources-prev-kind',
       keys: '[',
@@ -4643,7 +4655,7 @@ export function ResourcesView({
         onKindChange?.()
       },
     },
-  ])
+  ] as KeyboardShortcut[]).map((sc) => ({ ...sc, enabled: !kindsDrawerOpen && (sc.enabled ?? true) })))
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -6068,41 +6080,77 @@ export function ResourcesView({
     onOpenWorkloadLogs,
   }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
+  const renderSidebar = (className?: string) => (
+    <ResourcesSidebar
+      className={className}
+      selectedKind={selectedKind}
+      onSelectedKindChange={(kind) => {
+        shouldPushHistory.current = true
+        setSelectedKind(kind)
+        setKindsDrawerOpen(false)
+      }}
+      onKindChange={onKindChange}
+      apiResources={apiResourcesProp}
+      resourceCounts={counts}
+      resourceForbidden={Array.from(forbiddenKinds)}
+      resourceUnavailable={sidebarResourceUnavailable}
+      pinned={pinned}
+      togglePin={togglePin}
+      isPinned={isPinned}
+      categoryWorkspaces={sidebarCategoryWorkspaces}
+      onKindNavigated={() => {
+        // After selecting a kind via keyboard, move focus to the table search
+        // so the user can immediately filter within the selected kind.
+        setTimeout(() => searchInputRef.current?.focus(), 50)
+      }}
+    />
+  )
+
+  const kindsButton = (
+    <button
+      type="button"
+      onClick={() => setKindsDrawerOpen(true)}
+      aria-expanded={kindsDrawerOpen}
+      aria-label={`Resource kinds (showing ${selectedKind.kind})`}
+      className="flex shrink-0 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-elevated px-2.5 py-1.5 text-sm font-medium text-theme-text-primary hover:bg-theme-hover"
+    >
+      <PanelLeft className="h-4 w-4 text-theme-text-tertiary" />
+      <span className="max-w-[7rem] truncate">{selectedKind.kind}</span>
+    </button>
+  )
+
   return (
     <ResourcesViewDataContext.Provider value={resourcesViewDataContextValue}>
     <div className="flex h-full w-full">
-      {/* Sidebar - Resource Types */}
-      {!hideSidebar && (
-        <ResourcesSidebar
-          selectedKind={selectedKind}
-          onSelectedKindChange={(kind) => {
-            shouldPushHistory.current = true
-            setSelectedKind(kind)
-          }}
-          onKindChange={onKindChange}
-          apiResources={apiResourcesProp}
-          resourceCounts={counts}
-          resourceForbidden={Array.from(forbiddenKinds)}
-          resourceUnavailable={sidebarResourceUnavailable}
-          pinned={pinned}
-          togglePin={togglePin}
-          isPinned={isPinned}
-          categoryWorkspaces={sidebarCategoryWorkspaces}
-          onKindNavigated={() => {
-            // After selecting a kind via keyboard, move focus to the table search
-            // so the user can immediately filter within the selected kind.
-            setTimeout(() => searchInputRef.current?.focus(), 50)
-          }}
-        />
+      {/* Sidebar - Resource Types. On phones it is a modal drawer: the
+          dialog primitive traps focus, captures Escape before the table's
+          own shortcuts, and returns focus to the kinds button. */}
+      {!hideSidebar && !isPhone && renderSidebar()}
+      {!hideSidebar && isPhone && (
+        <DialogPortal
+          open={kindsDrawerOpen}
+          onClose={() => setKindsDrawerOpen(false)}
+          ariaLabel="Resource kinds"
+          className="!ml-0 !mr-auto h-full w-72 max-w-[85vw] self-stretch overflow-hidden rounded-none border-y-0 border-l-0"
+        >
+          {renderSidebar('!w-full h-full border-r-0')}
+        </DialogPortal>
       )}
 
       {kindView !== null ? (
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">{kindView}</div>
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
+          {!hideSidebar && isPhone && (
+            <div className="flex items-center px-3 py-2 border-b border-theme-border bg-theme-base shrink-0">{kindsButton}</div>
+          )}
+          {kindView}
+        </div>
       ) : (
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
         {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0">
-          <div className="flex-1 min-w-0">
+        {/* Phones: the toolbar wraps and search takes its own full row. */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0 phone:flex-wrap phone:gap-2 phone:px-3">
+          {!hideSidebar && isPhone && kindsButton}
+          <div className="flex-1 min-w-0 phone:order-last phone:basis-full">
             <div className="relative max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
               <Input
