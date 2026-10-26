@@ -541,3 +541,15 @@ it('still fetches the lead for sync and health without listing namesakes', async
 it.each(['agree', 'listed', 'claimed', 'disagree', 'shared', 'unknown', 'none'] as const)('image prefetch skips browser inheritance for %s answers', state => {
   expect(findInheritedGitOpsLookupRef({ ...podRelationships, ownership: { children: { complete: true }, manager: { state, direct: { object: pod } } } }, null, pod)).toBeNull()
 })
+
+
+it.each(['cycle', 'truncated'] as const)('fetches evidence for a %s chain without a stop object', async chainEnd => {
+  const manager = { state: 'unknown' as const, direct: { object: deployment }, chainEnd }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: null, manager, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.evidence).toHaveBeenCalledTimes(1)
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+  } finally { await h.cleanup() }
+})

@@ -431,7 +431,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
       if (write.paths?.length && write.paths.every(path => input.evidence?.paths.find(p => p.path === path)?.empty)) {
         return { level: 'none', reason: '' }
       }
-      if (manager.stop) {
+      if (manager.stop || manager.chainEnd) {
         return { level: 'may-revert', reason: input.ownershipError! }
       }
     }
@@ -448,6 +448,9 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
         (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1 || manager.via && directClaims.length > 0)) {
       return { level: 'may-revert', reason: `${names} may overwrite these fields. A single manager's ignore rules or sync policy cannot exempt this change.${manager.via ? ` The controller also generates it from ${managerRefLabel(manager.via.object)}.` : ''}` }
     }
+    if (owner && manager.state === 'claimed' && (write.scope === 'metadata' || write.scope === 'spec')) {
+      return { level: 'may-revert', reason: `This resource's metadata names ${names}, but its recorded membership isn't confirmed. A sync may overwrite this change.` }
+    }
   }
   if (write.scope === 'delete') {
     const operator = operatorOwnerOf(input)
@@ -457,6 +460,10 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   }
   if (manager && write.scope === 'delete') {
     const candidates = managerCandidates(manager)
+    if (manager.stop || manager.chainEnd) return { level: 'may-revert', reason: input.ownershipError! }
+    if (owner && manager.state === 'claimed') {
+      return { level: 'may-revert', reason: `This resource's metadata names ${candidates.map(managerRefLabel).join(' and ')}, but its recorded membership isn't confirmed. A sync may recreate it.` }
+    }
     if (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1) {
       return { level: 'may-revert', reason: `${candidates.map(managerRefLabel).join(' and ')} may recreate this resource on sync.` }
     }
@@ -523,7 +530,7 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
   const helmRelease = manager
     ? manager.lead?.kind === 'HelmRelease' && !manager.lead.group ? { namespace: manager.lead.namespace, name: manager.lead.name } : null
     : owner ? null : (input.helmRelease ?? null)
-  const ownershipError = manager?.stop
+  const ownershipError = manager?.stop || manager?.chainEnd
     ? "Radar couldn't follow this resource's controller chain, so it can't tell whether a GitOps tool or Helm manages it."
     : owner || helmRelease ? null : (input.ownershipError ?? null)
   const normalized: GitOpsWriteGuardInput = { ...input, manager, owner, helmRelease, ownershipError, ownerMatchedByName: manager ? false : input.ownerMatchedByName }
@@ -551,7 +558,7 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
     level,
     perWrite,
     summary,
-    syncPolicy: owner && (!manager || managerCandidates(manager).length === 1) ? gitOpsSyncPolicy(input.evidence?.policy) : null,
+    syncPolicy: owner && (!manager || manager.state !== 'claimed' && managerCandidates(manager).length === 1) ? gitOpsSyncPolicy(input.evidence?.policy) : null,
     requiresAck: level === 'will-revert' || level === 'may-revert',
     ownershipError,
   }

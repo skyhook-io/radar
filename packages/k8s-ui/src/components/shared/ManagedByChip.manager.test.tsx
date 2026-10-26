@@ -64,3 +64,13 @@ describe('manager answer chip', () => {
     expect(html).toContain('its own label names Application argocd/middle (copied from another resource)')
   })
 })
+
+
+it('Listed by names only recorders and explains an outside claim in the tooltip', () => {
+  const c = { ...a, name: 'outside' }
+  const manager: ManagerAnswer = { state: 'shared', lead: b, direct: { object, recorders: [a, b], claims: [{ ...claim, manager: c }] } }
+  const html = render(manager)
+  expect(html).toContain('argocd/b and argocd/a')
+  expect(html).not.toContain('argocd/b and argocd/a and argocd/outside')
+  expect(html).toContain("Application argocd/outside: its status doesn't list this resource")
+})

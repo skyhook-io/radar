@@ -83,7 +83,7 @@ export function useGitOpsWriteGuard({
   const lookupPending = targetLookupPending || ownership.lookupPending
   const managed = Boolean(ownership.owner || ownership.helmOwner)
   const manager = ownership.manager
-  const needsManagerEvidence = Boolean(manager && (manager.via || !['none', 'unknown'].includes(manager.state) || manager.stop))
+  const needsManagerEvidence = Boolean(manager && (manager.via || !['none', 'unknown'].includes(manager.state) || manager.stop || manager.chainEnd))
 
   const writesKey = JSON.stringify(writes)
   const requestedPathsKey = requestedPaths ? JSON.stringify(requestedPaths) : ''

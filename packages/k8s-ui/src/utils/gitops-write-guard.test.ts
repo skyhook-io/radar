@@ -520,3 +520,29 @@ describe('manager answer composition', () => {
     }
   })
 })
+
+
+describe('unconfirmed manager boundaries', () => {
+  const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'candidate' }
+  const claimed: import('../types/core').ManagerAnswer = { state: 'claimed', lead: app, direct: { object: target, claims: [{ manager: app, source: 'argo-tracking-id', check: 'omitted' }] } }
+  it.each(['omitted', 'remote', 'unreadable', 'withheld', 'missing'] as const)('%s cannot prove a revert or waive acknowledgment', check => {
+    const manager = { ...claimed, direct: { object: target, claims: [{ ...claimed.direct.claims![0], check }] } }
+    for (const ignored of [undefined, 'effective'] as const) {
+      const g = guard({ manager, writes: [hibernate, { scope: 'delete' }], evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present', ignored })]) })
+      expect(g.perWrite.map(w => w.level)).toEqual(['may-revert', 'may-revert'])
+      expect(g.requiresAck).toBe(true)
+      expect(g.syncPolicy).toBeNull()
+    }
+  })
+  it.each(['cycle', 'truncated'] as const)('%s ancestry remains conservative without a stop object', chainEnd => {
+    const g = guard({ manager: { state: 'unknown', direct: { object: target }, chainEnd }, writes: [hibernate, { scope: 'delete' }] })
+    expect(g.perWrite.map(w => w.level)).toEqual(['may-revert', 'may-revert'])
+    expect(g.ownershipError).toContain("couldn't follow")
+  })
+  it('stopped claimed deletes retain the floor after the operator rule', () => {
+    const manager = { ...claimed, stop: { at: target, state: 'unknown' } }
+    const input = { manager, writes: [{ scope: 'delete' as const }], evidence: evidence(selfHeal) }
+    expect(guard(input).perWrite[0].reason).toContain("couldn't follow")
+    expect(guard({ ...input, operatorOwner: { kind: 'Cluster', name: 'pg' } }).level).toBe('info')
+  })
+})

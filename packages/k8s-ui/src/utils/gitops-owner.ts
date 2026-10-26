@@ -105,7 +105,9 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
   const claimed = dedupeResourceRefs(claims.map(c => c.manager))
   const recorders = evidence.recorders ?? []
   const prefix = answer.state === 'agree' || answer.state === 'listed' ? 'Managed by' : answer.state === 'shared' ? 'Listed by' : 'Tracked by'
-  const displayed = answer.state === 'disagree' ? claimed : candidates
+  const listed = answer.lead && recorders.some(r => resourceRefKey(r) === resourceRefKey(answer.lead!))
+    ? dedupeResourceRefs([answer.lead, ...recorders]) : recorders
+  const displayed = answer.state === 'disagree' ? claimed : answer.state === 'shared' ? listed : candidates
   const label = displayed.map(r => r.namespace ? `${r.namespace}/${r.name}` : r.name).join(' and ')
   const reasons: Record<ManagerClaim['check'], string> = {
     recorded: 'its status lists this resource',
