@@ -79,7 +79,7 @@ func TestStrimziContextExactAuthorizedAndImmutable(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatal("cache mutated")
 	}
-	direct := detectStrimziConnectorIssues(schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, rows[0])
+	direct := StrimziConnectorIssues(schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, rows[0])
 	if out.Findings[0].ID != direct[0].ID {
 		t.Fatal("canonical finding identity changed")
 	}

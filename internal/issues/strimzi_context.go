@@ -149,7 +149,7 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	if connect.Name == "" || canRead != nil && !canRead(connect) {
 		return nil
 	}
-	out := &issuesapi.RelatedApplicationFindings{CoverageState: "unavailable", Source: connect, Coverage: "Only authorized, currently cached connector status is included; missing findings do not establish application health."}
+	out := &issuesapi.RelatedApplicationFindings{CoverageState: "unavailable", Source: connect, Coverage: "Connector status could not be read from the cache; missing findings do not establish application health."}
 	rows, gvr, truncated, err := reader.list(connect.Namespace)
 	if err != nil {
 		return out
@@ -175,7 +175,7 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	checked, unknown := 0, 0
 	for _, row := range matched {
 		checked++
-		findings := detectStrimziConnectorIssues(gvr, row)
+		findings := StrimziConnectorIssues(gvr, row)
 		findings, _ = filterShapedIssues(findings, Filters{})
 		if len(findings) == 0 && !StrimziConnectorRecoveryObserved(row) {
 			unknown++

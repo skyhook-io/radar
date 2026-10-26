@@ -25,7 +25,7 @@ func strimziDiagnoseKind(kind string) (string, bool) {
 
 func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string) (*mcp.CallToolResult, any, error) {
 	const group = "kafka.strimzi.io"
-	if input.Group != "" && input.Group != group {
+	if input.Group != "" && !strings.EqualFold(input.Group, group) {
 		return nil, nil, fmt.Errorf("invalid group %q for %s: expected %q", input.Group, kind, group)
 	}
 	if !checkNamespaceAccess(ctx, input.Namespace) {
@@ -61,16 +61,7 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 		ResourceContext:  &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })},
 	}
 	if kind == "KafkaConnector" {
-		rows := issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name)
-		for _, row := range rows {
-			if row.Group != group || row.Kind != kind || row.Namespace != input.Namespace || row.Name != input.Name {
-				continue
-			}
-			switch row.Reason {
-			case "StrimziConnectorFailed", "StrimziConnectorTasksFailed", "StrimziConnectorNotReady":
-				resp.RelatedIssues = append(resp.RelatedIssues, row)
-			}
-		}
+		resp.RelatedIssues = issues.StrimziConnectorIssues(gvr, obj)
 	}
 	if kind == "KafkaConnect" {
 		phase := map[string]string{"ready": "Ready", "not_ready": "NotReady", "unknown": "Unknown", "paused": "Paused", "terminating": "Terminating"}[resp.OperatorSnapshot.Readiness]

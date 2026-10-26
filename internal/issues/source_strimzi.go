@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-func detectStrimziConnectorIssues(gvr schema.GroupVersionResource, u *unstructured.Unstructured) []Issue {
+func StrimziConnectorIssues(gvr schema.GroupVersionResource, u *unstructured.Unstructured) []Issue {
 	if !strimziStatusCurrent(u) {
 		return nil
 	}
@@ -77,7 +77,8 @@ func detectStrimziConnectorIssues(gvr schema.GroupVersionResource, u *unstructur
 	message += ". This is an operator snapshot; runtime state may have changed."
 	// Strimzi can rewrite condition timestamps during reconciliation; neither
 	// they nor connectorStatus establish when the runtime failure began.
-	return []Issue{newConditionIssue(gvr, "KafkaConnector", u.GetNamespace(), u.GetName(), SeverityWarning, reason, message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}
+	out, _ := filterShapedIssues([]Issue{newConditionIssue(gvr, "KafkaConnector", u.GetNamespace(), u.GetName(), SeverityWarning, reason, message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}, Filters{})
+	return out
 }
 
 func strimziStatusCurrent(u *unstructured.Unstructured) bool {
@@ -200,7 +201,7 @@ func AssessStrimziSnapshot(gvr schema.GroupVersionResource, u *unstructured.Unst
 		}
 	}
 	if u.GetKind() == "KafkaConnector" {
-		if len(detectStrimziConnectorIssues(gvr, u)) > 0 {
+		if len(StrimziConnectorIssues(gvr, u)) > 0 {
 			out.State = "failing"
 			out.Reason = "operator_snapshot"
 			return out

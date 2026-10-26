@@ -26,7 +26,7 @@ func strimziConnectorFixture() *unstructured.Unstructured {
 
 func TestStrimziConnectorFailureEvidence(t *testing.T) {
 	u := strimziConnectorFixture()
-	got := detectStrimziConnectorIssues(strimziConnectorGVR, u)
+	got := StrimziConnectorIssues(strimziConnectorGVR, u)
 	if len(got) != 1 {
 		t.Fatalf("got %v", got)
 	}
@@ -90,7 +90,7 @@ func TestStrimziConnectorConservativeScenarios(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			u := strimziConnectorFixture()
 			tc.change(u)
-			got := detectStrimziConnectorIssues(strimziConnectorGVR, u)
+			got := StrimziConnectorIssues(strimziConnectorGVR, u)
 			if tc.want == "" {
 				if len(got) != 0 {
 					t.Fatalf("unexpected issue: %+v", got)
@@ -106,7 +106,7 @@ func TestStrimziConnectorConservativeScenarios(t *testing.T) {
 			unstructured.RemoveNestedField(u.Object, "status", "conditions")
 			_ = unstructured.SetNestedField(u.Object, state, "status", "connectorStatus", "connector", "state")
 			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"state": state}}, "status", "connectorStatus", "tasks")
-			if got := detectStrimziConnectorIssues(strimziConnectorGVR, u); len(got) != 0 {
+			if got := StrimziConnectorIssues(strimziConnectorGVR, u); len(got) != 0 {
 				t.Fatalf("state alone is not a failure: %+v", got)
 			}
 		})
@@ -120,7 +120,7 @@ func TestStrimziConnectorTaskIDsBounded(t *testing.T) {
 		tasks = append(tasks, map[string]any{"id": id, "state": "FAILED"})
 	}
 	_ = unstructured.SetNestedSlice(u.Object, tasks, "status", "connectorStatus", "tasks")
-	got := detectStrimziConnectorIssues(strimziConnectorGVR, u)
+	got := StrimziConnectorIssues(strimziConnectorGVR, u)
 	if len(got) != 1 || !strings.Contains(got[0].Message, "0, 1, 2, 3, 4, 5, 6, 7, 8, 9; 10 more") {
 		t.Fatalf("unstable/unbounded task list: %+v", got)
 	}

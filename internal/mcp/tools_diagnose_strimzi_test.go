@@ -133,3 +133,67 @@ func TestStrimziDiagnoseCacheMissDoesNotInventAbsence(t *testing.T) {
 	cache.Stop()
 	check(readreason.ReadError)
 }
+
+func TestStrimziDiagnoseSnapshotAndIssuesAgree(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	gvr := schema.GroupVersionResource{Group: "kafka.strimzi.io", Version: "v1", Resource: "kafkaconnectors"}
+	cases := []struct {
+		name, state, want string
+		issue             bool
+	}{
+		{"failed", "FAILED", "failing", true},
+		{"running", "RUNNING", "recovered", false},
+		{"paused", "PAUSED", "unknown", false},
+		{"stale", "FAILED", "unknown", false},
+	}
+	var objects []runtime.Object
+	for _, tc := range cases {
+		observed := int64(1)
+		if tc.name == "stale" {
+			observed = 0
+		}
+		objects = append(objects, &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "kafka.strimzi.io/v1", "kind": "KafkaConnector",
+			"metadata": map[string]any{"name": tc.name, "namespace": "alpha", "uid": tc.name, "generation": int64(1)},
+			"spec":     map[string]any{"config": map[string]any{"password": "raw-config-sentinel"}},
+			"status":   map[string]any{"observedGeneration": observed, "conditions": []any{map[string]any{"type": "Ready", "status": "True", "message": "raw-condition-sentinel"}}, "connectorStatus": map[string]any{"connector": map[string]any{"state": "RUNNING"}, "tasks": []any{map[string]any{"id": int64(0), "state": tc.state, "trace": "raw-trace-sentinel"}}}},
+		}})
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "KafkaConnectorList"}, objects...)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnector", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	cache := k8s.GetDynamicResourceCache()
+	if err := cache.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.WaitForSync(gvr, 5*time.Second) {
+		t.Fatal("fixture cache not synchronized")
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _, err := handleDiagnose(context.Background(), nil, diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Group: "KAFKA.STRIMZI.IO", Kind: "KafkaConnector", Namespace: "alpha", Name: tc.name}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := renderContent(result.Content)
+			if strings.Contains(raw, "sentinel") {
+				t.Fatalf("raw evidence leaked: %s", raw)
+			}
+			var body struct {
+				OperatorSnapshot issues.StrimziSnapshotAssessment `json:"operatorSnapshot"`
+				RelatedIssues    []issues.Issue                   `json:"relatedIssues"`
+			}
+			if err := json.Unmarshal([]byte(raw), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.OperatorSnapshot.State != tc.want || (len(body.RelatedIssues) > 0) != tc.issue {
+				t.Fatalf("snapshot and findings: %s", raw)
+			}
+			if tc.issue && body.RelatedIssues[0].TimingSummary == "" {
+				t.Fatal("curated finding lost public timing shape")
+			}
+		})
+	}
+}
