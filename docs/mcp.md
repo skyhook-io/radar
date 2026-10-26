@@ -930,6 +930,10 @@ selector change.
 
 See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors) for the Issues/API/MCP coverage, required read access, and operator-snapshot limitations.
 
+`diagnose` accepts `KafkaConnector` and `KafkaConnect` in `kafka.strimzi.io`. For a connector, `operatorSnapshot.state` is `failing`, `recovered` or `unknown`; `reason` explains unknown or failing observations. Recovery requires a current Ready snapshot with the connector and a nonempty task list all `RUNNING`. KafkaConnect reports operator readiness separately. Diagnosis does not collect Pods, logs or live application evidence. Unavailable cached reads return a coded error; only a miss from a synchronized namespace cache returns `object_not_found`. A context switch during collection discards the result.
+
+Resource context can include `relatedApplicationFindings` with connector findings under their original identity, without changing the parent's health or issue count. `coverageState` is `cached`, `limited` or `unavailable`; `checked` counts inspected snapshots and `unknown` counts unverifiable or inactive ones. Lists contain at most five findings and report `truncated` when more are omitted. A missing finding does not establish recovery or full application health.
+
 ## Available Resources
 
 | URI | Description |

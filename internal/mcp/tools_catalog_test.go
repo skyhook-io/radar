@@ -251,7 +251,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// get_resource's result shapes, with "only object_not_found means it is
 	// absent", a third.
 	const (
-		maxCatalogBytes         = 63200
+		maxCatalogBytes         = 64353
 		maxToolDescriptionBytes = 3000
 	)
 

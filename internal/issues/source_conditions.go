@@ -145,7 +145,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				}
 			}
 			if gvr.Group == "kafka.strimzi.io" && kind == "KafkaConnector" {
-				out = append(out, detectStrimziConnectorIssues(gvr, u)...)
+				out = append(out, StrimziConnectorIssues(gvr, u)...)
 				continue
 			}
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {

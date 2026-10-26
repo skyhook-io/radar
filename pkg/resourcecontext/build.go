@@ -25,6 +25,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -35,8 +36,9 @@ import (
 // in internal/* pre-compute IssueSummary / AuditSummary / PolicyReports and
 // pass them in, so we don't reach into internal/issues or internal/audit.
 type Options struct {
-	Reflections ReflectionLookup
-	Tier        ContextTier
+	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings
+	Reflections                ReflectionLookup
+	Tier                       ContextTier
 
 	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
 	// as fully authorized — local-kubeconfig / tests).
@@ -398,6 +400,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.Serving = opts.Serving
 
 	// 4. Pre-computed summaries — pass-through.
+	rc.RelatedApplicationFindings = opts.RelatedApplicationFindings
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
 	rc.AppReferences = filterAppReferences(ctx, opts.AppReferences, opts.AccessChecker, omitted)
