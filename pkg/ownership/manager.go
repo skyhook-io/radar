@@ -192,8 +192,24 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 	case chain.Truncated:
 		a.ChainEnd = ChainEndTruncated
 	}
-	a.State, a.Lead = derive(a.Direct, a.ChainEnd == "" && complete)
+	a.State, a.Lead = derive(a.Direct, chainSettled(a) && complete)
 	return a
+}
+
+// chainSettled reports whether the walk read the whole chain: it reached the
+// top, or an owner that is gone, was replaced or is an Event, which ends the
+// chain with an answer rather than leaving a manager above it unread.
+func chainSettled(a ManagerAnswer) bool {
+	switch a.ChainEnd {
+	case "":
+		return true
+	case ChainEndUnfollowed:
+		switch a.Stop.Owner.State {
+		case OwnerGone, OwnerReplaced, OwnerExcluded:
+			return true
+		}
+	}
+	return false
 }
 
 // managerEvidence reads the evidence on ref, an object the view holds.
