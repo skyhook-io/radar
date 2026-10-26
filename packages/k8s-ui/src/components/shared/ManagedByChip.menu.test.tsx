@@ -75,3 +75,21 @@ it('links a manager one claim found though another left it unresolved', () => {
   ] } }
   expect(renderToStaticMarkup(<ManagedByChip manager={both} onOpen={() => {}} />)).toContain('<button')
 })
+
+// A label naming two same-named Applications that both list the object was
+// checked, not unresolved: the menu says it doesn't pick one, not that none exists.
+it('says a recorded label names no single Application of its name', async () => {
+  const teamA = { ...a, namespace: 'team-a', name: 'web' }
+  const teamB = { ...a, namespace: 'team-b', name: 'web' }
+  const shared: ManagerAnswer = { state: 'shared', direct: { object, recorders: [teamA, teamB], claims: [{ manager: { ...a, namespace: '', name: 'web' }, source: 'argo-instance-label', check: 'recorded' }] } }
+  const element = document.createElement('div')
+  document.body.append(element)
+  const root = createRoot(element)
+  await act(async () => root.render(<ManagedByChip manager={shared} onOpen={() => {}} />))
+  await act(async () => { element.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!.click() })
+  const text = element.textContent!
+  expect(text).toContain("its label doesn't say which Application of this name")
+  expect(text).not.toContain('Radar found no Application')
+  await act(async () => root.unmount())
+  element.remove()
+})

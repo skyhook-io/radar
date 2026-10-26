@@ -34,13 +34,14 @@ const OWNER_LINK_LABEL = {
 
 // managerLinks: the managers a guard naming more than one can open, the lead
 // among them, since a lead isn't a winner. One Radar didn't find (missing,
-// withheld, a label naming no namespace) isn't linked.
+// withheld) or a label naming no namespace isn't linked: the label may name
+// either of two Applications of that name.
 function managerLinks(guard: GitOpsWriteGuard, onOpenManager: GitOpsWriteWarningProps['onOpenManager']): { label: string; owner: GitOpsOwnerRef }[] {
   if (!onOpenManager || !guard.manager) return []
   const choices = managerChoices(guard.manager)
   if (choices.length < 2) return []
   return choices.flatMap((c) => {
-    const owner = c.found ? gitOpsOwnerFromRef(c.ref) : null
+    const owner = c.found && c.ref.namespace ? gitOpsOwnerFromRef(c.ref) : null
     return owner ? [{ label: managerRefLabel(c.ref), owner }] : []
   })
 }

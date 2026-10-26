@@ -51,3 +51,15 @@ it('a host without manager navigation names them without links', async () => {
   expect(links).toHaveLength(0)
   await done()
 })
+
+// Two Applications of one name in different namespaces both list the object,
+// and its label names that name without a namespace: the label's claim is
+// recorded, yet says neither which one, so only the two qualified ones link.
+it('a label naming two same-named Applications links only the qualified ones', async () => {
+  const teamA = { ...a, namespace: 'team-a', name: 'web' }
+  const teamB = { ...a, namespace: 'team-b', name: 'web' }
+  const manager: ManagerAnswer = { state: 'shared', direct: { object, recorders: [teamA, teamB], claims: [{ manager: { ...a, namespace: '', name: 'web' }, source: 'argo-instance-label', check: 'recorded' }] } }
+  const { links, done } = await linksOf(manager, () => {})
+  expect(links.map(l => l.textContent)).toEqual(['View Application team-a/web', 'View Application team-b/web'])
+  await done()
+})

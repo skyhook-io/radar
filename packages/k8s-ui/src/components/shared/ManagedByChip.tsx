@@ -225,7 +225,7 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
               )}
             >
               <span className="truncate">{managerRefLabel(c.ref)}</span>
-              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}{c.owner ? '' : !c.ref.namespace ? ` · Radar found no ${c.ref.kind} by this name that you can view listing it; it may be managed from another cluster` : !c.found ? ' · Radar found no such manager you can view' : ''}</span>
+              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}{c.owner ? '' : !c.ref.namespace ? c.found ? ` · its label doesn't say which ${c.ref.kind} of this name` : ` · Radar found no ${c.ref.kind} by this name that you can view listing it; it may be managed from another cluster` : !c.found ? ' · Radar found no such manager you can view' : ''}</span>
             </button>
           ))}
         </div>
