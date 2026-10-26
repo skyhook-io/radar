@@ -960,7 +960,7 @@ kinds of evidence and names no winner they don't support:
 - `claims`: the managers its own tracking labels and annotations name, each with what checking it found (`recorded`,
   `omitted` when that manager's list was read and doesn't name it, `unreadable`, `remote`, `missing`, `not-recording`
   for a native Helm release, `unresolved` for a claim with no namespace, `withheld` when you may not read the manager,
-  `unchecked` when Radar couldn't read it). A native Helm release's claim counts only without GitOps evidence, since
+  `unchecked` when Radar couldn't establish what its list says). A native Helm release's claim counts only without GitOps evidence, since
   Flux's helm-controller writes the same annotations.
 
 `state` sums them up: `agree` or `listed` (one manager, `lead`), `disagree` (a list names it and its metadata names
@@ -970,7 +970,7 @@ Terraform, `kubectl apply` or a manager in another cluster leave nothing Radar s
 doesn't settle it, `via` names the controller ancestor whose evidence answers, as for a Pod whose Deployment an
 Application lists; `listedBy` and `claims` are then that ancestor's, and `alsoClaimed` lists what the resource's own
 metadata (and that of objects in between) names, each `on` its object: commonly inherited from a template, not disproven.
-When nothing settles it, the nearest ancestor whose metadata names a manager answers as `via`, with `claimed`. Claims of
+When nothing settles it and the resource makes no claim that isn't copied, the nearest ancestor whose metadata names a manager answers as `via`, with `claimed`. Claims of
 objects the walk passed appear in `alsoClaimed` with or without `via`. `get_resource` and `diagnose` then leave out the
 metadata-only warning naming an Argo CD, Flux or Helm manager, which this answer weighs; a controller named only by
 `app.kubernetes.io/managed-by` keeps its warning. A tracking ID copied from another object raises no warning anywhere. `lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of

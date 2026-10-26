@@ -178,7 +178,7 @@ type ManagerClaimContext struct {
 	// Check: "recorded", "omitted" (its list was read and doesn't name the
 	// resource), "unreadable", "remote", "missing", "not-recording" (a native
 	// Helm release), "unresolved" (no namespace), "withheld" (the caller may
-	// not read the manager) or "unchecked" (Radar couldn't read it).
+	// not read the manager) or "unchecked" (Radar couldn't establish what its list says).
 	Check string `json:"check"`
 	// On is the object whose metadata makes the claim, in AlsoClaimed.
 	On *ContextRef `json:"on,omitempty"`
