@@ -233,13 +233,19 @@ func (v *View) checkClaim(claimed resourceid.Ref, recorders []resourceid.Ref, fo
 	case slices.Contains(found.Remote, claimed):
 		return ClaimRemote
 	}
-	members := v.Members(claimed)
+	subject := v.subject(claimed)
 	switch {
-	case members.Subject.Access == Denied:
+	case subject.Access == Denied:
 		return ClaimWithheld
-	case members.Subject.Read.State == Absent:
+	case subject.Read.State == Absent:
 		return ClaimMissing
-	case !members.Subject.Present():
+	case !subject.Present():
+		return ClaimUnchecked
+	}
+	// Only the list's state matters here: reading its members would read and
+	// authorize every object a large Application lists.
+	members := v.session.Members(claimed)
+	if members.Manager.State != Present || members.Manager.Object.UID != subject.Read.Object.UID {
 		return ClaimUnchecked
 	}
 	switch members.Membership {
