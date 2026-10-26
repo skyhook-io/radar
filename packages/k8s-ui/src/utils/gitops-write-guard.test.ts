@@ -535,6 +535,22 @@ describe('manager answer composition', () => {
     expect(g.requiresAck).toBe(true)
   })
 
+  it('an agreeing answer whose manager kind this UI does not know still warns', () => {
+    const stack = { kind: 'Stack', group: 'example.io', namespace: 'x', name: 's' }
+    for (const write of [hibernate, { scope: 'delete' as const }]) {
+      const g = run({ state: 'agree', lead: stack, direct: { object: subject, recorders: [stack], claims: [{ manager: stack, source: 'argo-tracking-id', check: 'recorded' }] } }, [write])
+      expect(g.level).toBe('may-revert')
+    }
+  })
+
+  // A fallback via whose walk stopped at an unreadable owner may have missed
+  // a manager above it: a delete isn't just informational.
+  it('a delete through a fallback via with an unread chain keeps the warning', () => {
+    const g = run({ state: 'claimed', lead: a, direct: { object: subject }, via: { object: parent, claims: [{ manager: a, source: 'argo-instance-label', check: 'omitted', weak: true }] }, chainEnd: 'unfollowed', stop: { at: parent, state: 'unknown' } }, [{ scope: 'delete' }])
+    expect(g.level).toBe('may-revert')
+    expect(g.requiresAck).toBe(true)
+  })
+
   it('a state this UI does not know is read as claimed', () => {
     const g = run({ state: 'future-state' as never, lead: a, direct: { object: subject, recorders: [a] } }, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
     expect(g.level).toBe('may-revert')

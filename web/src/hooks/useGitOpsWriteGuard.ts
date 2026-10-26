@@ -4,6 +4,7 @@ import {
   evaluateGitOpsWriteGuard,
   gitOpsWriteEvidencePaths,
   gitOpsOwnerFromRef,
+  managerChoices,
   type GitOpsWrite,
   type GitOpsWriteEvidence,
   type GitOpsWriteGuard,
@@ -152,7 +153,15 @@ export function useGitOpsWriteGuard({
       const answer = evidence.manager
       const owner = answer.lead ? gitOpsOwnerFromRef(answer.lead) : null
       const helmOwner = answer.lead?.kind === 'HelmRelease' && !answer.lead.group ? { namespace: answer.lead.namespace, name: answer.lead.name } : null
-      return { ...ownership, manager: answer, owner, rawOwner: owner, helmOwner, ownerMatchedByName: false }
+      const same = (a: typeof owner, b: typeof owner) => Boolean(a && b && a.kind === b.kind && a.namespace === b.namespace && a.name === b.name)
+      if (same(owner, ownership.owner)) {
+        return { ...ownership, manager: answer, owner, rawOwner: owner, helmOwner, ownerMatchedByName: false }
+      }
+      // The live answer names another manager: what was read and verified
+      // for the cached one doesn't carry over. The server found it when its
+      // list names the object or a claim read it.
+      const found = Boolean(answer.lead && owner?.namespace && managerChoices(answer).find(c => c.ref.kind === answer.lead!.kind && c.ref.group === answer.lead!.group && c.ref.namespace === answer.lead!.namespace && c.ref.name === answer.lead!.name)?.found)
+      return { ...ownership, manager: answer, owner, rawOwner: owner, helmOwner, ownerMatchedByName: false, ownerObject: undefined, ownerStatus: null, ownerVerified: found }
     }
     const owner = ownership.owner
     const namespace = evidence?.ownerTracksTarget ? evidence.owner?.namespace : undefined

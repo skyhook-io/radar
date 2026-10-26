@@ -509,6 +509,21 @@ it.each(['none', 'unknown', 'disagree', 'shared', 'claimed', 'listed'] as const)
   } finally { await h.cleanup() }
 })
 
+// A live answer naming another manager doesn't inherit the cached one's
+// verification or status: a link to it would rest on a check of the old one.
+it("doesn't carry the cached manager's verification to a different live manager", async () => {
+  mocks.ownerObject = { status: { sync: { status: 'Synced' }, health: { status: 'Healthy' } } }
+  const other = { ...managerApp, name: 'live-app' }
+  const live = { state: 'claimed' as const, lead: other, direct: { object: deployment, claims: [{ manager: other, source: 'argo-tracking-id' as const, check: 'missing' as const }] } }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: other, manager: live, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager: managerAnswer } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.ownership.owner?.name).toBe('live-app')))
+    expect(h.ref.state!.ownership.ownerVerified).toBe(false)
+    expect(h.ref.state!.ownership.ownerStatus).toBeNull()
+  } finally { await h.cleanup() }
+})
+
 // An object adopted since the cache saw it has a manager the cache doesn't.
 it('checks a cached none against the live object', async () => {
   const cachedNone = { state: 'none' as const, direct: { object: deployment } }
