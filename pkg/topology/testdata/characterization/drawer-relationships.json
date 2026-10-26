@@ -47,8 +47,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
           }
         }
       }
@@ -109,8 +108,7 @@
                 "source": "flux-helm-labels",
                 "check": "unreadable"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -163,8 +161,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
           }
         }
       },
@@ -220,8 +217,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
           }
         }
       }
@@ -288,8 +284,7 @@
                 "source": "flux-kustomize-labels",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -349,8 +344,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"}
           }
         }
       },
@@ -411,8 +405,7 @@
                 "source": "helm-release",
                 "check": "not-recording"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -476,8 +469,7 @@
                 "source": "flux-helm-labels",
                 "check": "unreadable"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -536,8 +528,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"}
           }
         }
       },
@@ -613,8 +604,7 @@
                 "source": "argo-instance-label",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -696,8 +686,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"}
           },
           "chainEnd": "unfollowed",
           "stop": {
@@ -769,8 +758,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
           }
         }
       },
@@ -831,8 +819,7 @@
           "state": "agree",
           "lead": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
           "direct": {
-            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"}
           },
           "via": {
             "object": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
@@ -845,8 +832,7 @@
                 "source": "flux-kustomize-labels",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -906,8 +892,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"}
           }
         }
       },
@@ -967,8 +952,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"}
           }
         }
       },
@@ -1030,8 +1014,7 @@
           "state": "agree",
           "lead": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
           "direct": {
-            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"}
           },
           "via": {
             "object": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
@@ -1049,8 +1032,7 @@
                 "source": "argo-instance-label",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -1114,8 +1096,7 @@
                 "source": "flux-helm-labels",
                 "check": "unreadable"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -1171,8 +1152,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"},
-            "unreadable": 1
+            "object": {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"}
           }
         }
       },
@@ -1233,8 +1213,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
-            "unreadable": 1
+            "object": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
           }
         }
       }
@@ -1287,8 +1266,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"},
-            "unreadable": 1
+            "object": {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
           }
         }
       }
@@ -1341,8 +1319,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"},
-            "unreadable": 1
+            "object": {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
           }
         }
       }
@@ -1395,8 +1372,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"},
-            "unreadable": 1
+            "object": {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
           }
         }
       }
@@ -1457,8 +1433,7 @@
                 "source": "flux-helm-labels",
                 "check": "unreadable"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -1518,8 +1493,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"},
-            "unreadable": 1
+            "object": {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"}
           }
         }
       },
@@ -1572,8 +1546,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "HorizontalPodAutoscaler", "namespace": "shop", "name": "web", "group": "autoscaling"},
-            "unreadable": 1
+            "object": {"kind": "HorizontalPodAutoscaler", "namespace": "shop", "name": "web", "group": "autoscaling"}
           }
         }
       },
@@ -1635,8 +1608,7 @@
                 "source": "flux-helm-labels",
                 "check": "unreadable"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -1693,8 +1665,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
-            "unreadable": 1
+            "object": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
           }
         }
       }
@@ -1755,8 +1726,7 @@
                 "source": "flux-helm-labels",
                 "check": "unreadable"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -1813,8 +1783,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"},
-            "unreadable": 1
+            "object": {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"}
           }
         }
       },
@@ -1874,8 +1843,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"},
-            "unreadable": 1
+            "object": {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"}
           }
         }
       },
@@ -1935,8 +1903,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"},
-            "unreadable": 1
+            "object": {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"}
           }
         }
       },
@@ -1992,8 +1959,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"},
-            "unreadable": 1
+            "object": {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"}
           }
         }
       }
@@ -2046,8 +2012,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Certificate", "namespace": "shop", "name": "web-tls", "group": "cert-manager.io"},
-            "unreadable": 1
+            "object": {"kind": "Certificate", "namespace": "shop", "name": "web-tls", "group": "cert-manager.io"}
           }
         }
       }
@@ -2102,8 +2067,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
           }
         }
       }
@@ -2160,8 +2124,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"}
           }
         }
       },
@@ -2218,8 +2181,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "MachinePool", "namespace": "capi", "name": "prod-mp", "group": "cluster.x-k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "MachinePool", "namespace": "capi", "name": "prod-mp", "group": "cluster.x-k8s.io"}
           }
         }
       },
@@ -2279,8 +2241,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"}
           }
         }
       },
@@ -2340,8 +2301,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"}
           }
         }
       },
@@ -2398,8 +2358,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "KubeadmControlPlane", "namespace": "capi", "name": "prod-cp", "group": "controlplane.cluster.x-k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "KubeadmControlPlane", "namespace": "capi", "name": "prod-cp", "group": "controlplane.cluster.x-k8s.io"}
           }
         }
       },
@@ -2455,8 +2414,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"},
-            "unreadable": 1
+            "object": {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"}
           }
         }
       }
@@ -2547,8 +2505,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"},
-            "unreadable": 1
+            "object": {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"}
           }
         }
       },
@@ -2604,8 +2561,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"},
-            "unreadable": 1
+            "object": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"}
           }
         }
       }
@@ -2660,8 +2616,7 @@
           "state": "agree",
           "lead": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
           "direct": {
-            "object": {"kind": "Widget", "namespace": "shop", "name": "web-widget", "group": "example.io"},
-            "unreadable": 1
+            "object": {"kind": "Widget", "namespace": "shop", "name": "web-widget", "group": "example.io"}
           },
           "via": {
             "object": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
@@ -2679,8 +2634,7 @@
                 "source": "argo-instance-label",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -2771,8 +2725,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"}
           }
         }
       }
@@ -2825,8 +2778,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
           }
         }
       },
@@ -2882,8 +2834,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
           }
         }
       },
@@ -2966,8 +2917,7 @@
                 "source": "flux-kustomize-labels",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -3062,8 +3012,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"},
-            "unreadable": 1
+            "object": {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"}
           }
         }
       },
@@ -3154,8 +3103,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"},
-            "unreadable": 1
+            "object": {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"}
           }
         }
       }
@@ -3208,8 +3156,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"},
-            "unreadable": 1
+            "object": {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
           }
         }
       }
@@ -3298,8 +3245,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Object", "namespace": "", "name": "orders-db-config", "group": "kubernetes.crossplane.io"},
-            "unreadable": 1
+            "object": {"kind": "Object", "namespace": "", "name": "orders-db-config", "group": "kubernetes.crossplane.io"}
           }
         }
       },
@@ -3358,8 +3304,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
-            "unreadable": 1
+            "object": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
           }
         }
       },
@@ -3429,8 +3374,7 @@
             "object": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
             "recorders": [
               {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -3490,8 +3434,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "InMemoryChannel", "namespace": "shop", "name": "default-kne-trigger", "group": "messaging.knative.dev"},
-            "unreadable": 1
+            "object": {"kind": "InMemoryChannel", "namespace": "shop", "name": "default-kne-trigger", "group": "messaging.knative.dev"}
           }
         }
       },
@@ -3551,8 +3494,7 @@
             "object": {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"},
             "recorders": [
               {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -3608,8 +3550,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"},
-            "unreadable": 1
+            "object": {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
           }
         }
       }
@@ -3659,8 +3600,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "PodDisruptionBudget", "namespace": "shop", "name": "web", "group": "policy"},
-            "unreadable": 1
+            "object": {"kind": "PodDisruptionBudget", "namespace": "shop", "name": "web", "group": "policy"}
           }
         }
       },
@@ -3720,8 +3660,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
-            "unreadable": 1
+            "object": {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
           }
         }
       },
@@ -3781,8 +3720,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"},
-            "unreadable": 1
+            "object": {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"}
           }
         }
       },
@@ -3839,8 +3777,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
-            "unreadable": 1
+            "object": {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
           }
         }
       },
@@ -3897,8 +3834,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
-            "unreadable": 1
+            "object": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
           }
         }
       }
@@ -3948,8 +3884,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"},
-            "unreadable": 1
+            "object": {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
           }
         }
       },
@@ -4012,8 +3947,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"},
-            "unreadable": 1
+            "object": {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
           }
         }
       },
@@ -4072,8 +4006,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"},
-            "unreadable": 1
+            "object": {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"}
           }
         }
       },
@@ -4164,8 +4097,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Node", "namespace": "", "name": "node-a"},
-            "unreadable": 1
+            "object": {"kind": "Node", "namespace": "", "name": "node-a"}
           }
         }
       },
@@ -4271,8 +4203,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Node", "namespace": "", "name": "node-b"},
-            "unreadable": 1
+            "object": {"kind": "Node", "namespace": "", "name": "node-b"}
           }
         }
       },
@@ -4333,8 +4264,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"},
-            "unreadable": 1
+            "object": {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
           }
         }
       },
@@ -4425,8 +4355,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"},
-            "unreadable": 1
+            "object": {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"}
           }
         }
       },
@@ -4486,8 +4415,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"}
           }
         }
       },
@@ -4545,8 +4473,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"}
           }
         }
       },
@@ -4604,8 +4531,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"}
           },
           "chainEnd": "unfollowed",
           "stop": {
@@ -4670,8 +4596,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"}
           }
         }
       },
@@ -4727,8 +4652,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"}
           }
         }
       },
@@ -4784,8 +4708,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"}
           }
         }
       },
@@ -4841,8 +4764,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"}
           }
         }
       },
@@ -4898,8 +4820,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"}
           }
         }
       },
@@ -4955,8 +4876,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"}
           }
         }
       },
@@ -5012,8 +4932,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"}
           }
         }
       },
@@ -5077,8 +4996,7 @@
                 "source": "flux-kustomize-labels",
                 "check": "omitted"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -5136,8 +5054,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"}
           }
         }
       },
@@ -5195,8 +5112,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"}
           }
         }
       },
@@ -5256,8 +5172,7 @@
           "state": "agree",
           "lead": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"}
           },
           "via": {
             "object": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
@@ -5275,8 +5190,7 @@
                 "source": "argo-instance-label",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -5341,8 +5255,7 @@
           "state": "agree",
           "lead": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
           "direct": {
-            "object": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"}
           },
           "via": {
             "object": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
@@ -5360,8 +5273,7 @@
                 "source": "argo-instance-label",
                 "check": "recorded"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -5424,8 +5336,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "team", "name": "db-0"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "team", "name": "db-0"}
           }
         }
       },
@@ -5489,8 +5400,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
           }
         }
       },
@@ -5548,8 +5458,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"}
           }
         }
       },
@@ -5607,8 +5516,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Pod", "namespace": "team", "name": "report-1700-main"},
-            "unreadable": 1
+            "object": {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
           }
         }
       },
@@ -5662,8 +5570,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Secret", "namespace": "shop", "name": "web-secret"},
-            "unreadable": 1
+            "object": {"kind": "Secret", "namespace": "shop", "name": "web-secret"}
           }
         }
       },
@@ -5721,8 +5628,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Secret", "namespace": "shop", "name": "web-tls"},
-            "unreadable": 1
+            "object": {"kind": "Secret", "namespace": "shop", "name": "web-tls"}
           }
         }
       },
@@ -5784,8 +5690,7 @@
         "manager": {
           "state": "unknown",
           "direct": {
-            "object": {"kind": "Secret", "namespace": "team", "name": "db-creds"},
-            "unreadable": 1
+            "object": {"kind": "Secret", "namespace": "team", "name": "db-creds"}
           }
         }
       },
@@ -5853,8 +5758,7 @@
                 "source": "flux-helm-labels",
                 "check": "unreadable"
               }
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },
@@ -5917,8 +5821,7 @@
             "object": {"kind": "Service", "namespace": "shop", "name": "web"},
             "recorders": [
               {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
-            ],
-            "unreadable": 1
+            ]
           }
         }
       },

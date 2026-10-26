@@ -329,7 +329,11 @@ func managerAnswer(a ownership.ManagerAnswer) *ManagerAnswer {
 		out.Via = &via
 	}
 	for _, e := range a.Between {
-		out.Between = append(out.Between, managerEvidence(e))
+		// An object kept only because its search had gaps says nothing here:
+		// the gaps aren't on the wire, and State already counts them.
+		if len(e.Claims) > 0 {
+			out.Between = append(out.Between, managerEvidence(e))
+		}
 	}
 	if a.Stop != nil {
 		out.Stop = &ManagerChainStop{At: refOf(a.Stop.At), State: a.Stop.Owner.State.String()}
@@ -344,7 +348,7 @@ func managerAnswer(a ownership.ManagerAnswer) *ManagerAnswer {
 }
 
 func managerEvidence(e ownership.ManagerEvidence) ManagerEvidence {
-	out := ManagerEvidence{Object: refOf(e.Object), Unreadable: e.Unreadable, Remote: e.Remote, NotChecked: notChecked(e.Gaps), Undecided: e.Undecided}
+	out := ManagerEvidence{Object: refOf(e.Object)}
 	for _, r := range e.Recorders {
 		out.Recorders = append(out.Recorders, refOf(r))
 	}
