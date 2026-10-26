@@ -424,6 +424,13 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.multus }}
+  # Pod details link each secondary network to its NetworkAttachmentDefinition;
+  # nothing else in the group is read.
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.networkPolicyApi }}
   # SIG-network out-of-tree Network Policy API; ClusterNetworkPolicy is
   # cluster-scoped and surfaced in topology.
