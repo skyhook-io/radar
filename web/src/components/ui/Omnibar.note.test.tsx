@@ -125,7 +125,17 @@ describe('Omnibar note', () => {
   it('keeps the empty state and note steady while the same query re-fetches', () => {
     render({ text: 'Still loading — results may change.' }, { isFetching: true })
     typeQuery('lease')
-    expect(document.body.textContent).toContain('No resources match')
+    expect(document.body.textContent).toContain('No matches in what Radar searched.')
     expect(document.body.textContent).toContain('Still loading — results may change.')
+  })
+
+  it('claims no match only when the search covered everything it was asked about', () => {
+    render(undefined)
+    typeQuery('lease')
+    expect(document.body.textContent).toContain('No resources match “lease”.')
+    render({ text: "Leases can't be searched." })
+    typeQuery('lease')
+    expect(document.body.textContent).toContain('No matches in what Radar searched.')
+    expect(document.body.textContent).not.toContain('No resources match')
   })
 })
