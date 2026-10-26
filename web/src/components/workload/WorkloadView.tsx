@@ -1,4 +1,5 @@
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
@@ -1294,6 +1295,7 @@ export function WorkloadView({
           return (
           <>
             {diagnoseInline}
+            <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}
             <AuditOverviewSection
               findings={auditFindings ?? []}

@@ -145,6 +145,7 @@ type CloudConnectCapability struct {
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
 	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
+	ApplicationEvidence   bool `json:"applicationEvidence"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`

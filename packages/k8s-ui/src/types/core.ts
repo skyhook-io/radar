@@ -163,6 +163,7 @@ export interface CloudConnectCapability {
 
 export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
+ applicationEvidence?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean

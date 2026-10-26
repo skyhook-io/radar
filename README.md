@@ -574,9 +574,9 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **Cost (OpenCost / Kubecost)** | Namespace/workload/node cost via compatible Prometheus metrics or the Kubecost 3 Aggregator (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
-### Local runtime evidence via MCP
+### Local runtime evidence
 
-Local MCP clients can explicitly collect evidence from one Pod after operator approval:
+In local resource details, use **Collect application evidence** to select a Pod and collect explicitly. Local MCP clients can also collect after operator approval:
 
 | Integration | Evidence collected |
 |---|---|
