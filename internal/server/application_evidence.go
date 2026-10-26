@@ -16,9 +16,9 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
 	"github.com/skyhook-io/radar/internal/trace"
-	"github.com/skyhook-io/radar/pkg/readscope"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
 )
