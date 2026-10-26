@@ -67,6 +67,8 @@ export type { ClusterSwitcherProps, ClusterSwitcherItem } from '@skyhook-io/k8s-
 // their own per-cluster scope (Hub via ?namespaces= on the embedded RadarApp).
 export { NamespacePicker } from '@skyhook-io/k8s-ui';
 export type {
+  NamespaceCollection,
+  NamespaceCollectionGroup,
   NamespacePickerProps,
   NamespacePickerHandle,
   NamespaceScopeView,

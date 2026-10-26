@@ -41,17 +41,20 @@ const (
 //   - AccessibleNamespaces is the picker source — what the user can choose
 //     from. Authoritative=false means it's a best-effort short list (the
 //     user lacks list-namespace RBAC; other namespaces may exist).
+//   - Collection says where Radar keeps the kinds it collects in only some
+//     namespaces. That is Radar's own scope, not the user's pick or access.
 type NamespaceScopeResponse struct {
-	Actives              []string           `json:"actives"`
-	KubeconfigNamespace  string             `json:"kubeconfigNamespace"`
-	Mode                 NamespaceScopeMode `json:"mode"`
-	AccessibleNamespaces []string           `json:"accessibleNamespaces"`
-	DeniedNamespaces     []string           `json:"deniedNamespaces"`
-	Authoritative        bool               `json:"authoritative"`
-	CanClearNamespace    bool               `json:"canClearNamespace"`
-	CacheScoped          bool               `json:"cacheScoped"`
-	CacheScopeNamespace  string             `json:"cacheScopeNamespace,omitempty"`
-	NamespaceRescope     bool               `json:"namespaceRescope"`
+	Actives              []string             `json:"actives"`
+	KubeconfigNamespace  string               `json:"kubeconfigNamespace"`
+	Mode                 NamespaceScopeMode   `json:"mode"`
+	AccessibleNamespaces []string             `json:"accessibleNamespaces"`
+	DeniedNamespaces     []string             `json:"deniedNamespaces"`
+	Authoritative        bool                 `json:"authoritative"`
+	CanClearNamespace    bool                 `json:"canClearNamespace"`
+	CacheScoped          bool                 `json:"cacheScoped"`
+	CacheScopeNamespace  string               `json:"cacheScopeNamespace,omitempty"`
+	NamespaceRescope     bool                 `json:"namespaceRescope"`
+	Collection           *NamespaceCollection `json:"collection,omitempty"`
 }
 
 // nsPreferenceKey builds the per-user, per-context key for nsPreferences.
@@ -535,6 +538,13 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	}
 	denied := deniedNamespaces(namespaces, k8s.GetCachedPermissionResult(), k8s.ForceNamespaceScope, cacheScopeNs)
 
+	// Pinned, the picker already says what Radar watches; a failed load leaves no visible list.
+	var collection *NamespaceCollection
+	if !k8s.ForceNamespaceScope && !discoveryFailed && source != k8s.NamespaceListFailed {
+		cache := readCache()
+		collection = namespaceCollectionFor(cache, cache.PermissionResult(), namespaces)
+	}
+
 	s.writeJSON(w, NamespaceScopeResponse{
 		Actives:              actives,
 		KubeconfigNamespace:  kubeNs,
@@ -546,6 +556,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		CacheScoped:          k8s.ForceNamespaceScope,
 		CacheScopeNamespace:  cacheScopeNs,
 		NamespaceRescope:     k8s.ForceNamespaceScope && !s.authConfig.Enabled() && s.configManagement() != "operator",
+		Collection:           collection,
 	})
 }
 

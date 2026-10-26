@@ -4,7 +4,11 @@ import { ChevronDown, Globe, Search } from 'lucide-react'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { useKeepInViewport } from '../../hooks/useKeepInViewport'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 import { MultiSelectPicker } from '../ui/MultiSelectPicker'
+import type { NamespaceCollection } from '../../utils/namespace-collection'
+import { NamespaceCollectionChip } from './NamespaceCollectionChip'
+import { NamespaceCollectionDetails, COLLECTION_NOTE } from './NamespaceCollectionDetails'
 
 /**
  * Backend-reported namespace scope. Mirrors Radar's `/cluster/namespace-scope`
@@ -28,6 +32,8 @@ export interface NamespaceScopeView {
   canClearNamespace?: boolean
   /** false when accessibleNamespaces is a best-effort short list (no list perm). */
   authoritative?: boolean
+  /** Where Radar collects the kinds it keeps in only some namespaces; absent when none, or from an older Radar. */
+  collection?: NamespaceCollection
 }
 
 export interface NamespacePickerHandle {
@@ -98,6 +104,8 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   useKeepInViewport(dropdownRef, isOpen)
+  // No room beside the picker in a phone's header, so the dropdown carries the note.
+  const phone = usePhoneLayout()
   const [restoreFocus, setRestoreFocus] = useState(false)
 
   const scopeActives = useMemo(() => scope?.actives ?? [], [scope?.actives])
@@ -247,11 +255,13 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
   const isClusterWide = activeCount === 0
   const cacheScopeLocked = scope.cacheScoped && !scope.namespaceRescope
   const needsNamespaces = scope.authoritative === false && limitedListHelp != null
+  const collection = scope.collection?.groups.length ? scope.collection : undefined
+  const dropdownNote = phone ? collection : undefined
   const emptyStateLabel = needsNamespaces ? 'No namespaces yet.' : 'No namespaces available.'
   const isDisabled = disabled || loading || pending || cacheScopeLocked
   const canClearAll = scope.canClearNamespace || activeCount === 0
   const tooltipContent = disabled && disabledTooltip
-    ? disabledTooltip
+    ? dropdownNote ? `${disabledTooltip} ${COLLECTION_NOTE}` : disabledTooltip
     : scope.cacheScoped
       ? scope.namespaceRescope
         ? `Radar is watching only ${scope.cacheScopeNamespace || triggerLabel} to stay fast on large clusters. Pick another namespace to re-point it (takes a moment; closes open terminals).`
@@ -310,11 +320,21 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
         </button>
       </Tooltip>
 
+      {collection && !phone && <NamespaceCollectionChip collection={collection} variant={variant} />}
+
       {isOpen &&
         createPortal(
           <div
             ref={dropdownRef}
-            style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.width, zIndex: 100 }}
+            style={{
+              position: 'fixed',
+              top: pos.top,
+              left: pos.left,
+              minWidth: pos.width,
+              zIndex: 100,
+              // The note can push the dropdown past a short screen, and a fixed element can't be scrolled to.
+              ...(dropdownNote ? { maxHeight: `calc(100dvh - ${pos.top}px - 8px)`, overflowY: 'auto' } : {}),
+            }}
             className="bg-theme-surface border border-theme-border rounded-md shadow-theme-lg overflow-hidden"
           >
             {scope.cacheScoped ? (
@@ -395,6 +415,12 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
                 clearAllAriaLabel="Clear namespace selection"
                 renderItemMeta={renderNamespaceMeta}
               />
+            )}
+
+            {dropdownNote && (
+              <div className="border-t border-theme-border px-3 py-2.5 text-xs">
+                <NamespaceCollectionDetails collection={dropdownNote} />
+              </div>
             )}
 
             {needsNamespaces && (

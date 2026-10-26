@@ -177,6 +177,7 @@ export interface FeatureCapabilities {
   gitopsWriteEvidence?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
+  namespaceCollection?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

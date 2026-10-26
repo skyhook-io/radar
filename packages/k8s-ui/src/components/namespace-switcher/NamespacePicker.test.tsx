@@ -3,6 +3,7 @@ import { act, createRef, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NamespacePicker, type NamespacePickerHandle, type NamespacePickerProps, type NamespaceScopeView } from './NamespacePicker'
+import type { NamespaceCollection } from '../../utils/namespace-collection'
 
 vi.mock('../ui/Tooltip', () => ({
   Tooltip: ({ children, content }: { children: ReactNode; content: ReactNode }) => (
@@ -136,6 +137,68 @@ describe('NamespacePicker incomplete-list notice', () => {
     const done = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Done')!
     await act(async () => { done.click() })
     expect(onApply).toHaveBeenCalledWith(['team-a'])
+  })
+})
+
+describe('NamespacePicker collection', () => {
+  const collection: NamespaceCollection = {
+    groups: [{ kinds: [{ kind: 'Pod' }], namespaces: { count: 1, names: ['team-a'] } }],
+  }
+  const unfiltered: Partial<NamespaceScopeView> = { actives: [], mode: 'cluster-wide', authoritative: true }
+  const chip = () => document.querySelector<HTMLButtonElement>('button[aria-expanded][aria-label^="Partial"]')
+
+  it('shows a labelled chip beside the trigger, leaving the trigger and its tooltip as they were', async () => {
+    const { tooltip, text } = await renderOpen({ ...unfiltered, collection })
+    expect(chip()?.textContent).toBe('Partial')
+    expect(tooltip).toBe('Currently viewing all namespaces. Click to narrow the view.')
+    expect(document.querySelector('button[aria-label="Switch active namespaces"] .lucide-info')).toBeNull()
+    expect(text).not.toContain('Pods in team-a')
+  })
+
+  it('shows no chip for a Radar that sends no collection', async () => {
+    await renderOpen(unfiltered)
+    expect(chip()).toBeNull()
+  })
+
+  it('shows no chip when the collection names no group', async () => {
+    await renderOpen({ ...unfiltered, collection: { groups: [] } })
+    expect(chip()).toBeNull()
+  })
+
+  it('keeps the chip when the host disables the picker, since it describes Radar and not the pick', async () => {
+    await renderOpen({ ...unfiltered, collection }, { disabled: true, disabledTooltip: 'Not available here.' })
+    expect(chip()).not.toBeNull()
+  })
+
+  describe('on a phone', () => {
+    beforeEach(() => {
+      window.matchMedia = ((query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })) as unknown as typeof window.matchMedia
+    })
+    afterEach(() => {
+      delete (window as { matchMedia?: unknown }).matchMedia
+    })
+
+    it('has no room for a chip in the header, so the dropdown carries the note', async () => {
+      const { text } = await renderOpen({ ...unfiltered, collection })
+      expect(chip()).toBeNull()
+      expect(text).toContain('Radar collects some kinds only in some namespaces.')
+      expect(text).toContain('Pods in team-a')
+    })
+
+    it('says nothing without a collection', async () => {
+      const { text } = await renderOpen(unfiltered)
+      expect(text).not.toContain('collects some kinds')
+    })
+
+    it('adds the note to the disabled tooltip, since the dropdown can\u2019t open', async () => {
+      const { tooltip } = await renderOpen({ ...unfiltered, collection }, { disabled: true, disabledTooltip: 'Not available here.' })
+      expect(tooltip).toBe('Not available here. Radar collects some kinds only in some namespaces.')
+    })
   })
 })
 

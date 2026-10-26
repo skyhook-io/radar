@@ -20,6 +20,7 @@ import type {
   CapacityOverviewResponse,
   CapacityPoolDetailResponse,
   CapacityPoolListResponse,
+  NamespaceCollection,
   SetWorkloadImagesResult,
   WorkloadImageInventory,
   WorkloadImageUpdate,
@@ -7310,6 +7311,8 @@ export interface NamespaceScope {
   cacheScopeNamespace?: string;
   /** true when this client may rebuild the local cache for another namespace. */
   namespaceRescope: boolean;
+  /** Where Radar collects the kinds it keeps in only some namespaces; absent when none, or from an older Radar. */
+  collection?: NamespaceCollection;
 }
 
 export function useNamespaceScope() {

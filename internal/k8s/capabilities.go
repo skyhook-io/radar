@@ -178,6 +178,7 @@ type FeatureCapabilities struct {
 	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
 	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
+	NamespaceCollection   bool `json:"namespaceCollection"`   // `collection` on GET /api/cluster/namespace-scope
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
