@@ -56,6 +56,8 @@ describe('Deletion preview states', () => {
   it('shows loading without presenting stale failure or success as a result', async () => {
     await act(async () => root.render(<ForceDeleteConfirmDialog {...base} cascadeLoading cascadePreviewFailed cascadeRootResolved />))
     expect(document.body.textContent).toContain('Checking for dependent resources')
+    const confirm = Array.from(document.body.querySelectorAll('button')).find(button => button.textContent === 'Delete')!
+    expect(confirm.disabled).toBe(true)
     expect(document.body.textContent).not.toContain('unavailable')
     expect(document.body.textContent).not.toContain('does not predict')
   })

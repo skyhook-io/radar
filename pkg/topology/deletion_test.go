@@ -164,3 +164,24 @@ func TestPreviewDeletionStorageLimitIsExplicit(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewDeletionWarnsForDependentStorage(t *testing.T) {
+	for _, kind := range []string{"Pod", "StatefulSet"} {
+		apiVersion, group := "v1", ""
+		if kind == "StatefulSet" {
+			apiVersion, group = "apps/v1", "apps"
+		}
+		root := ownershiptest.Object{Ref: resourceid.Ref{Group: group, Kind: kind, Namespace: "demo", Name: "root"}, APIVersion: apiVersion, UID: "root"}
+		pvc := ownershiptest.Object{Ref: resourceid.Ref{Kind: "PersistentVolumeClaim", Namespace: "demo", Name: "data"}, APIVersion: "v1", UID: "data", OwnerReferences: []metav1.OwnerReference{root.OwnerRef(false)}}
+		w := ownershiptest.World{Resources: []ownership.ServedResource{
+			{Group: group, Version: "v1", Kind: kind, Resource: strings.ToLower(kind) + "s", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+			{Version: "v1", Kind: "PersistentVolumeClaim", Resource: "persistentvolumeclaims", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+		}, Objects: []ownershiptest.Object{root, pvc}}
+		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": "root", "namespace": "demo", "uid": "root"}}}
+		s, _ := ownershiptest.Scan(w).Begin()
+		p := PreviewDeletion(context.Background(), ownership.NewView(s, ownership.Unrestricted()), obj)
+		if len(p.Dependents) != 1 || !strings.Contains(strings.Join(p.NotEnumerated, " "), "storage/data") {
+			t.Fatalf("%s storage consequence hidden: %+v", kind, p)
+		}
+	}
+}

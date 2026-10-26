@@ -67,9 +67,6 @@ func PreviewDeletion(ctx context.Context, v *ownership.View, obj *unstructured.U
 		p.NotEnumerated = append(p.NotEnumerated, "all CRD instances; deleting a CRD removes them regardless of owner references or orphan propagation")
 	}
 	var members []ownership.Observation
-	if ref.Group == "" && (ref.Kind == "PersistentVolumeClaim" || ref.Kind == "PersistentVolume") {
-		p.NotEnumerated = append(p.NotEnumerated, "backing storage/data removal governed by the PV reclaim policy")
-	}
 	p.ControllerTeardown, members = previewControllerTeardown(v, ref, obj)
 	if p.ControllerTeardown != nil {
 		p.NotEnumerated = nil
@@ -91,6 +88,15 @@ func PreviewDeletion(ctx context.Context, v *ownership.View, obj *unstructured.U
 			p.NotEnumerated = append(p.NotEnumerated, "controller cleanup triggered by dependent GitOps managers")
 			break
 		}
+	}
+	storage := ref.Group == "" && (ref.Kind == "PersistentVolumeClaim" || ref.Kind == "PersistentVolume")
+	for _, objects := range [][]ownership.Observation{a.Dependents, a.Possible, members} {
+		for _, o := range objects {
+			storage = storage || o.Ref.Group == "" && (o.Ref.Kind == "PersistentVolumeClaim" || o.Ref.Kind == "PersistentVolume")
+		}
+	}
+	if storage {
+		p.NotEnumerated = append(p.NotEnumerated, "backing storage/data removal governed by the PV reclaim policy")
 	}
 	p.EvidenceHash = deletionEvidence(v, p, a, members)
 	return p

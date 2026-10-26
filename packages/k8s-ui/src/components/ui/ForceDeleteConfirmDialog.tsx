@@ -88,6 +88,7 @@ export function ForceDeleteConfirmDialog({
       confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
       variant="danger"
       isLoading={isLoading}
+      confirmDisabled={cascadeLoading}
     >
       <div className="flex flex-col gap-3 pb-1">
         {cascadeLoading && (
