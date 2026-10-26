@@ -88,7 +88,7 @@ web/src → (npm run build) → web/dist → (make embed) → internal/static/di
 
 ### Build / test / run
 
-`make help` lists every target — read the Makefile when uncertain. The day-to-day set: `make build` (frontend + embed + binary), `make restart` (full rebuild + restart) / `make restart-fe` (frontend + embed + restart), `make watch-backend` / `make watch-frontend` (Air :9280 + Vite :9273), `make test`, `make tsc`. `go run ./cmd/explorer --dev` serves the frontend from `web/dist` without the embed step.
+`make help` lists every target — read the Makefile when uncertain. The day-to-day set: `make build` (frontend + embed + binary), `make restart` (full rebuild + restart) / `make restart-fe` (frontend + embed + restart), `make watch-backend` / `make watch-frontend` (Air :9280 + Vite :9273), `make test`, `make tsc`, `make lint` (`go vet` on both Go modules, the root and `pkg/`). `go run ./cmd/explorer --dev` serves the frontend from `web/dist` without the embed step. Web unit tests: `cd web && npm test` (`vitest run src`); a bare `npx vitest run` also collects the Playwright specs in `web/e2e` and reports them as failed files.
 
 ### Visual Testing
 ```bash

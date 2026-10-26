@@ -467,6 +467,32 @@ cloud:
   # encrypted but is NOT authenticated (a network attacker could impersonate
   # the hub), so leave false for any hub with a publicly trusted certificate.
   insecureSkipVerify: false
+  # Join a Radar Hub with a shared enrollment key instead of a per-cluster
+  # token. Set hubURL and enrollment.key (or enrollment.existingSecret), and
+  # leave url, token and existingSecret empty: a configured token always wins.
+  # Every Radar installed with the same key shows up in the Hub as its own
+  # cluster, and joins again with the key every time it starts. Requires
+  # replicaCount: 1.
+  # Hub address, e.g. https://hub.example.com. http:// works only for
+  # localhost.
+  hubURL: ""
+  enrollment:
+    # Enrollment key (rhe_...). An owner creates one in Radar Hub under
+    # Settings > Enrollment keys; a self-hosted Hub's install key works too.
+    # Inline for trials; prefer existingSecret so the key stays out of the
+    # Helm release.
+    key: ""
+    existingSecret: ""
+    existingSecretKey: key
+  # Wrap the cluster name Radar picks when clusterName is empty: the API
+  # server host from kube-public/cluster-info, else cluster-<first 8
+  # characters of the kube-system namespace UID>. With clusterName set, that
+  # exact name is used and these are ignored.
+  clusterNamePrefix: ""
+  clusterNameSuffix: ""
+  # With an enrollment key: extra CA certificates (PEM) to trust for a Hub
+  # with a self-signed or private certificate. Radar reads them at startup.
+  caBundle: ""
   # Default ClusterRoleBindings for Radar Cloud identity groups.
   #
   # How it works: Cloud injects X-Forwarded-Groups: radar:<role>,

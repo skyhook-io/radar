@@ -398,6 +398,7 @@ export function LocalConnectionSettings({
   const save = async (update: Update) => {
     const data = await fetchConnections(update)
     receive(data)
+    onDirtyChange(false)
     setConfirmBack(false)
     setTask('main')
     setPending(null)

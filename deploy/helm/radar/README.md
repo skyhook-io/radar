@@ -129,6 +129,158 @@ applies to GitOps users: manage the Secret with SealedSecrets / SOPS /
 External Secrets and reference it via `cloud.existingSecret`; Helm never
 touches its contents.
 
+### Joining a Radar Hub with an enrollment key
+
+For a fleet, give every cluster the same enrollment key instead of a token per
+cluster. Every Radar installed with the same values shows up in the Hub as its
+own cluster, so the values can be the same for every cluster in a GitOps
+repository.
+
+An owner creates the key in Radar Hub under **Settings > Enrollment keys**. The
+Hub shows it once. On a self-hosted Hub, the install key from the Hub's config
+works too. If the key is set to wait for approval, a new cluster waits until an
+owner approves it on the Hub's Clusters page.
+
+The key is a password for all these clusters. Anyone who holds it can add a
+cluster to your Hub, or show up as one of the clusters that joined with it.
+Keep it in a Secret, not in values committed to Git.
+
+The key also decides which organization a cluster joins. A cluster that
+switches to another organization's key joins that organization as a new
+cluster; its entry in the first organization stays, offline, until an owner
+there removes it.
+
+1. Store the key in a Secret. The commands are safe to run again, for example
+   to put a new key in place:
+
+   ```bash
+   kubectl create namespace radar --dry-run=client -o yaml | kubectl apply -f -
+   kubectl create secret generic radar-hub-enrollment -n radar \
+     --from-literal=key="$ENROLLMENT_KEY" \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+
+   With GitOps, manage this Secret with SealedSecrets, SOPS or External
+   Secrets instead.
+
+2. Install Radar with these values, using your Hub's address:
+
+   ```yaml
+   cloud:
+     enabled: true
+     hubURL: https://hub.example.com
+     enrollment:
+       existingSecret: radar-hub-enrollment
+   auth:
+     mode: proxy
+   rbac:
+     helm: true
+     secrets: true
+     podExec: true
+     portForward: true
+     metrics: true
+     selfUpgrade: true
+   ```
+
+   ```bash
+   helm upgrade --install radar skyhook/radar -n radar -f values.yaml
+   ```
+
+   The `auth` and `rbac` values are the ones a single-cluster install from the
+   Hub uses, so a cluster that joins with the key gets the same features.
+
+   If the Hub's certificate is self-signed or signed by a private CA, Radar
+   can't verify it and keeps retrying with a certificate error in its log.
+   Add the CA to the values:
+
+   ```yaml
+   cloud:
+     caBundle: |
+       -----BEGIN CERTIFICATE-----
+       ...
+       -----END CERTIFICATE-----
+   ```
+
+   When the Hub serves its own self-signed certificate, the many-clusters
+   steps in Radar Hub include it. Otherwise use the CA of whatever serves the
+   Hub's address, such as your ingress or load balancer.
+
+3. Check that it joined. Radar's log says whether it joined and, if not,
+   why:
+
+   ```bash
+   kubectl -n radar logs deploy/radar
+   ```
+
+| Value | Meaning |
+| --- | --- |
+| `cloud.hubURL` | The Hub's address. `https://`, or `http://` for localhost only. |
+| `cloud.enrollment.existingSecret` / `existingSecretKey` | The Secret holding the key (key `key` by default). |
+| `cloud.enrollment.key` | The key (`rhe_...`) inline, for trials. It ends up in the Helm release; prefer `existingSecret`. |
+| `cloud.clusterName` | The exact name shown in the Hub. |
+| `cloud.clusterNamePrefix` / `clusterNameSuffix` | Text put before or after the name Radar picks. Ignored when `clusterName` is set. |
+| `cloud.caBundle` | Extra CA certificates (PEM) for a Hub with a self-signed or private certificate. Used for joining and for the tunnel. Read once at startup; a `helm upgrade` with a new bundle restarts Radar. |
+
+#### Cluster names
+
+With no name set, Radar uses the API server host from
+`kube-public/cluster-info`, or `cluster-<first 8 characters of the kube-system
+namespace UID>` when that is not available. To choose the name, set
+`cloud.clusterName` per cluster, for example
+`--set cloud.clusterName=prod-eu`. To keep the picked name but mark where it
+runs, set a prefix or suffix shared by a group of clusters, for example
+`cloud.clusterNamePrefix: eu-`. The latest change wins: a cluster renamed in
+the Hub keeps the Hub's name across restarts, until the name Radar sends
+changes (a new `clusterName`, prefix or suffix, or a new API server host).
+
+#### How it behaves
+
+- Radar joins with the key every time it starts and gets a new token. The
+  token lives only in Radar's memory; nothing is stored in the cluster. A
+  restart lands on the same cluster entry in the Hub, with its name and
+  history, because the Hub matches the kube-system namespace UID, the
+  namespace and the Helm release.
+- When the Hub stops accepting the token, for example because another start of
+  the same cluster joined, Radar joins again on its own.
+- When the Hub refuses to add the cluster, Radar keeps trying, and its log
+  says why it isn't joining.
+- The Hub keeps one connection per cluster. Another Radar with the same
+  identity waits until that connection ends. After a pod dies without
+  shutting down cleanly, its replacement can wait up to about 90 seconds for
+  the Hub to notice.
+- After you change the key in the Secret, restart Radar so it joins with the
+  new key.
+- A configured `cloud.token` or `cloud.existingSecret` wins. The key is then
+  ignored, and the install renders exactly as a token install.
+- `replicaCount` must be 1, and the Deployment uses the `Recreate` strategy.
+- `cloud.insecureSkipVerify` is refused: use `cloud.caBundle` instead.
+- It needs Radar 1.18.2 or later.
+
+#### If the key leaks
+
+1. In Radar Hub, delete the key under **Settings > Enrollment keys** and create
+   a new one. For a self-hosted Hub's install key, change it in the Hub's
+   config.
+2. Put the new key in the Secret on every cluster, with the command from step 1
+   above.
+3. Restart Radar on every cluster, so each one joins with the new key and gets
+   a new token:
+
+   ```bash
+   kubectl -n radar rollout restart deployment/radar
+   ```
+
+Clusters that are connected keep working after the key is deleted. A cluster
+that restarts without the new key stays offline until it gets it.
+
+#### Removed clusters
+
+A cluster removed in Radar Hub stays out, even if Radar keeps running there, for
+example because GitOps keeps it installed. Radar's log says it was removed. An
+owner can let it back in under **Settings > Enrollment keys**, and it comes
+back as a new cluster with no history. To stop it trying, uninstall Radar from
+that cluster.
+
 ### Radar Cloud default integration reads
 
 Radar Cloud's default viewer/member/owner bindings receive explicit `get/list/watch`
