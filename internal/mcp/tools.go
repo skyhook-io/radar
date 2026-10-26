@@ -472,7 +472,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
-			"summaryContext. Covers what you can list; big CRDs need kind:. Trivy reports match by " +
+			"summaryContext. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
 			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
@@ -3437,18 +3437,15 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 			result.Total, result.TotalMatched,
 		)
 	}
-	if result.Coverage.Status == resourceapi.CoveragePartial {
-		response.CoverageHint = coverageHint(result, len(parsed.KindFilter) > 0)
-	} else if len(result.Coverage.NarrowedBy) > 0 && len(result.Hits) == 0 {
-		response.CoverageHint = "No matches within what your access and Radar's collection cover; that does not rule out matches outside them."
-	}
+	response.CoverageHint = searchCoverageHint(result, len(parsed.KindFilter) > 0)
 	return toJSONResult(response)
 }
 
 // searchResponseMCP embeds search.Result so the JSON shape stays identical
 // except for the added hints: narrowHint when the hit limit cut the result,
-// coverageHint whenever it is partial or empty and narrowed. Hints serialize
-// before hits so agents read the limits before interpreting the matches.
+// coverageHint whenever it is partial, empty and narrowed, or has hits that
+// Radar's namespace collection or pin limited. Hints serialize before hits so
+// agents read the limits before interpreting the matches.
 type searchResponseMCP struct {
 	CoverageHint string `json:"coverageHint,omitempty"`
 	NarrowHint   string `json:"narrowHint,omitempty"`

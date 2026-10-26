@@ -158,6 +158,40 @@ var coverageTemplates = []coverageTemplate{
 // reason present, most actionable first, at most maxCoverageSentences and then
 // a count of the rest. Every reason yields a sentence, so it is non-empty
 // whenever the result is partial.
+// scopeHint says how Radar's own setup limits a search that found something:
+// an agent reads each answer alone and can't see the install, so without it
+// hits read as everything. The caller's access and uncollected kinds stay
+// quiet: the agent acts for the caller, and kind collection narrows nearly
+// every broad search.
+func scopeHint(cov resourceapi.SearchCoverage) string {
+	var sentences []string
+	if slices.Contains(cov.NarrowedBy, resourceapi.NarrowedByNamespaceCollection) {
+		sentences = append(sentences, "For some kinds, Radar searches only the namespaces it collects; matches for them elsewhere aren't included.")
+	}
+	if slices.Contains(cov.NarrowedBy, resourceapi.NarrowedByNamespacePin) {
+		sentences = append(sentences, "Radar is pinned to one namespace; namespaced matches elsewhere aren't included.")
+	}
+	return strings.Join(sentences, " ")
+}
+
+// searchCoverageHint is a search response's coverageHint: what a partial
+// result missed, that an empty narrowed one doesn't rule out matches outside
+// its scope, and, when there are hits, how Radar's setup limited them.
+func searchCoverageHint(res search.Result, namedKinds bool) string {
+	var hint string
+	if res.Coverage.Status == resourceapi.CoveragePartial {
+		hint = coverageHint(res, namedKinds)
+	} else if len(res.Coverage.NarrowedBy) > 0 && len(res.Hits) == 0 {
+		hint = "No matches within what your access and Radar's collection cover; that does not rule out matches outside them."
+	}
+	if len(res.Hits) > 0 {
+		if scope := scopeHint(res.Coverage); scope != "" {
+			hint = strings.TrimSpace(hint + " " + scope)
+		}
+	}
+	return hint
+}
+
 func coverageHint(res search.Result, namedKinds bool) string {
 	return entriesHint(hintEntries(res.Coverage), res.FilterErrors, res.FilterErrorSample, namedKinds)
 }

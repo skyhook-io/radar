@@ -275,6 +275,43 @@ func TestHandleSearchCoverageHintIsIndependentOfNarrowHint(t *testing.T) {
 	t.Cleanup(func() { getPermCache().Invalidate() })
 }
 
+func TestSearchCoverageHintSaysSetupLimitsOnHits(t *testing.T) {
+	const (
+		collection = "For some kinds, Radar searches only the namespaces it collects; matches for them elsewhere aren't included."
+		pin        = "Radar is pinned to one namespace; namespaced matches elsewhere aren't included."
+		empty      = "No matches within what your access and Radar's collection cover; that does not rule out matches outside them."
+		denied     = "Your access doesn't include all Secrets; this result says nothing about the rest."
+	)
+	hits := []search.Hit{{Kind: "Secret", Namespace: "read-a", Name: "db-creds"}}
+	deniedGap := []resourceapi.Gap{{Code: readreason.UserForbidden, Kinds: resourceapi.Kinds([]resourceapi.KindRef{{Kind: "Secret"}}, 10), Namespaces: resourceapi.UnknownNames()}}
+	for _, tc := range []struct {
+		name   string
+		status resourceapi.CoverageStatus
+		by     []resourceapi.Narrowing
+		gaps   []resourceapi.Gap
+		hits   []search.Hit
+		want   string
+	}{
+		{"collection", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByNamespaceCollection}, nil, hits, collection},
+		{"collection with access and kinds", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByKindCollection, resourceapi.NarrowedByUserAccess, resourceapi.NarrowedByNamespaceCollection}, nil, hits, collection},
+		{"pin", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByNamespacePin}, nil, hits, pin},
+		{"pin with access", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByNamespacePin, resourceapi.NarrowedByUserAccess}, nil, hits, pin},
+		{"pin and collection", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByNamespacePin, resourceapi.NarrowedByNamespaceCollection}, nil, hits, collection + " " + pin},
+		{"partial keeps its own hint first", resourceapi.CoveragePartial, []resourceapi.Narrowing{resourceapi.NarrowedByNamespaceCollection}, deniedGap, hits, denied + " " + collection},
+		{"access only", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByUserAccess}, nil, hits, ""},
+		{"kinds only", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByKindCollection}, nil, hits, ""},
+		{"not narrowed", resourceapi.CoverageComplete, nil, nil, hits, ""},
+		{"empty collection keeps the empty hint", resourceapi.CoverageComplete, []resourceapi.Narrowing{resourceapi.NarrowedByNamespaceCollection}, nil, nil, empty},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := search.Result{Hits: tc.hits, Coverage: resourceapi.SearchCoverage{Status: tc.status, NarrowedBy: tc.by, Gaps: tc.gaps}}
+			if got := searchCoverageHint(res, true); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCoverageHintTemplates(t *testing.T) {
 	gap := func(kind, group string, reason readreason.Code) hintEntry {
 		return hintEntry{Kind: kind, Group: group, Reason: reason}
