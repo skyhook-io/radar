@@ -24,21 +24,21 @@ func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
 	labels := obj.GetLabels()
 	annotations := obj.GetAnnotations()
 
-	if v := annotations["argocd.argoproj.io/instance"]; v != "" {
+	if v := labels["argocd.argoproj.io/instance"]; v != "" {
 		return "Argo CD", v
 	}
 	if v := annotations["argocd.argoproj.io/tracking-id"]; v != "" {
 		return "Argo CD", v
 	}
 
-	if v := annotations["kustomize.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := annotations["kustomize.toolkit.fluxcd.io/namespace"]; ns != "" {
+	if v := labels["kustomize.toolkit.fluxcd.io/name"]; v != "" {
+		if ns := labels["kustomize.toolkit.fluxcd.io/namespace"]; ns != "" {
 			return "Flux (Kustomization)", ns + "/" + v
 		}
 		return "Flux (Kustomization)", v
 	}
-	if v := annotations["helm.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := annotations["helm.toolkit.fluxcd.io/namespace"]; ns != "" {
+	if v := labels["helm.toolkit.fluxcd.io/name"]; v != "" {
+		if ns := labels["helm.toolkit.fluxcd.io/namespace"]; ns != "" {
 			return "Flux (HelmRelease)", ns + "/" + v
 		}
 		return "Flux (HelmRelease)", v

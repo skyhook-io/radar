@@ -65,7 +65,7 @@ func TestDetectExternalManager(t *testing.T) {
 			// Argo apps frequently carry Helm annotations because Argo renders
 			// charts — Argo must win the precedence ladder.
 			name:         "argo beats helm",
-			obj:          mk(nil, map[string]any{"argocd.argoproj.io/instance": "my-app", "meta.helm.sh/release-name": "rel"}),
+			obj:          mk(map[string]any{"argocd.argoproj.io/instance": "my-app"}, map[string]any{"meta.helm.sh/release-name": "rel"}),
 			wantManager:  "Argo CD",
 			wantInstance: "my-app",
 		},
@@ -77,27 +77,34 @@ func TestDetectExternalManager(t *testing.T) {
 		},
 		{
 			name:         "flux kustomization namespace-qualified",
-			obj:          mk(nil, map[string]any{"kustomize.toolkit.fluxcd.io/name": "ks", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}),
+			obj:          mk(map[string]any{"kustomize.toolkit.fluxcd.io/name": "ks", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}, nil),
 			wantManager:  "Flux (Kustomization)",
 			wantInstance: "flux-system/ks",
 		},
 		{
 			name:         "flux kustomization bare name",
-			obj:          mk(nil, map[string]any{"kustomize.toolkit.fluxcd.io/name": "ks"}),
+			obj:          mk(map[string]any{"kustomize.toolkit.fluxcd.io/name": "ks"}, nil),
 			wantManager:  "Flux (Kustomization)",
 			wantInstance: "ks",
 		},
 		{
 			name:         "flux helmrelease namespace-qualified",
-			obj:          mk(nil, map[string]any{"helm.toolkit.fluxcd.io/name": "hr", "helm.toolkit.fluxcd.io/namespace": "apps"}),
+			obj:          mk(map[string]any{"helm.toolkit.fluxcd.io/name": "hr", "helm.toolkit.fluxcd.io/namespace": "apps"}, nil),
 			wantManager:  "Flux (HelmRelease)",
 			wantInstance: "apps/hr",
 		},
 		{
 			name:         "flux kustomization beats helm label",
-			obj:          mk(map[string]any{"app.kubernetes.io/managed-by": "Helm"}, map[string]any{"kustomize.toolkit.fluxcd.io/name": "ks"}),
+			obj:          mk(map[string]any{"app.kubernetes.io/managed-by": "Helm", "kustomize.toolkit.fluxcd.io/name": "ks"}, nil),
 			wantManager:  "Flux (Kustomization)",
 			wantInstance: "ks",
+		},
+		{
+			// Argo CD and Flux write these as labels; an annotation of the same
+			// name is not their tracking.
+			name:        "flux and argo keys as annotations are ignored",
+			obj:         mk(nil, map[string]any{"kustomize.toolkit.fluxcd.io/name": "ks", "argocd.argoproj.io/instance": "my-app"}),
+			wantManager: "",
 		},
 		{
 			name:         "helm release annotation",
