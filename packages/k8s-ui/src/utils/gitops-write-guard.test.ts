@@ -501,6 +501,14 @@ describe('manager answer composition', () => {
     expect(g.ownershipError).toContain("couldn't follow")
   })
 
+  // A gone or replaced owner ends the chain with an answer: nothing above it
+  // was missed, so an object no manager names gets no warning.
+  it.each(['gone', 'replaced'] as const)('a walk ended by a %s owner is not an unread chain', state => {
+    const g = run({ state: 'none', direct: { object: subject }, chainEnd: 'unfollowed', stop: { at: subject, state, owner: parent } })
+    expect(g.level).toBe('none')
+    expect(g.ownershipError).toBeNull()
+  })
+
   it('a stopped walk with a weak claim cannot use that candidate’s exemption', () => {
     const g = run({ state: 'claimed', lead: a, direct: { object: subject, claims: [claim] }, stop: { at: subject, state: 'unknown', owner: parent } })
     expect(g.level).toBe('may-revert')

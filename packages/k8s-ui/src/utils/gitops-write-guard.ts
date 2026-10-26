@@ -431,7 +431,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
       if (write.paths?.length && write.paths.every(path => input.evidence?.paths.find(p => p.path === path)?.empty)) {
         return { level: 'none', reason: '' }
       }
-      if (manager.stop || manager.chainEnd) {
+      if (chainUnread(manager)) {
         return { level: 'may-revert', reason: input.ownershipError! }
       }
     }
@@ -460,7 +460,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   }
   if (manager && write.scope === 'delete') {
     const candidates = managerCandidates(manager)
-    if (manager.stop || manager.chainEnd) return { level: 'may-revert', reason: input.ownershipError! }
+    if (chainUnread(manager)) return { level: 'may-revert', reason: input.ownershipError! }
     if (owner && manager.state === 'claimed') {
       return { level: 'may-revert', reason: `This resource's metadata names ${candidates.map(managerRefLabel).join(' and ')}, but its recorded membership isn't confirmed. A sync may recreate it.` }
     }
@@ -524,13 +524,21 @@ export function gitOpsWriteHeadline(guard: GitOpsWriteGuard): string {
   return headline(guard, guard.level)
 }
 
+// chainUnread: the walk up the controller chain stopped at an owner Radar
+// couldn't read or decide, so a manager above it may be missed. An owner that is
+// gone or was replaced ends the chain with an answer.
+function chainUnread(manager: ManagerAnswer): boolean {
+  if (manager.chainEnd === 'cycle' || manager.chainEnd === 'truncated') return true
+  return Boolean(manager.stop && !['gone', 'replaced', 'excluded'].includes(manager.stop.state))
+}
+
 export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWriteGuard {
   const manager = input.evidence?.manager ?? input.manager
   const owner = manager ? manager.lead ? gitOpsOwnerFromRef(manager.lead) : null : input.owner ?? null
   const helmRelease = manager
     ? manager.lead?.kind === 'HelmRelease' && !manager.lead.group ? { namespace: manager.lead.namespace, name: manager.lead.name } : null
     : owner ? null : (input.helmRelease ?? null)
-  const ownershipError = manager?.stop || manager?.chainEnd
+  const ownershipError = manager && chainUnread(manager)
     ? "Radar couldn't follow this resource's controller chain, so it can't tell whether a GitOps tool or Helm manages it."
     : owner || helmRelease ? null : (input.ownershipError ?? null)
   const normalized: GitOpsWriteGuardInput = { ...input, manager, owner, helmRelease, ownershipError, ownerMatchedByName: manager ? false : input.ownerMatchedByName }
