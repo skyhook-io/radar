@@ -33,7 +33,7 @@ import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternal
 import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
 import { getGenericResourceStatus } from './generic-status'
-import { getCrossplaneStatus, isManagedResource, isComposite } from './resource-utils-crossplane'
+import { getCrossplaneStatus, getCrossplanePauseState, isManagedResource, isComposite } from './resource-utils-crossplane'
 import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString, getAuthorizationPolicySelectorString as _getAuthorizationPolicySelectorString, getDestinationRuleTlsMode as _getDestinationRuleTlsMode } from './resource-utils-istio'
 import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
 
@@ -2406,7 +2406,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'helmrepositories') return getHelmRepositoryType(resource)
       return resource.spec?.type || resource.type || ''
     case 'status':
-      if (isManagedResource(resource) || isComposite(resource)) return getCrossplaneStatus(resource).text
+      if (isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged') return getCrossplaneStatus(resource).text
       if (kindLower === 'pods') return getPodStatus(resource).text
       if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'rollouts'].includes(kindLower)) {
         let status: StatusBadge

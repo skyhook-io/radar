@@ -27,6 +27,8 @@ it.each([
   ['composite default', 'example.com', xr, false],
   ['composite printer', 'example.com', xr, true],
   ['claim printer', 'example.com', claim, true],
+  ['ref-less early composite printer', 'example.com', {}, true],
+  ['ref-less early claim default', 'example.com', {}, false],
 ] as const)('keeps pause context and primary evidence on the real %s table path', async (_name, group, spec, printer) => {
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   const kind: APIResource = { group, version: 'v1', kind: 'Archive', name: 'archives', namespaced: true, isCrd: true, verbs: ['get', 'list'] }

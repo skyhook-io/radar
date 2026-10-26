@@ -64,3 +64,22 @@ it("keeps uncorroborated controller pause adverse without inventing a resume fai
   expect(html).not.toContain("controller last reported reconciliation paused");
   expect(conditionStatusTone(payload.resource.status.conditions[1], captured.data.resource)).toBe("unhealthy");
 });
+
+
+it("keeps captured pause context before a resource has composition references", () => {
+  const payload = { ...paused, resource: { ...paused.resource, kind: "EarlyXR", spec: {} } };
+  const captured = groupsOf(project([tool("early-pause", "get_resource", payload)]).groups, "resource")[0].latest;
+  expect(captured.tone).toBe("neutral");
+  if (captured.data.type !== "resource") throw new Error("Expected resource evidence");
+  expect(renderToStaticMarkup(<ResourceBody data={captured.data} />)).toContain("controller last reported reconciliation paused");
+});
+
+it("keeps the captured deletion caution with recorded pause context", () => {
+  const payload = { ...paused, resource: { ...paused.resource, metadata: { ...paused.resource.metadata, deletionTimestamp: "2026-10-26T08:00:00Z" } } };
+  const captured = card(payload);
+  expect(captured.tone).toBe("neutral");
+  if (captured.data.type !== "resource") throw new Error("Expected resource evidence");
+  const html = renderToStaticMarkup(<ResourceBody data={captured.data} />);
+  expect(html).toContain("Deletion has been requested. Paused reconciliation may defer");
+  expect(html).toContain("controller last reported reconciliation paused");
+});

@@ -133,7 +133,7 @@ export function CrashBody({ data }: { data: EvidenceDataOf<"crash"> }) {
 
 export function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
   const replicas = data.resourceContext?.workloadSummary?.replicas;
-  const crossplane = isManagedResource(data.resource) || isComposite(data.resource);
+  const crossplane = isManagedResource(data.resource) || isComposite(data.resource) || getCrossplanePauseState(data.resource) === "acknowledged";
   // SealedSecret's dedicated body renders the resource's conditions beside
   // its controller state, so repeating the derived summary here adds noise.
   const conditions =

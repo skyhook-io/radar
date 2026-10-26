@@ -837,7 +837,7 @@ export function WorkloadView({
     ? getWorkloadDisplayStatus(resource, apiKind, workloadPods)
     : null
   const rolloutActivity = rolloutDisplay?.activity ?? null
-  const crossplaneResource = isManagedResource(resource) || isComposite(resource)
+  const crossplaneResource = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged'
   // A 404 with a cached copy: the object was deleted while this view was
   // open. Everything below that copy describes the past.
   const resourceGone = Boolean(resource) && isFetchError(resourceError) && resourceError.status === 404

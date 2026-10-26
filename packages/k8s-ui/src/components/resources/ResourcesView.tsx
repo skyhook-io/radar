@@ -207,7 +207,7 @@ import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, Volum
 import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell, CNPGObjectStoreCell, CNPGDeclarativeCell, CNPGImageCatalogCell } from './renderers/cnpg-cells'
 import { isApiGroup, CNPG_GROUP } from './resource-utils-cnpg'
-import { ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
+import { CrossplaneStatusCell, ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
 import { isManagedResource, isComposite, getCrossplanePauseState } from './resource-utils-crossplane'
 import { CrossplanePauseChip } from './renderers/CrossplanePauseContext'
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
@@ -3141,7 +3141,7 @@ function buildPrinterColumn(def: PrinterColumnDef, index: number, table: Printer
         return (
           // The value, not the column's description — the header tooltip
           // carries that. A cell tooltip exists to reveal a truncated value.
-          <Tooltip content={tone === 'neutral' ? `${text} · Last reported while reconciliation is paused` : text}>
+          <Tooltip content={tone === 'neutral' ? `${text} · ${String(value).trim().toLowerCase() === 'false' ? 'Controller recorded reconciliation paused' : 'Last reported readiness while reconciliation is paused'}` : text}>
             <span className={clsx('badge', healthColors[tone])}>{text}</span>
           </Tooltip>
         )
@@ -7381,11 +7381,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (column === 'name') {
     const isTerminating = !!meta.deletionTimestamp
     const nameClass = clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
+    const pauseState = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged' ? getCrossplanePauseState(resource) : null
     const audit = auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
     const auditTotal = audit ? audit.danger + audit.warning : 0
     return (
       <div className="flex items-center gap-1.5 min-w-0">
-        <Tooltip content={meta.name} wrapperClassName={findingMatch ? 'min-w-0' : undefined}>
+        <Tooltip content={meta.name} wrapperClassName={findingMatch || pauseState ? 'min-w-0' : undefined}>
           {nameHref ? (
             <a
               href={nameHref}
@@ -7400,7 +7401,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
           )}
         </Tooltip>
         <CopyNameButton name={meta.name} />
-        {(isManagedResource(resource) || isComposite(resource)) && <CrossplanePauseChip state={getCrossplanePauseState(resource)} compact />}
+        <CrossplanePauseChip state={pauseState} compact />
         {findingMatch && (
           <Tooltip content={findingMatch.text}>
             <span className="shrink-0 text-xs italic text-theme-text-tertiary cursor-help">
@@ -7452,6 +7453,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (column === 'status') {
     if (isManagedResource(resource)) return <ManagedResourceCell resource={resource} column={column} />
     if (isComposite(resource)) return <CompositeResourceCell resource={resource} column={column} />
+    if (getCrossplanePauseState(resource) === 'acknowledged') return <CrossplaneStatusCell resource={resource} />
   }
   if (group && !hasCuratedColumns(kind, group)) {
     return <GenericCell resource={resource} column={column} />

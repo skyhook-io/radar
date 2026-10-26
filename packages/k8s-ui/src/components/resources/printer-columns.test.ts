@@ -325,10 +325,10 @@ describe('Crossplane condition source provenance', () => {
     expect(printerCellTone({ name: 'Ready', jsonPath }, 'True', resource)).toBe('healthy')
   })
 
-  it('retains reconcile errors, missing annotation, and unrelated resource semantics', () => {
+  it('retains reconcile errors and missing annotation', () => {
     const error = { ...resource, status: { conditions: [{ type: 'Synced', status: 'False', reason: 'ReconcileError' }] } }
     expect(printerCellTone(synced, 'False', error)).toBe('unhealthy')
     expect(printerCellTone(synced, 'False', { ...resource, metadata: {} })).toBe('unhealthy')
-    expect(printerCellTone(synced, 'False', { ...resource, spec: {} })).toBe('unhealthy')
+    expect(printerCellTone(synced, 'False', { ...resource, spec: {} })).toBe('neutral')
   })
 })

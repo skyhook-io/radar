@@ -110,7 +110,7 @@ export function evidenceHasDetails(
     case "resource": {
       const replicas = data.resourceContext?.workloadSummary?.replicas;
       return Boolean(
-        ((isManagedResource(data.resource) || isComposite(data.resource)) && getCrossplanePauseState(data.resource)) ||
+        ((isManagedResource(data.resource) || isComposite(data.resource) || getCrossplanePauseState(data.resource) === "acknowledged") && getCrossplanePauseState(data.resource)) ||
         investigationResourceEvidenceHasDetails(data.resource) ||
         replicas?.desired !== undefined ||
         data.resourceContext?.statusSummary?.conditions?.length ||

@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers } from 'lucide-react'
+import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
+import { getCrossplanePauseState, getCrossplaneStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
+import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
 
 interface GenericRendererProps {
@@ -16,7 +18,8 @@ export function GenericRenderer({ data }: GenericRendererProps) {
   const conditions = status.conditions
 
   // Determine health status from conditions or status fields
-  const healthStatus = getHealthStatus(data)
+  const acknowledgedPause = getCrossplanePauseState(data) === 'acknowledged'
+  const healthStatus = acknowledgedPause && getCrossplaneStatus(data).level === 'neutral' ? null : getHealthStatus(data)
 
   // Extract important fields from spec and status
   const statusFields = getImportantFields(status, 'status')
@@ -32,6 +35,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
 
   return (
     <>
+      {acknowledgedPause && <CrossplanePauseNotice data={data} />}
       {/* Health Status Banner (if determinable) */}
       {healthStatus && (
         <div className={clsx(
@@ -90,7 +94,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
 
       {/* Conditions (common in CRDs) */}
       {conditions && Array.isArray(conditions) && conditions.length > 0 && (
-        <GenericConditionsSection conditions={conditions} />
+        <GenericConditionsSection conditions={conditions} resource={data} />
       )}
 
       {/* Nested Status Objects */}
@@ -323,11 +327,11 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
 // CONDITIONS SECTION
 // ============================================================================
 
-function GenericConditionsSection({ conditions }: { conditions: any[] }) {
+function GenericConditionsSection({ conditions, resource }: { conditions: any[]; resource: any }) {
   // Sort conditions: problematic first, then alphabetically
   const sortedConditions = [...conditions].sort((a, b) => {
-    const aProblematic = a.status === 'False' || (a.status === 'True' && ['Degraded', 'Warning'].includes(a.type))
-    const bProblematic = b.status === 'False' || (b.status === 'True' && ['Degraded', 'Warning'].includes(b.type))
+    const aProblematic = getCrossplaneConditionTone(resource, a) !== 'neutral' && (a.status === 'False' || (a.status === 'True' && ['Degraded', 'Warning'].includes(a.type)))
+    const bProblematic = getCrossplaneConditionTone(resource, b) !== 'neutral' && (b.status === 'False' || (b.status === 'True' && ['Degraded', 'Warning'].includes(b.type)))
     if (aProblematic && !bProblematic) return -1
     if (!aProblematic && bProblematic) return 1
     return (a.type || '').localeCompare(b.type || '')
@@ -335,13 +339,14 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
 
   // Check for any problems
   const hasProblems = sortedConditions.some(c =>
-    c.status === 'False' || (c.status === 'True' && ['Degraded', 'Warning'].includes(c.type))
+    getCrossplaneConditionTone(resource, c) !== 'neutral' && (c.status === 'False' || (c.status === 'True' && ['Degraded', 'Warning'].includes(c.type)))
   )
 
   return (
     <Section title={`Conditions (${conditions.length})`} defaultExpanded={hasProblems || conditions.length <= 5}>
       <div className="space-y-2">
         {sortedConditions.map((cond: any, index: number) => {
+          const isNeutral = getCrossplaneConditionTone(resource, cond) === 'neutral'
           const isTrue = cond.status === 'True'
           const isFalse = cond.status === 'False'
           const isWarningType = ['Degraded', 'Warning', 'ScalingLimited'].includes(cond.type)
@@ -349,7 +354,8 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
 
           // Determine icon color based on condition semantics
           let iconColor = 'text-yellow-400'
-          if (isTrue && isPositiveType) iconColor = 'text-green-400'
+          if (isNeutral) iconColor = 'text-theme-text-tertiary'
+          else if (isTrue && isPositiveType) iconColor = 'text-green-400'
           else if (isTrue && isWarningType) iconColor = 'text-yellow-400'
           else if (isTrue) iconColor = 'text-green-400'
           else if (isFalse && isPositiveType) iconColor = 'text-red-400'
@@ -358,7 +364,8 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
           return (
             <div key={`${cond.type}-${index}`} className="flex items-start gap-2 text-sm">
               <span className={clsx('w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5', iconColor)}>
-                {isTrue && isPositiveType ? <CheckCircle className="w-4 h-4" /> :
+                {isNeutral ? <Minus className="w-4 h-4" /> :
+                 isTrue && isPositiveType ? <CheckCircle className="w-4 h-4" /> :
                  isTrue && isWarningType ? <AlertTriangle className="w-4 h-4" /> :
                  isTrue ? <CheckCircle className="w-4 h-4" /> :
                  isFalse && isPositiveType ? <XCircle className="w-4 h-4" /> :
@@ -370,7 +377,7 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
                   <span className="text-theme-text-primary font-medium">{cond.type}</span>
                   <span className={clsx(
                     'badge-sm',
-                    isTrue ? 'bg-theme-elevated text-theme-text-secondary' : 'status-red'
+                    isTrue || isNeutral ? 'bg-theme-elevated text-theme-text-secondary' : 'status-red'
                   )}>
                     {cond.status}
                   </span>

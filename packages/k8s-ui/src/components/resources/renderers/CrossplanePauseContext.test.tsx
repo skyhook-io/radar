@@ -5,7 +5,7 @@ import { CompositeRenderer } from './CompositeRenderer'
 import { ManagedResourceCell, CompositeResourceCell } from './crossplane-cells'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import { WorkloadView } from '../../workload/WorkloadView'
-import { diagnoseHealthHint, getResourceStatus } from '../../shared/ResourceRendererDispatch'
+import { ResourceRendererDispatch, diagnoseHealthHint, getResourceStatus } from '../../shared/ResourceRendererDispatch'
 import { getCellFilterValue } from '../resource-utils'
 import { getCrossplanePauseState } from '../resource-utils-crossplane'
 
@@ -95,4 +95,28 @@ it('keeps pause context on a composed child beside its independent status', () =
   />)
   expect(html).toContain('Unavailable')
   expect(html).toContain('Paused')
+})
+
+it.each(['EarlyXR', 'EarlyClaim'])('qualifies recorded pause before %s has references without inferring its resource type', kind => {
+  const resource = { ...base, kind, spec: {}, status: { conditions: [pause] } }
+  const html = renderToStaticMarkup(<ResourceRendererDispatch resource={{ kind: 'earlyresources', namespace: 'test', name: 'archive' }} data={resource} onCopy={() => {}} copied={null} showCommonSections={false} />)
+  expect(html).toContain('last reported reconciliation paused')
+  expect(html).toContain('ReconcilePaused')
+  expect(html).toContain('False')
+  expect(html).not.toContain('status-red')
+  expect(html).not.toContain('Managed Resource')
+  expect(html).not.toContain('Composed Resources')
+  expect(getResourceStatus('earlyresources', resource)).toMatchObject({ text: 'Readiness unknown', level: 'neutral' })
+  const header = renderToStaticMarkup(<WorkloadView kind="earlyresources" namespace="test" name="archive" onBack={vi.fn()} resource={resource} />)
+  expect(header).toContain('Reconciliation paused')
+})
+
+it('does not infer Crossplane from an annotation-only request without shape or acknowledgement', () => {
+  const resource = { ...base, kind: 'Unknown', spec: {}, status: { conditions: [] } }
+  const html = renderToStaticMarkup(<WorkloadView kind="unknowns" namespace="test" name="archive" onBack={vi.fn()} resource={resource} />)
+  expect(html).not.toContain('Pause requested')
+})
+
+it('does not infer controller acknowledgement from a non-list condition field on an uncurated object', () => {
+  expect(getCrossplanePauseState({ ...base, spec: {}, status: { conditions: { Synced: 'False' } } })).toBe('requested')
 })

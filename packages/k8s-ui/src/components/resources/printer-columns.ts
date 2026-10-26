@@ -1,5 +1,5 @@
 import type { HealthLevel } from './resource-utils'
-import { getCrossplanePauseState, isManagedResource, isComposite } from './resource-utils-crossplane'
+import { getCrossplanePauseState } from './resource-utils-crossplane'
 import { KNOWN_NEGATIVE_CONDITIONS, KNOWN_POSITIVE_CONDITIONS } from './generic-status'
 
 // Vendor-declared table columns from a CRD's additionalPrinterColumns,
@@ -247,7 +247,7 @@ export function printerCellTone(def: PrinterColumnDef, value: unknown, resource?
   if (!positive && !degraded && !terminal) return null
   // A vendor column name alone does not establish which condition it reads.
   const conditionSource = /^\.status\.conditions\[\?\(@\.type==(['"])(Synced|Ready)\1\)\]\.status$/.exec(def.jsonPath ?? '')?.[2]
-  if (positive && conditionSource && (isManagedResource(resource) || isComposite(resource))
+  if (positive && conditionSource
     && getCrossplanePauseState(resource) === 'acknowledged'
     && ((conditionSource === 'Synced' && state === 'false') || (conditionSource === 'Ready' && state === 'true'))) {
     return 'neutral'

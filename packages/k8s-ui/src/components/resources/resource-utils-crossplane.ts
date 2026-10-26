@@ -144,18 +144,19 @@ export function isCrossplanePaused(data: any): boolean {
 }
 
 export function isExpectedCrossplanePauseCondition(data: any, condition: CrossplaneCondition): boolean {
-  return isCrossplanePaused(data) && condition.type === 'Synced'
+  return isCrossplanePaused(data) && condition?.type === 'Synced'
     && condition.status === 'False' && condition.reason === 'ReconcilePaused'
 }
 
 export function getCrossplanePauseState(data: any): 'requested' | 'acknowledged' | null {
   if (!isCrossplanePaused(data)) return null
-  return (data?.status?.conditions ?? []).some((condition: CrossplaneCondition) => isExpectedCrossplanePauseCondition(data, condition))
+  const conditions = data?.status?.conditions
+  return Array.isArray(conditions) && conditions.some((condition: CrossplaneCondition) => isExpectedCrossplanePauseCondition(data, condition))
     ? 'acknowledged' : 'requested'
 }
 
 export function getCrossplaneConditionTone(data: any, condition: CrossplaneCondition): ConditionTone | undefined {
-  return (isManagedResource(data) || isComposite(data)) && isExpectedCrossplanePauseCondition(data, condition) ? 'neutral' : undefined
+  return isExpectedCrossplanePauseCondition(data, condition) ? 'neutral' : undefined
 }
 
 /**

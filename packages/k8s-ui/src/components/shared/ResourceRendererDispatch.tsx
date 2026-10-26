@@ -295,6 +295,7 @@ import {
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
 import {
   getCrossplaneStatus,
+  getCrossplanePauseState,
   getProviderStatus,
   getProviderConfigStatus,
   isManagedResource,
@@ -1328,7 +1329,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     return getProviderStatus(data)
   }
   if (k === 'providerconfigs') return getProviderConfigStatus(data)
-  if (isManagedResource(data) || isComposite(data) || isClaim(data)) {
+  if (isManagedResource(data) || isComposite(data) || isClaim(data) || getCrossplanePauseState(data) === 'acknowledged') {
     return getCrossplaneStatus(data)
   }
 

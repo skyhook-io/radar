@@ -13,7 +13,7 @@ export function CrossplanePauseChip({ state, compact = false }: { state: ReturnT
   if (!state) return null
   return (
     <Tooltip content={pauseDescription(state)}>
-      <Badge severity="neutral" size={compact ? 'sm' : 'default'} className="gap-1 whitespace-nowrap">
+      <Badge severity="neutral" size={compact ? 'sm' : 'default'} className="gap-1 whitespace-nowrap shrink-0">
         <Pause className="w-3 h-3 shrink-0" aria-hidden />
         {state === 'requested' ? 'Pause requested' : compact ? 'Paused' : 'Reconciliation paused'}
       </Badge>
