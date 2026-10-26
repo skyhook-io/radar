@@ -221,7 +221,7 @@ import { CalicoInfraCell, CalicoPolicyCell } from './renderers/calico-cells'
 import { isCalicoPolicyResource, isCoreNetworkPolicyKind } from './resource-utils-calico'
 import { useRegisterShortcut, useRegisterShortcuts, type KeyboardShortcut } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
-import type { SelectedKindInfo, SidebarCategoryWorkspace } from './ResourcesSidebar'
+import type { SelectedKindInfo, SidebarCategoryWorkspace, SidebarDisplayState } from './ResourcesSidebar'
 import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick, type NamespacedRef } from '../compare'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 
@@ -3772,6 +3772,8 @@ export function ResourcesView({
   // a drawer over the table, opened from the toolbar and closed by a pick.
   const isPhone = usePhoneLayout()
   const [kindsDrawerOpen, setKindsDrawerOpen] = useState(false)
+  // The drawer unmounts its sidebar on close; keep its display settings here.
+  const [drawerSidebarState, setDrawerSidebarState] = useState<SidebarDisplayState>(() => ({ showEmptyKinds: false, favoritesExpanded: pinned.length > 0 }))
   useEffect(() => {
     if (!isPhone) setKindsDrawerOpen(false)
   }, [isPhone])
@@ -6108,9 +6110,12 @@ export function ResourcesView({
     onOpenWorkloadLogs,
   }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
-  const renderSidebar = (className?: string) => (
+  const renderSidebar = (className?: string, inDrawer = false) => (
     <ResourcesSidebar
       className={className}
+      displayState={inDrawer ? drawerSidebarState : undefined}
+      onDisplayStateChange={inDrawer ? setDrawerSidebarState : undefined}
+      containEscape={inDrawer}
       selectedKind={selectedKind}
       onSelectedKindChange={(kind) => {
         shouldPushHistory.current = true
@@ -6162,7 +6167,7 @@ export function ResourcesView({
           ariaLabel="Resource kinds"
           className="!ml-0 !mr-auto h-full w-72 max-w-[85vw] self-stretch overflow-hidden rounded-none border-y-0 border-l-0"
         >
-          {renderSidebar('!w-full h-full border-r-0')}
+          {renderSidebar('!w-full h-full border-r-0', true)}
         </DialogPortal>
       )}
 
@@ -6578,7 +6583,7 @@ export function ResourcesView({
 
         {/* Bulk actions bar */}
         {showBulkBar && (
-          <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0">
+          <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0 phone:flex-wrap phone:gap-2 phone:px-3">
             <span className="text-sm font-medium text-theme-text-primary">
               {checkedItems.length} selected
             </span>
