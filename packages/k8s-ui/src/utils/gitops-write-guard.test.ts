@@ -540,6 +540,16 @@ describe('manager answer composition', () => {
     expect(g.level).toBe('may-revert')
   })
 
+  // The schedule belongs to the Job's own CronJob, even when the answer came
+  // from an ancestor above it.
+  it("names the Job's own CronJob for future runs, not the answering ancestor", () => {
+    const op = { kind: 'Widget', group: 'example.io', namespace: 'db', name: 'pg' }
+    const g = run({ state: 'agree', lead: a, direct: { object: subject }, via: { object: op, recorders: [a], claims: [{ manager: a, source: 'argo-tracking-id', check: 'recorded' }] } }, [{ scope: 'delete' }], { operatorOwner: { kind: 'CronJob', name: 'backup' } })
+    expect(g.summary).toContain('but CronJob ')
+    expect(g.summary).toContain('backup can still create new ones on its schedule')
+    expect(g.summary).not.toContain('Widget db/pg can still')
+  })
+
   it('an informational note on a list-only answer says listed, not managed', () => {
     const g = run({ state: 'listed', lead: a, direct: { object: subject, recorders: [a] } }, [{ scope: 'create-child' }])
     expect(g.level).toBe('info')

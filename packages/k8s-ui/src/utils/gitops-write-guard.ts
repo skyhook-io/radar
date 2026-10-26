@@ -446,7 +446,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
         reason: write.scope === 'delete'
           ? !NON_RECREATING_CONTROLLERS.includes(operatorOwnerOf(input)?.kind ?? '')
             ? `Its controller recreates it from ${parent}.`
-            : `It was created from ${parent}; nothing is expected to recreate it, but ${source} can still create new ones on its schedule.`
+            : `It was created from ${parent}; nothing is expected to recreate it, but ${operatorOwnerOf(input)!.kind} ${input.target.namespace ? `${input.target.namespace}/` : ''}${operatorOwnerOf(input)!.name} can still create new ones on its schedule.`
           : `This resource is generated from ${parent}; changes to the parent may replace it.`,
       }
     }
