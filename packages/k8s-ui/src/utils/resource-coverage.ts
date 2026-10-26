@@ -104,12 +104,14 @@ export function boundedCountLabel(count: number, lowerBound: boolean): string {
   return count === 0 ? '–' : `≥${count.toLocaleString()}`
 }
 
-/**
- * One kind's count. Only a partial count is bounded: a count Radar's
- * collection narrowed is exact within the namespaces Radar collects, which
- * the kind's list says. A total over several kinds is a lower bound either
- * way (see isLowerBound): they may be collected in different namespaces.
- */
+/** One kind's count: "≥N" when the read is a lower bound for the cluster (see isLowerBound). */
 export function resourceCountLabel(count: number, coverage: ResourceCoverage | undefined): string {
-  return boundedCountLabel(count, coverage?.status === 'partial')
+  return boundedCountLabel(count, isLowerBound(coverage))
+}
+
+/** Why a kind's count is a lower bound, or undefined when it is exact. */
+export function resourceCountHint(coverage: ResourceCoverage | undefined): string | undefined {
+  if (coverage?.status === 'partial') return 'Count in the namespaces Radar could read; more may exist outside them.'
+  if (isLowerBound(coverage)) return 'Radar collects this kind only in some namespaces; more may exist elsewhere.'
+  return undefined
 }

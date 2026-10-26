@@ -1,5 +1,5 @@
 import type { ResourceCoverage } from '../../types/resource-coverage'
-import { boundedCountLabel, isEmptyCount, isLowerBound, resourceCountLabel } from '../../utils/resource-coverage'
+import { boundedCountLabel, isEmptyCount, isLowerBound, resourceCountHint, resourceCountLabel } from '../../utils/resource-coverage'
 import { useState, useMemo, useEffect, useRef, useCallback, useId, forwardRef, type ComponentType } from 'react'
 import {
   Search,
@@ -218,7 +218,7 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
               </span>
             </Tooltip>
           ) : (
-            <Tooltip disabled={coverage?.status !== 'partial'} content="Count in the namespaces Radar could read; more may exist outside them." position="left">
+            <Tooltip disabled={!resourceCountHint(coverage)} content={resourceCountHint(coverage)} position="left">
               <span className={clsx(
                 'text-xs py-0.5 px-1 min-w-8 rounded text-center font-mono',
                 isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
@@ -761,12 +761,14 @@ export function ResourcesSidebar({
                     </span>
                   </Tooltip>
                 ) : (
-                  <span className={clsx(
-                    'badge font-mono',
-                    isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
-                  )}>
-                    {resourceCountLabel(count, resourceCoverage?.[kindKey])}
-                  </span>
+                  <Tooltip disabled={!resourceCountHint(resourceCoverage?.[kindKey])} content={resourceCountHint(resourceCoverage?.[kindKey])} position="left">
+                    <span className={clsx(
+                      'badge font-mono',
+                      isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
+                    )}>
+                      {resourceCountLabel(count, resourceCoverage?.[kindKey])}
+                    </span>
+                  </Tooltip>
                 )}
               </button>
             )

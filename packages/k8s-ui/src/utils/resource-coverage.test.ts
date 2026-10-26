@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ResourceReadCoverage } from '../types/resource-coverage'
-import { boundedCountLabel, isEmptyCount, isLowerBound, resourceCountLabel, resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from './resource-coverage'
+import { boundedCountLabel, isEmptyCount, isLowerBound, resourceCountHint, resourceCountLabel, resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from './resource-coverage'
 
 const partial: ResourceReadCoverage = {
   status: 'partial', scope: { type: 'all_namespaces' },
@@ -85,9 +85,15 @@ describe('empty lists and counts', () => {
     expect(isEmptyCount(0, collected)).toBe(false)
     expect(resourceEmptyMessage('Pod', collected, false)).toBe('No Pod found in the namespaces Radar collects')
   })
+  it('bounds a collection-narrowed count: Radar did not count the namespaces it does not collect', () => {
+    expect(resourceCountLabel(23, collected)).toBe('≥23')
+    expect(resourceCountLabel(0, collected)).toBe('–')
+    expect(resourceCountHint(collected)).toBe('Radar collects this kind only in some namespaces; more may exist elsewhere.')
+    expect(resourceCountHint(partial)).toBe('Count in the namespaces Radar could read; more may exist outside them.')
+    expect(resourceCountHint(complete)).toBeUndefined()
+  })
   it('shows complete and unknown counts plainly, and hides their zeros', () => {
     expect(resourceCountLabel(23, complete)).toBe('23')
-    expect(resourceCountLabel(23, collected)).toBe('23')
     expect(resourceCountLabel(23, { status: 'unknown' })).toBe('23')
     expect(resourceCountLabel(0, { status: 'unknown' })).toBe('0')
     expect(resourceCountLabel(23, undefined)).toBe('23')
