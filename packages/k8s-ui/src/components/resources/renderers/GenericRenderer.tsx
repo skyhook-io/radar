@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
-import { getCrossplanePauseState, getCrossplaneStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
+import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
 
@@ -19,7 +19,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
 
   // Determine health status from conditions or status fields
   const acknowledgedPause = getCrossplanePauseState(data) === 'acknowledged'
-  const healthStatus = acknowledgedPause && getCrossplaneStatus(data).level === 'neutral' ? null : getHealthStatus(data)
+  const healthStatus = getHealthStatus(data)
 
   // Extract important fields from spec and status
   const statusFields = getImportantFields(status, 'status')
@@ -158,8 +158,9 @@ const BANNER_TYPE: Record<HealthLevel, HealthType> = {
 }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
-  const derived = getGenericResourceStatus(resource)
-  if (!derived) return null
+  const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
+  const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
+  if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
   return { type: BANNER_TYPE[derived.tone], label: derived.text, message: derived.reason }
 }
 

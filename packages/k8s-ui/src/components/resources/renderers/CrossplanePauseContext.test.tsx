@@ -7,7 +7,7 @@ import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import { WorkloadView } from '../../workload/WorkloadView'
 import { ResourceRendererDispatch, diagnoseHealthHint, getResourceStatus } from '../../shared/ResourceRendererDispatch'
 import { getCellFilterValue } from '../resource-utils'
-import { getCrossplanePauseState } from '../resource-utils-crossplane'
+import { getCrossplanePauseState, getCrossplaneStatusReason } from '../resource-utils-crossplane'
 
 const pause = { type: 'Synced', status: 'False', reason: 'ReconcilePaused', message: 'controller pause observation' }
 const base = {
@@ -119,4 +119,22 @@ it('does not infer Crossplane from an annotation-only request without shape or a
 
 it('does not infer controller acknowledgement from a non-list condition field on an uncurated object', () => {
   expect(getCrossplanePauseState({ ...base, spec: {}, status: { conditions: { Synced: 'False' } } })).toBe('requested')
+})
+
+it.each([
+  ['Failed', { phase: 'Failed', message: 'independent phase failure', conditions: [{ type: 'Ready', status: 'True' }, pause] }],
+  ['Not Healthy', { conditions: [{ type: 'Healthy', status: 'False', message: 'independent health failure' }, pause] }],
+] as const)('preserves independent generic %s evidence while qualifying early pause without mutating the resource', (label, reportedStatus) => {
+  const resource = { ...base, kind: 'EarlyXR', spec: {}, status: reportedStatus }
+  const before = structuredClone(resource)
+  Object.freeze(resource.status.conditions)
+  Object.freeze(resource.status)
+  Object.freeze(resource)
+  const html = renderToStaticMarkup(<ResourceRendererDispatch resource={{ kind: 'earlyresources', namespace: 'test', name: 'archive' }} data={resource} onCopy={() => {}} copied={null} showCommonSections={false} />)
+  expect(html).toContain(label)
+  expect(html).toContain('independent')
+  expect(html).toContain('last reported reconciliation paused')
+  expect(getResourceStatus('earlyresources', resource)).toMatchObject({ text: label, level: 'unhealthy' })
+  expect(getCrossplaneStatusReason(resource)).toContain('independent')
+  expect(resource).toEqual(before)
 })

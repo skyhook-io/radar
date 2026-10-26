@@ -7,6 +7,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
+import { getGenericResourceStatus, type GenericStatus } from './generic-status'
 import type { ConditionTone } from '../ui/drawer-components'
 
 interface CrossplaneCondition {
@@ -155,6 +156,17 @@ export function getCrossplanePauseState(data: any): 'requested' | 'acknowledged'
     ? 'acknowledged' : 'requested'
 }
 
+export function getCrossplaneIndependentStatus(data: any): GenericStatus | null {
+  if (getCrossplanePauseState(data) !== 'acknowledged') return getGenericResourceStatus(data)
+  return getGenericResourceStatus({
+    ...data,
+    status: {
+      ...data.status,
+      conditions: data.status.conditions.filter((condition: CrossplaneCondition) => !isExpectedCrossplanePauseCondition(data, condition)),
+    },
+  })
+}
+
 export function getCrossplaneConditionTone(data: any, condition: CrossplaneCondition): ConditionTone | undefined {
   return isExpectedCrossplanePauseCondition(data, condition) ? 'neutral' : undefined
 }
@@ -198,6 +210,11 @@ export function getCrossplaneStatus(data: any): StatusBadge {
   }
   const ready = findCondition(data, 'Ready')
   const synced = findCondition(data, 'Synced')
+  const independent = !isManagedResource(data) && !isComposite(data) && getCrossplanePauseState(data) === 'acknowledged'
+    ? getCrossplaneIndependentStatus(data) : null
+  if (independent && (independent.tone === 'unhealthy' || independent.tone === 'alert' || independent.tone === 'degraded')) {
+    return { text: independent.text, color: healthColors[independent.tone], level: independent.tone }
+  }
 
   if (!ready && !synced) {
     return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
@@ -226,6 +243,9 @@ export function getCrossplaneStatus(data: any): StatusBadge {
  * detail views.
  */
 export function getCrossplaneStatusReason(data: any): string | null {
+  const independent = !isManagedResource(data) && !isComposite(data) && getCrossplanePauseState(data) === 'acknowledged'
+    ? getCrossplaneIndependentStatus(data) : null
+  if (independent && (independent.tone === 'unhealthy' || independent.tone === 'alert' || independent.tone === 'degraded')) return independent.reason ?? null
   const ready = findCondition(data, 'Ready')
   const reportedSynced = findCondition(data, 'Synced')
   const synced = reportedSynced && !isExpectedCrossplanePauseCondition(data, reportedSynced) ? reportedSynced : undefined

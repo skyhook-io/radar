@@ -425,7 +425,7 @@ func TestPrinterColumnResponsePreservesConditionSource(t *testing.T) {
 	columns, cells := tableFromCRD(context.Background(), crdWith("v1", []map[string]any{
 		pcCol("Synced", path, "string", 0),
 		pcCol("Ready", ".status.unrelated", "boolean", 0),
-	}), []*unstructured.Unstructured{pcObj("a", map[string]any{"status": map[string]any{
+	}), "v1", []*unstructured.Unstructured{pcObj("a", map[string]any{"status": map[string]any{
 		"conditions": []any{map[string]any{"type": "Synced", "status": "False"}},
 		"unrelated":  false,
 	}})})
