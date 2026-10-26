@@ -2448,6 +2448,16 @@
               "reason": "radar_kind_not_collected"
             },
             {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
+              "reason": "radar_kind_not_collected"
+            },
+            {
               "group": "apps",
               "kind": "ControllerRevision",
               "reason": "radar_kind_not_collected"
@@ -2665,6 +2675,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -2955,6 +2975,16 @@
               "reason": "radar_kind_not_collected"
             },
             {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
+              "reason": "radar_kind_not_collected"
+            },
+            {
               "group": "apps",
               "kind": "ControllerRevision",
               "reason": "radar_kind_not_collected"
@@ -3043,6 +3073,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3185,6 +3225,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4040,6 +4090,16 @@
               "reason": "radar_kind_not_collected"
             },
             {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
+              "reason": "radar_kind_not_collected"
+            },
+            {
               "group": "apps",
               "kind": "ControllerRevision",
               "reason": "radar_kind_not_collected"
@@ -4143,6 +4203,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4295,6 +4365,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
               "reason": "radar_kind_not_collected"
             },
             {
