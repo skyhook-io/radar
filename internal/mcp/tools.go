@@ -131,7 +131,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
 			"get_dashboard or issues first. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=stored Synced=False/ReconcilePaused. Independent of readiness; absence does not exclude other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
 		Annotations: readOnly,
 	}, logToolCall("list_resources", handleListResources))
 
@@ -156,7 +156,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"carry `application_configuration_change: true`, it is a factual edit " +
 			"classification and narrow ranking hint, not a causal or universal relevance verdict. " +
 			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=stored Synced=False/ReconcilePaused. Independent of readiness; absence does not exclude other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
@@ -477,7 +477,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
 			"summaryContext. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
 			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=stored Synced=False/ReconcilePaused. Independent of readiness; absence does not exclude other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 

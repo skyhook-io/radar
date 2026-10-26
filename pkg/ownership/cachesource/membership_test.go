@@ -406,3 +406,42 @@ func TestRecordingManagersCostDoesNotGrowWithTheManagersList(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordingManagersOfDynamicNativeAndForeignCollidingKinds(t *testing.T) {
+	members := []resourceid.Ref{
+		{Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition", Name: "widgets.example.org"},
+		{Group: "apiregistration.k8s.io", Kind: "APIService", Name: "v1.metrics.example.org"},
+		{Group: "example.org", Kind: "CustomResourceDefinition", Namespace: "team", Name: "foreign-crd"},
+		{Group: "example.org", Kind: "APIService", Namespace: "team", Name: "foreign-api"},
+	}
+	app := ownershiptest.Object{
+		Ref:        resourceid.Ref{Group: ownership.ArgoApplication.Group, Kind: ownership.ArgoApplication.Kind, Namespace: "argocd", Name: "native-apis"},
+		APIVersion: "argoproj.io/v1alpha1", UID: "uid-native-apis", ResourceVersion: "1",
+		Membership: ownership.MembersRecorded, Members: members, DestinationNamespace: "shop",
+	}
+	w := ownershiptest.World{Resources: ownershiptest.Resources(), Collection: map[resourceid.GroupKind]ownershiptest.Collection{}, Objects: []ownershiptest.Object{app}}
+	for _, k := range ownershiptest.Kinds {
+		w.Collection[k.GroupKind] = ownershiptest.Collection{OnDemand: !k.Typed}
+	}
+	for _, member := range members {
+		resource := "apiservices"
+		if member.Kind == "CustomResourceDefinition" {
+			resource = "customresourcedefinitions"
+		}
+		w.Resources = append(w.Resources, ownership.ServedResource{Group: member.Group, Version: "v1", Kind: member.Kind, Resource: resource, Namespaced: member.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
+	}
+	s := begin(t, render(t, w).source())
+	got := s.Members(app.Ref)
+	if got.Membership != ownership.MembersRecorded || len(got.Members) != len(members) {
+		t.Fatalf("Members = %+v", got)
+	}
+	for _, member := range members {
+		if !slices.Contains(got.Members, member) {
+			t.Fatalf("member placement changed: missing %v in %v", member, got.Members)
+		}
+		recorders := s.RecordingManagers(member)
+		if len(recorders.Managers) != 1 || recorders.Managers[0].Ref != app.Ref || !recorders.Complete() {
+			t.Fatalf("RecordingManagers(%v) = %+v, want %v alone", member, recorders, app.Ref)
+		}
+	}
+}

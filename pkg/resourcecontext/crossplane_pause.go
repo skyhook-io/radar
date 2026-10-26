@@ -19,8 +19,8 @@ const (
 )
 
 // CrossplanePauseFor reports annotation intent even before an XR or Claim is
-// bound. Native objects converted to unstructured stay excluded. Requested does
-// not establish that a controller honors the annotation.
+// bound. Known built-in identities stay excluded after conversion to unstructured.
+// Requested does not establish that a controller honors the annotation.
 // An absent value makes no claim about policy-based pause or a prior resume.
 func CrossplanePauseFor(obj runtime.Object) CrossplanePauseState {
 	u, ok := obj.(*unstructured.Unstructured)
