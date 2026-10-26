@@ -1055,7 +1055,7 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 
 **Topology:** Radar connects a v1 Claim to its bound XR, and an XR to its composed Managed Resources. Edges follow Crossplane's v1 and v2 spec references; only resources Radar already watches and can read are shown.
 
-**Issues:** An explicit pause (`crossplane.io/paused: "true"` with `Synced=False/ReconcilePaused`) does not add a warning. Independent failure conditions remain visible, including while paused.
+**Issues:** `Synced=False/ReconcilePaused` does not add a warning when `crossplane.io/paused` is exactly `"true"`. Other failure conditions remain eligible under the usual condition and generation filters; unlike Cluster Audit, the pause annotation does not exclude the whole resource from Issues.
 
 **Cluster Audit:** New `crossplaneStuck` check flags MRs/XRs/Claims reporting `Ready=False` or `Synced=False` for more than 5 minutes (Medium) or 30 minutes (High). Synced=False takes priority over Ready=False because it usually indicates the actionable problem (bad ProviderConfig, malformed spec, missing IAM). Same severity ramp as `stuckTerminating` for cross-surface consistency. Paused resources are deliberately suppressed.
 
