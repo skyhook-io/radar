@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -775,6 +776,89 @@ func TestCurrentConditionGenerationDoesNotReviveOlderRepresentation(t *testing.T
 	u.Object["status"].(map[string]any)["v1beta2"] = map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable", "observedGeneration": int64(1)}}}
 	if c, found := findActionableCondition(u); !found || c.ObservedGeneration != 1 || !strings.Contains(c.Message, "generation 1") {
 		t.Fatalf("current representation must stay authoritative and qualified: %+v found=%v", c, found)
+	}
+}
+
+func TestDeletionConditionSelectionRetainsSpecificEvidence(t *testing.T) {
+	failedAt := time.Now().Add(-20 * time.Minute).UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name                                       string
+		deletionAge                                time.Duration
+		missingDeletion, staleDeleting, staleError bool
+		error, errorFirst, unknownOnset            bool
+		currentReady                               string
+		want                                       string
+	}{
+		{name: "recent deletion keeps older error", deletionAge: time.Minute, staleError: true, error: true, want: "Synced: ReconcileError"},
+		{name: "overdue deletion keeps older error", deletionAge: 11 * time.Minute, staleError: true, error: true, want: "Synced: ReconcileError"},
+		{name: "older error before overdue deletion", deletionAge: 11 * time.Minute, staleError: true, error: true, errorFirst: true, want: "Synced: ReconcileError"},
+		{name: "uncertain deletion keeps older error", missingDeletion: true, staleError: true, error: true, want: "Synced: ReconcileError"},
+		{name: "older deletion yields to current error", deletionAge: 11 * time.Minute, staleDeleting: true, error: true, want: "Synced: ReconcileError"},
+		{name: "older deletion keeps qualification", deletionAge: 11 * time.Minute, staleDeleting: true, want: "Ready: Deleting"},
+		{name: "older deletion cannot revive expected progress", deletionAge: time.Minute, staleDeleting: true},
+		{name: "unknown time does not inherit deletion onset", deletionAge: 11 * time.Minute, error: true, unknownOnset: true, want: "Synced: ReconcileError"},
+		{name: "modern unknown supersedes older deletion", deletionAge: 11 * time.Minute, currentReady: "Unknown"},
+		{name: "modern true supersedes older deletion", deletionAge: 11 * time.Minute, currentReady: "True"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deleting := map[string]any{"type": "Ready", "status": "False", "reason": "Deleting", "message": "cleanup requested", "lastTransitionTime": failedAt.Add(-time.Hour).Format(time.RFC3339)}
+			if tc.staleDeleting {
+				deleting["observedGeneration"] = int64(1)
+			}
+			conds := []map[string]any{deleting}
+			if tc.error {
+				failure := map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "delete failed: denied"}
+				if tc.staleError {
+					failure["observedGeneration"] = int64(1)
+				}
+				if !tc.unknownOnset {
+					failure["lastTransitionTime"] = failedAt.Format(time.RFC3339)
+				}
+				if tc.errorFirst {
+					conds = append([]map[string]any{failure}, conds...)
+				} else {
+					conds = append(conds, failure)
+				}
+			}
+			u := rolloutWithConditions(conds)
+			u.SetName("example")
+			u.SetNamespace("test")
+			u.SetGeneration(2)
+			if !tc.missingDeletion {
+				ts := metav1.NewTime(time.Now().Add(-tc.deletionAge))
+				u.SetDeletionTimestamp(&ts)
+			}
+			if tc.currentReady != "" {
+				u.Object["status"].(map[string]any)["v1beta2"] = rolloutWithConditions([]map[string]any{{"type": "Ready", "status": tc.currentReady}}).Object["status"]
+			}
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			for _, grouped := range []bool{false, true} {
+				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
+				if tc.want == "" {
+					if len(got) != 0 {
+						t.Fatalf("expected quiet condition, got %+v", got)
+					}
+					continue
+				}
+				if len(got) != 1 || got[0].Reason != tc.want {
+					t.Fatalf("want %s, got %+v", tc.want, got)
+				}
+				wantMessage, wantAt, stale := "cleanup requested", failedAt.Add(-time.Hour), tc.staleDeleting
+				if tc.error {
+					wantMessage, wantAt, stale = "delete failed: denied", failedAt, tc.staleError
+				}
+				if stale {
+					wantMessage = "Condition was last reported for generation 1; current resource generation is 2. " + wantMessage
+				}
+				if got[0].Message != wantMessage || got[0].OnsetUnknown != tc.unknownOnset {
+					t.Fatalf("selected observation changed: %+v", got[0])
+				}
+				if !tc.unknownOnset && !got[0].FirstSeen.Equal(wantAt) {
+					t.Fatalf("wrong onset %v, want %v", got[0].FirstSeen, wantAt)
+				}
+			}
+		})
 	}
 }
 
