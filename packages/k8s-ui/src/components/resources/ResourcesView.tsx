@@ -6182,7 +6182,7 @@ export function ResourcesView({
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
         {/* Toolbar */}
         {/* Phones: the toolbar wraps and search takes its own full row. */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0 phone:flex-wrap phone:gap-2 phone:px-3">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0 phone:relative phone:flex-wrap phone:gap-2 phone:px-3">
           {!hideSidebar && isPhone && kindsButton}
           <div className="flex-1 min-w-0 phone:order-last phone:basis-full">
             <div className="relative max-w-md">
@@ -6267,9 +6267,11 @@ export function ResourcesView({
             </div>
           </div>
 
-          {/* Problems dropdown (pods only) */}
+          {/* Problems dropdown (pods only). On phones the toolbar wraps, so this
+              menu and Labels' anchor to the toolbar (full width below it)
+              rather than to a trigger that may sit near either edge. */}
           {filterOptions?.problems && filterOptions.problems.length > 0 && (
-            <div className="relative" ref={problemsDropdownRef}>
+            <div className="relative phone:static" ref={problemsDropdownRef}>
               <button
                 onClick={() => { setShowProblemsDropdown(!showProblemsDropdown); setShowLabelsDropdown(false) }}
                 className={clsx(
@@ -6288,7 +6290,7 @@ export function ResourcesView({
                 )}
               </button>
               {showProblemsDropdown && (
-                <div className="absolute right-0 top-full mt-1 min-w-48 bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
+                <div className="absolute right-0 top-full mt-1 min-w-48 phone:left-3 phone:right-3 phone:min-w-0 bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
                   {problemFilters.length > 0 && (
                     <div className="flex items-center justify-between px-3 py-1.5 border-b border-theme-border">
                       <span className="text-xs font-medium text-theme-text-secondary">Problems</span>
@@ -6319,7 +6321,7 @@ export function ResourcesView({
 
           {/* Labels dropdown */}
           {filterOptions?.labels && filterOptions.labels.length > 0 && (
-            <div className="relative" ref={labelsDropdownRef}>
+            <div className="relative phone:static" ref={labelsDropdownRef}>
               <button
                 onClick={() => { setShowLabelsDropdown(!showLabelsDropdown); setShowProblemsDropdown(false); setLabelSearch('') }}
                 className={clsx(
@@ -6343,7 +6345,7 @@ export function ResourcesView({
                   ? labels.filter(l => l.value.toLowerCase().includes(labelSearch.toLowerCase()))
                   : labels
                 return (
-                  <div className="absolute right-0 top-full mt-1 min-w-64 max-w-80 bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
+                  <div className="absolute right-0 top-full mt-1 min-w-64 max-w-80 phone:left-3 phone:right-3 phone:min-w-0 phone:max-w-none bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
                     <div className="flex items-center gap-2 p-2 border-b border-theme-border">
                       <div className="relative flex-1">
                         <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary" />
