@@ -95,6 +95,17 @@ func defaultExecCommand(override, fallback, podOS string) []string {
 	return []string{"sh", "-c", defaultShellScript}
 }
 
+func defaultExecContainer(pod *corev1.Pod) string {
+	if container := k8score.DefaultExecContainer(pod); container != "" {
+		return container
+	}
+	// An interactive terminal still needs a default for proxy-only gateway pods.
+	if len(pod.Spec.Containers) > 0 {
+		return pod.Spec.Containers[0].Name
+	}
+	return ""
+}
+
 // osNodeLabelsLookup is injected so detectPodOS is unit-testable without a
 // fake client.
 type osNodeLabelsLookup func(ctx context.Context, nodeName string) (map[string]string, error)
@@ -335,7 +346,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 				podOS = detectPodOS(r.Context(), pod, nodeLabelsLookupFor(client))
 			}
 			if container == "" {
-				container = k8score.DefaultExecContainer(pod)
+				container = defaultExecContainer(pod)
 				execManager.mu.Lock()
 				session.Container = container
 				execManager.mu.Unlock()

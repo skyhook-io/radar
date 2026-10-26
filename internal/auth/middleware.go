@@ -238,8 +238,8 @@ func AuditLog(r *http.Request, namespace, name string) {
 }
 
 type AuditActionDetails struct {
-	Kind string
-	Group string
+	Kind          string
+	Group         string
 	Action        string
 	Namespace     string
 	Name          string

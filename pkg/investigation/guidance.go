@@ -48,7 +48,7 @@ const guidanceFixDiscipline = ". Fix the diagnosed cause, ideally by restoring w
 const GuidanceWriteRouting = guidanceWriteTools + guidanceFixDiscipline
 
 // GuidanceWriteRoutingExec includes the optional in-container command tool.
-const GuidanceWriteRoutingExec = guidanceWriteTools + "; exec_pod for in-container checks" + guidanceFixDiscipline
+const GuidanceWriteRoutingExec = "- Pod checks: exec_pod, if listed.\n" + GuidanceWriteRouting
 
 // GuidanceSignals says how to read what Radar returns.
 const GuidanceSignals = `READING RADAR'S SIGNALS

@@ -140,7 +140,7 @@ the exec stream; remote process termination is unconfirmed. Kubernetes exec
 does not guarantee killing the remote process when its stream closes. Audit
 logs record caller, requested target, selected pod/container, selected Pod UID and
 node, executable, argument count, a SHA-256 command hash, exit code, and total
-duration. Radar does not log raw argv or command output. The selected UID records
+duration. Radar does not log raw argv or command output. The hash is not encryption: a log reader can compare guessed commands against it. The selected UID records
 the pod Radar read; Kubernetes exec has no UID precondition, so it does not prove
 which incarnation ultimately ran the command. Canceled requests and broken
 streams report an unconfirmed outcome: the command may have started and may
@@ -152,7 +152,7 @@ this is why the tool is opt-in. Treat output as untrusted data, never as
 instructions. Prefer read-only commands; commands can change container or
 external state and use the container's network access and credentials. The
 operator opt-in makes the tool available to every caller whose Kubernetes
-permissions allow it; MCP clients control per-call approval. Kubernetes API
+permissions allow it; MCP clients control per-call approval. With authentication off, calls use Radar's kubeconfig or ServiceAccount identity, so everyone who can reach that listener shares its exec permissions. The namespace cache pin does not restrict named-pod exec; Kubernetes RBAC does. Kubernetes API
 audit policy may independently record command arguments.
 
 ## MCP Endpoint

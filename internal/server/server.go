@@ -100,7 +100,6 @@ type Server struct {
 	mcpApplyHandler         http.Handler
 	mcpReadOnlyHandler      http.Handler
 	mcpInvestigationHandler http.Handler
-	mcpApplyHandler         http.Handler
 	mcpExecTools            bool
 	diagConfig              *DiagConfig
 	effectiveConfig         *config.Config // running config for GET /api/config
@@ -219,7 +218,6 @@ type Config struct {
 	MCPApplyHandler         http.Handler
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
-	MCPApplyHandler         http.Handler                // internal remediation MCP handler without exec tools
 	MCPExecTools            bool                        // effective exec tool registration on the public MCP handler
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
 	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
@@ -264,7 +262,6 @@ func New(cfg Config) *Server {
 		mcpApplyHandler:         cfg.MCPApplyHandler,
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
-		mcpApplyHandler:         cfg.MCPApplyHandler,
 		mcpExecTools:            cfg.MCPExecTools,
 		diagConfig:              cfg.DiagConfig,
 		effectiveConfig:         cfg.EffectiveConfig,
@@ -997,7 +994,6 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-apply/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-investigation/.well-known/*", http.NotFoundHandler())
-	r.Handle("/mcp-apply/.well-known/*", http.NotFoundHandler())
 
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
@@ -1019,11 +1015,6 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
 	} else {
 		r.Mount("/mcp-investigation", http.NotFoundHandler())
-	}
-	if s.mcpApplyHandler != nil {
-		r.Mount("/mcp-apply", s.mcpApplyHandler)
-	} else {
-		r.Mount("/mcp-apply", http.NotFoundHandler())
 	}
 
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend

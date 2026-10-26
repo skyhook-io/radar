@@ -13,6 +13,7 @@ import (
 )
 
 func TestApplyServerDoesNotExposeDelete(t *testing.T) {
+	enableExecToolsForTest(t)
 	ctx := context.Background()
 	server := newApplyServer()
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "test"}, nil)
@@ -26,6 +27,9 @@ func TestApplyServerDoesNotExposeDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
+	if strings.Contains(cs.InitializeResult().Instructions, "exec_pod") {
+		t.Fatal("Apply instructions advertise excluded exec")
+	}
 	if !strings.Contains(cs.InitializeResult().Instructions, "patch_resource") {
 		t.Fatal("Apply lost write routing guidance")
 	}
@@ -35,8 +39,8 @@ func TestApplyServerDoesNotExposeDelete(t *testing.T) {
 	}
 	patch := false
 	for _, tool := range listed.Tools {
-		if tool.Name == "delete_resource" {
-			t.Fatal("Apply exposes deletion before its approval includes a preview")
+		if tool.Name == "delete_resource" || tool.Name == "exec_pod" {
+			t.Fatalf("Apply exposes restricted tool %s", tool.Name)
 		}
 		patch = patch || tool.Name == "patch_resource"
 	}
@@ -46,6 +50,10 @@ func TestApplyServerDoesNotExposeDelete(t *testing.T) {
 	result, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "delete_resource", Arguments: map[string]any{"kind": "ConfigMap", "name": "x", "namespace": "demo"}})
 	if err == nil && (result == nil || !result.IsError) {
 		t.Fatalf("unlisted deletion accepted: %+v", result)
+	}
+	result, err = cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "exec_pod", Arguments: map[string]any{"name": "x", "namespace": "demo", "command": []string{"true"}}})
+	if err == nil && (result == nil || !result.IsError) {
+		t.Fatalf("unlisted exec accepted: %+v", result)
 	}
 	if investigation.IsWriteTool("delete_resource") {
 		t.Fatal("Diagnose allowlist enables deletion without preview approval")

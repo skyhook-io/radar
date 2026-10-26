@@ -73,16 +73,10 @@ func NewReadOnlyHandler() http.Handler {
 	return handlerForServer(newServer(false, false, serverInstructions(false)))
 }
 
-// NewApplyHandler exposes remediation tools without container command execution
-// for every built-in agent, independently of its client-side tool restrictions.
-func NewApplyHandler() http.Handler {
-	return handlerForServer(newServer(true, false, ""))
-}
-
 // newApplyServer omits deletion until the built-in approval flow presents its
 // preview. Removing it here enforces the boundary for every agent client.
 func newApplyServer() *mcpsdk.Server {
-	server := newServer(true, serverInstructions(true))
+	server := newServer(true, false, investigation.GeneralGuidance(true))
 	server.RemoveTools("delete_resource")
 	return server
 }

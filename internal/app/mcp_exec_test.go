@@ -64,8 +64,8 @@ func TestMCPExecFlagGating(t *testing.T) {
 			} else if applyRec.Code != http.StatusNotFound {
 				t.Fatalf("disabled Apply mount: %d", applyRec.Code)
 			}
-			if strings.Contains(applyRec.Body.String(), `"name":"exec_pod"`) {
-				t.Fatal("exec_pod registered on the Apply mount")
+			if strings.Contains(applyRec.Body.String(), `"name":"exec_pod"`) || strings.Contains(applyRec.Body.String(), `"name":"delete_resource"`) {
+				t.Fatal("restricted tool registered on the Apply mount")
 			}
 		})
 	}

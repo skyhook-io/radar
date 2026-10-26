@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -430,6 +431,31 @@ func TestLooksLikeShellNotFound(t *testing.T) {
 			got := looksLikeShellNotFound(tc.errMsg)
 			if got != tc.want {
 				t.Errorf("looksLikeShellNotFound(%q) = %v, want %v (%s)", tc.errMsg, got, tc.want, tc.comment)
+			}
+		})
+	}
+}
+
+func TestDefaultExecContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		containers       []string
+		annotation, want string
+	}{
+		{name: "mesh and app", containers: []string{"istio-proxy", "app"}, want: "app"},
+		{name: "proxy only", containers: []string{"istio-proxy", "linkerd-proxy"}, want: "istio-proxy"},
+		{name: "explicit annotation", containers: []string{"first", "second"}, annotation: "second", want: "second"},
+		{name: "missing annotation", containers: []string{"first"}, annotation: "missing", want: "first"},
+		{name: "no containers"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{}
+			pod.Annotations = map[string]string{k8score.DefaultContainerAnnotation: tc.annotation}
+			for _, name := range tc.containers {
+				pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})
+			}
+			if got := defaultExecContainer(pod); got != tc.want {
+				t.Fatalf("container=%q want %q", got, tc.want)
 			}
 		})
 	}
