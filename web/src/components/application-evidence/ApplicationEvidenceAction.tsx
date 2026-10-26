@@ -10,6 +10,15 @@ import { collectApplicationEvidence, type ApplicationEvidenceResult, type Eviden
 
 const vaultNames: Record<string, string> = { initialized: 'Initialized', sealed: 'Sealed', standby: 'Standby', performanceStandby: 'Performance standby' }
 const unavailableReasons: Record<string, string> = {
+  pod_not_running: 'The selected Pod is no longer running.',
+  container_not_running: 'The selected application container is not running.',
+  endpoint_port_not_declared: 'The Pod no longer declares the supported application endpoint port.',
+  unsupported_image: 'The Pod no longer uses a supported application image.',
+  ambiguous_target: 'Radar could not identify one supported application container in this Pod.',
+  host_network_unsupported: 'Evidence collection is not supported for Pods using host networking.',
+  cluster_unavailable: 'The Kubernetes connection is unavailable.',
+  invalid_target: 'The selected Pod identity is incomplete.',
+  unsupported_adapter: 'The requested application is not supported.',
   endpoint_denied: 'The application endpoint requires authorization.',
   endpoint_unavailable: 'The application endpoint could not be reached.',
   endpoint_response_unavailable: 'The application endpoint did not return a readable response.',
@@ -27,6 +36,7 @@ const unavailableReasons: Record<string, string> = {
   unexpected_http_status: 'The endpoint returned an unsupported HTTP status.',
   redirect_refused: 'The endpoint redirected the request; Radar does not follow redirects.',
 }
+const refreshTargetReasons = new Set(['target_changed', 'pod_not_running', 'container_not_running', 'endpoint_port_not_declared', 'unsupported_image', 'ambiguous_target', 'host_network_unsupported'])
 const applicationNames = { rabbitmq: 'RabbitMQ', nats: 'NATS', vault: 'Vault' }
 type AvailableCandidates = EvidenceCandidates & { context: string }
 interface Props { kind: string; group?: string; namespace: string; name: string; uid: string }
@@ -55,7 +65,7 @@ export function ApplicationEvidenceAction(props: Props) {
   const candidates = error instanceof ApiError && [403, 404, 409, 503].includes(error.status) ? [] : available.candidates
   return <>
     {retryError}
-    {!retryError && available.permissionCheckTimedOut && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified in time. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
+    {!retryError && (available.permissionCheckTimedOut || available.permissionCheckFailed) && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified{available.permissionCheckTimedOut ? ' in time' : ''}. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
     <EvidenceControl key={`${context}:${props.uid}`} data={{ ...available, context: available.context, candidates }} refreshing={isFetching} dataUpdatedAt={dataUpdatedAt} onTargetChanged={() => { void refetch() }} />
   </>
 }
@@ -97,7 +107,7 @@ function EvidenceDialog({ open, data, onClose, onTargetChanged }: { open: boolea
       const response = await collectApplicationEvidence(candidate, data.context, controller.signal)
       if (!controller.signal.aborted) {
         setResult(response)
-        if (response.reason === 'target_changed') onTargetChanged()
+        if (response.reason && refreshTargetReasons.has(response.reason)) onTargetChanged()
       }
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Collection failed')
@@ -123,7 +133,7 @@ function EvidenceDialog({ open, data, onClose, onTargetChanged }: { open: boolea
     <div className="mt-5 flex flex-wrap justify-end gap-2">
       {result && <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}
       <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={close}>{pending ? 'Cancel' : 'Close'}</button>
-      <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending || result?.reason === 'target_changed'} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
+      <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending || !!result?.reason && refreshTargetReasons.has(result.reason)} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
     </div>
   </DialogPortal>
 }
