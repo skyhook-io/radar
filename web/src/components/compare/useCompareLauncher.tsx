@@ -65,7 +65,8 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
       onClose={() => setOpen(false)}
       source={source}
       candidates={candidates}
-      coverageNote={resourceCoverageNotice(coverage) ?? resourceNarrowedNotice(coverage)}
+      coverageNote={resourceCoverageNotice(coverage)}
+      scopeNote={resourceNarrowedNotice(coverage)}
       loading={open && isPending}
       error={open ? error : null}
       onPick={handlePick}

@@ -21,12 +21,14 @@ afterEach(() => {
   element.remove()
 })
 
-function render(coverageNote?: string) {
+function render(notes: { coverageNote?: string; scopeNote?: string } = {}) {
   act(() => {
-    root.render(<CompareResourcePicker open onClose={() => {}} source={source} candidates={[source]} coverageNote={coverageNote} onPick={() => {}} />)
+    root.render(<CompareResourcePicker open onClose={() => {}} source={source} candidates={[source]} {...notes} onPick={() => {}} />)
   })
   return document.body.textContent ?? ''
 }
+
+const note = (text: string) => [...document.querySelectorAll('[role="status"]')].find((el) => el.textContent === text)
 
 describe('compare picker empty state', () => {
   it('says nothing else exists only when the list was complete', () => {
@@ -34,8 +36,23 @@ describe('compare picker empty state', () => {
   })
 
   it("doesn't claim nothing else exists after a qualified read", () => {
-    const text = render('Partial results. Radar read read-a; your permissions exclude configmaps in read-b.')
+    const partial = 'Partial results. Radar read read-a; your permissions exclude configmaps in read-b.'
+    const text = render({ coverageNote: partial })
     expect(text).toContain('No other configmaps found in what Radar could read.')
     expect(text).not.toContain('available to compare against')
+    expect(note(partial)?.className).toContain('text-warning-text')
+  })
+
+  it('shows a collection-narrowed list as scope, not as a warning', () => {
+    const scope = 'Radar collects this kind only in 1 namespace: read-a.'
+    const text = render({ scopeNote: scope })
+    expect(text).toContain('No other configmaps found in the collected namespaces.')
+    expect(note(scope)?.className).not.toContain('text-warning-text')
+  })
+
+  it('lets the warning win when both notes are set', () => {
+    const text = render({ coverageNote: 'Partial results.', scopeNote: 'Radar collects this kind only in 1 namespace: read-a.' })
+    expect(text).toContain('Partial results.')
+    expect(text).not.toContain('Radar collects this kind')
   })
 })

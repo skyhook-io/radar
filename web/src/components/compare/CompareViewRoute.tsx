@@ -116,7 +116,8 @@ export function CompareViewRoute() {
           source={source}
           sourceSide={pickerOpen}
           candidates={candidates}
-          coverageNote={resourceCoverageNotice(candidatesCoverage) ?? resourceNarrowedNotice(candidatesCoverage)}
+          coverageNote={resourceCoverageNotice(candidatesCoverage)}
+          scopeNote={resourceNarrowedNotice(candidatesCoverage)}
           loading={candidatesPending}
           error={candidatesError}
           onPick={handlePick}
