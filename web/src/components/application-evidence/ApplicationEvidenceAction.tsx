@@ -6,7 +6,7 @@ import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { TimeValue } from '@skyhook-io/k8s-ui/components/ui/ScheduleValue'
 import { ApiError, fetchJSON, useClusterInfo, useCapabilities, useRadarFeature } from '../../api/client'
-import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidates } from '../../api/application-evidence'
+import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidate, type EvidenceCandidates } from '../../api/application-evidence'
 
 const vaultNames: Record<string, string> = { initialized: 'Initialized', sealed: 'Sealed', standby: 'Standby', performanceStandby: 'Performance standby' }
 const unavailableReasons: Record<string, string> = {
@@ -25,7 +25,7 @@ const unavailableReasons: Record<string, string> = {
   port_forward_unavailable: 'Radar could not open a Kubernetes port-forward to this Pod.',
   pod_read_unavailable: 'Radar could not read the selected Pod.',
   pod_recheck_unavailable: 'Radar could not verify the Pod identity after collection.',
-  target_changed: 'The selected Pod changed. Close this dialog and reopen the collection action to select a current target.',
+  target_changed: 'The selected Pod changed. Select a current Pod before collecting again.',
   collection_busy: 'Other evidence collections are running. Try again shortly.',
   collection_cancelled: 'Collection was cancelled or timed out.',
   response_too_large: 'The endpoint response exceeded the collection size limit.',
@@ -58,15 +58,15 @@ export function ApplicationEvidenceAction(props: Props) {
     refetchOnWindowFocus: false,
   })
   const available = data
-  const retry = () => { permissionRetryTarget.current = subjectKey; void refetch() }
+  const retry = () => { if (available?.permissionCheckTimedOut || available?.permissionCheckFailed) permissionRetryTarget.current = subjectKey; void refetch() }
   if (support === 'unsupported' || !context || !props.namespace || capabilities?.deployment?.mode !== 'local') return null
-  const retryError = error && (permissionRetryTarget.current === subjectKey || available?.enabled && available.context === context && available.subjectUID === props.uid) ? <div className="mt-3"><AlertBanner variant="warning" title="Could not refresh application evidence" message={<>{error instanceof Error ? error.message : 'Could not verify application evidence permissions.'} <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></>} /></div> : null
+  const retryError = error && (permissionRetryTarget.current === subjectKey || available?.enabled && available.context === context && available.subjectUID === props.uid) ? <div className="mt-3"><AlertBanner variant="warning" title="Could not refresh application evidence" message={<>{error instanceof Error ? error.message : 'Could not verify application evidence permissions.'} <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : available?.permissionCheckTimedOut || available?.permissionCheckFailed ? 'Retry permission check' : 'Retry'}</button></>} /></div> : null
   if (!available?.enabled || !available.context || available.context !== context || available.subjectUID !== props.uid) return retryError
   const candidates = error instanceof ApiError && [403, 404, 409, 503].includes(error.status) ? [] : available.candidates
   return <>
     {retryError}
     {!retryError && (available.permissionCheckTimedOut || available.permissionCheckFailed) && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified{available.permissionCheckTimedOut ? ' in time' : ''}. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
-    <EvidenceControl key={`${context}:${props.uid}`} data={{ ...available, context: available.context, candidates }} refreshing={isFetching} dataUpdatedAt={dataUpdatedAt} onTargetChanged={() => { void refetch() }} />
+    <EvidenceControl key={`${context}:${props.uid}`} data={{ ...available, context: available.context, candidates }} refreshing={isFetching} dataUpdatedAt={dataUpdatedAt} onTargetChanged={retry} />
   </>
 }
 
@@ -80,22 +80,25 @@ function EvidenceControl({ data, refreshing, dataUpdatedAt, onTargetChanged }: {
   const names = [...new Set(current.candidates.map(item => applicationNames[item.application]))].join(', ')
   return <div className="mt-3">
     {current.candidates.length > 0 && <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => { setSnapshot(current); setSession(value => value + 1); setOpen(true) }}>Collect {names} evidence</button>}
-    {snapshot && <EvidenceDialog key={session} open={open} data={snapshot} onTargetChanged={() => { setRejectedAt(dataUpdatedAt); onTargetChanged() }} onClose={() => setOpen(false)} />}
+    {snapshot && <EvidenceDialog key={session} open={open} data={snapshot} currentData={current} refreshing={refreshing} onTargetChanged={() => { setRejectedAt(dataUpdatedAt); onTargetChanged() }} onClose={() => setOpen(false)} />}
   </div>
 }
 
-function EvidenceDialog({ open, data, onClose, onTargetChanged }: { open: boolean; data: AvailableCandidates; onClose: () => void; onTargetChanged: () => void }) {
+function EvidenceDialog({ open, data, currentData, refreshing, onClose, onTargetChanged }: { open: boolean; data: AvailableCandidates; currentData: AvailableCandidates; refreshing: boolean; onClose: () => void; onTargetChanged: () => void }) {
   const titleId = useId()
   const targetId = useId()
-  const [selected, setSelected] = useState(0)
+  const [selected, setSelected] = useState<EvidenceCandidate | undefined>(data.candidates[0])
+  const [useCurrentTargets, setUseCurrentTargets] = useState(false)
   const [result, setResult] = useState<ApplicationEvidenceResult>()
   const [error, setError] = useState<string>()
   const [copied, setCopied] = useState(false)
   const [pending, setPending] = useState(false)
   const request = useRef<AbortController | undefined>(undefined)
   useEffect(() => () => request.current?.abort(), [])
-  const candidate = data.candidates[selected]
+  const choices = useCurrentTargets ? currentData : data
+  const candidate = choices.candidates.find(item => item.application === selected?.application && item.target.uid === selected?.target.uid && item.target.container === selected?.target.container)
   const collect = async () => {
+    if (!candidate) return
     request.current?.abort()
     const controller = new AbortController()
     request.current = controller
@@ -107,7 +110,11 @@ function EvidenceDialog({ open, data, onClose, onTargetChanged }: { open: boolea
       const response = await collectApplicationEvidence(candidate, data.context, controller.signal)
       if (!controller.signal.aborted) {
         setResult(response)
-        if (response.reason && refreshTargetReasons.has(response.reason)) onTargetChanged()
+        if (response.reason && refreshTargetReasons.has(response.reason)) {
+          setSelected(undefined)
+          setUseCurrentTargets(true)
+          onTargetChanged()
+        }
       }
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Collection failed')
@@ -121,19 +128,21 @@ function EvidenceDialog({ open, data, onClose, onTargetChanged }: { open: boolea
     <p className="mt-2 text-sm text-theme-text-secondary">Read one Pod’s application endpoint through a temporary Kubernetes port-forward using your current permissions.</p>
     <p className="mt-2 break-all text-xs text-theme-text-tertiary">Context: {data.context}</p>
     <label className="mt-4 block text-sm text-theme-text-primary" htmlFor={targetId}>Pod endpoint</label>
-    <SelectMenu id={targetId} ariaLabel="Pod endpoint" className="mt-1" value={String(selected)} disabled={pending}
-      options={data.candidates.map((item, index) => ({ value: String(index), label: `${applicationNames[item.application]} · ${item.target.namespace}/${item.target.pod} · ${item.target.container}` }))}
-      onChange={value => { setSelected(Number(value)); setResult(undefined); setError(undefined); setCopied(false) }} />
-    <p className="mt-2 text-sm text-theme-text-secondary">Collects: {candidate.expectedEvidence.join(', ')}.</p>
-    <p className="mt-1 text-xs text-theme-text-tertiary">{candidate.coverage}</p>
-    {(data.truncated || data.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">Discovery or permission limits may exclude endpoints. Collection covers only the selected Pod.</p>}
+    <SelectMenu id={targetId} ariaLabel="Pod endpoint" className="mt-1" value={candidate ? String(choices.candidates.indexOf(candidate)) : ''} placeholder="Select a current Pod" disabled={pending || useCurrentTargets && refreshing || choices.candidates.length === 0}
+      options={choices.candidates.map((item, index) => ({ value: String(index), label: `${applicationNames[item.application]} · ${item.target.namespace}/${item.target.pod} · ${item.target.container}` }))}
+      onChange={value => { setSelected(choices.candidates[Number(value)]); setError(undefined); setCopied(false) }} />
+    {candidate ? <>
+      <p className="mt-2 text-sm text-theme-text-secondary">Collects: {candidate.expectedEvidence.join(', ')}.</p>
+      <p className="mt-1 text-xs text-theme-text-tertiary">{candidate.coverage}</p>
+    </> : <p className="mt-2 text-sm text-theme-text-secondary">{refreshing ? 'Refreshing available Pods…' : choices.candidates.length > 0 ? 'Select a current Pod before collecting again.' : <>A current Pod endpoint has not been verified. <button type="button" className="text-accent-text hover:underline" onClick={onTargetChanged}>Refresh Pod choices</button></>}</p>}
+    {(choices.truncated || choices.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">Discovery or permission limits may exclude endpoints. Collection covers only the selected Pod.</p>}
     <p className="mt-2 text-xs text-theme-text-tertiary">Collection may be unavailable if the endpoint requires credentials or cannot be reached. Results describe this Pod at collection time.</p>
     {error && <div role="alert" className="mt-4"><AlertBanner variant="error" title="Could not complete the request" message={error} /></div>}
     {result && <ApplicationEvidenceObservation result={result} />}
     <div className="mt-5 flex flex-wrap justify-end gap-2">
       {result && <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}
       <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={close}>{pending ? 'Cancel' : 'Close'}</button>
-      <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending || !!result?.reason && refreshTargetReasons.has(result.reason)} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
+      <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending || !candidate} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
     </div>
   </DialogPortal>
 }

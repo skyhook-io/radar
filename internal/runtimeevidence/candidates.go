@@ -273,6 +273,7 @@ func CheckAccessResult(ctx context.Context, client kubernetes.Interface, target 
 	}
 	operations := []struct{ verb, sub string }{{"get", ""}, {"create", "portforward"}}
 	allowed := make([]bool, len(operations))
+	denied := make([]bool, len(operations))
 	failures := make([]error, len(operations))
 	var checks sync.WaitGroup
 	for i, op := range operations {
@@ -284,6 +285,10 @@ func CheckAccessResult(ctx context.Context, client kubernetes.Interface, target 
 				failures[i] = err
 				return
 			}
+			if r.Status.Denied || (!r.Status.Allowed && r.Status.EvaluationError == "") {
+				denied[i] = true
+				return
+			}
 			if r.Status.EvaluationError != "" {
 				failures[i] = errors.New("permission evaluation unavailable")
 				return
@@ -292,7 +297,10 @@ func CheckAccessResult(ctx context.Context, client kubernetes.Interface, target 
 		}()
 	}
 	checks.Wait()
-	if err := errors.Join(append(failures, ctx.Err())...); err != nil {
+	if denied[0] || denied[1] {
+		return false, nil
+	}
+	if err := errors.Join(failures...); err != nil {
 		return false, err
 	}
 	return allowed[0] && allowed[1], nil

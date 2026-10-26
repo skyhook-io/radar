@@ -273,3 +273,33 @@ func TestNamedPermissionChecksShareOneConcurrentBudget(t *testing.T) {
 		t.Fatalf("checks did not run concurrently: allowed=%v error=%v", allowed, err)
 	}
 }
+
+func TestDefinitivePermissionDenialDoesNotAskForRetry(t *testing.T) {
+	client := fake.NewClientset()
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(a kt.Action) (bool, runtime.Object, error) {
+		r := a.(kt.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+		if r.Spec.ResourceAttributes.Verb == "get" {
+			return true, &authv1.SelfSubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{Denied: true, EvaluationError: "another authorizer unavailable"}}, nil
+		}
+		return true, nil, errors.New("transport unavailable")
+	})
+	if allowed, err := CheckAccessResult(context.Background(), client, Target{Namespace: "lab", Pod: "rabbit"}); allowed || err != nil {
+		t.Fatalf("a definitive denial must stay denied without retry: allowed=%v error=%v", allowed, err)
+	}
+}
+
+func TestCompletedPermissionResponsesAreNotDiscardedByLaterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := fake.NewClientset()
+	var completed atomic.Int32
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(kt.Action) (bool, runtime.Object, error) {
+		if completed.Add(1) == 2 {
+			cancel()
+		}
+		return true, &authv1.SelfSubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+	})
+	if allowed, err := CheckAccessResult(ctx, client, Target{Namespace: "lab", Pod: "rabbit"}); !allowed || err != nil {
+		t.Fatalf("completed responses were discarded: allowed=%v error=%v", allowed, err)
+	}
+}

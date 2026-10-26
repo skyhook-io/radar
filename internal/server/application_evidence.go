@@ -144,8 +144,9 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		}()
 	}
 	checks.Wait()
-	response.PermissionCheckTimedOut = ctx.Err() == context.DeadlineExceeded
-	response.PermissionCheckFailed = !response.PermissionCheckTimedOut && errors.Join(permissionErrors...) != nil
+	permissionFailure := errors.Join(permissionErrors...)
+	response.PermissionCheckTimedOut = errors.Is(permissionFailure, context.DeadlineExceeded)
+	response.PermissionCheckFailed = !response.PermissionCheckTimedOut && permissionFailure != nil
 	allowed := make([]collector.Candidate, 0, len(response.Candidates))
 	for i, candidate := range response.Candidates {
 		if allowedTargets[i] {
