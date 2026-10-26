@@ -124,6 +124,9 @@ func TestParseNamespaces(t *testing.T) {
 		wantNil bool
 	}{
 		{"no params", "", nil, true},
+		{"empty list", "namespaces=,,", nil, true},
+		{"blank list", "namespaces= , , ", nil, true},
+		{"empty plural still takes precedence", "namespaces=,,&namespace=prod", nil, true},
 		{"single namespace param", "namespace=prod", []string{"prod"}, false},
 		{"plural namespaces param", "namespaces=dev,staging,prod", []string{"dev", "staging", "prod"}, false},
 		{"plural takes precedence", "namespaces=dev&namespace=prod", []string{"dev"}, false},
@@ -522,10 +525,12 @@ func TestProxyAuth_NamespaceFiltering_Restricted(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var pods []any
-	json.NewDecoder(resp.Body).Decode(&pods)
-	if len(pods) != 0 {
-		t.Errorf("restricted user should see 0 pods, got %d", len(pods))
+	var response testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 0 {
+		t.Errorf("restricted user should see 0 pods, got %d", len(response.Items))
 	}
 }
 
@@ -544,9 +549,11 @@ func TestProxyAuth_NamespaceFiltering_Allowed(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var pods []any
-	json.NewDecoder(resp.Body).Decode(&pods)
-	if len(pods) == 0 {
+	var response testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) == 0 {
 		t.Error("allowed user should see pods in default namespace")
 	}
 }
@@ -582,9 +589,11 @@ func TestProxyAuth_NamespaceFiltering_ClusterAdmin(t *testing.T) {
 	resp := env.authGet(t, "/api/resources/deployments", "admin", "platform-admins")
 	defer resp.Body.Close()
 
-	var deps []any
-	json.NewDecoder(resp.Body).Decode(&deps)
-	if len(deps) == 0 {
+	var response testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) == 0 {
 		t.Error("cluster admin should see all deployments")
 	}
 }
@@ -632,16 +641,8 @@ func TestProxyAuth_ClusterScopedReadsRequireClusterScopedRBAC(t *testing.T) {
 
 	for _, kind := range []string{"nodes", "clusterroles"} {
 		resp := env.authGet(t, "/api/resources/"+kind, "broad-reader", "")
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			t.Fatalf("%s: expected 200, got %d", kind, resp.StatusCode)
-		}
-		var items []any
-		json.NewDecoder(resp.Body).Decode(&items)
+		assertResourceReadError(t, resp, http.StatusForbidden, "user_forbidden")
 		resp.Body.Close()
-		if len(items) != 0 {
-			t.Errorf("%s leaked without cluster-scoped read RBAC: %d items", kind, len(items))
-		}
 	}
 
 	// Top nodes is the metrics-table sibling and was missed by the original
@@ -672,14 +673,7 @@ func TestProxyAuth_NamespacesResource_RequiresListNamespacesSAR(t *testing.T) {
 
 	resp := env.authGet(t, "/api/resources/namespaces", "broad-reader", "")
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-	var items []any
-	json.NewDecoder(resp.Body).Decode(&items)
-	if len(items) != 0 {
-		t.Errorf("namespaces leaked without list-namespaces RBAC: %d items", len(items))
-	}
+	assertResourceReadError(t, resp, http.StatusForbidden, "user_forbidden")
 }
 
 func TestProxyAuth_NamespacesResource_GetRequiresGetNamespacesSAR(t *testing.T) {
@@ -725,15 +719,10 @@ func TestProxyAuth_CanI_CacheIsPerUser(t *testing.T) {
 		t.Fatalf("alice: expected 200, got %d", aliceResp.StatusCode)
 	}
 
-	// Bob hits the same endpoint. canI says deny → empty result, not the
-	// list alice saw.
+	// Bob must receive his own explicit denial.
 	bobResp := env.authGet(t, "/api/resources/nodes", "bob", "")
 	defer bobResp.Body.Close()
-	var bobItems []any
-	json.NewDecoder(bobResp.Body).Decode(&bobItems)
-	if len(bobItems) != 0 {
-		t.Errorf("bob's nodes leaked via cross-user canI cache: %d items", len(bobItems))
-	}
+	assertResourceReadError(t, bobResp, http.StatusForbidden, "user_forbidden")
 }
 
 func TestHandleSetActiveNamespace_RejectsDeniedNamespace(t *testing.T) {
@@ -852,12 +841,7 @@ func TestProxyAuth_NamespaceFiltering_NoAccess(t *testing.T) {
 
 	resp := env.authGet(t, "/api/resources/pods", "nobody", "")
 	defer resp.Body.Close()
-
-	var pods []any
-	json.NewDecoder(resp.Body).Decode(&pods)
-	if len(pods) != 0 {
-		t.Errorf("user with no access should see 0 pods, got %d", len(pods))
-	}
+	assertResourceReadError(t, resp, http.StatusForbidden, "user_no_namespace_access")
 }
 
 // --- handleAuthMe: readscope.NoNamespaceAccess ---

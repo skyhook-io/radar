@@ -50,15 +50,10 @@ const (
 type Narrowing string
 
 const (
-	// NarrowedByUserAccess: the namespaces the user may read.
+	// NarrowedByUserAccess: the kinds or namespaces the caller may read.
 	NarrowedByUserAccess Narrowing = "user_access"
 	// NarrowedByNamespacePin: Radar's --namespace-scope pin.
 	NarrowedByNamespacePin Narrowing = "namespace_pin"
-	// NarrowedByNamespaceSelection: a namespace selection the server applied
-	// to an implicitly broad request. The picker's stored selection is not
-	// one: data reads never inherit it, and the UI sends it as named
-	// namespaces.
-	NarrowedByNamespaceSelection Narrowing = "namespace_selection"
 	// NarrowedByNamespaceCollection: the namespaces Radar collects a kind in,
 	// when its identity can't list the kind cluster-wide. Whoever runs Radar
 	// widens it.
@@ -142,8 +137,8 @@ type KindSet struct {
 // AllKinds is a gap's kinds when it reaches every kind in scope.
 func AllKinds() *KindSet { return &KindSet{Extent: ExtentAll} }
 
-// UnknownKinds is a gap's kinds when it reaches some, Radar can't say which:
-// the catalog of kinds itself couldn't be read.
+// UnknownKinds is a gap's kinds when it reaches an unknown subset of the
+// kinds in scope.
 func UnknownKinds() *KindSet { return &KindSet{Extent: ExtentUnknown} }
 
 // MarshalJSON writes an extent set as {"extent": …} alone, as NameSet does.
@@ -237,8 +232,11 @@ type Scope struct {
 // named. An axis that applies is always present, listed or as an Extent; an
 // absent axis doesn't apply to the gap. Which axes apply depends on the
 // surface: a list of a namespaced kind gives every gap its namespaces, a list
-// of a cluster-scoped kind none, a search kinds or namespaces, and a filter
-// failure only objects. Within one Coverage a namespace is in at most one gap.
+// of a cluster-scoped kind none, and a search kinds or namespaces. For
+// filter_eval_failed, CEL evaluation failures name objects;
+// findings_scan_incomplete names report kinds with unknown namespaces when
+// the findings scan runs out of time. Within one Coverage
+// a namespace is in at most one gap.
 //
 // Action is what the code calls for, from the same table as readreason, so a
 // client that doesn't know a newer code still knows what to do. Producers

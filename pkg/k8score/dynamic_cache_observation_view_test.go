@@ -65,3 +65,32 @@ func TestObservationViewLiveReadinessAndRetries(t *testing.T) {
 type scaleUnsyncedInformer struct{ scaleSyncedInformer }
 
 func (scaleUnsyncedInformer) HasSynced() bool { return false }
+
+func TestObservationViewReusesScopesAcrossNamespacesAndKinds(t *testing.T) {
+	d, gvrs, namespaces := observationScaleFixture(20, 100, 100)
+	view := d.NewObservationView(gvrs)
+	for _, gvr := range gvrs {
+		scope := view.NamespaceObservation(gvr, "").Namespaces
+		for _, ns := range namespaces {
+			observed := view.NamespaceObservation(gvr, ns)
+			if len(observed.Namespaces) != len(scope) || &observed.Namespaces[0] != &scope[0] {
+				t.Fatal("namespace observation rebuilt its kind's scope")
+			}
+		}
+	}
+}
+
+func BenchmarkCountsObservationView1000Namespaces100Kinds(b *testing.B) {
+	d, gvrs, namespaces := observationScaleFixture(100, 1000, 1000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		view := d.NewObservationView(gvrs)
+		for _, gvr := range gvrs {
+			view.NamespaceObservation(gvr, "")
+			for _, ns := range namespaces {
+				view.NamespaceObservation(gvr, ns)
+			}
+		}
+	}
+}

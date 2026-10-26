@@ -115,19 +115,21 @@ func TestResourceGetAnswersOwnershipFromOwnerReferences(t *testing.T) {
 	}
 }
 
-// Until Radar has a relationship graph, as while it starts or after a context
-// switch, a GET sends no relationships: the UI reads that as owners not mapped
-// yet, and its GitOps write guard warns instead of finding no manager.
+// Until Radar can build a relationship graph, as after a context switch whose
+// build the switch overtook, a GET sends no relationships: the UI reads that as
+// owners not mapped yet, and its GitOps write guard warns instead of finding
+// no manager.
 func TestResourceGetWithoutAGraphSendsNoRelationships(t *testing.T) {
 	withOwnershipDiscovery(t)
 	b := testServerSrv.broadcaster
 	b.cachedTopologyMu.Lock()
-	topo, idx, dirty := b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty
+	topo, idx, dirty, rebuild := b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty, b.rebuildTopology
 	b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty = nil, nil, false
+	b.rebuildTopology = func() bool { return false }
 	b.cachedTopologyMu.Unlock()
 	t.Cleanup(func() {
 		b.cachedTopologyMu.Lock()
-		b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty = topo, idx, dirty
+		b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty, b.rebuildTopology = topo, idx, dirty, rebuild
 		b.cachedTopologyMu.Unlock()
 	})
 	resp, err := http.Get(testServer.URL + "/api/resources/deployments/default/nginx?group=apps")

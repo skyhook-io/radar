@@ -197,8 +197,7 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 			return true
 		}
 		if ref.Namespace != "" || strings.EqualFold(ref.Kind, "Namespace") {
-			_, _, ok := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group)
-			if !ok {
+			if s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group) != nil {
 				return false
 			}
 			switch {
@@ -280,8 +279,8 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	// cluster-scoped get-SAR (fails closed), namespace access, and the
 	// per-namespace Secret get-SAR — so this can't surface issues for a resource
 	// the caller couldn't open in the drawer.
-	if status, msg, ok := s.preflightResourceGet(r, normalizeKind(rawKind), namespace, name, group); !ok {
-		s.writeError(w, status, msg)
+	if failure := s.preflightResourceGet(r, normalizeKind(rawKind), namespace, name, group); failure != nil {
+		s.writeReadFailure(w, rawKind, failure, nil)
 		return
 	}
 
@@ -500,7 +499,7 @@ func splitCSV(v string) []string {
 }
 
 // issueSubjectAccess is the drawer's gate for an issue's own namespaced
-// resource: namespace access, plus a get for Secrets and LimitRanges. It runs
+// resource: namespace access, plus a get for exact-gated namespaced kinds. It runs
 // once per composed row, so the caller's namespaces are resolved once.
 func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
 	if auth.UserFromContext(r.Context()) == nil {

@@ -71,6 +71,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rbac"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/urlutil"
@@ -1443,6 +1444,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
+		ResourceReadCoverage:  true,
+		SearchCoverage:        true,
 		YAMLReview:            true,
 		YAMLSchemas:           true,
 		WorkloadImages:        true,
@@ -1575,21 +1578,29 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 // pick made while browsing. The --namespace-scope clamp still applies — it is
 // the real extent of the cache.
 func (s *Server) parseNamespacesForUser(r *http.Request) []string {
+	namespaces, _ := s.parseNamespacesForUserWithStatus(r)
+	return namespaces
+}
+
+// parseNamespacesForUserWithStatus is parseNamespacesForUser that also reports
+// when the caller's namespace access couldn't be determined, so an empty
+// answer can be told apart from no access.
+func (s *Server) parseNamespacesForUserWithStatus(r *http.Request) ([]string, bool) {
 	namespaces := parseNamespaces(r.URL.Query())
 	if k8s.ForceNamespaceScope {
 		target := k8s.GetNamespaceScopeTarget()
 		if target == "" {
-			return []string{}
+			return []string{}, false
 		}
 		if namespaces == nil {
 			namespaces = []string{target}
 		} else if slices.Contains(namespaces, target) {
 			namespaces = []string{target}
 		} else {
-			return []string{}
+			return []string{}, false
 		}
 	}
-	return s.getUserNamespaces(r, namespaces)
+	return s.getUserNamespacesWithStatus(r, namespaces)
 }
 
 // resolveHelmNamespaces decides which namespaces a Helm list (releases, upgrade
@@ -1612,11 +1623,6 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 	// namespace discovery and wrongly drop a namespace where the caller has
 	// secrets but no pod access. A denied namespace surfaces as a 403 from the
 	// per-namespace list rather than a silent empty result.
-	//
-	// Guard on len > 0, not != nil: parseNamespaces returns an empty non-nil
-	// slice for a degenerate query like ?namespaces=,, — treat that as "no
-	// explicit filter" and fall through, rather than short-circuiting to a
-	// zero-namespace (empty) result.
 	if explicit := parseNamespaces(r.URL.Query()); len(explicit) > 0 {
 		// Under --namespace-scope the informer cache holds only the pinned
 		// namespace; keep Helm consistent with the rest of the UI by clamping an
@@ -1828,36 +1834,25 @@ func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, res
 // nil or empty input is returned unchanged; the caller's namespace-access
 // gate (parseNamespacesForUser / readscope.NoNamespaceAccess) is the upstream decision.
 func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, verb string, namespaces []string) []string {
-	if len(namespaces) == 0 {
-		return namespaces
-	}
-	// Bounded-parallel: each canRead miss is a SAR round-trip, so a serial loop
-	// over a large candidate set (e.g. a cluster-wide reader's full namespace
-	// list in resolveHelmNamespaces) would block the request for N round-trips.
-	// canRead memoizes on the mutex-guarded UserPermissions.canI, mirroring the
-	// parallel SAR probing in internal/k8s/capabilities.go. Result is sorted so
-	// the output is deterministic regardless of goroutine completion order.
-	const maxConcurrent = 16
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	out := make([]string, 0, len(namespaces))
-	for _, ns := range namespaces {
-		wg.Add(1)
-		go func(ns string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			if s.canRead(r, group, resource, ns, verb) {
-				mu.Lock()
-				out = append(out, ns)
-				mu.Unlock()
-			}
-		}(ns)
-	}
-	wg.Wait()
-	sort.Strings(out)
+	out, _ := s.filterNamespacesByCanReadDecision(r, group, resource, verb, namespaces)
 	return out
+}
+
+func (s *Server) filterNamespacesByCanReadDecision(r *http.Request, group, resource, verb string, namespaces []string) ([]string, bool) {
+	if len(namespaces) == 0 {
+		return namespaces, true
+	}
+	allowed, _, unchecked := s.partitionNamespacesByCanRead(r, group, resource, verb, namespaces)
+	return allowed, len(unchecked) == 0
+}
+
+// partitionNamespacesByCanRead splits namespaces by the caller's SAR for
+// (group, resource, verb): allowed, denied, and unchecked (the check itself
+// failed). Each part is sorted and non-nil.
+func (s *Server) partitionNamespacesByCanRead(r *http.Request, group, resource, verb string, namespaces []string) (allowed, denied, unchecked []string) {
+	return readscope.PartitionAccess(namespaces, func(ns string) (bool, bool) {
+		return s.canReadDecision(r, group, resource, ns, verb)
+	})
 }
 
 // deniedClusterScopedTopoKinds returns the set of cluster-scoped topology
@@ -1947,11 +1942,12 @@ func (s *Server) applyClusterScopedTopologyRBAC(r *http.Request, topo *topology.
 
 // parseNamespaces parses the namespace filter from query parameters.
 // Supports both "namespaces" (comma-separated, preferred) and "namespace" (single, backward compat).
+// A list with no names is an omitted filter.
 func parseNamespaces(query url.Values) []string {
 	// Prefer "namespaces" (plural, comma-separated)
 	if ns := query.Get("namespaces"); ns != "" {
 		parts := strings.Split(ns, ",")
-		result := make([]string, 0, len(parts))
+		var result []string
 		for _, p := range parts {
 			if trimmed := strings.TrimSpace(p); trimmed != "" {
 				result = append(result, trimmed)
@@ -2193,109 +2189,11 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, result)
 }
 
-// preflightResourceList runs the per-user RBAC gates shared by the REST
-// (/api/resources/{kind}) and AI (/api/ai/resources/{kind}) list paths.
-// It assumes the caller has already populated `namespaces` via
-// parseNamespacesForUser (which primes the canI cache that canRead relies on)
-// and has classified the kind for cluster-scope.
-//
-// Returns the (possibly-rewritten) namespace slice that downstream cache
-// reads should use. When ok=false the gate denied or the user has no
-// namespace access; (status, msg) carry the canonical HTTP response. REST
-// callers historically convert denies to a 200 with `[]` to avoid leaking
-// kind existence; the AI path returns the explicit status so agents see the
-// failure. Same gates run in the same order on both paths — the response
-// shape is the only thing that differs.
-func (s *Server) preflightResourceList(r *http.Request, kind, group string, namespaces []string) (finalNamespaces []string, status int, msg string, ok bool) {
-	// "namespaces" is cluster-scoped at the K8s API. Full Namespace objects
-	// (labels, annotations, spec) require explicit list-namespaces SAR.
-	// AllowedNamespaces is NOT a sufficient fallback: list-pods-in-alpha
-	// SAR-confirms namespace existence and pod read access, not get-namespace-
-	// alpha (which would require ClusterRole on namespaces). The namespace
-	// picker uses /api/namespaces, which serves a synthesized {name, status}
-	// view filtered by AllowedNamespaces — restricted users keep their picker
-	// without leaking Namespace metadata via this resource-browser path.
-	isNamespacesKind := kind == "namespaces" || kind == "namespace"
-	if isNamespacesKind {
-		if !s.canRead(r, "", "namespaces", "", "list") {
-			return nil, http.StatusForbidden, "insufficient permissions to list namespaces", false
-		}
-		return nil, 0, "", true // full lister output for SAR-authorized users
-	}
-
-	// Cluster-only kinds (Nodes, PVs, StorageClasses, ClusterRoles, cluster-
-	// scoped CRDs) have no namespace dimension — gate via SAR. Run BEFORE the
-	// readscope.NoNamespaceAccess check so a user with explicit cluster-scoped RBAC but
-	// no namespace access can still read those resources.
-	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
-	if isClusterScoped {
-		if !s.canRead(r, gvrGroup, gvrResource, "", "list") {
-			return nil, http.StatusForbidden, fmt.Sprintf("insufficient permissions to list %s", kind), false
-		}
-		// Cluster-scoped reads have no namespace dimension. Once the
-		// resource-level SAR passes, force the later typed/dynamic cache paths
-		// through their cluster-wide branch even if the user also has a
-		// namespace view preference.
-		return nil, 0, "", true
-	}
-
-	if readscope.NoNamespaceAccess(namespaces) {
-		return namespaces, http.StatusForbidden, "no namespace access", false
-	}
-
-	// Per-kind RBAC inside a namespace. Helm release storage IS K8s Secrets,
-	// so the chart can grant the SA cluster-wide secrets (rbac.secrets,
-	// rbac.helm, auth.mode != "none", or cloud.enabled — see deploy/helm/
-	// radar/templates/clusterrole.yaml). When any of those triggers fires
-	// the cache holds every secret in the cluster, so per-user RBAC must
-	// gate the read. Trivy reports are gated below; other namespaced kinds
-	// are deferred.
-	if kind == "secrets" || kind == "secret" {
-		if auth.UserFromContext(r.Context()) != nil {
-			if namespaces == nil {
-				// Auth user with cluster-wide namespace access (e.g. picked up
-				// via DiscoverNamespaces stage 1: cluster-wide list pods). The
-				// cache will serve all secrets — gate on cluster-scope SAR.
-				if !s.canRead(r, "", "secrets", "", "list") {
-					return nil, http.StatusForbidden, "insufficient permissions to list secrets", false
-				}
-			} else {
-				namespaces = s.filterNamespacesByCanRead(r, "", "secrets", "list", namespaces)
-				if len(namespaces) == 0 {
-					return namespaces, http.StatusForbidden, "insufficient permissions to list secrets", false
-				}
-			}
-		}
-	}
-
-	if gvr, ok := k8s.TrivyReportGVR(kind, group); ok {
-		if readable, all := s.readableTrivyNamespaces(r, gvr, namespaces); !all {
-			if len(readable) == 0 {
-				return readable, http.StatusForbidden, fmt.Sprintf("insufficient permissions to list %s", kind), false
-			}
-			namespaces = readable
-		}
-	}
-
-	if (kind == "limitranges" || kind == "limitrange") && group == "" {
-		scopes := namespaces
-		if scopes == nil {
-			scopes = []string{""}
-		}
-		for _, ns := range scopes {
-			if !s.canRead(r, "", "limitranges", ns, "list") {
-				return nil, http.StatusForbidden, "insufficient permissions to list limitranges", false
-			}
-		}
-	}
-
-	return namespaces, 0, "", true
-}
-
 func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnectedOrSyncing(w) {
 		return
 	}
+	started := readCache()
 	kind := normalizeKind(chi.URLParam(r, "kind"))
 	group := r.URL.Query().Get("group") // API group for CRD disambiguation
 	// include follows /api/search's body-verbosity vocabulary: "summary" =
@@ -2317,31 +2215,100 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 
 	// parseNamespacesForUser primes the per-user perm cache (triggers
 	// DiscoverNamespaces if needed). canRead below relies on it.
-	namespaces := s.parseNamespacesForUser(r)
+	namespaces, accessCheckFailed := s.parseNamespacesForUserWithStatus(r)
 
-	// Most REST lists preserve the empty-list denial response. LimitRange
-	// lookups need an explicit denial so an unreadable namespace is not
-	// presented as having no admission rules.
-	finalNamespaces, status, msg, ok := s.preflightResourceList(r, kind, group, namespaces)
-	if !ok {
-		if kind == "limitranges" && group == "" {
-			s.writeError(w, status, msg)
-			return
-		}
-		// Denied, not empty. writeResourceList resolves columns for an empty
-		// list, and that lookup runs as Radar's own identity — so routing a
-		// denial through it would answer a caller who cannot list the kind with
-		// its column metadata. Emit the envelope without a table.
-		s.writeEmptyResourceTable(w, tableMode, kind, group)
+	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+	authz, failure := s.preflightResourceList(r, kind, group, namespaces)
+	target := s.resourceListTarget(r, started, authz.gaps, clusterScoped)
+	if readCache() != started {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 		return
 	}
-	namespaces = finalNamespaces
+	if failure != nil {
+		s.writeReadFailure(w, kind, noAccessFailure(failure, target, accessCheckFailed), &target)
+		return
+	}
+	namespaces = authz.namespaces
+	// A named namespace Radar knows doesn't exist is a gap and is never read:
+	// an empty read there would say it holds nothing.
+	if target.explicit && namespaces != nil {
+		namespaces = slices.DeleteFunc(slices.Clone(namespaces), func(ns string) bool { return !slices.Contains(target.namespaces, ns) })
+		if len(namespaces) == 0 {
+			s.writeReadFailure(w, kind, noAccessFailure(readFailuref(readreason.UserNoNamespaceAccess, "no namespace to read"), target, false), &target)
+			return
+		}
+	}
 
 	cache, ok := s.gateResourceRead(w, kind, group)
 	if !ok {
 		return
 	}
+	if cache != started {
+		s.writeReadFailure(w, kind, errReadHandlesChanged, &target)
+		return
+	}
 
+	limit, err := parseResourceListLimit(r, includeSummary)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	key := informerKeyForKind(kind)
+	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) {
+		list, readErr := readDynamicResourceList(r, cache, kind, group, namespaces, target.explicit, limit)
+		if readErr != nil {
+			s.writeReadFailure(w, kind, readErr, &target)
+			return
+		}
+		if list.narrowed {
+			target = target.narrowedByCollection(list.collected, list.uncovered)
+		}
+		coverage := target.coverage(list.read, list.gaps)
+		if !s.checkResourceListSize(w, len(list.rows), limit, target, list.gaps) {
+			return
+		}
+		var result any = list.rows
+		if includeSummary {
+			result = applySummaryStrip(result)
+		}
+		s.writeResourceList(w, r, cache, tableMode, kind, group, result, coverage)
+		return
+	}
+	plan, err := typedReadCoverage(cache, key, namespaces, clusterScoped, target.explicit)
+	if len(plan.collected) > 0 {
+		target = target.narrowedByCollection(plan.collected, plan.uncovered)
+	}
+	if err != nil {
+		s.writeReadFailure(w, kind, err, &target)
+		return
+	}
+	coverage := target.coverage(plan.read, plan.gaps)
+	namespaces = plan.read
+	// A kind still loading elsewhere is listed from the stores of the
+	// namespaces whose own informers have synced; its lister is withheld
+	// until it has loaded everywhere.
+	var partialRows []any
+	count := 0
+	if plan.wholeKindReady {
+		count = typedListCount(cache, key, namespaces)
+	} else {
+		objs, ok := cache.ReadableObjects(key, namespaces)
+		if !ok {
+			s.writeReadFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key), &target)
+			return
+		}
+		partialRows = make([]any, 0, len(objs))
+		for _, obj := range objs {
+			if secret, ok := obj.(*corev1.Secret); ok {
+				obj = k8score.WithoutHelmReleaseValues(secret)
+			}
+			partialRows = append(partialRows, obj)
+		}
+		count = len(partialRows)
+	}
+	if !s.checkResourceListSize(w, count, limit, target, plan.gaps) {
+		return
+	}
 	var result any
 
 	// listPerNs is a helper that merges results across multiple namespaces.
@@ -2380,60 +2347,6 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		forbiddenMsg(resourceKind)
 	}
 
-	// A non-empty group routes to the dynamic/CRD cache so CRDs whose plural
-	// collides with a core kind (e.g. KNative "services" vs core "services")
-	// reach the right resource. Built-in workloads addressed by their real group
-	// (e.g. deployments?group=apps) live in the typed cache, so they must fall
-	// through to the typed switch below — TypedKindOwnsGroup keeps them off the
-	// dynamic path (which has no informer for built-ins). Cluster-scoped gating
-	// is already done at the top of this handler via k8s.ClassifyKindScope.
-	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
-		if len(namespaces) > 0 {
-			var merged []any
-			for _, ns := range namespaces {
-				items, listErr := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
-				if listErr != nil {
-					if strings.Contains(listErr.Error(), "unknown resource kind") {
-						s.writeError(w, http.StatusBadRequest, listErr.Error())
-						return
-					}
-					if apierrors.IsForbidden(listErr) || apierrors.IsUnauthorized(listErr) {
-						forbiddenMsg(kind)
-						return
-					}
-					log.Printf("[resources] Failed to list %s in namespace %s (group=%s): %v", kind, ns, group, listErr)
-					s.writeError(w, http.StatusInternalServerError, listErr.Error())
-					return
-				}
-				for _, item := range items {
-					merged = append(merged, item)
-				}
-			}
-			result = merged
-		} else {
-			result, err = cache.ListDynamicWithGroup(r.Context(), kind, "", group)
-			if err != nil {
-				if strings.Contains(err.Error(), "unknown resource kind") {
-					s.writeError(w, http.StatusBadRequest, err.Error())
-					return
-				}
-				if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-					forbiddenMsg(kind)
-					return
-				}
-				log.Printf("[resources] Failed to list %s (group=%s): %v", kind, group, err)
-				s.writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
-
-		if includeSummary {
-			result = applySummaryStrip(result)
-		}
-		s.writeResourceList(w, r, cache, tableMode, kind, group, result)
-		return
-	}
-
 	// Try typed cache for known resource types first. Canonicalize aliases
 	// ("pod", "pvc", "hpa") to their informer key first: gateResourceRead
 	// admits the whole typed vocabulary mid-sync, and an alias falling
@@ -2442,7 +2355,13 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	if key := informerKeyForKind(kind); key != "" {
 		kind = key
 	}
-	switch kind {
+	typedKind := kind
+	if partialRows != nil {
+		typedKind = ""
+	}
+	switch typedKind {
+	case "":
+		result = partialRows
 	case "pods":
 		if cache.Pods() == nil {
 			forbiddenMsg("pods")
@@ -2678,16 +2597,6 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			notReadyOrForbidden("limitranges")
 			return
 		}
-		scopes := namespaces
-		if scopes == nil {
-			scopes = []string{""}
-		}
-		for _, ns := range scopes {
-			if !cache.KindCoversNamespace("limitranges", ns) {
-				s.writeError(w, http.StatusForbidden, "Radar does not have LimitRange visibility for the requested namespace scope")
-				return
-			}
-		}
 		result, err = listPerNs(
 			func() (any, error) { return cache.LimitRanges().List(labels.Everything()) },
 			func(ns string) (any, error) {
@@ -2717,36 +2626,8 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			},
 		)
 	default:
-		// Fall back to dynamic cache for CRDs and other unknown resources
-		if len(namespaces) > 0 {
-			var merged []any
-			for _, ns := range namespaces {
-				items, listErr := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
-				if listErr != nil {
-					if strings.Contains(listErr.Error(), "unknown resource kind") {
-						s.writeError(w, http.StatusBadRequest, listErr.Error())
-						return
-					}
-					log.Printf("[resources] Failed to list %s in namespace %s: %v", kind, ns, listErr)
-					s.writeError(w, http.StatusInternalServerError, listErr.Error())
-					return
-				}
-				for _, item := range items {
-					merged = append(merged, item)
-				}
-			}
-			result = merged
-		} else {
-			result, err = cache.ListDynamicWithGroup(r.Context(), kind, "", group)
-			if err != nil {
-				if strings.Contains(err.Error(), "unknown resource kind") {
-					s.writeError(w, http.StatusBadRequest, err.Error())
-					return
-				}
-				s.writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
+		s.writeError(w, http.StatusBadRequest, "Unknown typed resource kind")
+		return
 	}
 
 	if err != nil {
@@ -2754,11 +2635,18 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.checkResourceListSize(w, listSize(result), limit, target, plan.gaps) {
+		return
+	}
 	if includeSummary {
 		result = summarizeTypedList(kind, result)
 		result = applySummaryStrip(result)
 	}
-	s.writeResourceList(w, r, cache, tableMode, kind, group, result)
+	if readCache() != cache {
+		s.writeReadFailure(w, kind, errReadHandlesChanged, &target)
+		return
+	}
+	s.writeResourceList(w, r, cache, tableMode, kind, group, result, coverage)
 }
 
 // normalizeKind converts K8s kind names to lowercase for case-insensitive matching
@@ -2771,6 +2659,7 @@ func normalizeKind(kind string) string {
 // aliases the list/get handlers accept — to its typed informer key. Returns
 // "" for kinds outside the typed informer set (CRDs, dynamic fallthrough).
 func informerKeyForKind(kind string) string {
+	kind = normalizeKind(kind)
 	switch kind {
 	case "pods", "pod":
 		return "pods"
@@ -2832,13 +2721,13 @@ func informerKeyForKind(kind string) string {
 	return ""
 }
 
-// gateResourceRead enforces per-kind readiness for the typed resource read
-// handlers and picks which cache serves the request. Post-connect that is
-// the promoted singleton — readiness must keep gating deferred/promoted kinds
-// syncing in background, or a partial store would serve as an empty or
-// truncated list. During initial sync it is the mid-sync handle, so kinds
-// become readable one by one instead of waiting behind the global connected
-// gate.
+// gateResourceRead picks which cache serves a typed resource read. Post-connect
+// that is the promoted singleton; during initial sync it is the mid-sync
+// handle, so kinds become readable one by one instead of waiting behind the
+// global connected gate. It does not refuse a kind still loading: callers
+// assess the read with typedReadCoverage, which serves the namespaces whose
+// informers have synced and reports the rest as gaps, so a partial store never
+// serves as an empty or truncated list.
 //
 // Returns (cache, true) when the read may proceed; otherwise writes the
 // response and returns (nil, false). Kinds outside the typed informer set —
@@ -2865,26 +2754,18 @@ func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k
 		return nil, false
 	}
 	switch readiness {
-	case k8s.KindPending:
-		s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_pending",
-			fmt.Sprintf("%s are still loading, please retry shortly", key))
-		return nil, false
-	case k8s.KindFailed:
-		s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_failed",
-			fmt.Sprintf("%s failed to load within the sync deadline", key))
-		return nil, false
 	case k8s.KindUnavailable:
 		// No informer for a typed-vocabulary kind (RBAC-disabled). The
 		// existing forbidden semantics need the fully-initialized stack —
 		// mid-sync there is no dynamic cache to fall through to, so answer
 		// "still loading" rather than 500 off a half-built path.
 		if k8s.GetResourceCache() == nil {
-			s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_pending",
+			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending),
 				fmt.Sprintf("%s are still loading, please retry shortly", key))
 			return nil, false
 		}
 		return cache, true
-	default: // KindReady
+	default: // ready, or loading in some namespaces: typedReadCoverage decides
 		return cache, true
 	}
 }
@@ -2925,78 +2806,11 @@ func hpaDiagnosisFor(resource any) *hpadiag.Diagnosis {
 	return hpadiag.Analyze(hpa)
 }
 
-// preflightResourceGet runs the per-user RBAC gates that must pass before any
-// single-resource GET fetch. Mirrors the kind/scope-aware logic used by both
-// the REST handler (handleGetResource) and the AI handler (handleAIGetResource)
-// so future RBAC adjustments stay in lockstep across both surfaces.
-//
-// Inputs are the already-normalized (kind, namespace, name, group); callers
-// must collapse the cluster-scoped "_" placeholder before calling. Returns
-// (status, message, ok=true) when the request passes the gates, or
-// (status, message, ok=false) with the HTTP status + body the caller should
-// emit on deny.
-//
-// Three gates, run in this order:
-//  1. kind == "namespaces"        → full Namespace object requires get-namespaces SAR
-//  2. cluster-scoped (Node/CRD/…) → per-kind get SAR (ClassifyKindScope)
-//  3. namespaced                   → namespace access via getUserNamespaces,
-//     plus per-namespace get SAR for Secrets, LimitRanges and Trivy reports
-func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) (int, string, bool) {
-	isNamespacesKind := kind == "namespaces" || kind == "namespace"
-	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
-	switch {
-	case isNamespacesKind:
-		// Full Namespace object access requires explicit get-namespaces SAR.
-		// Read access to resources IN a namespace (list pods etc.) does not
-		// imply read access to the Namespace object itself. Restricted users
-		// without ClusterRole on namespaces get 403 here.
-		if !s.canRead(r, "", "namespaces", "", "get") {
-			return http.StatusForbidden, fmt.Sprintf("no access to namespace %q", name), false
-		}
-	case isClusterScoped:
-		if !s.canRead(r, gvrGroup, gvrResource, "", "get") {
-			return http.StatusForbidden, fmt.Sprintf("no access to %s (cluster-scoped resource requires explicit RBAC)", kind), false
-		}
-	case namespace != "":
-		// Namespaced kind: verify namespace access.
-		allowed := s.getUserNamespaces(r, []string{namespace})
-		if readscope.NoNamespaceAccess(allowed) {
-			return http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace), false
-		}
-		// Per-kind RBAC inside the namespace for Secrets — the chart can
-		// grant the SA cluster-wide secrets (Helm release visibility), so
-		// namespace-list discovery is not a sufficient gate here. The list
-		// handler has the matching list-SAR.
-		if (kind == "secrets" || kind == "secret") && !s.canRead(r, "", "secrets", namespace, "get") {
-			return http.StatusForbidden, fmt.Sprintf("no access to secrets in namespace %q", namespace), false
-		}
-		if (kind == "limitranges" || kind == "limitrange") && group == "" && !s.canRead(r, "", "limitranges", namespace, "get") {
-			return http.StatusForbidden, fmt.Sprintf("no access to limitranges in namespace %q", namespace), false
-		}
-		if gvr, ok := k8s.TrivyReportGVR(kind, group); ok && !s.canRead(r, gvr.Group, gvr.Resource, namespace, "get") {
-			return http.StatusForbidden, fmt.Sprintf("no access to %s in namespace %q", kind, namespace), false
-		}
-	default:
-		// Empty namespace and not a recognized cluster-scoped kind: an empty
-		// namespace means the target is cluster-scoped, but ClassifyKindScope
-		// couldn't identify it (an undiscovered CRD), so no SAR ran. While
-		// discovery has not initialized yet (progressive startup, context
-		// switch), "unrecognized" means "not discovered yet", not "does not
-		// exist" — answer retryable rather than a permission-shaped terminal
-		// error for a deep link that resolves seconds later. Still fail
-		// closed either way: the resource is never served ungated.
-		if k8s.GetResourceDiscovery() == nil {
-			return http.StatusServiceUnavailable, fmt.Sprintf("%s is not discovered yet, please retry shortly", kind), false
-		}
-		return http.StatusForbidden, fmt.Sprintf("cannot verify access to %q (unrecognized cluster-scoped resource)", kind), false
-	}
-	return 0, "", true
-}
-
 func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnectedOrSyncing(w) {
 		return
 	}
+	started := readCache()
 	kind := normalizeKind(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
@@ -3016,15 +2830,15 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// "namespaces" is cluster-scoped at the K8s API but exposed as a per-user
 	// filtered list — gate the GET via the user's namespace access for the
 	// requested name, not via cluster-scoped SAR.
-	if status, msg, ok := s.preflightResourceGet(r, kind, namespace, name, group); !ok {
-		if status == http.StatusServiceUnavailable {
-			// Discovery hasn't seen the kind yet (progressive startup): carry
-			// the retryable code so detail hooks keep polling instead of
-			// reporting the cluster unavailable after one retry.
-			s.writeErrorCode(w, status, "cluster_connecting", msg)
-			return
+	if failure := s.preflightResourceGetFrom(r, started, kind, namespace, name, group); failure != nil {
+		s.writeReadFailure(w, kind, failure, nil)
+		return
+	}
+	if failure := outsideNamespacePin(namespace); failure != nil {
+		if readCache() != started {
+			failure = readFailuref(readreason.ConnectionChanged, "%s", errReadHandlesChanged)
 		}
-		s.writeError(w, status, msg)
+		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
 
@@ -3032,11 +2846,55 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if cache != started {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	if r.Method == http.MethodHead {
 		// Distinguish an authorized resource lookup from an upstream 404.
 		w.Header().Set("X-Radar-Resource-Read", "true")
 	}
 
+	// A found object proves existence before its store can prove a miss.
+	var readable any
+	if key := informerKeyForKind(kind); key != "" && (group == "" || k8s.TypedKindOwnsGroup(kind, group)) {
+		clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+		target := []string{namespace}
+		if clusterScoped {
+			target = nil
+		}
+		if obj, found := cache.CachedObject(key, namespace, name); found {
+			readable = obj
+			if secret, ok := obj.(*corev1.Secret); ok {
+				if readable, ok = s.servedSecret(w, r, secret); !ok {
+					return
+				}
+			}
+		} else {
+			plan, err := typedReadCoverage(cache, key, target, clusterScoped, true)
+			if err != nil {
+				s.writeCollectionFailure(w, kind, err)
+				return
+			}
+			if !plan.wholeKindReady {
+				obj, found, ok := cache.ReadableObject(key, namespace, name)
+				if !ok {
+					s.writeCollectionFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key))
+					return
+				}
+				if !found {
+					s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), fmt.Sprintf("%s %q not found", key, name))
+					return
+				}
+				readable = obj
+				if secret, ok := obj.(*corev1.Secret); ok {
+					if readable, ok = s.servedSecret(w, r, secret); !ok {
+						return
+					}
+				}
+			}
+		}
+	}
 	var resource any
 	var err error
 
@@ -3064,18 +2922,18 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// "unknown resource kind: deployments (group: apps)". Cluster-scoped gating
 	// is already done at the top of this handler via k8s.ClassifyKindScope.
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
-		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
+		resource, err = readDynamicResourceGet(r.Context(), cache, kind, group, namespace, name)
 		if err != nil {
-			if strings.Contains(err.Error(), "unknown resource kind") {
-				s.writeError(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, k8s.ErrUnknownDynamicKind) {
+				s.writeErrorCode(w, http.StatusBadRequest, string(readreason.KindUnknown), err.Error())
 				return
 			}
-			if strings.Contains(err.Error(), "not found") {
-				s.writeError(w, http.StatusNotFound, err.Error())
+			if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+				s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), err.Error())
 				return
 			}
 			log.Printf("[resources] Failed to get %s %s/%s (group=%s): %v", kind, namespace, name, group, err)
-			s.writeError(w, http.StatusInternalServerError, err.Error())
+			s.writeCollectionFailure(w, kind, err)
 			return
 		}
 		setTypeMeta(resource)
@@ -3083,16 +2941,28 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Pass the already-fetched resource so ManagedBy synthesis
 		// disambiguates by group (avoids kind/plural collisions like Knative
 		// Service vs core Service).
+		relationships := s.relationshipsFor(r, kind, namespace, name, resource)
+		if readCache() != cache {
+			s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+			return
+		}
+
 		s.writeJSON(w, topology.ResourceWithRelationships{
 			Resource:      resource,
-			Relationships: s.relationshipsFor(r, kind, namespace, name, resource),
+			Relationships: relationships,
 			HPADiagnosis:  hpaDiagnosisFor(resource),
 		})
 		return
 	}
 
 	// Try typed cache for known resource types first
-	switch kind {
+	typedKind := kind
+	if readable != nil {
+		typedKind = ""
+	}
+	switch typedKind {
+	case "":
+		resource = readable
 	case "pods", "pod":
 		if cache.Pods() == nil {
 			forbiddenGet("pods")
@@ -3149,23 +3019,12 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 		var cached *corev1.Secret
 		cached, err = lister.Secrets(namespace).Get(name)
-		if err == nil && k8score.IsHelmReleaseSecret(cached) && r.Method != http.MethodHead {
-			// The cache holds digests in place of Helm release Secret values.
-			live, status, liveErr := s.getLiveSecret(r, namespace, name)
-			if liveErr != nil {
-				s.writeError(w, status, liveErr.Error())
+		if err == nil {
+			served, ok := s.servedSecret(w, r, cached)
+			if !ok {
 				return
 			}
-			if live.UID != cached.UID {
-				// Not the object the cache answered for: recreated since, or
-				// the cluster context switched mid-request. Retryable.
-				s.writeErrorCode(w, http.StatusServiceUnavailable, "cluster_connecting",
-					fmt.Sprintf("Secret %s/%s changed while it was being read, please retry", namespace, name))
-				return
-			}
-			resource = live
-		} else {
-			resource = cached
+			resource = served
 		}
 	case "events", "event":
 		if cache.Events() == nil {
@@ -3288,23 +3147,27 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Fall back to dynamic cache for CRDs and other unknown resources
 		// Use group to disambiguate when multiple API groups have similar resource names
-		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
+		resource, err = readDynamicResourceGet(r.Context(), cache, kind, group, namespace, name)
 		if err != nil {
-			if strings.Contains(err.Error(), "unknown resource kind") {
-				s.writeError(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, k8s.ErrUnknownDynamicKind) {
+				s.writeErrorCode(w, http.StatusBadRequest, string(readreason.KindUnknown), err.Error())
 				return
 			}
-			if strings.Contains(err.Error(), "not found") {
-				s.writeError(w, http.StatusNotFound, err.Error())
+			if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+				s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), err.Error())
 				return
 			}
-			s.writeError(w, http.StatusInternalServerError, err.Error())
+			s.writeCollectionFailure(w, kind, err)
 			return
 		}
 	}
 
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+			s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), err.Error())
+		} else {
+			s.writeCollectionFailure(w, kind, err)
+		}
 		return
 	}
 	if r.Method == http.MethodHead {
@@ -3333,7 +3196,35 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if readCache() != cache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	s.writeJSON(w, response)
+}
+
+// servedSecret returns a cached Secret as it may be served. The cache holds
+// digests in place of a Helm release Secret's values, so that one is read
+// live; false means the answer was already written.
+func (s *Server) servedSecret(w http.ResponseWriter, r *http.Request, cached *corev1.Secret) (any, bool) {
+	// A HEAD lookup only asks whether the Secret exists, so it never needs
+	// the values the cache replaces with digests.
+	if !k8score.IsHelmReleaseSecret(cached) || r.Method == http.MethodHead {
+		return cached, true
+	}
+	live, status, err := s.getLiveSecret(r, cached.Namespace, cached.Name)
+	if err != nil {
+		s.writeError(w, status, err.Error())
+		return nil, false
+	}
+	if live.UID != cached.UID {
+		// Not the object the cache answered for: recreated since, or
+		// the cluster context switched mid-request. Retryable.
+		s.writeErrorCode(w, http.StatusServiceUnavailable, "cluster_connecting",
+			fmt.Sprintf("Secret %s/%s changed while it was being read, please retry", cached.Namespace, cached.Name))
+		return nil, false
+	}
+	return live, true
 }
 
 // getLiveSecret reads one Secret from the API server as the caller. It
@@ -4376,7 +4267,7 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 				s.writeApplyResourceError(w, http.StatusForbidden, errMsg, results, i, len(docs))
 				return
 			}
-			if apierrors.IsNotFound(err) {
+			if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 				s.writeApplyResourceError(w, http.StatusNotFound, errMsg, results, i, len(docs))
 				return
 			}
@@ -4448,7 +4339,7 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -4493,7 +4384,7 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 		Force:     force,
 	}, client)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -4528,8 +4419,8 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		namespace = ""
 	}
 
-	if status, message, ok := s.preflightResourceGet(r, kind, namespace, name, group); !ok {
-		s.writeError(w, status, message)
+	if failure := s.preflightResourceGet(r, kind, namespace, name, group); failure != nil {
+		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
 	cachedTopo := s.broadcaster.GetCachedTopology()
@@ -4655,7 +4546,7 @@ func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
 			s.writeRolloutError(w, err, "restart", namespace, name)
 			return
 		}
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -4703,7 +4594,7 @@ func (s *Server) handleScaleWorkload(w http.ResponseWriter, r *http.Request) {
 	}
 	err := k8s.ScaleWorkloadWithClient(r.Context(), kind, namespace, name, req.Replicas, client)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -4757,7 +4648,7 @@ func (s *Server) handleWorkloadRevisions(w http.ResponseWriter, r *http.Request)
 
 	revisions, err := k8s.ListWorkloadRevisionsWithClient(r.Context(), kind, namespace, name, client)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -4819,7 +4710,7 @@ func (s *Server) handleRollbackWorkload(w http.ResponseWriter, r *http.Request) 
 			s.writeRolloutError(w, err, "rollback", namespace, name)
 			return
 		}
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -5047,7 +4938,7 @@ func (s *Server) handleCAPIClusterKubeconfig(w http.ResponseWriter, r *http.Requ
 	secretName := name + "-kubeconfig"
 	secret, err := client.CoreV1().Secrets(ns).Get(r.Context(), secretName, metav1.GetOptions{})
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, fmt.Sprintf("kubeconfig secret %q not found in namespace %q", secretName, ns))
 			return
 		}
@@ -5105,7 +4996,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	secretName := name + "-kubeconfig"
 	secret, err := client.CoreV1().Secrets(ns).Get(r.Context(), secretName, metav1.GetOptions{})
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, fmt.Sprintf("kubeconfig secret %q not found in namespace %q", secretName, ns))
 			return
 		}

@@ -338,7 +338,24 @@
         },
         "systemRbac": { "type": "boolean" },
         "aiRbac": { "type": "boolean" },
-        "insecureSkipVerify": { "type": "boolean" }
+        "insecureSkipVerify": { "type": "boolean" },
+        "hubURL": {
+          "type": "string",
+          "pattern": "^(https?://.*)?$",
+          "description": "Hub address for joining with an enrollment key. Must start with https:// (http:// only for localhost)."
+        },
+        "enrollment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "existingSecretKey": { "type": "string" }
+          }
+        },
+        "clusterNamePrefix": { "type": "string" },
+        "clusterNameSuffix": { "type": "string" },
+        "caBundle": { "type": "string" }
       }
     },
     "usageReporting": {

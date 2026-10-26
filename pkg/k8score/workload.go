@@ -95,7 +95,7 @@ type ApplyResourceResult struct {
 	Submitted  *unstructured.Unstructured `json:"-"`
 
 	// Warnings are advisory notes derived from the actual state of the cluster
-	// (e.g., "this resource is reconciled by Helm" or "field X you omitted is
+	// (e.g., "its metadata says Helm installed it" or "field X you omitted is
 	// still present after apply because manager Y owns it"). They never block
 	// the apply — the apply succeeded if no error was returned. Treat each
 	// entry as a self-contained sentence.

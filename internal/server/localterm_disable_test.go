@@ -243,7 +243,8 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 		{name: "supported loopback deployment", server: Server{listenAddress: DefaultListenAddress}, host: "localhost:9280", want: true},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/capabilities", nil)
 			w := httptest.NewRecorder()
@@ -269,7 +270,7 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	k8s.InvalidateCapabilitiesCache()
-	for _, tt := range []struct {
+	disconnected := []struct {
 		name   string
 		server Server
 		host   string
@@ -277,7 +278,9 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 	}{
 		{name: "supported loopback deployment", server: Server{listenAddress: DefaultListenAddress}, host: "localhost:9280", want: true},
 		{name: "shared listener", server: Server{listenAddress: AllInterfacesAddress}, host: "localhost:9280", want: false},
-	} {
+	}
+	for i := range disconnected {
+		tt := &disconnected[i]
 		t.Run("disconnected/"+tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/capabilities", nil)
 			w := httptest.NewRecorder()

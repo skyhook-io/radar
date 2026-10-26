@@ -1,12 +1,12 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit, useIssues } from '../../api/client'
+import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
 import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
-import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
-import { readErrorBody } from '../../api/httpErrors'
+import { stripBasename } from '../../api/config'
+import { createListRefetchInterval, type ResourceListResult } from '../../api/resourceLists'
 import { useAPIResources } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
 import { getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
@@ -22,9 +22,8 @@ import {
   CORE_RESOURCES,
   intersectWorkloadWrites,
   hasCuratedColumns,
-  sanitizePrinterTable,
 } from '@skyhook-io/k8s-ui'
-import type { Capabilities, PrinterTable, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
+import type { Capabilities, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
@@ -134,7 +133,6 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const canBulkScaleSelectedKind = useMemo(() => canBulkScaleKind(selectedKind, workloadWrites), [selectedKind, workloadWrites])
 
   // Lightweight resource counts for sidebar badges (~2KB instead of ~608MB)
-  const namespacesParam = namespaces.join(',')
   const { data: countsData, isError: countsIsError } = useResourceCounts(namespaces)
 
   // Determine if selected kind is a CRD (only CRDs should send ?group= to backend)
@@ -196,23 +194,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // unguarded on exactly the clusters the guard protects. Counts arrive
   // right after 'connected' and settle the guard then.
   const syncShellActive = connection.state === 'connecting'
-  // A kind whose sync deadline fired is unavailable-with-a-reason: hand it to
-  // the list endpoint, whose 503 kind_sync_failed renders the honest error —
-  // the guard would otherwise trap it on "count unavailable" forever. Safe to
-  // unblock: the server serves no rows for a failed kind.
-  const selectedCountFailedSync =
-    selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_failed'
-  // A guarded kind whose informer hasn't finished reports unavailable with a
-  // kind_sync_pending reason — "count not known YET", so keep the loading
-  // state. Keyed on the reason, not on connection.state: deferred kinds sync
-  // after connect. Reasonless unavailable stays a real verification failure
-  // and blocks the view as before.
+  // A reasoned unavailable count must reach the list endpoint, which supplies
+  // the collector error without materializing an unchecked large payload.
+  const selectedCountReadFailure = selectedCountUnavailable &&
+    Boolean(countsData?.reasons?.[selectedCountKey]) &&
+    countsData?.reasons?.[selectedCountKey] !== 'kind_sync_pending'
   const selectedCountPendingSync =
     (selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_pending') ||
-    (syncShellActive && selectedCountUnavailable && !selectedCountFailedSync)
+    (syncShellActive && selectedCountUnavailable && !selectedCountReadFailure)
   const waitingForGuardCount = isSelectedKindGuarded &&
     ((!countsData && (!countsIsError || syncShellActive)) || selectedCountPendingSync)
-  const largeListBlocked = isSelectedKindGuarded && countsData != null && !selectedCountPendingSync && !selectedCountFailedSync &&
+  const largeListBlocked = isSelectedKindGuarded && countsData != null && !selectedCountPendingSync && !selectedCountReadFailure &&
     (selectedCountUnavailable || (selectedCountKnown && (selectedCount ?? 0) > selectedKindRowLimit))
   const selectedKindQueryBlocked = waitingForGuardCount || largeListBlocked
   const podCount = countsData?.counts.Pod
@@ -240,64 +232,30 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       }
     : null
 
+  const loadingInterval = useMemo(() => createListRefetchInterval(120000), [])
+
   // Fetch full data only for the selected kind
   const selectedKindQuery = useQuery({
     queryKey: ['resources', selectedKind?.name, isSelectedCrd ? selectedKind?.group : '', namespaces],
-    queryFn: async (): Promise<{ items: any[]; printerTable: PrinterTable | null }> => {
-      if (!selectedKind) return { items: [], printerTable: null }
-      const params = new URLSearchParams()
-      if (namespaces.length > 0) params.set('namespaces', namespacesParam)
-      if (isSelectedCrd && selectedKind.group) params.set('group', selectedKind.group)
-      if (selectedKindSummaryServed) params.set('include', 'summary')
+    queryFn: async ({ signal }): Promise<ResourceListResult<any>> => {
+      if (!selectedKind) return { items: [], coverage: { status: 'unknown' }, printerTable: null }
       // Only CRDs can declare printer columns, and a curated kind discards the
       // result — so table mode is requested from exactly the kinds that can use
       // it. Resolving a table costs the server a CRD read per request; doing
       // that for a kind whose columns are hand-curated is pure waste.
-      const wantsTable = isSelectedCrd && !!selectedKind.group &&
-        !hasCuratedColumns(selectedKind.name, selectedKind.group)
-      if (wantsTable) params.set('table', '1')
-      const startedAt = performance.now()
-      debugNamespaceLog('resources:selected-kind-fetch-start', {
-        kind: selectedKind.name,
-        group: isSelectedCrd ? selectedKind.group : '',
-        namespaces,
-        params: params.toString(),
+      const wantsTable = isSelectedCrd && !!selectedKind.group && !hasCuratedColumns(selectedKind.name, selectedKind.group)
+      return fetchResourceList(selectedKind.name, {
+        namespaces, group: isSelectedCrd ? selectedKind.group : undefined,
+        summary: selectedKindSummaryServed, table: wantsTable, signal,
       })
-      const res = await fetch(apiUrl(`/resources/${selectedKind.name}?${params}`), {
-        credentials: getCredentialsMode(),
-        headers: getAuthHeaders(),
-      })
-      debugNamespaceLog('resources:selected-kind-fetch-response', {
-        kind: selectedKind.name,
-        group: isSelectedCrd ? selectedKind.group : '',
-        namespaces,
-        params: params.toString(),
-        status: res.status,
-        durationMs: Math.round(performance.now() - startedAt),
-      })
-      if (!res.ok) {
-        const errorData = await readErrorBody(res)
-        throw new ApiError(errorData.error || `Failed to fetch ${selectedKind.name}`, res.status, errorData)
-      }
-      const body = await res.json()
-      // Both branches are current shapes, not a guess at a legacy one: a Radar
-      // backend that predates `table` ignores the parameter and answers with
-      // the bare array. @skyhook-io/radar-app is versioned independently of the
-      // backend it points at, so a consumer can pair a new frontend with an
-      // older Radar — and reading that array as a missing envelope would render
-      // every CRD list empty. Items and columns still come from one response,
-      // so a row can never render against another fetch's cells.
-      if (!wantsTable || Array.isArray(body)) return { items: body as any[], printerTable: null }
-      return {
-        items: Array.isArray(body?.items) ? body.items as any[] : [],
-        printerTable: sanitizePrinterTable(body),
-      }
     },
     enabled: !!selectedKind && !selectedKindQueryBlocked && resourceKindListMode(selectedKind, hostFeatures, capabilitiesPending) === 'table',
     staleTime: 30000,
-    refetchInterval: 120000, // Safety net — SSE k8s_event drives near-real-time invalidation
+    // Safety net — SSE k8s_event drives near-real-time invalidation. A list
+    // whose namespaces are still loading is re-read until they finish.
+    refetchInterval: loadingInterval,
     retry: (failureCount: number, error: Error) => {
-      if (isForbiddenError(error) || isKindSyncFailed(error)) return false
+      if (isForbiddenError(error) || isKindSyncFailed(error) || isUnretryableReadError(error)) return false
       // Cluster still connecting, or this kind's informer still completing
       // its initial sync: keep the query in its loading state and retry —
       // the header's sync-progress label explains the wait.
@@ -314,13 +272,14 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return {
       resourceName: selectedKind.name,
       group: selectedKind.group,
+      coverage: selectedKindQuery.data?.coverage,
       data: selectedKindQueryBlocked ? [] : selectedKindQuery.data?.items,
       isLoading: waitingForGuardCount || selectedKindQuery.isLoading,
       error: selectedKindQueryBlocked ? undefined : selectedKindQuery.error,
       refetch: selectedKindQuery.refetch,
       dataUpdatedAt: selectedKindQuery.dataUpdatedAt,
     }
-  }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data?.items, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
+  }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data?.items, selectedKindQuery.data?.coverage, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
 
   // Metrics
   const { data: topPodMetrics } = useTopPodMetrics({ enabled: topPodMetricsEnabled, namespaces })
@@ -425,13 +384,16 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       apiResources={apiResources}
       // Lightweight counts for sidebar (replaces 233 parallel queries)
       resourceCounts={countsData?.counts ?? EMPTY_RESOURCE_COUNTS}
+      resourceCoverage={countsData?.coverage}
       resourceForbidden={countsData?.forbidden}
       resourceReasons={countsData?.reasons}
       resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
       printerTable={selectedKindQueryBlocked ? null : selectedKindQuery.data?.printerTable ?? null}
       connectionState={connection.state === 'connecting' && connection.syncStatus ? 'syncing' : connection.state}
-      largeListGuard={largeListGuard}
+      largeListGuard={selectedKind && isListTooLargeError(selectedKindQuery.error)
+        ? { kind: selectedKind.name, reason: 'too-many', count: typeof selectedKindQuery.error.data?.count === 'number' ? selectedKindQuery.error.data.count : undefined, limit: selectedKindRowLimit, namespaces }
+        : largeListGuard}
       onSelectedKindChange={setSelectedKind}
       sidebarCategoryWorkspaces={cnpgSidebarWorkspace}
       topPodMetrics={topPodMetrics}

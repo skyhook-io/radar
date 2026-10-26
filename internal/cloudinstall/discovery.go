@@ -89,7 +89,13 @@ type DeploymentRuntime struct {
 	CloudTokenConfigured  bool
 	CloudTokenSecretName  string
 	CloudTokenSecretKey   string
-	AlreadyCloud          bool
+	// Enrollment mode: Radar joins with a shared key instead of a configured
+	// token.
+	EnrollmentConfigured bool
+	HubURL               string
+	HubURLConfigured     bool
+	HubURLUnresolved     bool
+	AlreadyCloud         bool
 }
 
 type DiscoveryOptions struct {
@@ -241,6 +247,10 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 	runtime.CloudURL, runtime.CloudURLConfigured = argumentValue(container.Args, "--cloud-url")
 	runtime.ClusterName, runtime.ClusterNameConfigured = argumentValue(container.Args, "--cluster-name")
 	cloudTokenValue, cloudTokenArg := argumentValue(container.Args, "--cloud-token")
+	runtime.HubURL, runtime.HubURLConfigured = argumentValue(container.Args, "--cloud-hub-url")
+	if keyFile, ok := argumentValue(container.Args, "--cloud-enrollment-key-file"); ok && keyFile != "" {
+		runtime.EnrollmentConfigured = true
+	}
 
 	for _, env := range container.Env {
 		switch env.Name {
@@ -263,6 +273,16 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 				runtime.ClusterNameConfigured = env.Value != "" || env.ValueFrom != nil
 				runtime.ClusterNameUnresolved = env.ValueFrom != nil
 			}
+		case "RADAR_CLOUD_HUB_URL":
+			if !runtime.HubURLConfigured {
+				runtime.HubURL = env.Value
+				runtime.HubURLConfigured = env.Value != "" || env.ValueFrom != nil
+				runtime.HubURLUnresolved = env.ValueFrom != nil
+			}
+		case "RADAR_CLOUD_ENROLLMENT_KEY_FILE":
+			if env.Value != "" || env.ValueFrom != nil {
+				runtime.EnrollmentConfigured = true
+			}
 		case "RADAR_CLOUD_TOKEN":
 			runtime.CloudTokenConfigured = env.Value != "" || env.ValueFrom != nil
 			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
@@ -272,7 +292,7 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 		}
 	}
 	runtime.CloudTokenConfigured = runtime.CloudTokenConfigured || (cloudTokenArg && cloudTokenValue != "")
-	runtime.AlreadyCloud = runtime.CloudMode || runtime.CloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured
+	runtime.AlreadyCloud = runtime.CloudMode || runtime.CloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured || runtime.EnrollmentConfigured
 	return runtime
 }
 
@@ -549,4 +569,10 @@ func controllerGVRs(ref subject.Ref) []schema.GroupVersionResource {
 	default:
 		return nil
 	}
+}
+
+// UsesEnrollment reports a Radar that joins its Hub with an enrollment key
+// rather than a configured token. A configured token wins, as in the binary.
+func (r DeploymentRuntime) UsesEnrollment() bool {
+	return r.EnrollmentConfigured && !r.CloudTokenConfigured
 }

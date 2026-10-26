@@ -5,6 +5,50 @@
 {{- fail "timeline.postgres.existingSecret is required when timeline.storage=postgres" }}
 {{- end }}
 {{- $basePath := include "radar.basePath" . -}}
+{{- $enroll := include "radar.cloudEnrollmentMode" . | eq "true" -}}
+{{- $cloudCA := and $enroll (not (empty .Values.cloud.caBundle)) -}}
+{{- if $enroll }}
+{{- $e := .Values.cloud.enrollment }}
+{{- /* The same rules Radar applies to --cloud-hub-url at startup, so a bad
+       address fails here instead of crash looping the pod. */}}
+{{- $hub := urlParse (toString .Values.cloud.hubURL) }}
+{{- $hubHost := regexReplaceAll ":[0-9]*$" $hub.host "" | trimPrefix "[" | trimSuffix "]" | lower }}
+{{- if or (not (has $hub.scheme (list "http" "https"))) (not $hubHost) }}
+{{- fail "cloud.hubURL must be the Hub's address, like https://hub.example.com" }}
+{{- end }}
+{{- if $hub.userinfo }}
+{{- fail "cloud.hubURL must not include credentials" }}
+{{- end }}
+{{- if not (has $hub.path (list "" "/")) }}
+{{- fail "cloud.hubURL must not include a path: use the Hub's address only, like https://hub.example.com" }}
+{{- end }}
+{{- if or $hub.query $hub.fragment (contains "#" (toString .Values.cloud.hubURL)) }}
+{{- fail "cloud.hubURL must not include a query string or fragment" }}
+{{- end }}
+{{- if and (eq $hub.scheme "http") (not (or (eq $hubHost "localhost") (hasPrefix "127." $hubHost) (eq $hubHost "::1"))) }}
+{{- fail "cloud.hubURL must use https:// unless the host is localhost or a loopback address" }}
+{{- end }}
+{{- if and $e.key $e.existingSecret }}
+{{- fail "cloud.enrollment.key and cloud.enrollment.existingSecret are mutually exclusive: set only one (prefer existingSecret so the key stays out of the Helm release)" }}
+{{- end }}
+{{- if and $e.key (not (hasPrefix "rhe_" (toString $e.key))) }}
+{{- fail "cloud.enrollment.key must be a Radar Hub enrollment key, which starts with rhe_. An owner creates one in Radar Hub under Settings > Enrollment keys. On a self-hosted Hub, the install key from the Hub's config works too." }}
+{{- end }}
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount must be 1 when Radar joins with cloud.enrollment: the Hub keeps one connection per cluster, so any other replica would only wait for it" }}
+{{- end }}
+{{- if .Values.cloud.insecureSkipVerify }}
+{{- fail "cloud.insecureSkipVerify cannot be used with cloud.enrollment: the enrollment key would be sent to an unverified server. Give the Hub's CA with cloud.caBundle instead" }}
+{{- end }}
+{{- end }}
+{{- /* Older images don't know the enrollment flags and refuse to start.
+       Only release-style tags are checked; others can't be compared. */}}
+{{- if $enroll }}
+{{- $tag := toString .Values.image.tag }}
+{{- if and (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+" $tag) (semverCompare "<1.18.2-0" $tag) }}
+{{- fail (printf "cloud.enrollment requires Radar 1.18.2 or later, but image.tag pins %s. Unset image.tag to use the chart's version, or pin 1.18.2 or later." $tag) }}
+{{- end }}
+{{- end }}
 {{- if and $basePath .Values.cloud.enabled }}
 {{- fail "basePath is not supported with cloud.enabled=true: Radar Cloud owns the URL path, and the binary refuses the combination at startup — unset one of them" }}
 {{- end }}
@@ -33,7 +77,10 @@ metadata:
     {{- include "radar.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") }}
+  {{- /* Enrollment: the Hub keeps one connection per cluster. In a rolling
+         update the new pod would wait until the old one is gone and the Hub
+         sees its connection drop. */}}
+  {{- if or $enroll (and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite")) }}
   strategy:
     type: Recreate
   {{- end }}
@@ -53,6 +100,10 @@ spec:
         checksum/rbac: {{ toJson .Values.rbac | sha256sum }}
         {{- if not .Values.cloud.enabled }}
         checksum/operator-settings: {{ include "radar.operatorSettings" . | sha256sum }}
+        {{- end }}
+        {{- if $cloudCA }}
+        {{- /* Radar reads the CA bundle once at startup. */}}
+        checksum/cloud-ca: {{ .Values.cloud.caBundle | sha256sum }}
         {{- end }}
       labels:
         {{- include "radar.selectorLabels" . | nindent 8 }}
@@ -201,9 +252,21 @@ spec:
             - --auth-oidc-enable-pkce
             {{- end }}
             {{- end }}
-            {{- if .Values.cloud.enabled }}
+            {{- if $enroll }}
+            - {{ printf "--cloud-hub-url=%s" .Values.cloud.hubURL | quote }}
+            - --cloud-enrollment-key-file=/etc/radar/cloud-enrollment/key
+            {{- with .Values.cloud.clusterName }}
+            - {{ printf "--cluster-name=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.cloud.clusterNamePrefix }}
+            - {{ printf "--cluster-name-prefix=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.cloud.clusterNameSuffix }}
+            - {{ printf "--cluster-name-suffix=%s" . | quote }}
+            {{- end }}
+            {{- else if .Values.cloud.enabled }}
             {{- if not (or .Values.cloud.token .Values.cloud.existingSecret) }}
-            {{- fail "cloud.token or cloud.existingSecret must be set when cloud.enabled=true" }}
+            {{- fail "cloud.token or cloud.existingSecret must be set when cloud.enabled=true, or cloud.hubURL with cloud.enrollment.key or cloud.enrollment.existingSecret to join with an enrollment key" }}
             {{- end }}
             - --cloud-url={{ required "cloud.url is required when cloud.enabled=true" .Values.cloud.url }}
             - --cluster-name={{ required "cloud.clusterName is required when cloud.enabled=true" .Values.cloud.clusterName }}
@@ -211,6 +274,9 @@ spec:
             - --cloud-insecure-skip-verify
             {{- end }}
             {{- /* cloud.token is injected via RADAR_CLOUD_TOKEN env var below, not the command line */}}
+            {{- end }}
+            {{- if $cloudCA }}
+            - --cloud-ca-file=/etc/radar/cloud-ca/ca.crt
             {{- end }}
             {{- /* extraArgs come last: a repeated scalar flag wins, a repeatable one is appended */}}
             {{- range .Values.extraArgs }}
@@ -400,6 +466,16 @@ spec:
             - name: data
               mountPath: /data
             {{- end }}
+            {{- if $enroll }}
+            - name: cloud-enrollment-key
+              mountPath: /etc/radar/cloud-enrollment
+              readOnly: true
+            {{- end }}
+            {{- if $cloudCA }}
+            - name: cloud-ca
+              mountPath: /etc/radar/cloud-ca
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -417,6 +493,22 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "radar.fullname" . }}
+        {{- end }}
+        {{- if $enroll }}
+        - name: cloud-enrollment-key
+          secret:
+            secretName: {{ include "radar.cloudEnrollmentKeySecretName" . }}
+            items:
+              - key: {{ ternary (.Values.cloud.enrollment.existingSecretKey | default "key") "key" (not (empty .Values.cloud.enrollment.existingSecret)) }}
+                path: key
+        {{- end }}
+        {{- if $cloudCA }}
+        - name: cloud-ca
+          configMap:
+            name: {{ include "radar.fullname" . }}-cloud-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
