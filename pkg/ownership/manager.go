@@ -273,8 +273,8 @@ func (v *View) checkClaim(claimed resourceid.Ref, recorders []resourceid.Ref, fo
 	case !subject.Present():
 		return ClaimUnchecked
 	}
-	// Only the list's state matters here: its members would cost as much as
-	// a large Application lists.
+	// Only the list's state matters here: building its members would cost
+	// as much as a large Application lists.
 	members := v.session.Membership(claimed)
 	if members.Manager.State != Present || members.Manager.Object.UID != subject.Read.Object.UID {
 		return ClaimUnchecked
