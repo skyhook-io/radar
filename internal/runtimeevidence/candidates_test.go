@@ -288,7 +288,7 @@ func TestDefinitivePermissionDenialDoesNotAskForRetry(t *testing.T) {
 	}
 }
 
-func TestCompletedPermissionResponsesAreNotDiscardedByLaterCancellation(t *testing.T) {
+func TestLatePermissionResponsesAreRejectedAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client := fake.NewClientset()
@@ -299,7 +299,7 @@ func TestCompletedPermissionResponsesAreNotDiscardedByLaterCancellation(t *testi
 		}
 		return true, &authv1.SelfSubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
-	if allowed, err := CheckAccessResult(ctx, client, Target{Namespace: "lab", Pod: "rabbit"}); !allowed || err != nil {
-		t.Fatalf("completed responses were discarded: allowed=%v error=%v", allowed, err)
+	if allowed, err := CheckAccessResult(ctx, client, Target{Namespace: "lab", Pod: "rabbit"}); allowed || !errors.Is(err, context.Canceled) {
+		t.Fatalf("late permission response was accepted: allowed=%v error=%v", allowed, err)
 	}
 }

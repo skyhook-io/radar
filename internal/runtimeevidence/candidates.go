@@ -285,6 +285,10 @@ func CheckAccessResult(ctx context.Context, client kubernetes.Interface, target 
 				failures[i] = err
 				return
 			}
+			if err := ctx.Err(); err != nil {
+				failures[i] = err
+				return
+			}
 			if r.Status.Denied || (!r.Status.Allowed && r.Status.EvaluationError == "") {
 				denied[i] = true
 				return
