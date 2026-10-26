@@ -736,7 +736,7 @@ export interface OwnershipCoverage {
     remote?: number
     notChecked?: OwnershipGap[]
   }
-  /** What manages this resource, from its own evidence or its nearest controller ancestor's. Absent from Radars that predate it. */
+  /** What manages this resource, from its own evidence or its nearest controller ancestor's. Absent means no answer (a Radar that predates it, or unavailableReason), never "none". */
   manager?: ManagerAnswer
   /** A readreason code when Radar couldn't answer at all. */
   unavailableReason?: string
@@ -746,15 +746,15 @@ export interface OwnershipCoverage {
 export interface ManagerAnswer {
   /** none: no evidence in what Radar collects and the viewer may read, never "unmanaged". */
   state: 'shared' | 'disagree' | 'agree' | 'listed' | 'claimed' | 'unknown' | 'none'
-  /** The manager to show first, when the state has one. */
+  /** The manager to show first, never a verdict: the recorder for agree/listed; for shared, the one recorder a claim names, if exactly one; for claimed, the manager every claim names, if they agree. Its namespace is "" when it comes from a claim that names none. */
   lead?: ResourceRef
   /** The evidence on the resource itself. */
   direct: ManagerEvidence
-  /** The nearest controller ancestor's evidence, when the resource's own doesn't settle it; state and lead then come from it. */
+  /** The nearest controller ancestor's evidence that settles it when the resource's own doesn't, or, when nothing does and the resource makes no claim that isn't copied, the nearest ancestor that makes one; state and lead then come from it. */
   via?: ManagerEvidence
-  /** Objects the walk passed before via that make claims, or that Radar couldn't search fully where it could this resource's. */
+  /** Objects the walk passed before via (or up the whole walk, without via) that make claims, or that Radar couldn't search fully where it could this resource's. */
   between?: ManagerEvidence[]
-  /** Why the walk up the controller chain stopped before an ancestor could answer. */
+  /** Why a walk that found no settling evidence stopped short. Absent when evidence settled it first, or the walk reached the chain's top. */
   chainEnd?: 'unfollowed' | 'cycle' | 'truncated'
   /** The controller reference the walk couldn't follow, when chainEnd is unfollowed. */
   stop?: {
@@ -776,22 +776,24 @@ export interface ManagerEvidence {
   recorders?: ResourceRef[]
   /** Managers its own metadata names. */
   claims?: ManagerClaim[]
-  /** Managers that may list it without Radar being able to tell. */
+  /** Managers whose lists may name it but can't be read. */
   unreadable?: number
+  /** Managers whose lists name its coordinates for a cluster Radar can't confirm is this one. */
   remote?: number
+  /** Manager kinds and namespaces the search for its recorders couldn't cover. */
   notChecked?: OwnershipGap[]
   /** Radar couldn't check whether the viewer may read some of what the search found. */
   undecided?: boolean
 }
 
 export interface ManagerClaim {
-  /** Its namespace is absent when the metadata doesn't say. */
+  /** Its namespace is "" when the metadata doesn't say. */
   manager: ResourceRef
   source: 'flux-helm-labels' | 'flux-kustomize-labels' | 'argo-tracking-id' | 'argo-instance-label' | 'helm-release'
   check: 'recorded' | 'omitted' | 'unreadable' | 'remote' | 'missing' | 'not-recording' | 'unresolved' | 'withheld' | 'unchecked'
   /** An Argo CD tracking ID naming another object. */
   copied?: boolean
-  /** Copied, or an instance label or Helm release annotation on an object a controller owns: it doesn't settle the question for its object. */
+  /** Copied, or an instance label or Helm release annotation on an object a controller owns: it doesn't stop the walk. One that isn't copied can still answer when nothing on the chain settles it. */
   weak?: boolean
 }
 

@@ -11,6 +11,12 @@ import (
 
 // ManagerState sums up what the evidence says manages an object. It never
 // names a winner the evidence doesn't support: a disagreement stays one.
+//
+// "Claims" in the states are the claims that count: a copied claim names
+// another object's manager and never counts, and a native Helm release's
+// counts only when no list names the object and no GitOps claim exists, since
+// Flux's helm-controller and adopted installs carry its annotations too.
+// Every claim stays in the evidence either way.
 type ManagerState string
 
 const (
@@ -22,7 +28,7 @@ const (
 	// ManagerAgree: one manager's list names it and every claim its metadata
 	// makes names that manager.
 	ManagerAgree ManagerState = "agree"
-	// ManagerListed: one manager's list names it; its metadata names none.
+	// ManagerListed: one manager's list names it; no claim counts.
 	ManagerListed ManagerState = "listed"
 	// ManagerClaimed: only its metadata names a manager, whose list couldn't
 	// confirm it (see each claim's Check).
@@ -49,7 +55,7 @@ const (
 	// ClaimRemote: the claimed manager applies to a cluster Radar can't
 	// confirm is this one.
 	ClaimRemote ClaimCheck = "remote"
-	// ClaimMissing: Radar holds no claimed manager.
+	// ClaimMissing: no such manager exists in this cluster.
 	ClaimMissing ClaimCheck = "missing"
 	// ClaimNotRecording: the claimed manager keeps no list, as a native Helm
 	// release.
@@ -60,7 +66,10 @@ const (
 	// ClaimWithheld: the caller may not read the claimed manager, so nothing
 	// is said of it.
 	ClaimWithheld ClaimCheck = "withheld"
-	// ClaimUnchecked: Radar couldn't read the claimed manager.
+	// ClaimUnchecked: Radar couldn't establish what the manager's list says:
+	// it couldn't read or decide access to the manager, the manager was
+	// replaced since the search, or the search didn't cover it. Unlike
+	// ClaimUnreadable, the list itself may be fine.
 	ClaimUnchecked ClaimCheck = "unchecked"
 )
 
@@ -69,10 +78,11 @@ const (
 type CheckedClaim struct {
 	gitops.Claim
 	Check ClaimCheck
-	// Weak: the claim doesn't settle the question for its object: it was
+	// Weak: the claim doesn't stop the walk up the controller chain: it was
 	// copied from another object, or it is metadata an object a controller
 	// owns commonly inherits, an Argo CD instance label from its template or
-	// a Helm release's annotations from its Deployment.
+	// a Helm release's annotations from its Deployment. A weak claim that
+	// isn't copied can still answer when nothing on the chain settles it.
 	Weak bool
 }
 
@@ -103,8 +113,9 @@ func (e ManagerEvidence) strong() bool {
 	return len(e.Recorders) > 0 || slices.ContainsFunc(e.Claims, func(c CheckedClaim) bool { return !c.Weak })
 }
 
-// ChainEnd says why a walk up the controller chain stopped before an
-// ancestor's evidence could answer; empty when it reached the chain's top.
+// ChainEnd says why a walk up the controller chain that found no evidence
+// settling the question stopped short. It is empty when evidence settled it
+// first, whatever lies above, or when the walk reached the chain's top.
 type ChainEnd string
 
 const (
@@ -117,20 +128,23 @@ const (
 type ManagerAnswer struct {
 	Subject Subject
 	State   ManagerState
-	// Lead is the manager to show first, when the state has one: never a
-	// verdict the evidence doesn't support.
+	// Lead is the manager to show first, never a verdict: the recorder for
+	// agree and listed; for shared, the one recorder a claim names, if exactly
+	// one; for claimed, the manager every claim names, if they agree; none
+	// otherwise. Its namespace is empty when it comes from a claim that
+	// names none, and it may be a manager Radar couldn't read.
 	Lead *resourceid.Ref
 	// Direct is the evidence on the object itself.
 	Direct ManagerEvidence
 	// Via is the evidence of the nearest controller ancestor that settles
 	// the question, when the object's own doesn't, or, when no object does
-	// and the object's metadata claims nothing, of the nearest that claims a
-	// manager; State and Lead are then derived from it.
+	// and the object makes no claim that isn't copied, of the nearest
+	// ancestor that does; State and Lead are then derived from it.
 	Via *ManagerEvidence
 	// Between is the evidence of objects the walk passed, after the object
-	// and before Via, that make claims, or that Radar couldn't search fully
-	// where it could the object's: evidence that didn't settle the question,
-	// kept so an answer can say why.
+	// and before Via (or up the whole walk, without Via), that make claims,
+	// or that Radar couldn't search fully where it could the object's:
+	// evidence that didn't settle the question, kept so an answer can say why.
 	Between  []ManagerEvidence
 	ChainEnd ChainEnd
 	// Stop is the controller reference the walk couldn't follow, when
@@ -152,8 +166,9 @@ type ChainStop struct {
 
 // Manager says what manages ref: the local managers whose lists name it and
 // the claims its metadata makes, or, when those don't settle it, the same of
-// its nearest controller ancestor that does. Evidence that disagrees stays
-// a disagreement.
+// its nearest controller ancestor that does (see Via). Evidence that
+// disagrees stays a disagreement. The answer means something only when
+// Subject is Present; otherwise its State is empty and Subject says why.
 func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 	chain := v.ControllerChain(ref)
 	a := ManagerAnswer{Subject: chain.Subject, Narrowed: v.access != Unrestricted()}
