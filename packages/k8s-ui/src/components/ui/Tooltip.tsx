@@ -2,6 +2,9 @@ import { ReactNode, useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { computeTooltipPosition } from './tooltip-position'
+import { isTouchIntent } from '../../utils/touch-intent'
+
+const ENABLED_CONTROL = 'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [role="button"]:not([aria-disabled="true"])'
 
 // Module-level singleton coordinator: only one Tooltip can be visible
 // at a time across the whole app. Without this, two Tooltip instances
@@ -221,6 +224,8 @@ export function Tooltip({
     }
   }, [isVisible])
 
+  const tapActivatesControl = () => isTouchIntent() && !!triggerRef.current?.querySelector(ENABLED_CONTROL)
+
   if ((disabled && !preserveWrapperWhenDisabled) || !content) {
     return <>{children}</>
   }
@@ -231,12 +236,13 @@ export function Tooltip({
         ref={triggerRef}
         className={clsx('inline-flex max-w-full', wrapperClassName)}
         style={wrapperStyle}
-        // Hover means a real mouse, and focus means keyboard focus: a touch
-        // tap fires both mouse-compat events and focus, which would pop the
-        // tooltip over whatever the tap just opened.
-        onPointerEnter={(e) => { if (e.pointerType === 'mouse') showTooltip() }}
-        onPointerLeave={(e) => { if (e.pointerType === 'mouse') scheduleHideTooltip() }}
-        onFocus={(e) => { if (isFocusVisible(e.target)) showTooltip() }}
+        // A tap fires mouseenter and focus too. On an enabled control the
+        // tap has its own action (often opening a menu), and the tooltip
+        // would pop over it; on disabled or plain content the tap is the
+        // only way a touch user can read the explanation, so it still shows.
+        onMouseEnter={() => { if (!tapActivatesControl()) showTooltip() }}
+        onMouseLeave={scheduleHideTooltip}
+        onFocus={() => { if (!tapActivatesControl()) showTooltip() }}
         onBlur={hideTooltip}
         // pointerdown fires before click, so the tooltip is gone before
         // the trigger's action runs. Required when the child handles
@@ -298,13 +304,4 @@ export function WithTooltip({
       {children}
     </Tooltip>
   )
-}
-
-function isFocusVisible(el: EventTarget): boolean {
-  try {
-    return el instanceof Element && el.matches(':focus-visible')
-  } catch {
-    // Engines without :focus-visible (older jsdom): keep keyboard tooltips.
-    return true
-  }
 }

@@ -2,10 +2,11 @@ import { useLayoutEffect, type RefObject } from 'react'
 
 /** Keeps an open menu or popover horizontally inside the viewport. Anchored
  *  menus open at their trigger's edge with a fixed minimum width, so on a
- *  narrow screen a trigger near the right edge pushes the menu off-screen.
- *  After each layout this shifts the element back by `margin-left` (not
- *  `translate`: Tailwind's translate utilities, used by the overlay motion,
- *  set that same property) and caps its width to the viewport.
+ *  narrow screen a trigger near the edge pushes the menu off-screen. After
+ *  each layout this shifts the element back with the `translate` property
+ *  (which moves it whichever side it's anchored to) and caps its width to the
+ *  viewport. Don't use it on an element whose own motion animates
+ *  `translate`: the inline value would override it.
  *
  *  Runs after every render while `active`, so a menu whose content changes
  *  width (a filter narrowing a list) is re-measured. */
@@ -13,13 +14,13 @@ export function useKeepInViewport(ref: RefObject<HTMLElement | null>, active: bo
   useLayoutEffect(() => {
     const el = ref.current
     if (!active || !el) return
-    el.style.marginLeft = ''
+    el.style.translate = ''
     el.style.maxWidth = `calc(100vw - ${2 * margin}px)`
     const viewport = document.documentElement.clientWidth
     if (el.offsetWidth > viewport - 2 * margin) el.style.minWidth = '0'
     const { left, right } = el.getBoundingClientRect()
     const shift = keepInViewportShift(left, right, viewport, margin)
-    if (shift !== 0) el.style.marginLeft = `${shift}px`
+    if (shift !== 0) el.style.translate = `${shift}px 0`
   })
 }
 

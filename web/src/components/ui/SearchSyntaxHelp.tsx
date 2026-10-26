@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, useCallback, type PointerEvent } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { HelpCircle } from 'lucide-react'
 import { clsx } from 'clsx'
+import { isTouchIntent } from '@skyhook-io/k8s-ui'
 
 // The query operators recognized by the search engine (internal/search/parse.go).
 const OPERATORS: { syntax: string; desc: string }[] = [
@@ -16,9 +17,10 @@ const OPERATORS: { syntax: string; desc: string }[] = [
 // reference tooltip, not a second click-to-open panel stacked over the results).
 // Self-contained + portaled to <body> so the header's stacking context can't
 // trap it; a short close grace lets the pointer travel onto the card.
-// Hover means a real mouse: a touch tap also fires mouse events, and the "?"
-// can sit right under the finger that just opened the search box. On touch
-// the "?" toggles the card instead, and a tap elsewhere closes it.
+// A tap also fires mouseenter, and the "?" can sit right under the finger
+// that just opened the search box, so hover ignores a tap's side effects. A
+// click (a tap, or assistive-technology activation) toggles the card, except
+// right after a mouse hover opened it; a tap elsewhere closes it.
 export function SearchSyntaxHelp() {
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -27,13 +29,11 @@ export function SearchSyntaxHelp() {
   const [anchor, setAnchor] = useState<{ right: number; top: number } | null>(null)
 
   const show = useCallback(() => { clearTimeout(closeTimer.current); setOpen(true) }, [])
+  const openedByHover = useRef(false)
   const scheduleHide = useCallback(() => {
     clearTimeout(closeTimer.current)
     closeTimer.current = setTimeout(() => setOpen(false), 120)
   }, [])
-  const lastPointer = useRef('mouse')
-  const onPointerEnter = (e: PointerEvent) => { if (e.pointerType === 'mouse') show() }
-  const onPointerLeave = (e: PointerEvent) => { if (e.pointerType === 'mouse') scheduleHide() }
 
   useEffect(() => {
     if (!open) return
@@ -69,10 +69,13 @@ export function SearchSyntaxHelp() {
         type="button"
         tabIndex={-1}
         aria-label="Search syntax help"
-        onPointerEnter={onPointerEnter}
-        onPointerLeave={onPointerLeave}
-        onPointerDown={(e) => { lastPointer.current = e.pointerType }}
-        onClick={() => { if (lastPointer.current !== 'mouse') setOpen((o) => !o) }}
+        aria-expanded={open}
+        onMouseEnter={() => { if (!isTouchIntent()) { openedByHover.current = !open; show() } }}
+        onMouseLeave={() => { openedByHover.current = false; scheduleHide() }}
+        onClick={() => {
+          if (openedByHover.current) { openedByHover.current = false; return }
+          setOpen((o) => !o)
+        }}
         onMouseDown={(e) => e.preventDefault()}
         className={clsx('shrink-0 rounded p-0.5 cursor-help transition-colors', open ? 'text-theme-text-secondary' : 'text-theme-text-tertiary hover:text-theme-text-secondary')}
       >
@@ -81,8 +84,8 @@ export function SearchSyntaxHelp() {
       {open && anchor && createPortal(
         <div
           ref={popRef}
-          onPointerEnter={onPointerEnter}
-          onPointerLeave={onPointerLeave}
+          onMouseEnter={show}
+          onMouseLeave={scheduleHide}
           onMouseDown={(e) => e.stopPropagation()}
           style={{ position: 'fixed', top: anchor.top, right: anchor.right, width: 280 }}
           className="z-[130] dialog shadow-theme-lg p-3"
