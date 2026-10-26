@@ -109,6 +109,20 @@ func (s *session) Members(manager resourceid.Ref) ownership.MembersRead {
 	return r
 }
 
+func (s *session) Membership(manager resourceid.Ref) ownership.MembersRead {
+	gk := manager.GroupKind()
+	if !ownership.IsRecordingManager(gk) {
+		return ownership.MembersRead{Manager: unavailable(manager, readreason.ReadError)}
+	}
+	var state ownership.MembershipState
+	read := s.readObject(manager, func(u *unstructured.Unstructured) { state = memberState(gk, u) })
+	r := ownership.MembersRead{Manager: read}
+	if read.State == ownership.Present {
+		r.Membership = state
+	}
+	return r
+}
+
 // builtinKind returns the built-in kind group/kind names, if it is one.
 func builtinKind(group, kind string) (resourceid.Builtin, bool) {
 	b, ok := resourceid.BuiltinForKind(kind)

@@ -335,6 +335,12 @@ func (s scanSession) Members(manager resourceid.Ref) ownership.MembersRead {
 	return r
 }
 
+func (s scanSession) Membership(manager resourceid.Ref) ownership.MembersRead {
+	r := s.Members(manager)
+	r.Members = nil
+	return r
+}
+
 // nameable says why no manager can list ref, or "" when one can: a reference
 // must name an object of a kind whose scope Radar can tell, in that scope, or
 // of a custom kind complete discovery doesn't serve, matched as recorded. A

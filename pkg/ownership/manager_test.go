@@ -381,6 +381,19 @@ func TestManagerKeepsWeakEvidenceAlongTheWalk(t *testing.T) {
 	}
 }
 
+// When no object settles it, a claim the walk passed answers: the Pod is
+// tracked through its ReplicaSet, not unmanaged.
+func TestManagerFallsBackToAWeakClaimOnTheWay(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	d := b.Add("apps", "Deployment", "shop", "web")
+	rs := b.Meta(b.Add("apps", "ReplicaSet", "shop", "web-1", d.OwnerRef(true)), map[string]string{instanceLabel: "argocd_shop"}, nil)
+	pod := b.Add("", "Pod", "shop", "web-1-a", rs.OwnerRef(true))
+	got := view(t, b.World(), ownership.Unrestricted()).Manager(pod.Ref)
+	if got.State != ownership.ManagerClaimed || got.Via == nil || got.Via.Object != rs.Ref || len(got.Between) != 0 {
+		t.Fatalf("answer %+v; want claimed via the ReplicaSet", got)
+	}
+}
+
 // A controller the caller may not read stops the walk: the answer says so,
 // and nothing of the controller.
 func TestManagerStopsAtAWithheldController(t *testing.T) {
