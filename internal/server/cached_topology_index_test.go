@@ -136,3 +136,53 @@ func TestAFailedBuildIsRetriedByTheNextRead(t *testing.T) {
 		t.Fatalf("second read got %v after %d attempts, want the retried build", topo, attempts)
 	}
 }
+
+// A switch to another cluster during a build lets the new cluster's readers,
+// including those already waiting, build for it rather than wait out a build
+// that can't store; the old build's end then disturbs nothing.
+func TestASwitchMidBuildLetsTheNewClusterBuild(t *testing.T) {
+	b := NewSSEBroadcaster()
+	old := topoWithEdge("deployment/x/old", "replicaset/x/old-1")
+	fresh := topoWithEdge("deployment/y/web", "replicaset/y/web-1")
+	oldStarted, releaseOld := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	b.rebuildTopology = func() bool {
+		if calls.Add(1) == 1 {
+			epoch := b.topoEpoch.Load()
+			close(oldStarted)
+			<-releaseOld
+			return b.updateCachedTopology(old, epoch)
+		}
+		return b.updateCachedTopology(fresh, b.topoEpoch.Load())
+	}
+
+	oldReader := make(chan *topology.Topology, 1)
+	go func() { oldReader <- b.GetCachedTopology() }()
+	<-oldStarted
+	waiting := make(chan *topology.Topology, 1)
+	go func() { waiting <- b.GetCachedTopology() }()
+	time.Sleep(50 * time.Millisecond) // let it join the old build
+
+	b.resetCachedTopology()
+	select {
+	case got := <-waiting:
+		if got != fresh {
+			t.Fatalf("waiting reader got %v, want the new cluster's graph", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiting reader kept waiting on the previous cluster's build")
+	}
+	if got := b.GetCachedTopology(); got != fresh {
+		t.Fatalf("new reader got %v, want the new cluster's graph", got)
+	}
+
+	close(releaseOld)
+	if got := <-oldReader; got != fresh {
+		t.Fatalf("old build's reader got %v, want what is cached: the new cluster's graph", got)
+	}
+	b.cachedTopologyMu.RLock()
+	defer b.cachedTopologyMu.RUnlock()
+	if b.cachedTopology != fresh || b.cachedTopologyDirty || b.cachedTopologyFlight != nil {
+		t.Fatal("the old build's end disturbed the new cluster's cache")
+	}
+}
