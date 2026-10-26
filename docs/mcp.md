@@ -1195,8 +1195,9 @@ Application lists; `listedBy` and `claims` are then that ancestor's, and `alsoCl
 metadata (and that of objects in between) names, each `on` its object: commonly inherited from a template, not disproven.
 When nothing settles it and the resource makes no claim that isn't copied, the nearest ancestor whose metadata names a manager answers as `via`, with `claimed`. Claims of
 objects the walk passed appear in `alsoClaimed` with or without `via`. `get_resource` and `diagnose` then leave out the
-metadata-only warning naming an Argo CD, Flux or Helm manager, which this answer weighs; a controller named only by
-`app.kubernetes.io/managed-by` keeps its warning. A tracking ID copied from another object raises no warning anywhere. `lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of
+metadata-only warning naming an Argo CD, Flux or Helm manager, which this answer weighs; metadata the answer doesn't
+weigh keeps its warning: another controller's `app.kubernetes.io/managed-by` label, or Helm named by labels without
+its release annotation. A tracking ID copied from another object raises no warning anywhere. `lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of
 what could name a manager. `managedBy` keeps its own meaning: the topmost owner the relationship graph links.
 
 ### Node placement context

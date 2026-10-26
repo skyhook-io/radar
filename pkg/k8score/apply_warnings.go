@@ -18,32 +18,53 @@ import (
 // when nothing was detected. Detection is deliberately conservative — radar and
 // kubectl are not considered "external".
 func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
+	if c := externalManagers(obj); len(c) > 0 {
+		return c[0].name, c[0].instance
+	}
+	return "", ""
+}
+
+// externalManager is one manager an object's metadata names. claim: the
+// metadata is a claim the GitOps manager answer weighs (gitops.Claims), so a
+// caller reporting that answer needn't repeat it.
+type externalManager struct {
+	name, instance string
+	claim          bool
+}
+
+// externalManagers returns every manager the metadata names, most specific
+// first.
+func externalManagers(obj *unstructured.Unstructured) []externalManager {
 	if obj == nil {
-		return "", ""
+		return nil
 	}
 	labels := obj.GetLabels()
 	annotations := obj.GetAnnotations()
+	var out []externalManager
 
 	if v := labels["argocd.argoproj.io/instance"]; v != "" {
-		return "Argo CD", v
+		out = append(out, externalManager{"Argo CD", v, true})
 	}
-	// A tracking ID copied from another object names that object's manager:
-	// look on for this one's.
+	// A tracking ID copied from another object names that object's manager.
 	if v := annotations["argocd.argoproj.io/tracking-id"]; v != "" && !copiedTrackingID(obj, v) {
-		return "Argo CD", v
+		out = append(out, externalManager{"Argo CD", v, true})
 	}
 
 	if v := labels["kustomize.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := labels["kustomize.toolkit.fluxcd.io/namespace"]; ns != "" {
-			return "Flux (Kustomization)", ns + "/" + v
+		ns := labels["kustomize.toolkit.fluxcd.io/namespace"]
+		instance := v
+		if ns != "" {
+			instance = ns + "/" + v
 		}
-		return "Flux (Kustomization)", v
+		out = append(out, externalManager{"Flux (Kustomization)", instance, ns != ""})
 	}
 	if v := labels["helm.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := labels["helm.toolkit.fluxcd.io/namespace"]; ns != "" {
-			return "Flux (HelmRelease)", ns + "/" + v
+		ns := labels["helm.toolkit.fluxcd.io/namespace"]
+		instance := v
+		if ns != "" {
+			instance = ns + "/" + v
 		}
-		return "Flux (HelmRelease)", v
+		out = append(out, externalManager{"Flux (HelmRelease)", instance, ns != ""})
 	}
 
 	helmRelease := annotations["meta.helm.sh/release-name"]
@@ -53,16 +74,16 @@ func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
 		if instance == "" {
 			instance = labels["app.kubernetes.io/instance"]
 		}
-		return "Helm", instance
+		out = append(out, externalManager{"Helm", instance, helmRelease != ""})
 	}
 
-	if mb := labels["app.kubernetes.io/managed-by"]; mb != "" {
+	if mb := labels["app.kubernetes.io/managed-by"]; mb != "" && !strings.EqualFold(mb, "Helm") {
 		low := strings.ToLower(mb)
 		if low != "kubectl" && low != "radar" {
-			return mb, labels["app.kubernetes.io/instance"]
+			out = append(out, externalManager{mb, labels["app.kubernetes.io/instance"], false})
 		}
 	}
-	return "", ""
+	return out
 }
 
 // formatExternalManagerWarning words the warning as what the metadata says, not

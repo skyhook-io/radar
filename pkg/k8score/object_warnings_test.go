@@ -192,4 +192,14 @@ func TestManagerWarningSkipsCopiesAndKeepsUnmodeledControllers(t *testing.T) {
 			t.Errorf("%s: copied tracking ID beside a cert-manager label: %q; want the cert-manager warning", name, got)
 		}
 	}
+
+	// Beside the answer, a claim it weighs doesn't hide what it doesn't.
+	ownWithCertManager := secret(map[string]any{"app.kubernetes.io/managed-by": "cert-manager"}, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:backup/copy"})
+	if got := EnrichRuntimeObjectAnsweredWarnings(ownWithCertManager); len(got) != 1 || !strings.Contains(got[0], "cert-manager") {
+		t.Errorf("own tracking ID beside a cert-manager label, answered: %q; want the cert-manager warning", got)
+	}
+	helmLabels := secret(map[string]any{"app.kubernetes.io/managed-by": "Helm", "app.kubernetes.io/instance": "chart"}, nil)
+	if got := EnrichRuntimeObjectAnsweredWarnings(helmLabels); len(got) != 1 || !strings.Contains(got[0], "Helm") {
+		t.Errorf("Helm labels without a release annotation, answered: %q; want the Helm warning", got)
+	}
 }

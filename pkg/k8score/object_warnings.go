@@ -21,9 +21,10 @@ func EnrichRuntimeObjectWarnings(obj runtime.Object) []string {
 
 // EnrichRuntimeObjectAnsweredWarnings is EnrichRuntimeObjectWarnings for a
 // caller that reports a GitOps manager answer beside the warnings: the answer
-// weighs Argo CD, Flux and Helm metadata against the managers' lists, so the
-// warning naming one of those is left out. Any other controller its
-// app.kubernetes.io/managed-by label names keeps its warning.
+// weighs the Argo CD, Flux and Helm claims the metadata makes, so a warning
+// naming one of those is left out. Metadata it doesn't weigh keeps its
+// warning: another controller's app.kubernetes.io/managed-by label, or Helm
+// named by labels without its release annotation.
 func EnrichRuntimeObjectAnsweredWarnings(obj runtime.Object) []string {
 	return enrichRuntime(obj, false)
 }
@@ -61,8 +62,13 @@ func enrich(obj *unstructured.Unstructured, withManager bool) []string {
 	}
 	var out []string
 
-	if mgr, instance := detectExternalManager(obj); mgr != "" && (withManager || !answeredManager(mgr)) {
-		out = append(out, formatExternalManagerWarning(mgr, instance))
+	// Beside a manager answer, the first manager its claims don't already
+	// cover: an independent controller label, or Helm named by labels alone.
+	for _, m := range externalManagers(obj) {
+		if withManager || !m.claim {
+			out = append(out, formatExternalManagerWarning(m.name, m.instance))
+			break
+		}
 	}
 
 	if w := deletionTimestampWarning(obj); w != "" {
@@ -217,12 +223,6 @@ func durationShort(d time.Duration) string {
 	}
 	days := int(d.Hours()) / 24
 	return fmt.Sprintf("%dd", days)
-}
-
-// answeredManager reports whether a manager answer weighs the metadata that
-// named mgr.
-func answeredManager(mgr string) bool {
-	return mgr == "Argo CD" || mgr == "Helm" || strings.HasPrefix(mgr, "Flux ")
 }
 
 // copiedTrackingID reports whether instance is an Argo CD tracking ID naming
