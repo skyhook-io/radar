@@ -509,6 +509,17 @@ it.each(['none', 'unknown', 'disagree', 'shared', 'claimed', 'listed'] as const)
   } finally { await h.cleanup() }
 })
 
+// An object adopted since the cache saw it has a manager the cache doesn't.
+it('checks a cached none against the live object', async () => {
+  const cachedNone = { state: 'none' as const, direct: { object: deployment } }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: managerApp, manager: managerAnswer, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager: cachedNone } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(mocks.evidence).toHaveBeenCalled()))
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.owner?.name).toBe('server-app')))
+  } finally { await h.cleanup() }
+})
+
 it('does not guess an Argo namespace or inherit through the browser with an answer', async () => {
   const unresolved = { ...managerAnswer, state: 'claimed' as const, lead: { ...managerApp, namespace: '' } }
   mocks.applications.data = [{ metadata: { name: managerApp.name, namespace: 'guessed' } }]

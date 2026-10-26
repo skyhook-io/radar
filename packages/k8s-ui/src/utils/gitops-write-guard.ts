@@ -103,6 +103,8 @@ export interface GitOpsWritePolicyEvidence {
 
 export interface GitOpsWriteEvidence {
   manager?: ManagerAnswer
+  /** Why the server couldn't answer what manages the live object; the owner hint wasn't used either. */
+  managerUnavailable?: string
   uid: string
   resourceVersion: string
   owner: { kind: string; group?: string; namespace: string; name: string } | null
@@ -437,12 +439,12 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
       }
     }
     if (manager.via && !directClaims.length) {
-      const parent = managerRefLabel(manager.via.object)
+      const parent = `${managerRefLabel(manager.via.object)}, ${parentManagedBy(manager, names)}`
       return {
         level: 'info',
         reason: write.scope === 'delete'
-          ? `Its controller recreates it from ${parent}, which ${names} manages.`
-          : `This resource is generated from ${parent}, which ${names} manages; changes to the parent may replace it.`,
+          ? `Its controller recreates it from ${parent}.`
+          : `This resource is generated from ${parent}; changes to the parent may replace it.`,
       }
     }
     if ((write.scope === 'metadata' || write.scope === 'spec') &&
@@ -525,6 +527,32 @@ export function gitOpsWriteHeadline(guard: GitOpsWriteGuard): string {
   return headline(guard, guard.level)
 }
 
+// parentManagedBy says what the evidence says of a parent, in the words its
+// state allows: only a list and metadata agreeing say a manager manages it.
+function parentManagedBy(manager: ManagerAnswer, names: string): string {
+  switch (manager.state) {
+    case 'agree':
+      return `which ${names} manages`
+    case 'listed':
+    case 'shared':
+      return `which ${names} ${managerCandidates(manager).length > 1 ? 'list' : 'lists'} in ${managerCandidates(manager).length > 1 ? 'their statuses' : 'its status'}`
+    default:
+      return `whose metadata names ${names}`
+  }
+}
+
+// adoptedHelmRelease: a native Helm release's annotations on an object a GitOps
+// manager other than Flux's HelmRelease answers for. Argo CD renders charts
+// with helm template, and a Kustomization applies plain manifests, so the
+// annotations mean a Helm install was adopted: its release can still upgrade
+// or roll back the object, whatever the GitOps manager ignores.
+function adoptedHelmRelease(manager: ManagerAnswer | undefined): string | null {
+  if (!manager?.lead || manager.via) return null
+  if (manager.lead.kind === 'HelmRelease') return null
+  const claim = (manager.direct.claims ?? []).find(c => c.source === 'helm-release' && !c.copied && !c.weak)
+  return claim ? `${claim.manager.namespace ? `${claim.manager.namespace}/` : ''}${claim.manager.name}` : null
+}
+
 // targetOptedOut: the target's own annotations opt it out of its manager's
 // reconciliation, which holds whether or not that manager's list names it.
 function targetOptedOut(input: GitOpsWriteGuardInput): boolean {
@@ -540,18 +568,42 @@ function chainUnread(manager: ManagerAnswer): boolean {
 }
 
 export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWriteGuard {
-  const manager = input.evidence?.manager ?? input.manager
-  const owner = manager ? manager.lead ? gitOpsOwnerFromRef(manager.lead) : null : input.owner ?? null
-  const helmRelease = manager
+  // A live check the server couldn't answer, or one that failed while the
+  // cached answer names a manager, leaves that answer unconfirmed: an exemption
+  // read from it could belong to the object as it was.
+  const cachedNamesManager = Boolean(input.manager && (input.manager.via || !['none', 'unknown'].includes(input.manager.state)))
+  const unconfirmed = input.evidence?.managerUnavailable || (!input.evidence && input.evidenceError && cachedNamesManager ? input.evidenceError : null)
+  const manager = unconfirmed ? undefined : input.evidence?.manager ?? input.manager
+  const owner = unconfirmed ? null : manager ? manager.lead ? gitOpsOwnerFromRef(manager.lead) : null : input.owner ?? null
+  const helmRelease = unconfirmed ? null : manager
     ? manager.lead?.kind === 'HelmRelease' && !manager.lead.group ? { namespace: manager.lead.namespace, name: manager.lead.name } : null
     : owner ? null : (input.helmRelease ?? null)
-  const ownershipError = manager && chainUnread(manager)
-    ? "Radar couldn't follow this resource's controller chain, so it can't tell whether a GitOps tool or Helm manages it."
-    : owner || helmRelease ? null : (input.ownershipError ?? null)
+  const ownershipError = unconfirmed
+    ? `Radar couldn't check what manages this resource now (${unconfirmed}), so it can't tell whether a GitOps tool or Helm reverts this change.`
+    : manager && chainUnread(manager)
+      ? "Radar couldn't follow this resource's controller chain, so it can't tell whether a GitOps tool or Helm manages it."
+      : owner || helmRelease ? null : (input.ownershipError ?? null)
   const normalized: GitOpsWriteGuardInput = { ...input, manager, owner, helmRelease, ownershipError, ownerMatchedByName: manager ? false : input.ownerMatchedByName }
+  const adopted = adoptedHelmRelease(manager)
 
   const perWrite = input.writes.map((write) => {
     const verdict = classifyWrite(normalized, owner, write)
+    // A list alone doesn't show its manager syncs the object (a copy carrying
+    // another object's tracking ID, a CRD a HelmRelease skips): no promise.
+    if (manager?.state === 'listed' && verdict.level === 'will-revert') {
+      return {
+        write,
+        level: 'may-revert' as const,
+        reason: `${verdict.reason} Its metadata doesn't name ${managerRefLabel(manager.lead!)}, so Radar can't confirm it syncs this object.`,
+      }
+    }
+    if (adopted && verdict.level === 'info' && (write.scope === 'metadata' || write.scope === 'spec' || write.scope === 'delete')) {
+      return {
+        write,
+        level: 'may-revert' as const,
+        reason: `${verdict.reason} Its metadata also says Helm release ${adopted} installed it; the next helm upgrade or rollback of that release may ${write.scope === 'delete' ? 'recreate it' : 'overwrite this change'}.`,
+      }
+    }
     if (owner && normalized.ownerMatchedByName && verdict.level === 'info' && write.scope !== 'create-child') {
       return {
         write,

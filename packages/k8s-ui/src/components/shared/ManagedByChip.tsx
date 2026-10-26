@@ -1,6 +1,9 @@
+import { useEffect, useRef, useState } from 'react'
 import { GitBranch, Package } from 'lucide-react'
 import { clsx } from 'clsx'
-import { gitOpsOwnerFromRef, managerCandidates, managerChipPresentation, type GitOpsOwnerRef, type ManagerListing } from '../../utils/gitops-owner'
+import { gitOpsOwnerFromRef, managerCandidates, managerChipPresentation, managerChoices, managerRefLabel, type GitOpsOwnerRef, type ManagerChoice, type ManagerListing } from '../../utils/gitops-owner'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import type { ManagerAnswer } from '../../types/core'
 import type { GitOpsStatus } from '../../types/gitops'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
@@ -127,30 +130,104 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
   onOpen?: (ref: GitOpsOwnerRef) => void
   variant: 'inline' | 'block'
 }) {
+  const [open, setOpen] = useState(false)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    // Consumed, so the Escape that closes the menu doesn't also close the drawer.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+
   const presentation = managerChipPresentation(manager)
   if (!presentation) return null
-  const owner = manager.lead ? gitOpsOwnerFromRef(manager.lead) : null
-  const interactive = Boolean(owner && onOpen && owner.namespace)
-  const Wrapper = interactive ? 'button' : 'span'
-  const statusLabel = owner && status && managerCandidates(manager).length === 1 ? gitOpsStatusLabel(status) : null
-  return (
-    <Tooltip content={`${presentation.tooltip}${statusLabel ? ` ${statusLabel}${status?.message ? `: ${status.message}` : ''}.` : ''}`} delay={500} position="bottom" wrapperClassName={variant === 'block' ? 'mt-1' : undefined}>
-      <Wrapper
-        {...(interactive ? { type: 'button' as const, onClick: () => owner && onOpen?.(owner) } : {})}
-        className={clsx(
-          'inline-flex min-w-0 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] text-theme-text-secondary',
-          interactive && 'hover:border-accent hover:text-accent transition-colors',
-        )}
-      >
-        <GitBranch className="h-3 w-3 shrink-0" />
-        {presentation.warning && <StatusDot tone="degraded" size="xs" />}
-        <span className="shrink-0 text-theme-text-tertiary">{presentation.prefix}</span>
-        <span className="truncate max-w-[180px]">{presentation.label}</span>
-        {presentation.via && <span className="shrink-0 text-theme-text-tertiary">via {presentation.via}</span>}
-        {statusLabel && <><span className="mx-0.5 text-theme-text-disabled">·</span><StatusDot tone={gitOpsStatusTone(status!)} size="xs" /><span>{statusLabel}</span></>}
-      </Wrapper>
-    </Tooltip>
+  // Several candidates open a menu naming each, so none is reached only
+  // through the one shown first; one opens directly.
+  const choices = managerChoices(manager)
+    .map(c => ({ ...c, owner: gitOpsOwnerFromRef(c.ref) }))
+    .filter((c): c is ManagerChoice & { owner: GitOpsOwnerRef } => Boolean(c.owner?.namespace))
+  const several = managerCandidates(manager).length > 1
+  const lead = manager.lead ? gitOpsOwnerFromRef(manager.lead) : null
+  const direct = !several && lead?.namespace ? lead : null
+  const menu = Boolean(onOpen) && several && choices.length > 0
+  const statusLabel = lead && status && !several ? gitOpsStatusLabel(status) : null
+  const chipClass = clsx(
+    'inline-flex min-w-0 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] text-theme-text-secondary',
+    (menu || direct && onOpen) && 'hover:border-accent hover:text-accent transition-colors',
   )
+  const content = (
+    <>
+      <GitBranch className="h-3 w-3 shrink-0" />
+      {presentation.warning && <StatusDot tone="degraded" size="xs" />}
+      <span className="shrink-0 text-theme-text-tertiary">{presentation.prefix}</span>
+      <span className="truncate max-w-[180px]">{presentation.label}</span>
+      {presentation.via && <span className="shrink-0 text-theme-text-tertiary">via {presentation.via}</span>}
+      {statusLabel && <><span className="mx-0.5 text-theme-text-disabled">·</span><StatusDot tone={gitOpsStatusTone(status!)} size="xs" /><span>{statusLabel}</span></>}
+    </>
+  )
+  const tooltip = `${presentation.tooltip}${statusLabel ? ` ${statusLabel}${status?.message ? `: ${status.message}` : ''}.` : ''}`
+  const chip = menu ? (
+    <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(v => !v)} className={chipClass}>{content}</button>
+  ) : direct && onOpen ? (
+    <button type="button" onClick={() => onOpen(direct)} className={chipClass}>{content}</button>
+  ) : (
+    // Focusable, so keyboard users reach the tooltip that explains it.
+    <span tabIndex={0} className={chipClass}>{content}</span>
+  )
+  return (
+    <div ref={ref} className={clsx('relative inline-flex min-w-0', variant === 'block' && 'mt-1')}>
+      <Tooltip content={tooltip} delay={500} position="bottom">{chip}</Tooltip>
+      {menu && shouldRender && (
+        <div
+          role="menu"
+          inert={!open}
+          className={clsx(
+            'absolute left-0 top-full z-50 mt-1 min-w-[220px] origin-top-left rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg',
+            TRANSITION_MENU,
+            isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+            !open && 'pointer-events-none',
+          )}
+          style={overlayTransitionStyle(isOpen, 'menu')}
+        >
+          {choices.map(c => (
+            <button
+              key={`${c.ref.group}/${c.ref.kind}/${c.ref.namespace}/${c.ref.name}`}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false)
+                onOpen?.(c.owner)
+              }}
+              className="flex w-full flex-col items-start px-3 py-1.5 text-left text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+            >
+              <span className="truncate">{managerRefLabel(c.ref)}</span>
+              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function choiceRole(c: ManagerChoice): string {
+  if (c.listed && c.claimed) return 'Its status lists this, and the metadata names it'
+  if (c.listed) return 'Its status lists this'
+  return 'This metadata names it'
 }
 
 export function HelmManagedByChip({

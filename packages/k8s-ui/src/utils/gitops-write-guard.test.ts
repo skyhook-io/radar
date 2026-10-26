@@ -482,9 +482,55 @@ describe('manager answer composition', () => {
     expect(run(manager, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ empty: true })]) }).level).toBe('none')
   })
 
-  it('a single candidate with declared field evidence can still prove will-revert', () => {
-    const manager = { state: 'listed' as const, lead: a, direct: { object: subject, recorders: [a] } }
+  it('a single agreeing candidate with declared field evidence can still prove will-revert', () => {
+    const manager = { state: 'agree' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: a, source: 'argo-tracking-id' as const, check: 'recorded' as const }] } }
     expect(run(manager, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) }).level).toBe('will-revert')
+  })
+
+  // A list alone can name an object its manager never syncs: a copy carrying
+  // another object's tracking ID, a CRD a HelmRelease skips.
+  it.each([hibernate, { scope: 'delete' as const }])('a list without metadata naming its manager promises no revert (%o)', write => {
+    const manager = { state: 'listed' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: b, source: 'argo-tracking-id' as const, check: 'missing' as const, copied: true }] } }
+    const g = run(manager, [write], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
+    expect(g.level).toBe('may-revert')
+    expect(g.summary).toContain("can't confirm it syncs this object")
+  })
+
+  it('a parent the metadata alone names is not said to be managed', () => {
+    const g = run({ state: 'claimed', lead: a, direct: { object: subject }, via: { object: parent, claims: [{ manager: a, source: 'argo-tracking-id', check: 'missing' }] } })
+    expect(g.level).toBe('info')
+    expect(g.summary).toContain('whose metadata names Application argocd/a')
+    expect(g.summary).not.toContain('manages')
+  })
+
+  it('an adopted Helm release keeps its upgrade risk past an Argo CD ignore rule', () => {
+    const helm = { kind: 'HelmRelease', group: '', namespace: 'db', name: 'chart' }
+    const manager = { state: 'agree' as const, lead: a, direct: { object: subject, recorders: [a], claims: [
+      { manager: a, source: 'argo-tracking-id' as const, check: 'recorded' as const },
+      { manager: helm, source: 'helm-release' as const, check: 'not-recording' as const },
+    ] } }
+    const g = run(manager)
+    expect(g.level).toBe('may-revert')
+    expect(g.summary).toContain('Helm release db/chart')
+  })
+
+  it('a refused live answer drops the cached answer and the owner hint', () => {
+    const agree = { state: 'agree' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: a, source: 'argo-tracking-id' as const, check: 'recorded' as const }] } }
+    const g = run(agree, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present', ignored: 'effective' })], { managerUnavailable: 'objects_changed' }) })
+    expect(g.level).toBe('may-revert')
+    expect(g.owner).toBeNull()
+    expect(g.summary).toContain('objects_changed')
+  })
+
+  it("a failed live check doesn't keep a cached via answer's reassurance", () => {
+    const g = run(via, [hibernate], { evidence: undefined, evidenceError: 'forbidden' })
+    expect(g.level).toBe('may-revert')
+    expect(g.requiresAck).toBe(true)
+  })
+
+  it('a failed live check of a cached none stays quiet', () => {
+    const g = run({ state: 'none', direct: { object: subject } }, [hibernate], { evidence: undefined, evidenceError: 'timeout' })
+    expect(g.level).toBe('none')
   })
 
   it.each(['unknown', 'none'] as const)('server %s replaces client owner, Helm and manager inputs', state => {

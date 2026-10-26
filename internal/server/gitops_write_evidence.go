@@ -125,13 +125,18 @@ type controllerOwnerEvidence struct {
 }
 
 type gitOpsWriteEvidenceResponse struct {
-	Manager         *topology.ManagerAnswer  `json:"manager,omitempty"`
-	UID             string                   `json:"uid"`
-	ResourceVersion string                   `json:"resourceVersion"`
-	Owner           *topology.ResourceRef    `json:"owner"`
-	Policy          *gitOpsWritePolicy       `json:"policy"`
-	PolicyError     string                   `json:"policyError,omitempty"`
-	ControllerOwner *controllerOwnerEvidence `json:"controllerOwner,omitempty"`
+	Manager *topology.ManagerAnswer `json:"manager,omitempty"`
+	// ManagerUnavailable is the reason code when Radar couldn't answer what
+	// manages the live object (it changed under the cache, or the cache isn't
+	// ready). The caller's owner hint is then not used either: an exemption
+	// read from it could belong to the object as it was.
+	ManagerUnavailable string                   `json:"managerUnavailable,omitempty"`
+	UID                string                   `json:"uid"`
+	ResourceVersion    string                   `json:"resourceVersion"`
+	Owner              *topology.ResourceRef    `json:"owner"`
+	Policy             *gitOpsWritePolicy       `json:"policy"`
+	PolicyError        string                   `json:"policyError,omitempty"`
+	ControllerOwner    *controllerOwnerEvidence `json:"controllerOwner,omitempty"`
 	// OwnerTracksTarget: the Argo CD Application's status lists this object
 	// among its resources, which confirms an owner the client matched by name.
 	OwnerTracksTarget bool                 `json:"ownerTracksTarget,omitempty"`
@@ -193,13 +198,15 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 
 	req.writeEvidenceRef = canonicalWriteEvidenceRef(req.writeEvidenceRef, target)
 	var manager *topology.ManagerAnswer
+	var unavailable string
 	if fetched, ok := k8s.OwnershipObservation(target); ok {
-		manager = k8s.AnswerLiveManager(fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+		manager, unavailable = k8s.AnswerLiveManager(fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 	}
 	var owner *topology.ResourceRef
-	if manager != nil {
+	switch {
+	case manager != nil:
 		owner = manager.Lead
-	} else {
+	case unavailable == "":
 		owner = resolveWriteEvidenceOwner(req, target)
 	}
 	if manager == nil && owner != nil && owner.Namespace == "" && owner.Group == "argoproj.io" && strings.EqualFold(owner.Kind, "Application") {
@@ -220,7 +227,7 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 	}
 
 	resp := buildGitOpsWriteEvidence(target, req.writeEvidenceRef, req.Paths, owner, ownerObj, ownerErr)
-	resp.Manager = manager
+	resp.Manager, resp.ManagerUnavailable = manager, unavailable
 	s.writeJSON(w, resp)
 }
 

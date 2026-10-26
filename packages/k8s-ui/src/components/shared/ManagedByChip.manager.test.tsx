@@ -11,9 +11,11 @@ const claim: ManagerClaim = { manager: a, source: 'argo-instance-label', check: 
 const render = (manager: ManagerAnswer) => renderToStaticMarkup(<ManagedByChip manager={manager} />).replaceAll('&#x27;', "'")
 
 describe('manager answer chip', () => {
-  it.each(['agree', 'listed'] as const)('%s is Managed by even before the status fetch', state => {
+  // Only a list and the metadata agreeing say a manager manages it; a list
+  // alone can name an object its manager doesn't sync.
+  it.each([['agree', 'Managed by'], ['listed', 'Listed by']] as const)('%s says %s even before the status fetch', (state, prefix) => {
     const html = render({ state, lead: a, direct: { object, recorders: [a] } })
-    expect(html).toContain('Managed by')
+    expect(html).toContain(prefix)
     expect(html).toContain('Application argocd/a lists this resource in its status.')
   })
   it('agree says the tracking metadata names the listing manager, once', () => {
@@ -24,7 +26,7 @@ describe('manager answer chip', () => {
   it.each([
     ['omitted', "its status doesn't list this resource"],
     ['unreadable', "Radar can't read its status"],
-    ['remote', 'it deploys to another cluster'],
+    ['remote', "Radar can't confirm it deploys to this cluster"],
     ['missing', 'no such Application here'],
     ['withheld', "you can't view it"],
     ['unresolved', "the label doesn't name its namespace"],
@@ -64,7 +66,7 @@ describe('manager answer chip', () => {
     const html = render({ state: 'listed', lead: b, direct: { object, claims: [claim] },
       between: [{ object: { ...object, kind: 'ReplicaSet', name: 'web' }, claims: [{ ...claim, manager: { ...a, name: 'middle' }, copied: true }] }],
       via: { object: { kind: 'Deployment', group: 'apps', namespace: 'demo', name: 'web' }, recorders: [b] } })
-    expect(html).toContain('Managed by')
+    expect(html).toContain('Listed by')
     expect(html).toContain('Through Deployment demo/web')
     expect(html).toContain('its own label names Application argocd/a')
     expect(html).not.toContain('argocd/middle')

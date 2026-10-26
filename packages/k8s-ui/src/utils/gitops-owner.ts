@@ -109,7 +109,11 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
   const claims = activeManagerClaims(evidence)
   const claimed = dedupeResourceRefs(claims.map(c => c.manager))
   const recorders = evidence.recorders ?? []
-  const prefix = answer.state === 'agree' || answer.state === 'listed' ? 'Managed by' : answer.state === 'shared' ? 'Listed by' : 'Tracked by'
+  // A list alone records what a manager compared or applied, which can be an
+  // object it doesn't sync (a copy carrying another's tracking ID, a CRD a
+  // HelmRelease skips): only a list and the object's metadata agreeing says
+  // it manages the object.
+  const prefix = answer.state === 'agree' ? 'Managed by' : answer.state === 'shared' || answer.state === 'listed' ? 'Listed by' : 'Tracked by'
   const listed = answer.lead && recorders.some(r => resourceRefKey(r) === resourceRefKey(answer.lead!))
     ? dedupeResourceRefs([answer.lead, ...recorders]) : recorders
   const displayed = answer.state === 'disagree' ? claimed : answer.state === 'shared' ? listed : candidates
@@ -118,7 +122,7 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     recorded: 'its status lists this resource',
     omitted: "its status doesn't list this resource",
     unreadable: "Radar can't read its status",
-    remote: 'it deploys to another cluster',
+    remote: "Radar can't confirm it deploys to this cluster",
     missing: 'no such manager here',
     'not-recording': 'Helm records an installation, rather than continuously reconciling it',
     unresolved: "the label doesn't name its namespace",
@@ -147,6 +151,21 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
   }
   if (answer.narrowed) details.push('This answer covers what you can view.')
   return { prefix, label, via: answer.via?.object.kind, tooltip: details.join(' '), warning: answer.state === 'disagree' }
+}
+
+/** A candidate manager of an answer, with what names it: its list, its metadata, or both. */
+export type ManagerChoice = { ref: ResourceRef; listed: boolean; claimed: boolean }
+
+/** Every candidate manager of an answer, lead first, each with what names it. */
+export function managerChoices(answer: ManagerAnswer): ManagerChoice[] {
+  const evidence = answer.via ?? answer.direct
+  const recorders = new Set((evidence.recorders ?? []).map(resourceRefKey))
+  const candidates = managerCandidates(answer)
+  const claimed = new Set(activeManagerClaims(evidence).map(c => {
+    const ref = c.manager
+    return resourceRefKey(ref.namespace ? ref : candidates.find(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name) ?? ref)
+  }))
+  return candidates.map(ref => ({ ref, listed: recorders.has(resourceRefKey(ref)), claimed: claimed.has(resourceRefKey(ref)) }))
 }
 
 export function managerChipCoversGroup(relationships: Relationships): boolean {

@@ -79,7 +79,7 @@ describe('manager answer group projection', () => {
 
   it.each(['agree', 'listed'] as const)('hides only the exact single %s recorder', state => {
     const html = render({ ...answer, state })
-    expect(html).toContain('Managed by')
+    expect(html).toContain(state === 'agree' ? 'Managed by' : 'Listed by')
     expect(html).not.toContain('Managed By')
   })
   it.each(['claimed', 'disagree', 'shared', 'unknown', 'none'] as const)('keeps Managed By for %s', state => {

@@ -75,14 +75,18 @@ func AnswerOwner(rel *topology.Relationships, fetched ownership.Observation, acc
 
 // AnswerLiveManager reads the live target's metadata while ancestors and
 // recorded membership retain their cache provenance. The view still checks
-// access and refuses an object replaced since the live read.
-func AnswerLiveManager(fetched ownership.Observation, access func(*ownership.Catalog) ownership.Access) *topology.ManagerAnswer {
+// access and refuses an object replaced since the live read; unavailable is
+// then the reason code, and the answer nil.
+func AnswerLiveManager(fetched ownership.Observation, access func(*ownership.Catalog) ownership.Access) (answer *topology.ManagerAnswer, unavailable string) {
 	rel := &topology.Relationships{}
 	answerOwnership(liveOwnershipSource{Source: ownershipSource, fetched: fetched}, topology.ApplyOwner, nil, rel, fetched, access)
-	if rel.Ownership == nil {
-		return nil
+	switch {
+	case rel.Ownership == nil:
+		return nil, "unavailable"
+	case rel.Ownership.UnavailableReason != "":
+		return nil, rel.Ownership.UnavailableReason
 	}
-	return rel.Ownership.Manager
+	return rel.Ownership.Manager, ""
 }
 
 type liveOwnershipSource struct {
