@@ -439,13 +439,14 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
       }
     }
     if (manager.via && !directClaims.length) {
-      const parent = `${managerRefLabel(manager.via.object)}, ${parentManagedBy(manager, names)}`
+      const source = managerRefLabel(manager.via.object)
+      const parent = `${source}, ${parentManagedBy(manager, names)}`
       return {
         level: 'info',
         reason: write.scope === 'delete'
           ? !NON_RECREATING_CONTROLLERS.includes(operatorOwnerOf(input)?.kind ?? '')
             ? `Its controller recreates it from ${parent}.`
-            : `It was created from ${parent}; deleting it doesn't change that source, and nothing is expected to recreate it.`
+            : `It was created from ${parent}; nothing is expected to recreate it, but ${source} can still create new ones on its schedule.`
           : `This resource is generated from ${parent}; changes to the parent may replace it.`,
       }
     }
@@ -528,7 +529,8 @@ function headline(guard: Pick<GitOpsWriteGuard, 'owner' | 'helmRelease' | 'manag
       : 'A GitOps tool'
   if (level === 'will-revert') return `${who} will revert this change.`
   if (level === 'may-revert') return `${who} may revert this change.`
-  if (level === 'info') return guard.owner || guard.helmRelease ? `Managed by ${who}.` : ''
+  // A list alone isn't management: say what the chip says.
+  if (level === 'info') return guard.owner || guard.helmRelease ? `${guard.manager?.state === 'listed' ? 'Listed by' : 'Managed by'} ${who}.` : ''
   return ''
 }
 
@@ -619,7 +621,7 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
       return {
         write,
         level: 'may-revert' as const,
-        reason: `${managerRefLabel(manager.lead!)} lists this object in its status, but the object's metadata doesn't name it, so Radar can't confirm a sync applies it. If one does: ${verdict.reason}`,
+        reason: `Radar can't confirm ${managerRefLabel(manager.lead!)} applies this object: its status lists it, but the object's metadata doesn't name it. If it does: ${verdict.reason}`,
       }
     }
     if (adopted && verdict.level === 'info' && (write.scope === 'metadata' || write.scope === 'spec' || write.scope === 'delete')) {

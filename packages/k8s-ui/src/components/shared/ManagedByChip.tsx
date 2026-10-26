@@ -167,7 +167,9 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
   const lead = manager.lead ? gitOpsOwnerFromRef(manager.lead) : null
   const direct = !several ? choices.find(c => c.owner && lead && c.owner.name === lead.name && c.owner.namespace === lead.namespace)?.owner ?? null : null
   const menu = Boolean(onOpen) && several && choices.some(c => c.owner)
-  const statusLabel = lead && status && !several ? gitOpsStatusLabel(status) : null
+  // The manager's own status, shown only when it is confirmed to manage this
+  // resource: beside a list alone, Synced reads as this resource's state.
+  const statusLabel = lead && status && !several && manager.state === 'agree' ? gitOpsStatusLabel(status) : null
   const chipClass = clsx(
     'inline-flex min-w-0 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] text-theme-text-secondary',
     (menu || direct && onOpen) && 'hover:border-accent hover:text-accent transition-colors',

@@ -131,6 +131,10 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
   }
   const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
   const details: string[] = []
+  // Tracked by names what metadata says, which Radar hasn't confirmed.
+  if (answer.state === 'claimed') {
+    details.push(`${answer.via ? `${managerRefLabel(evidence.object)}'s` : "This resource's"} labels or annotations name ${names(claimed)}; Radar hasn't confirmed ${claimed.length === 1 ? 'it manages' : 'they manage'} it.`)
+  }
   for (const c of claims) {
     if (c.check === 'recorded') continue
     // A newer Radar may send a check this UI doesn't know.
@@ -142,9 +146,10 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     const confirmed = claims.some(c => c.check === 'recorded')
     details.push(`${names(recorders)} ${recorders.length === 1 ? 'lists' : 'list'} ${subject} in ${recorders.length === 1 ? 'its status' : 'their statuses'}${confirmed ? `, and ${answer.via ? 'its' : 'this resource\'s'} tracking metadata names ${recorders.length === 1 ? 'it' : 'one of them'}` : ''}.`)
   }
-  if (answer.via) {
-    details.push(`Through ${managerRefLabel(answer.via.object)}.`)
-    for (const e of [answer.direct, ...(answer.between ?? [])]) {
+  if (answer.via) details.push(`Through ${managerRefLabel(answer.via.object)}.`)
+  // Claims the answer passed on the way stay visible, with or without Via.
+  {
+    for (const e of [...(answer.via ? [answer.direct] : []), ...(answer.between ?? [])]) {
       for (const c of e.claims ?? []) {
         if (c.copied) continue
         details.push(`${managerRefLabel(e.object)}: its own ${c.source.includes('label') ? 'label' : 'annotation'} names ${managerRefLabel(c.manager)}.`)

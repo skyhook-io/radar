@@ -89,3 +89,20 @@ it('says on the chip itself that the answer comes through an ancestor', () => {
   const html = renderToStaticMarkup(<ManagedByChip manager={{ state: 'listed', lead, direct: { object }, via: { object: { kind: 'Deployment', group: 'apps', namespace: 'demo', name: 'web' }, recorders: [lead] } }} />)
   expect(html).toMatch(/<span class="shrink-0 text-theme-text-tertiary">via Deployment<\/span>/)
 })
+
+describe('manager answer chip wording', () => {
+  it("says up front that a claim isn't confirmed", () => {
+    expect(render({ state: 'claimed', lead: a, direct: { object, claims: [claim] } })).toContain("labels or annotations name Application argocd/a; Radar hasn't confirmed it manages it")
+  })
+  // A claim the walk passed shows even when no ancestor answered.
+  it('names claims on the way without via', () => {
+    const html = render({ state: 'claimed', lead: a, direct: { object, claims: [claim] },
+      between: [{ object: { ...object, kind: 'ReplicaSet', name: 'web' }, claims: [{ ...claim, manager: { ...a, name: 'rs-app' } }] }] })
+    expect(html).toContain('ReplicaSet demo/web: its own label names Application argocd/rs-app')
+  })
+  // The manager's Synced reads as this resource's state beside a list alone.
+  it.each([['agree', true], ['listed', false]] as const)('%s shows the manager status: %s', (state, shown) => {
+    const html = renderToStaticMarkup(<ManagedByChip manager={{ state, lead: a, direct: { object, recorders: [a] } }} status={{ sync: 'Synced', health: 'Healthy' } as never} />)
+    expect(html.includes('Synced')).toBe(shown)
+  })
+})

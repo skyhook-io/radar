@@ -9,6 +9,7 @@ import {
   type GitOpsPathEvidence,
   type GitOpsWrite,
   type GitOpsWriteEvidence,
+  gitOpsWriteHeadline,
   type GitOpsWriteGuardInput,
   type GitOpsWritePolicyEvidence,
 } from './gitops-write-guard'
@@ -493,9 +494,9 @@ describe('manager answer composition', () => {
     const manager = { state: 'listed' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: b, source: 'argo-tracking-id' as const, check: 'missing' as const, copied: true }] } }
     const g = run(manager, [write], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
     expect(g.level).toBe('may-revert')
-    expect(g.summary).toContain("can't confirm a sync applies it. If one does:")
+    expect(g.summary).toContain("Radar can't confirm Application argocd/a applies this object")
     // The field evidence stays, behind the condition.
-    expect(g.summary).toMatch(/If one does: .+/)
+    expect(g.summary).toMatch(/If it does: .+/)
   })
 
   it('a parent the managers disagree on says which names it and which lists it', () => {
@@ -511,6 +512,7 @@ describe('manager answer composition', () => {
     const g = run({ state: 'agree', lead: a, direct: { object: subject }, via: { object: cron, recorders: [a], claims: [{ manager: a, source: 'argo-tracking-id', check: 'recorded' }] } }, [{ scope: 'delete' }], { operatorOwner: { kind: 'CronJob', name: 'backup' } })
     expect(g.level).toBe('info')
     expect(g.summary).toContain('nothing is expected to recreate it')
+    expect(g.summary).toContain('CronJob db/backup can still create new ones on its schedule')
     expect(g.summary).not.toContain('recreates it')
   })
 
@@ -536,6 +538,12 @@ describe('manager answer composition', () => {
   it('a state this UI does not know is read as claimed', () => {
     const g = run({ state: 'future-state' as never, lead: a, direct: { object: subject, recorders: [a] } }, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
     expect(g.level).toBe('may-revert')
+  })
+
+  it('an informational note on a list-only answer says listed, not managed', () => {
+    const g = run({ state: 'listed', lead: a, direct: { object: subject, recorders: [a] } }, [{ scope: 'create-child' }])
+    expect(g.level).toBe('info')
+    expect(gitOpsWriteHeadline(g)).toBe('Listed by Argo CD Application argocd/a.')
   })
 
   it('a parent the metadata alone names is not said to be managed', () => {
