@@ -364,7 +364,9 @@ func TestApplyOwnershipCapsChildren(t *testing.T) {
 // object owns or manages: searches for dependents and member lists.
 type searchCounter struct {
 	ownership.ReadSession
-	searches int
+	// searches counts searches for dependents and member lists read;
+	// recorders counts the index lookups for the managers recording an object.
+	searches, recorders int
 }
 
 func (s *searchCounter) DependentCandidates(uid types.UID, domain ownership.SearchScope) ownership.DependentCandidatesRead {
@@ -378,7 +380,7 @@ func (s *searchCounter) Members(manager resourceid.Ref) ownership.MembersRead {
 }
 
 func (s *searchCounter) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
-	s.searches++
+	s.recorders++
 	return s.ReadSession.RecordingManagers(ref)
 }
 
@@ -396,6 +398,17 @@ func TestApplyOwnershipSaysNothingOfAnEvent(t *testing.T) {
 
 // ApplyOwner gives every object the owner ApplyOwnership gives it, and why
 // there is none, without searching for children or reading a member list.
+// claimsOnChain counts the claims on ref's controller chain that name a
+// manager the walk may read the list of.
+func claimsOnChain(v *ownership.View, ref resourceid.Ref) int {
+	n := 0
+	for _, r := range v.ControllerChain(ref).Chain {
+		e := v.Manager(r).Direct
+		n += len(e.Claims)
+	}
+	return n
+}
+
 func TestApplyOwnerAnswersTheOwnerWithoutSearching(t *testing.T) {
 	w := ownershiptest.Fixture()
 	for _, o := range w.Objects {
@@ -407,9 +420,17 @@ func TestApplyOwnerAnswersTheOwnerWithoutSearching(t *testing.T) {
 		}
 		counted := &searchCounter{ReadSession: s}
 		owner := &Relationships{}
-		ApplyOwner(owner, ownership.NewView(counted, ownership.Unrestricted()), fetched(t, w, o.Ref))
-		if counted.searches != 0 {
-			t.Errorf("%v: the owner took %d searches for dependents or members", o.Ref, counted.searches)
+		v := ownership.NewView(counted, ownership.Unrestricted())
+		ApplyOwner(owner, v, fetched(t, w, o.Ref))
+		// The manager answer looks up the managers recording each object on
+		// the controller chain, and reads a claimed manager's list; nothing
+		// else is searched.
+		searches, recorders := counted.searches, counted.recorders
+		if chain := len(v.ControllerChain(o.Ref).Chain); searches > claimsOnChain(v, o.Ref) || recorders > chain {
+			t.Errorf("%v: the owner took %d searches and %d recorder lookups, chain %d", o.Ref, searches, recorders, chain)
+		}
+		if owner.Ownership != nil && full.Ownership != nil && !reflect.DeepEqual(owner.Ownership.Manager, full.Ownership.Manager) {
+			t.Errorf("%v: manager %+v, want the full answer's %+v", o.Ref, owner.Ownership.Manager, full.Ownership.Manager)
 		}
 		if !reflect.DeepEqual(owner.Owner, full.Owner) {
 			t.Errorf("%v: owner %v, want %v", o.Ref, owner.Owner, full.Owner)

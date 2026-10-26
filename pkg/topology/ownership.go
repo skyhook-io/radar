@@ -147,12 +147,16 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	}
 }
 
-// ApplyOwner answers only rel's Owner, and why there is none, from v: what a
-// resource context reads, which needs no search for children and no member
-// list. The rest of rel's ownership is cleared and left unanswered.
+// ApplyOwner answers only rel's Owner, and why there is none, and what
+// manages the resource, from v: what a resource context reads, which needs no
+// search for children. The rest of rel's ownership is cleared and left
+// unanswered.
 func ApplyOwner(rel *Relationships, v *ownership.View, fetched ownership.Observation) {
-	if rel != nil && v != nil {
-		applyOwner(rel, v, fetched)
+	if rel == nil || v == nil {
+		return
+	}
+	if cov, _, answered := applyOwner(rel, v, fetched); answered {
+		cov.Manager = managerAnswer(v.Manager(fetched.Ref))
 	}
 }
 

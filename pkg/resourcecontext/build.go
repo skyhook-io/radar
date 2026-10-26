@@ -244,6 +244,10 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			"managedBy", omitted)
 	}
 
+	if answered && rel.Ownership != nil && rel.Ownership.Manager != nil {
+		rc.Manager = managerContext(rel.Ownership.Manager)
+	}
+
 	if rel != nil && rel.Owner != nil {
 		candidate := &ContextRef{
 			Kind:      rel.Owner.Kind,
@@ -1597,6 +1601,35 @@ func (s *refSet) refs(kind, group string) []ContextRef {
 // toContextRefs translates a slice of topology.ResourceRef into ContextRefs.
 // Sorted by (kind, namespace, name) for determinism — golden tests rely on
 // this ordering.
+// managerContext compacts a manager answer: the evidence that answers, the
+// resource's or its controller's, and nothing that didn't settle it. Every
+// reference in it is one the caller may read, or metadata on one.
+func managerContext(m *topology.ManagerAnswer) *ManagerContext {
+	out := &ManagerContext{State: m.State, Narrowed: m.Narrowed}
+	if m.Lead != nil {
+		lead := toContextRef(*m.Lead)
+		out.Lead = &lead
+	}
+	evidence := m.Direct
+	if m.Via != nil {
+		evidence = *m.Via
+		via := toContextRef(m.Via.Object)
+		out.Via = &via
+	}
+	out.ListedBy = toContextRefs(evidence.Recorders)
+	for _, c := range evidence.Claims {
+		if c.Copied {
+			continue
+		}
+		out.Claims = append(out.Claims, ManagerClaimContext{Manager: toContextRef(c.Manager), Check: c.Check})
+	}
+	return out
+}
+
+func toContextRef(r topology.ResourceRef) ContextRef {
+	return ContextRef{Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name}
+}
+
 func toContextRefs(refs []topology.ResourceRef) []ContextRef {
 	if len(refs) == 0 {
 		return nil

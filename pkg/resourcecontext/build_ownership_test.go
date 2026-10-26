@@ -100,3 +100,32 @@ func TestBuildKeepsManagedByWithoutTopology(t *testing.T) {
 		t.Fatalf("managedBy with ownership = %+v, without = %+v", with.ManagedBy, without.ManagedBy)
 	}
 }
+
+// The manager answer reaches the resource context compacted: the evidence
+// that answers, the controller's when it does, and no copied claim.
+func TestBuildCompactsTheManagerAnswer(t *testing.T) {
+	pod := &corev1.Pod{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-1-a", UID: "uid-pod"},
+	}
+	app := topology.ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "shop"}
+	other := topology.ResourceRef{Group: "argoproj.io", Kind: "Application", Name: "old"}
+	deploy := topology.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
+	rc := Build(context.Background(), pod, Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
+		rel.Ownership = &topology.OwnershipCoverage{Manager: &topology.ManagerAnswer{
+			State: "agree", Lead: &app, Narrowed: true,
+			Direct: topology.ManagerEvidence{Object: topology.ResourceRef{Kind: "Pod", Namespace: "shop", Name: "web-1-a"}},
+			Via: &topology.ManagerEvidence{Object: deploy, Recorders: []topology.ResourceRef{app}, Claims: []topology.ManagerClaim{
+				{Manager: app, Source: "argo-tracking-id", Check: "recorded"},
+				{Manager: other, Source: "argo-tracking-id", Check: "missing", Copied: true},
+			}},
+		}}
+	}})
+	m := rc.Manager
+	if m == nil || m.State != "agree" || m.Lead == nil || m.Lead.Name != "shop" || m.Via == nil || m.Via.Name != "web" || !m.Narrowed {
+		t.Fatalf("manager %+v; want agree, led by shop, via the Deployment, narrowed", m)
+	}
+	if len(m.ListedBy) != 1 || len(m.Claims) != 1 || m.Claims[0].Check != "recorded" {
+		t.Fatalf("listedBy %+v claims %+v; want the Deployment's evidence without the copied claim", m.ListedBy, m.Claims)
+	}
+}
