@@ -157,15 +157,15 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
   if (!presentation) return null
   // Several candidates open a menu naming each, so none is reached only
   // through the one shown first; one opens directly.
-  // Every candidate is named; only one Radar can locate links. A label that
-  // names no namespace stays unlinked: Radar doesn't guess it.
+  // Every candidate is named; only one Radar found links. A label that names
+  // no namespace stays unlinked: Radar doesn't guess it.
   const choices = managerChoices(manager).map(c => {
     const owner = gitOpsOwnerFromRef(c.ref)
-    return { ...c, owner: owner?.namespace ? owner : null }
+    return { ...c, owner: c.found && owner?.namespace ? owner : null }
   })
   const several = managerCandidates(manager).length > 1
   const lead = manager.lead ? gitOpsOwnerFromRef(manager.lead) : null
-  const direct = !several && lead?.namespace ? lead : null
+  const direct = !several ? choices.find(c => c.owner && lead && c.owner.name === lead.name && c.owner.namespace === lead.namespace)?.owner ?? null : null
   const menu = Boolean(onOpen) && several && choices.some(c => c.owner)
   const statusLabel = lead && status && !several ? gitOpsStatusLabel(status) : null
   const chipClass = clsx(
@@ -223,7 +223,7 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
               )}
             >
               <span className="truncate">{managerRefLabel(c.ref)}</span>
-              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}{c.owner ? '' : c.ref.namespace ? '' : " · its label doesn't name its namespace"}</span>
+              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}{c.owner ? '' : !c.ref.namespace ? " · its label doesn't name its namespace" : !c.found ? ' · Radar found no such manager you can view' : ''}</span>
             </button>
           ))}
         </div>
@@ -232,7 +232,7 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
   )
 }
 
-function choiceRole(c: Pick<ManagerChoice, 'listed' | 'claimed'>): string {
+function choiceRole(c: Pick<ManagerChoice, 'listed' | 'claimed' | 'found'>): string {
   if (c.listed && c.claimed) return 'Its status lists this, and the metadata names it'
   if (c.listed) return 'Its status lists this'
   return 'This metadata names it'

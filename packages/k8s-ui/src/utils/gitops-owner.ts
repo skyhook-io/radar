@@ -153,19 +153,29 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
   return { prefix, label, via: answer.via?.object.kind, tooltip: details.join(' '), warning: answer.state === 'disagree' }
 }
 
-/** A candidate manager of an answer, with what names it: its list, its metadata, or both. */
-export type ManagerChoice = { ref: ResourceRef; listed: boolean; claimed: boolean }
+/**
+ * A candidate manager of an answer, with what names it: its list, its
+ * metadata, or both. found: Radar read the manager, so a link to it opens it;
+ * a claim of a manager that is missing, withheld or unresolved isn't.
+ */
+export type ManagerChoice = { ref: ResourceRef; listed: boolean; claimed: boolean; found: boolean }
 
 /** Every candidate manager of an answer, lead first, each with what names it. */
 export function managerChoices(answer: ManagerAnswer): ManagerChoice[] {
   const evidence = answer.via ?? answer.direct
   const recorders = new Set((evidence.recorders ?? []).map(resourceRefKey))
   const candidates = managerCandidates(answer)
-  const claimed = new Set(activeManagerClaims(evidence).map(c => {
+  const checks = new Map<string, ManagerClaim['check']>()
+  for (const c of activeManagerClaims(evidence)) {
     const ref = c.manager
-    return resourceRefKey(ref.namespace ? ref : candidates.find(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name) ?? ref)
-  }))
-  return candidates.map(ref => ({ ref, listed: recorders.has(resourceRefKey(ref)), claimed: claimed.has(resourceRefKey(ref)) }))
+    checks.set(resourceRefKey(ref.namespace ? ref : candidates.find(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name) ?? ref), c.check)
+  }
+  const unfound: Array<ManagerClaim['check'] | undefined> = ['missing', 'withheld', 'unresolved']
+  return candidates.map(ref => {
+    const key = resourceRefKey(ref)
+    const listed = recorders.has(key)
+    return { ref, listed, claimed: checks.has(key), found: listed || !unfound.includes(checks.get(key)) }
+  })
 }
 
 export function managerChipCoversGroup(relationships: Relationships): boolean {

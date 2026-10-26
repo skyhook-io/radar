@@ -49,3 +49,12 @@ it('names an unresolved candidate without linking it', async () => {
   await act(async () => root.unmount())
   element.remove()
 })
+
+// A claim of a manager Radar didn't find is named but not linked, so the chip
+// never opens a page for an Application that isn't there.
+it('links only managers Radar found', () => {
+  const missing: ManagerAnswer = { state: 'claimed', lead: a, direct: { object, claims: [{ manager: a, source: 'argo-tracking-id', check: 'missing' }] } }
+  expect(renderToStaticMarkup(<ManagedByChip manager={missing} onOpen={() => {}} />)).not.toContain('<button')
+  const found: ManagerAnswer = { state: 'claimed', lead: a, direct: { object, claims: [{ manager: a, source: 'argo-tracking-id', check: 'omitted' }] } }
+  expect(renderToStaticMarkup(<ManagedByChip manager={found} onOpen={() => {}} />)).toContain('<button')
+})

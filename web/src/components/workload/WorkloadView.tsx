@@ -1327,7 +1327,9 @@ export function WorkloadView({
         hasOverviewLead={hasOperationalIssues || Boolean(schedulingEvidence && schedulingEvidence.state !== 'reported')}
         hasOperationalIssues={hasOperationalIssues}
         operationalIssuesPending={issuesPending}
-        onOpenGitOpsResource={gitopsOwnerObject ? handleOpenGitOpsResource : undefined}
+        // A manager answer's chip links only managers the server found; a
+        // disagreement has no lead, so no owner object, but its managers link.
+        onOpenGitOpsResource={gitopsOwnerObject || relationships?.ownership?.manager ? handleOpenGitOpsResource : undefined}
         resolvedGitOpsOwner={gitopsOwner}
         gitOpsOwnerVerified={gitOpsOwnerVerified}
         gitOpsOwnerPending={gitOpsOwnerPending}
