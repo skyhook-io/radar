@@ -306,7 +306,7 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	// scope. Replay the dispatch via the shared helper to pin the
 	// end-to-end shape. Topology is nil; managedBy is nil but
 	// issueCount dispatch is what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx, nil)
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 1 {
 		t.Errorf("Node hit via builder: got %+v, want IssueCount=1 (was 0 pre-fix)", sc)
 	}
@@ -334,7 +334,7 @@ func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 
 	// Topology is nil — managedBy is nil but issueCount dispatch is
 	// what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx, nil)
 
 	// Cluster-scoped Node hit — must read clusterIdx.
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 2 {
@@ -437,5 +437,27 @@ func TestBuildIssueIndexAuthorizesInventoryEvidence(t *testing.T) {
 				t.Fatalf("count=%d, want %d", got, tc.count)
 			}
 		})
+	}
+}
+
+// The topology is shared by every user: a manager it links that the caller
+// can't read is left out of the row's pointer, with nothing in its place
+// that says one exists. A readable owner still answers.
+func TestReadableRelationshipsDropsManagersTheCallerCantRead(t *testing.T) {
+	app := topology.ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "shop"}
+	owner := topology.ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "shop", Name: "web-1"}
+	noApps := func(group, kind, _ string) bool { return !(group == "argoproj.io" && kind == "Application") }
+	rel := &topology.Relationships{ManagedBy: []topology.ResourceRef{app}, Owner: &owner}
+	got := ManagedByFromRelationships(readableRelationships(rel, noApps))
+	if got == nil || got.Kind != "ReplicaSet" {
+		t.Fatalf("pointer = %+v; want the readable owner, not the hidden Application", got)
+	}
+	alone := ManagedByFromRelationships(readableRelationships(&topology.Relationships{ManagedBy: []topology.ResourceRef{app}}, noApps))
+	none := ManagedByFromRelationships(readableRelationships(&topology.Relationships{}, noApps))
+	if alone != nil || none != nil {
+		t.Fatalf("hidden manager alone = %+v, nothing = %+v; want both absent", alone, none)
+	}
+	if got := ManagedByFromRelationships(readableRelationships(rel, nil)); got == nil || got.Kind != "Application" {
+		t.Fatalf("no access check: %+v; want the Application", got)
 	}
 }

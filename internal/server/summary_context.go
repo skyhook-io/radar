@@ -35,7 +35,7 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
-	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), idx, idx)
+	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), idx, idx, s.summaryRefReader(r))
 }
 
 // newSearchSummaryContextBuilder is the search-specific variant. Search
@@ -68,5 +68,12 @@ func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces 
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
 	}
-	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), namespacedIdx, clusterIdx)
+	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), namespacedIdx, clusterIdx, s.summaryRefReader(r))
+}
+
+// summaryRefReader is the caller's access to a reference a summary names, as
+// the AI resource context checks it.
+func (s *Server) summaryRefReader(r *http.Request) func(group, kind, namespace string) bool {
+	checker := s.newRequestScopedChecker(r)
+	return func(group, kind, namespace string) bool { return checker.CanRead(r.Context(), group, kind, namespace) }
 }

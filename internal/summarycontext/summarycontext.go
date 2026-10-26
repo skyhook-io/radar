@@ -105,7 +105,12 @@ func Within[T any](budget time.Duration, build func() T) T {
 // its preferred source (REST: broadcaster cache; MCP: short-TTL
 // memoizer). nil topo is fine — managedBy is omitted but issueCount
 // still resolves.
-func BuilderFromIndexes(topo *topology.Topology, namespacedIdx, clusterIdx IssueIndex) Builder {
+//
+// canRead is the caller's access to a reference (nil allows everything).
+// The topology is shared by every user, so a manager it links may be one
+// the caller can't read: that pointer is dropped, without a note, rather
+// than naming a manager the caller can't see.
+func BuilderFromIndexes(topo *topology.Topology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool) Builder {
 	resourceProvider := k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
 	dynamicProvider := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 
@@ -135,7 +140,7 @@ func BuilderFromIndexes(topo *topology.Topology, namespacedIdx, clusterIdx Issue
 				rawObj = u
 			}
 			rel := topology.GetRelationshipsWithObject(kind, namespace, name, rawObj, topo, resourceProvider, dynamicProvider, relIdx)
-			managedBy = ManagedByFromRelationships(rel)
+			managedBy = ManagedByFromRelationships(readableRelationships(rel, canRead))
 		}
 		var source runtime.Object = obj
 		if source == nil && u != nil {
@@ -307,4 +312,22 @@ func ManagedByFromRelationships(rel *topology.Relationships) *resourcecontext.Ma
 		return resourcecontext.ManagedByFromOwner(rel.Owner.Kind, rel.Owner.Group, rel.Owner.Namespace, rel.Owner.Name)
 	}
 	return nil
+}
+
+// readableRelationships is rel with the managedBy and owner references the
+// caller can't read left out.
+func readableRelationships(rel *topology.Relationships, canRead func(group, kind, namespace string) bool) *topology.Relationships {
+	if rel == nil || canRead == nil {
+		return rel
+	}
+	out := &topology.Relationships{}
+	for _, ref := range rel.ManagedBy {
+		if canRead(ref.Group, ref.Kind, ref.Namespace) {
+			out.ManagedBy = append(out.ManagedBy, ref)
+		}
+	}
+	if rel.Owner != nil && canRead(rel.Owner.Group, rel.Owner.Kind, rel.Owner.Namespace) {
+		out.Owner = rel.Owner
+	}
+	return out
 }

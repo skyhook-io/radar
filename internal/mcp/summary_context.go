@@ -37,7 +37,7 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
-	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(namespaces), idx, idx)
+	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(namespaces), idx, idx, summaryRefReader(ctx))
 }
 
 // newSearchSummaryContextBuilder is the MCP search variant. Mirrors
@@ -57,7 +57,7 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
-	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(scanNamespaces), namespacedIdx, clusterIdx)
+	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(scanNamespaces), namespacedIdx, clusterIdx, summaryRefReader(ctx))
 }
 
 // summaryCtxTopoMemo caches topology builds for the list_resources and search
@@ -95,4 +95,11 @@ func buildSummaryContextTopology(namespaces []string) *topology.Topology {
 		return nil
 	}
 	return topo
+}
+
+// summaryRefReader is the caller's access to a reference a summary names, as
+// the resource context checks it.
+func summaryRefReader(ctx context.Context) func(group, kind, namespace string) bool {
+	checker := newMCPRequestScopedChecker(ctx)
+	return func(group, kind, namespace string) bool { return checker.CanRead(ctx, group, kind, namespace) }
 }
