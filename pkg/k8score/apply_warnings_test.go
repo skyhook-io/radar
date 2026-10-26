@@ -161,6 +161,19 @@ func TestDetectExternalManager(t *testing.T) {
 	}
 }
 
+// Metadata names a candidate, not a verdict: the warning must not state that the
+// manager reconciles the object, and native Helm only acts on upgrade.
+func TestExternalManagerWarningReportsMetadata(t *testing.T) {
+	argo := formatExternalManagerWarning("Argo CD", "shop")
+	if strings.Contains(argo, "is reconciled by") || !strings.Contains(argo, "tracking metadata names Argo CD (instance: shop)") {
+		t.Errorf("Argo CD warning = %q", argo)
+	}
+	helm := formatExternalManagerWarning("Helm", "web")
+	if strings.Contains(helm, "reconcil") || !strings.Contains(helm, "helm upgrade") {
+		t.Errorf("Helm warning = %q", helm)
+	}
+}
+
 func TestCheckFieldRemoval(t *testing.T) {
 	t.Run("deployment container probe survives", func(t *testing.T) {
 		pre := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app", "readinessProbe")}})
