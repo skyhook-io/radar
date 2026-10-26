@@ -1319,4 +1319,4 @@ The preview describes collection caused by deleting the root in the observed
 state. A live outside owner prevents that collection; its independent deletion
 may subsequently collect the same object. Opening the REST dialog is advisory
 and does not transactionally bind a later HTTP delete. MCP confirmation adds
-root preconditions and a server-side impact fingerprint.
+root preconditions and a confirmation bound to the reviewed target. The dependent lists remain advisory observations.

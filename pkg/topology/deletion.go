@@ -2,15 +2,10 @@ package topology
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"slices"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -98,62 +93,7 @@ func PreviewDeletion(ctx context.Context, v *ownership.View, obj *unstructured.U
 	if storage {
 		p.NotEnumerated = append(p.NotEnumerated, "backing storage/data removal governed by the PV reclaim policy")
 	}
-	p.EvidenceHash = deletionEvidence(v, p, a, members)
 	return p
-}
-
-func deletionEvidence(v *ownership.View, p *CascadeDeletePreview, a ownership.DeletionAnswer, members []ownership.Observation) string {
-	leaf := map[resourceid.Ref]bool{}
-	parents := map[types.UID]bool{}
-	for _, objects := range [][]ownership.Observation{a.Dependents, a.Possible} {
-		for _, o := range objects {
-			for _, r := range o.OwnerReferences {
-				parents[r.UID] = true
-			}
-		}
-	}
-	if !a.Truncated {
-		for _, objects := range [][]ownership.Observation{a.Dependents, a.Possible} {
-			for _, o := range objects {
-				if o.Ref.Group == "" && o.Ref.Kind == "Pod" && len(o.OwnerReferences) > 0 && !parents[o.UID] && len(v.Children(o.Ref).Children) == 0 {
-					leaf[o.Ref] = true
-				}
-			}
-		}
-	}
-	// Leaf Pod replacement is ordinary workload churn. Owner sets and counts
-	// remain bound; non-Pod and non-leaf identities still require another preview.
-	counts := map[string]int{}
-	var evidence []ownership.Observation
-	for phase, objects := range [][]ownership.Observation{a.Dependents, a.Possible} {
-		for _, o := range objects {
-			if leaf[o.Ref] {
-				key, _ := json.Marshal(struct {
-					Phase     int
-					Namespace string
-					Owners    []metav1.OwnerReference
-				}{phase, o.Ref.Namespace, o.OwnerReferences})
-				counts[string(key)]++
-			} else {
-				o.ResourceVersion = ""
-				evidence = append(evidence, o)
-			}
-		}
-	}
-	for _, o := range members {
-		o.ResourceVersion = ""
-		evidence = append(evidence, o)
-	}
-	projection := *p
-	projection.Dependents = slices.DeleteFunc(slices.Clone(p.Dependents), func(r ResourceRef) bool { return leaf[refIdentity(r)] })
-	projection.PossibleDependents = slices.DeleteFunc(slices.Clone(p.PossibleDependents), func(r ResourceRef) bool { return leaf[refIdentity(r)] })
-	encoded, _ := json.Marshal(struct {
-		Preview      *CascadeDeletePreview
-		Observations []ownership.Observation
-		LeafPods     map[string]int
-	}{&projection, evidence, counts})
-	digest := sha256.Sum256(encoded)
-	return hex.EncodeToString(digest[:])
 }
 
 func previewControllerTeardown(v *ownership.View, ref resourceid.Ref, obj *unstructured.Unstructured) (*ControllerTeardown, []ownership.Observation) {

@@ -566,10 +566,6 @@ type SecretCertificateInfo struct {
 // Coverage is absent when no ownership projection was possible. NotEnumerated
 // names deletion mechanisms outside the projection, never empty sets of objects.
 type CascadeDeletePreview struct {
-	// EvidenceHash binds observed impact, excluding leaf-Pod identity when its
-	// owner set and count stay the same. The host must bind the root identity
-	// separately. This server-side evidence is never sent to the browser.
-	EvidenceHash string `json:"-"`
 	// Propagation is the normal-delete policy. Dependents project cascading
 	// collection; Orphan preserves them unless force removes the orphan finalizer.
 	Propagation        string              `json:"propagation,omitempty"`

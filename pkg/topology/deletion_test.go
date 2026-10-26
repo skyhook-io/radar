@@ -109,42 +109,6 @@ func TestPreviewDeletionRootIncarnationAndOrphanPolicy(t *testing.T) {
 	}
 }
 
-func TestDeletionEvidenceAllowsOnlyLeafPodChurn(t *testing.T) {
-	root := ownershiptest.Object{Ref: resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "demo", Name: "web"}, APIVersion: "apps/v1", UID: "root", ResourceVersion: "1"}
-	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "demo", Name: "old"}, APIVersion: "v1", UID: "old", OwnerReferences: []metav1.OwnerReference{root.OwnerRef(true)}}
-	child := ownershiptest.Object{Ref: resourceid.Ref{Kind: "ConfigMap", Namespace: "demo", Name: "data"}, APIVersion: "v1", UID: "data", OwnerReferences: []metav1.OwnerReference{pod.OwnerRef(false)}}
-	for _, nonLeaf := range []bool{false, true} {
-		w := ownershiptest.World{Resources: []ownership.ServedResource{{Group: "apps", Version: "v1", Kind: "Deployment", Resource: "deployments", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}, {Version: "v1", Kind: "Pod", Resource: "pods", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}, {Version: "v1", Kind: "ConfigMap", Resource: "configmaps", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}, Objects: []ownershiptest.Object{root, pod}}
-		if nonLeaf {
-			w.Objects = append(w.Objects, child)
-		}
-		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "web", "namespace": "demo", "uid": "root", "resourceVersion": "1"}}}
-		project := func() string {
-			s, _ := ownershiptest.Scan(w).Begin()
-			return PreviewDeletion(context.Background(), ownership.NewView(s, ownership.Unrestricted()), obj).EvidenceHash
-		}
-		before := project()
-		w.Objects[1].Ref.Name = "new"
-		w.Objects[1].UID = "new"
-		if nonLeaf {
-			w.Objects[2].OwnerReferences = []metav1.OwnerReference{w.Objects[1].OwnerRef(false)}
-		}
-		after := project()
-		if (before == after) == nonLeaf {
-			t.Fatalf("nonLeaf=%v before=%s after=%s", nonLeaf, before, after)
-		}
-		if !nonLeaf {
-			extra := pod
-			extra.Ref.Name = "extra"
-			extra.UID = "extra"
-			w.Objects = append(w.Objects, extra)
-			if project() == after {
-				t.Fatal("growing pod count did not invalidate preview")
-			}
-		}
-	}
-}
-
 func TestPreviewDeletionStorageLimitIsExplicit(t *testing.T) {
 	for _, kind := range []string{"PersistentVolumeClaim", "PersistentVolume"} {
 		ns := ""
