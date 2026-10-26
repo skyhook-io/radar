@@ -503,6 +503,21 @@ describe('manager answer composition', () => {
     expect(g.summary).toContain('whose metadata names Application argocd/a, while Application argocd/b lists it in its status')
   })
 
+  // A CronJob's Job runs once: deleting it, even one created by hand, gets no
+  // replacement, whatever manages the CronJob.
+  it("a CronJob's Job is not said to be recreated", () => {
+    const cron = { kind: 'CronJob', group: 'batch', namespace: 'db', name: 'backup' }
+    const g = run({ state: 'agree', lead: a, direct: { object: subject }, via: { object: cron, recorders: [a], claims: [{ manager: a, source: 'argo-tracking-id', check: 'recorded' }] } }, [{ scope: 'delete' }], { operatorOwner: { kind: 'CronJob', name: 'backup' } })
+    expect(g.level).toBe('info')
+    expect(g.summary).toContain('nothing is expected to recreate it')
+    expect(g.summary).not.toContain('recreates it')
+  })
+
+  it('a state this UI does not know is read as claimed', () => {
+    const g = run({ state: 'future-state' as never, lead: a, direct: { object: subject, recorders: [a] } }, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
+    expect(g.level).toBe('may-revert')
+  })
+
   it('a parent the metadata alone names is not said to be managed', () => {
     const g = run({ state: 'claimed', lead: a, direct: { object: subject }, via: { object: parent, claims: [{ manager: a, source: 'argo-tracking-id', check: 'missing' }] } })
     expect(g.level).toBe('info')

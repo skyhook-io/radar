@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import type { ManagerAnswer } from '../../types/core'
 import { ManagedByChip } from './ManagedByChip'
+import { managerChipPresentation } from '../../utils/gitops-owner'
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 
@@ -57,4 +58,20 @@ it('links only managers Radar found', () => {
   expect(renderToStaticMarkup(<ManagedByChip manager={missing} onOpen={() => {}} />)).not.toContain('<button')
   const found: ManagerAnswer = { state: 'claimed', lead: a, direct: { object, claims: [{ manager: a, source: 'argo-tracking-id', check: 'omitted' }] } }
   expect(renderToStaticMarkup(<ManagedByChip manager={found} onOpen={() => {}} />)).toContain('<button')
+})
+
+// A newer Radar may send a check this UI doesn't know: render, don't link.
+it('renders an unfamiliar check without linking it', () => {
+  const future: ManagerAnswer = { state: 'claimed', lead: a, direct: { object, claims: [{ manager: a, source: 'argo-tracking-id', check: 'installation-mismatch' as never }] } }
+  expect(renderToStaticMarkup(<ManagedByChip manager={future} onOpen={() => {}} />)).not.toContain('<button')
+  expect(managerChipPresentation(future)?.tooltip).toContain("couldn't confirm")
+})
+
+// One claim that read the manager is enough to link it, whatever another says.
+it('links a manager one claim found though another left it unresolved', () => {
+  const both: ManagerAnswer = { state: 'claimed', lead: a, direct: { object, claims: [
+    { manager: a, source: 'argo-tracking-id', check: 'omitted' },
+    { manager: { ...a, namespace: '' }, source: 'argo-instance-label', check: 'unresolved' },
+  ] } }
+  expect(renderToStaticMarkup(<ManagedByChip manager={both} onOpen={() => {}} />)).toContain('<button')
 })

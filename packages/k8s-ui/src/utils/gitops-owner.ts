@@ -133,7 +133,9 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
   const details: string[] = []
   for (const c of claims) {
     if (c.check === 'recorded') continue
-    details.push(`${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reasons[c.check].replace('this resource', subject)}.`)
+    // A newer Radar may send a check this UI doesn't know.
+    const reason = reasons[c.check] ?? "Radar couldn't confirm its status lists this resource"
+    details.push(`${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reason.replace('this resource', subject)}.`)
   }
   if (recorders.length) {
     // A claim its list confirms adds nothing but the agreement.
@@ -165,16 +167,21 @@ export function managerChoices(answer: ManagerAnswer): ManagerChoice[] {
   const evidence = answer.via ?? answer.direct
   const recorders = new Set((evidence.recorders ?? []).map(resourceRefKey))
   const candidates = managerCandidates(answer)
-  const checks = new Map<string, ManagerClaim['check']>()
+  // A manager is found when any claim naming it read it; a check this UI
+  // doesn't know never counts as one.
+  const read: Array<string> = ['recorded', 'omitted', 'unreadable', 'remote']
+  const claimed = new Set<string>()
+  const found = new Set<string>()
   for (const c of activeManagerClaims(evidence)) {
     const ref = c.manager
-    checks.set(resourceRefKey(ref.namespace ? ref : candidates.find(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name) ?? ref), c.check)
+    const key = resourceRefKey(ref.namespace ? ref : candidates.find(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name) ?? ref)
+    claimed.add(key)
+    if (read.includes(c.check)) found.add(key)
   }
-  const unfound: Array<ManagerClaim['check'] | undefined> = ['missing', 'withheld', 'unresolved']
   return candidates.map(ref => {
     const key = resourceRefKey(ref)
     const listed = recorders.has(key)
-    return { ref, listed, claimed: checks.has(key), found: listed || !unfound.includes(checks.get(key)) }
+    return { ref, listed, claimed: claimed.has(key), found: listed || found.has(key) }
   })
 }
 

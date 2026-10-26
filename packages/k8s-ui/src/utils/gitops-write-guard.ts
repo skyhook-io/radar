@@ -443,7 +443,9 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
       return {
         level: 'info',
         reason: write.scope === 'delete'
-          ? `Its controller recreates it from ${parent}.`
+          ? !NON_RECREATING_CONTROLLERS.includes(operatorOwnerOf(input)?.kind ?? '')
+            ? `Its controller recreates it from ${parent}.`
+            : `It was created from ${parent}; deleting it doesn't change that source, and nothing is expected to recreate it.`
           : `This resource is generated from ${parent}; changes to the parent may replace it.`,
       }
     }
@@ -458,7 +460,12 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   if (write.scope === 'delete') {
     const operator = operatorOwnerOf(input)
     if (operator) {
-      return { level: 'info', reason: `${operator.kind} ${operator.name} will recreate this ${input.target.kind}.` }
+      return {
+        level: 'info',
+        reason: !NON_RECREATING_CONTROLLERS.includes(operator.kind)
+          ? `${operator.kind} ${operator.name} will recreate this ${input.target.kind}.`
+          : `${operator.kind} ${operator.name} created this ${input.target.kind}; it is not expected to recreate it.`,
+      }
     }
   }
   if (manager && write.scope === 'delete') {
@@ -572,13 +579,22 @@ function chainUnread(manager: ManagerAnswer): boolean {
   return Boolean(manager.stop && !['gone', 'replaced', 'excluded'].includes(manager.stop.state))
 }
 
+// The states this UI knows. A newer Radar may send another; it is read as
+// claimed, which never proves a revert or waives a warning.
+const MANAGER_STATES: Array<string> = ['shared', 'disagree', 'agree', 'listed', 'claimed', 'unknown', 'none']
+
+// Controllers that don't replace an object of theirs that is deleted: a
+// CronJob's Job (scheduled or created by hand) runs once.
+const NON_RECREATING_CONTROLLERS = ['CronJob']
+
 export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWriteGuard {
   // A live check the server couldn't answer, or one that failed while the
   // cached answer names a manager, leaves that answer unconfirmed: an exemption
   // read from it could belong to the object as it was.
   const cachedNamesManager = Boolean(input.manager && (input.manager.via || !['none', 'unknown'].includes(input.manager.state)))
   const unconfirmed = input.evidence?.managerUnavailable || (!input.evidence && input.evidenceError && cachedNamesManager ? input.evidenceError : null)
-  const manager = unconfirmed ? undefined : input.evidence?.manager ?? input.manager
+  const answered = unconfirmed ? undefined : input.evidence?.manager ?? input.manager
+  const manager = answered && !MANAGER_STATES.includes(answered.state) ? { ...answered, state: 'claimed' as const } : answered
   const owner = unconfirmed ? null : manager ? manager.lead ? gitOpsOwnerFromRef(manager.lead) : null : input.owner ?? null
   const helmRelease = unconfirmed ? null : manager
     ? manager.lead?.kind === 'HelmRelease' && !manager.lead.group ? { namespace: manager.lead.namespace, name: manager.lead.name } : null
