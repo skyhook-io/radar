@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { ChevronDown, Globe, Search } from 'lucide-react'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
+import { useKeepInViewport } from '../../hooks/useKeepInViewport'
 import { MultiSelectPicker } from '../ui/MultiSelectPicker'
 
 /**
@@ -96,6 +97,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
 
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  useKeepInViewport(dropdownRef, isOpen)
   const [restoreFocus, setRestoreFocus] = useState(false)
 
   const scopeActives = useMemo(() => scope?.actives ?? [], [scope?.actives])
