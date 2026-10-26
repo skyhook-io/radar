@@ -14,11 +14,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
-// Search gates typed role metadata because it can expose permissions beyond namespace visibility.
-func requiresSearchRoleAccess(group, resource string) bool {
-	return group == "rbac.authorization.k8s.io" && (resource == "roles" || resource == "rolebindings")
-}
-
 // reasonClass groups coverage reasons by how a search reports them.
 type reasonClass int
 

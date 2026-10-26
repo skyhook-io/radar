@@ -879,10 +879,10 @@ namespaces when the kind failed everywhere and an unknown part when only some
 namespaces failed; a namespace gap reaches all kinds only when every searched
 kind was excluded in those namespaces, and otherwise an unknown subset of kinds.
 A gap from an unreadable catalog reaches an unknown set of kinds.
-`filter_eval_failed` has two forms: CEL evaluation failures name `objects`
-instead; the findings-scan time limit lists report `kinds` with
-`namespaces: {"extent": "unknown"}`, because findings in unscanned reports
-may still match.
+`filter_eval_failed` names `objects` whose CEL filter evaluation failed.
+`findings_scan_incomplete` lists report `kinds` with
+`namespaces: {"extent": "unknown"}` when the findings scan runs out of time,
+because findings in unscanned reports may still match.
 
 **`status: "partial"` means this result can't rule out a match for what you
 asked: something was loading or failed, a kind or namespace you named couldn't
@@ -970,7 +970,8 @@ What gets reported follows from that:
 | `user_namespace_not_visible` | named `ns:` | The namespace isn't among the namespaces you can see, or doesn't exist; the code doesn't say which. | Use a namespace you can see, or ask for access. |
 | `outside_namespace_pin` | named `ns:` | Radar's `--namespace-scope` pin leaves the namespace out. | Radar's `--namespace-scope` setting. |
 | `radar_namespace_not_collected` | named `ns:` | Radar's cache left kinds unsearched there: `kinds.extent` is `all` only if every searched kind was excluded, otherwise `unknown`. | Widen Radar's collection. |
-| `filter_eval_failed` | when the filter fails, or the findings search ran out of time | The `filter=` expression couldn't be evaluated on some objects Radar read, or Radar stopped searching Trivy report findings when its time budget ran out, so a CVE or package may be in a report it left out. | Guard missing fields with `has()`; for findings, narrow with `kind:`, `ns:` or `image:`. |
+| `filter_eval_failed` | when the filter fails | The `filter=` expression couldn't be evaluated on some objects Radar read. | Guard missing fields with `has()`. |
+| `findings_scan_incomplete` | when the findings search ran out of time | Radar stopped searching Trivy report findings when its time budget ran out, so a CVE or package may be in a report it left out. | Narrow with `kind:`, `ns:` or a more specific term. |
 
 A namespace gap lists the namespaces you named where kinds were missed for that
 reason, once per code, never per kind. Every combination of its axes was missed;
@@ -1026,8 +1027,8 @@ Readiness is judged per namespace: a namespace whose watch is still loading repo
 hits from namespaces that are ready.
 
 Ordinary namespaced kinds, including dynamic CRDs, use the same namespace visibility
-policy as resource lists. Secrets and typed Roles/RoleBindings use exact caller list
-gates. These gates try one cluster-wide check, then bounded parallel namespace
+policy as resource lists. Secrets, Roles, RoleBindings, LimitRanges and Trivy reports
+use exact caller list gates. These gates try one cluster-wide check, then bounded parallel namespace
 checks only after a denial. Cluster-scoped kinds use an exact cluster-scoped check.
 
 `features.searchCoverage` advertises the coverage response and `object` binding so

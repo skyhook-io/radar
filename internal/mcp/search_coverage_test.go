@@ -536,7 +536,7 @@ func hintOf(r hintResult, namedKinds bool) string {
 // coverage, gap axes and all, and says how to search the rest.
 func TestSearchHintReportsFindingsCutShort(t *testing.T) {
 	cov := resourceapi.SearchCoverage{Status: resourceapi.CoveragePartial, Gaps: []resourceapi.Gap{{
-		Code:       readreason.FilterEvalFailed,
+		Code:       readreason.FindingsScanIncomplete,
 		Kinds:      resourceapi.Kinds([]resourceapi.KindRef{{Kind: "VulnerabilityReport", Group: "aquasecurity.github.io"}}, 1),
 		Namespaces: resourceapi.UnknownNames(),
 	}}}

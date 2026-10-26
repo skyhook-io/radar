@@ -195,7 +195,7 @@ export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: S
   const someKindsUncollected = unsearched.some((e) => e.reason === 'radar_namespace_not_collected' && e.someKinds)
   if (uncollected.length && someKindsUncollected) say(`Some kinds weren't searched in ${uncollected.length === 1 ? 'namespace' : 'namespaces'} ${quoted(uncollected)}: Radar here watches only some namespaces.`)
   else if (uncollected.length) namespaceSentence(uncollected, "wasn't searched: Radar here watches only some namespaces", "weren't searched: Radar here watches only some namespaces")
-  const findings = named('filter_eval_failed')
+  const findings = named('findings_scan_incomplete')
   if (findings.length) say(`Radar ran out of time searching the findings of ${names(findings, 'and')}, so a CVE or package missing here may be in a report it left out.`)
   const denied = named('user_forbidden')
   if (denied.length) {

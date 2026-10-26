@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 // limitsProvider holds one matching report plus a Pod, so a test can tell
@@ -51,7 +52,7 @@ func TestSearch_FindingsTimeLimitIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasKindGap(res, readreason.FilterEvalFailed, "VulnerabilityReport") {
+	if !hasKindGap(res, readreason.FindingsScanIncomplete, "VulnerabilityReport") {
 		t.Fatalf("gaps = %+v, want VulnerabilityReport's findings reported as not fully searched", res.Coverage.Gaps)
 	}
 	if got := reportHitNames(res); !slices.Equal(got, []string{"shop/cve-2026-109618-canary"}) {
@@ -197,7 +198,7 @@ func TestSearch_FilterSkipsReportsWhoseFindingsWereNotRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Hits) != 0 || !hasKindGap(res, readreason.FilterEvalFailed, "VulnerabilityReport") {
+	if len(res.Hits) != 0 || !hasKindGap(res, readreason.FindingsScanIncomplete, "VulnerabilityReport") {
 		t.Fatalf("hits = %v, gaps = %+v", reportHitNames(res), res.Coverage.Gaps)
 	}
 }
@@ -278,3 +279,33 @@ func TestSearch_CancellationStopsInsideAReportOfPassedChecks(t *testing.T) {
 // slowProvider blocks one kind's list until released.
 // A search waiting on a slow list of some other kind doesn't hold the
 // findings slot, so another search can still read findings.
+
+func TestSearch_FindingsTimeLimitAndFilterFailuresAreDistinct(t *testing.T) {
+	defer func(b time.Duration) { findingsBudget = b }(findingsBudget)
+	findingsBudget = -time.Second
+	f, err := filter.CompileObjectFilter(`object.nonexistent == 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Search(context.Background(), limitsProvider(), Parse("CVE-2026-109618"), Options{Include: IncludeNone, Filter: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 0 || res.FilterErrors != 1 || len(res.Coverage.Gaps) != 2 {
+		t.Fatalf("distinct failures: %+v", res)
+	}
+	for _, gap := range res.Coverage.Gaps {
+		switch gap.Code {
+		case readreason.FindingsScanIncomplete:
+			if gap.Objects != nil || gap.Kinds == nil || !slices.Equal(gap.Kinds.Names, []resourceapi.KindRef{{Kind: "VulnerabilityReport", Group: "aquasecurity.github.io"}}) || gap.Namespaces == nil || gap.Namespaces.Extent != resourceapi.ExtentUnknown {
+				t.Errorf("findings gap: %+v", gap)
+			}
+		case readreason.FilterEvalFailed:
+			if gap.Kinds != nil || gap.Namespaces != nil || gap.Objects == nil || !slices.Equal(gap.Objects.Names, []resourceapi.ObjectRef{{Kind: "Pod", Namespace: "shop", Name: "cve-2026-109618-canary"}}) {
+				t.Errorf("CEL gap: %+v", gap)
+			}
+		default:
+			t.Errorf("unexpected gap: %+v", gap)
+		}
+	}
+}

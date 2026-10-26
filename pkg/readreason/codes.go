@@ -84,6 +84,10 @@ const (
 	// FilterEvalFailed: a search filter could not be evaluated on objects
 	// Radar did read, so whether they match is unknown.
 	FilterEvalFailed Code = "filter_eval_failed"
+	// FindingsScanIncomplete: the findings scan ran out of time, so findings
+	// in unscanned reports may still match. Narrow with kind:, ns: or a more
+	// specific term.
+	FindingsScanIncomplete Code = "findings_scan_incomplete"
 
 	// ClusterConnecting: Radar is still connecting to the cluster.
 	ClusterConnecting Code = "cluster_connecting"
@@ -144,6 +148,7 @@ var actions = map[Code]Action{
 	ObjectNotFound:             ActionNone,
 	ListTooLarge:               ActionChangeRequest,
 	FilterEvalFailed:           ActionChangeRequest,
+	FindingsScanIncomplete:     ActionChangeRequest,
 	ClusterConnecting:          ActionRetry,
 	ClusterDisconnected:        ActionRadarConfig,
 	ConnectionChanged:          ActionCheckTarget,
@@ -187,9 +192,10 @@ func AffectsWholeCluster(c Code) bool {
 // connection, without which nothing is read; wait for what resolves by
 // itself, since a retry then returns at least part of the answer; act on
 // their own access and namespace targeting; then Radar's identity and setup,
-// a load that is overdue, and what Radar doesn't collect. A search filter's
-// failure and the unclassified read_error come last among failures, so an
-// error names a specific cause when it has one. object_not_found is an
+// a load that is overdue, and what Radar doesn't collect. Search filter
+// failures, incomplete findings scans and the unclassified read_error come
+// last among failures, so an error names a specific cause when it has one.
+// object_not_found is an
 // answer, not a failure.
 var precedence = []Code{
 	NamespaceRequired, KindUnknown, KindNotWatchable, KindNotSearchable, ListTooLarge,
@@ -198,7 +204,7 @@ var precedence = []Code{
 	UserForbidden, UserNoNamespaceAccess, UserNamespaceNotVisible, NamespaceNotFound,
 	OutsideNamespacePin,
 	RadarCredentialsRejected, RadarForbidden, RadarKindNotCollected,
-	KindSyncTimedOut, RadarNamespaceNotCollected, FilterEvalFailed, ReadError,
+	KindSyncTimedOut, RadarNamespaceNotCollected, FilterEvalFailed, FindingsScanIncomplete, ReadError,
 	ObjectNotFound,
 }
 
