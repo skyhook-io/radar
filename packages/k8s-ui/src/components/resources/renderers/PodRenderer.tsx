@@ -336,6 +336,7 @@ export function PodRenderer({
   const noUsageYet = notRunning && metricsHistory?.metricsAPIReachable === true && !metricsHistory.collectionError && !metricsHistory.containers?.length && !metrics?.containers?.length
   const showMetricsUnavailable = !isTerminal && !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
   const hasMetricsHistory = !!metricsHistory?.containers?.length
+  const showTerminalUsage = isTerminal && (metricsHistory !== undefined || metricsHistoryLoading || !!metricsHistoryError || !!metrics || metricsUnavailable)
   const currentMetrics = isTerminal || metricsUnavailable ? undefined : metrics
 
   // Image filesystem modal state
@@ -877,7 +878,7 @@ export function PodRenderer({
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(isTerminal || currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
+      {!hideMetricsServer && !!(showTerminalUsage || currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {isTerminal && (
             <div className="mb-3 text-sm text-theme-text-tertiary">

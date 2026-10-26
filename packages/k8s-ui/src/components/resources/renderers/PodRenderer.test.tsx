@@ -590,4 +590,10 @@ describe('finished Pod resource usage',()=>{
   expect(html).not.toContain('No recorded usage is available.')
  })
 
+ it('keeps usage absent when the host wires no metrics state',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null} />)
+  expect(html).not.toContain('Resource Usage')
+  expect(html).not.toContain('Live resource usage has ended')
+ })
+
 })
