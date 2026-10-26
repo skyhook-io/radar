@@ -124,8 +124,8 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
+      {/* Toolbar. Phones: the controls wrap and search takes its own row. */}
+      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0 phone:flex-wrap phone:gap-2 phone:px-3">
         <div className="flex items-center gap-2 text-theme-text-secondary">
           <Package className="w-5 h-5" />
           <span className="font-medium">Charts</span>
@@ -214,7 +214,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
 
         {/* ArtifactHub filters */}
         {chartSource === 'artifacthub' && (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 phone:flex-wrap phone:gap-x-3 phone:gap-y-2">
             <label className="flex items-center gap-1.5 text-sm text-theme-text-secondary">
               <input
                 type="checkbox"
@@ -252,7 +252,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
         )}
 
         {/* Search */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative phone:order-last phone:basis-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
           <Input
             placeholder={chartSource === 'local' ? "Search charts..." : "Search ArtifactHub..."}
