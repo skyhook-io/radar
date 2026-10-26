@@ -231,9 +231,12 @@ export function Tooltip({
         ref={triggerRef}
         className={clsx('inline-flex max-w-full', wrapperClassName)}
         style={wrapperStyle}
-        onMouseEnter={showTooltip}
-        onMouseLeave={scheduleHideTooltip}
-        onFocus={showTooltip}
+        // Hover means a real mouse, and focus means keyboard focus: a touch
+        // tap fires both mouse-compat events and focus, which would pop the
+        // tooltip over whatever the tap just opened.
+        onPointerEnter={(e) => { if (e.pointerType === 'mouse') showTooltip() }}
+        onPointerLeave={(e) => { if (e.pointerType === 'mouse') scheduleHideTooltip() }}
+        onFocus={(e) => { if (isFocusVisible(e.target)) showTooltip() }}
         onBlur={hideTooltip}
         // pointerdown fires before click, so the tooltip is gone before
         // the trigger's action runs. Required when the child handles
@@ -295,4 +298,13 @@ export function WithTooltip({
       {children}
     </Tooltip>
   )
+}
+
+function isFocusVisible(el: EventTarget): boolean {
+  try {
+    return el instanceof Element && el.matches(':focus-visible')
+  } catch {
+    // Engines without :focus-visible (older jsdom): keep keyboard tooltips.
+    return true
+  }
 }
