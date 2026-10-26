@@ -15,8 +15,8 @@ import (
 // It captures each object's metadata once, whether it read the object or
 // found it searching an owner's dependents, and answers every question from
 // that capture, so an object reads the same in every answer. Member lists
-// aren't captured: Members and RecordingManagers read the managers' status
-// each time they are asked. Answers read the
+// aren't captured: Members reads a manager's status each time it is asked,
+// and RecordingManagers searches for an object's managers once. Answers read the
 // cache as it is when asked, so one can be a moment older than another, as
 // any informer read can. It searches each owner's dependents at most once.
 // It never reads an object the caller may not read, and says nothing of
@@ -24,10 +24,11 @@ import (
 // ValidateCaches passes once they are built. They share the view's captures,
 // so they must not be modified. A View is not safe for concurrent use.
 type View struct {
-	session  ReadSession
-	access   Access
-	reads    map[resourceid.Ref]accessRead
-	searches map[resourceid.Ref]DependentCandidatesRead
+	session   ReadSession
+	access    Access
+	reads     map[resourceid.Ref]accessRead
+	searches  map[resourceid.Ref]DependentCandidatesRead
+	recording map[resourceid.Ref]RecordingManagersAnswer
 }
 
 type accessRead struct {
@@ -38,10 +39,11 @@ type accessRead struct {
 // NewView answers for the caller access describes, from s.
 func NewView(s ReadSession, access Access) *View {
 	return &View{
-		session:  s,
-		access:   access,
-		reads:    map[resourceid.Ref]accessRead{},
-		searches: map[resourceid.Ref]DependentCandidatesRead{},
+		session:   s,
+		access:    access,
+		reads:     map[resourceid.Ref]accessRead{},
+		searches:  map[resourceid.Ref]DependentCandidatesRead{},
+		recording: map[resourceid.Ref]RecordingManagersAnswer{},
 	}
 }
 
@@ -483,6 +485,15 @@ func covers(g Gap, ref resourceid.Ref) bool {
 // manager the view already read answers as it was read, and one it hadn't is
 // captured as found.
 func (v *View) RecordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
+	if a, ok := v.recording[ref]; ok {
+		return a
+	}
+	a := v.recordingManagers(ref)
+	v.recording[ref] = a
+	return a
+}
+
+func (v *View) recordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 	found := v.session.RecordingManagers(ref)
 	a := RecordingManagersAnswer{searchGaps: found.Gaps}
 	for _, g := range found.Gaps {

@@ -12,7 +12,7 @@ Three kinds of evidence, kept apart:
 |---|---|---|
 | **Owner references** | `metadata.ownerReferences` on the dependent | What Kubernetes' garbage collector links. A reference names its owner's UID; whether it resolves to the owner is a rule's call (`ResolveOwner`). |
 | **Recorded membership** | A GitOps manager's status: an Argo CD Application's `status.resources`, a Flux Kustomization's or HelmRelease's `status.inventory` | That the manager recorded the object: for Argo CD, the objects its last comparison covered (desired objects not yet created, live ones awaiting pruning, objects another Application also tracks); for Flux, its last apply. Not that it applied the object or alone manages it. |
-| **Claims** | Labels and annotations on the object (Argo CD's tracking annotation or label, Flux's `*.toolkit.fluxcd.io/name` labels) | What the controllers themselves use to decide membership. Not read yet: weighing claims against recorded lists belongs to manager resolution. |
+| **Claims** | Labels and annotations on the object (Argo CD's tracking annotation or label, Flux's `*.toolkit.fluxcd.io/name` labels, Helm's release annotations) | What the object says manages it: a candidate, not a verdict. Argo CD decides membership by its configured tracking method and installation ID, which Radar may not be able to read. Parsed by `pkg/gitops/claims.go`, every candidate kept. |
 
 Every answer says what it couldn't read. An empty answer means "none" only when it is complete.
 
@@ -40,6 +40,24 @@ Every answer says what it couldn't read. An empty answer means "none" only when 
 - **`pkg/ownership/cachesource`: the cache source.** One traversal (`dynamicIndexed`) reads either index for custom
   resources. It reads a resource watched at several versions from one version, pins the namespaces a version is watched
   in at the session's first look, and turns every unread kind or namespace into a gap.
+
+## What manages an object
+
+`View.Manager(ref)` (`pkg/ownership/manager.go`) weighs the two GitOps kinds of evidence for one object and names no
+winner they don't support. It gathers, for the object, the local managers whose lists name it (**recorders**) and the
+claims its metadata makes, each checked against its manager (recorded, omitted by a list that was read, unreadable,
+remote, missing, not a recording kind as for a native Helm release, unresolved for a claim with no namespace, or
+withheld from the caller). When that evidence doesn't settle the question it walks the controller chain, Pod →
+ReplicaSet → Deployment, to the nearest ancestor whose evidence does, and reports it as **via**. A claim is **weak** —
+it doesn't stop the walk — when it was copied from another object or is an Argo CD instance label on an object a
+controller owns, which commonly inherits it from a template. A walk stops at an owner it can't follow and says so.
+
+The state, first match wins: **shared** (several lists name it), **disagree** (a list names it and a claim names
+another manager), **agree** (one list names it and every claim names that manager), **listed** (one list, no claim),
+**claimed** (claims only), **unknown** (no evidence, and Radar couldn't look everywhere) and **none** (no evidence in
+what Radar collects and the caller may read — never "unmanaged"). A native Helm release's annotations count only when
+no GitOps evidence exists, since Flux's helm-controller writes them too. The answer reaches the wire as
+`relationships.ownership.manager`; `relationships.managedBy` keeps its own meaning, the topmost owner the graph links.
 
 ## Coverage
 

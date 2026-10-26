@@ -367,6 +367,17 @@ func (b *Builder) Manager(gk resourceid.GroupKind, namespace, name string, state
 	return b.b.manager(gk, namespace, name, state, 0, destination, members...)
 }
 
+// Meta sets the labels and annotations of o, an object already added.
+func (b *Builder) Meta(o Object, labels, annotations map[string]string) Object {
+	for i := range b.b.objects {
+		if b.b.objects[i].Ref == o.Ref {
+			b.b.objects[i].Labels, b.b.objects[i].Annotations = labels, annotations
+			return b.b.objects[i]
+		}
+	}
+	panic("ownershiptest: Meta of an object not added")
+}
+
 // World returns the World built, every kind collected in full except those
 // Radar can't watch.
 func (b *Builder) World() World { return b.b.world() }

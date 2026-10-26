@@ -736,8 +736,49 @@ export interface OwnershipCoverage {
     remote?: number
     notChecked?: OwnershipGap[]
   }
+  /** What manages this resource, from its own evidence or its nearest controller ancestor's. Absent from Radars that predate it. */
+  manager?: ManagerAnswer
   /** A readreason code when Radar couldn't answer at all. */
   unavailableReason?: string
+}
+
+/** What manages a resource: the managers whose status lists name it and what its metadata claims. It names no winner the evidence doesn't support. */
+export interface ManagerAnswer {
+  /** none: no evidence in what Radar collects and the viewer may read, never "unmanaged". */
+  state: 'shared' | 'disagree' | 'agree' | 'listed' | 'claimed' | 'unknown' | 'none'
+  /** The manager to show first, when the state has one. */
+  lead?: ResourceRef
+  /** The evidence on the resource itself. */
+  direct: ManagerEvidence
+  /** The nearest controller ancestor's evidence, when the resource's own doesn't settle it; state and lead then come from it. */
+  via?: ManagerEvidence
+  /** Why the walk up the controller chain stopped before an ancestor could answer. */
+  chainEnd?: 'unfollowed' | 'cycle' | 'truncated'
+  /** The viewer's access is restricted, so the evidence is the part it may read. */
+  narrowed?: boolean
+}
+
+export interface ManagerEvidence {
+  object: ResourceRef
+  /** Local managers whose status lists name it. */
+  recorders?: ResourceRef[]
+  /** Managers its own metadata names. */
+  claims?: ManagerClaim[]
+  /** Managers that may list it without Radar being able to tell. */
+  unreadable?: number
+  remote?: number
+  notChecked?: OwnershipGap[]
+}
+
+export interface ManagerClaim {
+  /** Its namespace is absent when the metadata doesn't say. */
+  manager: ResourceRef
+  source: 'flux-helm-labels' | 'flux-kustomize-labels' | 'argo-tracking-id' | 'argo-instance-label' | 'helm-release'
+  check: 'recorded' | 'omitted' | 'unreadable' | 'remote' | 'missing' | 'not-recording' | 'unresolved' | 'withheld' | 'unchecked'
+  /** An Argo CD tracking ID naming another object. */
+  copied?: boolean
+  /** Copied, or an instance label on an object a controller owns: it doesn't settle the question for its object. */
+  weak?: boolean
 }
 
 // Parsed X.509 certificate metadata (from backend cert parsing)

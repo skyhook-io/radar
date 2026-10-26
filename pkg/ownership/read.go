@@ -4,6 +4,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -57,6 +58,9 @@ type Observation struct {
 	ResourceVersion string
 	// OwnerReferences are the object's own, in order and unvalidated.
 	OwnerReferences []metav1.OwnerReference
+	// Claims are the managers the object's own metadata names, read when it
+	// was captured.
+	Claims []gitops.Claim
 }
 
 // Observe copies what ownership needs out of m, the object at ref, which may
@@ -73,6 +77,7 @@ func Observe(ref resourceid.Ref, m metav1.Object) Observation {
 			refs[i].DeepCopyInto(&o.OwnerReferences[i])
 		}
 	}
+	o.Claims = gitops.Claims(ref, m.GetLabels(), m.GetAnnotations())
 	return o
 }
 

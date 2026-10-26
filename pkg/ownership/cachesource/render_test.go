@@ -81,6 +81,8 @@ func setMeta(t testing.TB, obj runtime.Object, o ownershiptest.Object) {
 		owners = append(owners, *ref.DeepCopy())
 	}
 	m.SetOwnerReferences(owners)
+	m.SetLabels(o.Labels)
+	m.SetAnnotations(o.Annotations)
 	if o.DeletionTimestamp != nil {
 		m.SetDeletionTimestamp(o.DeletionTimestamp.DeepCopy())
 	}

@@ -597,6 +597,10 @@ type OwnershipCoverage struct {
 	// lists the resource, for Managers, couldn't settle every one the caller
 	// may read.
 	Managers *ManagersCoverage `json:"managers,omitempty"`
+	// Manager is what manages the resource, from the evidence on it or, when
+	// that doesn't settle it, on its nearest controller ancestor. It is set
+	// whenever ownership was answered.
+	Manager *ManagerAnswer `json:"manager,omitempty"`
 	// UnavailableReason is a reason code when Radar couldn't answer at all.
 	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
@@ -641,6 +645,69 @@ type ManagersCoverage struct {
 	// NotChecked are the manager kinds and namespaces Radar couldn't search,
 	// and why.
 	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
+}
+
+// ManagerAnswer is what manages a resource: the managers whose status lists
+// name it and what its own metadata claims. It names no winner the evidence
+// doesn't support: a disagreement stays one.
+type ManagerAnswer struct {
+	// State sums up the evidence: "agree" (one list names it and every claim
+	// names that manager), "listed" (one list names it, no claim),
+	// "disagree" (one list names it and a claim names another manager),
+	// "shared" (several lists name it), "claimed" (only claims name a
+	// manager), "unknown" (no evidence, and Radar couldn't look everywhere)
+	// or "none" (no evidence in what Radar collects and the caller may read;
+	// not a statement that nothing manages it).
+	State string `json:"state"`
+	// Lead is the manager to show first, when the state has one.
+	Lead *ResourceRef `json:"lead,omitempty"`
+	// Direct is the evidence on the resource itself.
+	Direct ManagerEvidence `json:"direct"`
+	// Via is the evidence on the nearest controller ancestor that settles the
+	// question when the resource's own doesn't; State and Lead then come from
+	// it.
+	Via *ManagerEvidence `json:"via,omitempty"`
+	// ChainEnd is why the walk up the controller chain stopped before an
+	// ancestor could answer: "unfollowed", "cycle" or "truncated".
+	ChainEnd string `json:"chainEnd,omitempty"`
+	// Narrowed: the caller's access is restricted, so the evidence is the part
+	// it may read.
+	Narrowed bool `json:"narrowed,omitempty"`
+}
+
+// ManagerEvidence is what names the managers of one object.
+type ManagerEvidence struct {
+	Object ResourceRef `json:"object"`
+	// Recorders are the local managers whose status lists name it.
+	Recorders []ResourceRef `json:"recorders,omitempty"`
+	// Claims are the managers its own metadata names.
+	Claims []ManagerClaim `json:"claims,omitempty"`
+	// Unreadable and Remote count the managers that may list it without
+	// Radar being able to tell; NotChecked are the manager kinds and
+	// namespaces Radar couldn't search.
+	Unreadable int            `json:"unreadable,omitempty"`
+	Remote     int            `json:"remote,omitempty"`
+	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
+}
+
+// ManagerClaim is a manager an object's metadata names, and what checking it
+// found.
+type ManagerClaim struct {
+	// Manager is the manager named; its namespace is empty when the metadata
+	// doesn't say.
+	Manager ResourceRef `json:"manager"`
+	// Source is the metadata: "flux-helm-labels", "flux-kustomize-labels",
+	// "argo-tracking-id", "argo-instance-label" or "helm-release".
+	Source string `json:"source"`
+	// Check is what checking the claim found: "recorded", "omitted",
+	// "unreadable", "remote", "missing", "not-recording", "unresolved",
+	// "withheld" or "unchecked".
+	Check string `json:"check"`
+	// Copied: an Argo CD tracking ID naming another object.
+	Copied bool `json:"copied,omitempty"`
+	// Weak: the claim doesn't settle the question for its object, being
+	// copied or an instance label on an object a controller owns.
+	Weak bool `json:"weak,omitempty"`
 }
 
 // MembersCoverage says what a GitOps manager's status records of its

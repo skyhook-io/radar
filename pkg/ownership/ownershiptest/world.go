@@ -30,12 +30,15 @@ type World struct {
 type Object struct {
 	Ref resourceid.Ref
 	// APIVersion is the version Radar reads the object at.
-	APIVersion        string
-	UID               types.UID
-	ResourceVersion   string
-	OwnerReferences   []metav1.OwnerReference
-	DeletionTimestamp *metav1.Time
-	Finalizers        []string
+	APIVersion      string
+	UID             types.UID
+	ResourceVersion string
+	OwnerReferences []metav1.OwnerReference
+	// Labels and Annotations are the object's metadata, which may name its
+	// managers.
+	Labels, Annotations map[string]string
+	DeletionTimestamp   *metav1.Time
+	Finalizers          []string
 	// Membership and Members are what a recording manager's status says of
 	// its members, as the objects it means. DestinationNamespace is an Argo
 	// CD Application's destination namespace.

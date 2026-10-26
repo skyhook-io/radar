@@ -43,3 +43,32 @@ func BenchmarkRecordingManagers(b *testing.B) {
 		s.RecordingManagers(target)
 	}
 }
+
+// BenchmarkManagerThroughAChain is one drawer's answer for a Pod whose
+// Deployment is one of 10,000 an Application lists, the Pod carrying the
+// Application's instance label, so the answer walks to the Deployment; a
+// fresh view per answer, as each request opens one.
+func BenchmarkManagerThroughAChain(b *testing.B) {
+	bld := ownershiptest.NewBuilder()
+	var members []resourceid.Ref
+	var pod resourceid.Ref
+	for i := range 10000 {
+		d := bld.Add("apps", "Deployment", "shop", fmt.Sprint("web-", i))
+		members = append(members, d.Ref)
+		if i == 7 {
+			rs := bld.Add("apps", "ReplicaSet", "shop", "web-7-1", d.OwnerRef(true))
+			pod = bld.Meta(bld.Add("", "Pod", "shop", "web-7-1-a", rs.OwnerRef(true)), map[string]string{"argocd.argoproj.io/instance": "shop"}, nil).Ref
+		}
+	}
+	bld.Manager(ownership.ArgoApplication, "argocd", "shop", ownership.MembersRecorded, "shop", members...)
+	bld.Manager(ownership.ArgoApplication, "argocd", "broken", ownership.MembersUnreadable, "shop")
+	s := begin(b, render(b, bld.World()).source())
+	if got := ownership.NewView(s, ownership.Unrestricted()).Manager(pod); got.State != ownership.ManagerListed || got.Via == nil {
+		b.Fatalf("Manager = %+v", got)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		ownership.NewView(s, ownership.Unrestricted()).Manager(pod)
+	}
+}

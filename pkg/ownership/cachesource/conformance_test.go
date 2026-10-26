@@ -111,7 +111,30 @@ func viewAnswers(v *ownership.View, ref resourceid.Ref) []any {
 		out = append(out, ident(m))
 	}
 	out = append(out, managers.Unreadable, managers.Remote, managers.Gaps)
+	m := v.Manager(ref)
+	out = append(out, m.State, m.Lead, fmt.Sprintf("%+v", m.Direct), m.ChainEnd, m.Narrowed)
+	if m.Via != nil {
+		out = append(out, fmt.Sprintf("%+v", *m.Via))
+	}
 	return out
+}
+
+// The cache source reads the claims an object's metadata makes as the
+// oracle does, so both answer what manages it alike: a list naming it, an
+// instance label inherited by a Pod, a disagreeing tracking ID, a copied one
+// and a Helm release.
+func TestSourceConformsOnManagerClaims(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	recorded := ownership.MembersRecorded
+	d := b.Add("apps", "Deployment", "alpha", "web")
+	rs := b.Add("apps", "ReplicaSet", "alpha", "web-1", d.OwnerRef(true))
+	b.Meta(b.Add("", "Pod", "alpha", "web-1-a", rs.OwnerRef(true)), map[string]string{"argocd.argoproj.io/instance": "web"}, nil)
+	cm := b.Meta(b.Add("", "ConfigMap", "alpha", "settings"), nil, map[string]string{"argocd.argoproj.io/tracking-id": "beta_old:/ConfigMap:alpha/settings"})
+	b.Meta(b.Add("", "ConfigMap", "alpha", "copy"), nil, map[string]string{"argocd.argoproj.io/tracking-id": "beta_web:/ConfigMap:alpha/settings"})
+	b.Meta(b.Add("", "ConfigMap", "alpha", "chart"), nil, map[string]string{"meta.helm.sh/release-name": "web", "meta.helm.sh/release-namespace": "alpha"})
+	b.Manager(ownership.ArgoApplication, "beta", "web", recorded, "alpha", d.Ref, cm.Ref)
+	b.Manager(ownership.ArgoApplication, "beta", "old", recorded, "alpha")
+	conform(t, b.World())
 }
 
 // alphaOnly may read namespaced objects only in alpha, and no Nodes.
