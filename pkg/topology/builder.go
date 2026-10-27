@@ -8358,6 +8358,12 @@ func extractGenericStatus(resource *unstructured.Unstructured) HealthStatus {
 			return healthLevelToStatus(health.OpenTelemetryInstrumentation(resource).Level)
 		}
 	}
+	if resource.GroupVersionKind().Group == "flagger.app" && resource.GetKind() == "Canary" {
+		return healthLevelToStatus(health.FlaggerCanary(resource).Level)
+	}
+	if resource.GroupVersionKind().Group == "flagger.app" && resource.GetKind() == "MetricTemplate" {
+		return StatusNeutral
+	}
 	status, found, _ := unstructured.NestedMap(resource.Object, "status")
 	if !found {
 		return StatusUnknown

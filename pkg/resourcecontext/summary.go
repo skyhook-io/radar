@@ -166,6 +166,12 @@ func unstructuredHealth(u *unstructured.Unstructured) string {
 			return levelToString(health.OpenTelemetryInstrumentation(u).Level)
 		}
 	}
+	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "Canary" {
+		return levelToString(health.FlaggerCanary(u).Level)
+	}
+	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "MetricTemplate" {
+		return "neutral"
+	}
 	conditions, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !found || len(conditions) == 0 {
 		return ""

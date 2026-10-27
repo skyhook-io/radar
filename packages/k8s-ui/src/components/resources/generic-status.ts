@@ -1,4 +1,5 @@
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
+import { getFlaggerCanaryStatus } from './resource-utils-flagger'
 import { isApiGroup } from './resource-utils-cnpg'
 import type { HealthLevel } from './resource-utils'
 import { getGatewayPolicyStatus } from './gateway-policy-status'
@@ -94,6 +95,13 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
     const native = resource.kind === 'OpenTelemetryCollector' ? getOpenTelemetryCollectorStatus(resource)
       : resource.kind === 'Instrumentation' ? getOpenTelemetryInstrumentationStatus(resource) : null
     if (native) return { text: native.text, tone: native.level }
+  }
+  if (isApiGroup(resource?.apiVersion, 'flagger.app')) {
+    if (resource.kind === 'Canary') {
+      const native = getFlaggerCanaryStatus(resource)
+      return { text: native.text, tone: native.level }
+    }
+    if (resource.kind === 'MetricTemplate') return { text: 'Configured', tone: 'neutral' }
   }
   const status = resource?.status
   if (!status || typeof status !== 'object') return null

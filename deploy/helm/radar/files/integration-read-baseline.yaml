@@ -10,6 +10,13 @@ entries:
     decision: withhold
     reason: "Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no caller grants."
     source: "https://github.com/open-telemetry/opentelemetry-operator/tree/989089bf5c75d78fdc6004147f97d972fc436bd4/apis"
+  - group: "flagger.app"
+    resources: ["canaries", "metrictemplates"]
+    scope: Namespaced
+    collection: "flagger"
+    decision: withhold
+    reason: "Canary webhooks and MetricTemplate provider headers can contain inline credentials. Native visibility adds no caller grants."
+    source: "https://github.com/fluxcd/flagger/tree/c781cdc199d44cf84e21e90aedd8ff14c1df450e/pkg/apis/flagger/v1beta1"
   - group: "scheduling.k8s.io"
     resources: ["priorityclasses"]
     scope: Cluster

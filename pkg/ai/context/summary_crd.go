@@ -35,6 +35,10 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeOpenTelemetryCollector(obj)
 	case group == "opentelemetry.io" && kind == "Instrumentation":
 		return summarizeOpenTelemetryInstrumentation(obj)
+	case group == "flagger.app" && kind == "Canary":
+		return summarizeFlaggerCanary(obj)
+	case group == "flagger.app" && kind == "MetricTemplate":
+		return summarizeFlaggerMetricTemplate(obj)
 	case group == TrivyGroup && obj.Object["report"] != nil:
 		return summarizeTrivyReport(obj)
 	case group == "argoproj.io" && kind == "Application":

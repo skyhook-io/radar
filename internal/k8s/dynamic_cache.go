@@ -184,6 +184,8 @@ type supportedCRDResource struct {
 var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "opentelemetry.io", Versions: []string{"v1beta1", "v1alpha1"}, Resource: "opentelemetrycollectors", Kind: "OpenTelemetryCollector", Namespaced: true},
 	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "metrictemplates", Kind: "MetricTemplate", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnectors", Kind: "KafkaConnector", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applications", Kind: "Application", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applicationsets", Kind: "ApplicationSet", Namespaced: true},

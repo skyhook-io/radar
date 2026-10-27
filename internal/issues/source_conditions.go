@@ -242,6 +242,10 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 
 func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
 	switch gvr.Group {
+	case "flagger.app":
+		if kind == "Canary" {
+			return detectFlaggerCanaryIssues(gvr, u)
+		}
 	case "gateway.networking.k8s.io":
 		return detectGatewayConditionIssues(gvr, kind, u)
 	case "apiregistration.k8s.io":

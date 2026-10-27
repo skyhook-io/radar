@@ -194,3 +194,4 @@ export { RayClusterRenderer } from './RayClusterRenderer'
 export { RayJobRenderer } from './RayJobRenderer'
 
 export { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from './OpenTelemetryRenderers'
+export { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from './FlaggerRenderers'

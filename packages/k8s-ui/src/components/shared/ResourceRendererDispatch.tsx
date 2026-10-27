@@ -1,5 +1,7 @@
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
+import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
+import { getFlaggerCanaryStatus } from '../resources/resource-utils-flagger'
 import { getGitOpsTool } from '../gitops/detail-helpers'
 import { apiVersionToGroup } from '../../utils/navigation'
 import { hasReflectorDetails } from '../resources/renderers/ReflectorSection'
@@ -454,6 +456,7 @@ export interface RendererOverrides {
 // Known resource types with specific renderers (module-level to avoid re-allocation)
 const KNOWN_KINDS = new Set([
   'opentelemetrycollectors', 'instrumentations',
+  'canaries', 'metrictemplates',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
@@ -714,6 +717,7 @@ export function ResourceRendererDispatch({
   const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
   const isGroupGatedKind =
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
+    ['canaries', 'metrictemplates'].includes(kind) ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
     || kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
@@ -724,6 +728,7 @@ export function ResourceRendererDispatch({
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
+    (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (isFluxKind && isFluxResource)
     || (kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io'))
     || (kind === 'services' && (data?.apiVersion === 'v1' || isApiGroup(data?.apiVersion, 'serving.knative.dev')))
@@ -1060,6 +1065,8 @@ export function ResourceRendererDispatch({
 
         {kind === 'opentelemetrycollectors' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryCollectorRenderer data={data} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
+        {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires
             for known-plural collisions where no apiVersion-gated renderer
@@ -1122,6 +1129,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)
     if (k === 'instrumentations') return getOpenTelemetryInstrumentationStatus(data)
   }
+  if (k === 'canaries' && isApiGroup(data.apiVersion, 'flagger.app')) return getFlaggerCanaryStatus(data)
   if (k === 'pods') return getPodStatus(data)
   if (['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(k)) {
     return getWorkloadDisplayStatus(data, k).status

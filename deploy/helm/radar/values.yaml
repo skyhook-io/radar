@@ -212,6 +212,7 @@ rbac:
     nimOperator: true       # apps.nvidia.com (NVIDIA NIM: NIMServices, NIMCaches, NIMPipelines)
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
+    flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
     reflector: true         # reflector.v1.k8s.emberstack.com

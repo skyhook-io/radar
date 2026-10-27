@@ -52,6 +52,59 @@ customer-managed read permissions for caller-authorized tools when needed. This
 baseline exception is not a full-object UI/REST confidentiality guarantee; runtime
 response authorization remains separate. It does not revoke
 permissions already granted by other roles.
+## Flagger
+
+Radar provides native details and concise REST/MCP summaries for `flagger.app`
+**Canary** and **MetricTemplate** resources, with native list columns for recorded state, strategy, canary target, reported
+weight and requested suspension. The unstable top-level transition timestamp is
+not used as a failure-onset column.
+
+Canary details distinguish recorded rollout phase from a requested suspension.
+The recorded phase stays visible while suspension is requested. Normal analysis,
+confirmation waits and promotion are neutral states; a failed last
+rollout remains visible even when suspension is requested. Flagger does not publish
+an observed generation, so its recorded phase is not proof that the latest spec
+has been reconciled. `Promoted=False` alone is not treated as a failure.
+
+The drawer links to the canary-side target, optional HPA/KEDA scaler and metric
+templates, including template namespace overrides. Links follow the controller's
+native clients: templates always resolve as `flagger.app` MetricTemplates; target
+kind determines the apps/core/Knative identity. Built-in metrics and inline queries
+are labeled without inventing template links. Blue/green, A/B and mirrored analysis
+are identified; reported canary weight is shown for weighted canaries, not as a
+live traffic measurement. MetricTemplate details show provider configuration and
+query text without rendering provider headers or fetching external metrics.
+
+A Deployment target is normally scaled to zero between analyses while its primary
+continues serving. Generated primary resources appear through existing ownership
+in Related Resources; Radar does not manufacture primary links from naming guesses.
+DaemonSet targets are parked using a node selector rather than zero replicas.
+
+**Issues:** collected Canaries in the caller-visible namespace scope with `status.phase=Failed` produce a warning
+for the last recorded rollout. The onset comes from the matching failed `Promoted` condition’s last-transition
+time when valid; the top-level timestamp is rewritten on scheduler ticks and is
+not used. Without that condition the onset remains unknown. Inspect the Canary's events for the
+cause. A failed new rollout does not imply the primary is down. Suspended failed
+rollouts remain visible; ordinary waiting/progress and `Promoted=False` remain quiet.
+No new workflow actions, topology edge types, traffic queries or MCP tools are added.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|---|---|---|---|---|
+| Canary | flagger.app | Existing observed ownership to primary resources; no new target-reference edge | Recorded rollout, analysis and explicit refs | Recorded outcome, suspension and target |
+| MetricTemplate | flagger.app | No new edges | Provider and query configuration | Provider type and configuration state |
+
+**In-cluster collection is opt-in:** set `rbac.crdGroups.flagger=true` in the Radar
+Helm chart to grant its collector `get/list/watch` on Canaries and MetricTemplates.
+Without collection access, in-cluster browsing and failed-rollout Issues for these
+kinds are unavailable. Locally, Radar uses the current Kubernetes identity's access.
+This switch does not grant Cloud callers access: the integration-read baseline
+withholds these full objects because webhook metadata and provider headers may
+contain inline credentials. Supply explicit customer-managed read permissions.
+Default collector/caller access for existing integrations is unchanged. The
+baseline is not a UI/REST confidentiality guarantee: runtime response and Issues
+authorization remain separate. Existing namespace-scoped response paths can
+expose full Canary and MetricTemplate objects, including arbitrary inline
+configuration, in visible namespaces.
 
 ## ConfigMap and Secret reflection (Reflector)
 

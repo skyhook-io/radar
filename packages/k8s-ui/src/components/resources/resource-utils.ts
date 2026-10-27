@@ -1,4 +1,5 @@
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getFlaggerColumnValue } from './resource-utils-flagger'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -2465,6 +2466,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   try {
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
+  const flaggerValue = getFlaggerColumnValue(resource, column)
+  if (flaggerValue !== undefined) return flaggerValue
   const kindLower = kind.toLowerCase()
 
   switch (column) {

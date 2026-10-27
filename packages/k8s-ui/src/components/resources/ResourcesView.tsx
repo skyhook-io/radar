@@ -1,4 +1,5 @@
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getFlaggerColumnValue } from './resource-utils-flagger'
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
 import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
@@ -596,6 +597,24 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'endpoint', label: 'OTLP Endpoint', width: 'min-w-48' },
     { key: 'sampler', label: 'Sampler', width: 'w-40 shrink-0' },
     { key: 'samplerArgument', label: 'Sampler Argument', width: 'w-32 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  canaries: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Rollout State', width: 'w-40 shrink-0', tooltip: 'Last recorded rollout outcome, with requested suspension separate from a failed result. Not a latest-generation guarantee.' },
+    { key: 'strategy', label: 'Strategy', width: 'w-36 shrink-0' },
+    { key: 'target', label: 'Canary Target', width: 'min-w-40' },
+    { key: 'canaryWeight', label: 'Reported Weight', width: 'w-36 shrink-0', tooltip: 'Last reported canary routing weight, not measured traffic. Blue/green and A/B strategies are not weighted.' },
+    { key: 'suspended', label: 'Suspend Requested', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  metrictemplates: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Configuration', width: 'w-36 shrink-0' },
+    { key: 'provider', label: 'Provider', width: 'w-32 shrink-0' },
+    { key: 'address', label: 'Provider Address', width: 'min-w-48' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   pods: [
@@ -2897,6 +2916,8 @@ function isCuratedUnboundedGroup(key: string, group: string): boolean {
 const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
+  canaries: ['flagger.app'],
+  metrictemplates: ['flagger.app'],
   challenges: ['acme.cert-manager.io'],
   orders: ['acme.cert-manager.io'],
   compositeresourcedefinitions: ['apiextensions.crossplane.io'],
@@ -5422,6 +5443,8 @@ export function ResourcesView({
     const kindLower = kind?.toLowerCase() || ''
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
+    const flaggerValue = getFlaggerColumnValue(resource, column)
+    if (flaggerValue !== undefined) return flaggerValue
 
     switch (column) {
       case 'name':
@@ -7559,6 +7582,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
   }
   switch (kindLower) {
     case 'pods':
