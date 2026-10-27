@@ -208,9 +208,10 @@ func tlsServingIndexFor(cache *ResourceCache, scope *DetectScope) *tlsServingInd
 // tlsUseSelectsCertificate reports whether the use's controller presents
 // this certificate for some host of the use: the certificate covers the host
 // and no other currently valid certificate the controller references does.
-// Controllers pick a certificate naming the host exactly over a wildcard
-// (ingress-nginx, Traefik, Envoy), so a valid wildcard doesn't contest one
-// that names the host.
+// A store-based controller (Traefik) picks a certificate naming the host
+// exactly over a wildcard, so a valid wildcard doesn't contest one that names
+// the host, unless it is declared for that host too: ingress-nginx serves the
+// first TLS entry declared for a host whatever its names.
 // A referenced Secret Radar can't read contests every host, as it may hold
 // such a certificate; one referenced for the same host that is missing or
 // holds no certificate contests it too, as the controller may fall back to a
@@ -235,7 +236,7 @@ func tlsUseSelectsCertificate(idx *tlsServingIndex, use tlsUse, cert certs.Input
 			ns, name, _ := strings.Cut(other, "/")
 			alt, ok, readable := certFor(ns, name)
 			sameHost := otherHosts[host] || otherHosts[""]
-			if !readable || (sameHost && !ok) || (ok && tlsCertificateValid(alt, now) && tlsCertificateCovers(alt, host) && (!exact || tlsCertificateNames(alt, host))) {
+			if !readable || (sameHost && !ok) || (ok && tlsCertificateValid(alt, now) && tlsCertificateCovers(alt, host) && (!exact || sameHost || tlsCertificateNames(alt, host))) {
 				contested = true
 				break
 			}

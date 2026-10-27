@@ -311,11 +311,18 @@ func TestDetectLiveIngressTLSCertificatesSelection(t *testing.T) {
 	orphan := tlsIngress("shop", "orphan", []string{"orphan-tls"}, withClass("nginx"), withAddress)
 	shadowed := tlsIngress("shop", "shadowed", []string{"valid-first-tls", "shadowed-tls"}, withClass("nginx"), withAddress)
 	// A valid wildcard doesn't contest a certificate naming the host
-	// exactly: controllers prefer the exact name.
+	// exactly (store-based controllers prefer the exact name), unless it is
+	// declared for that host too: ingress-nginx serves the first entry
+	// declared for the host.
 	certPEMs["named-tls"] = testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour), "named.other.test")
+	certPEMs["declared-tls"] = testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour), "declared.other.test")
 	certPEMs["valid-wild-tls"] = testCertPEM(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "*.other.test")
-	named := tlsIngress("shop", "named", []string{"valid-wild-tls", "named-tls"}, withClass("nginx"), withAddress)
+	named := tlsIngress("shop", "named", []string{"named-tls"}, withClass("nginx"), withAddress)
 	named.Spec.Rules[0].Host = "named.other.test"
+	wildElsewhere := tlsIngress("shop", "wild-elsewhere", []string{"valid-wild-tls"}, withClass("nginx"), withAddress)
+	wildElsewhere.Spec.Rules[0].Host = "elsewhere.other.test"
+	declared := tlsIngress("shop", "declared", []string{"valid-wild-tls", "declared-tls"}, withClass("nginx"), withAddress)
+	declared.Spec.Rules[0].Host = "declared.other.test"
 	// A Secret declared for the same host that doesn't exist may send the
 	// controller to its default certificate.
 	exact := tlsIngress("shop", "exact", []string{"missing-tls", "exact-tls"}, withClass("nginx"), withAddress)
@@ -332,7 +339,7 @@ func TestDetectLiveIngressTLSCertificatesSelection(t *testing.T) {
 			tlsIngress("shop", "alb-legacy", []string{"alb-legacy-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "alb")),
 			tlsIngress("shop", "canary", []string{"canary-tls"}, withClass("nginx"), withAddress, withAnnotation("nginx.ingress.kubernetes.io/canary", "true")),
 			tlsIngress("shop", "delegated", []string{"delegated-tls"}, withClass("nginx"), withAddress, withAnnotation("projectcontour.io/tls-cert-namespace", "certs")),
-			orphan.DeepCopy(), shadowed.DeepCopy(), exact.DeepCopy(), wildcard.DeepCopy(), storeA.DeepCopy(), storeB.DeepCopy(), named.DeepCopy(),
+			orphan.DeepCopy(), shadowed.DeepCopy(), exact.DeepCopy(), wildcard.DeepCopy(), storeA.DeepCopy(), storeB.DeepCopy(), named.DeepCopy(), wildElsewhere.DeepCopy(), declared.DeepCopy(),
 			tlsIngress("shop", "gke-managed", []string{"gke-managed-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "gce"), withAnnotation("networking.gke.io/managed-certificates", "shop-cert")),
 		}
 		for name, cert := range certPEMs {
