@@ -278,6 +278,7 @@ export function InvestigationView({
   maximized,
   onOpenResource,
   onOpenTimeline,
+  onRevealDestination,
 }: {
   run: RunSummary;
   agentLabel: string;
@@ -286,6 +287,8 @@ export function InvestigationView({
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
   /** Opens Radar's Timeline filtered to the resource a changes card is about. */
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
+  /** Makes a page this view navigates to visible: restores or closes the panel. */
+  onRevealDestination?: () => void;
 }) {
   const { kind, namespace, name } = run;
   const {
@@ -979,6 +982,16 @@ export function InvestigationView({
     ownerVerified: applyOwnerVerified,
     helmOwner: applyHelmOwner,
   } = applyOwnership;
+  // A page opened from the Apply dialog replaces it, and the panel makes
+  // room so the page isn't left underneath.
+  const openFromApply = useCallback(
+    (path: string) => {
+      setConfirmApply(false);
+      onRevealDestination?.();
+      navigateRouter(path);
+    },
+    [navigateRouter, onRevealDestination],
+  );
   const openApplyOwner = useMemo(() => {
     // A host without resource navigation (Radar Hub's fleet Diagnose panel)
     // has no route for the owner either.
@@ -986,19 +999,19 @@ export function InvestigationView({
     const owner = applyOwner;
     const helmOwner = applyHelmOwner;
     if (owner && applyOwnerVerified) {
-      return () => navigateRouter(gitOpsRouteForOwner(owner));
+      return () => openFromApply(gitOpsRouteForOwner(owner));
     }
     if (helmOwner) {
       return () =>
-        navigateRouter(
+        openFromApply(
           `/helm?release=${encodeURIComponent(`${helmOwner.namespace}/${helmOwner.name}`)}`,
         );
     }
     return undefined;
-  }, [applyOwner, applyOwnerVerified, applyHelmOwner, navigateRouter, onOpenResource]);
+  }, [applyOwner, applyOwnerVerified, applyHelmOwner, openFromApply, onOpenResource]);
   const openApplyManager = useMemo(
-    () => (onOpenResource ? (owner: GitOpsOwnerRef) => navigateRouter(gitOpsRouteForOwner(owner)) : undefined),
-    [navigateRouter, onOpenResource],
+    () => (onOpenResource ? (owner: GitOpsOwnerRef) => openFromApply(gitOpsRouteForOwner(owner)) : undefined),
+    [openFromApply, onOpenResource],
   );
   const [pendingFix, setPendingFix] = useState("");
   const requestApply = (fix: string) => {

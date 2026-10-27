@@ -57,7 +57,7 @@ export function readActionFor(code: unknown): ReadAction | undefined {
 
 /** Why a read failed, in a few plain words; an unknown code reads as a failed read. */
 export function gapReasonText(reason: string): string {
-  switch (reason) {
+  switch (canonicalReadCode(reason)) {
     case 'radar_kind_not_collected':
     case 'radar_namespace_not_collected':
       return "Radar doesn't collect it"

@@ -226,19 +226,19 @@ describe('RelatedResourcesSection ownership', () => {
     }
     const answer = (state: 'listed' | 'shared' | 'disagree' | 'agree', recorders = [app]) => ({ state, direct: { object: rs, recorders } })
     it.each(['listed', 'shared', 'disagree'] as const)('a %s answer lists its recorders', state => {
-      expect(title({ managers: [app], ownership: { manager: answer(state) } })).toBe('Listed By')
+      expect(title({ managers: [app], ownership: { children: { complete: true }, manager: answer(state) } })).toBe('Listed By')
     })
     it('an agree answer manages', () => {
-      expect(title({ managers: [app], ownership: { manager: answer('agree') } })).toBe('Managed By')
+      expect(title({ managers: [app], ownership: { children: { complete: true }, manager: answer('agree') } })).toBe('Managed By')
     })
     it('a manager that is not a direct recorder keeps Managed By', () => {
-      expect(title({ managers: [app, other], ownership: { manager: answer('listed') } })).toBe('Managed By')
+      expect(title({ managers: [app, other], ownership: { children: { complete: true }, manager: answer('listed') } })).toBe('Managed By')
     })
     it('an inherited answer keeps Managed By', () => {
-      expect(title({ managers: [app], ownership: { manager: { ...answer('listed'), via: { object: cm, recorders: [app] } } } })).toBe('Managed By')
+      expect(title({ managers: [app], ownership: { children: { complete: true }, manager: { ...answer('listed'), via: { object: cm, recorders: [app] } } } })).toBe('Managed By')
     })
     it('a note without managers keeps Managed By', () => {
-      expect(title({ ownership: { manager: answer('listed', []), managers: { remote: 1 } } })).toBe('Managed By')
+      expect(title({ ownership: { children: { complete: true }, manager: answer('listed', []), managers: { remote: 1 } } })).toBe('Managed By')
     })
     it('an older Radar without an answer keeps Managed By', () => {
       expect(title({ managers: [app] })).toBe('Managed By')

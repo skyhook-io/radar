@@ -604,6 +604,9 @@ describe('manager answer composition', () => {
     ['kind_sync_pending', '(still loading)', true],
     ['read_error', '(the read failed)', true],
     ['user_forbidden', '(you may not list it)', false],
+    // Spellings an older Radar sends read as the code they became.
+    ['kind_sync_failed', '(loading is overdue)', true],
+    ['rbac_denied', '(you may not list it)', false],
   ])('a refused live answer explains %s in words', (code, words, reopen) => {
     const g = run(agree, [hibernate], { evidence: evidence(selfHeal, [], { managerUnavailable: code }) })
     expect(g.summary).toContain(words)

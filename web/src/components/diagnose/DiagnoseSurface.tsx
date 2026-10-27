@@ -466,6 +466,10 @@ export function DiagnoseSurface({
       setMaximized,
     ],
   );
+  const revealDestination = useCallback(
+    () => revealInvestigationDestination(setMaximized, d.dismissForNavigation, narrow),
+    [d.dismissForNavigation, narrow, setMaximized],
+  );
   const openEvidenceTimeline = useCallback(
     (scope: InvestigationTimelineScope) => {
       if (!onOpenTimeline) return;
@@ -578,6 +582,7 @@ export function DiagnoseSurface({
       maximized={maximized}
       onOpenResource={onOpenResource ? openEvidenceResource : undefined}
       onOpenTimeline={onOpenTimeline ? openEvidenceTimeline : undefined}
+      onRevealDestination={revealDestination}
     />
   ) : d.activeRunId && !d.runsLoaded ? (
     // Deep-linked to a run before the list has ever loaded: show the load

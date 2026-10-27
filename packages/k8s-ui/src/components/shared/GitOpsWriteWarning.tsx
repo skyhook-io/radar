@@ -72,7 +72,7 @@ function linkManagers(lines: string[], links: ManagerLink[], onOpen: (owner: Git
           key={`${i}:${link.label}`}
           type="button"
           onClick={() => onOpen(link.owner)}
-          className="font-medium text-skyhook-600 underline decoration-dotted underline-offset-2 hover:decoration-solid dark:text-skyhook-400"
+          className="font-medium text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid"
         >
           {link.label}
         </button>,
@@ -138,7 +138,7 @@ export function GitOpsWriteWarning({
             key={label}
             type="button"
             onClick={() => onOpenManager!(owner)}
-            className="inline-flex items-center gap-1 text-xs font-medium text-skyhook-600 hover:underline dark:text-skyhook-400"
+            className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
           >
             View {label}
             <ExternalLink className="h-3 w-3" />
@@ -150,7 +150,7 @@ export function GitOpsWriteWarning({
     <button
       type="button"
       onClick={onOpenOwner}
-      className="inline-flex items-center gap-1 text-xs font-medium text-skyhook-600 hover:underline dark:text-skyhook-400"
+      className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline"
     >
       {guard.owner ? OWNER_LINK_LABEL[guard.owner.kind] : 'View Helm release'}
       <ExternalLink className="h-3 w-3" />
