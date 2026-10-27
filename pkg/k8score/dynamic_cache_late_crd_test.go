@@ -3,9 +3,11 @@ package k8score
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -13,6 +15,7 @@ import (
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // lockedDiscovery lets a test change the served resources while Radar
@@ -214,6 +217,46 @@ func TestLateCRDScanRetriesUntilServed(t *testing.T) {
 
 	fakeDiscovery.serve(dbClusterResources)
 	waitUntilTrue(t, "CRD watched after a retry", func() bool { return cache.hasCoveringInformer(clusters, "") })
+}
+
+func TestLateCRDCountFailureIsRetried(t *testing.T) {
+	old := lateCRDScanDelay
+	lateCRDScanDelay = 20 * time.Millisecond
+	t.Cleanup(func() { lateCRDScanDelay = old })
+
+	clusters := schema.GroupVersionResource{Group: "db.example.com", Version: "v1alpha1", Resource: "dbclusters"}
+	discovery, err := NewResourceDiscovery(newLockedDiscovery(crdResources, dbClusterResources), WithDiscoveryCacheTTL(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{clusters: "DBClusterList"})
+	var attempts atomic.Int32
+	dynamicClient.PrependReactor("list", "dbclusters", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if attempts.Add(1) == 1 {
+			return true, nil, apierrors.NewNotFound(clusters.GroupResource(), "")
+		}
+		return false, nil, nil
+	})
+	cache, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dynamicClient, Discovery: discovery})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cache.Stop)
+
+	cache.onCRDEvent(crdObject("dbclusters.db.example.com", "db.example.com", "dbclusters"))
+	waitUntilTrue(t, "CRD watched after transient count failure", func() bool {
+		return cache.hasCoveringInformer(clusters, "")
+	})
+	if !cache.WaitForSync(clusters, 5*time.Second) {
+		t.Fatal("late CRD informer did not sync")
+	}
+	waitUntilTrue(t, "retry scan complete", func() bool {
+		cache.lateCRDMu.Lock()
+		defer cache.lateCRDMu.Unlock()
+		_, seen := cache.seenCRDs["db.example.com/dbclusters"]
+		return seen && len(cache.pendingCRDs) == 0 && !cache.lateCRDScanning
+	})
 }
 
 func TestLateCRDScanOnlyHandlesNewCRDs(t *testing.T) {

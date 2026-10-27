@@ -2576,6 +2576,7 @@ func (d *DynamicResourceCache) crdWatchCandidates() ([]schema.GroupVersionResour
 
 type crdWatchStats struct {
 	alreadyWatching, eager, deferred, noAccess int
+	retry                                      []schema.GroupVersionResource
 }
 
 // maxEagerResources is the object count up to which a CRD is watched eagerly.
@@ -2636,6 +2637,7 @@ func (d *DynamicResourceCache) watchSmallCRDs(gvrs []schema.GroupVersionResource
 		if r.count == -2 {
 			// Probe failed (timeout, network error) — defer to be safe
 			stats.deferred++
+			stats.retry = append(stats.retry, r.gvr)
 			d.retainObservation(r.gvr, DynamicObservationDeferred, "resource_count_probe_failed", false)
 			continue
 		}
@@ -2833,6 +2835,15 @@ func (d *DynamicResourceCache) scanLateCRDs() {
 		return
 	}
 	stats := d.watchSmallCRDs(fresh)
+	d.lateCRDMu.Lock()
+	for _, gvr := range stats.retry {
+		key := gvr.Group + "/" + gvr.Resource
+		if _, seen := d.seenCRDs[key]; seen {
+			delete(d.seenCRDs, key)
+			d.pendingCRDs[key] = struct{}{}
+		}
+	}
+	d.lateCRDMu.Unlock()
 	// A reinstalled CRD can still have the informer from before its deletion.
 	alreadyWatched := len(fresh) - stats.eager - stats.deferred - stats.noAccess
 	log.Printf("[CRD Discovery] %d CRDs installed after startup (%d small → eager, %d large → on-demand, %d no access, %d already watched)",
