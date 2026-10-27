@@ -640,6 +640,9 @@ var (
 // queries keep the row-level guard.
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
+	// A Node's owner reference (Karpenter's NodeClaim) doesn't make it a
+	// derived object the way a Pod's or ReplicaSet's does, so owned Nodes stay.
+	ownedNodes := slices.Contains(queryKinds, "Node")
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
 		Kinds:      queryKinds,
@@ -653,12 +656,15 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		// and serving those here hands agents phantom changes.
 		ClusterContext:   k8s.ActiveClusterContext(),
 		Limit:            bound + 1,
-		IncludeManaged:   false,
+		IncludeManaged:   ownedNodes,
 		IncludeK8sEvents: false,
 	}
 	events, err := store.Query(ctx, opts)
 	if err != nil {
 		return nil, false, err
+	}
+	if ownedNodes {
+		events = slices.DeleteFunc(events, func(e timeline.TimelineEvent) bool { return e.Kind != "Node" && e.IsManaged() })
 	}
 	saturated := len(events) > bound
 	if saturated {
@@ -1162,6 +1168,9 @@ func hasSpecConfigField(e timeline.TimelineEvent) bool {
 	}
 	for _, f := range e.Diff.Fields {
 		p := strings.ToLower(f.Path)
+		if e.Kind == "Node" && (strings.HasPrefix(p, "metadata.labels") || strings.HasPrefix(p, "metadata.annotations")) {
+			return true
+		}
 		if strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || p == "immutable" || strings.HasPrefix(p, "data") {
 			return true
 		}
