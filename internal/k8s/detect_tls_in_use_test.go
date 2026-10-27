@@ -71,10 +71,10 @@ func withClass(class string) tlsIngressOpt {
 func tlsIngress(ns, name string, secrets []string, opts ...tlsIngressOpt) *networkingv1.Ingress {
 	ing := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))},
-		Spec:       networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "shop.example.test"}}},
+		Spec:       networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: name + ".example.test"}}},
 	}
 	for _, s := range secrets {
-		ing.Spec.TLS = append(ing.Spec.TLS, networkingv1.IngressTLS{Hosts: []string{"shop.example.test"}, SecretName: s})
+		ing.Spec.TLS = append(ing.Spec.TLS, networkingv1.IngressTLS{Hosts: []string{name + ".example.test"}, SecretName: s})
 	}
 	for _, opt := range opts {
 		opt(ing)
@@ -261,13 +261,17 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 	now := time.Now()
 	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
-	secrets := []string{"gce-tls", "classless-tls", "missing-class-tls", "alb-legacy-tls", "canary-tls", "delegated-tls", "orphan-tls", "shadowed-tls", "gke-managed-tls", "wildcard-tls"}
+	secrets := []string{"gce-tls", "classless-tls", "missing-class-tls", "alb-legacy-tls", "canary-tls", "delegated-tls", "orphan-tls", "shadowed-tls", "gke-managed-tls", "wildcard-tls", "exact-tls"}
 	// A TLS entry naming only a host no rule serves is never presented.
 	orphan := tlsIngress("shop", "orphan", nil, withClass("nginx"), withAddress)
 	orphan.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"old.example.test"}, SecretName: "orphan-tls"}}
 	// The first entry covering a host wins; a later one for the same host is unused.
 	shadowed := tlsIngress("shop", "shadowed", nil, withClass("nginx"), withAddress)
-	shadowed.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"shop.example.test"}, SecretName: "valid-first-tls"}, {Hosts: []string{"shop.example.test"}, SecretName: "shadowed-tls"}}
+	shadowed.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"shadowed.example.test"}, SecretName: "valid-first-tls"}, {Hosts: []string{"shadowed.example.test"}, SecretName: "shadowed-tls"}}
+	// An exact entry is presented before an earlier wildcard.
+	exactAfterWildcard := tlsIngress("shop", "exact-after-wildcard", nil, withClass("nginx"), withAddress)
+	exactAfterWildcard.Spec.Rules[0].Host = "exact.example.test"
+	exactAfterWildcard.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"*.example.test"}, SecretName: "valid-wildcard-tls"}, {Hosts: []string{"exact.example.test"}, SecretName: "exact-tls"}}
 	wildcard := tlsIngress("shop", "wildcard", nil, withClass("nginx"), withAddress)
 	wildcard.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"*.example.test"}, SecretName: "wildcard-tls"}}
 	base := func() []runtime.Object {
@@ -279,7 +283,7 @@ func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 			tlsIngress("shop", "alb-legacy", []string{"alb-legacy-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "alb")),
 			tlsIngress("shop", "canary", []string{"canary-tls"}, withClass("nginx"), withAddress, withAnnotation("nginx.ingress.kubernetes.io/canary", "true")),
 			tlsIngress("shop", "delegated", []string{"delegated-tls"}, withClass("nginx"), withAddress, withAnnotation("projectcontour.io/tls-cert-namespace", "certs")),
-			orphan, shadowed, wildcard,
+			orphan, shadowed, wildcard, exactAfterWildcard,
 			tlsIngress("shop", "gke-managed", []string{"gke-managed-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "gce"), withAnnotation("networking.gke.io/managed-certificates", "shop-cert")),
 		}
 		for _, s := range secrets {
@@ -302,30 +306,84 @@ func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 		}
 		return strings.Join(names, ",")
 	}
-	if got := detect(t, base()); got != "classless-tls,gce-tls,wildcard-tls" {
-		t.Fatalf("detections = %s, want the legacy-gce, class-less and wildcard Ingresses only", got)
+	if got := detect(t, base()); got != "classless-tls,exact-tls,gce-tls,wildcard-tls" {
+		t.Fatalf("detections = %s, want the legacy-gce, class-less, exact-after-wildcard and wildcard Ingresses only", got)
 	}
 	withALBClass := append(base(), &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "aws"}, Spec: networkingv1.IngressClassSpec{Controller: "ingress.k8s.aws/alb"}})
 	// ALB can claim a legacy class of any name and class-less Ingresses.
-	if got := detect(t, withALBClass); got != "wildcard-tls" {
-		t.Fatalf("with an ALB class installed, detections = %s, want only the nginx-class wildcard-tls", got)
+	if got := detect(t, withALBClass); got != "exact-tls,wildcard-tls" {
+		t.Fatalf("with an ALB class installed, detections = %s, want only the nginx-class exact-tls and wildcard-tls", got)
 	}
 }
 
-func TestTLSHostCovers(t *testing.T) {
+func TestTLSEntryForHost(t *testing.T) {
+	ing := &networkingv1.Ingress{Spec: networkingv1.IngressSpec{TLS: []networkingv1.IngressTLS{
+		{Hosts: []string{"*.example.test"}, SecretName: "wildcard"},
+		{Hosts: []string{"SHOP.example.test"}, SecretName: "exact"},
+		{Hosts: []string{"shop.example.test"}, SecretName: "exact-again"},
+	}}}
 	for _, tc := range []struct {
-		tls, rule string
-		want      bool
+		host string
+		want int
 	}{
-		{"shop.example.test", "SHOP.example.test", true},
-		{"*.example.test", "api.example.test", true},
-		{"*.example.test", "*.example.test", true},
-		{"*.example.test", "a.b.example.test", false},
-		{"*.example.test", "example.test", false},
-		{"old.example.test", "shop.example.test", false},
+		{"shop.example.test", 1}, // exact beats an earlier wildcard; the first exact entry wins
+		{"api.example.test", 0},
+		{"a.b.example.test", -1},
+		{"example.test", -1},
 	} {
-		if got := tlsHostCovers(tc.tls, tc.rule); got != tc.want {
-			t.Errorf("tlsHostCovers(%q, %q) = %v, want %v", tc.tls, tc.rule, got, tc.want)
+		if got := tlsEntryForHost(ing, tc.host); got != tc.want {
+			t.Errorf("tlsEntryForHost(%q) = %d, want %d", tc.host, got, tc.want)
 		}
+	}
+}
+
+// ingress-nginx presents the oldest Ingress's TLS for a host several
+// Ingresses define, so only that Ingress's Secret is served.
+func TestDetectLiveIngressTLSCertificatesSharedHost(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
+	valid := testCertPEM(t, now.Add(-time.Hour), now.Add(10*24*time.Hour))
+	created := func(age time.Duration) tlsIngressOpt {
+		return func(ing *networkingv1.Ingress) { ing.CreationTimestamp = metav1.NewTime(now.Add(-age)) }
+	}
+	sameHost := func(host string) tlsIngressOpt {
+		return func(ing *networkingv1.Ingress) {
+			ing.Spec.Rules[0].Host = host
+			ing.Spec.TLS[0].Hosts = []string{host}
+		}
+	}
+	objects := []runtime.Object{
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+		tlsSecret("shop", "old-valid-tls", valid),
+		tlsSecret("shop", "new-expired-tls", expired),
+		tlsSecret("other", "old-expired-tls", expired),
+		tlsSecret("shop", "new-valid-tls", valid),
+		tlsIngress("shop", "old", []string{"old-valid-tls"}, withClass("nginx"), withAddress, created(48*time.Hour), sameHost("shop.example.test")),
+		tlsIngress("shop", "new", []string{"new-expired-tls"}, withClass("nginx"), withAddress, created(time.Hour), sameHost("shop.example.test")),
+	}
+	// Another host where the older Ingress, in another namespace, holds the
+	// expired certificate.
+	older := tlsIngress("other", "older", []string{"old-expired-tls"}, withClass("nginx"), withAddress, created(72*time.Hour))
+	newer := tlsIngress("shop", "newer", []string{"new-valid-tls"}, withClass("nginx"), withAddress, created(2*time.Hour))
+	for _, ing := range []*networkingv1.Ingress{older, newer} {
+		ing.Spec.Rules[0].Host = "api.example.test"
+		ing.Spec.TLS[0].Hosts = []string{"api.example.test"}
+	}
+	// Two Ingresses presenting the same Secret for one host both use it.
+	objects = append(objects, older, newer, tlsSecret("shop", "twin-expired-tls", expired),
+		tlsIngress("shop", "twin-a", []string{"twin-expired-tls"}, withClass("nginx"), withAddress, created(5*time.Hour), sameHost("twin.example.test")),
+		tlsIngress("shop", "twin-b", []string{"twin-expired-tls"}, withClass("nginx"), withAddress, created(4*time.Hour), sameHost("twin.example.test")))
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", now)
+	if len(got) != 2 || got[0].Namespace != "other" || got[0].Name != "old-expired-tls" || got[1].Name != "twin-expired-tls" || len(got[1].AffectedRefs) != 2 {
+		t.Fatalf("detections = %+v, want the oldest Ingress's expired Secret and the twin Secret linked twice", got)
+	}
+	// A namespace-filtered scan still sees the owner in another namespace.
+	if got := detectLiveIngressTLSCertificates(GetResourceCache(), "shop", now); len(got) != 1 || got[0].Name != "twin-expired-tls" {
+		t.Fatalf("shop-scoped detections = %+v, want only twin-expired-tls", got)
 	}
 }

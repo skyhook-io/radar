@@ -65,16 +65,10 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 
 	controllerPods := map[string][]string{} // controller -> namespaces of its ready pods
 	consumers := map[string]*tlsConsumers{} // namespace/secret
+	var owners map[string]string
 	for _, ing := range ings {
-		if ing.DeletionTimestamp != nil || len(ing.Spec.TLS) == 0 || ingressTLSServedElsewhere(ing) {
-			continue
-		}
-		addressed := ingressstatus.HasAssignedAddress(ing)
-		controller, ok := ingressController(cache, ing)
-		if !ok && addressed {
-			ok = unresolvedClassOutsideALB(cache, ing)
-		}
-		if !ok || controller == albIngressController {
+		controller, addressed, ok := tlsIngressController(cache, ing)
+		if !ok {
 			continue
 		}
 		var podNamespaces []string
@@ -87,9 +81,12 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 				continue
 			}
 		}
+		if owners == nil {
+			owners = tlsHostOwnersMemo(cache)
+		}
 		seen := map[string]bool{}
 		for i, tls := range ing.Spec.TLS {
-			if tls.SecretName == "" || seen[tls.SecretName] || !tlsEntryServed(ing, i) {
+			if tls.SecretName == "" || seen[tls.SecretName] || !tlsEntryServed(ing, i, controller, owners) {
 				continue
 			}
 			seen[tls.SecretName] = true
@@ -197,49 +194,110 @@ func unresolvedClassOutsideALB(cache *ResourceCache, ing *networkingv1.Ingress) 
 	return true
 }
 
-// tlsEntryServed reports whether the i-th TLS entry is the first to cover
-// some rule's host. Controllers pick a certificate by the rule's host, taking
-// the first entry that matches, so an entry naming only hosts no rule serves,
-// or hosts an earlier entry already covers, is never presented. An entry with
-// no hosts is kept.
-func tlsEntryServed(ing *networkingv1.Ingress, i int) bool {
+// tlsIngressController returns the controller of a live TLS Ingress whose
+// own Secrets are what clients see, and whether it has an address. An
+// unresolved class gets a stand-in key from its legacy class name.
+func tlsIngressController(cache *ResourceCache, ing *networkingv1.Ingress) (controller string, addressed, ok bool) {
+	if ing.DeletionTimestamp != nil || len(ing.Spec.TLS) == 0 || ingressTLSServedElsewhere(ing) {
+		return "", false, false
+	}
+	addressed = ingressstatus.HasAssignedAddress(ing)
+	controller, ok = ingressController(cache, ing)
+	if !ok && addressed && unresolvedClassOutsideALB(cache, ing) {
+		// Ingresses sharing a legacy class name share a controller.
+		return "legacy-class:" + ingressstatus.LegacyClass(ing), true, true
+	}
+	return controller, addressed, ok && controller != albIngressController
+}
+
+// tlsEntryServed reports whether the i-th TLS entry is the certificate
+// presented for some rule's host. An entry with no hosts is kept.
+func tlsEntryServed(ing *networkingv1.Ingress, i int, controller string, owners map[string]string) bool {
 	if len(ing.Spec.TLS[i].Hosts) == 0 {
 		return true
 	}
+	secret := ing.Namespace + "/" + ing.Spec.TLS[i].SecretName
 	for _, rule := range ing.Spec.Rules {
-		if !tlsEntryCovers(ing.Spec.TLS[i], rule.Host) {
-			continue
+		host := normalizeTLSHost(rule.Host)
+		if host != "" && tlsEntryForHost(ing, host) == i && owners[controller+"\x00"+host] == secret {
+			return true
 		}
-		shadowed := false
-		for _, earlier := range ing.Spec.TLS[:i] {
-			if tlsEntryCovers(earlier, rule.Host) {
-				shadowed = true
-				break
+	}
+	return false
+}
+
+// tlsEntryForHost returns the index of the TLS entry an Ingress presents for
+// host, or -1: the first entry naming the host exactly, else the first whose
+// wildcard covers it. Controllers match exact hosts before wildcards.
+func tlsEntryForHost(ing *networkingv1.Ingress, host string) int {
+	wildcard := -1
+	for i, tls := range ing.Spec.TLS {
+		for _, h := range tls.Hosts {
+			h = normalizeTLSHost(h)
+			if h == host {
+				return i
+			}
+			if wildcard < 0 && tlsWildcardCovers(h, host) {
+				wildcard = i
 			}
 		}
-		if !shadowed {
-			return true
-		}
 	}
-	return false
+	return wildcard
 }
 
-func tlsEntryCovers(tls networkingv1.IngressTLS, ruleHost string) bool {
-	for _, host := range tls.Hosts {
-		if tlsHostCovers(host, ruleHost) {
-			return true
+// tlsHostOwnersMemo maps controller and rule host to the Secret the
+// controller presents for that host: the one the oldest Ingress defining TLS
+// for it names, as ingress-nginx does. Other controllers may resolve a shared host
+// differently; counting only the oldest leaves the rest to audit rather than
+// reporting a certificate that may not be served. It reads every Ingress, as
+// a host can be shared across namespaces.
+func tlsHostOwnersMemo(cache *ResourceCache) map[string]string {
+	return cache.detectMemo.get("tlsHostOwners", func() any {
+		owners := map[string]string{}
+		lister := cache.Ingresses()
+		if lister == nil {
+			return owners
 		}
-	}
-	return false
+		ings, _ := lister.List(labels.Everything())
+		oldest := map[string]*networkingv1.Ingress{}
+		for _, ing := range ings {
+			controller, _, ok := tlsIngressController(cache, ing)
+			if !ok {
+				continue
+			}
+			for _, rule := range ing.Spec.Rules {
+				host := normalizeTLSHost(rule.Host)
+				if host == "" || tlsEntryForHost(ing, host) < 0 {
+					continue
+				}
+				key := controller + "\x00" + host
+				if cur := oldest[key]; cur == nil || ingressOlder(ing, cur) {
+					oldest[key] = ing
+				}
+			}
+		}
+		for key, ing := range oldest {
+			_, host, _ := strings.Cut(key, "\x00")
+			owners[key] = ing.Namespace + "/" + ing.Spec.TLS[tlsEntryForHost(ing, host)].SecretName
+		}
+		return owners
+	}).(map[string]string)
 }
 
-// tlsHostCovers matches a TLS host against a rule host, a wildcard covering
+func ingressOlder(a, b *networkingv1.Ingress) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return a.CreationTimestamp.Before(&b.CreationTimestamp)
+	}
+	return a.Namespace+"/"+a.Name < b.Namespace+"/"+b.Name
+}
+
+func normalizeTLSHost(host string) string {
+	return strings.ToLower(strings.TrimSpace(host))
+}
+
+// tlsWildcardCovers matches a wildcard TLS host against a rule host, covering
 // exactly one leading label.
-func tlsHostCovers(tlsHost, ruleHost string) bool {
-	tlsHost, ruleHost = strings.ToLower(strings.TrimSpace(tlsHost)), strings.ToLower(strings.TrimSpace(ruleHost))
-	if tlsHost == ruleHost {
-		return true
-	}
+func tlsWildcardCovers(tlsHost, ruleHost string) bool {
 	suffix, ok := strings.CutPrefix(tlsHost, "*.")
 	if !ok {
 		return false
@@ -290,29 +348,34 @@ func ingressSSLPassthrough(ing *networkingv1.Ingress) bool {
 	return false
 }
 
-// A namespace-filtered compose runs the detector once per namespace, and each
-// run would otherwise scan every pod for the controller's labels.
-const controllerPodMemoTTL = 5 * time.Second
+// A namespace-filtered compose runs the detectors once per namespace, and
+// each run would otherwise repeat the same cluster-wide scan.
+const detectMemoTTL = 5 * time.Second
 
-type controllerPodMemo struct {
-	mu    sync.Mutex
-	at    time.Time
-	byKey map[string][]string
+type detectMemo struct {
+	mu     sync.Mutex
+	at     time.Time
+	values map[string]any
+}
+
+func (m *detectMemo) get(key string, load func() any) any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.values == nil || time.Since(m.at) > detectMemoTTL {
+		m.at, m.values = time.Now(), map[string]any{}
+	}
+	v, ok := m.values[key]
+	if !ok {
+		v = load()
+		m.values[key] = v
+	}
+	return v
 }
 
 func readyControllerPodNamespacesMemo(cache *ResourceCache, controller string) []string {
-	m := &cache.controllerPods
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.byKey == nil || time.Since(m.at) > controllerPodMemoTTL {
-		m.at, m.byKey = time.Now(), map[string][]string{}
-	}
-	namespaces, ok := m.byKey[controller]
-	if !ok {
-		namespaces = readyControllerPodNamespaces(cache, controller)
-		m.byKey[controller] = namespaces
-	}
-	return namespaces
+	return cache.detectMemo.get("controllerPods\x00"+controller, func() any {
+		return readyControllerPodNamespaces(cache, controller)
+	}).([]string)
 }
 
 // readyControllerPodNamespaces returns the namespaces of the controller's
