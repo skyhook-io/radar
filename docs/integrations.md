@@ -120,6 +120,13 @@ The Cloud integration-read baseline does not add these resources to generated
 caller-role grants. That baseline is not a deny rule for the response paths above.
 Default collector/caller access for existing integrations is unchanged.
 
+### Flagger dependency checks
+
+Issues reports missing declared Flagger targets, analysis MetricTemplates and provider Secrets used by those templates. These are warnings about release reconciliation/evaluation, not proof the stable primary is down. Suspended/deleting Canaries produce no reference warnings; skipped analysis suppresses only analysis-reference warnings; zero target replicas are valid.
+
+Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
+
+
 ## ConfigMap and Secret reflection (Reflector)
 
 [EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
