@@ -1014,14 +1014,18 @@ func TestDiffGenericUnstructured_DeletionStart(t *testing.T) {
 	if strings.Join(summary, ", ") != "deletion started" {
 		t.Fatalf("deletion summary = %q", summary)
 	}
+	_, summary = diffGenericUnstructured(obj(1, 1, false), obj(3, 1, true))
+	if strings.Join(summary, ", ") != "deletion started" {
+		t.Fatalf("folded status/deletion summary = %q", summary)
+	}
 	_, summary = diffGenericUnstructured(obj(1, 1, false), obj(3, 2, true))
-	if strings.Join(summary, ", ") != "spec changed (gen 1→3, fields not specifically tracked)" {
+	if strings.Join(summary, ", ") != "desired state changes: spec.replicas" {
 		t.Fatalf("folded spec edit summary = %q", summary)
 	}
 	// A CustomResourceDefinition is deleted without a generation bump, so a
 	// folded spec edit can arrive as +1.
 	_, summary = diffGenericUnstructured(obj(1, 1, false), obj(2, 2, true))
-	if strings.Join(summary, ", ") != "spec changed (gen 1→2, fields not specifically tracked)" {
+	if strings.Join(summary, ", ") != "desired state changes: spec.replicas" {
 		t.Fatalf("folded +1 spec edit summary = %q", summary)
 	}
 }

@@ -20,7 +20,7 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 	for namespace, pods := range podsByNamespace {
 		candidates := map[string]bool{}
 		for _, change := range changes {
-			if change.Namespace == namespace && (change.Kind == "Secret" || change.Kind == "ConfigMap") && change.ChangeType == "update" {
+			if eventGroupMatchesTracked(change.Kind, change.APIVersion) && change.Namespace == namespace && (change.Kind == "Secret" || change.Kind == "ConfigMap") && change.ChangeType == "update" {
 				candidates[resourceKey(change.Kind, namespace, change.Name)] = true
 			}
 		}
@@ -46,7 +46,7 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 		facts := k8s.FindStaleEnvForPods(ctx, cache, readers)
 		for i := range changes {
 			change := &changes[i]
-			if change.Namespace != namespace || change.ChangeType != "update" {
+			if !eventGroupMatchesTracked(change.Kind, change.APIVersion) || change.Namespace != namespace || change.ChangeType != "update" {
 				continue
 			}
 			changedAt, err := time.Parse(time.RFC3339, change.Timestamp)

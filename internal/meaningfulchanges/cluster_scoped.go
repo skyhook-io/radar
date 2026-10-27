@@ -100,7 +100,7 @@ func ClusterScopedForNamespace(ctx context.Context, namespace string, nsLabels N
 	if timeline.HistoryEvictedThrough().After(windowStart) {
 		incomplete = append(incomplete, "Radar has evicted older change history; earlier changes in the window are unknown.")
 	}
-	q := normalizeQuery(Query{Kinds: readable, Since: since, start: windowStart})
+	q := normalizeQuery(Query{Kinds: readable, Since: since, start: windowStart, TrackedOnly: true})
 	var events []timeline.TimelineEvent
 	for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
 		got, full, err := queryCandidates(ctx, store, q, q.Kinds, eventTypes, FetchBound)

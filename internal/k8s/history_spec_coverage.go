@@ -344,17 +344,25 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 		reported[change.Path] = true
 	}
 	untracked = collapseUntracked(untracked, covered, reported)
+	return untrackedSpecRows(root, untracked)
+}
+
+func untrackedSpecRows(root string, untracked []changedSpecPath) ([]FieldChange, []string) {
 	if len(untracked) == 0 {
 		return nil, nil
 	}
 
 	var changes []FieldChange
 	var omitted []string
+	omittedCount := 0
 	labels := make([]string, 0, len(untracked))
 	for _, c := range untracked {
 		oldVal, newVal := c.oldV, c.newV
 		oldFound, newFound := oldVal != nil, newVal != nil
 		label := shortSpecPath(c.path)
+		if root == "desired state" {
+			label = c.path
+		}
 		switch {
 		case c.order:
 			label += " order"
@@ -365,7 +373,10 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 		}
 		labels = append(labels, label)
 		if len(changes) == maxUntrackedSpecRows {
-			omitted = append(omitted, c.path)
+			omittedCount++
+			if root != "desired state" || len(omitted) < maxUntrackedSpecRows {
+				omitted = append(omitted, c.path)
+			}
 			continue
 		}
 		if c.order {
@@ -375,10 +386,12 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 		oldShown, newShown := untrackedDisplayValues(c.path, oldVal, newVal)
 		changes = append(changes, FieldChange{Path: c.path, OldValue: oldShown, NewValue: newShown})
 	}
-	// Past the row cap, one row still names every changed field, so no field
-	// identity is lost even when its values are.
 	if len(omitted) > 0 {
-		changes = append(changes, FieldChange{Path: root + " (more fields)", OldValue: nil, NewValue: omitted})
+		path := root + " (more fields)"
+		if extra := omittedCount - len(omitted); extra > 0 {
+			path = fmt.Sprintf("%s (more fields; %d paths omitted)", root, extra)
+		}
+		changes = append(changes, FieldChange{Path: path, OldValue: nil, NewValue: omitted})
 	}
 	shown := labels
 	if len(shown) > maxUntrackedSummary {
@@ -388,6 +401,9 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 	prefix := "other spec changes: "
 	if root != "spec" {
 		prefix = "other changes: "
+	}
+	if root == "desired state" {
+		prefix = "desired state changes: "
 	}
 	summary := prefix + strings.Join(shown, ", ")
 	if extra := len(labels) - len(shown); extra > 0 {

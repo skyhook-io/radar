@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -907,6 +908,12 @@ func deletionAccountsForGenerationBump(oldObj, newObj any) bool {
 }
 
 func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
+	if oldU, newU, ok := unstructuredPair(oldObj, newObj); ok {
+		registration, audited := diffFunctions[kind]
+		if !audited || resourceid.GroupFromAPIVersion(newU.GetAPIVersion()) != registration.group {
+			return !reflect.DeepEqual(genericDesiredState(oldU), genericDesiredState(newU))
+		}
+	}
 	// The delete event that follows records the removal.
 	if deletionAccountsForGenerationBump(oldObj, newObj) {
 		return false
