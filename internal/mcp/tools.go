@@ -1603,6 +1603,9 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	}
 	allowed := filterNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
+		if input.Kind != "" && currentReadCache() != started {
+			return nil, nil, errConnectionChanged()
+		}
 		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
 		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}, Coverage: collection.coverage, NarrowHint: strings.Join(collection.hints, " ")})
 	}

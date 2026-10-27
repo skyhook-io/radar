@@ -1538,6 +1538,10 @@ func isWorkloadKind(kind string) bool {
 	}
 }
 
+// CanonicalKind is the Kind a change query matches for kind: a kind, its
+// plural or a short name, as get_changes accepts them.
+func CanonicalKind(kind string) string { return canonicalKind(kind) }
+
 func canonicalKind(kind string) string {
 	// Discovery is the authority: lowercase-keyed by kind AND plural, yields
 	// the exact PascalCase Kind for everything on the cluster, CRDs included.

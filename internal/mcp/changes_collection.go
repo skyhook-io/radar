@@ -8,10 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // changesCollection is what get_changes says about Radar's collection of the
@@ -31,29 +35,43 @@ type changesCollection struct {
 func changesKindCollection(ctx context.Context, kind, namespace string, since time.Duration) (changesCollection, error) {
 	var out changesCollection
 	started := currentReadCache()
+	kind = meaningfulchanges.CanonicalKind(kind)
 	ids := customKindIdentities(kind)
 	if len(ids) == 0 {
 		refreshDiscoveryForKind(strings.ToLower(kind), "")
 		ids = customKindIdentities(kind)
 	}
+	// Native Helm history is listed as HelmRelease too, and Radar reads it
+	// from release records, not a watch.
+	helm := issues.KindFilterIncludes([]string{kind}, "HelmRelease", "helmreleases")
+	_, builtin := resourceid.BuiltinGroup(kind)
+	custom := slices.DeleteFunc(slices.Clone(ids), func(id k8score.APIResource) bool { return k8score.IsBuiltInAPIGroup(id.Group) })
 	switch {
-	case len(ids) == 0:
+	case len(ids) == 0 && !helm && !builtin:
 		out.hints = append(out.hints, readErrorHint(errKindUnknown(kind, "", nil)))
 		return out, nil
-	case !slices.ContainsFunc(ids, func(id k8score.APIResource) bool { return !k8score.IsBuiltInAPIGroup(id.Group) }):
+	case len(custom) == 0:
 		return out, nil
-	case len(ids) > 1:
-		groups := make([]string, 0, len(ids))
-		for _, id := range ids {
-			groups = append(groups, groupLabel(id.Group))
+	case len(custom) > 1:
+		groups := make([]string, 0, len(custom))
+		for _, id := range custom {
+			groups = append(groups, id.Group)
 		}
-		out.hints = append(out.hints, fmt.Sprintf("%s names a kind in more than one API group (%s), and these changes may include any of them, so Radar can't say which it collects here. list_resources with kind and group says for each.", kind, strings.Join(groups, ", ")))
+		out.hints = append(out.hints, fmt.Sprintf("%s names custom kinds in more than one API group (%s), and these changes may include any of them, so Radar can't say which it collects here. list_resources with kind and group says for each.", kind, strings.Join(groups, ", ")))
 		return out, nil
 	}
-	id := ids[0]
+	id := custom[0]
+	// Beside a built-in kind or Helm history of the same name, the answer
+	// mixes sources: the custom kind is named by group and gets no coverage
+	// field, which would read as describing every row.
+	shared := len(ids) > 1 || helm
+	label := id.Name
+	if shared {
+		label = id.Name + "." + id.Group
+	}
 	clusterScoped := !id.Namespaced
 	if clusterScoped && namespace != "" {
-		out.hints = append(out.hints, fmt.Sprintf("%s are cluster-scoped, so their changes have no namespace; omit namespace to see them.", id.Name))
+		out.hints = append(out.hints, fmt.Sprintf("%s are cluster-scoped, so their changes have no namespace; omit namespace to see them.", label))
 		return out, nil
 	}
 
@@ -72,24 +90,26 @@ func changesKindCollection(ctx context.Context, kind, namespace string, since ti
 		}
 		var err error
 		if target, err = resolveReadTargetFrom(ctx, started, requested); err != nil {
-			return out, collectionError(&out, err)
+			return out, collectionError(&out, err, shared)
 		}
 		// Change rows need list on the kind itself, not just namespace
 		// access, so coverage checks the same.
 		if readable, gaps, err = narrowByExactAccess(ctx, target.namespaces, id.Group, id.Name, "list"); err != nil {
-			return out, collectionError(&out, withListCoverage(ctx, err, id.Name, target, clusterScoped))
+			return out, collectionError(&out, withListCoverage(ctx, err, id.Name, target, clusterScoped), shared)
 		}
 	}
 	r, err := readDynamicList(ctx, started, id.Name, id.Group, target, readable, gaps, clusterScoped, false)
 	if err != nil {
-		return out, collectionError(&out, err)
+		return out, collectionError(&out, err, shared)
 	}
 	cov := r.coverage(ctx, clusterScoped)
-	out.coverage = &cov
-	if sentence := collectionSentence(ctx, r.resource, cov); sentence != "" {
+	if !shared {
+		out.coverage = &cov
+	}
+	if sentence := collectionSentence(ctx, label, cov); sentence != "" {
 		out.hints = append(out.hints, sentence)
 	}
-	if sentence := collectionSinceSentence(r.resource, id.Name, id.Group, since); sentence != "" {
+	if sentence := collectionSinceSentence(label, id.Name, id.Group, since); sentence != "" {
 		out.hints = append(out.hints, sentence)
 	}
 	if currentReadCache() != started {
@@ -116,17 +136,10 @@ func customKindIdentities(kind string) []k8score.APIResource {
 	return out
 }
 
-func groupLabel(group string) string {
-	if group == "" {
-		return "core"
-	}
-	return group
-}
-
 // collectionError keeps a failed collection check as an explanation, so the
 // changes still return. A changed connection fails the answer instead: its
 // rows and its coverage may describe different clusters.
-func collectionError(out *changesCollection, err error) error {
+func collectionError(out *changesCollection, err error, shared bool) error {
 	var re *readError
 	if !errors.As(err, &re) {
 		return err
@@ -134,22 +147,29 @@ func collectionError(out *changesCollection, err error) error {
 	if re.code == readreason.ConnectionChanged {
 		return err
 	}
-	out.coverage = re.coverage
+	if !shared {
+		out.coverage = re.coverage
+	}
 	out.hints = append(out.hints, readErrorHint(err))
 	return nil
 }
 
-// readErrorHint is a failed read's explanation and what to do next.
+// readErrorHint is a failed read's explanation and what to do next. The
+// read's own next steps name list_resources and its arguments, so only the
+// generic ones are kept.
 func readErrorHint(err error) string {
 	var re *readError
 	if !errors.As(err, &re) {
 		return err.Error()
 	}
-	next := re.next
-	if next == "" && re.coverage != nil {
+	next := ""
+	switch {
+	case re.code == readreason.KindUnknown:
+		next = "Check the spelling; list_resources with kind=customresourcedefinitions lists the custom kinds installed here."
+	case re.coverage != nil:
 		next = retrySteps(*re.coverage)
 	}
-	if next == "" {
+	if next == "" && re.code != readreason.KindUnknown {
 		next = errorNext(re.code)
 	}
 	return strings.TrimSpace(re.err.Error() + " " + next)
@@ -177,24 +197,32 @@ func collectionSentence(ctx context.Context, resource string, cov resourceapi.Co
 }
 
 // collectionSinceSentence says when collection of the kind started, if that
-// was inside the window. Only a cluster-wide watch has one start for every
-// namespace; per-namespace watches start separately, so then the start is
-// not established.
+// was inside the window and well after Radar's own start, which
+// historyCoverage already reports. Only a cluster-wide watch has one start
+// for every namespace; per-namespace watches start separately, so then the
+// start is not established. A cluster-wide watch still loading is a gap in
+// coverage instead.
 func collectionSinceSentence(resource, name, group string, since time.Duration) string {
 	dynamicCache := k8s.GetDynamicResourceCache()
 	gvr, ok := discoveredGVR(name, group)
 	if dynamicCache == nil || !ok {
 		return ""
 	}
-	if !dynamicCache.IsClusterWideSynced(gvr) {
-		if dynamicCache.IsSynced(gvr) {
-			return fmt.Sprintf("Radar watches %s per namespace here, so it can't establish since when it has collected them; changes early in the window may be missing.", resource)
-		}
+	switch dynamicCache.Observation(gvr).Scope {
+	case k8score.DynamicObservationScopeCluster:
+	case k8score.DynamicObservationScopeExplicitNamespaces:
+		return fmt.Sprintf("Radar watches %s per namespace here, so it can't establish since when it has collected them; changes early in the window may be missing.", resource)
+	default:
 		return ""
 	}
 	watched, ok := dynamicCache.WatchedSince(gvr)
-	if !ok || !watched.After(time.Now().Add(-since)) {
+	if !ok || !watched.After(time.Now().Add(-since)) || watched.Sub(timeline.ObservationStart()) < collectionStartSlack {
 		return ""
 	}
 	return fmt.Sprintf("Radar has watched %s only since %s; earlier changes in the window are unknown.", resource, watched.UTC().Format(time.RFC3339))
 }
+
+// collectionStartSlack is how long after Radar starts its startup watches
+// may take to begin. A kind watched from then on has the history the
+// store-wide boundary already states.
+const collectionStartSlack = time.Minute

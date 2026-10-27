@@ -37,7 +37,7 @@ func setupWidgets(t *testing.T, f widgetFixture) *k8s.DynamicResourceCache {
 	}
 	t.Cleanup(k8s.ResetTestState)
 	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "w"}}}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList"}, widget)
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", {Group: "serving.knative.dev", Version: "v1", Resource: "services"}: "ServiceList"}, widget)
 	if f.fallbacks != nil {
 		dyn.PrependReactor("list", "widgets", func(a ktesting.Action) (bool, runtime.Object, error) {
 			if a.GetNamespace() == "" {
@@ -115,8 +115,8 @@ func TestGetChangesCollectionNeedsListOnTheKind(t *testing.T) {
 	if len(response.Changes) != 0 || response.Coverage == nil || len(response.Coverage.Gaps) == 0 || response.Coverage.Gaps[0].Code != readreason.UserForbidden {
 		t.Fatalf("coverage = %+v, want user_forbidden: namespace access is not access to the kind", response.Coverage)
 	}
-	if !strings.Contains(response.NarrowHint, "doesn't allow") {
-		t.Fatalf("narrowHint = %q", response.NarrowHint)
+	if !strings.Contains(response.NarrowHint, "doesn't allow") || strings.Contains(response.NarrowHint, "list_resources again") {
+		t.Fatalf("narrowHint = %q, want the denial without list_resources' own next step", response.NarrowHint)
 	}
 }
 
@@ -125,6 +125,8 @@ func TestGetChangesCollectionHints(t *testing.T) {
 		{Group: "example.test", Version: "v1", Kind: "Gadget", Name: "gadgets", Namespaced: false, Verbs: []string{"get", "list", "watch"}},
 		{Group: "one.example", Version: "v1", Kind: "Twin", Name: "twins", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
 		{Group: "two.example", Version: "v1", Kind: "Twin", Name: "twins", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
+		{Group: "", Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
+		{Group: "serving.knative.dev", Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
 	}}
 	for _, tc := range []struct {
 		name  string
@@ -133,6 +135,13 @@ func TestGetChangesCollectionHints(t *testing.T) {
 	}{
 		{"unknown kind", getChangesInput{Kind: "Nonesuch"}, `doesn't know a resource kind named "Nonesuch"`},
 		{"two custom groups", getChangesInput{Kind: "Twin"}, "more than one API group (one.example, two.example)"},
+		// Beside core Service, Knative Service is checked by itself and
+		// named by group; no coverage field, since rows mix both.
+		{"custom kind sharing a core name", getChangesInput{Kind: "Service", Since: "1h"}, "Radar has watched services.serving.knative.dev only since"},
+		// Native Helm history needs no watch, so the name is never unknown.
+		{"helm without flux", getChangesInput{Kind: "HelmRelease"}, ""},
+		// A short name the history query accepts is not an unknown kind.
+		{"built-in short name", getChangesInput{Kind: "cm"}, ""},
 		{"cluster-scoped kind with namespace", getChangesInput{Kind: "Gadget", Namespace: "alpha"}, "gadgets are cluster-scoped"},
 		{"name without kind", getChangesInput{Name: "w"}, "pass kind= to check whether Radar collects the kind"},
 	} {
@@ -140,7 +149,11 @@ func TestGetChangesCollectionHints(t *testing.T) {
 			// A discovery miss refreshes discovery, which the fake client empties.
 			setupWidgets(t, extra)
 			response, _ := getChangesForTest(t, context.Background(), tc.input)
-			if response.Coverage != nil || !strings.Contains(response.NarrowHint, tc.want) {
+			// get_changes has no group argument to suggest.
+			if strings.Contains(response.NarrowHint, "pass group") {
+				t.Fatalf("narrowHint = %q suggests an argument get_changes doesn't have", response.NarrowHint)
+			}
+			if response.Coverage != nil || !strings.Contains(response.NarrowHint, tc.want) || (tc.want == "" && strings.Contains(response.NarrowHint, "doesn't know")) {
 				t.Fatalf("coverage=%+v narrowHint=%q, want no coverage and %q", response.Coverage, response.NarrowHint, tc.want)
 			}
 		})
