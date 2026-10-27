@@ -2693,9 +2693,8 @@ func (d *DynamicResourceCache) markCRDsSeen(keys []string) map[string]struct{} {
 }
 
 // watchLateCRDs subscribes to CRD events so CRDs installed after startup get
-// the same watch decision as DiscoverAllCRDs gave the ones already present.
-// Without it, a CRD installed later is watched only once someone lists it, so
-// its resources' changes before that are missing from the timeline.
+// the same watch decision as DiscoverAllCRDs gave the ones already present,
+// and their resources' changes reach the timeline from install on.
 func (d *DynamicResourceCache) watchLateCRDs() {
 	handler := cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { d.onCRDEvent(obj) },
