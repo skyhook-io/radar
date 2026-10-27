@@ -315,7 +315,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'namespace', required: true, desc: 'pod or workload namespace' },
       { arg: 'name', required: true, desc: 'pod or workload name' },
       { arg: 'command', required: true, desc: 'argv array; no shell, stdin or TTY added' },
-      { arg: 'kind', desc: 'pod (default), Deployment, StatefulSet, DaemonSet, Job, ReplicaSet or Rollout; requires a Ready pod of the current revision' },
+      { arg: 'kind', desc: 'pod (default), Deployment, StatefulSet, DaemonSet, Job, ReplicaSet or Rollout; workload targets require a Running, Ready pod of the desired revision' },
       { arg: 'container', desc: 'default-container annotation, then first non-mesh app container' },
       { arg: 'timeout_seconds', desc: 'one deadline for resolution and execution; default 30, max 45 seconds; 64 KiB per output stream' },
     ],

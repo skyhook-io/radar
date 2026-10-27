@@ -203,3 +203,21 @@ func TestWrapToolCallErrorChangesLevel(t *testing.T) {
 		t.Errorf("expected level=error on the structured line for failed tool call\nfull output:\n%s", line)
 	}
 }
+
+func TestLogToolCallRecordsErrorResultsWithoutLeakingContent(t *testing.T) {
+	for _, tool := range []string{"exec_pod", "other_tool"} {
+		t.Run(tool, func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previous) })
+			call := logToolCall(tool, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "private-output"}}}, nil, nil
+			})
+			res, _, err := call(t.Context(), nil, struct{}{})
+			if err != nil || !res.IsError || strings.Contains(logs.String(), "private-output") || !strings.Contains(logs.String(), "ERROR") || !strings.Contains(logs.String(), "level=error") {
+				t.Fatalf("incorrect error log: %s", logs.String())
+			}
+		})
+	}
+}

@@ -38,13 +38,14 @@ WHICH TOOL
 - Helm: list_helm_releases, get_helm_release.
 `
 
+const guidanceWriteTools = "- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node"
+const guidanceFixDiscipline = ". Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.\n"
+
 // GuidanceWriteRouting routes fixes to the write tools. A proxy in front of a
 // full server can hide its write tools (Radar Hub does for read-only
 // organizations) while still listing other vendors' write tools, so the line
 // conditions each Kubernetes write tool on that tool being listed rather than
 // on write tools in general.
-const guidanceWriteTools = "- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node"
-const guidanceFixDiscipline = ". Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.\n"
 const GuidanceWriteRouting = guidanceWriteTools + guidanceFixDiscipline
 
 // GuidanceWriteRoutingExec includes the optional in-container command tool.
@@ -60,7 +61,8 @@ const GuidanceSignals = `READING RADAR'S SIGNALS
 `
 
 // GeneralGuidanceReadOnly is the general guidance for a surface without write
-// tools; GeneralGuidanceFull adds the write-tool routing. Both end with the
+// tools; GeneralGuidanceFull adds write-tool routing, and GeneralGuidanceExec
+// also routes to optional container commands. All end with the
 // evidence rule and the untrusted-data rule Radar's own investigation agent
 // follows.
 const (

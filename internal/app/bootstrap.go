@@ -561,6 +561,10 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	mcpExecTools := cfg.MCPEnabled && cfg.MCPExecTools && !cfg.DisableExec && !cfg.MCPReadOnly
+	effectiveCfg.MCPExecTools = &mcpExecTools
+	if cfg.MCPExecTools && !mcpExecTools {
+		log.Printf("[mcp] exec_pod opt-in suppressed (MCP enabled=%t, read-only=%t, disable-exec=%t)", cfg.MCPEnabled, cfg.MCPReadOnly, cfg.DisableExec)
+	}
 	mcppkg.SetExecToolsEnabled(mcpExecTools)
 	serverCfg.MCPExecTools = mcpExecTools
 	if cfg.MCPEnabled {

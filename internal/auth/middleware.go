@@ -238,6 +238,7 @@ func AuditLog(r *http.Request, namespace, name string) {
 }
 
 type AuditActionDetails struct {
+	InvocationID  string
 	Kind          string
 	Group         string
 	Action        string
@@ -268,6 +269,9 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 	line := fmt.Sprintf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
 		username, groups, details.Action, r.URL.Path, details.Kind, details.Group, details.Namespace, details.Name,
 		details.Container, details.Variable, details.Source, details.Outcome)
+	if details.InvocationID != "" {
+		line += fmt.Sprintf(" invocationID=%q", details.InvocationID)
+	}
 	if details.CommandHash != "" {
 		line += fmt.Sprintf(" executable=%q argumentCount=%d commandHash=%q", details.Executable, details.ArgumentCount, details.CommandHash)
 	}

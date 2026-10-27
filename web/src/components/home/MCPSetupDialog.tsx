@@ -45,7 +45,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools = false }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -329,6 +329,17 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
               <h4 className="text-sm font-semibold text-theme-text-primary">Tools</h4>
               <span className="text-[11px] text-theme-text-tertiary">{tools.length} tools</span>
             </div>
+            {!readOnly && execTools === false && (
+              <p className="text-xs text-theme-text-tertiary">
+                <code className="inline-code">exec_pod</code> is disabled. To allow container commands,
+                enable <code className="inline-code">--mcp-exec-tools</code> and restart Radar with{' '}
+                <code className="inline-code">--disable-exec</code> off. See{' '}
+                <a href="https://github.com/skyhook-io/radar/blob/main/docs/mcp.md#exec_pod"
+                  target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                  configuration options
+                </a>{' '}for Desktop and Helm. Kubernetes permissions still apply.
+              </p>
+            )}
             <div className="grid grid-cols-1 gap-1.5">
               {tools.map((tool) => (
                 <div key={tool.name} className="card-inner space-y-1.5">

@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"github.com/gorilla/websocket"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,7 +66,7 @@ func TestExecPodWorkloadListsOnlyCallerVisiblePods(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := decodeToolResult(t, result)
-				if got["podSelection"] != "db-visible of 1 pods of statefulsets db" {
+				if got["podSelection"] != "db-visible selected for statefulset/db; pods of desired revision: 1" {
 					t.Fatalf("selection=%v", got["podSelection"])
 				}
 			}
@@ -86,7 +87,7 @@ func TestExecPodTargetsInitAndEphemeralContainers(t *testing.T) {
 		{"annotated ordinary init", "", "setup", "setup"},
 		{"annotated ephemeral", "", "debugger", "debugger"},
 		{"fallback app only", "", "", "app"},
-		{"invalid annotation falls back", "", "missing", "app"},
+		{"explicit overrides invalid annotation", "app", "missing", "app"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := pod.DeepCopy()
@@ -151,7 +152,13 @@ func TestExecPodRealSPDYForbiddenResponse(t *testing.T) {
 			defer server.Close()
 			previous := k8s.SetTestConfig(&rest.Config{Host: server.URL})
 			t.Cleanup(func() { k8s.SetTestConfig(previous) })
-			_, _, err := handleExecPod(t.Context(), nil, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
+			res, _, err := handleExecPod(t.Context(), nil, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
+			if code >= 500 {
+				if err != nil || res == nil || !res.IsError || !strings.Contains(decodeToolResult(t, res)["message"].(string), "may still be running") || websocket.Load() != 1 || spdy.Load() != 1 {
+					t.Fatalf("unknown outcome: %v %v", res, err)
+				}
+				return
+			}
 			if err == nil {
 				t.Fatal("exec succeeded")
 			}
@@ -198,5 +205,68 @@ func TestExecPodClientAndExecutorShareConfigSnapshot(t *testing.T) {
 	_, _, err := handleExecPod(ctx, nil, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
 	if err == nil || !strings.Contains(err.Error(), "rbac_denied") || podReads.Load() != 1 || execRequests.Load() == 0 {
 		t.Fatalf("podReads=%d execRequests=%d err=%v", podReads.Load(), execRequests.Load(), err)
+	}
+}
+
+func TestExecPodBrokenWebSocketPreservesEvidenceThroughMCP(t *testing.T) {
+	enableExecToolsForTest(t)
+	t.Cleanup(k8s.SetTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected}))
+	upgrader := websocket.Upgrader{Subprotocols: []string{"v5.channel.k8s.io"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/namespaces/shop/pods/web-1" {
+			pod := runningPod("web-1", true, "app")
+			pod.UID = "observed-uid"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(pod)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		conn.WriteMessage(websocket.BinaryMessage, append([]byte{1}, []byte(strings.Repeat("evidence", 150))...))
+		conn.WriteMessage(websocket.BinaryMessage, append([]byte{2}, []byte("last diagnostic")...))
+		conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "stream interrupted"))
+	}))
+	defer server.Close()
+	previous := k8s.SetTestConfig(&rest.Config{Host: server.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(previous) })
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"exec_pod","arguments":{"namespace":"shop","name":"web-1","command":["check"]}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", "2025-06-18")
+	rec := httptest.NewRecorder()
+	NewHandler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if strings.Contains(rec.Header().Get("Content-Type"), "text/event-stream") {
+		for line := range strings.SplitSeq(body, "\n") {
+			if strings.HasPrefix(line, "data:") {
+				body = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				break
+			}
+		}
+	}
+	var envelope struct {
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+		t.Fatalf("response: %s: %v", body, err)
+	}
+	if rec.Code != http.StatusOK || !envelope.Result.IsError || len(envelope.Result.Content) != 1 {
+		t.Fatalf("missing MCP error envelope: %s", body)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["stdout"] != strings.Repeat("evidence", 150) || result["stderr"] != "last diagnostic" || result["pod"] != "web-1" || result["selectedPodUID"] != "observed-uid" || result["exitCode"] != nil {
+		t.Fatalf("lost execution evidence: %+v", result)
 	}
 }

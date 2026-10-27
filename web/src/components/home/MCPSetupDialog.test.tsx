@@ -24,12 +24,20 @@ describe('MCP setup in read-only mode', () => {
     }
   })
 
-  it('hides opt-in exec and excludes it from the default tool count', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+  it('explains disabled exec without including it in the available tool count', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open execTools={false} mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('apply_resource')
     expect(html).toContain('in_cluster')
-    expect(html).not.toContain('exec_pod')
+    expect(html).toContain('exec_pod')
+    expect(html).toContain('is disabled')
+    expect(html).toContain('--mcp-exec-tools')
     expect(html).toContain(`${MCP_TOOL_CATALOG.length - 1} tools`)
+  })
+
+  it('does not suggest an unsupported flag when the capability is absent', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    expect(html).not.toContain('exec_pod')
+    expect(html).not.toContain('--mcp-exec-tools')
   })
 
   it('shows exec and counts it only when enabled', () => {

@@ -28,8 +28,8 @@ func TestExecPodLogsMetadataWithoutCommandOrOutput(t *testing.T) {
 	wrapped := logToolCall("exec_pod", func(ctx context.Context, req *mcp.CallToolRequest, input execPodInput) (*mcp.CallToolResult, any, error) {
 		return execPod(ctx, fake.NewClientset(runningPod("web-1", true, "app")), nil, run, input)
 	})
-	_, _, err := wrapped(t.Context(), nil, input)
-	if err == nil || !strings.Contains(err.Error(), "transport-output-secret") {
+	res, _, err := wrapped(t.Context(), nil, input)
+	if err != nil || res == nil || !res.IsError || !strings.Contains(decodeToolResult(t, res)["message"].(string), "transport-output-secret") {
 		t.Fatalf("client lost its error: %v", err)
 	}
 	for _, secret := range []string{"argument-secret", "transport-output-secret", "postgres://", "argv="} {
@@ -95,13 +95,18 @@ func TestExecPodInterruptedExecutionReportsUnknownOutcome(t *testing.T) {
 					return io.ErrUnexpectedEOF
 				}
 			}
-			_, _, err := execPod(ctx, fake.NewClientset(runningPod("web-1", true, "app")), nil, run, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"check"}})
-			if err == nil {
-				t.Fatal("interrupted exec succeeded")
-			}
+			res, _, err := execPod(ctx, fake.NewClientset(runningPod("web-1", true, "app")), nil, run, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"check"}})
 			unknown := mode != "forbidden" && mode != "setup error"
-			if strings.Contains(err.Error(), "may still be running") != unknown {
-				t.Fatalf("unknown=%v: %v", unknown, err)
+			if unknown {
+				if err != nil || res == nil || !res.IsError {
+					t.Fatalf("lost error result: %v %v", res, err)
+				}
+				got := decodeToolResult(t, res)
+				if got["stdout"] != "partial output" || got["pod"] != "web-1" || got["exitCode"] != nil || !strings.Contains(got["message"].(string), "may still be running") || !strings.Contains(got["message"].(string), "inspect its effects before retrying") {
+					t.Fatalf("lost evidence: %+v", got)
+				}
+			} else if err == nil {
+				t.Fatal("rejection must return an error")
 			}
 			outcome := "stream_error"
 			switch mode {
@@ -112,9 +117,6 @@ func TestExecPodInterruptedExecutionReportsUnknownOutcome(t *testing.T) {
 			}
 			if !strings.Contains(logs.String(), `outcome="`+outcome+`"`) {
 				t.Fatalf("outcome: %s", logs.String())
-			}
-			if unknown && !strings.Contains(err.Error(), "inspect its effects before retrying") {
-				t.Fatalf("missing retry guidance: %v", err)
 			}
 		})
 	}
@@ -127,7 +129,34 @@ func TestExecPodPermissionHintsDescribeTheFailedStage(t *testing.T) {
 		t.Fatal(resolution)
 	}
 	stream := execPodError(denied, true).Error()
-	if !strings.Contains(stream, "exec requires create on pods/exec") {
+	if !strings.Contains(stream, "exec needs pods/exec permission") {
 		t.Fatal(stream)
+	}
+}
+
+func TestExecAuditAttemptPrecedesRunAndCorrelatesCompletion(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	var attempt string
+	run := func(context.Context, string, string, string, []string, io.Writer, io.Writer) error {
+		attempt = logs.String()
+		if !strings.Contains(attempt, `outcome="attempt"`) || strings.Contains(attempt, `outcome="exit_0"`) {
+			t.Errorf("missing pre-execution record: %s", attempt)
+		}
+		return nil
+	}
+	_, _, err := execPod(t.Context(), fake.NewClientset(runningPod("web-1", true, "app")), nil, run, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := strings.Index(attempt, ` invocationID="`)
+	if index < 0 {
+		t.Fatalf("missing invocation identity: %s", attempt)
+	}
+	id := strings.Fields(attempt[index:])[0]
+	if strings.Count(logs.String(), id) != 2 || !strings.Contains(logs.String(), `outcome="exit_0"`) {
+		t.Fatalf("uncorrelated completion: %s", logs.String())
 	}
 }

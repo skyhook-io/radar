@@ -269,9 +269,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 			SetExecToolsEnabled(enabled)
 			t.Cleanup(func() { SetExecToolsEnabled(previous) })
 			budget := maxCatalogBytes
-			// exec_pod adds 2,011 measured description/schema bytes; the default cap stays fixed.
+			// exec_pod adds 2,353 measured description/schema bytes; the default cap stays fixed.
 			if enabled {
-				budget += 2011
+				budget += 2353
 			}
 			total := 0
 			for _, tool := range listRegisteredTools(t) {

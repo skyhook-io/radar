@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -142,18 +143,21 @@ func logToolCall[In any](
 		start := time.Now()
 		result, extra, err := handler(ctx, req, input)
 		dur := time.Since(start)
+		toolErr := err
+		if toolErr == nil && result != nil && result.IsError {
+			toolErr = errors.New("tool returned an error result")
+		}
 
-		if err != nil && sensitive {
+		if toolErr != nil && sensitive {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s)", name, dur.Round(time.Millisecond))
-		} else if err != nil {
-			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), err)
+		} else if toolErr != nil {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), toolErr)
 			if cause := collectorCause(err); cause != nil {
 				log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m collector response: %v", name, cause)
 			}
 		} else {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[32mOK\033[0m (%s)", name, dur.Round(time.Millisecond))
 		}
-		toolErr := err
 		if structured, ok := readErrorResult(err); ok {
 			result, extra, err = structured, nil, nil
 		}

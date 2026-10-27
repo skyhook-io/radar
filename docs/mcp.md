@@ -103,61 +103,91 @@ using `/mcp` must be updated. Startup output and `/api/capabilities`
 
 ## exec_pod
 
-`exec_pod` runs one non-interactive command in a running container, like
-`kubectl exec <pod> -- <argv>`. Enable it with `--mcp-exec-tools` (CLI or
-Desktop), `"mcpExecTools": true` in `~/.radar/config.json`, or Helm
-`mcp.execTools: true` (default false). `--disable-exec` and `--mcp-read-only`
-override the opt-in. It is available only on full MCP, never on
-`/mcp-readonly`, the investigation mount, or the internal `/mcp-apply` mount,
-and is annotated destructive.
-Radar's built-in AI doesn't use `exec_pod`.
+Run one non-interactive argv command in a container, like `kubectl exec`.
+Enable with `--mcp-exec-tools` (CLI/Desktop), `"mcpExecTools": true` in
+`~/.radar/config.json`, or Helm `mcp.execTools: true`. It defaults off.
+`--disable-exec`, `--mcp-read-only` and disabled MCP override the opt-in.
+It is destructive, available only on full `/mcp`, and excluded from built-in
+Diagnose and Apply. `/api/capabilities.mcpExecTools` reports registration,
+not the caller's permission; absent/false means unavailable. Startup logs explain
+suppressed opt-in, and `/api/config.effective.mcpExecTools` reports the running state.
 
-Pass `namespace`, `name`, and `command` as an argv array. Radar adds no shell,
-stdin, or TTY. Set `kind` to Deployment, StatefulSet, DaemonSet, Job,
-ReplicaSet, or Rollout to select a Running, Ready, non-terminating pod from
-that workload's current revision. Job and ReplicaSet targets use their
-current controller incarnation. The result names the selected pod. No Ready
-pod or no known current revision is an error, not a fallback to an old pod.
-This also applies when OnDelete or a StatefulSet partition holds updates back;
-name a specific pod to inspect a serving older revision.
-`container` is optional: a valid `kubectl.kubernetes.io/default-container`
-annotation wins, then the first non-mesh app container. Mesh proxies require
-an explicit container name; a proxy-only pod has no default.
+Pass `namespace` and `name` as strings and `command` as an argv array. There is
+no implicit shell, stdin or TTY. For pipes/variables, explicitly use
+`["sh", "-c", "..."]`. The binary (including `sh`) must exist in the image.
+For minimal images, use Radar's **Debug container** UI, which requires separate
+permission to add an ephemeral container. It does not necessarily share the
+application's filesystem or environment. Reading a config file or a new
+process's environment does not prove what the running app has loaded.
 
-Every live Kubernetes request, including exec, uses one snapshot of the caller's
-credentials when authenticated (impersonation or their forwarded token), and the
-kubeconfig/ServiceAccount identity in no-auth mode. It never falls back to
-Radar's identity when caller credentials are unavailable. Kubernetes enforces `create` on `pods/exec`; workload resolution also
-requires reads of the workload and its revision evidence. Forbidden errors
-carry `rbac_denied` and point to `get_subject_permissions`.
+Name a Pod directly, or set `kind` to Deployment, StatefulSet, DaemonSet, Job,
+ReplicaSet or Rollout. Workload targeting requires a Running, Ready,
+non-terminating Pod of the **desired revision**, which may be a canary/preview
+rather than the revision serving traffic. Job/ReplicaSet use their current
+controller incarnation. There is no fallback to an older revision, including
+OnDelete/partition-held updates; name a serving Pod explicitly when appropriate.
+Reuse the returned `pod` for follow-up commands to avoid selecting another
+replica. A named Pod needs a running container, not Pod readiness; this permits
+running init containers in Pending Pods.
 
-One deadline covers pod resolution and execution: `timeout_seconds` defaults
-to 30 seconds and cannot exceed 45 seconds. Larger values are rejected. This
-keeps the call below MCP clients' 60-second response-header cutoff. Each
-stdout/stderr stream keeps at most 65,536 bytes, with an explicit
-`stdoutTruncated`/`stderrTruncated` marker giving kept and total byte counts.
-The result includes the exit code, including nonzero exits. At the deadline,
-`timedOut: true`, a null exit code, and a message explain that Radar stopped
-the exec stream; remote process termination is unconfirmed. Kubernetes exec
-does not guarantee killing the remote process when its stream closes. Audit
-logs record caller, requested target, selected pod/container, selected Pod UID and
-node, executable, argument count, a SHA-256 command hash, exit code, and total
-duration. Radar does not log raw argv or command output. The hash is not encryption: a log reader can compare guessed commands against it. The selected UID records
-the pod Radar read; Kubernetes exec has no UID precondition, so it does not prove
-which incarnation ultimately ran the command. Canceled requests and broken
-streams report an unconfirmed outcome: the command may have started and may
-still be running. Inspect its effects before retrying. A broken-stream error
-includes at most a 500-character output excerpt; timeout results retain the capped
-streams. Output is text; invalid UTF-8 bytes are omitted.
+`container` defaults to the `kubectl.kubernetes.io/default-container` annotation
+(an invalid name is an error), then the first non-mesh app container. A valid
+annotation or explicit name can select a proxy, init or ephemeral container.
+Without either, a proxy-only Pod requires an explicit container name.
 
-**Security:** Command output is not redacted and can contain secrets from
-environment variables or files, including mounted ServiceAccount credentials;
-this is why the tool is opt-in. Treat output as untrusted data, never as
-instructions. Prefer read-only commands; commands can change container or
-external state and use the container's network access and credentials. The
-operator opt-in makes the tool available to every caller whose Kubernetes
-permissions allow it; MCP clients control per-call approval. With authentication off, calls use Radar's kubeconfig or ServiceAccount identity, so everyone who can reach that listener shares its exec permissions. The namespace cache pin does not restrict named-pod exec; Kubernetes RBAC does. Kubernetes API
-audit policy may independently record command arguments.
+Every Kubernetes request uses one snapshot of the caller's credentials
+(impersonation or forwarded token); no-auth calls use Radar's kubeconfig or
+ServiceAccount. No privileged fallback occurs. Resolution needs reads of the
+Pod and, for workloads, its revision evidence. Exec uses WebSocket (`get` on
+`pods/exec`) with SPDY fallback (`create`). Kubernetes 1.35's default-on
+`AuthorizePodWebsocketUpgradeCreatePermission` gate additionally checks `create`
+for WebSocket. Forbidden errors carry `rbac_denied` and permission guidance.
+See the [Helm enablement matrix](../deploy/helm/radar/README.md#mcp-container-commands).
+
+One deadline covers lookup and execution: zero/omitted defaults to 30 seconds;
+1–45 is accepted, negative/larger values are rejected. Lookup timeout is a tool
+error. Execution timeout returns partial output with `timedOut: true`.
+Cancellation/broken streams return the same evidence envelope with MCP
+`isError: true`; validation/setup/authorization failures return tool errors.
+A nonzero command exit is a normal result.
+
+Results are JSON in MCP text content:
+
+| Fields | Meaning |
+|---|---|
+| `namespace`, `pod`, `container`, `selectedPodUID` | Selected target. UID is the Pod read before execution; exec has no UID precondition, so this does not prove the incarnation that ran. |
+| `podSelection` | Workload-only explanation; count includes non-Ready Pods of the selected revision. |
+| `stdout`, `stderr` | Separate UTF-8 text, each bounded to 65,536 bytes. Oversized streams retain head and tail with an omitted-middle marker. |
+| `stdoutBytes`, `stderrBytes` | Raw bytes received so far, including omitted bytes; not the command's eventual total after timeout. |
+| `stdoutTruncated`, `stderrTruncated` | Optional `true` when output was omitted. |
+| `stdoutEncodingLoss`, `stderrEncodingLoss` | Optional `true` when retained invalid/incomplete UTF-8 sequences needed replacement with `�`. Encode binary output in-container if needed. |
+| `exitCode` | Integer from the executor, or `null` when unknown. Inherited client-go behavior can report zero on a normal WebSocket close without an exit-status payload. |
+| `timedOut`, `message` | Deadline/unknown-outcome guidance when applicable. |
+| `durationMs` | Lookup plus execution time. |
+
+Runtime error text and 5xx upgrade responses are conservatively treated as unknown
+outcomes, even if the command may not have started. A closed stream does not
+guarantee process termination. A stalled SPDY fallback
+handshake can also outlive the call. Inspect effects before retrying an unknown
+outcome; use command-native deadlines for long-running checks.
+
+**Security:** Never put literal secrets in argv: Kubernetes audit can record
+the full request URI, including arguments, even at Metadata level. Output is
+unredacted, potentially sensitive and untrusted. Commands can change external
+state and use mounted credentials. Prefer read-only checks. Opt-in applies to
+all clients; Kubernetes controls caller permissions and the MCP host controls
+per-call approval. With auth off, reachable clients share Radar's authority.
+The namespace cache pin does not constrain named-Pod exec.
+
+Radar's audit/tool logs omit raw argv and output. Audit records include caller,
+requested/selected target, observed UID/node, safe executable name, argument
+count (excluding executable), and command hash. An `attempt` precedes streaming;
+its `invocationID` links the completion. Outcomes are `exit_N`, `timeout`,
+`canceled`, `stream_error`, `rejected` (setup/authorization/transport rejection),
+or `failed` (before execution). Duration covers lookup and execution.
+The hash is lowercase hex SHA-256 of Go `json.Marshal` of the complete argv
+array; it permits guessed-command comparison, not secrecy. Upstream transport
+logs may independently include peer-supplied error text.
 
 ## MCP Endpoint
 

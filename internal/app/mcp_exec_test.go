@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,9 +26,29 @@ func TestMCPExecFlagGating(t *testing.T) {
 		{name: "MCP disabled", optIn: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var logs strings.Builder
+			previousLog := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousLog) })
 			cfg := AppConfig{MCPEnabled: tc.enabled, MCPExecTools: tc.optIn, DisableExec: tc.disableExec, MCPReadOnly: tc.readOnly}
 			SetGlobals(cfg)
 			srv := CreateServer(cfg)
+			if strings.Contains(logs.String(), "opt-in suppressed") != (tc.optIn && !tc.want) {
+				t.Fatalf("suppression log: %s", logs.String())
+			}
+			configRec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(configRec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+			var configResult struct {
+				Effective struct {
+					MCPExecTools *bool `json:"mcpExecTools"`
+				} `json:"effective"`
+			}
+			if err := json.Unmarshal(configRec.Body.Bytes(), &configResult); err != nil {
+				t.Fatal(err)
+			}
+			if configResult.Effective.MCPExecTools == nil || *configResult.Effective.MCPExecTools != tc.want {
+				t.Fatalf("effective config: %s", configRec.Body.String())
+			}
 			req := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json, text/event-stream")

@@ -558,6 +558,26 @@ Disabled by default for security:
 | Webhooks view | `rbac.viewWebhooks: true` | Show MutatingWebhookConfigurations and ValidatingWebhookConfigurations in the resource browser. Off by default — the configurations reveal which admission controls are enforced (Gatekeeper / Kyverno policies, image scanners, DLP) and where the gaps are, which is recon value for a low-trust viewer. Auto-enabled under auth or cloud mode. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |
 
+### MCP container commands
+
+`mcp.execTools` registers `exec_pod`; `rbac.podExec` grants Radar's ServiceAccount
+exec permission. These are separate controls:
+
+| `mcp.execTools` | `rbac.podExec` | Result |
+|---|---|---|
+| false | false | MCP exec unavailable; chart grants no SA exec access. |
+| false | true | MCP exec unavailable; SA exec grant supports the existing terminal. |
+| true | false | MCP exec registered; no SA exec grant from this option. It works only if the executing identity has permission from another grant. |
+| true | true | MCP exec registered; SA exec grant present except in user-token mode. |
+
+With auth off, execution uses the ServiceAccount, shared by every reachable
+client. With proxy/OIDC impersonation, it uses the caller's Kubernetes permissions;
+the SA grant does not grant the caller exec. In user-token mode, the chart emits
+no SA exec rule and execution uses the forwarded caller token. The chart's SA
+rule grants `create pods/exec` (SPDY); WebSocket also needs `get pods/exec`.
+`--disable-exec`, read-only mode and disabled MCP suppress registration regardless
+of either value. See [the exec contract](../../../docs/mcp.md#exec_pod).
+
 ### In-app Agent Upgrades (opt-in, for Radar Cloud users)
 
 `rbac.selfUpgrade: true` lets a Radar Cloud organization owner trigger one-click upgrades from the web UI — no terminal or cloud credentials needed. It does not upgrade anything automatically. Disabled by default; only needed when connecting to Radar Cloud (the install wizard sets this automatically).

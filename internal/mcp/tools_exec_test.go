@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -226,7 +227,7 @@ func TestExecPodNamedPendingSidecarReachesExecutor(t *testing.T) {
 
 			containerErr := apierrors.NewBadRequest("container app is not running")
 			input.Container = "app"
-			_, _, err = execPod(t.Context(), client, nil, fakeExec(&calls, "", "", containerErr), input)
+			_, _, err = execPod(t.Context(), client, nil, fakeExec(&calls, "", "", &execTransportError{error: containerErr, status: 400}), input)
 			if !errors.Is(err, containerErr) || !strings.Contains(err.Error(), containerErr.Error()) {
 				t.Fatalf("container state error must pass through: %v", err)
 			}
@@ -271,7 +272,7 @@ func TestExecPodPicksReadyWorkloadPod(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := decodeToolResult(t, res)
-	if got["pod"] != "web-1-old" || !strings.Contains(got["podSelection"].(string), "of 2 pods") {
+	if got["pod"] != "web-1-old" || !strings.Contains(got["podSelection"].(string), "pods of desired revision: 2") {
 		t.Fatalf("picked %+v", got)
 	}
 	changed := ready.DeepCopy()
@@ -388,7 +389,7 @@ func TestExecPodRefusesOldDeploymentRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = resolveExecPod(t.Context(), client, nil, "deploy", "shop", "web")
-	if err == nil || !strings.Contains(err.Error(), "is paused with no observed current revision; target a specific pod by name") {
+	if err == nil || !strings.Contains(err.Error(), "is paused with no observed desired revision; target a specific pod by name") {
 		t.Fatalf("accepted mismatched template: %v", err)
 	}
 }
@@ -455,7 +456,7 @@ func TestExecPodTruncatesBothStreamsInBytes(t *testing.T) {
 	}
 	got := decodeToolResult(t, result)
 	for _, stream := range []string{"stdout", "stderr"} {
-		if len(got[stream].(string)) > execOutputCap || !strings.Contains(got[stream+"Truncated"].(string), "65536 of 196608 bytes") {
+		if len(got[stream].(string)) > execOutputCap || got[stream+"Truncated"] != true || got[stream+"Bytes"] != float64(len(output)) || !utf8.ValidString(got[stream].(string)) {
 			t.Fatalf("%s: %+v", stream, got[stream+"Truncated"])
 		}
 	}
@@ -481,5 +482,58 @@ func TestExecPodDeadlineBoundsUnresponsiveExecutor(t *testing.T) {
 	got := decodeToolResult(t, result)
 	if time.Since(start) > 5*time.Second || got["timedOut"] != true || got["exitCode"] != nil || got["stdout"] != "partial" {
 		t.Fatalf("elapsed=%s result=%v", time.Since(start), got)
+	}
+}
+
+func TestExecPodInvalidDefaultAnnotationDoesNotExecute(t *testing.T) {
+	pod := runningPod("web-1", true, "app", "proxy")
+	pod.Annotations = map[string]string{"kubectl.kubernetes.io/default-container": "missing"}
+	var calls []execCall
+	_, _, err := execPod(t.Context(), fake.NewClientset(pod), nil, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: pod.Name, Command: []string{"true"}})
+	if err == nil || !strings.Contains(err.Error(), "default-container annotation") || !strings.Contains(err.Error(), "containers: app, proxy") || len(calls) != 0 {
+		t.Fatalf("calls=%v err=%v", calls, err)
+	}
+}
+
+func TestExecOutputRetainsHeadAndTailAcrossWrites(t *testing.T) {
+	for _, size := range []int{1, 13, execOutputCap / 2, execOutputCap, execOutputCap * 3} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			input := "initial context\n" + strings.Repeat("x", execOutputCap*3) + "\nfinal diagnostic"
+			buffer := &cappedBuffer{limit: execOutputCap}
+			for start := 0; start < len(input); start += size {
+				chunk := input[start:min(start+size, len(input))]
+				if n, err := io.WriteString(buffer, chunk); err != nil || n != len(chunk) {
+					t.Fatalf("write: %d %v", n, err)
+				}
+			}
+			result := map[string]any{}
+			addTruncation(result, "stdout", buffer)
+			output := result["stdout"].(string)
+			if len(output) > execOutputCap || !strings.HasPrefix(output, "initial context\n") || !strings.HasSuffix(output, "\nfinal diagnostic") || !strings.Contains(output, "[... output omitted ...]") || result["stdoutBytes"] != len(input) || result["stdoutTruncated"] != true {
+				t.Fatalf("bytes=%v len=%d head/tail lost", result["stdoutBytes"], len(output))
+			}
+		})
+	}
+}
+
+func TestExecOutputMarksEncodingLossAndBoundsExpansion(t *testing.T) {
+	for _, input := range []string{"A\xffB", strings.Repeat("A\xff", execOutputCap/2), strings.Repeat("世", execOutputCap)} {
+		buffer := &cappedBuffer{limit: execOutputCap}
+		io.WriteString(buffer, input)
+		result := map[string]any{}
+		addTruncation(result, "stdout", buffer)
+		output := result["stdout"].(string)
+		if len(output) > execOutputCap || !utf8.ValidString(output) || result["stdoutBytes"] != len(input) {
+			t.Fatalf("output bytes=%d raw=%v", len(output), result["stdoutBytes"])
+		}
+		if utf8.ValidString(input) && result["stdoutEncodingLoss"] != nil {
+			t.Fatal("valid UTF-8 marked corrupt at retention boundary")
+		}
+		if !utf8.ValidString(input) && result["stdoutEncodingLoss"] != true {
+			t.Fatal("encoding loss unmarked")
+		}
+		if input == "A\xffB" && output != "A�B" {
+			t.Fatalf("altered evidence: %q", output)
+		}
 	}
 }
