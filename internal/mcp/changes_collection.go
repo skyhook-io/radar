@@ -31,6 +31,9 @@ type changesCollection struct {
 	// historyCoverage already states a boundary that close.
 	since   string
 	sinceAt time.Time
+	// clusterScoped names the kind when it is cluster-scoped and its
+	// collection was checked.
+	clusterScoped string
 }
 
 // sinceHint is the collection-start sentence unless history reports a
@@ -128,6 +131,9 @@ func changesKindCollection(ctx context.Context, kind, namespace string, since ti
 		out.hints = append(out.hints, sentence)
 	}
 	out.since, out.sinceAt = collectionSinceSentence(label, id.Name, id.Group, since)
+	if clusterScoped {
+		out.clusterScoped = label
+	}
 	if currentReadCache() != started {
 		return changesCollection{}, errConnectionChanged()
 	}

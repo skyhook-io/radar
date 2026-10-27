@@ -41,7 +41,7 @@ func setupWidgets(t *testing.T, f widgetFixture) *k8s.DynamicResourceCache {
 	}
 	t.Cleanup(k8s.ResetTestState)
 	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "w"}}}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", {Group: "serving.knative.dev", Version: "v1", Resource: "services"}: "ServiceList", {Group: "projectcalico.org", Version: "v3", Resource: "networkpolicies"}: "NetworkPolicyList"}, widget)
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", {Group: "serving.knative.dev", Version: "v1", Resource: "services"}: "ServiceList", {Group: "projectcalico.org", Version: "v3", Resource: "networkpolicies"}: "NetworkPolicyList", {Group: "example.test", Version: "v1", Resource: "gadgets"}: "GadgetList"}, widget)
 	if f.fallbacks != nil {
 		dyn.PrependReactor("list", "widgets", func(a ktesting.Action) (bool, runtime.Object, error) {
 			if a.GetNamespace() == "" {
@@ -154,6 +154,24 @@ func TestGetChangesCollectionNeedsListOnTheKind(t *testing.T) {
 	}
 	if !strings.Contains(response.NarrowHint, "doesn't allow") || strings.Contains(response.NarrowHint, "list_resources again") {
 		t.Fatalf("narrowHint = %q, want the denial without list_resources' own next step", response.NarrowHint)
+	}
+}
+
+// get_changes reads history only in a restricted caller's namespaces, which
+// never hold a cluster-scoped kind's changes: complete coverage would vouch
+// for that empty answer.
+func TestGetChangesClusterScopedKindForNamespaceRestrictedCaller(t *testing.T) {
+	setupWidgets(t, widgetFixture{extra: []k8s.APIResource{{Group: "example.test", Version: "v1", Kind: "Gadget", Name: "gadgets", Namespaced: false, Verbs: []string{"get", "list", "watch"}}}})
+	t.Cleanup(func() { getPermCache().Invalidate() })
+	ctx := withRestrictedUser(t, "bob", []string{"alpha"})
+	grantClusterRead(t, "bob", "example.test/gadgets")
+
+	response, _ := getChangesForTest(t, ctx, getChangesInput{Kind: "Gadget"})
+	if response.Coverage != nil || !strings.Contains(response.NarrowHint, "reads history only in the namespaces you can see") {
+		t.Fatalf("coverage=%+v narrowHint=%q, want no coverage and the limitation stated", response.Coverage, response.NarrowHint)
+	}
+	if response, _ = getChangesForTest(t, context.Background(), getChangesInput{Kind: "Gadget"}); response.Coverage == nil {
+		t.Fatal("auth off: a cluster-scoped kind keeps its coverage")
 	}
 }
 

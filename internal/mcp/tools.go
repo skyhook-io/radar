@@ -1602,6 +1602,12 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		requested = []string{input.Namespace}
 	}
 	allowed := filterNamespacesForUser(ctx, requested)
+	// History is read only in the caller's namespaces, so a cluster-scoped
+	// kind's changes don't come back here; its coverage would vouch for an
+	// empty answer it doesn't describe.
+	if collection.clusterScoped != "" && allowed != nil {
+		collection = changesCollection{hints: []string{fmt.Sprintf("Changes to %s are cluster-scoped, and get_changes reads history only in the namespaces you can see, so they are not listed here.", collection.clusterScoped)}}
+	}
 	if allowed != nil && len(allowed) == 0 {
 		if input.Kind != "" && currentReadCache() != started {
 			return nil, nil, errConnectionChanged()
