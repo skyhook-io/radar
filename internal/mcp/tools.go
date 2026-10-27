@@ -1741,7 +1741,8 @@ type getChangesResponseMCP struct {
 	SourcesErrored []string                   `json:"sourcesErrored,omitempty"`
 	// ClusterScopedChanges is set for a namespace query: changes to
 	// cluster-scoped admission configuration that applies, or may apply, to
-	// the namespace. Changes above never include cluster-scoped objects.
+	// the namespace. For such a query, Changes above never include
+	// cluster-scoped objects.
 	ClusterScopedChanges *issuesapi.ClusterScopedChanges `json:"clusterScopedChanges,omitempty"`
 	// HistoryCoverage is set when the window starts before the history Radar
 	// holds, including when no change was returned.
