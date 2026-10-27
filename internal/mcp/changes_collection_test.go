@@ -204,6 +204,20 @@ func TestGetChangesClusterScopedKindForNamespaceLimitedCaller(t *testing.T) {
 		t.Fatalf("no namespaces: changes=%+v, want the gadget change", response.Changes)
 	}
 
+	// Built-in cluster-scoped kinds resolve without discovery, which this
+	// fixture doesn't serve Node from.
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+		ID: "node", Timestamp: time.Now().Add(-time.Minute), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Node", APIVersion: "v1", Name: "n1", EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.unschedulable", OldValue: false, NewValue: true}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	grantClusterRead(t, "bob", "/nodes")
+	if response, _ = getChangesForTest(t, bob, getChangesInput{Kind: "Node"}); len(response.Changes) != 1 {
+		t.Fatalf("built-in Node: changes=%+v, want the cordon", response.Changes)
+	}
+
 	dave := withRestrictedUser(t, "dave", []string{"alpha"})
 	getPermCache().Get("dave", nil).SetCanI("list", "example.test", "gadgets", "", false)
 	response, _ = getChangesForTest(t, dave, getChangesInput{Kind: "Gadget"})

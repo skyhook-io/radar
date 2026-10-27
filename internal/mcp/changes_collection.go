@@ -255,8 +255,16 @@ const collectionStartSlack = time.Minute
 // readableClusterScopedGroups returns the API groups of kind's cluster-scoped
 // resources the caller may list.
 func readableClusterScopedGroups(ctx context.Context, kind string) []string {
+	kind = meaningfulchanges.CanonicalKind(kind)
+	var ids []k8score.APIResource
+	// Built-in cluster-scoped kinds resolve without discovery, whose typed
+	// informers keep recording while it fails.
+	if group, resource, ok := k8s.ClusterOnlyKindGVR(kind); ok {
+		ids = append(ids, k8score.APIResource{Group: group, Name: resource})
+	}
+	ids = append(ids, kindIdentities(kind)...)
 	var groups []string
-	for _, id := range kindIdentities(meaningfulchanges.CanonicalKind(kind)) {
+	for _, id := range ids {
 		if id.Namespaced || slices.Contains(groups, id.Group) {
 			continue
 		}
