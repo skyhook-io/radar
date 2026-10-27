@@ -56,3 +56,14 @@ func hasAssignedAddress(ingress *networkingv1.Ingress) bool {
 	}
 	return false
 }
+
+// ControllerPodLabels maps an IngressClass spec.controller to the labels that
+// find its pods, for the in-cluster controllers that serve traffic themselves
+// and take certificates from the Ingress's TLS Secrets.
+var ControllerPodLabels = map[string]map[string]string{
+	"k8s.io/ingress-nginx":           {"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"},
+	"nginx.org/ingress-controller":   {"app.kubernetes.io/name": "nginx-ingress"},
+	"traefik.io/ingress-controller":  {"app.kubernetes.io/name": "traefik"},
+	"projectcontour.io/contour":      {"app.kubernetes.io/name": "contour"},
+	"haproxy.org/ingress-controller": {"app.kubernetes.io/instance": "haproxy-ingress"},
+}

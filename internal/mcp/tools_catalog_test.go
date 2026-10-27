@@ -259,8 +259,10 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// or treat absence as ruling out another pause mechanism.
 	const (
 		// Includes controller-first navigation and the separate GitOps edit boundary.
-		maxCatalogBytes         = 66200
-		maxToolDescriptionBytes = 3000
+		// issues states what it covers and what it doesn't (expiring
+		// certificates, other posture), so an empty result isn't read as healthy.
+		maxCatalogBytes         = 66500
+		maxToolDescriptionBytes = 3200
 	)
 
 	for _, enabled := range []bool{false, true} {

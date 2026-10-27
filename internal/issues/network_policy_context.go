@@ -36,9 +36,9 @@ func networkPolicyIsolationContext(p k8s.Detection) *issuesapi.DiagnosticContext
 	}
 }
 
-// redactNetworkPolicyIsolationRefs drops the links to resources the caller
-// can't read, and the fact when none remain.
-func redactNetworkPolicyIsolationRefs(fact issuesapi.DiagnosticFact, canRead func(Ref) bool) (issuesapi.DiagnosticFact, bool, bool) {
+// redactAffectedRefsFact drops the links to resources the caller can't read,
+// and the fact when none remain.
+func redactAffectedRefsFact(fact issuesapi.DiagnosticFact, canRead func(Ref) bool) (issuesapi.DiagnosticFact, bool, bool) {
 	kept := make([]issuesapi.Ref, 0, len(fact.Refs))
 	for _, ref := range fact.Refs {
 		if canRead(Ref(ref)) {

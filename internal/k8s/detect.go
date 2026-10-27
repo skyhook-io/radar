@@ -762,6 +762,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 	problems = append(problems, detectNetworkPolicyDenyAllIngress(cache, namespace, podsByNamespace, now)...)
+	problems = append(problems, detectLiveIngressTLSCertificates(cache, namespace, now)...)
 
 	// HPA problems
 	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {

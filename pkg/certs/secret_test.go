@@ -92,6 +92,9 @@ func TestFromTLSSecret_SkipsNonServingSecrets(t *testing.T) {
 				if in.NotAfter == nil {
 					t.Error("NotAfter = nil, want parsed expiry from the leaf cert")
 				}
+				if in.NotBefore == nil || in.NotBefore.After(time.Now()) {
+					t.Errorf("NotBefore = %v, want the leaf cert's past start time", in.NotBefore)
+				}
 			}
 		})
 	}

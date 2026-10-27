@@ -206,6 +206,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryInvalidConfiguration
 	case k8s.NetworkPolicyDenyAllIngressReason:
 		return issuesapi.CategoryNetworkPolicyDenied
+	case k8s.TLSCertificateExpiredReason, k8s.TLSCertificateNotYetValidReason:
+		return issuesapi.CategoryCertificateNotReady
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":

@@ -205,6 +205,10 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 			iss.DiagnosticContext = ctx
 			iss.AffectedRefs = p.AffectedRefs
 		}
+		if ctx := tlsCertificateConsumersContext(p); ctx != nil {
+			iss.DiagnosticContext = ctx
+			iss.AffectedRefs = p.AffectedRefs
+		}
 	}
 	if p.OwnerKind != "" {
 		// Prefer the owner group resolved at detection (carries the real group

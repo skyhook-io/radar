@@ -360,6 +360,15 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) IssueIndex {
 		if f.Owner.Kind != "" {
 			mark(f.Owner.Group, f.Owner.Kind, f.Owner.Namespace, f.Owner.Name, f.ID)
 		}
+		// A finding about another subject (a NetworkPolicy, an expired TLS
+		// Secret) also counts on each resource it affects, as the related-issues
+		// lookup shows it there. Compose already removed the refs the caller
+		// can't read; without an authorizer it didn't, so count none.
+		if filters.CanReadRelated != nil {
+			for _, ref := range f.AffectedRefs {
+				mark(ref.Group, ref.Kind, ref.Namespace, ref.Name, f.ID)
+			}
+		}
 	}
 	idx := make(IssueIndex, len(seen))
 	for k, ids := range seen {
