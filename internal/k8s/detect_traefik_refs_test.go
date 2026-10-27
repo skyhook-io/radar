@@ -305,6 +305,51 @@ func TestDetectLiveTraefikMissingRefsGeneratedNameCollisions(t *testing.T) {
 	}
 }
 
+func TestDetectLiveTraefikMissingRefsGeneratedErrorServices(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, "--providers.kubernetescrd", "--providers.kubernetescrd.allowcrossnamespace"),
+		traefikObject("Middleware", "generated", "errors", map[string]any{"errors": map[string]any{"service": map[string]any{"name": "web", "namespace": "shop", "port": int64(80)}}}),
+		ingressRoute("generated", "errors-service", nil, []any{map[string]any{"name": "errors-errorpage-service", "kind": "TraefikService"}}, nil),
+		ingressRoute("generated", "possible-errors-service", nil, []any{map[string]any{"name": "unknown-errorpage-service", "kind": "TraefikService"}}, nil),
+		ingressRoute("generated", "normalized-errors-service", nil, []any{map[string]any{"name": "errors-errorpage.service", "kind": "TraefikService"}}, nil),
+		ingressRoute("generated", "ordinary-traefikservice", nil, []any{map[string]any{"name": "missing", "kind": "TraefikService"}}, nil),
+		ingressRoute("generated", "ordinary-service", nil, svcRef("errors-errorpage-service"), nil),
+	)
+	got := DetectLiveTraefikMissingRefs(GetResourceCache(), GetDynamicResourceCache(), GetResourceDiscovery(), "generated", nil)
+	byName := map[string]Detection{}
+	for _, d := range got {
+		byName[d.Name] = d
+	}
+	if len(got) != 2 || byName["ordinary-traefikservice"].Reason != TraefikRouterMissingServiceReason || byName["ordinary-service"].Reason != TraefikRouterMissingServiceReason {
+		t.Fatalf("generated error services must not be reported missing: %+v", got)
+	}
+}
+
+func TestDetectLiveTraefikMissingRefsAmbiguousMiddlewareTraversal(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, "--providers.kubernetescrd"),
+		traefikObject("Middleware", "a", "b-chain", map[string]any{"chain": map[string]any{"middlewares": mwRef("gone")}}),
+		traefikObject("Middleware", "a-b", "chain", map[string]any{"stripPrefix": map[string]any{"prefixes": []any{"/api"}}}),
+		traefikObject("Middleware", "a", "b-errors", map[string]any{"errors": map[string]any{"service": map[string]any{"name": "gone", "port": int64(80)}}}),
+		traefikObject("Middleware", "a-b", "errors", map[string]any{"stripPrefix": map[string]any{"prefixes": []any{"/api"}}}),
+		traefikObject("Middleware", "a", "outer", map[string]any{"chain": map[string]any{"middlewares": mwRef("b-chain", "b-errors")}}),
+		traefikObject("Middleware", "a", "unique", map[string]any{"chain": map[string]any{"middlewares": mwRef("gone")}}),
+		traefikObject("TraefikService", "a", "b-weighted", map[string]any{"weighted": map[string]any{"services": svcRef("gone")}}),
+		traefikObject("TraefikService", "a-b", "weighted", map[string]any{"weighted": map[string]any{"services": svcRef("web")}}),
+		ingressRoute("a", "ambiguous-chain", nil, nil, mwRef("b-chain")),
+		ingressRoute("a", "ambiguous-errors", nil, nil, mwRef("b-errors")),
+		ingressRoute("a", "nested-ambiguous-chain", nil, nil, mwRef("outer")),
+		ingressRoute("a", "ambiguous-service", nil, []any{map[string]any{"name": "b-weighted", "kind": "TraefikService"}}, nil),
+		ingressRoute("a", "unique-chain", nil, nil, mwRef("unique")),
+	)
+	got := DetectLiveTraefikMissingRefs(GetResourceCache(), GetDynamicResourceCache(), GetResourceDiscovery(), "a", nil)
+	if len(got) != 1 || got[0].Name != "unique-chain" || got[0].Reason != TraefikRouterMissingMiddlewareReason {
+		t.Fatalf("ambiguous configurations must not be traversed: %+v", got)
+	}
+}
+
 func TestDetectLiveTraefikMissingRefsWorkingDirConfig(t *testing.T) {
 	defer ResetTestState()
 	defer ResetTestDynamicState()
@@ -324,18 +369,24 @@ func TestParseTraefikFlagsAutoLoadedConfig(t *testing.T) {
 		want                        bool
 	}{
 		{name: "etc directory", mountPath: "/etc/traefik/"},
+		{name: "etc ancestor", mountPath: "/etc"},
+		{name: "root ancestor", mountPath: "/"},
 		{name: "etc toml", mountPath: "/etc/traefik/traefik.toml"},
 		{name: "etc yaml", mountPath: "/etc/traefik/traefik.yaml"},
 		{name: "etc yml", mountPath: "/etc/traefik/traefik.yml"},
 		{name: "working directory", mountPath: "/config", workingDir: "/config"},
+		{name: "working directory ancestor", mountPath: "/config", workingDir: "/config/nested"},
 		{name: "working directory file", mountPath: "/config/traefik.yml", workingDir: "/config"},
 		{name: "xdg directory", mountPath: "/config", env: []corev1.EnvVar{{Name: "XDG_CONFIG_HOME", Value: "/config"}}},
+		{name: "xdg ancestor", mountPath: "/config", env: []corev1.EnvVar{{Name: "XDG_CONFIG_HOME", Value: "/config/nested"}}},
 		{name: "xdg file", mountPath: "/config/traefik.toml", env: []corev1.EnvVar{{Name: "XDG_CONFIG_HOME", Value: "/config"}}},
 		{name: "home directory", mountPath: "/custom/.config", env: []corev1.EnvVar{{Name: "HOME", Value: "/custom"}}},
+		{name: "home ancestor", mountPath: "/custom", env: []corev1.EnvVar{{Name: "HOME", Value: "/custom"}}},
 		{name: "home file", mountPath: "/custom/.config/traefik.yaml", env: []corev1.EnvVar{{Name: "HOME", Value: "/custom"}}},
 		{name: "unknown home", mountPath: "/config", env: []corev1.EnvVar{{Name: "HOME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}}}},
 		{name: "expanded xdg", mountPath: "/config", env: []corev1.EnvVar{{Name: "XDG_CONFIG_HOME", Value: "$(CONFIG_DIR)"}}},
 		{name: "unrelated directory", mountPath: "/config", want: true},
+		{name: "shared path prefix", mountPath: "/etc/traef", want: true},
 		{name: "nested file", mountPath: "/config/other/traefik.yaml", workingDir: "/config", want: true},
 		{name: "unrelated extension", mountPath: "/etc/traefik/traefik.txt", want: true},
 		{name: "root home not declared", mountPath: "/root/.config", want: true},
@@ -348,6 +399,20 @@ func TestParseTraefikFlagsAutoLoadedConfig(t *testing.T) {
 			})
 			if ok != tt.want {
 				t.Fatalf("configured from flags = %v, want %v", ok, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseTraefikFlagsEnvFrom(t *testing.T) {
+	for name, source := range map[string]corev1.EnvFromSource{
+		"config map": {ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "traefik-config"}}},
+		"secret":     {SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "traefik-config"}}},
+		"prefixed":   {Prefix: "TRAEFIK_", ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "static-config"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if inst, ok := parseTraefikFlags(corev1.Container{Image: "traefik:v3.7.14", Args: traefikArgs, EnvFrom: []corev1.EnvFromSource{source}}); ok {
+				t.Fatalf("envFrom may supply unseen static configuration: %+v", inst)
 			}
 		})
 	}
@@ -374,6 +439,15 @@ func TestTraefikLoadersEntryPoints(t *testing.T) {
 		{name: "mixed unnamed", args: []string{"--entrypoints.dns.address=:53/udp", "--entrypoints.web.address=:80"}, want: true},
 		{name: "mixed route", args: []string{"--entrypoints.dns.address=:53/udp", "--entrypoints.web.address=:80"}, entryPoints: []any{"dns", "web"}, want: true},
 		{name: "entry point options suppress default", args: []string{"--entrypoints.web.http.tls=true"}, entryPoints: []any{"http"}},
+		{name: "internal unnamed", args: []string{"--entrypoints.traefik.address=:8080"}},
+		{name: "internal explicit", args: []string{"--entrypoints.traefik.address=:8080"}, entryPoints: []any{"traefik"}, want: true},
+		{name: "internal default excludes web", args: []string{"--entrypoints.traefik.address=:8080", "--entrypoints.traefik.asdefault=true", "--entrypoints.web.address=:80"}},
+		{name: "udp default excludes web", args: []string{"--entrypoints.dns.address=:53/udp", "--entrypoints.dns.asdefault=true", "--entrypoints.web.address=:80"}},
+		{name: "http default", args: []string{"--entrypoints.web.address=:80", "--entrypoints.web.asdefault=true", "--entrypoints.traefik.address=:8080"}, want: true},
+		{name: "http default bare flag", args: []string{"--entrypoints.web.asdefault", "--entrypoints.web.address=:80"}, want: true},
+		{name: "default false", args: []string{"--entrypoints.web.address=:80", "--entrypoints.web.asdefault=false"}, want: true},
+		{name: "last default flag wins", args: []string{"--entrypoints.dns.address=:53/udp", "--entrypoints.dns.asdefault=true", "--entrypoints.dns.asdefault=false", "--entrypoints.web.address=:80"}, want: true},
+		{name: "explicit nondefault", args: []string{"--entrypoints.web.address=:80", "--entrypoints.traefik.address=:8080", "--entrypoints.traefik.asdefault=true"}, entryPoints: []any{"web"}, want: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			inst, ok := parseTraefikFlags(corev1.Container{Image: "traefik:v3.7.14", Args: append([]string{"--providers.kubernetescrd"}, tt.args...)})
@@ -417,12 +491,111 @@ func TestTraefikLoadersClassPresence(t *testing.T) {
 			}
 			route := ingressRoute("shop", "test", extra, svcRef("gone"), nil)
 			route.SetAnnotations(tt.annotations)
-			inst := traefikInstance{ingressClass: tt.controllerClass, entryPoints: map[string]bool{"http": true}}
+			inst := traefikInstance{ingressClass: tt.controllerClass, entryPoints: map[string]bool{"http": true}, defaultEntryPoints: map[string]bool{"http": true}}
 			if got := len(traefikLoaders([]traefikInstance{inst}, route)) > 0; got != tt.want {
 				t.Fatalf("route admitted = %v, want %v", got, tt.want)
 			}
 		})
 	}
+}
+
+func TestDetectLiveTraefikMissingRefsShadowedRouter(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		candidateExtra map[string]any
+		brokenExtra    map[string]any
+		services       []any
+		middlewares    []any
+		match          string
+		extraArgs      []string
+		deleted        bool
+		wantWarning    bool
+	}{
+		{name: "identical rule", wantWarning: true},
+		{name: "overlapping entry points", brokenExtra: map[string]any{"entryPoints": []any{"web", "websecure"}}, candidateExtra: map[string]any{"entryPoints": []any{"websecure"}}, wantWarning: true},
+		{name: "disjoint entry points", brokenExtra: map[string]any{"entryPoints": []any{"web"}}, candidateExtra: map[string]any{"entryPoints": []any{"websecure"}}},
+		{name: "byte different rule", match: "Host( `affected.example.test` )"},
+		{name: "candidate missing service", services: svcRef("gone-too")},
+		{name: "candidate missing middleware", middlewares: mwRef("gone-too")},
+		{name: "candidate missing chain member", middlewares: mwRef("secure-chain")},
+		{name: "candidate different class", candidateExtra: map[string]any{"ingressClassName": "internal"}},
+		{name: "candidate namespace excluded", extraArgs: []string{"--providers.kubernetescrd.namespaces=edge"}},
+		{name: "candidate deleted", deleted: true},
+		{name: "default overlaps explicit", brokenExtra: map[string]any{"entryPoints": []any{"websecure"}}, extraArgs: []string{"--entrypoints.websecure.asdefault=true"}, wantWarning: true},
+		{name: "default excludes nondefault", brokenExtra: map[string]any{"entryPoints": []any{"web"}}, extraArgs: []string{"--entrypoints.websecure.asdefault=true"}},
+		{name: "default excludes internal", brokenExtra: map[string]any{"entryPoints": []any{"traefik"}}, extraArgs: []string{"--entrypoints.traefik.address=:8080"}},
+		{name: "no defaults from internal", brokenExtra: map[string]any{"entryPoints": []any{"web"}}, extraArgs: []string{"--entrypoints.traefik.address=:8080", "--entrypoints.traefik.asdefault=true"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			defer ResetTestState()
+			defer ResetTestDynamicState()
+			services := tt.services
+			if services == nil {
+				services = svcRef("web")
+			}
+			candidate := ingressRoute("shop", "alternate", tt.candidateExtra, nil, nil)
+			match := tt.match
+			if match == "" {
+				match = "Host(`affected.example.test`)"
+			}
+			if err := unstructured.SetNestedSlice(candidate.Object, []any{map[string]any{"kind": "Rule", "match": match, "services": services, "middlewares": tt.middlewares}}, "spec", "routes"); err != nil {
+				t.Fatal(err)
+			}
+			if tt.deleted {
+				now := metav1.Now()
+				candidate.SetDeletionTimestamp(&now)
+			}
+			args := append([]string{"--providers.kubernetescrd", "--entrypoints.web.address=:80", "--entrypoints.websecure.address=:443"}, tt.extraArgs...)
+			initTraefikFixture(t, traefikPod("traefik", true, args...), candidate,
+				ingressRoute("edge", "affected", tt.brokenExtra, svcRef("gone"), nil),
+			)
+			got := DetectLiveTraefikMissingRefs(GetResourceCache(), GetDynamicResourceCache(), GetResourceDiscovery(), "edge", nil)
+			var affected []Detection
+			for _, d := range got {
+				if d.Name == "affected" {
+					affected = append(affected, d)
+				}
+			}
+			if len(affected) != 1 {
+				t.Fatalf("affected rows = %+v", affected)
+			}
+			d := affected[0]
+			if (d.Severity == "warning") != tt.wantWarning || strings.Contains(d.Cause, "Another route with the same rule may serve these requests.") != tt.wantWarning {
+				t.Fatalf("shadowed = %v; detection = %+v", tt.wantWarning, d)
+			}
+			if tt.wantWarning && !hasRead(d.RequiredReads, issuesapi.EvidenceRead{Group: traefikGroup, Resource: "ingressroutes", Namespace: "shop", Verb: "list"}) {
+				t.Fatalf("cross-namespace shadow evidence must require reading its route: %+v", d.RequiredReads)
+			}
+		})
+	}
+}
+
+func TestDetectLiveTraefikMissingRefsShadowedRuleKeepsOtherFailureCritical(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	broken := ingressRoute("edge", "affected", nil, nil, nil)
+	if err := unstructured.SetNestedSlice(broken.Object, []any{
+		map[string]any{"match": "Host(`shared.example.test`)", "services": svcRef("gone")},
+		map[string]any{"match": "Host(`unserved.example.test`)", "services": svcRef("gone")},
+	}, "spec", "routes"); err != nil {
+		t.Fatal(err)
+	}
+	candidate := ingressRoute("shop", "alternate", nil, nil, nil)
+	if err := unstructured.SetNestedSlice(candidate.Object, []any{
+		map[string]any{"match": "Host(`shared.example.test`)", "services": svcRef("web")},
+	}, "spec", "routes"); err != nil {
+		t.Fatal(err)
+	}
+	initTraefikFixture(t, traefikPod("traefik", true, "--providers.kubernetescrd"), broken, candidate)
+	for _, d := range DetectLiveTraefikMissingRefs(GetResourceCache(), GetDynamicResourceCache(), GetResourceDiscovery(), "edge", nil) {
+		if d.Name == "affected" {
+			if d.Severity != "critical" || !strings.Contains(d.Message, "unserved.example.test") || strings.Contains(d.Cause, "Another route with the same rule") {
+				t.Fatalf("the unshadowed failure must remain critical: %+v", d)
+			}
+			return
+		}
+	}
+	t.Fatal("missing affected row")
 }
 
 // A compose's scope loads each Traefik inventory once, and only when a route
@@ -431,22 +604,22 @@ func TestTraefikInventoryLoadsLazilyPerScope(t *testing.T) {
 	defer ResetTestState()
 	defer ResetTestDynamicState()
 	initTraefikFixture(t, traefikPod("traefik", true, "--providers.kubernetescrd"),
-		ingressRoute("core-only", "missing", nil, svcRef("gone"), nil),
-		ingressRoute("middleware-only", "missing", nil, nil, mwRef("gone")),
-		ingressRoute("traefikservice-only", "missing", nil, []any{map[string]any{"name": "gone", "kind": "TraefikService"}}, nil),
+		ingressRoute("core-only", "core-missing", nil, svcRef("gone"), nil),
+		ingressRoute("middleware-only", "middleware-missing", nil, nil, mwRef("gone")),
+		ingressRoute("traefikservice-only", "traefikservice-missing", nil, []any{map[string]any{"name": "gone", "kind": "TraefikService"}}, nil),
 	)
 	cache, dynamicCache, discovery := GetResourceCache(), GetDynamicResourceCache(), GetResourceDiscovery()
 	scope := NewDetectScope()
 	if got := DetectLiveTraefikMissingRefs(cache, dynamicCache, discovery, "core-only", scope); len(got) != 1 {
 		t.Fatalf("core Service scan = %+v", got)
 	}
-	if len(scope.values) != 1 {
-		t.Fatalf("core Service scan loaded Traefik inventories: %v", scope.values)
+	if len(scope.values) != 2 {
+		t.Fatalf("core Service scan must load only instances and shadowing routes: %v", scope.values)
 	}
 	if got := DetectLiveTraefikMissingRefs(cache, dynamicCache, discovery, "middleware-only", scope); len(got) != 1 {
 		t.Fatalf("Middleware scan = %+v", got)
 	}
-	if len(scope.values) != 2 {
+	if len(scope.values) != 3 {
 		t.Fatalf("Middleware scan must load only its own inventory: %v", scope.values)
 	}
 	inv := newTraefikInventory(cache, dynamicCache, discovery, scope, traefikGroup)
@@ -455,7 +628,7 @@ func TestTraefikInventoryLoadsLazilyPerScope(t *testing.T) {
 		t.Fatalf("TraefikService scan = %+v", got)
 	}
 	services := inv.load("TraefikService")
-	if len(scope.values) != 3 || middlewares == nil || services == nil {
+	if len(scope.values) != 4 || middlewares == nil || services == nil {
 		t.Fatalf("both inventories should now be loaded: %v", scope.values)
 	}
 	next := newTraefikInventory(cache, dynamicCache, discovery, scope, traefikGroup)

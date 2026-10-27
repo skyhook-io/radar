@@ -29,6 +29,7 @@ type traefikInstance struct {
 	ingressClass        string
 	labelSelector       labels.Selector // nil: every IngressRoute
 	entryPoints         map[string]bool // HTTP-capable entry points
+	defaultEntryPoints  map[string]bool
 	allowCrossNamespace bool
 }
 
@@ -115,7 +116,7 @@ func runningTraefikInstances(cache *ResourceCache) []traefikInstance {
 }
 
 func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
-	if traefikMajorVersion(c.Image) != 3 {
+	if traefikMajorVersion(c.Image) != 3 || len(c.EnvFrom) > 0 {
 		return traefikInstance{}, false
 	}
 	configDirs := []string{"/etc/traefik"}
@@ -141,12 +142,13 @@ func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
 		mountPath := path.Clean(m.MountPath)
 		for _, dir := range configDirs {
 			dir = path.Clean(dir)
-			if mountPath == dir || mountPath == path.Join(dir, "traefik.toml") || mountPath == path.Join(dir, "traefik.yaml") || mountPath == path.Join(dir, "traefik.yml") {
+			if mountPath == dir || strings.HasPrefix(dir, strings.TrimSuffix(mountPath, "/")+"/") || mountPath == path.Join(dir, "traefik.toml") || mountPath == path.Join(dir, "traefik.yaml") || mountPath == path.Join(dir, "traefik.yml") {
 				return traefikInstance{}, false
 			}
 		}
 	}
 	inst := traefikInstance{entryPoints: map[string]bool{}}
+	asDefault := map[string]bool{}
 	enabled, disabled := false, false
 	entryPointsConfigured := false
 	args := append(append([]string(nil), c.Command...), c.Args...)
@@ -155,7 +157,8 @@ func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
 		key = strings.ToLower(key)
 		// Valued options may also take their value as the next argument.
 		entryPointAddress := strings.HasPrefix(key, "entrypoints.") && strings.HasSuffix(key, ".address")
-		if !hasValue && (traefikValuedFlags[key] || entryPointAddress) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+		entryPointDefault := strings.HasPrefix(key, "entrypoints.") && strings.HasSuffix(key, ".asdefault")
+		if !hasValue && (traefikValuedFlags[key] || entryPointAddress || entryPointDefault) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 			value, hasValue = args[i+1], true
 			i++
 		}
@@ -198,11 +201,23 @@ func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
 				if value != "" && !strings.HasSuffix(strings.ToLower(value), "/udp") {
 					inst.entryPoints[name] = true
 				}
+			} else if entryPointDefault {
+				name := strings.TrimSuffix(strings.TrimPrefix(key, "entrypoints."), ".asdefault")
+				delete(asDefault, name)
+				if !hasValue || strings.EqualFold(value, "true") {
+					asDefault[name] = true
+				}
 			}
 		}
 	}
 	if !entryPointsConfigured {
 		inst.entryPoints["http"] = true
+	}
+	inst.defaultEntryPoints = map[string]bool{}
+	for name := range inst.entryPoints {
+		if name != "traefik" && (len(asDefault) == 0 || asDefault[name]) {
+			inst.defaultEntryPoints[name] = true
+		}
 	}
 	return inst, enabled && !disabled
 }
@@ -249,7 +264,6 @@ func traefikLoaders(instances []traefikInstance, route *unstructured.Unstructure
 	if !hasClass {
 		class = legacyClass
 	}
-	entryPoints, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "entryPoints")
 	var out []traefikInstance
 	for _, inst := range instances {
 		if inst.namespaces != nil && !inst.namespaces[route.GetNamespace()] {
@@ -261,17 +275,25 @@ func traefikLoaders(instances []traefikInstance, route *unstructured.Unstructure
 		if class != inst.ingressClass && (inst.ingressClass != "" || class != "traefik") {
 			continue
 		}
-		// Traefik attaches the router to the named entry points it has and
-		// ignores the rest, so one existing entry point is enough.
-		serves := len(entryPoints) == 0 && len(inst.entryPoints) > 0
-		for _, ep := range entryPoints {
-			serves = serves || inst.entryPoints[strings.ToLower(ep)]
-		}
-		if serves {
+		if len(inst.routeEntryPoints(route)) > 0 {
 			out = append(out, inst)
 		}
 	}
 	return out
+}
+
+func (inst traefikInstance) routeEntryPoints(route *unstructured.Unstructured) map[string]bool {
+	entryPoints, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "entryPoints")
+	if len(entryPoints) == 0 {
+		return inst.defaultEntryPoints
+	}
+	served := map[string]bool{}
+	for _, ep := range entryPoints {
+		if ep = strings.ToLower(ep); inst.entryPoints[ep] {
+			served[ep] = true
+		}
+	}
+	return served
 }
 
 // traefikInventory answers "does this target exist" only where it can be
@@ -288,7 +310,7 @@ type traefikInventory struct {
 // These maps are shared across namespace scans and must remain read-only.
 type traefikKindInventory struct {
 	objects        map[string]*unstructured.Unstructured // ns/name
-	generatedNames map[string]bool                       // normalized ns-name
+	generatedNames map[string]int                        // normalized ns-name counts
 }
 
 func newTraefikInventory(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, scope *DetectScope, group string) *traefikInventory {
@@ -305,10 +327,10 @@ func (inv *traefikInventory) load(kind string) *traefikKindInventory {
 		if err != nil {
 			return (*traefikKindInventory)(nil)
 		}
-		inventory := &traefikKindInventory{objects: map[string]*unstructured.Unstructured{}, generatedNames: map[string]bool{}}
+		inventory := &traefikKindInventory{objects: map[string]*unstructured.Unstructured{}, generatedNames: map[string]int{}}
 		for _, obj := range items {
 			inventory.objects[obj.GetNamespace()+"/"+obj.GetName()] = obj
-			inventory.generatedNames[traefikGeneratedName(obj.GetNamespace(), obj.GetName())] = true
+			inventory.generatedNames[traefikGeneratedName(obj.GetNamespace(), obj.GetName())]++
 		}
 		return inventory
 	}).(*traefikKindInventory)
@@ -322,8 +344,13 @@ func (inv *traefikInventory) serviceMissing(ref map[string]any, ns string) (stri
 		return "", issuesapi.EvidenceRead{}, false
 	}
 	if kind, _ := ref["kind"].(string); kind == "TraefikService" {
+		// Errors Middlewares can populate this configuration name without
+		// any TraefikService object, including through normalized aliases.
+		if strings.HasSuffix(traefikGeneratedName(ns, name), "-errorpage-service") {
+			return "", issuesapi.EvidenceRead{}, false
+		}
 		services := inv.load("TraefikService")
-		if services == nil || services.objects[ns+"/"+name] != nil || services.generatedNames[traefikGeneratedName(ns, name)] {
+		if services == nil || services.objects[ns+"/"+name] != nil || services.generatedNames[traefikGeneratedName(ns, name)] > 0 {
 			return "", issuesapi.EvidenceRead{}, false
 		}
 		return fmt.Sprintf("TraefikService %q", traefikRefLabel(ns, name)), issuesapi.EvidenceRead{Group: inv.group, Resource: "traefikservices", Namespace: ns, Verb: "list"}, true
@@ -369,6 +396,12 @@ func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, al
 	if middlewares == nil {
 		return traefikMissingRef{}, false
 	}
+	identifier := traefikGeneratedName(ns, name)
+	// A failing Middleware may be skipped before collision handling, so
+	// its object's spec does not prove which configuration Traefik uses.
+	if middlewares.generatedNames[identifier] > 1 {
+		return traefikMissingRef{}, false
+	}
 	key := ns + "/" + name
 	if visited[key] {
 		return traefikMissingRef{}, false
@@ -378,7 +411,7 @@ func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, al
 	if !ok {
 		// Legacy Traefik names flatten namespace and name with a dash, so
 		// another object's configuration can satisfy this reference.
-		if middlewares.generatedNames[traefikGeneratedName(ns, name)] {
+		if middlewares.generatedNames[identifier] > 0 {
 			return traefikMissingRef{}, false
 		}
 		return traefikMissingRef{
@@ -422,6 +455,70 @@ func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, al
 	return traefikMissingRef{}, false
 }
 
+func (inv *traefikInventory) ruleMissingRefs(r map[string]any, ns string, allowCrossNamespace bool) []traefikMissingRef {
+	var missing []traefikMissingRef
+	for _, svc := range nestedMaps(r, "services") {
+		svcNs := ns
+		if refNs, _ := svc["namespace"].(string); refNs != "" {
+			if refNs != ns && !allowCrossNamespace {
+				continue
+			}
+			svcNs = refNs
+		}
+		if target, read, ok := inv.serviceMissing(svc, svcNs); ok {
+			missing = append(missing, traefikMissingRef{reason: TraefikRouterMissingServiceReason, target: target, reads: []issuesapi.EvidenceRead{read}})
+		}
+	}
+	for _, mw := range nestedMaps(r, "middlewares") {
+		if m, ok := inv.middlewareMissing(mw, ns, allowCrossNamespace, map[string]bool{}); ok {
+			missing = append(missing, m)
+		}
+	}
+	return missing
+}
+
+func (inv *traefikInventory) shadowingRoute(route *unstructured.Unstructured, ruleIndex int, match string, loaders []traefikInstance) (issuesapi.EvidenceRead, bool) {
+	routes := inv.load("IngressRoute")
+	if routes == nil || match == "" {
+		return issuesapi.EvidenceRead{}, false
+	}
+	for _, candidate := range routes.objects {
+		if candidate.GetDeletionTimestamp() != nil {
+			continue
+		}
+		for _, inst := range traefikLoaders(loaders, candidate) {
+			overlaps := false
+			entryPoints := inst.routeEntryPoints(route)
+			for ep := range inst.routeEntryPoints(candidate) {
+				overlaps = overlaps || entryPoints[ep]
+			}
+			if !overlaps {
+				continue
+			}
+			rules, _, _ := unstructured.NestedSlice(candidate.Object, "spec", "routes")
+			for i, raw := range rules {
+				if candidate.GetNamespace() == route.GetNamespace() && candidate.GetName() == route.GetName() && i == ruleIndex {
+					continue
+				}
+				r, ok := raw.(map[string]any)
+				if !ok || r["match"] != match || (r["kind"] != nil && r["kind"] != "" && r["kind"] != "Rule") || len(nestedMaps(r, "services")) == 0 {
+					continue
+				}
+				allowed := true
+				for _, ref := range append(nestedMaps(r, "services"), nestedMaps(r, "middlewares")...) {
+					if ns, _ := ref["namespace"].(string); ns != "" && ns != candidate.GetNamespace() && !inst.allowCrossNamespace {
+						allowed = false
+					}
+				}
+				if allowed && len(inv.ruleMissingRefs(r, candidate.GetNamespace(), inst.allowCrossNamespace)) == 0 {
+					return issuesapi.EvidenceRead{Group: inv.group, Resource: "ingressroutes", Namespace: candidate.GetNamespace(), Verb: "list"}, true
+				}
+			}
+		}
+	}
+	return issuesapi.EvidenceRead{}, false
+}
+
 func traefikRouteMissingRefs(route *unstructured.Unstructured, group string, loaders []traefikInstance, inv *traefikInventory, now time.Time) []Detection {
 	ns := route.GetNamespace()
 	allowCrossNamespace := false
@@ -431,7 +528,7 @@ func traefikRouteMissingRefs(route *unstructured.Unstructured, group string, loa
 		podNamespaces[inst.podNamespace] = true
 	}
 	routes, _, _ := unstructured.NestedSlice(route.Object, "spec", "routes")
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	var out []Detection
 	for i, raw := range routes {
 		r, ok := raw.(map[string]any)
@@ -439,30 +536,13 @@ func traefikRouteMissingRefs(route *unstructured.Unstructured, group string, loa
 			continue
 		}
 		match, _ := r["match"].(string)
-		var missing []traefikMissingRef
-		for _, svc := range nestedMaps(r, "services") {
-			svcNs := ns
-			if refNs, _ := svc["namespace"].(string); refNs != "" {
-				if refNs != ns && !allowCrossNamespace {
-					continue
-				}
-				svcNs = refNs
-			}
-			if target, read, ok := inv.serviceMissing(svc, svcNs); ok {
-				missing = append(missing, traefikMissingRef{reason: TraefikRouterMissingServiceReason, target: target, reads: []issuesapi.EvidenceRead{read}})
-			}
+		missing := inv.ruleMissingRefs(r, ns, allowCrossNamespace)
+		if len(missing) == 0 {
+			continue
 		}
-		for _, mw := range nestedMaps(r, "middlewares") {
-			if m, ok := inv.middlewareMissing(mw, ns, allowCrossNamespace, map[string]bool{}); ok {
-				missing = append(missing, m)
-			}
-		}
+		shadowRead, shadowed := inv.shadowingRoute(route, i, match, loaders)
 		for _, m := range missing {
 			key := m.reason + "\x00" + m.target + "\x00" + m.via
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
 			message := fmt.Sprintf("routes[%d] (%s) references %s, which does not exist", i, match, m.target)
 			action := fmt.Sprintf("Create %s, or point routes[%d] at one that exists.", m.target, i)
 			if m.via != "" {
@@ -471,12 +551,26 @@ func traefikRouteMissingRefs(route *unstructured.Unstructured, group string, loa
 			}
 			d := missingRefProblem(now, "IngressRoute", group, ns, route.GetName(), m.reason, message, route.GetCreationTimestamp().Time)
 			d.Cause = fmt.Sprintf("Traefik does not load a router when a Service or Middleware it needs is missing, so requests matching %s get no route from it: a 404 unless another router matches. Traefik reports this only in its log and dashboard.", match)
+			if shadowed {
+				d.Severity = "warning"
+				d.Cause += " Another route with the same rule may serve these requests."
+			}
 			d.Action = action
 			reads := dedupeEvidenceReads(m.reads)
+			if shadowed {
+				reads = append(reads, shadowRead)
+			}
 			for _, podNs := range sortedSetKeys(podNamespaces) {
 				reads = append(reads, issuesapi.EvidenceRead{Resource: "pods", Namespace: podNs, Verb: "list"})
 			}
 			d.RequiredReads = reads
+			if index, exists := seen[key]; exists {
+				if out[index].Severity == "warning" && d.Severity == "critical" {
+					out[index] = d
+				}
+				continue
+			}
+			seen[key] = len(out)
 			out = append(out, d)
 		}
 	}
