@@ -141,6 +141,10 @@ function markFor(probes: ProbeResult[], id: OriginId, ctx: OriginContext): Mark 
   // its answer was deliberately kept informational. 'blocked' ("never tried -
   // something failed earlier") was false on both clauses.
   if (live.length === 0 && probes.some((p) => p.skipped && p.skipClass === 'informational')) return 'inconclusive'
+  // A refusal is not a dead end the operator has to accept: 'blocked' ("an
+  // earlier failure or a skip stopped it") hides that this one names a grant
+  // they can ask for.
+  if (live.length === 0 && probes.some((p) => p.skipped && p.skipClass === 'denied')) return 'denied'
   if (live.length === 0) return 'blocked'
   if (ctx.stale) return 'stale'
   if (live.some((p) => !p.ok || p.tone === 'unhealthy')) return 'failed'
@@ -153,6 +157,12 @@ function markFor(probes: ProbeResult[], id: OriginId, ctx: OriginContext): Mark 
 /** The reason an all-skipped origin never ran, taken from the probes themselves. */
 function skipReason(probes: ProbeResult[]): string | undefined {
   return probes.find((p) => p.skipped && p.reason)?.reason
+}
+
+/** The reason an origin was refused. Identity-scoped, so unlike `skipReason` it
+ *  speaks for every port and carries no misattribution risk. */
+function deniedReason(probes: ProbeResult[]): string | undefined {
+  return probes.find((p) => p.skipped && p.skipClass === 'denied' && p.reason)?.reason
 }
 
 /**
@@ -278,6 +288,7 @@ export function buildOrigins(trace: Trace | undefined, ctx: OriginContext = {}):
   }
 
   const apiProbes = byOrigin.get('apiserver') ?? []
+  const apiMark = markFor(apiProbes, 'apiserver', ctx)
   const apiserver: Origin = {
     id: 'apiserver',
     glyph: '⌸',
@@ -287,7 +298,16 @@ export function buildOrigins(trace: Trace | undefined, ctx: OriginContext = {}):
     kind: 'relayed',
     kindTag: ORIGIN_KIND_TAG.relayed,
     lane: 'control',
-    mark: markFor(apiProbes, 'apiserver', ctx),
+    mark: apiMark,
+    // The relay carries the identity Radar is running as, which is not always
+    // one that may proxy. Without the reason the capsule stated a refusal and
+    // left the reader no way to know what to grant.
+    //
+    // Only a DENIAL is read here, never any skip: a refusal is a property of the
+    // identity and so speaks for every port, while the other skips (an HTTPS
+    // port the relay can't verify, a non-HTTP port) are port-specific and would
+    // be misattributed the moment another port is selected.
+    unavailable: apiMark === 'denied' ? deniedReason(apiProbes) : undefined,
   }
 
   const localProbes = byOrigin.get('local') ?? []

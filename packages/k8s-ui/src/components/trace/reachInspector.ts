@@ -201,11 +201,25 @@ function gapNext(
 
   if (!actionable && denied) {
     const ns = namespace || '<namespace>'
+    // Which grant to ask for depends on WHICH vantage was refused. The Job and
+    // the relay need different permissions, and naming the wrong one sends the
+    // operator to their cluster admin with a request that would not fix this.
+    // When both are refused the Job wins by strength order, which is also the
+    // more valuable ask - it is the stronger evidence.
+    const relay = denied.id === 'apiserver'
     return {
       header: 'ASK FOR THIS PERMISSION',
-      body: `Running an in-cluster test needs \`create\` on \`jobs\` in ${ns}. Grant it, or run the check from a workload you already control.`,
+      body: relay
+        ? `Relaying through the API server needs \`get\` on \`services/proxy\` and \`pods/proxy\` in ${ns}. Grant it, or test from inside the cluster instead.`
+        : `Running an in-cluster test needs \`create\` on \`jobs\` in ${ns}. Grant it, or run the check from a workload you already control.`,
       blocked: denied.unavailable,
-      ctas: [{ text: 'Copy the permission check', action: 'copy-command', command: `kubectl auth can-i create jobs -n ${ns}` }],
+      ctas: [
+        {
+          text: 'Copy the permission check',
+          action: 'copy-command',
+          command: relay ? `kubectl auth can-i get services/proxy -n ${ns}` : `kubectl auth can-i create jobs -n ${ns}`,
+        },
+      ],
     }
   }
   if (actionable && actionable.id === current.id) {
