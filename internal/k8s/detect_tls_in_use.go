@@ -88,8 +88,8 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 			}
 		}
 		seen := map[string]bool{}
-		for _, tls := range ing.Spec.TLS {
-			if tls.SecretName == "" || seen[tls.SecretName] || !tlsEntryServed(ing, tls) {
+		for i, tls := range ing.Spec.TLS {
+			if tls.SecretName == "" || seen[tls.SecretName] || !tlsEntryServed(ing, i) {
 				continue
 			}
 			seen[tls.SecretName] = true
@@ -197,18 +197,37 @@ func unresolvedClassOutsideALB(cache *ResourceCache, ing *networkingv1.Ingress) 
 	return true
 }
 
-// tlsEntryServed reports whether a rule serves one of the TLS entry's hosts.
-// Controllers pick a certificate by the rule's host, so an entry naming only
-// hosts no rule serves is never presented. An entry with no hosts is kept.
-func tlsEntryServed(ing *networkingv1.Ingress, tls networkingv1.IngressTLS) bool {
-	if len(tls.Hosts) == 0 {
+// tlsEntryServed reports whether the i-th TLS entry is the first to cover
+// some rule's host. Controllers pick a certificate by the rule's host, taking
+// the first entry that matches, so an entry naming only hosts no rule serves,
+// or hosts an earlier entry already covers, is never presented. An entry with
+// no hosts is kept.
+func tlsEntryServed(ing *networkingv1.Ingress, i int) bool {
+	if len(ing.Spec.TLS[i].Hosts) == 0 {
 		return true
 	}
-	for _, host := range tls.Hosts {
-		for _, rule := range ing.Spec.Rules {
-			if tlsHostCovers(host, rule.Host) {
-				return true
+	for _, rule := range ing.Spec.Rules {
+		if !tlsEntryCovers(ing.Spec.TLS[i], rule.Host) {
+			continue
+		}
+		shadowed := false
+		for _, earlier := range ing.Spec.TLS[:i] {
+			if tlsEntryCovers(earlier, rule.Host) {
+				shadowed = true
+				break
 			}
+		}
+		if !shadowed {
+			return true
+		}
+	}
+	return false
+}
+
+func tlsEntryCovers(tls networkingv1.IngressTLS, ruleHost string) bool {
+	for _, host := range tls.Hosts {
+		if tlsHostCovers(host, ruleHost) {
+			return true
 		}
 	}
 	return false
@@ -231,14 +250,25 @@ func tlsHostCovers(tlsHost, ruleHost string) bool {
 
 // ingressTLSServedElsewhere reports an Ingress whose own TLS Secret is not the
 // certificate clients see: SSL passthrough hands TLS to the backend, an
-// ingress-nginx canary takes its TLS from the primary Ingress, and Contour's
-// tls-cert-namespace reads the Secret from another namespace.
+// ingress-nginx canary takes its TLS from the primary Ingress, Contour's
+// tls-cert-namespace reads the Secret from another namespace, and GKE prefers
+// pre-shared and Google-managed certificates over the Secret.
 func ingressTLSServedElsewhere(ing *networkingv1.Ingress) bool {
 	if ingressSSLPassthrough(ing) || strings.EqualFold(strings.TrimSpace(ing.Annotations["nginx.ingress.kubernetes.io/canary"]), "true") {
 		return true
 	}
-	_, delegated := ing.Annotations["projectcontour.io/tls-cert-namespace"]
-	return delegated
+	for _, key := range tlsElsewhereAnnotations {
+		if strings.TrimSpace(ing.Annotations[key]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+var tlsElsewhereAnnotations = []string{
+	"projectcontour.io/tls-cert-namespace",
+	"ingress.gcp.kubernetes.io/pre-shared-cert",
+	"networking.gke.io/managed-certificates",
 }
 
 // sslPassthroughAnnotations hand TLS to the backend (ingress-nginx, HAProxy
