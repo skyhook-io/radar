@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -311,7 +312,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, detection)
 			}
 
-			if deploymentBelowDesiredAvailable(d) && stuck == nil && replicaFailure == nil {
+			if deploymentBelowDesiredAvailable(d) && !deploymentRolloutDipWithinBudget(d, now) && stuck == nil && replicaFailure == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				var availCondLTT time.Time
 				for _, cond := range d.Status.Conditions {
@@ -2393,6 +2394,41 @@ func failedJobCondition(job *batchv1.Job) *batchv1.JobCondition {
 // previous generation) quiet until the controller reports the shortfall.
 func deploymentBelowDesiredAvailable(dep *appsv1.Deployment) bool {
 	return dep.Status.UnavailableReplicas > 0 && dep.Status.AvailableReplicas < schedDesiredReplicas(dep.Spec.Replicas)
+}
+
+// deploymentRolloutDipWithinBudget reports whether a shortfall below
+// spec.replicas is a RollingUpdate taking pods down within its maxUnavailable
+// budget. The controller sets Available=True exactly when available >=
+// replicas - maxUnavailable, and keeps Progressing at ReplicaSetUpdated or
+// NewReplicaSetCreated until the rollout completes; a pod lost after completion
+// leaves the reason at NewReplicaSetAvailable, so steady-state capacity loss
+// still reports. (FoundNewReplicaSet is only written when a progress deadline is
+// first enabled, not by a rollout.) The guards keep a stale condition from
+// vouching for the dip: a paused Deployment or one with no progress deadline
+// never times out, a status older than the spec judged a different target, and
+// progress last recorded longer ago than the deadline should already have timed
+// out (a timestamp further ahead of this clock than ordinary skew can't vouch
+// for anything either). Zero available is an outage even when the budget
+// allows it.
+func deploymentRolloutDipWithinBudget(dep *appsv1.Deployment, now time.Time) bool {
+	deadline := dep.Spec.ProgressDeadlineSeconds
+	if dep.Spec.Paused || deadline == nil || *deadline == math.MaxInt32 ||
+		dep.Status.ObservedGeneration < dep.Generation || dep.Status.AvailableReplicas == 0 {
+		return false
+	}
+	var available, progressing bool
+	for _, cond := range dep.Status.Conditions {
+		switch cond.Type {
+		case appsv1.DeploymentAvailable:
+			available = cond.Status == corev1.ConditionTrue
+		case appsv1.DeploymentProgressing:
+			sinceProgress := now.Sub(cond.LastUpdateTime.Time)
+			progressing = cond.Status == corev1.ConditionTrue &&
+				(cond.Reason == "ReplicaSetUpdated" || cond.Reason == "NewReplicaSetCreated") &&
+				sinceProgress >= -onsetObservationMargin && sinceProgress <= time.Duration(*deadline)*time.Second
+		}
+	}
+	return available && progressing
 }
 
 func deploymentReplicaFailure(dep *appsv1.Deployment) *appsv1.DeploymentCondition {
