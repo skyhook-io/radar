@@ -221,12 +221,13 @@ Namespace filters accept both `?namespace=X` (single) and `?namespaces=X,Y` (pre
 
 Radar Hub embeds the newest `@skyhook-io/radar-app` against whatever Radar each cluster runs, so a frontend call to a new endpoint can hit a Radar that predates it. When adding an endpoint the UI calls: advertise a flag for it in `FeatureCapabilities` (`internal/k8s/capabilities.go`) in the same PR, add an entry with that flag and `flagShippedWithEndpoint: true` to `web/src/api/radarFeatures.ts`, and guard the hook with `useRadarFeature`. An older Radar then gets a "needs a newer Radar" note instead of a red error. `TestFeatureFlagsHaveFrontendGates` fails if the flag and the entry drift apart.
 
-### Review checklist: the three ways Radar runs
+### Review checklist: the four ways Radar runs
 
-Every review of server or UI behavior considers all three:
+Every review of server or UI behavior considers all four:
 - **Local:** one user, auth off, UI and server ship together.
 - **In-cluster shared:** auth on, many users on one process. Anything process-wide (managers, caches, connections, detections) is shared across users, and per-user namespace RBAC must hold for derived data too (counts, coverage, timings).
 - **Radar Hub:** the newest `radar-app` against whatever Radar each cluster runs, through a GET-only proxy.
+- **Shared without authentication:** the Docker image and the Helm default (`auth.mode: none` on `0.0.0.0`). Anyone who reaches the address is a user, which is accepted; a web page in their browser must still get nothing, and nothing may exceed Radar's Kubernetes identity (host access, process internals, lasting outbound actions). A new route or capability states what it does here and has a test for it. The rules are in [docs/authentication.md](docs/authentication.md#without-authentication); `Server.sharedListener()` is the check.
 
 ### Error Handling (Frontend)
 
