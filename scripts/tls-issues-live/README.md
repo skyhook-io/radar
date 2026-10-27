@@ -55,5 +55,6 @@ python3 scripts/tls-issues-live/check.py --context radar-test-nonprod \
   --radar http://127.0.0.1:<p> --mode gateway --gateway-class istio
 ```
 
-The exit status is non-zero when a Radar row names a Secret the controller
-doesn't serve, or one that is valid.
+Exit status 1 means a Radar row names a Secret the controller doesn't serve,
+or one that is valid. Exit status 2 means a handshake failed, so the
+controller's answer is unknown and the run proves nothing.

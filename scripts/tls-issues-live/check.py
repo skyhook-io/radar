@@ -104,14 +104,14 @@ def ingress_scenarios(run):
     }
 
 
-def ingress_manifest(ns, name, host, secret_names, ingress_class):
+def ingress_manifest(ns, name, host, secret_names, ingress_class, path="/"):
     tls = [{"hosts": [host], "secretName": s} for s in secret_names]
     return {
         "apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
         "metadata": {"name": name, "namespace": ns},
         "spec": {
             "ingressClassName": ingress_class, "tls": tls,
-            "rules": [{"host": host, "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": "echo", "port": {"number": 80}}}}]}}],
+            "rules": [{"host": host, "http": {"paths": [{"path": path, "pathType": "Prefix", "backend": {"service": {"name": "echo", "port": {"number": 80}}}}]}}],
         },
     }
 
@@ -196,7 +196,9 @@ def main():
             for scen in ingress_scenarios(run).values():
                 for ing_name, host, secret_names, delay in scen["ingresses"]:
                     time.sleep(delay)  # creation order decides some controllers' choice
-                    apply(args.context, ns, [ingress_manifest(ns, ing_name, host, secret_names, args.ingress_class)])
+                    # Distinct paths: ingress-nginx's webhook refuses a host and path
+                    # another Ingress already defines.
+                    apply(args.context, ns, [ingress_manifest(ns, ing_name, host, secret_names, args.ingress_class, "/" + ing_name)])
                     probes.append((host, args.controller_port))
             svc_ns, svc = args.controller_service.split("/")
             target = (svc_ns, f"svc/{svc}", args.controller_port)
@@ -211,12 +213,18 @@ def main():
             target = (ns, "svc/tls-check-istio", None)
 
         time.sleep(20)  # controllers and Radar's informers settle
-        local = free_port()
         ports = sorted({p for _, p in probes})
         pf_ports = {p: free_port() for p in ports}
         pf = subprocess.Popen(["kubectl", "--context", args.context, "-n", target[0], "port-forward", target[1],
                                *[f"{pf_ports[p]}:{p}" for p in ports]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(4)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                for p in pf_ports.values():
+                    socket.create_connection(("127.0.0.1", p), timeout=2).close()
+                break
+            except OSError:
+                time.sleep(1)
 
         served = {}
         for host, port in probes:
@@ -233,6 +241,10 @@ def main():
         print("\nradar TLS rows:")
         for name, r in sorted(reported.items()):
             print(f"  {name:20s} {r.get('severity'):9s} {r.get('reason')}")
+        errors = sorted(h for h, s in served.items() if str(s).startswith("error"))
+        if errors:
+            print(f"\ninconclusive: no handshake for {errors}; the controller's answer is unknown")
+            return 2
         false_rows = sorted(set(reported) - broken)
         missed = sorted(broken - set(reported))
         print(f"\nprecision: {'PASS' if not false_rows else 'FAIL'} false rows={false_rows}")
