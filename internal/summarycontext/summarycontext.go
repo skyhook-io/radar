@@ -13,6 +13,7 @@ package summarycontext
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -63,10 +64,14 @@ func WithBudget(ctx context.Context, build func(context.Context) Builder) (Build
 						obj = u
 					}
 					omitted := []resourcecontext.OmittedField{{Field: "managedBy", Reason: reason}, {Field: "issueCount", Reason: reason}}
+					var scanned *resourcecontext.ScannedRef
 					if group == aicontext.TrivyGroup {
+						if u != nil {
+							_, scanned = trivyScanTarget(nil, u, nil)
+						}
 						omitted = append(omitted, resourcecontext.OmittedField{Field: "scanned", Reason: reason})
 					}
-					return resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{Omitted: omitted})
+					return resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{Scanned: scanned, Omitted: omitted})
 				}
 			}
 		}
@@ -106,6 +111,12 @@ func WithinContext[T any](ctx context.Context, gate *BudgetGate, build func() T)
 	done := make(chan T, 1)
 	go func() {
 		defer func() { <-gate.slots }()
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("[summarycontext] Background enrichment failed: %v", err)
+				done <- zero
+			}
+		}()
 		done <- build()
 	}()
 	select {
@@ -163,6 +174,9 @@ func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 		if ctx.Err() != nil {
 			omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedBudgetExceeded}}
 			if group == aicontext.TrivyGroup {
+				if u != nil {
+					_, scanned = trivyScanTarget(nil, u, nil)
+				}
 				omitted = append(omitted, resourcecontext.OmittedField{Field: "scanned", Reason: resourcecontext.OmittedBudgetExceeded})
 			}
 		} else if u != nil && group == aicontext.TrivyGroup {
@@ -194,6 +208,18 @@ func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 		}
 		if residualUnavailable && len(omitted) == 0 {
 			omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedUnavailable}}
+		}
+		if ctx.Err() != nil {
+			hasManagedOmission := false
+			for i := range omitted {
+				hasManagedOmission = hasManagedOmission || omitted[i].Field == "managedBy"
+				if omitted[i].Reason == resourcecontext.OmittedUnavailable {
+					omitted[i].Reason = resourcecontext.OmittedBudgetExceeded
+				}
+			}
+			if managedBy == nil && !hasManagedOmission {
+				omitted = append(omitted, resourcecontext.OmittedField{Field: "managedBy", Reason: resourcecontext.OmittedBudgetExceeded})
+			}
 		}
 		idx := namespacedIdx
 		if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {

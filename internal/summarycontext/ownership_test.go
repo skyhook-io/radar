@@ -103,6 +103,7 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		{"operator beats copied labels", pod, "Pod", ownership.Unrestricted(), "Widget", "", false},
 		{"denied top", pod, "Pod", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, "Deployment", resourcecontext.OmittedRBACDenied, false},
 		{"recorded without metadata", standalone, "Deployment", ownership.Unrestricted(), "Application", "", true},
+		{"budget during graph", standalone, "Deployment", ownership.Unrestricted(), "Application", resourcecontext.OmittedBudgetExceeded, true},
 		{"recorded without graph", standalone, "Deployment", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, true},
 		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, false},
 		{"GitOps lead beside unknown owner", managedGap, "Pod", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, false},
@@ -112,9 +113,15 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		{"GitOps edge is not a fallback", unmanaged, "ConfigMap", ownership.Unrestricted(), "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			loaded := false
 			graph := func() IndexedTopology {
 				loaded = true
+				if tc.name == "budget during graph" {
+					cancel()
+					return IndexedTopology{}
+				}
 				if tc.name == "recorded without graph" || tc.name == "no graph or manager" {
 					return IndexedTopology{}
 				}
@@ -135,7 +142,7 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 				return IndexedTopology{Topology: value, Index: topology.IndexByResource(value)}
 			}
 			owners := k8s.NewAgentOwnership(func(*ownership.Catalog) ownership.Access { return tc.access })
-			build := BuilderFromIndexes(context.Background(), graph, nil, nil, nil, owners)
+			build := BuilderFromIndexes(ctx, graph, nil, nil, nil, owners)
 			meta := tc.obj.(metav1.Object)
 			group := ""
 			if tc.kind == "Deployment" {

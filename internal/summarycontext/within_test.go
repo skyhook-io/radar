@@ -42,3 +42,15 @@ func TestWithinContextCancellationDoesNotStartWork(t *testing.T) {
 		t.Fatalf("cancelled result = %d", got)
 	}
 }
+
+func TestWithinContextRecoversAndReleasesCapacity(t *testing.T) {
+	gate := NewBudgetGate(1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if got := WithinContext(ctx, gate, func() int { panic("invalid cached shape") }); got != 0 {
+		t.Fatalf("panicking enrichment returned %d", got)
+	}
+	if got := WithinContext(ctx, gate, func() int { return 7 }); got != 7 {
+		t.Fatal("panicking enrichment retained its slot")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestExpiredBudgetPreservesHealthAndPreparedIssues(t *testing.T) {
@@ -100,7 +101,12 @@ func TestTrivyPreparationFailureMarksScanned(t *testing.T) {
 			cancel()
 		}
 		build, stop := WithBudget(ctx, func(context.Context) Builder { return nil })
-		got := build(&corev1.Pod{}, nil, aicontext.TrivyGroup, "VulnerabilityReport", "shop", "report")
+		report := &unstructured.Unstructured{}
+		report.SetLabels(map[string]string{"trivy-operator.resource.kind": "ReplicaSet", "trivy-operator.resource.name": "web-old"})
+		got := build(nil, report, aicontext.TrivyGroup, "VulnerabilityReport", "shop", "report")
+		if got.Scanned == nil || got.Scanned.Name != "web-old" {
+			t.Fatalf("lost label-derived scan target: %+v", got)
+		}
 		stop()
 		cancel()
 		want := resourcecontext.OmittedUnavailable
@@ -110,5 +116,17 @@ func TestTrivyPreparationFailureMarksScanned(t *testing.T) {
 		if !slices.Contains(got.Omitted, resourcecontext.OmittedField{Field: "scanned", Reason: want}) {
 			t.Fatalf("expired=%v: scanned omission missing: %+v", expired, got.Omitted)
 		}
+	}
+}
+
+func TestExpiredTrivyBudgetPreservesScanLabels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	report := &unstructured.Unstructured{}
+	report.SetLabels(map[string]string{"trivy-operator.resource.kind": "ReplicaSet", "trivy-operator.resource.name": "web-old"})
+	build := BuilderFromIndexes(ctx, nil, nil, nil, nil, nil)
+	got := build(nil, report, aicontext.TrivyGroup, "VulnerabilityReport", "shop", "report")
+	if got.Scanned == nil || got.Scanned.Name != "web-old" || got.Scanned.Replicas != nil || got.Scanned.Missing {
+		t.Fatalf("scan metadata lost or live state invented: %+v", got.Scanned)
 	}
 }

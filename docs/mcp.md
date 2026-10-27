@@ -1344,7 +1344,7 @@ controller walk, `cache_cold` for a known uncollected or unsynced owner kind, or
 independent GitOps lead can coexist with a note about the incomplete controller lookup. Controller and management lookups use collected inventory and start
 no watches: an uncollected or unsynced CRD can leave a gap. Read that kind with `list_resources` to activate an on-demand cache, then retry. Non-controller owner references (including Strimzi PodSet-to-Kafka) are available as `owner` but do not extend the controller walk. Native custom kinds include their exact API group.
 
-A cold relationship graph or an unavailable spec-derived controller also leaves `managedBy` incomplete.
+A missing relationship graph or an unavailable observed spec-derived controller also leaves `managedBy` incomplete.
 A denied spec source stays hidden without a note naming or counting that relationship. `omitted` paths are
 relative to their containing context; a readable pointer may coexist with an incompleteness note.
 
