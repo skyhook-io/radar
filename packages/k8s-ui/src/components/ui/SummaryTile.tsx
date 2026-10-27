@@ -55,7 +55,7 @@ export function SummaryTile({
   )
   if (!onClick) {
     return (
-      <div className="rounded-md border border-theme-border bg-theme-base px-3 py-2 phone:px-2 phone:py-1.5">
+      <div className="rounded-md border border-theme-border bg-theme-base px-3 py-2 phone:flex-1 phone:basis-0 phone:whitespace-nowrap phone:px-2 phone:py-1.5">
         {value$}
         {label$}
       </div>
@@ -67,7 +67,7 @@ export function SummaryTile({
       onClick={onClick}
       aria-pressed={active}
       className={clsx(
-        'cursor-pointer rounded-md border bg-theme-base px-3 py-2 phone:px-2 phone:py-1.5 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyhook-500',
+        'cursor-pointer rounded-md border bg-theme-base px-3 py-2 phone:flex-1 phone:basis-0 phone:whitespace-nowrap phone:px-2 phone:py-1.5 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyhook-500',
         active ? activeBorderClass : 'border-theme-border',
       )}
     >
