@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Badge } from '../../ui/Badge'
-import { Section, Property, PropertyList, ResourceLink, ConditionsSection, useOperationalIssuesShown } from '../../ui/drawer-components'
+import { healthToSeverity } from '../../../utils/badge-colors'
+import { Section, Property, PropertyList, ResourceLink, ConditionsSection, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import type { ResourceRef } from '../../../types'
 import { getFlaggerAnalysis, getFlaggerCanaryStatus, getFlaggerStrategy, getFlaggerTargetRef, getFlaggerAutoscalerRef, getFlaggerMetricTemplateRef } from '../resource-utils-flagger'
 
@@ -20,7 +21,7 @@ export function FlaggerCanaryRenderer({ data, onNavigate }: Props) {
   return <>
     <Section title="Canary Rollout" defaultExpanded>
       <PropertyList>
-        <Property label="Rollout state" value={<Badge colorClass={state.color}>{state.text}</Badge>} />
+        <Property label="Rollout state" value={<Badge severity={healthToSeverity(state.level)}>{state.text}</Badge>} />
         <Property label="Recorded phase" value={data.status?.phase} />
         <Property label="Suspend requested" value={data.spec?.suspend === true ? 'Yes' : 'No'} />
         <Property label="Strategy" value={strategy} />
@@ -32,7 +33,7 @@ export function FlaggerCanaryRenderer({ data, onNavigate }: Props) {
       <p className="mt-2 text-xs text-theme-text-tertiary">Phase and counters describe Flagger’s last reported rollout, not a live traffic measurement or proof that the latest configuration was reconciled.</p>
       {data.spec?.targetRef?.kind === 'Deployment' && <p className="mt-2 text-xs text-theme-text-tertiary">Flagger normally scales the canary target to zero between analyses. The primary Deployment continues serving; find observed primary resources in Related Resources.</p>}
       {data.spec?.targetRef?.kind === 'DaemonSet' && <p className="mt-2 text-xs text-theme-text-tertiary">Flagger parks the canary DaemonSet with a node selector between analyses. Inspect the primary DaemonSet in Related Resources.</p>}
-      {data.status?.phase === 'Failed' && !operationalIssuesShown && <p className="mt-2 text-sm text-theme-text-secondary">The last reported rollout failed. Inspect this Canary’s events for failed metric checks or webhooks; the primary may still be serving the previous version.</p>}
+      {data.status?.phase === 'Failed' && !operationalIssuesShown && <AlertBanner variant="warning" title="Canary rollout failed" message="Inspect this Canary’s events for failed metric checks or webhooks; the primary may still be serving the previous version." />}
     </Section>
     <Section title="Analysis" defaultExpanded>
       <PropertyList>
