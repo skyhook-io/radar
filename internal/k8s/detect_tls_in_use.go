@@ -72,7 +72,7 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 		if !ok || controller == albIngressController {
 			continue
 		}
-		addressed := len(ing.Status.LoadBalancer.Ingress) > 0
+		addressed := ingressstatus.HasAssignedAddress(ing)
 		var podNamespaces []string
 		if !addressed {
 			if _, seen := controllerPods[controller]; !seen {
@@ -131,10 +131,9 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 }
 
 // ingressController resolves the controller of the IngressClass serving ing.
-// The legacy class annotation names no controller, and controllers differ on
-// whether it or spec.ingressClassName wins, so an annotation resolves only
-// when it marks the Ingress for the AWS Load Balancer Controller or names the
-// same class as the field.
+// The legacy class annotation resolves through the IngressClass of the same
+// name. Controllers differ on whether it or spec.ingressClassName wins, so
+// when both are set and differ, the Ingress is not resolved.
 func ingressController(cache *ResourceCache, ing *networkingv1.Ingress) (string, bool) {
 	alb, known := ingressServedByALB(cache, ing)
 	if alb {
@@ -145,10 +144,12 @@ func ingressController(cache *ResourceCache, ing *networkingv1.Ingress) (string,
 		name = strings.TrimSpace(*ing.Spec.IngressClassName)
 	}
 	if legacy := ingressstatus.LegacyClass(ing); legacy != "" {
-		if legacy != name {
+		// Controllers match the annotation against their own class name, which
+		// is conventionally the name of their IngressClass.
+		if name != "" && legacy != name {
 			return "", false
 		}
-		return ingressClassController(cache, name)
+		return ingressClassController(cache, legacy)
 	}
 	if !known {
 		return "", false
@@ -159,12 +160,19 @@ func ingressController(cache *ResourceCache, ing *networkingv1.Ingress) (string,
 	return defaultIngressClassController(cache)
 }
 
-// ingressSSLPassthrough reports a controller annotation (ingress-nginx,
-// HAProxy) that hands TLS to the backend, so the Ingress's own TLS Secret is
+// sslPassthroughAnnotations hand TLS to the backend (ingress-nginx, HAProxy
+// Ingress and HAProxy Kubernetes Ingress), so the Ingress's own TLS Secret is
 // not what clients see.
+var sslPassthroughAnnotations = []string{
+	"nginx.ingress.kubernetes.io/ssl-passthrough",
+	"haproxy-ingress.github.io/ssl-passthrough",
+	"ingress.kubernetes.io/ssl-passthrough",
+	"haproxy.org/ssl-passthrough",
+}
+
 func ingressSSLPassthrough(ing *networkingv1.Ingress) bool {
-	for key, value := range ing.Annotations {
-		if strings.HasSuffix(key, "/ssl-passthrough") && strings.EqualFold(strings.TrimSpace(value), "true") {
+	for _, key := range sslPassthroughAnnotations {
+		if strings.EqualFold(strings.TrimSpace(ing.Annotations[key]), "true") {
 			return true
 		}
 	}

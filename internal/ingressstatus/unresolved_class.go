@@ -15,7 +15,7 @@ const (
 )
 
 func ClassifyUnresolvedClass(ingress *networkingv1.Ingress) UnresolvedClass {
-	if ingress == nil || hasAssignedAddress(ingress) || HasCloudLoadBalancerAnnotations(ingress) || LegacyClass(ingress) != "" {
+	if ingress == nil || HasAssignedAddress(ingress) || HasCloudLoadBalancerAnnotations(ingress) || LegacyClass(ingress) != "" {
 		return ClassResolutionNotActionable
 	}
 	if ingress.Spec.IngressClassName != nil && strings.TrimSpace(*ingress.Spec.IngressClassName) != "" {
@@ -48,7 +48,8 @@ func HasCloudLoadBalancerAnnotations(ingress *networkingv1.Ingress) bool {
 	return false
 }
 
-func hasAssignedAddress(ingress *networkingv1.Ingress) bool {
+// HasAssignedAddress reports a load-balancer status entry with an IP or hostname.
+func HasAssignedAddress(ingress *networkingv1.Ingress) bool {
 	for _, address := range ingress.Status.LoadBalancer.Ingress {
 		if address.IP != "" || address.Hostname != "" {
 			return true

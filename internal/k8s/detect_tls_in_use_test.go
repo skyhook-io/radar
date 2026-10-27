@@ -102,6 +102,9 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		tlsSecret("shop", "passthrough-expired-tls", expired),
 		tlsSecret("shop", "legacy-match-expired-tls", expired),
 		tlsSecret("shop", "legacy-conflict-expired-tls", expired),
+		tlsSecret("shop", "legacy-only-expired-tls", expired),
+		tlsSecret("shop", "empty-status-expired-tls", expired),
+		tlsSecret("shop", "foreign-passthrough-expired-tls", expired),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "opaque", Namespace: "shop"}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"tls.crt": expired}},
 		// Two live Ingresses share one expired Secret: one row, both linked.
 		tlsIngress("shop", "web", []string{"expired-tls", "expired-tls"}, nginx, withAddress),
@@ -117,6 +120,14 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		tlsIngress("shop", "passthrough", []string{"passthrough-expired-tls"}, nginx, withAddress, withAnnotation("nginx.ingress.kubernetes.io/ssl-passthrough", "true")),
 		// A legacy annotation naming the same class as the field is unambiguous.
 		tlsIngress("shop", "legacy-match", []string{"legacy-match-expired-tls"}, nginx, withAddress, withAnnotation("kubernetes.io/ingress.class", "nginx")),
+		// A legacy annotation alone resolves through the IngressClass of that name.
+		tlsIngress("shop", "legacy-only", []string{"legacy-only-expired-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "nginx")),
+		// An empty status entry is no address, and nginx has no running pod here.
+		tlsIngress("shop", "empty-status", []string{"empty-status-expired-tls"}, nginx, func(ing *networkingv1.Ingress) {
+			ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{{}}
+		}),
+		// Only the controllers' own passthrough annotations hand TLS to the backend.
+		tlsIngress("shop", "foreign-passthrough", []string{"foreign-passthrough-expired-tls"}, nginx, withAddress, withAnnotation("example.com/ssl-passthrough", "true")),
 		// Controllers disagree on which of two different classes wins.
 		tlsIngress("shop", "legacy-conflict", []string{"legacy-conflict-expired-tls"}, nginx, withAddress, withAnnotation("kubernetes.io/ingress.class", "other")),
 	}
@@ -125,10 +136,14 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 	}
 
 	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", now)
-	if len(got) != 3 || got[2].Name != "legacy-match-expired-tls" {
-		t.Fatalf("detections = %+v, want expired-tls, future-tls and legacy-match-expired-tls only", got)
+	var names []string
+	for _, d := range got {
+		names = append(names, d.Name)
 	}
-	exp, early := got[0], got[1]
+	if strings.Join(names, ",") != "expired-tls,foreign-passthrough-expired-tls,future-tls,legacy-match-expired-tls,legacy-only-expired-tls" {
+		t.Fatalf("detections = %v", names)
+	}
+	exp, early := got[0], got[2]
 	if exp.Kind != "Secret" || exp.Namespace != "shop" || exp.Name != "expired-tls" || exp.Reason != TLSCertificateExpiredReason || exp.Severity != "critical" {
 		t.Fatalf("expired detection = %+v", exp)
 	}
@@ -185,7 +200,7 @@ func TestDetectLiveIngressTLSCertificatesSkipsUncoveredSecretNamespace(t *testin
 func readyPod(ns, name string, podLabels map[string]string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: podLabels},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
 	}
 }
 
