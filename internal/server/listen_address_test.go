@@ -334,7 +334,7 @@ func TestSharedListenerHostProtectionIsMounted(t *testing.T) {
 	s := New(Config{
 		ListenAddress:  AllInterfacesAddress,
 		AllowedHosts:   []string{"radar.internal"},
-		TrustedOrigins: []string{"https://radar.example.com:8443"},
+		TrustedOrigins: []string{"https://radar.example.com:8443", "http://bücher.example"},
 		MCPHandler:     mcp,
 	})
 
@@ -351,6 +351,7 @@ func TestSharedListenerHostProtectionIsMounted(t *testing.T) {
 		{name: "mcp by IP", method: http.MethodPost, path: "/mcp", host: "192.168.1.6:9280", wantStatus: http.StatusNoContent},
 		{name: "mcp allowed host", method: http.MethodPost, path: "/mcp", host: "radar.internal:9280", wantStatus: http.StatusNoContent},
 		{name: "mcp trusted origin host", method: http.MethodPost, path: "/mcp", host: "radar.example.com", wantStatus: http.StatusNoContent},
+		{name: "mcp trusted origin IDN host", method: http.MethodPost, path: "/mcp", host: "xn--bcher-kva.example", wantStatus: http.StatusNoContent},
 		{name: "health by pod IP", method: http.MethodGet, path: "/api/health", host: "10.0.0.7:9280", wantStatus: http.StatusOK},
 	}
 	for _, tt := range tests {

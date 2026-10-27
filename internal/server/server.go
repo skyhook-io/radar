@@ -299,8 +299,12 @@ func New(cfg Config) *Server {
 		s.allowedHosts[normalizeHostname(host)] = struct{}{}
 	}
 	for _, origin := range cfg.TrustedOrigins {
-		if u, err := url.Parse(origin); err == nil && u.Hostname() != "" {
-			s.allowedHosts[normalizeHostname(u.Hostname())] = struct{}{}
+		if u, err := url.Parse(origin); err == nil && net.ParseIP(u.Hostname()) == nil {
+			if hosts, err := ParseAllowedHosts(u.Hostname()); err == nil {
+				for _, host := range hosts {
+					s.allowedHosts[host] = struct{}{}
+				}
+			}
 		}
 	}
 	if s.allowAnyHost && !cfg.AuthConfig.Enabled() && !cloud.IsLoopbackHostname(cfg.ListenAddress) {
