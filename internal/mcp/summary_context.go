@@ -20,6 +20,8 @@ import (
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
+var summaryTopologyGate = summarycontext.NewBudgetGate(1)
+
 // newResourceSummaryContextBuilder assembles the per-request closure for MCP
 // list_resources. Returns nil when the typed cache is unavailable, in which case the caller should skip context attachment
 // rather than emit empty objects.
@@ -38,7 +40,7 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	return summarycontext.BuilderFromIndexes(ctx, func() *topology.Topology {
-		return summarycontext.WithinContext(ctx, func() *topology.Topology { return buildSummaryContextTopology(namespaces) })
+		return summarycontext.WithinContext(ctx, summaryTopologyGate, func() *topology.Topology { return buildSummaryContextTopology(namespaces) })
 	}, idx, idx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
@@ -60,7 +62,7 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
 	return summarycontext.BuilderFromIndexes(ctx, func() *topology.Topology {
-		return summarycontext.WithinContext(ctx, func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) })
+		return summarycontext.WithinContext(ctx, summaryTopologyGate, func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) })
 	}, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 

@@ -1065,6 +1065,9 @@ What gets reported follows from that:
 - **Named kinds may warm within one shared two-second deadline.** Broad searches
   do not wait for warm-up. Kinds still loading are reported as `kind_sync_pending`.
   Optional list/search enrichment shares a three-second budget, including authorization.
+  At most eight preparations run concurrently; cache scans that outlive cancellation
+  retain their slot until they finish. Waiting for a slot uses the same budget.
+  REST and MCP topology builds have independent one-build gates.
   After it expires, rows retain health and already-computed issue counts; `omitted`
   marks `managedBy` as `budget_exceeded`. If preparation itself could not finish,
   health still appears and `issueCount` is also marked unavailable rather than implying zero.

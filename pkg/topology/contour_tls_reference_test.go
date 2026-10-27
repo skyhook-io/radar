@@ -2,6 +2,7 @@ package topology
 
 import (
 	"encoding/json"
+	"fmt"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -89,6 +90,9 @@ func TestRelationshipGraphRetainsUnusedCertificateSecrets(t *testing.T) {
 	cert.Object["spec"] = map[string]any{"secretName": "tls"}
 	dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Certificate"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {cert}}, listCalls: map[schema.GroupVersionResource]int{}}
 	provider := &mockProvider{secrets: []*corev1.Secret{{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls"}, Data: map[string][]byte{"tls.key": []byte("must-not-appear")}}}}
+	for i, secretType := range []corev1.SecretType{corev1.SecretType("helm.sh/release.v1"), corev1.SecretTypeServiceAccountToken, corev1.SecretTypeOpaque} {
+		provider.secrets = append(provider.secrets, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: fmt.Sprintf("unrelated-%d", i)}, Type: secretType})
+	}
 	for _, full := range []bool{false, true} {
 		for _, ns := range []string{"shop", "other"} {
 			opts := DefaultBuildOptions()
@@ -97,6 +101,11 @@ func TestRelationshipGraphRetainsUnusedCertificateSecrets(t *testing.T) {
 			graph, err := NewBuilder(provider).WithDynamic(dynamic).Build(opts)
 			if err != nil {
 				t.Fatal(err)
+			}
+			for _, node := range graph.Nodes {
+				if node.Kind == KindSecret && node.Name != "tls" {
+					t.Fatalf("unrelated Secret entered the graph: %s", node.Name)
+				}
 			}
 			found := false
 			for _, edge := range graph.Edges {
@@ -110,5 +119,39 @@ func TestRelationshipGraphRetainsUnusedCertificateSecrets(t *testing.T) {
 				t.Fatal("Secret payload leaked into graph")
 			}
 		}
+	}
+}
+
+func BenchmarkRelationshipGraphUnrelatedSecrets(b *testing.B) {
+	for _, count := range []int{0, 10000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			gvr := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
+			cert := genericIdentityObject(gvr, "Certificate", "shop", "tls")
+			cert.Object["spec"] = map[string]any{"secretName": "tls"}
+			dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Certificate"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {cert}}, listCalls: map[schema.GroupVersionResource]int{}}
+			provider := &mockProvider{secrets: []*corev1.Secret{{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls"}}}}
+			for i := range count {
+				provider.secrets = append(provider.secrets, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: fmt.Sprintf("release-%d", i)}, Type: corev1.SecretType("helm.sh/release.v1")})
+			}
+			opts := RelationshipBuildOptions()
+			opts.IncludeSecrets = true
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				graph, err := NewBuilder(provider).WithDynamic(dynamic).Build(opts)
+				if err != nil {
+					b.Fatal(err)
+				}
+				secrets := 0
+				for _, node := range graph.Nodes {
+					if node.Kind == KindSecret {
+						secrets++
+					}
+				}
+				if secrets != 1 {
+					b.Fatalf("retained %d Secrets, want only the targeted one", secrets)
+				}
+			}
+		})
 	}
 }

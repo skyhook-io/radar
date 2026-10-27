@@ -370,12 +370,10 @@ func managerEvidence(e ownership.ManagerEvidence) ManagerEvidence {
 type ControllerChain struct {
 	// Refs are the objects the walk read, the resource first.
 	Refs []ResourceRef
-	// Stop is why the walk ended before an object without a controller
-	// reference: "unknown" when Radar couldn't check the next owner (its kind
-	// isn't watched or still loading, or discovery can't resolve it) or the
-	// references loop or run too long, "withheld" when the caller may not
-	// read it. Empty when the walk reached the top, or the next owner is gone,
-	// replaced, unresolvable or an Event.
+	// Stop mirrors an unfollowed OwnerUnknown (unobserved kind, incomplete
+	// discovery, cycle or depth bound) or OwnerWithheld. It is empty for a
+	// settled top, gone/replaced owner, excluded Event, or OwnerUnresolvable
+	// (a malformed reference or an impossible namespace/scope relationship).
 	Stop   string
 	Reason readreason.Code
 }

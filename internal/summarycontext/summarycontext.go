@@ -14,8 +14,6 @@ package summarycontext
 import (
 	"context"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,16 +52,7 @@ func WithBudget(ctx context.Context, build func(context.Context) Builder) (Build
 		if builder == nil {
 			var budgetCtx context.Context
 			budgetCtx, stopBudget = context.WithTimeout(ctx, Budget)
-			if budgetCtx.Err() == nil {
-				// Preparation includes caller-specific authorization; a slow caller must
-				// not suppress another caller's independently readable context.
-				ready := make(chan Builder, 1)
-				go func() { ready <- build(budgetCtx) }()
-				select {
-				case builder = <-ready:
-				case <-budgetCtx.Done():
-				}
-			}
+			builder = WithinContext(budgetCtx, preparationGate, func() Builder { return build(budgetCtx) })
 			if builder == nil {
 				reason := resourcecontext.OmittedUnavailable
 				if budgetCtx.Err() != nil {
@@ -83,61 +72,44 @@ func WithBudget(ctx context.Context, build func(context.Context) Builder) (Build
 	}, func() { stopBudget(); cancel() }
 }
 
-func WithinContext[T any](ctx context.Context, build func() T) T {
-	if ctx.Err() != nil {
-		var zero T
-		return zero
-	}
-	if deadline, ok := ctx.Deadline(); ok {
-		return Within(time.Until(deadline), build)
-	}
-	return build()
+// Cache scans can outlive a caller's deadline. Bound that work without sharing
+// caller-specific results or letting one slow preparation block every caller.
+var preparationGate = NewBudgetGate(8)
+
+type BudgetGate struct {
+	slots chan struct{}
 }
 
-// lagging counts builds still running after their caller stopped waiting.
-var lagging atomic.Int32
+func NewBudgetGate(limit int) *BudgetGate {
+	return &BudgetGate{slots: make(chan struct{}, limit)}
+}
 
-// Within returns what build produces if it finishes within budget, and the
-// zero value otherwise. build keeps running in the background, so the caches
-// it fills are warm for a later request. While such a build is still running,
-// Within returns the zero value at once instead of starting another: during
-// a long warm-up every search would otherwise leave one more stuck build
-// behind.
-func Within[T any](budget time.Duration, build func() T) T {
+// WithinContext bounds both waiting and work left behind after cancellation.
+// Each independent cache source owns a gate so one cold source cannot suppress
+// a ready answer from another.
+func WithinContext[T any](ctx context.Context, gate *BudgetGate, build func() T) T {
 	var zero T
-	if lagging.Load() > 0 {
+	if ctx.Err() != nil {
 		return zero
 	}
-	var mu sync.Mutex
-	finished, abandoned := false, false
+	select {
+	case gate.slots <- struct{}{}:
+	case <-ctx.Done():
+		return zero
+	}
+	if ctx.Err() != nil {
+		<-gate.slots
+		return zero
+	}
 	done := make(chan T, 1)
 	go func() {
-		v := build()
-		mu.Lock()
-		finished = true
-		if abandoned {
-			lagging.Add(-1)
-		}
-		mu.Unlock()
-		done <- v
+		defer func() { <-gate.slots }()
+		done <- build()
 	}()
-	timer := time.NewTimer(budget)
-	defer timer.Stop()
 	select {
-	case v := <-done:
-		return v
-	case <-timer.C:
-	}
-	mu.Lock()
-	if !finished {
-		abandoned = true
-		lagging.Add(1)
-	}
-	mu.Unlock()
-	select {
-	case v := <-done:
-		return v
-	default:
+	case result := <-done:
+		return result
+	case <-ctx.Done():
 		return zero
 	}
 }
