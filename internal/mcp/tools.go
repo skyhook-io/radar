@@ -1588,6 +1588,15 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		limit = min(input.Limit, 50)
 	}
 
+	started := currentReadCache()
+	var collection changesCollection
+	if input.Kind != "" {
+		var err error
+		if collection, err = changesKindCollection(ctx, input.Kind, input.Namespace, since); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	var requested []string
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
@@ -1595,7 +1604,7 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	allowed := filterNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
 		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
-		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}})
+		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}, Coverage: collection.coverage, NarrowHint: strings.Join(collection.hints, " ")})
 	}
 
 	query := meaningfulchanges.Query{
@@ -1639,11 +1648,17 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		Changes:         changes,
 		SourcesErrored:  sourcesErrored,
 		HistoryCoverage: meaningfulchanges.HistoryCoverageFor(recentResult.History, callerReadsAllNamespaces(ctx)),
+		Coverage:        collection.coverage,
 	}
 	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
 		resp.ClusterScopedChanges = mcpClusterScopedChanges(ctx, input.Namespace, since, false)
 	}
-	var hints []string
+	// What Radar doesn't collect comes first: it decides whether an empty
+	// answer means anything.
+	hints := slices.Clone(collection.hints)
+	if input.Name != "" && input.Kind == "" && len(changes) == 0 {
+		hints = append(hints, "No change is recorded under this name in the kinds Radar collects; pass kind= to check whether Radar collects the kind.")
+	}
 	if recentResult.FetchSaturated {
 		hints = append(hints, meaningfulchanges.FetchSaturatedGuidance+
 			" Narrow with namespace=, kind= or name=. limit changes how many rows are returned, not the fetch bound."+
@@ -1660,6 +1675,9 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	// change. A name= query is one object's history and stays as rows.
 	if input.Name == "" {
 		resp.Changes, resp.Created = meaningfulchanges.CompactCreates(resp.Changes)
+	}
+	if input.Kind != "" && currentReadCache() != started {
+		return nil, nil, errConnectionChanged()
 	}
 	return toJSONResult(resp)
 }
@@ -1678,6 +1696,11 @@ type getChangesResponseMCP struct {
 	// HistoryCoverage is set when the window starts before the history Radar
 	// holds, including when no change was returned.
 	HistoryCoverage *issuesapi.HistoryCoverage `json:"historyCoverage,omitempty"`
+	// Coverage is set when kind names a custom kind: where Radar collects it
+	// now, as list_resources reports it. It does not say how much history
+	// Radar holds; complete coverage with a recent start still misses
+	// earlier changes, which narrowHint states.
+	Coverage *resourceapi.Coverage `json:"coverage,omitempty"`
 }
 
 func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topologyInput) (*mcp.CallToolResult, any, error) {

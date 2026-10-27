@@ -23,13 +23,62 @@ import (
 // the caller's own access already withheld. Each namespace is a separate read
 // unit: one that fails is a gap, and the list fails only when none succeeds.
 func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, target readTarget, namespaces []string, gaps gapSet, clusterScoped bool, contextMode string) (*mcp.CallToolResult, any, error) {
+	r, err := readDynamicList(ctx, cache, kind, group, target, namespaces, gaps, clusterScoped, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	allItems := make([]any, 0, len(r.items))
+	for _, item := range r.items {
+		allItems = append(allItems, aicontext.MinifyUnstructured(item, aicontext.LevelSummary))
+	}
+
+	if contextMode != "none" {
+		// Cluster-scoped CRDs emit issues at namespace="" — passing a
+		// namespace-restricted slice would silently zero issueCount on
+		// every row. Caller has already gated cluster-scoped reads via
+		// canReadClusterScopedKind, so cluster-wide compose is safe.
+		idxNamespaces := r.read
+		if r.readAll || clusterScoped {
+			idxNamespaces = nil
+		}
+		if builder := newResourceSummaryContextBuilder(ctx, idxNamespaces); builder != nil {
+			summarycontext.AttachToUnstructuredList(allItems, r.items, builder)
+		}
+	}
+
+	if !r.current() {
+		return nil, nil, errConnectionChanged()
+	}
+	return listResult(ctx, r.resource, allItems, r.coverage(ctx, clusterScoped))
+}
+
+// dynamicList is what a read of a dynamic kind reached: its rows (when they
+// were asked for), the namespaces it read, and what it could not read.
+type dynamicList struct {
+	items    []*unstructured.Unstructured
+	resource string
+	target   readTarget
+	read     []string
+	readAll  bool
+	gaps     gapSet
+	current  func() bool
+}
+
+func (r dynamicList) coverage(ctx context.Context, clusterScoped bool) resourceapi.Coverage {
+	return listCoverageFor(clusterScoped, r.target, r.read, r.readAll, r.gaps.gaps(ctx, resourceapi.MCPSetLimit, clusterScoped))
+}
+
+// readDynamicList reads a dynamic kind for listDynamicResources. Without rows
+// it reads the cached objects in place, for callers that want only what the
+// read covered.
+func readDynamicList(ctx context.Context, cache *k8s.ResourceCache, kind, group string, target readTarget, namespaces []string, gaps gapSet, clusterScoped bool, rows bool) (dynamicList, error) {
 	dynamicCache := k8s.GetDynamicResourceCache()
 	discovery := k8s.GetResourceDiscovery()
 	current := func() bool {
 		return cache == k8s.GetResourceCache() && dynamicCache == k8s.GetDynamicResourceCache() && discovery == k8s.GetResourceDiscovery()
 	}
 	if !current() {
-		return nil, nil, errConnectionChanged()
+		return dynamicList{}, errConnectionChanged()
 	}
 	if clusterScoped {
 		namespaces = nil
@@ -47,6 +96,9 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			if found && dynamicCache != nil {
 				if k8s.ShouldBypassDynamicInformer(gvr) {
 					return dynamicCache.ListDirect(ctx, gvr, ns)
+				}
+				if !rows {
+					return dynamicCache.ListReadOnly(gvr, ns)
 				}
 				return dynamicCache.List(gvr, ns)
 			}
@@ -69,12 +121,12 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			namespaces = dynamicCache.FallbackNamespaces()
 			target = target.narrowedByNamespaceCollection(namespaces, nil)
 		default:
-			return nil, nil, err
+			return dynamicList{}, err
 		}
 	} else if unrestrictedAll && found && dynamicCache != nil {
 		ensureErr := dynamicCache.EnsureWatching(gvr)
 		if !current() || dynamicCache.IsStopped() {
-			return nil, nil, errConnectionChanged()
+			return dynamicList{}, errConnectionChanged()
 		}
 		observation := dynamicCache.Observation(gvr)
 		facts := readplan.Dynamic(dynamicCache, gvr, nil, false)
@@ -111,10 +163,10 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		}
 		if ensureErr != nil && (len(namespaces) == 0 || gaps.empty()) {
 			if !gaps.empty() {
-				return nil, nil, withListCoverage(ctx, gaps.failure(), collector.resource, target, clusterScoped)
+				return dynamicList{}, withListCoverage(ctx, gaps.failure(), collector.resource, target, clusterScoped)
 			}
 			_, err := checkDynamicResourceReadFrom(ctx, kind, group, "", "list", ensureErr, dynamicCache, gvr, found)
-			return nil, nil, err
+			return dynamicList{}, err
 		}
 	}
 
@@ -131,13 +183,13 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		uncollectedErr := map[readreason.Code]error{}
 		for _, ns := range namespaces {
 			if err := ctx.Err(); err != nil {
-				return nil, nil, err
+				return dynamicList{}, err
 			}
 			items, err := readDynamicScope(ctx, kind, group, ns, "list", listAt(ns))
 			if err != nil {
 				code, classified := readErrorCodeOf(err)
 				if !classified || code == readreason.ConnectionChanged {
-					return nil, nil, err
+					return dynamicList{}, err
 				}
 				if code == readreason.RadarForbidden {
 					refused = append(refused, ns)
@@ -181,7 +233,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 				}
 				gaps.firstErr[readreason.RadarForbidden] = coverageError(ctx, collector, refused, covered, refusal)
 			}
-			return nil, nil, withListCoverage(ctx, gaps.failure(), collector.resource, target, clusterScoped)
+			return dynamicList{}, withListCoverage(ctx, gaps.failure(), collector.resource, target, clusterScoped)
 		}
 	default:
 		items, err := readDynamicScope(ctx, kind, group, "", "list", listAt(""))
@@ -189,34 +241,18 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			if !gaps.empty() && gaps.absorb(err, namespaces) {
 				err = gaps.failure()
 			}
-			return nil, nil, withListCoverage(ctx, err, collector.resource, target, clusterScoped)
+			return dynamicList{}, withListCoverage(ctx, err, collector.resource, target, clusterScoped)
 		}
 		rawItems, readAll = items, true
 	}
 
-	allItems := make([]any, 0, len(rawItems))
-	for _, item := range rawItems {
-		allItems = append(allItems, aicontext.MinifyUnstructured(item, aicontext.LevelSummary))
-	}
-
-	if contextMode != "none" {
-		// Cluster-scoped CRDs emit issues at namespace="" — passing a
-		// namespace-restricted slice would silently zero issueCount on
-		// every row. Caller has already gated cluster-scoped reads via
-		// canReadClusterScopedKind, so cluster-wide compose is safe.
-		idxNamespaces := read
-		if readAll || clusterScoped {
-			idxNamespaces = nil
-		}
-		if builder := newResourceSummaryContextBuilder(ctx, idxNamespaces); builder != nil {
-			summarycontext.AttachToUnstructuredList(allItems, rawItems, builder)
-		}
-	}
-
 	if !current() {
-		return nil, nil, errConnectionChanged()
+		return dynamicList{}, errConnectionChanged()
 	}
-	return listResult(ctx, collector.resource, allItems, listCoverageFor(clusterScoped, target, read, readAll, gaps.gaps(ctx, resourceapi.MCPSetLimit, clusterScoped)))
+	if !rows {
+		rawItems = nil
+	}
+	return dynamicList{items: rawItems, resource: collector.resource, target: target, read: read, readAll: readAll, gaps: gaps, current: current}, nil
 }
 
 // readErrorCodeOf classifies one namespace's failed dynamic read. An API
