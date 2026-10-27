@@ -263,14 +263,21 @@ func readableClusterScopedGroups(ctx context.Context, kind string) []string {
 		ids = append(ids, k8score.APIResource{Group: group, Name: resource})
 	}
 	ids = append(ids, kindIdentities(kind)...)
+	// Change rows name a kind and group, not a resource, so a group counts
+	// only when the caller may list every resource of that kind in it.
+	allowed := map[string]bool{}
 	var groups []string
 	for _, id := range ids {
-		if id.Namespaced || slices.Contains(groups, id.Group) {
+		if id.Namespaced {
 			continue
 		}
-		if granted, _ := canReadInNamespaceDecision(ctx, id.Group, id.Name, "", "list"); granted {
-			groups = append(groups, id.Group)
+		granted, _ := canReadInNamespaceDecision(ctx, id.Group, id.Name, "", "list")
+		if seen, ok := allowed[id.Group]; ok {
+			allowed[id.Group] = seen && granted
+			continue
 		}
+		allowed[id.Group] = granted
+		groups = append(groups, id.Group)
 	}
-	return groups
+	return slices.DeleteFunc(groups, func(g string) bool { return !allowed[g] })
 }

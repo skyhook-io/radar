@@ -218,6 +218,14 @@ func TestGetChangesClusterScopedKindForNamespaceLimitedCaller(t *testing.T) {
 		t.Fatalf("built-in Node: changes=%+v, want the cordon", response.Changes)
 	}
 
+	// A second resource of the same kind and group the caller may not list
+	// withholds the group: change rows can't tell the two apart.
+	k8s.GetResourceDiscovery().AddAPIResource(k8s.APIResource{Group: "example.test", Version: "v1", Kind: "Gadget", Name: "gadgetsets", Namespaced: false, Verbs: []string{"get", "list", "watch"}})
+	getPermCache().Get("bob", nil).SetCanI("list", "example.test", "gadgetsets", "", false)
+	if response, _ = getChangesForTest(t, bob, getChangesInput{Kind: "Gadget"}); gadgets(response) != 0 {
+		t.Fatalf("one of two same-kind resources denied: changes=%+v, want none", response.Changes)
+	}
+
 	dave := withRestrictedUser(t, "dave", []string{"alpha"})
 	getPermCache().Get("dave", nil).SetCanI("list", "example.test", "gadgets", "", false)
 	response, _ = getChangesForTest(t, dave, getChangesInput{Kind: "Gadget"})
