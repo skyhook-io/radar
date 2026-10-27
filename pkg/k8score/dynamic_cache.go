@@ -2744,7 +2744,12 @@ func (d *DynamicResourceCache) onCRDEvent(obj any) {
 	if _, seen := d.seenCRDs[key]; seen {
 		return
 	}
-	d.pendingCRDs[key] = struct{}{}
+	if _, pending := d.pendingCRDs[key]; !pending {
+		// A newly pending CRD gets the full retry budget, even if it arrives
+		// while earlier CRDs are on their last retry.
+		d.pendingCRDs[key] = struct{}{}
+		d.lateCRDRetries = 0
+	}
 	d.scheduleLateCRDScanLocked(lateCRDScanDelay)
 }
 

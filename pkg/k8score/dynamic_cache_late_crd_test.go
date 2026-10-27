@@ -250,9 +250,13 @@ func TestKnownCRDEventsDoNotScheduleScan(t *testing.T) {
 	if cache.lateCRDTimer != nil {
 		t.Fatal("event for a known CRD scheduled a scan")
 	}
+	cache.lateCRDRetries = lateCRDMaxRetries
 	cache.onCRDEvent(crdObject("bs.b.io", "b.io", "bs"))
 	if cache.lateCRDTimer == nil {
 		t.Fatal("event for a new CRD did not schedule a scan")
+	}
+	if cache.lateCRDRetries != 0 {
+		t.Fatal("a newly pending CRD did not get the full retry budget")
 	}
 	cache.lateCRDTimer.Stop()
 }
