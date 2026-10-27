@@ -43,6 +43,7 @@ require (
 	k8s.io/client-go v0.37.1
 	k8s.io/component-helpers v0.37.1
 	k8s.io/klog/v2 v2.140.0
+	k8s.io/streaming v0.37.1
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
 	modernc.org/sqlite v1.60.1
 	oras.land/oras-go/v2 v2.6.2
@@ -83,7 +84,7 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
 	github.com/go-gorp/gorp/v3 v3.1.0 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
@@ -182,7 +183,6 @@ require (
 	k8s.io/csi-translation-lib v0.37.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
 	k8s.io/kubectl v0.37.1 // indirect
-	k8s.io/streaming v0.37.1 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
