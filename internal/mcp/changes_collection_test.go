@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -26,6 +28,7 @@ var widgetGVR = schema.GroupVersionResource{Group: "example.test", Version: "v1"
 type widgetFixture struct {
 	fallbacks []string          // collector refused cluster-wide; watches these namespaces
 	extra     []k8s.APIResource // more discovery entries
+	objects   []runtime.Object  // more typed objects, such as namespaces
 }
 
 // setupWidgets serves a namespaced custom kind Widget in alpha, with an empty
@@ -33,7 +36,7 @@ type widgetFixture struct {
 func setupWidgets(t *testing.T, f widgetFixture) *k8s.DynamicResourceCache {
 	t.Helper()
 	initCorrelationStore(t)
-	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces()...)); err != nil {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces(f.objects...)...)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
@@ -105,6 +108,19 @@ func TestGetChangesCollectionStartNearRadarStart(t *testing.T) {
 	response, _ = getChangesForTest(t, context.Background(), getChangesInput{Kind: "Widget", Since: "1h"})
 	if strings.Contains(response.NarrowHint, "Radar has watched widgets") || response.HistoryCoverage == nil {
 		t.Fatalf("window before Radar's start: narrowHint = %q coverage = %+v, want only the store-wide boundary", response.NarrowHint, response.HistoryCoverage)
+	}
+}
+
+// A namespace created after Radar started has no store-wide boundary to
+// report, so the kind's own start must still be stated.
+func TestGetChangesCollectionStartInNamespaceNewerThanRadar(t *testing.T) {
+	fresh := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "fresh", CreationTimestamp: metav1.NewTime(time.Now().Add(-20 * time.Second))}}
+	setupWidgets(t, widgetFixture{objects: []runtime.Object{fresh}})
+	timeline.SetObservationStartForTest(time.Now().Add(-30 * time.Second))
+
+	response, _ := getChangesForTest(t, context.Background(), getChangesInput{Kind: "Widget", Namespace: "fresh", Since: "1h"})
+	if response.HistoryCoverage != nil || !strings.Contains(response.NarrowHint, "Radar has watched widgets only since") {
+		t.Fatalf("historyCoverage = %+v narrowHint = %q, want the collection start stated", response.HistoryCoverage, response.NarrowHint)
 	}
 }
 

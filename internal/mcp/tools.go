@@ -1607,7 +1607,11 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 			return nil, nil, errConnectionChanged()
 		}
 		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
-		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}, Coverage: collection.coverage, NarrowHint: strings.Join(collection.hints, " ")})
+		hints := collection.hints
+		if since := collection.sinceHint(nil); since != "" {
+			hints = append(hints, since)
+		}
+		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}, Coverage: collection.coverage, NarrowHint: strings.Join(hints, " ")})
 	}
 
 	query := meaningfulchanges.Query{
@@ -1659,6 +1663,9 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	// What Radar doesn't collect comes first: it decides whether an empty
 	// answer means anything.
 	hints := slices.Clone(collection.hints)
+	if since := collection.sinceHint(resp.HistoryCoverage); since != "" {
+		hints = append(hints, since)
+	}
 	if input.Name != "" && input.Kind == "" && len(changes) == 0 {
 		hints = append(hints, "No change is recorded under this name in the kinds Radar collects; pass kind= to check whether Radar collects the kind.")
 	}

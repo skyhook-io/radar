@@ -11,7 +11,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
-	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -26,6 +26,23 @@ import (
 type changesCollection struct {
 	coverage *resourceapi.Coverage
 	hints    []string
+	// since says when collection started inside the window; sinceAt is that
+	// time. The handler keeps the sentence unless the response's own
+	// historyCoverage already states a boundary that close.
+	since   string
+	sinceAt time.Time
+}
+
+// sinceHint is the collection-start sentence unless history reports a
+// boundary within collectionStartSlack of it: then the two say the same.
+func (c changesCollection) sinceHint(history *issuesapi.HistoryCoverage) string {
+	if c.since == "" {
+		return ""
+	}
+	if history != nil && !history.CompleteSince.IsZero() && c.sinceAt.Sub(history.CompleteSince) < collectionStartSlack {
+		return ""
+	}
+	return c.since
 }
 
 // changesKindCollection checks Radar's collection of kind the way
@@ -109,9 +126,7 @@ func changesKindCollection(ctx context.Context, kind, namespace string, since ti
 	if sentence := collectionSentence(ctx, label, cov); sentence != "" {
 		out.hints = append(out.hints, sentence)
 	}
-	if sentence := collectionSinceSentence(label, id.Name, id.Group, since); sentence != "" {
-		out.hints = append(out.hints, sentence)
-	}
+	out.since, out.sinceAt = collectionSinceSentence(label, id.Name, id.Group, since)
 	if currentReadCache() != started {
 		return changesCollection{}, errConnectionChanged()
 	}
@@ -202,35 +217,28 @@ func collectionSentence(ctx context.Context, resource string, cov resourceapi.Co
 }
 
 // collectionSinceSentence says when collection of the kind started, if that
-// was inside the window. A start shortly after Radar's own is left to
-// historyCoverage when the window reaches back before Radar started. Only a cluster-wide watch has one start
-// for every namespace; per-namespace watches start separately, so then the
-// start is not established. A cluster-wide watch still loading is a gap in
-// coverage instead.
-func collectionSinceSentence(resource, name, group string, since time.Duration) string {
+// was inside the window, and that time. Only a cluster-wide watch has one
+// start for every namespace; per-namespace watches start separately, so then
+// the start is not established. A cluster-wide watch still loading is a gap
+// in coverage instead.
+func collectionSinceSentence(resource, name, group string, since time.Duration) (string, time.Time) {
 	dynamicCache := k8s.GetDynamicResourceCache()
 	gvr, ok := discoveredGVR(name, group)
 	if dynamicCache == nil || !ok {
-		return ""
+		return "", time.Time{}
 	}
 	switch dynamicCache.Observation(gvr).Scope {
 	case k8score.DynamicObservationScopeCluster:
 	case k8score.DynamicObservationScopeExplicitNamespaces:
-		return fmt.Sprintf("Radar watches %s per namespace here, so it can't establish since when it has collected them; changes early in the window may be missing.", resource)
+		return fmt.Sprintf("Radar watches %s per namespace here, so it can't establish since when it has collected them; changes early in the window may be missing.", resource), time.Time{}
 	default:
-		return ""
+		return "", time.Time{}
 	}
 	watched, ok := dynamicCache.WatchedSince(gvr)
-	windowStart := time.Now().Add(-since)
-	if !ok || !watched.After(windowStart) {
-		return ""
+	if !ok || !watched.After(time.Now().Add(-since)) {
+		return "", time.Time{}
 	}
-	// When the window also starts before Radar did, historyCoverage already
-	// says history is incomplete up to Radar's start.
-	if started := timeline.ObservationStart(); started.After(windowStart) && watched.Sub(started) < collectionStartSlack {
-		return ""
-	}
-	return fmt.Sprintf("Radar has watched %s only since %s; earlier changes in the window are unknown.", resource, watched.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("Radar has watched %s only since %s; earlier changes in the window are unknown.", resource, watched.UTC().Format(time.RFC3339)), watched
 }
 
 // collectionStartSlack is how long after Radar starts its startup watches
