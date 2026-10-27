@@ -46,6 +46,11 @@ func addGatewayTLSUses(idx *tlsServingIndex) {
 	if !ok {
 		return
 	}
+	// Gateways in namespaces Radar doesn't see could hold the valid
+	// competitor that makes another certificate unserved.
+	if !dynamicCache.IsClusterWideSynced(gvr) {
+		return
+	}
 	gateways, err := dynamicCache.ListWatched(gvr)
 	if err != nil {
 		log.Printf("[issues] failed to list Gateways for TLS certificate checks: %s", logsafe.Sanitize(err.Error()))
@@ -53,6 +58,9 @@ func addGatewayTLSUses(idx *tlsServingIndex) {
 	}
 	classGVR, ok := discovery.GetGVRWithGroup("GatewayClass", gatewayAPIGroup)
 	if !ok {
+		return
+	}
+	if !dynamicCache.IsClusterWideSynced(classGVR) {
 		return
 	}
 	classes, err := dynamicCache.ListWatched(classGVR)
@@ -74,7 +82,7 @@ func addGatewayTLSUses(idx *tlsServingIndex) {
 		if !ok || controller == "" || gatewayControllersIgnoringCertificateRefs[controller] {
 			continue
 		}
-		key := "gateway:" + controller
+		key := gatewayCertificatePool(controller)
 		live := gatewayLive(gw)
 		gwRef := issuesapi.Ref{Group: gatewayAPIGroup, Kind: "Gateway", Namespace: gw.GetNamespace(), Name: gw.GetName()}
 		listenerStatus := gatewayListenerStatuses(gw)
@@ -121,6 +129,21 @@ func addGatewayTLSUses(idx *tlsServingIndex) {
 		}
 	}
 }
+
+// gatewayCertificatePool names the certificate pool a Gateway controller
+// serves from. Traefik loads Ingress and Gateway certificates into one store,
+// so its Gateways share the Ingress controller's pool.
+func gatewayCertificatePool(controller string) string {
+	if controller == traefikGatewayController {
+		return traefikIngressController
+	}
+	return "gateway:" + controller
+}
+
+const (
+	traefikGatewayController = "traefik.io/gateway-controller"
+	traefikIngressController = "traefik.io/ingress-controller"
+)
 
 // GKE takes certificates from a Certificate Manager map named on the Gateway,
 // and GKE and the AWS Gateway API Controller take them from pre-shared or ACM

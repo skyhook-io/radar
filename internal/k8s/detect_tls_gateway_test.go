@@ -270,3 +270,14 @@ func TestDetectLiveTLSCertificatesGatewayListeners(t *testing.T) {
 		t.Fatalf("namespace-scoped scan = %+v, want the Secret in certs used by a Gateway in edge", scoped)
 	}
 }
+
+// Traefik serves Ingress and Gateway certificates from one store, so a
+// valid one loaded through either can be what clients get for the other.
+func TestGatewayCertificatePool(t *testing.T) {
+	if got := gatewayCertificatePool(traefikGatewayController); got != traefikIngressController {
+		t.Errorf("Traefik Gateway pool = %q, want the Traefik Ingress pool", got)
+	}
+	if got := gatewayCertificatePool("istio.io/gateway-controller"); got == "istio.io/gateway-controller" || got == traefikIngressController {
+		t.Errorf("Istio Gateway pool = %q, want its own gateway pool", got)
+	}
+}
