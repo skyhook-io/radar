@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/ingressstatus"
@@ -19,92 +18,114 @@ import (
 const (
 	TLSCertificateExpiredReason     = "TLSCertificateExpired"
 	TLSCertificateNotYetValidReason = "TLSCertificateNotYetValid"
+	TLSCertificateExpiringReason    = "TLSCertificateExpiring"
 )
+
+// A served certificate this close to expiry is reported before it fails;
+// further out it stays an audit finding.
+const tlsExpiringWindow = 24 * time.Hour
+
+// maxTLSMessageHosts bounds the certificate hostnames a message lists.
+const maxTLSMessageHosts = 3
 
 // A certificate issued moments ago can carry a NotBefore slightly ahead of
 // this host's clock; only a start time clearly in the future is a failure.
 const tlsNotYetValidTolerance = 5 * time.Minute
 
-// tlsConsumers is the live Ingresses using one TLS Secret: those with a
-// load-balancer address, and those that count only because their
-// controller's pods are running, whose namespaces are evidence a caller must
-// be able to read.
+// tlsConsumers is the live uses of one TLS Secret: those with a load-balancer
+// address, and those that count only because their controller's pods are
+// running, whose namespaces are evidence a caller must be able to read.
 type tlsConsumers struct {
 	addressedRefs []issuesapi.Ref
 	runningRefs   []issuesapi.Ref
 	podNamespaces map[string]bool
 }
 
+// tlsUse is one live resource using a TLS Secret for a host. An empty host
+// stands for every name the certificate covers.
+type tlsUse struct {
+	secretNamespace, secretName string
+	host                        string
+	controller                  string
+	ref                         issuesapi.Ref
+	addressed                   bool
+	podNamespaces               []string
+}
+
+// tlsServingIndex is every live TLS use in the cluster, and for each
+// controller every Secret any of its resources references, live or not, with
+// the hosts it is referenced for ("" for any).
+type tlsServingIndex struct {
+	uses       []tlsUse
+	referenced map[string]map[string]map[string]bool // controller -> namespace/secret -> hosts
+}
+
+func (idx *tlsServingIndex) reference(controller, secretNamespace, secretName, host string) {
+	if idx.referenced[controller] == nil {
+		idx.referenced[controller] = map[string]map[string]bool{}
+	}
+	key := secretNamespace + "/" + secretName
+	if idx.referenced[controller][key] == nil {
+		idx.referenced[controller][key] = map[string]bool{}
+	}
+	idx.referenced[controller][key][host] = true
+}
+
 // detectLiveIngressTLSCertificates reports a kubernetes.io/tls Secret whose
-// leaf certificate is expired or not yet valid while a live Ingress uses it
-// for TLS. Audit lists every expiring certificate; this reports only the ones
-// something serves, so clients verifying the certificate fail right now.
+// leaf certificate is expired, not yet valid, or within a day of expiry
+// while a live Ingress uses it for TLS. Audit lists every expiring
+// certificate; this reports only the ones something serves.
 //
-// The Ingress must resolve to an installed IngressClass whose controller is
-// not the AWS Load Balancer Controller (which takes certificates from ACM,
-// not from the Secret), and must look live:
-//   - it has a load-balancer address: critical.
-//   - it has none, but its class names a known in-cluster controller with a
-//     ready pod: warning. Some controllers never publish an address (Traefik
-//     behind a ClusterIP Service), but a running controller doesn't prove it
-//     picked up this Ingress.
+// The Ingress must resolve to a controller that takes certificates from its
+// Secret (not the AWS Load Balancer Controller, which uses ACM), and must
+// look live:
+//   - it has a load-balancer address, and its controller, when Radar knows
+//     how to find its pods, has a ready one (an address can outlive the
+//     controller that published it): critical.
+//   - it has none, but its controller has a ready pod: warning. Some
+//     controllers never publish an address (Traefik behind a ClusterIP
+//     Service), but a running controller doesn't prove it picked up this
+//     Ingress.
 //
-// Anything else may never have been served, so it is left to audit.
-func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, now time.Time) []Detection {
-	ingLister := cache.Ingresses()
+// Controllers pick a certificate per host differently (ingress-nginx by
+// Ingress age and TLS entry, Traefik from one store keyed by certificate
+// names), so the Secret counts for a host only when its certificate covers
+// the host and no other currently valid certificate any resource of the same
+// controller references does. Anything else may never be served, so it is
+// left to audit.
+func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, scope *DetectScope, now time.Time) []Detection {
 	secLister := cache.Secrets()
-	if ingLister == nil || secLister == nil {
+	if secLister == nil {
 		return nil
 	}
-	var ings []*networkingv1.Ingress
-	if namespace != "" {
-		ings, _ = ingLister.Ingresses(namespace).List(labels.Everything())
-	} else {
-		ings, _ = ingLister.List(labels.Everything())
+	idx := tlsServingIndexFor(cache, scope)
+	certFor := func(ns, name string) (certs.Input, bool, bool) {
+		return tlsSecretCertificate(cache, scope, ns, name)
 	}
 
-	controllerPods := map[string][]string{} // controller -> namespaces of its ready pods
 	consumers := map[string]*tlsConsumers{} // namespace/secret
-	var owners map[string]string
-	for _, ing := range ings {
-		controller, addressed, ok := tlsIngressController(cache, ing)
-		if !ok {
+	for _, use := range idx.uses {
+		if namespace != "" && use.secretNamespace != namespace {
 			continue
 		}
-		var podNamespaces []string
-		if !addressed {
-			if _, seen := controllerPods[controller]; !seen {
-				controllerPods[controller] = readyControllerPodNamespacesMemo(cache, controller)
-			}
-			podNamespaces = controllerPods[controller]
-			if len(podNamespaces) == 0 {
-				continue
-			}
+		cert, ok, _ := certFor(use.secretNamespace, use.secretName)
+		// Only a certificate with a problem is checked against the others.
+		if !ok || (tlsCertificateValid(cert, now) && cert.NotAfter.Sub(now) > tlsExpiringWindow) || !tlsUseSelectsCertificate(idx, use, cert, now, certFor) {
+			continue
 		}
-		if owners == nil {
-			owners = tlsHostOwnersMemo(cache)
+		key := use.secretNamespace + "/" + use.secretName
+		c := consumers[key]
+		if c == nil {
+			c = &tlsConsumers{podNamespaces: map[string]bool{}}
+			consumers[key] = c
 		}
-		seen := map[string]bool{}
-		for i, tls := range ing.Spec.TLS {
-			if tls.SecretName == "" || seen[tls.SecretName] || !tlsEntryServed(ing, i, controller, owners) {
-				continue
-			}
-			seen[tls.SecretName] = true
-			key := ing.Namespace + "/" + tls.SecretName
-			c := consumers[key]
-			if c == nil {
-				c = &tlsConsumers{podNamespaces: map[string]bool{}}
-				consumers[key] = c
-			}
-			ref := issuesapi.Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name}
-			if addressed {
-				c.addressedRefs = append(c.addressedRefs, ref)
-				continue
-			}
-			c.runningRefs = append(c.runningRefs, ref)
-			for _, ns := range podNamespaces {
-				c.podNamespaces[ns] = true
-			}
+		if use.addressed {
+			c.addressedRefs = appendUniqueRef(c.addressedRefs, use.ref)
+			continue
+		}
+		c.runningRefs = appendUniqueRef(c.runningRefs, use.ref)
+		for _, ns := range use.podNamespaces {
+			c.podNamespaces[ns] = true
 		}
 	}
 
@@ -117,9 +138,6 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 	var out []Detection
 	for _, key := range keys {
 		ns, secretName, _ := strings.Cut(key, "/")
-		if !cache.KindCoversNamespace("secrets", ns) {
-			continue
-		}
 		secret, err := secLister.Secrets(ns).Get(secretName)
 		if err != nil {
 			continue
@@ -129,6 +147,152 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 		}
 	}
 	return out
+}
+
+// tlsServingIndexFor builds the index once per scope. Ingress uses need a
+// cluster-wide Ingress inventory: a Secret is reported only when no other
+// certificate could be served for its host, which an inventory missing some
+// namespaces can't establish.
+func tlsServingIndexFor(cache *ResourceCache, scope *DetectScope) *tlsServingIndex {
+	return scope.get("tlsServingIndex", func() any {
+		idx := &tlsServingIndex{referenced: map[string]map[string]map[string]bool{}}
+		ingLister := cache.Ingresses()
+		if ingLister == nil || !cache.IsKindClusterWide("ingresses") {
+			return idx
+		}
+		ings, _ := ingLister.List(labels.Everything())
+		for _, ing := range ings {
+			controller, addressed, ok := tlsIngressController(cache, ing)
+			if !ok {
+				continue
+			}
+			for _, tls := range ing.Spec.TLS {
+				if tls.SecretName == "" {
+					continue
+				}
+				for _, rule := range ing.Spec.Rules {
+					idx.reference(controller, ing.Namespace, tls.SecretName, normalizeTLSHost(rule.Host))
+				}
+			}
+			var podNamespaces []string
+			if _, known := ingressstatus.ControllerPodLabels[controller]; known {
+				podNamespaces = readyControllerPodNamespaces(cache, scope, controller)
+				if len(podNamespaces) == 0 {
+					continue
+				}
+			} else if !addressed {
+				continue
+			}
+			if addressed {
+				podNamespaces = nil
+			}
+			ref := issuesapi.Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name}
+			for _, tls := range ing.Spec.TLS {
+				if tls.SecretName == "" {
+					continue
+				}
+				for _, rule := range ing.Spec.Rules {
+					if host := normalizeTLSHost(rule.Host); host != "" {
+						idx.uses = append(idx.uses, tlsUse{
+							secretNamespace: ing.Namespace, secretName: tls.SecretName, host: host,
+							controller: controller, ref: ref, addressed: addressed, podNamespaces: podNamespaces,
+						})
+					}
+				}
+			}
+		}
+		return idx
+	}).(*tlsServingIndex)
+}
+
+// tlsUseSelectsCertificate reports whether the use's controller presents
+// this certificate for some host of the use: the certificate covers the host
+// and no other currently valid certificate the controller references does.
+// A referenced Secret Radar can't read contests every host, as it may hold
+// such a certificate; one referenced for the same host that is missing or
+// holds no certificate contests it too, as the controller may fall back to a
+// default certificate.
+func tlsUseSelectsCertificate(idx *tlsServingIndex, use tlsUse, cert certs.Input, now time.Time, certFor func(ns, name string) (certs.Input, bool, bool)) bool {
+	hosts := []string{use.host}
+	if use.host == "" {
+		hosts = cert.Domains
+	}
+	self := use.secretNamespace + "/" + use.secretName
+	for _, host := range hosts {
+		host = normalizeTLSHost(host)
+		if host == "" || !tlsCertificateCovers(cert, host) {
+			continue
+		}
+		contested := false
+		for other, otherHosts := range idx.referenced[use.controller] {
+			if other == self {
+				continue
+			}
+			ns, name, _ := strings.Cut(other, "/")
+			alt, ok, readable := certFor(ns, name)
+			sameHost := otherHosts[host] || otherHosts[""]
+			if !readable || (sameHost && !ok) || (ok && tlsCertificateValid(alt, now) && tlsCertificateCovers(alt, host)) {
+				contested = true
+				break
+			}
+		}
+		if !contested {
+			return true
+		}
+	}
+	return false
+}
+
+// tlsSecretCertificate parses a TLS Secret's leaf once per scope. readable is
+// false when Radar can't tell what the Secret holds: its namespace is outside
+// the Secret informer. A Secret that doesn't exist is readable and holds no
+// certificate.
+func tlsSecretCertificate(cache *ResourceCache, scope *DetectScope, ns, name string) (cert certs.Input, ok, readable bool) {
+	type parsed struct {
+		cert         certs.Input
+		ok, readable bool
+	}
+	p := scope.get("tlsCert\x00"+ns+"/"+name, func() any {
+		secLister := cache.Secrets()
+		if secLister == nil || !cache.KindCoversNamespace("secrets", ns) {
+			return parsed{}
+		}
+		secret, err := secLister.Secrets(ns).Get(name)
+		if err != nil || secret.DeletionTimestamp != nil {
+			return parsed{readable: true}
+		}
+		c, ok := certs.FromTLSSecret(secret)
+		return parsed{cert: c, ok: ok, readable: true}
+	}).(parsed)
+	return p.cert, p.ok, p.readable
+}
+
+func tlsCertificateValid(cert certs.Input, now time.Time) bool {
+	if cert.NotAfter == nil || !now.Before(*cert.NotAfter) {
+		return false
+	}
+	return cert.NotBefore == nil || !cert.NotBefore.After(now.Add(tlsNotYetValidTolerance))
+}
+
+// tlsCertificateCovers matches a host against the certificate's names, a
+// wildcard name covering exactly one leading label.
+func tlsCertificateCovers(cert certs.Input, host string) bool {
+	for _, name := range cert.Domains {
+		name = normalizeTLSHost(name)
+		if name == host || tlsWildcardCovers(name, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUniqueRef(refs []issuesapi.Ref, ref issuesapi.Ref) []issuesapi.Ref {
+	for _, r := range refs {
+		if r == ref {
+			return refs
+		}
+	}
+	return append(refs, ref)
 }
 
 // ingressController resolves the controller of the IngressClass serving ing.
@@ -210,99 +374,26 @@ func tlsIngressController(cache *ResourceCache, ing *networkingv1.Ingress) (cont
 	return controller, addressed, ok && controller != albIngressController
 }
 
-// tlsEntryServed reports whether the i-th TLS entry is the certificate
-// presented for some rule's host. An entry with no hosts is kept.
-func tlsEntryServed(ing *networkingv1.Ingress, i int, controller string, owners map[string]string) bool {
-	if len(ing.Spec.TLS[i].Hosts) == 0 {
-		return true
+func tlsCertificateAction(secret *corev1.Secret) string {
+	renew := "if cert-manager issues it, check that Certificate's status and events"
+	if name := strings.TrimSpace(secret.Annotations["cert-manager.io/certificate-name"]); name != "" {
+		renew = fmt.Sprintf("cert-manager issues it from Certificate %s/%s, so check that Certificate's status and events", secret.Namespace, name)
 	}
-	secret := ing.Namespace + "/" + ing.Spec.TLS[i].SecretName
-	for _, rule := range ing.Spec.Rules {
-		host := normalizeTLSHost(rule.Host)
-		if host != "" && tlsEntryForHost(ing, host) == i && owners[controller+"\x00"+host] == secret {
-			return true
-		}
-	}
-	return false
-}
-
-// tlsEntryForHost returns the index of the TLS entry an Ingress presents for
-// host, or -1: the first entry naming the host exactly, else the first whose
-// wildcard covers it. Controllers match exact hosts before wildcards.
-func tlsEntryForHost(ing *networkingv1.Ingress, host string) int {
-	wildcard := -1
-	for i, tls := range ing.Spec.TLS {
-		for _, h := range tls.Hosts {
-			h = normalizeTLSHost(h)
-			if h == host {
-				return i
-			}
-			if wildcard < 0 && tlsWildcardCovers(h, host) {
-				wildcard = i
-			}
-		}
-	}
-	return wildcard
-}
-
-// tlsHostOwnersMemo maps controller and rule host to the Secret the
-// controller presents for that host: the one the oldest Ingress defining TLS
-// for it names, as ingress-nginx does. Other controllers may resolve a shared host
-// differently; counting only the oldest leaves the rest to audit rather than
-// reporting a certificate that may not be served. It reads every Ingress, as
-// a host can be shared across namespaces.
-func tlsHostOwnersMemo(cache *ResourceCache) map[string]string {
-	return cache.detectMemo.get("tlsHostOwners", func() any {
-		owners := map[string]string{}
-		lister := cache.Ingresses()
-		if lister == nil {
-			return owners
-		}
-		ings, _ := lister.List(labels.Everything())
-		oldest := map[string]*networkingv1.Ingress{}
-		for _, ing := range ings {
-			controller, _, ok := tlsIngressController(cache, ing)
-			if !ok {
-				continue
-			}
-			for _, rule := range ing.Spec.Rules {
-				host := normalizeTLSHost(rule.Host)
-				if host == "" || tlsEntryForHost(ing, host) < 0 {
-					continue
-				}
-				key := controller + "\x00" + host
-				if cur := oldest[key]; cur == nil || ingressOlder(ing, cur) {
-					oldest[key] = ing
-				}
-			}
-		}
-		for key, ing := range oldest {
-			_, host, _ := strings.Cut(key, "\x00")
-			owners[key] = ing.Namespace + "/" + ing.Spec.TLS[tlsEntryForHost(ing, host)].SecretName
-		}
-		return owners
-	}).(map[string]string)
-}
-
-func ingressOlder(a, b *networkingv1.Ingress) bool {
-	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
-		return a.CreationTimestamp.Before(&b.CreationTimestamp)
-	}
-	return a.Namespace+"/"+a.Name < b.Namespace+"/"+b.Name
+	return fmt.Sprintf("Replace the certificate in Secret %s/%s with a valid one; %s. To see what clients receive: openssl s_client -connect <ingress address>:443 -servername <host> </dev/null | openssl x509 -noout -dates", secret.Namespace, secret.Name, renew)
 }
 
 func normalizeTLSHost(host string) string {
 	return strings.ToLower(strings.TrimSpace(host))
 }
 
-// tlsWildcardCovers matches a wildcard TLS host against a rule host, covering
-// exactly one leading label.
-func tlsWildcardCovers(tlsHost, ruleHost string) bool {
-	suffix, ok := strings.CutPrefix(tlsHost, "*.")
+// tlsWildcardCovers matches a wildcard name against a host, covering exactly
+// one leading label.
+func tlsWildcardCovers(name, host string) bool {
+	suffix, ok := strings.CutPrefix(name, "*.")
 	if !ok {
 		return false
 	}
-	label, rest, found := strings.Cut(ruleHost, ".")
+	label, rest, found := strings.Cut(host, ".")
 	return found && label != "" && rest == suffix
 }
 
@@ -348,39 +439,15 @@ func ingressSSLPassthrough(ing *networkingv1.Ingress) bool {
 	return false
 }
 
-// A namespace-filtered compose runs the detectors once per namespace, and
-// each run would otherwise repeat the same cluster-wide scan.
-const detectMemoTTL = 5 * time.Second
-
-type detectMemo struct {
-	mu     sync.Mutex
-	at     time.Time
-	values map[string]any
-}
-
-func (m *detectMemo) get(key string, load func() any) any {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.values == nil || time.Since(m.at) > detectMemoTTL {
-		m.at, m.values = time.Now(), map[string]any{}
-	}
-	v, ok := m.values[key]
-	if !ok {
-		v = load()
-		m.values[key] = v
-	}
-	return v
-}
-
-func readyControllerPodNamespacesMemo(cache *ResourceCache, controller string) []string {
-	return cache.detectMemo.get("controllerPods\x00"+controller, func() any {
-		return readyControllerPodNamespaces(cache, controller)
+// readyControllerPodNamespaces returns the namespaces of the controller's
+// ready pods, or nil when none can be seen.
+func readyControllerPodNamespaces(cache *ResourceCache, scope *DetectScope, controller string) []string {
+	return scope.get("controllerPods\x00"+controller, func() any {
+		return scanReadyControllerPodNamespaces(cache, controller)
 	}).([]string)
 }
 
-// readyControllerPodNamespaces returns the namespaces of the controller's
-// ready pods, or nil when none can be seen.
-func readyControllerPodNamespaces(cache *ResourceCache, controller string) []string {
+func scanReadyControllerPodNamespaces(cache *ResourceCache, controller string) []string {
 	podLabels, ok := ingressstatus.ControllerPodLabels[controller]
 	podLister := cache.Pods()
 	if !ok || podLister == nil {
@@ -413,24 +480,40 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 		return Detection{}, false
 	}
 	addressed := len(consumers.addressedRefs) > 0
-	user := "an Ingress whose ingress controller is running references it for TLS"
+	user := "an Ingress references it for TLS and its ingress controller is running, so it is likely, not confirmed, served"
 	severity := "warning"
 	if addressed {
 		user = "an Ingress with a load-balancer address references it for TLS"
 		severity = "critical"
 	}
+	// The hostnames come from the certificate, which the caller reads with the
+	// Secret, so they name nothing the row's Secret access doesn't already show.
+	subject := "The certificate in this Secret"
+	if hosts := cert.Domains; len(hosts) > 0 {
+		listed := strings.Join(hosts[:min(len(hosts), maxTLSMessageHosts)], ", ")
+		if extra := len(hosts) - maxTLSMessageHosts; extra > 0 {
+			listed += fmt.Sprintf(" (+%d more)", extra)
+		}
+		subject = "The certificate for " + listed + " in this Secret"
+	}
 	var reason, fingerprint, message, cause string
 	switch {
 	case cert.NotAfter != nil && now.After(*cert.NotAfter):
 		reason, fingerprint = TLSCertificateExpiredReason, "tls-certificate-expired"
-		message = fmt.Sprintf("The certificate in this Secret expired %s ago (%s), and %s.",
-			timeutil.FormatAgeShort(now.Sub(*cert.NotAfter)), cert.NotAfter.UTC().Format(time.RFC3339), user)
+		message = fmt.Sprintf("%s expired %s ago (%s), and %s.",
+			subject, timeutil.FormatAgeShort(now.Sub(*cert.NotAfter)), cert.NotAfter.UTC().Format(time.RFC3339), user)
 		cause = "The certificate's validity period has ended. The ingress controller either serves it, and clients that verify certificates reject the connection, or falls back to its default certificate, which those clients also reject unless it happens to cover this host."
 	case cert.NotBefore != nil && cert.NotBefore.After(now.Add(tlsNotYetValidTolerance)):
 		reason, fingerprint = TLSCertificateNotYetValidReason, "tls-certificate-not-yet-valid"
-		message = fmt.Sprintf("The certificate in this Secret is not valid until %s (in %s), and %s.",
-			cert.NotBefore.UTC().Format(time.RFC3339), timeutil.FormatAgeShort(cert.NotBefore.Sub(now)), user)
+		message = fmt.Sprintf("%s is not valid until %s (in %s), and %s.",
+			subject, cert.NotBefore.UTC().Format(time.RFC3339), timeutil.FormatAgeShort(cert.NotBefore.Sub(now)), user)
 		cause = "The certificate's validity period has not started, often because it was issued with a wrong clock or start date. Clients that verify certificates reject it until then."
+	case cert.NotAfter != nil && cert.NotAfter.Sub(now) <= tlsExpiringWindow:
+		// Nothing fails yet, so this is a warning however certain the serving is.
+		reason, fingerprint, severity = TLSCertificateExpiringReason, "tls-certificate-expiring", "warning"
+		message = fmt.Sprintf("%s expires in %s (%s), and %s.",
+			subject, timeutil.FormatAgeShort(cert.NotAfter.Sub(now)), cert.NotAfter.UTC().Format(time.RFC3339), user)
+		cause = "The certificate is still valid but expires within a day. Unless it is renewed first, clients that verify certificates start rejecting the connection at that time."
 	default:
 		return Detection{}, false
 	}
@@ -465,7 +548,7 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 		Message:           message,
 		MessageSource:     issuesapi.MessageSourceRadar,
 		Cause:             cause,
-		Action:            fmt.Sprintf("Replace the certificate in Secret %s/%s with a valid one; if cert-manager issues it, check that Certificate's status and events. To see what clients receive: openssl s_client -connect <ingress address>:443 -servername <host> </dev/null | openssl x509 -noout -dates", secret.Namespace, secret.Name),
+		Action:            tlsCertificateAction(secret),
 		Fingerprint:       fingerprint,
 		Age:               timeutil.FormatAgeShort(age),
 		AgeSeconds:        int64(age.Seconds()),

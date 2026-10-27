@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -89,5 +90,38 @@ func TestExpiredTLSIssueRedactsUnreadableIngresses(t *testing.T) {
 	partial := Compose(p, Filters{Limit: NoLimit, CanReadRelated: onlyWeb})
 	if len(partial) != 1 || len(partial[0].DiagnosticContext.Facts[0].Refs) != 1 || partial[0].DiagnosticContext.Facts[0].Refs[0].Name != "web" {
 		t.Fatalf("partial redaction = %+v", partial)
+	}
+}
+
+// Links are capped after unreadable consumers are dropped, so hidden ones
+// neither crowd out a readable consumer nor show up as a truncation note.
+func TestExpiredTLSIssueCapsLinksAfterRedaction(t *testing.T) {
+	var refs []Ref
+	for i := 0; i < maxAffectedRefLinks; i++ {
+		refs = append(refs, Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "hidden", Name: fmt.Sprintf("ing-%02d", i)})
+	}
+	refs = append(refs, Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "shop", Name: "web"})
+	p := &fakeProvider{problems: []k8s.Detection{expiredTLSDetection(refs...)}}
+	if got := Compose(p, Filters{Limit: NoLimit}); !strings.HasSuffix(got[0].DiagnosticContext.Facts[0].Message, truncatedLinksNote) {
+		t.Fatalf("unredacted fact = %+v, want the truncation note", got[0].DiagnosticContext.Facts[0])
+	}
+	shopOnly := func(ref Ref) bool { return ref.Kind != "Ingress" || ref.Namespace == "shop" }
+	got := Compose(p, Filters{Limit: NoLimit, CanReadRelated: shopOnly})
+	fact := got[0].DiagnosticContext.Facts[0]
+	if len(fact.Refs) != 1 || fact.Refs[0].Name != "web" || strings.Contains(fact.Message, "Only the first") {
+		t.Fatalf("redacted fact = %+v, want only web and no truncation note", fact)
+	}
+}
+
+// kind=Ingress finds the Secret row through the Ingresses it affects, but
+// not through Ingresses the caller can't read.
+func TestExpiredTLSIssueMatchesAffectedKindFilter(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{expiredTLSDetection(tlsConsumers...)}}
+	if got := Compose(p, Filters{Limit: NoLimit, Kinds: []string{"Ingress"}}); len(got) != 1 || got[0].Kind != "Secret" {
+		t.Fatalf("kind=Ingress = %+v, want the Secret row", got)
+	}
+	noIngresses := func(ref Ref) bool { return ref.Kind != "Ingress" }
+	if got := Compose(p, Filters{Limit: NoLimit, Kinds: []string{"Ingress"}, CanReadRelated: noIngresses}); len(got) != 0 {
+		t.Fatalf("kind=Ingress without Ingress access = %+v, want none", got)
 	}
 }

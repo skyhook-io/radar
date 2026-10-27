@@ -141,9 +141,6 @@ type ResourceCache struct {
 	secretWriteTimes *secretDataManagerWriteIndex
 	// generation is the cacheGeneration this cache was built under.
 	generation uint64
-	// detectMemo holds short-lived cluster-wide lookups that detectors would
-	// otherwise repeat for every namespace of a namespace-filtered compose.
-	detectMemo detectMemo
 }
 
 // Generation identifies the construction this cache came from. Every

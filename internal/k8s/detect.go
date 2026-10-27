@@ -223,6 +223,12 @@ func podOwnerKindName(cache *ResourceCache, pod *corev1.Pod) (group, kind, name 
 // Does NOT include pods (consumers handle pod problems differently).
 // namespace="" scans all namespaces.
 func DetectProblems(cache *ResourceCache, namespace string) []Detection {
+	return DetectProblemsInScope(cache, namespace, nil)
+}
+
+// DetectProblemsInScope is DetectProblems sharing cluster-wide lookups with
+// the other runs of one compose through scope.
+func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *DetectScope) []Detection {
 	var problems []Detection
 	now := time.Now()
 	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
@@ -762,7 +768,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 	problems = append(problems, detectNetworkPolicyDenyAllIngress(cache, namespace, podsByNamespace, now)...)
-	problems = append(problems, detectLiveIngressTLSCertificates(cache, namespace, now)...)
+	problems = append(problems, detectLiveIngressTLSCertificates(cache, namespace, scope, now)...)
 
 	// HPA problems
 	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {

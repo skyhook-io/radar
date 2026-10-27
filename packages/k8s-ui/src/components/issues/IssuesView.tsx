@@ -88,8 +88,8 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
         tone="healthy"
         variant="card"
         icon={CircleCheck}
-        headline="Nothing broken right now"
-        body="No active issues across the selected scope."
+        headline="No issues detected"
+        body="Radar's checks found nothing broken in the selected scope. They don't cover every failure, and Audit lists configuration that can still break things."
       />
     ) : (
       <EmptyState headline="No issue data yet" body="Connect a cluster to populate the issue queue." action={emptyAction} />

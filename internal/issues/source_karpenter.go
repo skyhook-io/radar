@@ -353,8 +353,9 @@ func RedactIssueRelatedRefs(issue Issue, canRead func(Ref) bool) Issue {
 			continue
 		}
 		if fact.Type == factNetworkPolicyIsolates || fact.Type == factTLSCertificateConsumers {
-			redacted, keep, factChanged := redactAffectedRefsFact(fact, canRead)
-			changed = changed || factChanged
+			// issue.AffectedRefs now holds only the readable ones.
+			redacted, keep := redactAffectedRefsFact(fact, issue.AffectedRefs)
+			changed = true
 			if !keep {
 				continue
 			}

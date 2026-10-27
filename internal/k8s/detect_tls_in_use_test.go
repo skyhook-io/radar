@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/certs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
@@ -21,16 +22,21 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func testCertPEM(t *testing.T, notBefore, notAfter time.Time) []byte {
+// testCertPEM issues a certificate for names, by default *.example.test,
+// which covers every host tlsIngress gives an Ingress.
+func testCertPEM(t *testing.T, notBefore, notAfter time.Time, names ...string) []byte {
 	t.Helper()
+	if len(names) == 0 {
+		names = []string{"*.example.test"}
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "shop.example.test"},
-		DNSNames:     []string{"shop.example.test"},
+		Subject:      pkix.Name{CommonName: names[0]},
+		DNSNames:     names,
 		NotBefore:    notBefore,
 		NotAfter:     notAfter,
 	}
@@ -88,10 +94,13 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 	now := time.Now()
 	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-24*time.Hour))
 	future := testCertPEM(t, now.Add(48*time.Hour), now.Add(90*24*time.Hour))
-	justIssued := testCertPEM(t, now.Add(time.Minute), now.Add(90*24*time.Hour))
-	valid := testCertPEM(t, now.Add(-time.Hour), now.Add(10*24*time.Hour))
+	// Valid certificates name hosts no Ingress here serves, so they don't
+	// contest the expired ones.
+	justIssued := testCertPEM(t, now.Add(time.Minute), now.Add(90*24*time.Hour), "just-issued.example.test")
+	valid := testCertPEM(t, now.Add(-time.Hour), now.Add(10*24*time.Hour), "valid.example.test")
 	nginx := withClass("nginx")
 	objects := []runtime.Object{
+		readyPod("ingress-nginx", "controller-0", nginxPodLabels),
 		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
 		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "aws"}, Spec: networkingv1.IngressClassSpec{Controller: "ingress.k8s.aws/alb"}},
 		tlsSecret("shop", "expired-tls", expired),
@@ -114,7 +123,7 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		tlsIngress("shop", "api", []string{"expired-tls", "valid-tls"}, nginx, withAddress),
 		tlsIngress("shop", "early", []string{"future-tls", "just-issued-tls"}, nginx, withAddress),
 		tlsIngress("shop", "alb", []string{"alb-expired-tls"}, withClass("aws"), withAddress),
-		// No address: no controller has picked it up, so it is not live.
+		// No address, but nginx is running: a warning.
 		tlsIngress("shop", "pending", []string{"pending-expired-tls"}, nginx),
 		// Class not installed: can't tell which controller serves it.
 		tlsIngress("shop", "orphan", []string{"unknown-class-expired-tls"}, withClass("missing"), withAddress),
@@ -125,7 +134,7 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		tlsIngress("shop", "legacy-match", []string{"legacy-match-expired-tls"}, nginx, withAddress, withAnnotation("kubernetes.io/ingress.class", "nginx")),
 		// A legacy annotation alone resolves through the IngressClass of that name.
 		tlsIngress("shop", "legacy-only", []string{"legacy-only-expired-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "nginx")),
-		// An empty status entry is no address, and nginx has no running pod here.
+		// An empty status entry is no address: a warning, not critical.
 		tlsIngress("shop", "empty-status", []string{"empty-status-expired-tls"}, nginx, func(ing *networkingv1.Ingress) {
 			ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{{}}
 		}),
@@ -138,15 +147,18 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", now)
+	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
 	var names []string
 	for _, d := range got {
 		names = append(names, d.Name)
 	}
-	if strings.Join(names, ",") != "expired-tls,foreign-passthrough-expired-tls,future-tls,legacy-match-expired-tls,legacy-only-expired-tls" {
+	if strings.Join(names, ",") != "empty-status-expired-tls,expired-tls,foreign-passthrough-expired-tls,future-tls,legacy-match-expired-tls,legacy-only-expired-tls,pending-expired-tls" {
 		t.Fatalf("detections = %v", names)
 	}
-	exp, early := got[0], got[2]
+	emptyStatus, exp, early, pending := got[0], got[1], got[3], got[6]
+	if emptyStatus.Severity != "warning" || pending.Severity != "warning" {
+		t.Fatalf("Ingresses without an address are warnings: %+v, %+v", emptyStatus, pending)
+	}
 	if exp.Kind != "Secret" || exp.Namespace != "shop" || exp.Name != "expired-tls" || exp.Reason != TLSCertificateExpiredReason || exp.Severity != "critical" {
 		t.Fatalf("expired detection = %+v", exp)
 	}
@@ -174,31 +186,41 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 	}
 }
 
-func TestDetectLiveIngressTLSCertificatesSkipsUncoveredSecretNamespace(t *testing.T) {
+// A Secret outside the Secret informer is never reported, and since it could
+// hold a valid certificate for any host, it contests every Secret the same
+// controller serves; another controller's rows are unaffected.
+func TestDetectLiveIngressTLSCertificatesUncoveredSecretNamespace(t *testing.T) {
 	defer ResetTestState()
 
 	now := time.Now()
 	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
 	objects := []runtime.Object{
 		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "custom"}, Spec: networkingv1.IngressClassSpec{Controller: "example.com/custom"}},
+		readyPod("ingress-nginx", "controller-0", nginxPodLabels),
+		tlsSecret("shop", "custom-tls", expired),
+		tlsIngress("shop", "custom", []string{"custom-tls"}, withClass("custom"), withAddress),
 		tlsSecret("shop", "expired-tls", expired),
 		tlsSecret("other", "expired-tls", expired),
 		tlsIngress("shop", "web", []string{"expired-tls"}, withClass("nginx"), withAddress),
-		tlsIngress("other", "web", []string{"expired-tls"}, withClass("nginx"), withAddress),
+		tlsIngress("other", "admin", []string{"expired-tls"}, withClass("nginx"), withAddress),
 	}
 	scopes := map[string]k8score.ResourceScope{
 		"ingresses":      {Enabled: true},
 		"ingressclasses": {Enabled: true},
+		"pods":           {Enabled: true},
 		"secrets":        {Enabled: true, Namespace: "shop"},
 	}
 	if err := InitScopedTestResourceCache(fake.NewClientset(objects...), scopes); err != nil {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", now)
-	if len(got) != 1 || got[0].Namespace != "shop" {
-		t.Fatalf("detections = %+v, want only the namespace the Secret informer covers", got)
+	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	if len(got) != 1 || got[0].Namespace != "shop" || got[0].Name != "custom-tls" {
+		t.Fatalf("detections = %+v, want only the other controller's custom-tls", got)
 	}
 }
+
+var nginxPodLabels = map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"}
 
 func readyPod(ns, name string, podLabels map[string]string) *corev1.Pod {
 	return &corev1.Pod{
@@ -217,7 +239,7 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 	now := time.Now()
 	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
 	traefikLabels := map[string]string{"app.kubernetes.io/name": "traefik"}
-	notReady := readyPod("edge", "nginx-0", map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"})
+	notReady := readyPod("edge", "nginx-0", nginxPodLabels)
 	notReady.Status.Conditions[0].Status = corev1.ConditionFalse
 	objects := []runtime.Object{
 		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "traefik"}, Spec: networkingv1.IngressClassSpec{Controller: "traefik.io/ingress-controller"}},
@@ -229,6 +251,10 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 		tlsSecret("shop", "mixed-tls", expired),
 		tlsSecret("shop", "nginx-tls", expired),
 		tlsSecret("shop", "custom-tls", expired),
+		tlsSecret("shop", "stale-tls", expired),
+		// An address can outlive the controller that published it: with no
+		// ready nginx pod, this addressed Ingress is not live.
+		tlsIngress("shop", "stale", []string{"stale-tls"}, withClass("nginx"), withAddress),
 		tlsIngress("shop", "via-traefik", []string{"traefik-tls", "mixed-tls"}, withClass("traefik")),
 		tlsIngress("shop", "addressed", []string{"mixed-tls"}, withClass("custom"), withAddress),
 		tlsIngress("shop", "via-nginx", []string{"nginx-tls"}, withClass("nginx")),
@@ -237,7 +263,7 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", now)
+	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
 	if len(got) != 2 {
 		t.Fatalf("detections = %+v, want mixed-tls and traefik-tls", got)
 	}
@@ -257,37 +283,46 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 
 // An addressed Ingress is live even when its class resolves to no
 // IngressClass object, unless ALB could be serving it or its address may be
-// left over from a removed controller.
-func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
+// left over from a removed controller. A Secret counts for a host only when
+// its certificate covers the host and no other certificate the controller
+// could serve for it does.
+func TestDetectLiveIngressTLSCertificatesSelection(t *testing.T) {
 	now := time.Now()
 	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
-	secrets := []string{"gce-tls", "classless-tls", "missing-class-tls", "alb-legacy-tls", "canary-tls", "delegated-tls", "orphan-tls", "shadowed-tls", "gke-managed-tls", "wildcard-tls", "exact-tls"}
-	// A TLS entry naming only a host no rule serves is never presented.
-	orphan := tlsIngress("shop", "orphan", nil, withClass("nginx"), withAddress)
-	orphan.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"old.example.test"}, SecretName: "orphan-tls"}}
-	// The first entry covering a host wins; a later one for the same host is unused.
-	shadowed := tlsIngress("shop", "shadowed", nil, withClass("nginx"), withAddress)
-	shadowed.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"shadowed.example.test"}, SecretName: "valid-first-tls"}, {Hosts: []string{"shadowed.example.test"}, SecretName: "shadowed-tls"}}
-	// An exact entry is presented before an earlier wildcard.
-	exactAfterWildcard := tlsIngress("shop", "exact-after-wildcard", nil, withClass("nginx"), withAddress)
-	exactAfterWildcard.Spec.Rules[0].Host = "exact.example.test"
-	exactAfterWildcard.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"*.example.test"}, SecretName: "valid-wildcard-tls"}, {Hosts: []string{"exact.example.test"}, SecretName: "exact-tls"}}
-	wildcard := tlsIngress("shop", "wildcard", nil, withClass("nginx"), withAddress)
-	wildcard.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"*.example.test"}, SecretName: "wildcard-tls"}}
+	certPEMs := map[string][]byte{}
+	for _, s := range []string{"gce-tls", "classless-tls", "missing-class-tls", "alb-legacy-tls", "canary-tls", "delegated-tls", "shadowed-tls", "gke-managed-tls", "wildcard-tls", "exact-tls", "store-a-tls"} {
+		certPEMs[s] = expired
+	}
+	// A certificate that doesn't cover the rule's host is not presented for it.
+	certPEMs["orphan-tls"] = testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour), "old.example.test")
+	// A valid certificate for the host, in the same Ingress or another one the
+	// same controller serves, may be the one presented instead.
+	certPEMs["valid-first-tls"] = testCertPEM(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "shadowed.example.test")
+	certPEMs["store-b-tls"] = testCertPEM(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "store-a.example.test", "store-b.example.test")
+
+	orphan := tlsIngress("shop", "orphan", []string{"orphan-tls"}, withClass("nginx"), withAddress)
+	shadowed := tlsIngress("shop", "shadowed", []string{"valid-first-tls", "shadowed-tls"}, withClass("nginx"), withAddress)
+	// A Secret declared for the same host that doesn't exist may send the
+	// controller to its default certificate.
+	exact := tlsIngress("shop", "exact", []string{"missing-tls", "exact-tls"}, withClass("nginx"), withAddress)
+	wildcard := tlsIngress("shop", "wildcard", []string{"wildcard-tls"}, withClass("nginx"), withAddress)
+	storeA := tlsIngress("shop", "store-a", []string{"store-a-tls"}, withClass("nginx"), withAddress)
+	storeB := tlsIngress("shop", "store-b", []string{"store-b-tls"}, withClass("nginx"), withAddress)
 	base := func() []runtime.Object {
 		objects := []runtime.Object{
 			&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+			readyPod("ingress-nginx", "controller-0", nginxPodLabels),
 			tlsIngress("shop", "gce", []string{"gce-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "gce")),
 			tlsIngress("shop", "classless", []string{"classless-tls"}, withAddress),
 			tlsIngress("shop", "missing-class", []string{"missing-class-tls"}, withClass("removed"), withAddress),
 			tlsIngress("shop", "alb-legacy", []string{"alb-legacy-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "alb")),
 			tlsIngress("shop", "canary", []string{"canary-tls"}, withClass("nginx"), withAddress, withAnnotation("nginx.ingress.kubernetes.io/canary", "true")),
 			tlsIngress("shop", "delegated", []string{"delegated-tls"}, withClass("nginx"), withAddress, withAnnotation("projectcontour.io/tls-cert-namespace", "certs")),
-			orphan, shadowed, wildcard, exactAfterWildcard,
+			orphan.DeepCopy(), shadowed.DeepCopy(), exact.DeepCopy(), wildcard.DeepCopy(), storeA.DeepCopy(), storeB.DeepCopy(),
 			tlsIngress("shop", "gke-managed", []string{"gke-managed-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "gce"), withAnnotation("networking.gke.io/managed-certificates", "shop-cert")),
 		}
-		for _, s := range secrets {
-			objects = append(objects, tlsSecret("shop", s, expired))
+		for name, cert := range certPEMs {
+			objects = append(objects, tlsSecret("shop", name, cert))
 		}
 		return objects
 	}
@@ -298,7 +333,7 @@ func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 			t.Fatalf("InitTestResourceCache: %v", err)
 		}
 		var names []string
-		for _, d := range detectLiveIngressTLSCertificates(GetResourceCache(), "", now) {
+		for _, d := range detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now) {
 			if d.Severity != "critical" {
 				t.Errorf("%s severity = %s, want critical", d.Name, d.Severity)
 			}
@@ -306,45 +341,49 @@ func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 		}
 		return strings.Join(names, ",")
 	}
-	if got := detect(t, base()); got != "classless-tls,exact-tls,gce-tls,wildcard-tls" {
-		t.Fatalf("detections = %s, want the legacy-gce, class-less, exact-after-wildcard and wildcard Ingresses only", got)
+	if got := detect(t, base()); got != "classless-tls,gce-tls,wildcard-tls" {
+		t.Fatalf("detections = %s, want the legacy-gce, class-less and wildcard Ingresses only", got)
 	}
 	withALBClass := append(base(), &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "aws"}, Spec: networkingv1.IngressClassSpec{Controller: "ingress.k8s.aws/alb"}})
 	// ALB can claim a legacy class of any name and class-less Ingresses.
-	if got := detect(t, withALBClass); got != "exact-tls,wildcard-tls" {
-		t.Fatalf("with an ALB class installed, detections = %s, want only the nginx-class exact-tls and wildcard-tls", got)
+	if got := detect(t, withALBClass); got != "wildcard-tls" {
+		t.Fatalf("with an ALB class installed, detections = %s, want only the nginx-class wildcard-tls", got)
 	}
 }
 
-func TestTLSEntryForHost(t *testing.T) {
-	ing := &networkingv1.Ingress{Spec: networkingv1.IngressSpec{TLS: []networkingv1.IngressTLS{
-		{Hosts: []string{"*.example.test"}, SecretName: "wildcard"},
-		{Hosts: []string{"SHOP.example.test"}, SecretName: "exact"},
-		{Hosts: []string{"shop.example.test"}, SecretName: "exact-again"},
-	}}}
+func certsInput(names ...string) certs.Input {
+	return certs.Input{Domains: names}
+}
+
+func TestTLSCertificateCovers(t *testing.T) {
+	cert := certsInput("*.example.test", "SHOP.other.test")
 	for _, tc := range []struct {
 		host string
-		want int
+		want bool
 	}{
-		{"shop.example.test", 1}, // exact beats an earlier wildcard; the first exact entry wins
-		{"api.example.test", 0},
-		{"a.b.example.test", -1},
-		{"example.test", -1},
+		{"api.example.test", true},
+		{"shop.other.test", true},
+		{"a.b.example.test", false},
+		{"example.test", false},
+		{"other.test", false},
 	} {
-		if got := tlsEntryForHost(ing, tc.host); got != tc.want {
-			t.Errorf("tlsEntryForHost(%q) = %d, want %d", tc.host, got, tc.want)
+		if got := tlsCertificateCovers(cert, tc.host); got != tc.want {
+			t.Errorf("tlsCertificateCovers(%q) = %v, want %v", tc.host, got, tc.want)
 		}
 	}
 }
 
-// ingress-nginx presents the oldest Ingress's TLS for a host several
-// Ingresses define, so only that Ingress's Secret is served.
+// Several Ingresses defining TLS for one host leave the choice to the
+// controller (ingress-nginx takes the oldest Ingress's, Traefik the first
+// certificate in its store), so an expired Secret there counts only when no
+// valid certificate for the host competes, whichever Ingress is older and
+// whatever namespace it lives in. Ingresses presenting one Secret for one
+// host all use it.
 func TestDetectLiveIngressTLSCertificatesSharedHost(t *testing.T) {
 	defer ResetTestState()
 
 	now := time.Now()
 	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
-	valid := testCertPEM(t, now.Add(-time.Hour), now.Add(10*24*time.Hour))
 	created := func(age time.Duration) tlsIngressOpt {
 		return func(ing *networkingv1.Ingress) { ing.CreationTimestamp = metav1.NewTime(now.Add(-age)) }
 	}
@@ -354,36 +393,67 @@ func TestDetectLiveIngressTLSCertificatesSharedHost(t *testing.T) {
 			ing.Spec.TLS[0].Hosts = []string{host}
 		}
 	}
+	nginx := withClass("nginx")
 	objects := []runtime.Object{
 		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
-		tlsSecret("shop", "old-valid-tls", valid),
+		readyPod("ingress-nginx", "controller-0", nginxPodLabels),
+		tlsSecret("shop", "old-valid-tls", testCertPEM(t, now.Add(-time.Hour), now.Add(10*24*time.Hour), "shop.example.test")),
 		tlsSecret("shop", "new-expired-tls", expired),
 		tlsSecret("other", "old-expired-tls", expired),
-		tlsSecret("shop", "new-valid-tls", valid),
-		tlsIngress("shop", "old", []string{"old-valid-tls"}, withClass("nginx"), withAddress, created(48*time.Hour), sameHost("shop.example.test")),
-		tlsIngress("shop", "new", []string{"new-expired-tls"}, withClass("nginx"), withAddress, created(time.Hour), sameHost("shop.example.test")),
+		tlsSecret("shop", "new-valid-tls", testCertPEM(t, now.Add(-time.Hour), now.Add(10*24*time.Hour), "api.example.test")),
+		tlsSecret("shop", "twin-expired-tls", expired),
+		tlsIngress("shop", "old", []string{"old-valid-tls"}, nginx, withAddress, created(48*time.Hour), sameHost("shop.example.test")),
+		tlsIngress("shop", "new", []string{"new-expired-tls"}, nginx, withAddress, created(time.Hour), sameHost("shop.example.test")),
+		tlsIngress("other", "older", []string{"old-expired-tls"}, nginx, withAddress, created(72*time.Hour), sameHost("api.example.test")),
+		tlsIngress("shop", "newer", []string{"new-valid-tls"}, nginx, withAddress, created(2*time.Hour), sameHost("api.example.test")),
+		tlsIngress("shop", "twin-a", []string{"twin-expired-tls"}, nginx, withAddress, created(5*time.Hour), sameHost("twin.example.test")),
+		tlsIngress("shop", "twin-b", []string{"twin-expired-tls"}, nginx, withAddress, created(4*time.Hour), sameHost("twin.example.test")),
 	}
-	// Another host where the older Ingress, in another namespace, holds the
-	// expired certificate.
-	older := tlsIngress("other", "older", []string{"old-expired-tls"}, withClass("nginx"), withAddress, created(72*time.Hour))
-	newer := tlsIngress("shop", "newer", []string{"new-valid-tls"}, withClass("nginx"), withAddress, created(2*time.Hour))
-	for _, ing := range []*networkingv1.Ingress{older, newer} {
-		ing.Spec.Rules[0].Host = "api.example.test"
-		ing.Spec.TLS[0].Hosts = []string{"api.example.test"}
-	}
-	// Two Ingresses presenting the same Secret for one host both use it.
-	objects = append(objects, older, newer, tlsSecret("shop", "twin-expired-tls", expired),
-		tlsIngress("shop", "twin-a", []string{"twin-expired-tls"}, withClass("nginx"), withAddress, created(5*time.Hour), sameHost("twin.example.test")),
-		tlsIngress("shop", "twin-b", []string{"twin-expired-tls"}, withClass("nginx"), withAddress, created(4*time.Hour), sameHost("twin.example.test")))
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", now)
-	if len(got) != 2 || got[0].Namespace != "other" || got[0].Name != "old-expired-tls" || got[1].Name != "twin-expired-tls" || len(got[1].AffectedRefs) != 2 {
-		t.Fatalf("detections = %+v, want the oldest Ingress's expired Secret and the twin Secret linked twice", got)
+	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	if len(got) != 1 || got[0].Name != "twin-expired-tls" || len(got[0].AffectedRefs) != 2 {
+		t.Fatalf("detections = %+v, want only the twin Secret, linked twice", got)
 	}
-	// A namespace-filtered scan still sees the owner in another namespace.
-	if got := detectLiveIngressTLSCertificates(GetResourceCache(), "shop", now); len(got) != 1 || got[0].Name != "twin-expired-tls" {
-		t.Fatalf("shop-scoped detections = %+v, want only twin-expired-tls", got)
+	// A namespace-filtered scan still weighs the competitor in another namespace.
+	if got := detectLiveIngressTLSCertificates(GetResourceCache(), "other", nil, now); len(got) != 0 {
+		t.Fatalf("other-scoped detections = %+v, want none", got)
+	}
+}
+
+// A served certificate within a day of expiry is a warning, however certain
+// the serving is; further out it is left to audit. Messages name the
+// certificate's hosts, and the action names the cert-manager Certificate.
+func TestDetectLiveIngressTLSCertificatesExpiringSoon(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	soon := tlsSecret("shop", "soon-tls", testCertPEM(t, now.Add(-60*24*time.Hour), now.Add(3*time.Hour), "soon.example.test"))
+	soon.Annotations = map[string]string{"cert-manager.io/certificate-name": "soon-cert"}
+	objects := []runtime.Object{
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+		readyPod("ingress-nginx", "controller-0", nginxPodLabels),
+		soon,
+		tlsSecret("shop", "later-tls", testCertPEM(t, now.Add(-60*24*time.Hour), now.Add(48*time.Hour), "later.example.test")),
+		tlsIngress("shop", "soon", []string{"soon-tls"}, withClass("nginx"), withAddress),
+		tlsIngress("shop", "later", []string{"later-tls"}, withClass("nginx"), withAddress),
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	if len(got) != 1 {
+		t.Fatalf("detections = %+v, want only soon-tls", got)
+	}
+	d := got[0]
+	if d.Name != "soon-tls" || d.Reason != TLSCertificateExpiringReason || d.Severity != "warning" {
+		t.Fatalf("expiring detection = %+v", d)
+	}
+	if !strings.HasPrefix(d.Message, "The certificate for soon.example.test in this Secret expires in ") {
+		t.Fatalf("message = %q, want the certificate's host and the time left", d.Message)
+	}
+	if !strings.Contains(d.Action, "Certificate shop/soon-cert") {
+		t.Fatalf("action = %q, want the cert-manager Certificate named", d.Action)
 	}
 }

@@ -72,8 +72,9 @@ func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
 		return k8s.DetectProblems(p.cache, "")
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
+	scope := k8s.NewDetectScope()
 	for _, ns := range namespaces {
-		perNs = append(perNs, k8s.DetectProblems(p.cache, ns))
+		perNs = append(perNs, k8s.DetectProblemsInScope(p.cache, ns, scope))
 	}
 	return flattenNamespacedProblems(perNs)
 }
