@@ -310,6 +310,12 @@ func TestDetectLiveIngressTLSCertificatesSelection(t *testing.T) {
 
 	orphan := tlsIngress("shop", "orphan", []string{"orphan-tls"}, withClass("nginx"), withAddress)
 	shadowed := tlsIngress("shop", "shadowed", []string{"valid-first-tls", "shadowed-tls"}, withClass("nginx"), withAddress)
+	// A valid wildcard doesn't contest a certificate naming the host
+	// exactly: controllers prefer the exact name.
+	certPEMs["named-tls"] = testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour), "named.other.test")
+	certPEMs["valid-wild-tls"] = testCertPEM(t, now.Add(-time.Hour), now.Add(90*24*time.Hour), "*.other.test")
+	named := tlsIngress("shop", "named", []string{"valid-wild-tls", "named-tls"}, withClass("nginx"), withAddress)
+	named.Spec.Rules[0].Host = "named.other.test"
 	// A Secret declared for the same host that doesn't exist may send the
 	// controller to its default certificate.
 	exact := tlsIngress("shop", "exact", []string{"missing-tls", "exact-tls"}, withClass("nginx"), withAddress)
@@ -326,7 +332,7 @@ func TestDetectLiveIngressTLSCertificatesSelection(t *testing.T) {
 			tlsIngress("shop", "alb-legacy", []string{"alb-legacy-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "alb")),
 			tlsIngress("shop", "canary", []string{"canary-tls"}, withClass("nginx"), withAddress, withAnnotation("nginx.ingress.kubernetes.io/canary", "true")),
 			tlsIngress("shop", "delegated", []string{"delegated-tls"}, withClass("nginx"), withAddress, withAnnotation("projectcontour.io/tls-cert-namespace", "certs")),
-			orphan.DeepCopy(), shadowed.DeepCopy(), exact.DeepCopy(), wildcard.DeepCopy(), storeA.DeepCopy(), storeB.DeepCopy(),
+			orphan.DeepCopy(), shadowed.DeepCopy(), exact.DeepCopy(), wildcard.DeepCopy(), storeA.DeepCopy(), storeB.DeepCopy(), named.DeepCopy(),
 			tlsIngress("shop", "gke-managed", []string{"gke-managed-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "gce"), withAnnotation("networking.gke.io/managed-certificates", "shop-cert")),
 		}
 		for name, cert := range certPEMs {
@@ -349,13 +355,13 @@ func TestDetectLiveIngressTLSCertificatesSelection(t *testing.T) {
 		}
 		return strings.Join(names, ",")
 	}
-	if got := detect(t, base()); got != "classless-tls,gce-tls,wildcard-tls" {
-		t.Fatalf("detections = %s, want the legacy-gce, class-less and wildcard Ingresses only", got)
+	if got := detect(t, base()); got != "classless-tls,gce-tls,named-tls,wildcard-tls" {
+		t.Fatalf("detections = %s, want the legacy-gce, class-less, exactly named and wildcard Ingresses only", got)
 	}
 	withALBClass := append(base(), &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "aws"}, Spec: networkingv1.IngressClassSpec{Controller: "ingress.k8s.aws/alb"}})
 	// ALB can claim a legacy class of any name and class-less Ingresses.
-	if got := detect(t, withALBClass); got != "wildcard-tls" {
-		t.Fatalf("with an ALB class installed, detections = %s, want only the nginx-class wildcard-tls", got)
+	if got := detect(t, withALBClass); got != "named-tls,wildcard-tls" {
+		t.Fatalf("with an ALB class installed, detections = %s, want only the nginx-class named-tls and wildcard-tls", got)
 	}
 }
 

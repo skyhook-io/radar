@@ -208,6 +208,9 @@ func tlsServingIndexFor(cache *ResourceCache, scope *DetectScope) *tlsServingInd
 // tlsUseSelectsCertificate reports whether the use's controller presents
 // this certificate for some host of the use: the certificate covers the host
 // and no other currently valid certificate the controller references does.
+// Controllers pick a certificate naming the host exactly over a wildcard
+// (ingress-nginx, Traefik, Envoy), so a valid wildcard doesn't contest one
+// that names the host.
 // A referenced Secret Radar can't read contests every host, as it may hold
 // such a certificate; one referenced for the same host that is missing or
 // holds no certificate contests it too, as the controller may fall back to a
@@ -223,6 +226,7 @@ func tlsUseSelectsCertificate(idx *tlsServingIndex, use tlsUse, cert certs.Input
 		if host == "" || !tlsCertificateCovers(cert, host) {
 			continue
 		}
+		exact := tlsCertificateNames(cert, host)
 		contested := false
 		for other, otherHosts := range idx.referenced[use.controller] {
 			if other == self {
@@ -231,7 +235,7 @@ func tlsUseSelectsCertificate(idx *tlsServingIndex, use tlsUse, cert certs.Input
 			ns, name, _ := strings.Cut(other, "/")
 			alt, ok, readable := certFor(ns, name)
 			sameHost := otherHosts[host] || otherHosts[""]
-			if !readable || (sameHost && !ok) || (ok && tlsCertificateValid(alt, now) && tlsCertificateCovers(alt, host)) {
+			if !readable || (sameHost && !ok) || (ok && tlsCertificateValid(alt, now) && tlsCertificateCovers(alt, host) && (!exact || tlsCertificateNames(alt, host))) {
 				contested = true
 				break
 			}
@@ -280,6 +284,17 @@ func tlsCertificateCovers(cert certs.Input, host string) bool {
 	for _, name := range cert.Domains {
 		name = normalizeTLSHost(name)
 		if name == host || tlsWildcardCovers(name, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// tlsCertificateNames reports whether the certificate names host exactly,
+// not through a wildcard.
+func tlsCertificateNames(cert certs.Input, host string) bool {
+	for _, name := range cert.Domains {
+		if normalizeTLSHost(name) == host {
 			return true
 		}
 	}
