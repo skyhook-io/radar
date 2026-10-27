@@ -3906,7 +3906,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 
-			// Only include Secrets that are referenced by workloads in the same namespace
 			secretID := fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name)
 			consumers := secretConsumers[workloadRefKey{namespace: secret.Namespace, name: secret.Name}]
 
@@ -3919,7 +3918,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 
-			if len(consumers) > 0 || podSecretTargets[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] {
+			if opts.ForRelationshipCache || len(consumers) > 0 || podSecretTargets[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] {
 				visibleSecretIDs[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] = secretID
 				nodes = append(nodes, secretNode(secret))
 			}

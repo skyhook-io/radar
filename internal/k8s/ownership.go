@@ -214,18 +214,22 @@ func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.Con
 	return topology.ChainOf(chain)
 }
 
-func (c *AgentOwnership) OtherManagers(rel *topology.Relationships, ref resourceid.Ref) []topology.ResourceRef {
+// OtherManagers reads residual spec relations for the resource most recently
+// passed to Of. The bool reports unchecked sources, never denied ones.
+func (c *AgentOwnership) OtherManagers(rel *topology.Relationships, ref resourceid.Ref) ([]topology.ResourceRef, bool) {
 	if c.view == nil || c.failed || c.active != ref {
-		return nil
+		return nil, true
 	}
-	out := topology.OtherManagingControllers(rel, c.view, ref)
+	out, incomplete := topology.OtherManagingControllers(rel, c.view, ref)
 	if c.session.ValidateCaches() != nil {
 		c.failed = true
-		return nil
+		return nil, true
 	}
-	return out
+	return out, incomplete
 }
 
+// Manager reads GitOps/Helm evidence for the resource most recently passed to Of.
+// A changed connection or inactive subject returns no usable answer.
 func (c *AgentOwnership) Manager(ref resourceid.Ref) ownership.ManagerAnswer {
 	if c.view == nil || c.failed || c.active != ref {
 		return ownership.ManagerAnswer{}

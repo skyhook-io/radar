@@ -11,7 +11,6 @@ package server
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -38,7 +37,9 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
-	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology, idx, idx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
+	return summarycontext.BuilderFromIndexes(r.Context(), func() *topology.Topology {
+		return summarycontext.WithinContext(r.Context(), s.broadcaster.GetCachedTopology)
+	}, idx, idx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 
 // newSearchSummaryContextBuilder is the search-specific variant. Search
@@ -62,10 +63,6 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 // (cluster-wide user) — both indexes would be identical, so one pass
 // suffices.
 func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces []string) summarycontext.Builder {
-	deadline := time.Now().Add(summarycontext.SearchBudget)
-	if parent, ok := r.Context().Deadline(); ok && parent.Before(deadline) {
-		deadline = parent
-	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
@@ -75,12 +72,8 @@ func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces 
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
 	}
-	return summarycontext.BuilderFromIndexes(func() *topology.Topology {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return nil
-		}
-		return summarycontext.Within(remaining, s.broadcaster.GetCachedTopology)
+	return summarycontext.BuilderFromIndexes(r.Context(), func() *topology.Topology {
+		return summarycontext.WithinContext(r.Context(), s.broadcaster.GetCachedTopology)
 	}, namespacedIdx, clusterIdx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 

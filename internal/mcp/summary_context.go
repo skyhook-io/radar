@@ -37,7 +37,9 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
-	return summarycontext.BuilderFromIndexes(func() *topology.Topology { return buildSummaryContextTopology(namespaces) }, idx, idx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
+	return summarycontext.BuilderFromIndexes(ctx, func() *topology.Topology {
+		return summarycontext.WithinContext(ctx, func() *topology.Topology { return buildSummaryContextTopology(namespaces) })
+	}, idx, idx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
 // newSearchSummaryContextBuilder is the MCP search variant. Mirrors
@@ -48,10 +50,6 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 // are reachable, so composing the cluster-wide index doesn't leak
 // rows the user can't see.
 func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string) summarycontext.Builder {
-	deadline := time.Now().Add(summarycontext.SearchBudget)
-	if parent, ok := ctx.Deadline(); ok && parent.Before(deadline) {
-		deadline = parent
-	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
@@ -61,12 +59,8 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
-	return summarycontext.BuilderFromIndexes(func() *topology.Topology {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return nil
-		}
-		return summarycontext.Within(remaining, func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) })
+	return summarycontext.BuilderFromIndexes(ctx, func() *topology.Topology {
+		return summarycontext.WithinContext(ctx, func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) })
 	}, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
@@ -92,7 +86,8 @@ func buildSummaryContextTopology(namespaces []string) *topology.Topology {
 	if cache == nil {
 		return nil
 	}
-	opts := topology.DefaultBuildOptions()
+	opts := topology.RelationshipBuildOptions()
+	opts.IncludeSecrets = true
 	if len(namespaces) > 0 {
 		opts.Namespaces = namespaces
 	}

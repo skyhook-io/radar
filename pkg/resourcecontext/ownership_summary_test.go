@@ -99,3 +99,15 @@ func TestControllerSummaryKeepsRoleAndCoverage(t *testing.T) {
 		t.Fatalf("missing coverage without a pointer: %+v", rc)
 	}
 }
+
+func TestControllerOmissionKeepsKnownCollectionReason(t *testing.T) {
+	for _, reason := range []readreason.Code{readreason.KindSyncPending, readreason.RadarKindNotCollected} {
+		chain := topology.ChainOf(ownership.ControllerChainAnswer{
+			Subject:             ownership.Subject{Access: ownership.Allowed, Read: ownership.ObjectRead{State: ownership.Present}},
+			UnfollowedReference: &ownership.OwnerResolution{State: ownership.OwnerUnknown, Gap: ownership.Gap{Reason: reason}},
+		})
+		if got := ControllerOmission(chain); got != OmittedCacheCold {
+			t.Fatalf("%s: %s", reason, got)
+		}
+	}
+}

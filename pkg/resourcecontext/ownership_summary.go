@@ -2,10 +2,13 @@ package resourcecontext
 
 import (
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
+// ControllerOmission describes an unreadable or unsettled controller walk,
+// including a subject the caller cannot get. A readable prefix can still exist.
 func ControllerOmission(chain *topology.ControllerChain) OmittedReason {
 	if chain == nil {
 		return OmittedUnavailable
@@ -14,11 +17,16 @@ func ControllerOmission(chain *topology.ControllerChain) OmittedReason {
 	case "withheld":
 		return OmittedRBACDenied
 	case "unknown":
+		if chain.Reason == readreason.KindSyncPending || chain.Reason == readreason.RadarKindNotCollected {
+			return OmittedCacheCold
+		}
 		return OmittedUnavailable
 	}
 	return ""
 }
 
+// ControllerSummary projects an owner-reference or spec-declared controller.
+// Its source is native even when the controller belongs to a GitOps API group.
 func ControllerSummary(ref topology.ResourceRef) *ManagedByRef {
 	out := ManagedByFromOwner(ref.Kind, ref.Group, ref.Namespace, ref.Name)
 	if out != nil {
@@ -32,7 +40,7 @@ func ControllerSummary(ref topology.ResourceRef) *ManagedByRef {
 }
 
 // ManagerSummary emits a navigation lead, not a second management verdict.
-// Claims without a present manager stay in the detail evidence instead.
+// Claims need a readable manager; native Helm names a logical release instead.
 func ManagerSummary(answer ownership.ManagerAnswer) *ManagedByRef {
 	if !answer.Subject.Present() || answer.Lead == nil || answer.Lead.Namespace == "" {
 		return nil

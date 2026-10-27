@@ -489,6 +489,9 @@ type Relationships struct {
 	// reads it, for the resource contexts' top owner. Set only with
 	// Ownership; not on the wire.
 	ControllerChain *ControllerChain `json:"-"`
+	// OtherManagersIncomplete records unavailable spec-management sources;
+	// denied sources are hidden without disclosing that they exist.
+	OtherManagersIncomplete bool `json:"-"`
 	// manageSources and manageTargets are the resources this one's manages
 	// edges come from and go to, which ApplyOwnership sorts into ownership,
 	// management and display shortcuts.

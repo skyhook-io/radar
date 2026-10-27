@@ -8,8 +8,7 @@
 // kind canonicalization, managedBy resolution, per-row dispatch by
 // scope) is identical, so it lives here.
 //
-// pkg/resourcecontext intentionally has no dependencies on internal/*
-// or pkg/topology; the join happens here.
+// pkg/resourcecontext has no dependencies on internal/*; the join happens here.
 package summarycontext
 
 import (
@@ -26,6 +25,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -41,23 +41,58 @@ import (
 // from different operators). Pass "" for core-group resources.
 type Builder func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext
 
-// Keep enrichment on the caller's goroutine: the batch ownership view is
-// not safe for concurrent use. Its authorization uses the same deadline.
-func UntilDeadline(ctx context.Context, build Builder) Builder {
+// Budget bounds optional list/search enrichment, including authorization.
+// It starts on the first row; core listing/searching uses the original context.
+// The returned builder and cleanup are sequential, like the ownership View.
+const Budget = 3 * time.Second
+
+func WithBudget(ctx context.Context, build func(context.Context) Builder) (Builder, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stopBudget := func() {}
+	var builder Builder
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
-		if ctx.Err() != nil {
-			return nil
+		if builder == nil {
+			var budgetCtx context.Context
+			budgetCtx, stopBudget = context.WithTimeout(ctx, Budget)
+			if budgetCtx.Err() == nil {
+				// Preparation includes caller-specific authorization; a slow caller must
+				// not suppress another caller's independently readable context.
+				ready := make(chan Builder, 1)
+				go func() { ready <- build(budgetCtx) }()
+				select {
+				case builder = <-ready:
+				case <-budgetCtx.Done():
+				}
+			}
+			if builder == nil {
+				reason := resourcecontext.OmittedUnavailable
+				if budgetCtx.Err() != nil {
+					reason = resourcecontext.OmittedBudgetExceeded
+				}
+				builder = func(obj runtime.Object, u *unstructured.Unstructured, _, _, _, _ string) *resourcecontext.ResourceSummaryContext {
+					if obj == nil && u != nil {
+						obj = u
+					}
+					return resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{Omitted: []resourcecontext.OmittedField{
+						{Field: "managedBy", Reason: reason}, {Field: "issueCount", Reason: reason},
+					}})
+				}
+			}
 		}
-		return build(obj, u, group, kind, namespace, name)
-	}
+		return builder(obj, u, group, kind, namespace, name)
+	}, func() { stopBudget(); cancel() }
 }
 
-// SearchBudget bounds how long search waits for its per-hit context (issue
-// index and the topology behind managedBy). Both read custom resources, which
-// right after a restart wait on Radar's custom-resource discovery for tens of
-// seconds on a CRD-heavy cluster; search answers without the context rather
-// than hold its results.
-const SearchBudget = 3 * time.Second
+func WithinContext[T any](ctx context.Context, build func() T) T {
+	if ctx.Err() != nil {
+		var zero T
+		return zero
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		return Within(time.Until(deadline), build)
+	}
+	return build()
+}
 
 // lagging counts builds still running after their caller stopped waiting.
 var lagging atomic.Int32
@@ -109,7 +144,7 @@ func Within[T any](budget time.Duration, build func() T) T {
 
 // BuilderFromIndexes composes canonical ownership next hops and optional issue
 // counts. The graph is obtained only for residual spec-declared relations.
-func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
+func BuilderFromIndexes(ctx context.Context, topologySource func() *topology.Topology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
 	var topo *topology.Topology
 	var relIdx *topology.RelationshipsIndex
 	var resourceProvider topology.ResourceProvider
@@ -130,8 +165,12 @@ func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx,
 		if topo == nil {
 			return nil
 		}
-		return topology.GetRelationshipsWithObject(kind, namespace, name, obj, topo,
+		rel := topology.GetRelationshipsWithObject(kind, namespace, name, obj, topo,
 			resourceProvider, dynamicProvider, relIdx)
+		if rel == nil {
+			return &topology.Relationships{}
+		}
+		return rel
 	}
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		var managedBy *resourcecontext.ManagedByRef
@@ -142,31 +181,39 @@ func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx,
 		if source == nil && u != nil {
 			source = u
 		}
-		if u != nil && group == aicontext.TrivyGroup {
+		if ctx.Err() != nil {
+			omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedBudgetExceeded}}
+			if group == aicontext.TrivyGroup {
+				omitted = append(omitted, resourcecontext.OmittedField{Field: "scanned", Reason: resourcecontext.OmittedBudgetExceeded})
+			}
+		} else if u != nil && group == aicontext.TrivyGroup {
 			managedBy, scanned = trivyScanTarget(k8s.GetResourceCache(), u, canRead)
 		} else if m, ok := source.(metav1.Object); ok && owners != nil {
 			ref := resourceid.Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}
 			chain := owners.Of(m, ref)
 			if top := chain.Top(); top != nil {
 				managedBy = resourcecontext.ControllerSummary(*top)
-			} else {
+			} else if chain == nil || chain.Stop != "" || len(chain.Refs) > 0 {
 				var other []topology.ResourceRef
 				if chain != nil && chain.Stop == "" && len(chain.Refs) > 0 {
 					rel := relationships(kind, namespace, name, source)
-					residualUnavailable = rel == nil
-					other = owners.OtherManagers(rel, ref)
+					other, residualUnavailable = owners.OtherManagers(rel, ref)
 				}
 				if len(other) > 0 {
 					managedBy = resourcecontext.ControllerSummary(other[0])
 				} else {
-					managedBy = resourcecontext.ManagerSummary(owners.Manager(ref))
+					answer := owners.Manager(ref)
+					managedBy = resourcecontext.ManagerSummary(answer)
+					if managedBy == nil && answer.State != ownership.ManagerNone {
+						omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedUnavailable}}
+					}
 				}
 			}
-			if reason := resourcecontext.ControllerOmission(chain); reason != "" && (managedBy == nil || chain.Top() != nil) {
+			if reason := resourcecontext.ControllerOmission(chain); reason != "" {
 				omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: reason}}
 			}
 		}
-		if residualUnavailable && managedBy == nil && len(omitted) == 0 {
+		if residualUnavailable && len(omitted) == 0 {
 			omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedUnavailable}}
 		}
 		idx := namespacedIdx

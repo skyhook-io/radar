@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -54,6 +55,31 @@ func memberState(gk resourceid.GroupKind, u *unstructured.Unstructured) ownershi
 		return ownership.MembersUnreadable
 	}
 	return located(gk, u)
+}
+
+type membershipStateObservation struct {
+	uid                 types.UID
+	version, apiVersion string
+	state               ownership.MembershipState
+}
+
+// A resource version identifies the immutable inventory read from the informer.
+// Keep only its scalar validation result, not the potentially large cached object.
+func (s *session) cachedMemberState(gk resourceid.GroupKind, u *unstructured.Unstructured) ownership.MembershipState {
+	if u.GetResourceVersion() == "" {
+		return memberState(gk, u)
+	}
+	ref := resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()}
+	previous, found := s.membershipStates[ref]
+	if found && previous.uid == u.GetUID() && previous.version == u.GetResourceVersion() && previous.apiVersion == u.GetAPIVersion() {
+		return previous.state
+	}
+	state := memberState(gk, u)
+	if s.membershipStates == nil {
+		s.membershipStates = make(map[resourceid.Ref]membershipStateObservation)
+	}
+	s.membershipStates[ref] = membershipStateObservation{uid: u.GetUID(), version: u.GetResourceVersion(), apiVersion: u.GetAPIVersion(), state: state}
+	return state
 }
 
 // appliesElsewhere reports whether a manager is known to apply to another
@@ -115,7 +141,7 @@ func (s *session) Membership(manager resourceid.Ref) ownership.MembersRead {
 		return ownership.MembersRead{Manager: unavailable(manager, readreason.ReadError)}
 	}
 	var state ownership.MembershipState
-	read := s.readObject(manager, func(u *unstructured.Unstructured) { state = memberState(gk, u) })
+	read := s.readObject(manager, func(u *unstructured.Unstructured) { state = s.cachedMemberState(gk, u) })
 	r := ownership.MembersRead{Manager: read}
 	if read.State == ownership.Present {
 		r.Membership = state
@@ -247,7 +273,7 @@ func (s *session) readMembers(kind ownership.CatalogKind, keys []string) members
 	keys = append([]string{k8score.UnreadableMembersKey}, keys...)
 	s.dynamicIndexed(q, kind, k8score.GitOpsMembersIndex, keys, func(u *unstructured.Unstructured) {
 		manager := resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()}
-		switch memberState(gk, u) {
+		switch s.cachedMemberState(gk, u) {
 		case ownership.MembersUnreadable:
 			m.unreadable = append(m.unreadable, manager)
 		case ownership.MembersRemote:

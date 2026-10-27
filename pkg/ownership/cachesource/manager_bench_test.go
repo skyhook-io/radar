@@ -2,6 +2,7 @@ package cachesource
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -10,7 +11,7 @@ import (
 )
 
 func BenchmarkAgentOwnershipBatch(b *testing.B) {
-	for _, scenario := range []string{"omitted-claims", "unreadable-managers", "shared-controller", "many-namespaces"} {
+	for _, scenario := range []string{"omitted-claims", "listed-members", "unreadable-managers", "shared-controller", "many-namespaces"} {
 		b.Run(scenario, func(b *testing.B) {
 			world := ownershiptest.NewBuilder()
 			var rows, members []resourceid.Ref
@@ -30,9 +31,12 @@ func BenchmarkAgentOwnershipBatch(b *testing.B) {
 						members = append(members, world.Add("", "ConfigMap", "shop", "listed-"+name).Ref)
 					}
 					rows = append(rows, row.Ref)
+					if scenario == "listed-members" {
+						members = append(members, row.Ref)
+					}
 				}
 			}
-			if scenario == "omitted-claims" {
+			if scenario == "omitted-claims" || scenario == "listed-members" {
 				world.Manager(ownership.ArgoApplication, "argocd", "app", ownership.MembersRecorded, "shop", members...)
 			}
 			if scenario == "unreadable-managers" {
@@ -44,6 +48,11 @@ func BenchmarkAgentOwnershipBatch(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
+				b.StopTimer()
+				runtime.GC()
+				var before, after runtime.MemStats
+				runtime.ReadMemStats(&before)
+				b.StartTimer()
 				session := begin(b, cache.source())
 				view := ownership.NewView(session, ownership.Unrestricted())
 				for _, row := range rows {
@@ -53,6 +62,14 @@ func BenchmarkAgentOwnershipBatch(b *testing.B) {
 						view.Manager(row)
 					}
 				}
+				b.StopTimer()
+				runtime.GC()
+				runtime.ReadMemStats(&after)
+				runtime.KeepAlive(view)
+				if after.HeapAlloc > before.HeapAlloc {
+					b.ReportMetric(float64(after.HeapAlloc-before.HeapAlloc), "retained_B")
+				}
+				b.StartTimer()
 				if err := session.ValidateCaches(); err != nil {
 					b.Fatal(err)
 				}

@@ -1064,9 +1064,10 @@ What gets reported follows from that:
   `radar_namespace_not_collected` when an `ns:` term names it.
 - **Named kinds may warm within one shared two-second deadline.** Broad searches
   do not wait for warm-up. Kinds still loading are reported as `kind_sync_pending`.
-  The per-hit `summaryContext` (health, issue count, managedBy) is left out when it
-  can't be built within about three seconds, as right after a restart while
-  custom-resource discovery runs.
+  Optional list/search enrichment shares a three-second budget, including authorization.
+  After it expires, rows retain health and already-computed issue counts; `omitted`
+  marks `managedBy` as `budget_exceeded`. If preparation itself could not finish,
+  health still appears and `issueCount` is also marked unavailable rather than implying zero.
 - **A kind Radar watches namespace by namespace is searched where it has
   loaded.** A namespace whose informer is still loading is a `kind_sync_pending`
   gap for the kind, and the namespaces that are ready still contribute hits.
@@ -1336,9 +1337,13 @@ GitOps evidence answer, including claims, conflicts and ancestor attribution. Fo
 or use `diagnose` to inspect that evidence. Trivy reports retain their scanned-workload navigation.
 
 Both detail and summary use `omitted: [{field: "managedBy", reason: "unavailable"}]` when Radar couldn't finish the
-controller walk, or `rbac_denied` for unreadable owners. A summary can carry that note even with no pointer. An
-independent spec/GitOps lead is not marked as an incomplete controller root. Controller and management lookups use collected inventory and start
-no watches: an uncollected or unsynced CRD can leave a gap. Native custom kinds include their exact API group.
+controller walk, `cache_cold` for a known uncollected or unsynced owner kind, or `rbac_denied` for unreadable owners. A summary can carry that note even with no pointer. An
+independent GitOps lead can coexist with a note about the incomplete controller lookup. Controller and management lookups use collected inventory and start
+no watches: an uncollected or unsynced CRD can leave a gap. Read that kind with `list_resources` to activate an on-demand cache, then retry. Non-controller owner references (including Strimzi PodSet-to-Kafka) are available as `owner` but do not extend the controller walk. Native custom kinds include their exact API group.
+
+A cold relationship graph or an unavailable spec-derived controller also leaves `managedBy` incomplete.
+A denied spec source stays hidden without a note naming or counting that relationship. `omitted` paths are
+relative to their containing context; a readable pointer may coexist with an incompleteness note.
 
 ### Node placement context
 

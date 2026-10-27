@@ -32,6 +32,7 @@ type View struct {
 	searches        map[resourceid.Ref]DependentCandidatesRead
 	recording       map[resourceid.Ref]RecordingManagersAnswer
 	claimMembership map[resourceid.Ref]MembersRead
+	unreadable      []resourceid.Ref
 }
 
 type accessRead struct {
@@ -540,11 +541,24 @@ func (v *View) recordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 			a.Managers = append(a.Managers, r.read.Object)
 		}
 	}
+	// Consecutive rows commonly see the same unreadable inventories. Share
+	// their filtered references without freezing index reads or permissions.
+	a.Unreadable = v.unreadable
+	shared, n := true, 0
 	for _, m := range found.Unreadable {
 		if may(m.GroupKind(), m.Namespace) {
-			a.Unreadable = append(a.Unreadable, m)
+			if shared && (n == len(a.Unreadable) || a.Unreadable[n] != m) {
+				a.Unreadable = slices.Clone(a.Unreadable[:n])
+				shared = false
+			}
+			if !shared {
+				a.Unreadable = append(a.Unreadable, m)
+			}
+			n++
 		}
 	}
+	a.Unreadable = a.Unreadable[:n:n]
+	v.unreadable = a.Unreadable
 	for _, m := range found.Remote {
 		if may(m.GroupKind(), m.Namespace) {
 			a.Remote = append(a.Remote, m)

@@ -202,6 +202,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	// answered: the host's ownership answer stands, even one with nothing to
 	// say, as for an Event, whose owner references ownership doesn't follow.
+	relationshipsAvailable := opts.Topology != nil || opts.Relationships != nil
 	answered := false
 	if m, ok := obj.(metav1.Object); ok && opts.Ownership != nil {
 		if rel == nil {
@@ -234,6 +235,8 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		}
 		if reason != "" {
 			omitted.add("managedBy", reason)
+		} else if rel.OtherManagersIncomplete || !relationshipsAvailable {
+			omitted.add("managedBy", OmittedUnavailable)
 		}
 	}
 

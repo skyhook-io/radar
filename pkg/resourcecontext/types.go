@@ -192,9 +192,9 @@ type ManagerClaimContext struct {
 // ManagedByRef is the compact form of a "managed-by" pointer used in
 // ResourceSummaryContext (list/search rows). Carries Kind alongside Source so
 // consumers can distinguish e.g. a Flux Kustomization from a Flux
-// HelmRelease without re-parsing the Source string. Group is set only for a
-// "native" kind that isn't built in, such as an operator's custom resource,
-// to keep per-row bytes minimal where the kind alone names it.
+// HelmRelease without re-parsing Source. Native controller/spec references
+// include Group unless their identity matches the built-in kind and group.
+// "native" describes the relationship, including custom controllers, not a vendor.
 type ManagedByRef struct {
 	Kind      string `json:"kind"` // "Application" | "Kustomization" | "HelmRelease" | "Deployment" | "DaemonSet" | "StatefulSet" | "Rollout" | …
 	Group     string `json:"group,omitempty"`
@@ -206,17 +206,17 @@ type ManagedByRef struct {
 // ResourceSummaryContext is the per-row enrichment attached to
 // list_resources and search hits. The row-tier companion to
 // ResourceContext (the detail-tier enrichment on GET responses) —
-// bounded to triage facts (typically ~60 bytes, plus at most 33 bytes for
-// annotation pause intent). Always-on when the caller did not opt out via
+// bounded to triage facts. Always-on when the caller did not opt out via
 // context=none.
 type ResourceSummaryContext struct {
 	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
 
-	ManagedBy  *ManagedByRef  `json:"managedBy,omitempty"`
-	Health     string         `json:"health,omitempty"`
-	IssueCount int            `json:"issueCount,omitempty"`
-	Scanned    *ScannedRef    `json:"scanned,omitempty"`
-	Omitted    []OmittedField `json:"omitted,omitempty"`
+	ManagedBy  *ManagedByRef `json:"managedBy,omitempty"`
+	Health     string        `json:"health,omitempty"`
+	IssueCount int           `json:"issueCount,omitempty"`
+	Scanned    *ScannedRef   `json:"scanned,omitempty"`
+	// Omitted qualifies missing or incomplete fields, including a present pointer.
+	Omitted []OmittedField `json:"omitted,omitempty"`
 }
 
 // ScannedRef names the object a security-scan report (Trivy Operator) is
@@ -877,8 +877,9 @@ type KyvernoFinding struct {
 	Message string `json:"message,omitempty"`
 }
 
-// OmittedField records a field that was intentionally dropped from the
-// response. See the "omitted.field path convention" in the v1 contract:
+// OmittedField records an unavailable field or an incomplete value. A readable
+// managedBy prefix can coexist with a note that its controller walk is incomplete.
+// Paths are relative to the containing resourceContext or summaryContext:
 //   - top-level field: bare name (e.g. "selectedBy")
 //   - nested: dotted path (e.g. "policySummary.kyverno")
 //   - whole resourceContext skipped: "*"

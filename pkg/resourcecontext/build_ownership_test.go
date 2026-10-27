@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -192,6 +193,34 @@ func TestBuildManagedByHidesUnreadableManagersWithoutANote(t *testing.T) {
 	}
 }
 
+func TestBuildReportsUnavailableSpecControllers(t *testing.T) {
+	secret := &corev1.Secret{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls", UID: "uid-tls"}}
+	for _, tc := range []struct{ graph, prefix bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		graph := tc.graph
+		opts := Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
+			rel.Ownership = &topology.OwnershipCoverage{}
+			rel.ControllerChain = &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Secret", Namespace: "shop", Name: "tls"}}}
+			rel.OtherManagersIncomplete = graph
+			if tc.prefix {
+				rel.ControllerChain.Refs = append(rel.ControllerChain.Refs, topology.ResourceRef{Group: "example.io", Kind: "Widget", Namespace: "shop", Name: "generator"})
+			}
+		}}
+		if graph {
+			opts.Relationships = &topology.Relationships{}
+		}
+		rc := Build(context.Background(), secret, opts)
+		found := false
+		for _, o := range rc.Omitted {
+			if o.Field == "managedBy" && o.Reason == OmittedUnavailable {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("graph=%v: missing incompleteness: %+v", graph, rc)
+		}
+	}
+}
+
 // managedBy reaches the top of the caller's controller chain when the graph's
 // pointer stops on it (the graph has no node for a custom resource nothing
 // owns), and when the manager answer takes the GitOps pointer it would
@@ -221,12 +250,13 @@ func TestBuildManagedByReachesTheTopController(t *testing.T) {
 		{"a GitOps manager the answer takes", []topology.ResourceRef{app}, answer, chain, "TidbCluster", ""},
 		{"a GitOps manager at the chain's top stays the answer's", nil, answer, &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Pod", Namespace: "db", Name: "basic-tidb-0"}, sts, app}}, "Application", ""},
 		{"another managing controller", []topology.ResourceRef{cert}, nil, chain, "TidbCluster", ""},
+		{"an owner Radar is still collecting", nil, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "unknown", Reason: readreason.KindSyncPending}, "StatefulSet", OmittedCacheCold},
 		{"an owner Radar couldn't check", []topology.ResourceRef{sts}, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "unknown"}, "StatefulSet", OmittedUnavailable},
 		{"an owner the caller may not read", nil, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "withheld"}, "StatefulSet", OmittedRBACDenied},
 		{"a GitOps pointer above a stop", []topology.ResourceRef{app}, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "unknown"}, "StatefulSet", OmittedUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rc := Build(context.Background(), pod, Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
+			rc := Build(context.Background(), pod, Options{Topology: &topology.Topology{}, AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
 				rel.ManagedBy = tc.pointer
 				rel.Ownership = &topology.OwnershipCoverage{Manager: tc.manager}
 				rel.ControllerChain = tc.chain

@@ -1,10 +1,12 @@
 package topology
 
 import (
+	"encoding/json"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +80,35 @@ func TestContourMalformedTLSNameKeepsTheProxyRoutes(t *testing.T) {
 	}
 	if !found {
 		t.Error("an unusable TLS secret name dropped the proxy's tcpproxy backend")
+	}
+}
+
+func TestRelationshipGraphRetainsUnusedCertificateSecrets(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
+	cert := genericIdentityObject(gvr, "Certificate", "shop", "tls")
+	cert.Object["spec"] = map[string]any{"secretName": "tls"}
+	dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Certificate"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {cert}}, listCalls: map[schema.GroupVersionResource]int{}}
+	provider := &mockProvider{secrets: []*corev1.Secret{{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls"}, Data: map[string][]byte{"tls.key": []byte("must-not-appear")}}}}
+	for _, full := range []bool{false, true} {
+		for _, ns := range []string{"shop", "other"} {
+			opts := DefaultBuildOptions()
+			opts.IncludeSecrets, opts.ForRelationshipCache = true, full
+			opts.Namespaces = []string{ns}
+			graph, err := NewBuilder(provider).WithDynamic(dynamic).Build(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, edge := range graph.Edges {
+				found = found || edge.Source == "certificate/shop/tls" && edge.Target == "secret/shop/tls" && edge.Type == EdgeManages
+			}
+			if found != (full && ns == "shop") {
+				t.Fatalf("relationship=%v namespace=%s edge=%v", full, ns, found)
+			}
+			wire, _ := json.Marshal(graph)
+			if strings.Contains(string(wire), "must-not-appear") || strings.Contains(string(wire), "tls.key") {
+				t.Fatal("Secret payload leaked into graph")
+			}
+		}
 	}
 }

@@ -156,7 +156,7 @@ func ApplyOwner(rel *Relationships, v *ownership.View, fetched ownership.Observa
 	}
 	if cov, _, answered := applyOwner(rel, v, fetched); answered {
 		cov.Manager = managerAnswer(v.Manager(fetched.Ref))
-		rel.Managers = OtherManagingControllers(rel, v, fetched.Ref)
+		rel.Managers, rel.OtherManagersIncomplete = OtherManagingControllers(rel, v, fetched.Ref)
 	}
 }
 
@@ -294,6 +294,7 @@ func OwnershipUnavailable(rel *Relationships, reason string) {
 func clearOwnership(rel *Relationships) *OwnershipCoverage {
 	rel.Owner, rel.Owners, rel.Deployment, rel.Children, rel.OlderRevisions, rel.Managers, rel.Manages = nil, nil, nil, nil, nil, nil, nil
 	rel.ControllerChain = nil
+	rel.OtherManagersIncomplete = false
 	rel.Ownership = &OwnershipCoverage{}
 	return rel.Ownership
 }
@@ -375,7 +376,8 @@ type ControllerChain struct {
 	// references loop or run too long, "withheld" when the caller may not
 	// read it. Empty when the walk reached the top, or the next owner is gone,
 	// replaced, unresolvable or an Event.
-	Stop string
+	Stop   string
+	Reason readreason.Code
 }
 
 // ChainOf projects a controller walk the caller made; nil when the caller
@@ -391,6 +393,7 @@ func ChainOf(a ownership.ControllerChainAnswer) *ControllerChain {
 	switch u := a.UnfollowedReference; {
 	case u != nil && (u.State == ownership.OwnerUnknown || u.State == ownership.OwnerWithheld):
 		c.Stop = u.State.String()
+		c.Reason = u.Gap.Reason
 	case a.Cycle, a.Truncated:
 		c.Stop = ownership.OwnerUnknown.String()
 	}
@@ -423,13 +426,17 @@ func (c *ControllerChain) Top() *ResourceRef {
 
 // OtherManagingControllers retains spec-declared graph relations only when
 // they cannot be owner references, controller shortcuts or GitOps evidence.
-func OtherManagingControllers(rel *Relationships, v *ownership.View, subject resourceid.Ref) []ResourceRef {
-	if rel == nil || len(rel.manageSources) == 0 {
-		return nil
+// Incomplete means a source could not be checked, not that one was denied.
+func OtherManagingControllers(rel *Relationships, v *ownership.View, subject resourceid.Ref) (managers []ResourceRef, incomplete bool) {
+	if rel == nil {
+		return nil, true
+	}
+	if len(rel.manageSources) == 0 {
+		return nil, false
 	}
 	chain := v.ControllerChain(subject)
 	if !settled(chain) {
-		return nil
+		return nil, false
 	}
 	named := namedOwners(chain.Subject.Read.Object)
 	var out []ResourceRef
@@ -438,12 +445,23 @@ func OtherManagingControllers(rel *Relationships, v *ownership.View, subject res
 		if ownership.IsRecordingManager(r.GroupKind()) || r.Kind == "HelmRelease" && r.Group == "" {
 			continue
 		}
-		if managingSource(v, r, named, chain) {
+		// A GatewayClass selects an implementation; it does not generate the Gateway.
+		if r.Group == "gateway.networking.k8s.io" && r.Kind == "GatewayClass" {
+			continue
+		}
+		if named[r] || slices.Contains(chain.Chain, r) {
+			continue
+		}
+		read, _ := v.References(r)
+		switch {
+		case read.Access == ownership.Undecided, read.Access == ownership.Allowed && read.Read.State == ownership.Unavailable:
+			incomplete = true
+		case read.Present():
 			out = appendResourceRef(out, source)
 		}
 	}
 	slices.SortFunc(out, func(a, b ResourceRef) int { return strings.Compare(refIdentity(a).String(), refIdentity(b).String()) })
-	return out
+	return out, incomplete
 }
 
 func managingSource(v *ownership.View, ref resourceid.Ref, named map[resourceid.Ref]bool, chain ownership.ControllerChainAnswer) bool {

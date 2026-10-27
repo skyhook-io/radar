@@ -1,7 +1,8 @@
 # Ownership: owners, dependents and managers
 
 Radar answers "what owns this object?", "what does it own?" and "what manages it?" from the informer caches it already
-holds, with no API calls. This page is the map: the model, which field answers which question, the layers, and where
+holds, without fetching relationship objects from the API. Authenticated requests may perform SubjectAccessReviews
+to authorize those cached reads. This page is the map: the model, which field answers which question, the layers, and where
 each rule lives. The doc comments at the linked code are the specification.
 
 ## The model
@@ -106,7 +107,7 @@ List/search summaries prefer this controller to a GitOps or Helm manager, includ
 readable controller ancestor, an observed spec-declared managing controller (such as a Certificate for its Secret) takes
 precedence over a GitOps lead. Those residual graph sources use the same classification as Related Resources: exclude
 owner references, controller shortcuts, unreadable objects, GitOps managers and native Helm. An unsettled chain cannot
-establish that a graph source is not an ownership shortcut, so it supplies no residual manager. The graph is loaded and
+establish that a graph source is not an ownership shortcut, so it supplies no residual manager. GatewayClass is excluded from the agent projection: it selects an implementation rather than generating the Gateway. The graph is loaded and
 indexed only when this residual lookup is needed.
 
 With no controller relation, `View.Manager` supplies a summary lead for `agree`, `listed` or `shared` with a lead. A
@@ -114,11 +115,17 @@ With no controller relation, `View.Manager` supplies a summary lead for `agree`,
 `not-recording` claim with release namespace and name. Copied or weak inherited claims and missing, unresolved, withheld or unchecked claims remain in
 full detail instead of becoming summary pointers. A lead is where to inspect next, never a verdict of exclusive management.
 
-Both detail and summary `omitted` use `managedBy: rbac_denied` or `unavailable` when a controller walk stops short,
-including when no ancestor was readable. An independent spec/GitOps lead is not labelled as a partial controller root.
+Both detail and summary `omitted` use `managedBy: rbac_denied`, `cache_cold` (a known uncollected or unsynced kind), or `unavailable` when a controller walk stops short,
+including when no ancestor was readable and a GitOps lead is available. The note describes the incomplete preferred
+controller lookup, not the eligibility of the lead shown. A cold graph, an unavailable spec source, or management
+evidence with no eligible navigation lead also adds `unavailable`; absence never establishes that an object is unmanaged. `unavailable` is not a promise that retrying will help: full manager evidence may explain a conflict or a claim without a usable local lead. Even `manager.state=none` means no evidence in this model, not proof that no controller or external writer exists.
+The relationship-cache graph retains unused Secrets too, so a newly issued Certificate can name its Secret before any workload consumes it. The normal visual graph still hides unused Secrets. MCP summaries use the same full relationship options as detail.
+
 Lists share one `k8s.AgentOwnership` session and view across rows. Claim checks share a manager's membership state in
-that view; member enumeration still reads current status. UI ownership retains namespace-level access; REST AI context
+that view; member enumeration still reads current status. The cache source validates each immutable inventory observation once per request (identity, UID, resource version and API version); empty versions are not memoized. Searches still read the current atomic union of member and unreadable index buckets. Identical permission-filtered unreadable-reference slices are shared without freezing later permissions or status changes. The remaining unreadable-manager search cost is proportional to rows × unreadable managers. UI ownership retains namespace-level access; REST AI context
 and summaries additionally require exact reference `get` permission before deriving their answers, as MCP does.
+
+A controller chain follows only `controller: true` owner references. A sole non-controller owner remains available in `owner`, but is not promoted to a controller: Strimzi PodSet-to-Kafka references are one example. Missing `managedBy` is not proof of no ownership. Flux prune-disabled orphans and Helm retained objects can keep claims after management ends; a claim-derived lead is a place to investigate, never proof of current reconciliation. Native Helm coordinates do not verify release existence.
 
 ## Coverage
 

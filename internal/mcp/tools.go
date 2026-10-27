@@ -126,6 +126,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(pods/po, deployments/deploy, services/svc, configmaps/cm, CRDs). Returns compact Kubernetes-shaped " +
 			"rows plus summaryContext by default (managedBy, health, issueCount) so you can " +
 			"compare many similar resources and pick suspects before calling get_resource. " +
+			"managedBy is the controller or manager to inspect next, not an edit target. " +
+			"A lead is not exclusive; omitted can qualify it. " +
+			"No lead or manager.state=none means no evidence, not unmanaged. Read get_resource resourceContext.manager before planning edits. " +
 			"Returns {summary, next?, coverage, items}: summary says in words what the rows cover and what was not read; " +
 			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
@@ -474,7 +477,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
-			"summaryContext. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
+			"summaryContext. managedBy is a controller-first inspection lead, not an edit target; absence never proves unmanaged. " +
+			"A lead is not exclusive; omitted can qualify it. " +
+			"No lead or manager.state=none means no evidence, not unmanaged. Read get_resource resourceContext.manager before planning edits. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
 			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint. " +
 			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
 		Annotations: readOnly,
@@ -711,7 +716,7 @@ type listResourcesInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind to list for a broad sweep, e.g. pods/po, deployments/deploy, services/svc, configmaps/cm. Prefer this before get_resource when comparing many same-kind objects."`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for app-scoped triage"`
-	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches summaryContext (managedBy + health + issueCount + crossplanePause) for suspect ranking; 'none' returns bare rows"`
+	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches health, issueCount, crossplanePause and managedBy (controller-first inspection lead; absence never proves unmanaged). Read get_resource resourceContext.manager for GitOps/Helm evidence before choosing where to edit. 'none' returns bare rows"`
 }
 
 type getResourceInput struct {
@@ -761,7 +766,7 @@ type searchInput struct {
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations, report (Trivy findings; the binding matches one finding). Guard fields with has(spec.sources); check map keys with '\"app\" in labels'. Example, Deployments with zero or unreported ready replicas: 'kind == \"Deployment\" && (!has(status.readyReplicas) || status.readyReplicas == 0)'"`
-	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount + crossplanePause) for suspect ranking; 'none' returns bare hits"`
+	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches health, issueCount, crossplanePause and managedBy (controller-first inspection lead; absence never proves unmanaged). Read get_resource resourceContext.manager for GitOps/Helm evidence before choosing where to edit. 'none' returns bare hits"`
 }
 
 type issuesInput struct {
@@ -1016,9 +1021,11 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	// cluster-scoped RBAC gate above (canReadClusterScopedKind) already
 	// authorized the read, so we pass nil here to compose cluster-wide.
 	if input.Context != "none" {
-		if builder := newResourceSummaryContextBuilder(ctx, listScope); builder != nil {
-			summarycontext.AttachToTypedList(results, objs, builder)
-		}
+		builder, cancel := summarycontext.WithBudget(ctx, func(ctx context.Context) summarycontext.Builder {
+			return newResourceSummaryContextBuilder(ctx, listScope)
+		})
+		defer cancel()
+		summarycontext.AttachToTypedList(results, objs, builder)
 	}
 
 	if !resourceReadCacheIsCurrent(cache) {
@@ -3437,13 +3444,11 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	// builder routes per-hit by scope; CanReadClusterScoped above
 	// already gates which cluster-scoped kinds are reachable.
 	if input.Context != "none" {
-		enrichmentCtx, cancel := context.WithTimeout(ctx, summarycontext.SearchBudget)
+		builder, cancel := summarycontext.WithBudget(ctx, func(ctx context.Context) summarycontext.Builder {
+			return newSearchSummaryContextBuilder(ctx, scanNamespaces)
+		})
 		defer cancel()
-		if builder := summarycontext.Within(summarycontext.SearchBudget, func() summarycontext.Builder {
-			return newSearchSummaryContextBuilder(enrichmentCtx, scanNamespaces)
-		}); builder != nil {
-			opts.SummaryBuilder = search.SummaryBuilderFunc(summarycontext.UntilDeadline(enrichmentCtx, builder))
-		}
+		opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 	}
 	result, err := search.Search(ctx, provider, parsed, opts)
 	if errors.Is(err, search.ErrConnectionChanged) || (err == nil && !provider.Current()) {

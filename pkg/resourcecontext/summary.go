@@ -21,8 +21,8 @@ import (
 // the per-result digest in here.
 type SummaryOptions struct {
 	// ManagedBy is the compact owner/GitOps pointer attached to the summary.
-	// Callers derive this from topology.Relationships via
-	// ManagedByFromOwner; nil leaves the field absent.
+	// Callers project the canonical controller or manager answer; nil leaves
+	// the field absent. Omitted distinguishes incomplete from settled absence.
 	ManagedBy *ManagedByRef
 
 	// IssueCount is the count of internal issue-engine findings scoped to
@@ -39,6 +39,7 @@ type SummaryOptions struct {
 
 	// Scanned, for a security-scan report, names the object it scanned.
 	Scanned *ScannedRef
+	// Omitted qualifies fields relative to the summary, including partial values.
 	Omitted []OmittedField
 }
 

@@ -1,6 +1,7 @@
 package summarycontext
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -52,12 +53,18 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-a", UID: "uid-pod", OwnerReferences: []metav1.OwnerReference{owner("apps", "Deployment", "web", "uid-dep")}, Labels: map[string]string{"argocd.argoproj.io/instance": "copied"}}}
 	standalone := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "standalone", UID: "uid-root"}}
 	missing := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "gap", UID: "uid-gap", OwnerReferences: []metav1.OwnerReference{owner("unknown.io", "Missing", "root", "uid-missing")}}}
+	managedGap := missing.DeepCopy()
+	managedGap.Name, managedGap.UID = "managed-gap", "uid-managed-gap"
+	_ = unstructured.SetNestedSlice(app.Object, []any{
+		map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "standalone"},
+		map[string]any{"kind": "Pod", "namespace": "shop", "name": "managed-gap"},
+	}, "status", "resources")
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls", UID: "uid-tls"}}
 	sealed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "sealed", UID: "uid-sealed"}}
 	unmanaged := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "unmanaged", UID: "uid-unmanaged"}}
 	cert := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": map[string]any{"namespace": "shop", "name": "tls", "uid": "uid-cert"}, "spec": map[string]any{"secretName": "tls"}}}
 	sealedSpec := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "bitnami.com/v1alpha1", "kind": "SealedSecret", "metadata": map[string]any{"namespace": "shop", "name": "sealed", "uid": "uid-sealed-spec"}}}
-	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, standalone, missing, secret, sealed, unmanaged)); err != nil {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, standalone, missing, managedGap, secret, sealed, unmanaged)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)
@@ -92,11 +99,13 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		note   resourcecontext.OmittedReason
 		graph  bool
 	}{
+		{"excluded Event", &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "event", UID: "uid-event"}}, "Event", ownership.Unrestricted(), "", "", false},
 		{"operator beats copied labels", pod, "Pod", ownership.Unrestricted(), "Widget", "", false},
 		{"denied top", pod, "Pod", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, "Deployment", resourcecontext.OmittedRBACDenied, false},
 		{"recorded without metadata", standalone, "Deployment", ownership.Unrestricted(), "Application", "", true},
-		{"recorded without graph", standalone, "Deployment", ownership.Unrestricted(), "Application", "", true},
+		{"recorded without graph", standalone, "Deployment", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, true},
 		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, false},
+		{"GitOps lead beside unknown owner", managedGap, "Pod", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, false},
 		{"certificate spec", secret, "Secret", ownership.Unrestricted(), "Certificate", "", true},
 		{"sealed secret spec", sealed, "Secret", ownership.Unrestricted(), "SealedSecret", "", true},
 		{"no graph or manager", unmanaged, "ConfigMap", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, true},
@@ -110,6 +119,7 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 					return nil
 				}
 				nodes := []topology.Node{
+					{ID: "deployment/shop/standalone", Kind: topology.KindDeployment, Name: "standalone", Data: map[string]any{"namespace": "shop", "apiVersion": "apps/v1"}},
 					{ID: "secret/shop/tls", Kind: topology.KindSecret, Name: "tls", Data: map[string]any{"namespace": "shop"}},
 					{ID: "secret/shop/sealed", Kind: topology.KindSecret, Name: "sealed", Data: map[string]any{"namespace": "shop"}},
 					{ID: "configmap/shop/unmanaged", Kind: topology.KindConfigMap, Name: "unmanaged", Data: map[string]any{"namespace": "shop"}},
@@ -124,7 +134,7 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 				}}
 			}
 			owners := k8s.NewAgentOwnership(func(*ownership.Catalog) ownership.Access { return tc.access })
-			build := BuilderFromIndexes(graph, nil, nil, nil, owners)
+			build := BuilderFromIndexes(context.Background(), graph, nil, nil, nil, owners)
 			meta := tc.obj.(metav1.Object)
 			group := ""
 			if tc.kind == "Deployment" {

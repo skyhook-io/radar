@@ -90,14 +90,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// (CanReadClusterScoped) already constrains which cluster-scoped
 	// kinds are reachable.
 	if r.URL.Query().Get("context") != "none" {
-		enrichmentCtx, cancel := context.WithTimeout(r.Context(), summarycontext.SearchBudget)
+		builder, cancel := summarycontext.WithBudget(r.Context(), func(ctx context.Context) summarycontext.Builder {
+			return s.newSearchSummaryContextBuilder(r.WithContext(ctx), scanNamespaces)
+		})
 		defer cancel()
-		enrichmentRequest := r.WithContext(enrichmentCtx)
-		if builder := summarycontext.Within(summarycontext.SearchBudget, func() summarycontext.Builder {
-			return s.newSearchSummaryContextBuilder(enrichmentRequest, scanNamespaces)
-		}); builder != nil {
-			opts.SummaryBuilder = search.SummaryBuilderFunc(summarycontext.UntilDeadline(enrichmentCtx, builder))
-		}
+		opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 	}
 	if expr := r.URL.Query().Get("filter"); expr != "" {
 		f, err := filter.CachedObjectFilter(expr)
