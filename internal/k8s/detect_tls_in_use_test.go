@@ -69,7 +69,10 @@ func withClass(class string) tlsIngressOpt {
 }
 
 func tlsIngress(ns, name string, secrets []string, opts ...tlsIngressOpt) *networkingv1.Ingress {
-	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))}}
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))},
+		Spec:       networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "shop.example.test"}}},
+	}
 	for _, s := range secrets {
 		ing.Spec.TLS = append(ing.Spec.TLS, networkingv1.IngressTLS{Hosts: []string{"shop.example.test"}, SecretName: s})
 	}
@@ -258,7 +261,10 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 	now := time.Now()
 	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
-	secrets := []string{"gce-tls", "classless-tls", "missing-class-tls", "alb-legacy-tls", "canary-tls", "delegated-tls"}
+	secrets := []string{"gce-tls", "classless-tls", "missing-class-tls", "alb-legacy-tls", "canary-tls", "delegated-tls", "orphan-tls"}
+	// A TLS entry naming only a host no rule serves is never presented.
+	orphan := tlsIngress("shop", "orphan", nil, withClass("nginx"), withAddress)
+	orphan.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{"old.example.test"}, SecretName: "orphan-tls"}}
 	base := func() []runtime.Object {
 		objects := []runtime.Object{
 			&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
@@ -268,6 +274,7 @@ func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 			tlsIngress("shop", "alb-legacy", []string{"alb-legacy-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "alb")),
 			tlsIngress("shop", "canary", []string{"canary-tls"}, withClass("nginx"), withAddress, withAnnotation("nginx.ingress.kubernetes.io/canary", "true")),
 			tlsIngress("shop", "delegated", []string{"delegated-tls"}, withClass("nginx"), withAddress, withAnnotation("projectcontour.io/tls-cert-namespace", "certs")),
+			orphan,
 		}
 		for _, s := range secrets {
 			objects = append(objects, tlsSecret("shop", s, expired))
@@ -293,7 +300,8 @@ func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 		t.Fatalf("detections = %s, want the legacy-gce and class-less Ingresses only", got)
 	}
 	withALBClass := append(base(), &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "aws"}, Spec: networkingv1.IngressClassSpec{Controller: "ingress.k8s.aws/alb"}})
-	if got := detect(t, withALBClass); got != "gce-tls" {
-		t.Fatalf("with an ALB class installed, detections = %s, want only gce-tls", got)
+	// ALB can claim a legacy class of any name and class-less Ingresses.
+	if got := detect(t, withALBClass); got != "" {
+		t.Fatalf("with an ALB class installed, detections = %s, want none", got)
 	}
 }

@@ -141,6 +141,8 @@ type ResourceCache struct {
 	secretWriteTimes *secretDataManagerWriteIndex
 	// generation is the cacheGeneration this cache was built under.
 	generation uint64
+	// controllerPods memoizes the TLS detector's controller pod lookups.
+	controllerPods controllerPodMemo
 }
 
 // Generation identifies the construction this cache came from. Every

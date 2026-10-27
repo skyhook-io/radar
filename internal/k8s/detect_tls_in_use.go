@@ -89,7 +89,7 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 		}
 		seen := map[string]bool{}
 		for _, tls := range ing.Spec.TLS {
-			if tls.SecretName == "" || seen[tls.SecretName] {
+			if tls.SecretName == "" || seen[tls.SecretName] || !tlsEntryServed(ing, tls) {
 				continue
 			}
 			seen[tls.SecretName] = true
@@ -167,9 +167,11 @@ func ingressController(cache *ResourceCache, ing *networkingv1.Ingress) (string,
 // unresolvedClassOutsideALB reports whether an addressed Ingress whose class
 // resolves to no IngressClass is still served by something other than the
 // AWS Load Balancer Controller: a legacy class annotation with no IngressClass
-// object (GKE's gce, older ingress-nginx installs), or no class at all while
-// no installed class is ALB's. A class field naming an uninstalled class is
-// not resolved: its address may be left over from a removed controller.
+// object (GKE's gce, older ingress-nginx installs), or no class at all. Both
+// are refused while any installed class is ALB's: ALB can claim a legacy
+// class of any name, and class-less Ingresses. A class field naming an
+// uninstalled class is not resolved: its address may be left over from a
+// removed controller.
 func unresolvedClassOutsideALB(cache *ResourceCache, ing *networkingv1.Ingress) bool {
 	lister := cache.IngressClasses()
 	if lister == nil || !cache.IsKindReady("ingressclasses") || hasALBAnnotation(ing) {
@@ -179,10 +181,8 @@ func unresolvedClassOutsideALB(cache *ResourceCache, ing *networkingv1.Ingress) 
 	if ing.Spec.IngressClassName != nil {
 		name = strings.TrimSpace(*ing.Spec.IngressClassName)
 	}
-	if legacy := ingressstatus.LegacyClass(ing); legacy != "" {
-		return legacy != albLegacyIngressClass && (name == "" || name == legacy)
-	}
-	if name != "" {
+	legacy := ingressstatus.LegacyClass(ing)
+	if legacy == albLegacyIngressClass || (legacy == "" && name != "") || (legacy != "" && name != "" && name != legacy) {
 		return false
 	}
 	classes, err := lister.List(labels.Everything())
@@ -195,6 +195,23 @@ func unresolvedClassOutsideALB(cache *ResourceCache, ing *networkingv1.Ingress) 
 		}
 	}
 	return true
+}
+
+// tlsEntryServed reports whether a rule serves one of the TLS entry's hosts.
+// Controllers pick a certificate by the rule's host, so an entry naming only
+// hosts no rule serves is never presented. An entry with no hosts is kept.
+func tlsEntryServed(ing *networkingv1.Ingress, tls networkingv1.IngressTLS) bool {
+	if len(tls.Hosts) == 0 {
+		return true
+	}
+	for _, host := range tls.Hosts {
+		for _, rule := range ing.Spec.Rules {
+			if strings.EqualFold(strings.TrimSpace(host), strings.TrimSpace(rule.Host)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ingressTLSServedElsewhere reports an Ingress whose own TLS Secret is not the
@@ -232,23 +249,23 @@ func ingressSSLPassthrough(ing *networkingv1.Ingress) bool {
 // run would otherwise scan every pod for the controller's labels.
 const controllerPodMemoTTL = 5 * time.Second
 
-var controllerPodMemo struct {
-	sync.Mutex
-	cache *ResourceCache
+type controllerPodMemo struct {
+	mu    sync.Mutex
 	at    time.Time
 	byKey map[string][]string
 }
 
 func readyControllerPodNamespacesMemo(cache *ResourceCache, controller string) []string {
-	controllerPodMemo.Lock()
-	defer controllerPodMemo.Unlock()
-	if controllerPodMemo.cache != cache || time.Since(controllerPodMemo.at) > controllerPodMemoTTL {
-		controllerPodMemo.cache, controllerPodMemo.at, controllerPodMemo.byKey = cache, time.Now(), map[string][]string{}
+	m := &cache.controllerPods
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.byKey == nil || time.Since(m.at) > controllerPodMemoTTL {
+		m.at, m.byKey = time.Now(), map[string][]string{}
 	}
-	namespaces, ok := controllerPodMemo.byKey[controller]
+	namespaces, ok := m.byKey[controller]
 	if !ok {
 		namespaces = readyControllerPodNamespaces(cache, controller)
-		controllerPodMemo.byKey[controller] = namespaces
+		m.byKey[controller] = namespaces
 	}
 	return namespaces
 }
