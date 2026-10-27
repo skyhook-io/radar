@@ -781,15 +781,16 @@ function WorkloadAttribution({
           <button
             key={identityKey({ ref: workload.owner })}
             type="button"
-            className="flex w-full items-baseline justify-between gap-2 border-b border-theme-border-subtle py-1.5 text-left last:border-b-0 hover:text-accent-text"
+            // Phones: the workload gets its own full line and the counts wrap under it.
+            className="flex w-full items-baseline justify-between gap-2 border-b border-theme-border-subtle py-1.5 text-left last:border-b-0 hover:text-accent-text phone:flex-wrap phone:justify-start phone:gap-x-3 phone:gap-y-0.5"
             onClick={() =>
               onOpenResource(refToSelectedResource(workload.owner))
             }
           >
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-theme-text-primary">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-theme-text-primary phone:basis-full phone:whitespace-normal phone:[overflow-wrap:anywhere]">
               {workload.owner.kind}/{workload.owner.name}
             </span>
-            <span className="shrink-0 text-xs text-theme-text-tertiary">
+            <span className="shrink-0 text-xs text-theme-text-tertiary phone:shrink phone:min-w-0 phone:[overflow-wrap:anywhere]">
               {workload.owner.namespace}
             </span>
             <span className="shrink-0 font-mono text-xs">
