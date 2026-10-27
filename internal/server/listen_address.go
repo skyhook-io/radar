@@ -157,7 +157,7 @@ func (s *Server) protectUnauthenticatedHost(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if cloud.IsLoopbackHostname(s.listenAddress) {
+		if !s.sharedListener() {
 			if !requestHostIsLoopback(r) {
 				s.writeError(w, http.StatusForbidden, "loopback-only Radar requires a loopback request Host; enable authentication for a reverse proxy, or explicitly use --listen-address=0.0.0.0 only on a trusted network")
 				return
