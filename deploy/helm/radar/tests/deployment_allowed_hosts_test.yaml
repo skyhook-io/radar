@@ -1,0 +1,59 @@
+suite: Allowed hosts
+templates:
+  - deployment.yaml
+tests:
+  - it: omits the flag when nothing is listed
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=
+          any: true
+
+  - it: adds ingress and HTTPRoute hostnames to listed hosts once each
+    set:
+      allowedHosts:
+        - radar.internal
+        - radar.example.com
+      ingress:
+        enabled: true
+        hosts:
+          - host: radar.example.com
+            paths: [{path: /, pathType: Prefix}]
+          - host: radar.corp.example
+            paths: [{path: /, pathType: Prefix}]
+      httpRoute:
+        enabled: true
+        parentRefs: [{name: gw}]
+        hostnames:
+          - radar.gw.example
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.internal,radar.example.com,radar.corp.example,radar.gw.example
+
+  - it: ignores hostnames of disabled routes
+    set:
+      ingress:
+        enabled: false
+        hosts:
+          - host: radar.example.com
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.example.com
+          any: true
+
+  - it: passes the wildcard through
+    set:
+      allowedHosts: ["*"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=*
+
+  - it: rejects a scheme or port at install time
+    set:
+      allowedHosts:
+        - https://radar.example.com:8443
+    asserts:
+      - failedTemplate: {}

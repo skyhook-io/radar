@@ -257,6 +257,14 @@ helm upgrade --install radar skyhook/radar \
   -n radar -f values.yaml
 ```
 
+Without authentication Radar answers only hostnames it can trust not to be a
+rebound attacker page: `localhost`, IP addresses, Kubernetes Service names, and
+the ingress and HTTPRoute hostnames, which the chart adds for you. If you reach
+Radar by another name (a second DNS name, an external load balancer hostname),
+add it to `allowedHosts`; otherwise requests fail with *Radar without
+authentication answers only ...* naming the host. See
+[HTTP Listener](configuration.md#http-listener).
+
 ### Subpath Ingress (No Strip-Prefix)
 
 If your ingress forwards `/radar/...` to the Radar service as `/radar/...`, set `basePath` to the same prefix:
