@@ -13,6 +13,7 @@
 package summarycontext
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,17 @@ import (
 // Service vs corev1 Service, or two custom CRDs both named "Cluster"
 // from different operators). Pass "" for core-group resources.
 type Builder func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext
+
+// Keep enrichment on the caller's goroutine: the batch ownership view is
+// not safe for concurrent use. Its authorization uses the same deadline.
+func UntilDeadline(ctx context.Context, build Builder) Builder {
+	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return build(obj, u, group, kind, namespace, name)
+	}
+}
 
 // SearchBudget bounds how long search waits for its per-hit context (issue
 // index and the topology behind managedBy). Both read custom resources, which
@@ -125,6 +137,7 @@ func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx,
 		var managedBy *resourcecontext.ManagedByRef
 		var scanned *resourcecontext.ScannedRef
 		var omitted []resourcecontext.OmittedField
+		residualUnavailable := false
 		var source runtime.Object = obj
 		if source == nil && u != nil {
 			source = u
@@ -139,7 +152,9 @@ func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx,
 			} else {
 				var other []topology.ResourceRef
 				if chain != nil && chain.Stop == "" && len(chain.Refs) > 0 {
-					other = owners.OtherManagers(relationships(kind, namespace, name, source), ref)
+					rel := relationships(kind, namespace, name, source)
+					residualUnavailable = rel == nil
+					other = owners.OtherManagers(rel, ref)
 				}
 				if len(other) > 0 {
 					managedBy = resourcecontext.ControllerSummary(other[0])
@@ -150,6 +165,9 @@ func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx,
 			if reason := resourcecontext.ControllerOmission(chain); reason != "" && (managedBy == nil || chain.Top() != nil) {
 				omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: reason}}
 			}
+		}
+		if residualUnavailable && managedBy == nil && len(omitted) == 0 {
+			omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedUnavailable}}
 		}
 		idx := namespacedIdx
 		if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {

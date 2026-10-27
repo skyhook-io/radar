@@ -35,7 +35,11 @@ func TestHandleSearchDoesNotWaitOnAColdTopologyBuild(t *testing.T) {
 	time.AfterFunc(20*time.Second, unblock)
 
 	start := time.Now()
-	if _, _, err := handleSearch(withClusterAdmin(t, "search-cold"), nil, searchInput{Query: "pod"}); err != nil {
+	ctx := withClusterAdmin(t, "search-cold")
+	for _, ns := range []string{"alpha", "beta", "gamma"} {
+		getPermCache().Get("search-cold", nil).SetCanI("get", "", "pods", ns, true)
+	}
+	if _, _, err := handleSearch(ctx, nil, searchInput{Query: "pod"}); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(start); elapsed > 8*time.Second {

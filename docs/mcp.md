@@ -1330,14 +1330,14 @@ every change belongs there.
 
 Summaries prefer the controller over GitOps/Helm metadata. Without a readable ancestor they prefer an observed
 spec-declared managing controller (a Certificate for its Secret), then an eligible GitOps/Helm lead from the management
-evidence engine. Missing, withheld, unresolved and unchecked claims do not become summary pointers. See
+evidence engine. Copied or weak inherited claims and missing, withheld, unresolved or unchecked claims do not become summary pointers. See
 [ownership](ownership.md#the-top-controller) for the exact eligibility rules. Full `resourceContext.manager` remains the
 GitOps evidence answer, including claims, conflicts and ancestor attribution. Follow the controller with `get_resource`
 or use `diagnose` to inspect that evidence. Trivy reports retain their scanned-workload navigation.
 
 Both detail and summary use `omitted: [{field: "managedBy", reason: "unavailable"}]` when Radar couldn't finish the
 controller walk, or `rbac_denied` for unreadable owners. A summary can carry that note even with no pointer. An
-independent spec/GitOps lead is not marked as an incomplete controller root. Reads use collected inventory and start
+independent spec/GitOps lead is not marked as an incomplete controller root. Controller and management lookups use collected inventory and start
 no watches: an uncollected or unsynced CRD can leave a gap. Native custom kinds include their exact API group.
 
 ### Node placement context

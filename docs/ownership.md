@@ -111,7 +111,7 @@ indexed only when this residual lookup is needed.
 
 With no controller relation, `View.Manager` supplies a summary lead for `agree`, `listed` or `shared` with a lead. A
 `claimed` lead needs a matching active claim checked `recorded`, `omitted` or `unreadable`, or a native Helm
-`not-recording` claim with release namespace and name. Missing, unresolved, withheld and unchecked claims remain in
+`not-recording` claim with release namespace and name. Copied or weak inherited claims and missing, unresolved, withheld or unchecked claims remain in
 full detail instead of becoming summary pointers. A lead is where to inspect next, never a verdict of exclusive management.
 
 Both detail and summary `omitted` use `managedBy: rbac_denied` or `unavailable` when a controller walk stops short,

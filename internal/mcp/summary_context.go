@@ -49,6 +49,9 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 // rows the user can't see.
 func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string) summarycontext.Builder {
 	deadline := time.Now().Add(summarycontext.SearchBudget)
+	if parent, ok := ctx.Deadline(); ok && parent.Before(deadline) {
+		deadline = parent
+	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil

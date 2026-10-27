@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -89,10 +90,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// (CanReadClusterScoped) already constrains which cluster-scoped
 	// kinds are reachable.
 	if r.URL.Query().Get("context") != "none" {
+		enrichmentCtx, cancel := context.WithTimeout(r.Context(), summarycontext.SearchBudget)
+		defer cancel()
+		enrichmentRequest := r.WithContext(enrichmentCtx)
 		if builder := summarycontext.Within(summarycontext.SearchBudget, func() summarycontext.Builder {
-			return s.newSearchSummaryContextBuilder(r, scanNamespaces)
+			return s.newSearchSummaryContextBuilder(enrichmentRequest, scanNamespaces)
 		}); builder != nil {
-			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
+			opts.SummaryBuilder = search.SummaryBuilderFunc(summarycontext.UntilDeadline(enrichmentCtx, builder))
 		}
 	}
 	if expr := r.URL.Query().Get("filter"); expr != "" {

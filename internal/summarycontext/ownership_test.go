@@ -99,13 +99,14 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, false},
 		{"certificate spec", secret, "Secret", ownership.Unrestricted(), "Certificate", "", true},
 		{"sealed secret spec", sealed, "Secret", ownership.Unrestricted(), "SealedSecret", "", true},
+		{"no graph or manager", unmanaged, "ConfigMap", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, true},
 		{"GitOps edge is not a fallback", unmanaged, "ConfigMap", ownership.Unrestricted(), "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loaded := false
 			graph := func() *topology.Topology {
 				loaded = true
-				if tc.name == "recorded without graph" {
+				if tc.name == "recorded without graph" || tc.name == "no graph or manager" {
 					return nil
 				}
 				nodes := []topology.Node{

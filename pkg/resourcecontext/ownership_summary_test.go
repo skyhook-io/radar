@@ -53,6 +53,11 @@ func TestManagerSummaryEligibility(t *testing.T) {
 			if got := ManagerSummary(a); (got != nil) != want {
 				t.Fatalf("pointer %+v, want present=%v", got, want)
 			}
+			a.Direct.Claims[0].Weak = true
+			if got := ManagerSummary(a); got != nil {
+				t.Fatalf("inherited claim: %+v", got)
+			}
+			a.Direct.Claims[0].Weak = false
 			a.Direct.Claims[0].Copied = true
 			if got := ManagerSummary(a); got != nil {
 				t.Fatalf("copied claim: %+v", got)

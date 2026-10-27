@@ -63,6 +63,9 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 // suffices.
 func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces []string) summarycontext.Builder {
 	deadline := time.Now().Add(summarycontext.SearchBudget)
+	if parent, ok := r.Context().Deadline(); ok && parent.Before(deadline) {
+		deadline = parent
+	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil

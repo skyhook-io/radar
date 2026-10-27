@@ -47,7 +47,7 @@ func ManagerSummary(answer ownership.ManagerAnswer) *ManagedByRef {
 			evidence = *answer.Via
 		}
 		for _, claim := range evidence.Claims {
-			if claim.Copied || claim.Manager != *lead {
+			if claim.Copied || claim.Weak || claim.Manager != *lead {
 				continue
 			}
 			switch claim.Check {
