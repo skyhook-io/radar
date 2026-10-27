@@ -23,6 +23,7 @@ import (
 //	q       — search string (free tokens + modifiers: kind:, ns:, label:k=v, image:, cluster:)
 //	limit   — max hits returned (default 50, capped at 500)
 //	include — "summary" (default), "raw", or "none"
+//	context — "summary" (default), "status" (health/issues only), or "none"
 //	namespace, namespaces — explicit namespace names, unioned with ns: terms
 //
 // The returned shape is a search.Result. Per-cluster, no cross-cluster
@@ -80,7 +81,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// summaryContext attaches managedBy/health/issueCount per hit. Build
 	// the per-request closure once (one Compose call + cached topology
 	// snapshot) and let the search executor invoke it per kept hit.
-	// ?context=none opts out so legacy callers don't pay for the join.
+	// ?context=status keeps health/issues without navigation lookups;
+	// ?context=none opts out of enrichment.
 	//
 	// Search uses the dual-index variant: hits are mixed-kind in one
 	// response (namespaced Pods alongside cluster-scoped Nodes), so a
@@ -90,8 +92,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// (CanReadClusterScoped) already constrains which cluster-scoped
 	// kinds are reachable.
 	if r.URL.Query().Get("context") != "none" {
-		builder, cancel := summarycontext.WithBudget(r.Context(), func(ctx context.Context) summarycontext.Builder {
-			return s.newSearchSummaryContextBuilder(r.WithContext(ctx), scanNamespaces)
+		statusOnly := r.URL.Query().Get("context") == "status"
+		withBudget := summarycontext.WithBudget
+		if statusOnly {
+			withBudget = summarycontext.WithStatusBudget
+		}
+		builder, cancel := withBudget(r.Context(), func(ctx context.Context) summarycontext.Builder {
+			return s.newSearchSummaryContextBuilder(r.WithContext(ctx), scanNamespaces, statusOnly)
 		})
 		defer cancel()
 		opts.SummaryBuilder = search.SummaryBuilderFunc(builder)

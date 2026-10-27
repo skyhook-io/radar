@@ -989,6 +989,15 @@ names, combined as a union with any `ns:` terms in `q`. Hidden, missing and
 outside-pin names produce the same coverage gaps as their `ns:` spelling. An
 empty parsed list adds no names.
 
+REST search defaults to `context=summary`, including navigation evidence.
+`context=status`, used by Omnibar, returns cached health and authorized issue
+counts without ownership, relationship-graph or live scan-target lookups;
+`context=none` skips enrichment. The same three-second enrichment budget applies
+to status and summary. Unrequested fields have no omission note; an unavailable
+issue count is qualified by `omitted`. Older Radar versions return their full
+summary for `context=status`, which still supplies the fields Omnibar needs.
+MCP search keeps full summary context.
+
 Every response includes `coverage`: `{status, narrowedBy?, gaps}`, built from the
 same [gaps and codes](#resource-reads-coverage-and-errors) as resource lists. A
 gap is either about kinds or about namespaces, and states both axes: `kinds`

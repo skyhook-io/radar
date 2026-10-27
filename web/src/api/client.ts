@@ -2024,15 +2024,15 @@ const SEARCH_MIN_QUERY = 2;
 
 // useSearch hits the resource-search engine. The caller supplies the (already
 // debounced) query; the hook is enabled only past the min length. include=none
-// keeps the per-hit payload identity-only; context=summary attaches
-// health/issueCount per hit (rich rows). React Query's AbortSignal cancels
+// keeps the per-hit payload identity-only; context=status attaches health/issueCount,
+// while context=summary also requests navigation. React Query's AbortSignal cancels
 // overlapping scans on a new query. keepPreviousData avoids flicker while the
 // next query resolves.
 export function useSearch(
   query: string,
   opts?: {
     limit?: number;
-    context?: "summary" | "none";
+    context?: "summary" | "status" | "none";
     enabled?: boolean;
     globalNs?: boolean;
     /** Re-query on an interval decided from the latest response. */

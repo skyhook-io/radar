@@ -31,6 +31,7 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   const [exhaustedQuery, setExhaustedQuery] = useState<string | null>(null)
 
   const { data: searchData, isFetching, isPlaceholderData, isError } = useSearch(query, {
+    context: 'status',
     enabled: open,
     globalNs: true,
     refetchInterval: (data) => (open && stillLoading(data) && exhaustedQuery !== query ? PENDING_RETRY_MS : false),

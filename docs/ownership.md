@@ -138,7 +138,9 @@ failed enrichment, qualified when live scan state could not be checked.
 
 Each REST AI list/search or MCP list/search request gets a three-second optional-enrichment budget, including authorization and queue waits.
 Health and prepared issue counts survive expiry. Saturation or failed preparation can omit issue counts, including in
-Omnibar results; `omitted` distinguishes unknown counts from zero. Lists share one caller-scoped ownership session.
+Omnibar results; `omitted` distinguishes unknown counts from zero. Omnibar requests `context=status` on REST search:
+cached health and authorized issue counts, without ownership, relationship-graph or live scan-target lookups. Unrequested
+navigation fields have no omission note. The default `context=summary` and MCP search retain navigation. Lists share one caller-scoped ownership session.
 Execution and caching details live in [summarycontext](../internal/summarycontext/summarycontext.go),
 [AgentOwnership](../internal/k8s/ownership.go) and [cachesource](../pkg/ownership/cachesource/).
 
