@@ -2988,3 +2988,201 @@ func TestJobDetectionStaysOwnSubject(t *testing.T) {
 		t.Errorf("a CronJob-owned failed Job must stay its own subject (no owner stamp), got owner kind %q", owned.OwnerKind)
 	}
 }
+
+func TestStatefulSetRolloutWithinBudget(t *testing.T) {
+	rolling := func() *appsv1.StatefulSet {
+		return &appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Generation: 2},
+			Spec:       appsv1.StatefulSetSpec{Replicas: ptrInt32(3)},
+			Status: appsv1.StatefulSetStatus{
+				ObservedGeneration: 2,
+				Replicas:           3,
+				ReadyReplicas:      2,
+				AvailableReplicas:  2,
+				CurrentRevision:    "db-old",
+				UpdateRevision:     "db-new",
+			},
+		}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*appsv1.StatefulSet)
+		want   bool
+	}{
+		{"one pod replaced at a time", func(*appsv1.StatefulSet) {}, true},
+		{"explicit RollingUpdate strategy", func(s *appsv1.StatefulSet) {
+			s.Spec.UpdateStrategy.Type = appsv1.RollingUpdateStatefulSetStrategyType
+		}, true},
+		{"rollout complete", func(s *appsv1.StatefulSet) { s.Status.CurrentRevision = "db-new" }, false},
+		{"no revision recorded", func(s *appsv1.StatefulSet) { s.Status.CurrentRevision, s.Status.UpdateRevision = "", "" }, false},
+		{"two short", func(s *appsv1.StatefulSet) { s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 1 }, false},
+		{"ready but not yet available counts against the budget", func(s *appsv1.StatefulSet) { s.Status.AvailableReplicas = 1 }, false},
+		{"nothing available", func(s *appsv1.StatefulSet) {
+			s.Spec.Replicas = ptrInt32(1)
+			s.Status.Replicas, s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 0, 0
+		}, false},
+		{"partitioned", func(s *appsv1.StatefulSet) {
+			s.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{Partition: ptrInt32(1)}
+		}, false},
+		{"OnDelete", func(s *appsv1.StatefulSet) { s.Spec.UpdateStrategy.Type = appsv1.OnDeleteStatefulSetStrategyType }, false},
+		{"maxUnavailable 2 is feature-gated, so two short stays critical", func(s *appsv1.StatefulSet) {
+			two := intstr.FromInt32(2)
+			s.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{MaxUnavailable: &two}
+			s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 1
+		}, false},
+		{"percentage maxUnavailable is feature-gated too", func(s *appsv1.StatefulSet) {
+			pct := intstr.FromString("70%")
+			s.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{MaxUnavailable: &pct}
+			s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 1
+		}, false},
+		{"status from an older generation", func(s *appsv1.StatefulSet) { s.Status.ObservedGeneration = 1 }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := rolling()
+			tc.mutate(s)
+			if got := statefulSetRolloutWithinBudget(s, schedDesiredReplicas(s.Spec.Replicas)); got != tc.want {
+				t.Fatalf("statefulSetRolloutWithinBudget = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDaemonSetRolloutWithinBudget(t *testing.T) {
+	rolling := func(maxUnavailable, maxSurge intstr.IntOrString) *appsv1.DaemonSet {
+		return &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Generation: 2},
+			Spec: appsv1.DaemonSetSpec{UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
+				Type:          appsv1.RollingUpdateDaemonSetStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDaemonSet{MaxUnavailable: &maxUnavailable, MaxSurge: &maxSurge},
+			}},
+			Status: appsv1.DaemonSetStatus{
+				ObservedGeneration:     2,
+				DesiredNumberScheduled: 10,
+				CurrentNumberScheduled: 10,
+				UpdatedNumberScheduled: 4,
+				NumberAvailable:        9,
+				NumberUnavailable:      1,
+			},
+		}
+	}
+	one, zero := intstr.FromInt32(1), intstr.FromInt32(0)
+	cases := []struct {
+		name string
+		ds   *appsv1.DaemonSet
+		want bool
+	}{
+		{"default budget of one", rolling(one, zero), true},
+		{"beyond budget", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.NumberAvailable, d.Status.NumberUnavailable = 8, 2
+			return d
+		}(), false},
+		{"percent rounds up: 15% of 10 allows 2", func() *appsv1.DaemonSet {
+			d := rolling(intstr.FromString("15%"), zero)
+			d.Status.NumberAvailable, d.Status.NumberUnavailable = 8, 2
+			return d
+		}(), true},
+		{"no surge or unavailability allowed falls back to one", rolling(zero, zero), true},
+		{"surge-only rollout keeps every node available", rolling(zero, one), false},
+		{"last replacement counted updated before it is available", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.UpdatedNumberScheduled = 10
+			return d
+		}(), false},
+		{"nothing available", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.DesiredNumberScheduled, d.Status.CurrentNumberScheduled, d.Status.UpdatedNumberScheduled = 1, 1, 0
+			d.Status.NumberAvailable, d.Status.NumberUnavailable = 0, 1
+			return d
+		}(), false},
+		{"status from an older generation", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.ObservedGeneration = 1
+			return d
+		}(), false},
+		{"OnDelete", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Spec.UpdateStrategy = appsv1.DaemonSetUpdateStrategy{Type: appsv1.OnDeleteDaemonSetStrategyType}
+			return d
+		}(), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := daemonSetRolloutWithinBudget(tc.ds); got != tc.want {
+				t.Fatalf("daemonSetRolloutWithinBudget = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDetectProblems_RollingUpdateWithinBudgetIsWarning pins the severity
+// StatefulSets and DaemonSets carry while a RollingUpdate is replacing pods
+// within its budget: still listed, since nothing ends a stuck rollout of these
+// kinds, but not critical.
+func TestDetectProblems_RollingUpdateWithinBudgetIsWarning(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	one, zero := intstr.FromInt32(1), intstr.FromInt32(0)
+	dsStrategy := appsv1.DaemonSetUpdateStrategy{
+		Type:          appsv1.RollingUpdateDaemonSetStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateDaemonSet{MaxUnavailable: &one, MaxSurge: &zero},
+	}
+	client := fake.NewClientset(
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.StatefulSetSpec{Replicas: ptrInt32(3)},
+			Status: appsv1.StatefulSetStatus{ObservedGeneration: 2, Replicas: 3, ReadyReplicas: 2, AvailableReplicas: 2,
+				CurrentRevision: "db-old", UpdateRevision: "db-new"},
+		},
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "shop", CreationTimestamp: old, Generation: 1},
+			Spec:       appsv1.StatefulSetSpec{Replicas: ptrInt32(3)},
+			Status: appsv1.StatefulSetStatus{ObservedGeneration: 1, Replicas: 3, ReadyReplicas: 2, AvailableReplicas: 2,
+				CurrentRevision: "cache-1", UpdateRevision: "cache-1"},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.DaemonSetSpec{UpdateStrategy: dsStrategy},
+			Status: appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 4, CurrentNumberScheduled: 4,
+				UpdatedNumberScheduled: 2, NumberReady: 3, NumberAvailable: 3, NumberUnavailable: 1},
+		},
+		// Mid-rollout with a node lacking any pod: stays critical, since status
+		// can't separate the delete-then-create gap from a failed create.
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "proxy", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.DaemonSetSpec{UpdateStrategy: dsStrategy},
+			Status: appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 4, CurrentNumberScheduled: 3,
+				UpdatedNumberScheduled: 2, NumberReady: 3, NumberAvailable: 3, NumberUnavailable: 1},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "logs", Namespace: "shop", CreationTimestamp: old, Generation: 1},
+			Spec:       appsv1.DaemonSetSpec{UpdateStrategy: dsStrategy},
+			Status: appsv1.DaemonSetStatus{ObservedGeneration: 1, DesiredNumberScheduled: 4, CurrentNumberScheduled: 4,
+				UpdatedNumberScheduled: 4, NumberReady: 3, NumberAvailable: 3, NumberUnavailable: 1},
+		},
+	)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "shop")
+		if hasProblem(problems, "StatefulSet", "cache", "2/3 ready") && hasProblem(problems, "DaemonSet", "logs", "1 unavailable") &&
+			hasProblem(problems, "StatefulSet", "db", "2/3 ready") && hasProblem(problems, "DaemonSet", "agent", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "proxy", "1 not scheduled") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "StatefulSet", "db", "2/3 ready", "warning")
+	assertProblem(t, problems, "DaemonSet", "agent", "1 unavailable", "warning")
+	assertProblem(t, problems, "DaemonSet", "proxy", "1 not scheduled", "critical")
+	assertProblem(t, problems, "StatefulSet", "cache", "2/3 ready", "critical")
+	assertProblem(t, problems, "DaemonSet", "logs", "1 unavailable", "critical")
+}

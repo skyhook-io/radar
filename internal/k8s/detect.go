@@ -417,12 +417,16 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			if ss.Status.ReadyReplicas < desired {
 				ageDur := now.Sub(ss.CreationTimestamp.Time)
+				severity := "critical"
+				if statefulSetRolloutWithinBudget(ss, desired) {
+					severity = "warning"
+				}
 				problems = append(problems, Detection{
 					Kind:              "StatefulSet",
 					Namespace:         ss.Namespace,
 					Name:              ss.Name,
 					Group:             "apps",
-					Severity:          "critical",
+					Severity:          severity,
 					Reason:            fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, desired),
 					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
@@ -465,12 +469,17 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			if ds.Status.NumberMisscheduled > 0 {
 				appendDSProblem(fmt.Sprintf("%d misscheduled", ds.Status.NumberMisscheduled), "high", "daemonset:misscheduled")
 			}
+			// "not scheduled" stays critical even mid-rollout: status cannot tell
+			// the moment between deleting a node's old pod and creating its
+			// replacement from a replacement that can never be created.
 			if ds.Status.DesiredNumberScheduled > ds.Status.CurrentNumberScheduled {
 				appendDSProblem(fmt.Sprintf("%d not scheduled", ds.Status.DesiredNumberScheduled-ds.Status.CurrentNumberScheduled), "critical", "daemonset:not-scheduled")
 			} else if ds.Status.NumberUnavailable > 0 {
 				severity := "critical"
 				if daemonSetUnavailableIsByDesignUnschedulable(cache, ds, podsByNamespace) {
 					severity = "high"
+				} else if daemonSetRolloutWithinBudget(ds) {
+					severity = "warning"
 				}
 				appendDSProblem(fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable), severity, "daemonset:unavailable")
 			}
@@ -2032,6 +2041,59 @@ func daemonSetUnavailableIsByDesignUnschedulable(cache *ResourceCache, ds *appsv
 		byDesignTargets[targetNode] = true
 	}
 	return int32(len(byDesignTargets)) >= ds.Status.NumberUnavailable
+}
+
+// statefulSetRolloutWithinBudget reports whether a StatefulSet's shortfall is a
+// RollingUpdate replacing one pod at a time. Unlike a Deployment there is no
+// progress deadline to end a stuck rollout, so the caller lowers the row's
+// severity rather than hiding it. The controller takes a pod down only when
+// every other is available, and only allows more than one at a time behind a
+// feature gate Radar cannot see, so the budget is one available replica short.
+// Revisions also differ after a partitioned rollout finishes, so partitioned
+// sets keep the critical row.
+func statefulSetRolloutWithinBudget(ss *appsv1.StatefulSet, desired int32) bool {
+	strategy := ss.Spec.UpdateStrategy
+	if strategy.Type != "" && strategy.Type != appsv1.RollingUpdateStatefulSetStrategyType {
+		return false
+	}
+	if strategy.RollingUpdate != nil && strategy.RollingUpdate.Partition != nil && *strategy.RollingUpdate.Partition > 0 {
+		return false
+	}
+	return ss.Status.ObservedGeneration >= ss.Generation &&
+		ss.Status.UpdateRevision != "" && ss.Status.CurrentRevision != ss.Status.UpdateRevision &&
+		ss.Status.AvailableReplicas > 0 && desired-ss.Status.AvailableReplicas <= 1
+}
+
+// daemonSetRolloutWithinBudget reports whether a DaemonSet's unavailable nodes
+// are a RollingUpdate within its maxUnavailable budget, resolved as the
+// controller does: rounded up against the scheduled count, and 1 when neither
+// surge nor unavailability is allowed. No progress deadline ends a stuck
+// DaemonSet rollout, so the caller lowers the row's severity rather than hiding
+// it. updatedNumberScheduled counts pods before they are available, so the last
+// node's replacement turns the row critical again until it is up.
+func daemonSetRolloutWithinBudget(ds *appsv1.DaemonSet) bool {
+	if ds.Spec.UpdateStrategy.Type != appsv1.RollingUpdateDaemonSetStrategyType || ds.Spec.UpdateStrategy.RollingUpdate == nil {
+		return false
+	}
+	desired := ds.Status.DesiredNumberScheduled
+	if ds.Status.ObservedGeneration < ds.Generation || ds.Status.UpdatedNumberScheduled >= desired || ds.Status.NumberAvailable == 0 {
+		return false
+	}
+	rolling := ds.Spec.UpdateStrategy.RollingUpdate
+	maxUnavailable, err := intstr.GetScaledValueFromIntOrPercent(rolling.MaxUnavailable, int(desired), true)
+	if err != nil {
+		return false
+	}
+	maxSurge := 0
+	if rolling.MaxSurge != nil {
+		if maxSurge, err = intstr.GetScaledValueFromIntOrPercent(rolling.MaxSurge, int(desired), true); err != nil {
+			return false
+		}
+	}
+	if maxUnavailable == 0 && maxSurge == 0 {
+		maxUnavailable = 1
+	}
+	return int(ds.Status.NumberUnavailable) <= maxUnavailable
 }
 
 func daemonSetPodIsAssignedButUnavailable(pod *corev1.Pod) bool {
