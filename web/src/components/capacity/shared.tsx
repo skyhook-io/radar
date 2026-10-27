@@ -1048,6 +1048,7 @@ export function KpiTile({
   attention = false,
   linkLabel,
   onClick,
+  className,
 }: {
   label: string;
   value: ReactNode;
@@ -1057,6 +1058,7 @@ export function KpiTile({
   attention?: boolean;
   linkLabel?: string;
   onClick?: () => void;
+  className?: string;
 }) {
   const clickable = Boolean(onClick);
   return (
@@ -1078,7 +1080,7 @@ export function KpiTile({
         clickable
           ? "cursor-pointer transition-colors hover:border-theme-border-light hover:bg-theme-hover/40"
           : ""
-      }`}
+      } ${className ?? ""}`}
     >
       <div className="flex items-center gap-1.5 phone:flex-wrap phone:gap-y-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">

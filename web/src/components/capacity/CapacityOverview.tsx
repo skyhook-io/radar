@@ -421,6 +421,8 @@ export function CapacityOverview({
               "Claim inventory",
             )}
             attention={(summary.claimStages?.failed ?? 0) > 0}
+            // Keeps the row full when the denied Pending pods tile below takes its own.
+            className={podsDeniedFlag ? "phone:col-span-2" : undefined}
           />
         )}
         {podsDeniedFlag ? (
@@ -428,6 +430,8 @@ export function CapacityOverview({
             label="Pending pods"
             value="Unavailable"
             sub="Pod access denied — not zero"
+            // "Unavailable" is wider than a half-width tile on a phone.
+            className="phone:col-span-2"
             certainty="unknown"
             certaintyTitle="Unknown — the current identity cannot list Pods. Absence of data is not zero."
           />
