@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -97,8 +98,8 @@ func TestDiffGenericUnstructured_DesiredStateOrderOnly(t *testing.T) {
 		items[0], items[1] = items[1], items[0]
 	}
 	want := []FieldChange{
-		{Path: "routing (order or structure changed)", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker},
-		{Path: "spec (order or structure changed)", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker},
+		{Path: "routing", OldValue: []string{"first", "last"}, NewValue: []string{"last", "first"}},
+		{Path: "spec.http", OldValue: []string{"specific", "fallback"}, NewValue: []string{"fallback", "specific"}},
 		{Path: "metadata.generation", OldValue: int64(1), NewValue: int64(2)},
 	}
 	for _, precomputed := range []bool{false, true} {
@@ -106,7 +107,7 @@ func TestDiffGenericUnstructured_DesiredStateOrderOnly(t *testing.T) {
 		if !record || diff == nil || !reflect.DeepEqual(diff.Fields, want) {
 			t.Fatalf("record=%v diff=%+v, want fields %+v", record, diff, want)
 		}
-		if diff.Summary != "desired state changes: routing (order or structure changed), spec (order or structure changed)" {
+		if diff.Summary != "desired state changes: routing order, spec.http order" {
 			t.Fatalf("summary = %q", diff.Summary)
 		}
 	}
@@ -154,9 +155,9 @@ func TestDiffGenericUnstructured_DesiredStateOrderBesideOtherRootChange(t *testi
 				if !record || diff == nil || len(diff.Fields) != 3 {
 					t.Fatalf("record=%v diff=%+v, want both desired-state rows and generation", record, diff)
 				}
-				order := findChange(diff, reorderedRoot+" (order or structure changed)")
-				if order == nil || order.OldValue != hiddenValueMarker || order.NewValue != hiddenValueMarker {
-					t.Fatalf("order row = %+v, want hidden values", order)
+				order := findChange(diff, reorderedRoot+".http")
+				if order == nil || !reflect.DeepEqual(order.NewValue, []string{"fallback", "specific"}) {
+					t.Fatalf("order row = %+v, want new route order", order)
 				}
 				leaf := findChange(diff, changedRoot+".replicas")
 				if leaf == nil || leaf.OldValue != int64(1) || leaf.NewValue != int64(2) {
@@ -164,6 +165,80 @@ func TestDiffGenericUnstructured_DesiredStateOrderBesideOtherRootChange(t *testi
 				}
 			}
 		})
+	}
+}
+
+func TestDiffGenericUnstructured_OrderBesideSiblingChange(t *testing.T) {
+	old := collisionObject("networking.istio.io/v1", "VirtualService", map[string]any{"spec": map[string]any{
+		"gateways": []any{"mesh"},
+		"http":     []any{map[string]any{"name": "specific"}, map[string]any{"name": "fallback"}},
+	}})
+	old.SetGeneration(1)
+	new := old.DeepCopy()
+	new.SetGeneration(2)
+	spec := new.Object["spec"].(map[string]any)
+	spec["gateways"] = []any{"mesh", "edge"}
+	spec["http"] = []any{map[string]any{"name": "fallback"}, map[string]any{"name": "specific"}}
+	diff := ComputeDiff("VirtualService", old, new)
+	if diff == nil || findChange(diff, "spec.http") == nil || findChange(diff, "spec.gateways[1]") == nil {
+		t.Fatalf("diff = %+v, want both the route reorder and the gateway edit", diff)
+	}
+}
+
+func TestDiffGenericUnstructured_UnkeyedInsertReportsOneItem(t *testing.T) {
+	rule := func(n int) any {
+		return map[string]any{"alert": fmt.Sprintf("Alert%d", n), "expr": fmt.Sprintf("up{job=%q} == 0", fmt.Sprint(n))}
+	}
+	var rules []any
+	for i := 0; i < 10; i++ {
+		rules = append(rules, rule(i))
+	}
+	old := collisionObject("monitoring.coreos.com/v1", "PrometheusRule", map[string]any{"spec": map[string]any{"rules": rules}})
+	old.SetGeneration(1)
+	for _, tc := range []struct {
+		name  string
+		rules []any
+		want  FieldChange
+	}{
+		{"prepend", append([]any{rule(99)}, rules...), FieldChange{Path: "spec.rules[0]", OldValue: nil, NewValue: hiddenSetMarker}},
+		{"remove middle", append(append([]any{}, rules[:4]...), rules[5:]...), FieldChange{Path: "spec.rules[4]", OldValue: hiddenSetMarker, NewValue: nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			new := old.DeepCopy()
+			new.SetGeneration(2)
+			new.Object["spec"] = map[string]any{"rules": tc.rules}
+			diff := ComputeDiff("PrometheusRule", old, new)
+			want := []FieldChange{tc.want, {Path: "metadata.generation", OldValue: int64(1), NewValue: int64(2)}}
+			if diff == nil || !reflect.DeepEqual(diff.Fields, want) {
+				t.Fatalf("diff = %+v, want %+v", diff, want)
+			}
+		})
+	}
+}
+
+func TestTimelineUpdateDiff_CRDStrippedFieldEdit(t *testing.T) {
+	crd := func(schemaType string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+			"metadata": map[string]any{"name": "widgets.example.com", "generation": int64(1)},
+			"spec": map[string]any{"group": "example.com", "versions": []any{map[string]any{
+				"name": "v1", "served": true, "storage": true,
+				"schema": map[string]any{"openAPIV3Schema": map[string]any{"type": schemaType}},
+			}}},
+		}}
+		stripped, err := k8score.DropUnstructuredManagedFields(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stripped.(*unstructured.Unstructured)
+	}
+	old, new := crd("object"), crd("string")
+	new.SetGeneration(2)
+	for _, precomputed := range []bool{false, true} {
+		diff, record := timelineUpdateDiff("CustomResourceDefinition", old, new, ComputeDiff("CustomResourceDefinition", old, new), precomputed)
+		if !record || diff == nil || findChange(diff, "metadata.generation") == nil || !strings.Contains(diff.Summary, "schema or conversion changed") {
+			t.Fatalf("CRD schema edit: record=%v diff=%+v", record, diff)
+		}
 	}
 }
 

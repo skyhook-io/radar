@@ -279,7 +279,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"often faster than reading " +
 			"ReplicaSet histories or audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Bound the window with since; narrow by " +
-			"namespace, kind or name. Runs of 5+ plain creates are listed " +
+			"namespace, kind or name; custom-resource kinds outside Argo CD, Flux, Rollouts and " +
+			"Gateway API appear only with kind or name. Runs of 5+ plain creates are listed " +
 			"in `created` as `+<seconds after first>s Kind/name` lines, counted in limit. " +
 			"A namespace query (no kind/name) adds clusterScopedChanges: webhook config " +
 			"changes that may affect it. Omit namespace for other changes outside it. " +

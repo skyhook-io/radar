@@ -274,7 +274,10 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 			oldValue, oldFound := oldDesired[root]
 			newValue, newFound := newDesired[root]
 			before := len(paths)
-			collectChangedSpecPaths(root, oldValue, newValue, "", &paths)
+			// A custom kind's list order may be significant (route or
+			// rule precedence), and its schema cannot say, so any reorder
+			// of a keyed list is reported.
+			collectChangedPaths(root, oldValue, newValue, "", func(string) bool { return true }, &paths)
 			if len(paths) == before && (oldFound != newFound || !reflect.DeepEqual(oldValue, newValue)) {
 				paths = append(paths, changedSpecPath{path: root + " (order or structure changed)", oldV: hiddenValueMarker, newV: hiddenValueMarker})
 			}
@@ -287,6 +290,10 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 			}
 		}
 		changes, summary = untrackedSpecRows("desired state", paths)
+		if len(changes) == 0 && desiredStateStripped(newU) {
+			changes = []FieldChange{{Path: "spec.versions[].schema or spec.conversion", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker}}
+			summary = []string{"schema or conversion changed (fields Radar does not keep)"}
+		}
 		if len(changes) > 0 {
 			changes = append(changes, FieldChange{Path: "metadata.generation", OldValue: oldGen, NewValue: newGen})
 		}
@@ -320,6 +327,14 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 		OldValue: "changed",
 		NewValue: "changed",
 	}}, []string{"resource changed"}
+}
+
+// desiredStateStripped reports kinds whose informer transform removes
+// desired-state fields (pkg/k8score/transform.go drops CRD schemas and
+// conversion settings), so a generation bump with no visible desired-state
+// change is still an edit.
+func desiredStateStripped(u *unstructured.Unstructured) bool {
+	return u.GetKind() == "CustomResourceDefinition" && resourceid.GroupFromAPIVersion(u.GetAPIVersion()) == "apiextensions.k8s.io"
 }
 
 func genericDesiredState(u *unstructured.Unstructured) map[string]any {

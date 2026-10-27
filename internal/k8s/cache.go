@@ -908,7 +908,7 @@ func deletionAccountsForGenerationBump(oldObj, newObj any) bool {
 }
 
 func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
-	if oldU, newU, ok := unstructuredPair(oldObj, newObj); ok {
+	if oldU, newU, ok := unstructuredPair(oldObj, newObj); ok && !desiredStateStripped(newU) {
 		registration, audited := diffFunctions[kind]
 		if !audited || resourceid.GroupFromAPIVersion(newU.GetAPIVersion()) != registration.group {
 			return !reflect.DeepEqual(genericDesiredState(oldU), genericDesiredState(newU))

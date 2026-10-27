@@ -244,7 +244,7 @@ func TestRecentCustomResourceOrderOnlyIsSpecConfig(t *testing.T) {
 		t.Fatalf("got %+v, err %v; want order-only change", got, err)
 	}
 	c := got.Changes[0]
-	if c.ChangeCategory != issuesapi.ChangeCategorySpecConfig || len(c.Fields) != 2 || c.Fields[0].Path != "spec (order or structure changed)" || c.Fields[1].Path != "metadata.generation" {
+	if c.ChangeCategory != issuesapi.ChangeCategorySpecConfig || len(c.Fields) != 2 || c.Fields[0].Path != "spec.http" || c.Summary != "desired state changes: spec.http order" || c.Fields[1].Path != "metadata.generation" {
 		t.Fatalf("order-only change = %+v", c)
 	}
 }

@@ -498,6 +498,12 @@ func rootFieldsEqual(oldObj, newObj any, root string) bool {
 // differ. Lists of named objects are keyed by name to match the explicit
 // differs' `containers[app]` notation; other lists are keyed by index.
 func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out *[]changedSpecPath) {
+	collectChangedPaths(path, oldV, newV, absentRoot, orderMatters, out)
+}
+
+// collectChangedPaths reports a reorder of a keyed list at any path where
+// ordered returns true.
+func collectChangedPaths(path string, oldV, newV any, absentRoot string, ordered func(string) bool, out *[]changedSpecPath) {
 	if reflect.DeepEqual(oldV, newV) {
 		return
 	}
@@ -521,7 +527,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 			return
 		}
 		for _, k := range unionKeys(o, n) {
-			collectChangedSpecPaths(specPathKey(path, k), o[k], n[k], absentRoot, out)
+			collectChangedPaths(specPathKey(path, k), o[k], n[k], absentRoot, ordered, out)
 		}
 	case []any:
 		n, ok := newV.([]any)
@@ -532,25 +538,35 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 		if field := listKeyField(o, n); field != "" {
 			oldByKey, _ := listByKey(o, field)
 			newByKey, _ := listByKey(n, field)
-			if oldOrder, newOrder := sharedKeyOrder(o, newByKey, field), sharedKeyOrder(n, oldByKey, field); orderMatters(path) && !equalStringSlices(oldOrder, newOrder) {
+			if oldOrder, newOrder := sharedKeyOrder(o, newByKey, field), sharedKeyOrder(n, oldByKey, field); ordered(path) && !equalStringSlices(oldOrder, newOrder) {
 				*out = append(*out, changedSpecPath{path: path, order: true, oldOrder: oldOrder, newOrder: newOrder})
 			}
 			for _, k := range unionKeys(oldByKey, newByKey) {
-				collectChangedSpecPaths(path+"["+k+"]", oldByKey[k], newByKey[k], absentRoot, out)
+				collectChangedPaths(path+"["+k+"]", oldByKey[k], newByKey[k], absentRoot, ordered, out)
 			}
 			return
 		}
-		// Unkeyed items are compared by position; items past the shorter
-		// list are reported as added or removed.
-		for i := 0; i < max(len(o), len(n)); i++ {
+		// Unkeyed items are compared by position after dropping the equal
+		// prefix and suffix, so one inserted or removed item does not read
+		// as a change to every item after it.
+		prefix := 0
+		for prefix < len(o) && prefix < len(n) && reflect.DeepEqual(o[prefix], n[prefix]) {
+			prefix++
+		}
+		suffix := 0
+		for suffix < len(o)-prefix && suffix < len(n)-prefix && reflect.DeepEqual(o[len(o)-1-suffix], n[len(n)-1-suffix]) {
+			suffix++
+		}
+		oldMid, newMid := o[prefix:len(o)-suffix], n[prefix:len(n)-suffix]
+		for i := 0; i < max(len(oldMid), len(newMid)); i++ {
 			var oldItem, newItem any
-			if i < len(o) {
-				oldItem = o[i]
+			if i < len(oldMid) {
+				oldItem = oldMid[i]
 			}
-			if i < len(n) {
-				newItem = n[i]
+			if i < len(newMid) {
+				newItem = newMid[i]
 			}
-			collectChangedSpecPaths(fmt.Sprintf("%s[%d]", path, i), oldItem, newItem, absentRoot, out)
+			collectChangedPaths(fmt.Sprintf("%s[%d]", path, prefix+i), oldItem, newItem, absentRoot, ordered, out)
 		}
 	default:
 		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot, oldV: oldV, newV: newV})

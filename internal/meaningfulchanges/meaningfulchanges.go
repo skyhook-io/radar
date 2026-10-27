@@ -670,7 +670,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 	if saturated {
 		events = events[:bound]
 	}
-	events = filterTrackedGroupEvents(events, false)
+	events = filterTrackedGroupEvents(events)
 	if !includeCustom {
 		return events, saturated, nil
 	}
@@ -742,18 +742,10 @@ func commonTrackedAPIGroups(kinds []string) []string {
 // API group than the one the feed tracks for that kind — kind strings are
 // queried by name, so without this a Knative Service event would enter a
 // core Service's candidate set (and vice versa). Events with no recorded
-// apiVersion are kept: unknown, not mismatched. Explicit queries may admit
-// custom groups but retain the managed-resource exclusion for built-ins.
-func filterTrackedGroupEvents(events []timeline.TimelineEvent, includeCustom bool) []timeline.TimelineEvent {
+// apiVersion are kept: unknown, not mismatched.
+func filterTrackedGroupEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
 	out := events[:0]
 	for _, e := range events {
-		if includeCustom && isCustomResourceEvent(e) {
-			out = append(out, e)
-			continue
-		}
-		if e.IsManaged() {
-			continue
-		}
 		if eventGroupMatchesTracked(e.Kind, e.APIVersion) {
 			out = append(out, e)
 		}
