@@ -8,9 +8,7 @@
 // receive the same shape; presentation specifics (token budgets, prose
 // hints, tier-based filtering) live in the caller, not in this package.
 //
-// This package is types-only: it deliberately depends on nothing from
-// pkg/topology or internal/* so that it can be imported by any layer
-// (handlers, generators, tests) without producing import cycles.
+// This package has no internal/* dependencies; hosts supply their data sources.
 //
 // All enum string values are snake_case — both for readability in Go code
 // and for stable, machine-friendly JSON output.
@@ -211,10 +209,13 @@ type ManagedByRef struct {
 type ResourceSummaryContext struct {
 	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
 
-	ManagedBy  *ManagedByRef `json:"managedBy,omitempty"`
-	Health     string        `json:"health,omitempty"`
-	IssueCount int           `json:"issueCount,omitempty"`
-	Scanned    *ScannedRef   `json:"scanned,omitempty"`
+	// ManagedBy is one controller-first inspection lead, not an edit target.
+	ManagedBy *ManagedByRef `json:"managedBy,omitempty"`
+	Health    string        `json:"health,omitempty"`
+	// IssueCount is omitted at zero; an Omitted entry for issueCount instead
+	// means the count is unknown.
+	IssueCount int         `json:"issueCount,omitempty"`
+	Scanned    *ScannedRef `json:"scanned,omitempty"`
 	// Omitted qualifies missing or incomplete fields, including a present pointer.
 	Omitted []OmittedField `json:"omitted,omitempty"`
 }
@@ -888,7 +889,7 @@ type OmittedField struct {
 	Reason OmittedReason `json:"reason"`
 }
 
-// OmittedReason is the closed enum of reasons a field can be omitted.
+// OmittedReason explains an unavailable field or incomplete value.
 type OmittedReason string
 
 const (

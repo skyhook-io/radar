@@ -32,9 +32,8 @@ import (
 
 // Options carries everything Build needs to compute a ResourceContext.
 //
-// Per the v1 contract, this package depends only on pkg/topology — callers
-// in internal/* pre-compute IssueSummary / AuditSummary / PolicyReports and
-// pass them in, so we don't reach into internal/issues or internal/audit.
+// Hosts pre-compute issue, audit and policy summaries; Build never calls
+// internal services.
 type Options struct {
 	Reflections ReflectionLookup
 	Tier        ContextTier
@@ -43,30 +42,21 @@ type Options struct {
 	// as fully authorized — local-kubeconfig / tests).
 	AccessChecker RefAccessChecker
 
-	// Topology data sources. When Topology is nil, the topology-derived
-	// fields (Exposes, SelectedBy, ScaledBy, RunsOn,
-	// Uses.ServiceAccount) are skipped.
+	// Topology supplies relationships when Relationships is nil. Without
+	// either source, graph-derived fields are skipped.
 	Topology    *topology.Topology
 	Provider    topology.ResourceProvider
 	DynamicProv topology.DynamicProvider
 
-	// Relationships is the pre-computed per-resource projection. When non-nil,
-	// Build consumes it directly instead of calling
-	// topology.GetRelationshipsWithObject — single-resource handlers should
-	// leave this nil and let Build compute; bulk/list callers that already
-	// loop over relationships per row SHOULD pass it to avoid double work.
-	//
-	// Topology MUST still be set when Relationships is set — synthesis
-	// helpers read Topology and RelIndex through
-	// it.
+	// Relationships bypasses graph projection when already computed. It need
+	// not have a Topology; Ownership may mutate it, so do not share it across
+	// concurrent calls.
 	Relationships *topology.Relationships
 
-	// Ownership is required for ManagedBy and Manager enrichment. When set,
-	// it answers the relationships' Owner from owner
-	// references in place of the topology's manages edges, for fetched, the
-	// object Build describes. Build reads Owner, ControllerChain, other Managers
-	// and the manager answer (rel.Ownership.Manager), so a host
-	// needn't search for children (see topology.ApplyOwner). rel is never nil.
+	// Ownership is required for ManagedBy and Manager enrichment. It must use
+	// topology.ApplyOwner semantics for fetched: Owner and ControllerChain from
+	// owner references, Managers containing only residual spec controllers,
+	// and GitOps/Helm evidence in rel.Ownership.Manager. rel is never nil.
 	Ownership func(rel *topology.Relationships, fetched ownership.Observation)
 
 	// RelIndex is the topology inverted-edge index. Pass a shared instance

@@ -21,8 +21,8 @@ import (
 var summaryTopologyGate = summarycontext.NewBudgetGate(1)
 
 // newResourceSummaryContextBuilder assembles the per-request closure for the
-// list/search handlers. Returns nil when the typed cache is unavailable, in which case callers should skip context attachment
-// rather than emit empty objects.
+// list/search handlers. A missing typed cache returns nil; WithBudget turns that
+// into cheap context with omissions for unavailable enrichment.
 //
 // Callers pass the namespace list they're scanning so the issue index
 // is scoped to just those rows (the full Compose call on a 100-namespace

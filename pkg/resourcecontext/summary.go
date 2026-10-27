@@ -69,10 +69,10 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryConte
 	}
 }
 
-// ManagedByFromOwner assembles a compact ManagedByRef from raw owner
-// fields (typically pulled out of topology.Relationships in the handler).
-// Returns nil when ownerKind or ownerName is empty so callers don't
-// have to guard the assignment.
+// ManagedByFromOwner formats an identity; it establishes no ownership or
+// management evidence. Use ControllerSummary for controller/spec references
+// and ManagerSummary for a canonical manager answer. Returns nil when
+// ownerKind or ownerName is empty.
 //
 // Source classification:
 //   - "argocd" for argoproj.io kinds (Application, ApplicationSet, Rollout)

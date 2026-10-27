@@ -180,7 +180,8 @@ func NewAgentOwnership(access func(*ownership.Catalog) ownership.Access) *AgentO
 
 // Of is the controller chain of obj, read from the caches as ref, as the
 // caller reads it; nil when it can't be answered. obj is never modified: the
-// caches share it.
+// caches share it. A successful read activates ref for OtherManagers and Manager
+// until the next Of call.
 func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.ControllerChain {
 	c.active = resourceid.Ref{}
 	if obj == nil || ref.Kind == "" || c.failed {
@@ -229,7 +230,8 @@ func (c *AgentOwnership) OtherManagers(rel *topology.Relationships, ref resource
 }
 
 // Manager reads GitOps/Helm evidence for the resource most recently passed to Of.
-// A changed connection or inactive subject returns no usable answer.
+// A changed connection or inactive subject returns a zero answer (State is "",
+// not ManagerNone).
 func (c *AgentOwnership) Manager(ref resourceid.Ref) ownership.ManagerAnswer {
 	if c.view == nil || c.failed || c.active != ref {
 		return ownership.ManagerAnswer{}

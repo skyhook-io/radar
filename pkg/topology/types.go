@@ -480,7 +480,8 @@ type Relationships struct {
 	OlderRevisions []ResourceRef `json:"olderRevisions,omitempty"`
 	// Managers and Manages are management without an owner reference: GitOps
 	// member lists, class bindings, spec and status references. They never
-	// mean garbage collection. Set only with Ownership.
+	// mean garbage collection. Set only with Ownership. ApplyOwner instead
+	// fills Managers with residual spec controllers and leaves Manages empty.
 	Managers []ResourceRef `json:"managers,omitempty"`
 	Manages  []ResourceRef `json:"manages,omitempty"`
 	// Ownership says how complete the owner-reference answers are.

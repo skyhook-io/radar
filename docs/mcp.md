@@ -536,9 +536,9 @@ Captured Crossplane resource cards keep declared pause as neutral context and re
 
 `reductionLimited: true` marks a different case: a recommendation exists, but it is a conservative step toward the demand-based target rather than the target itself. Those rows — and only those — also carry `demandTarget: {value, basis}`, the end state the step is heading toward, with `basis` naming how it was derived (`7d Max x 1.15` for memory, `7d P95 x 1.15` for CPU, or the minimum request). It is **not** a value to apply: apply `recommendedRequest`, observe a full window, then re-check. A memory target comes from the 7-day max, so a monthly or batch peak outside the window is invisible to it. The engine computes a target before its HPA, OOM and limit checks run, so a withheld row has one internally; it is never emitted there, because it would fill the `null` those checks left on purpose. `observedStatistic` names what `observed` is (`P95` for CPU, `Max` for memory). `bursty` and `p99Usage` qualify CPU rows whose P99 ran far above the P95 the recommendation is built on.
 
-### `managedBy` — where a request change belongs
+### `managedBy` — source hints for request changes
 
-Workloads carry `managedBy: {tool, kind, group, namespace, name, signal}` when Radar can tell what owns their spec: `controller` (a controller ownerReference, such as an operator's custom resource), `flux`, `argocd`, `helm`, or `addon-manager` (`addonmanager.kubernetes.io/mode=Reconcile` only — `EnsureExists` does not revert edits). A patch applied live to such a workload is overwritten on that tool's next reconcile or upgrade, so the change belongs at the source. `signal` names the metadata that produced the answer, because labels get copied between templates.
+Rightsizing's `managedBy: {tool, kind, group, namespace, name, signal}` is a separate metadata-based source hint, not the [list/search inspection lead](#managedby--the-top-controller). It reports a controller ownerReference, Flux/Argo CD/Helm metadata, or `addon-manager` in `Reconcile` mode (`EnsureExists` only recreates deleted objects). Inspect that source before changing requests: reconciliation or a later upgrade may overwrite a live patch. `signal` names the evidence; copied labels and retained annotations do not prove current reconciliation.
 
 A missing `managedBy` does **not** mean the workload is unmanaged. Argo CD's default tracking label is also every Helm chart's `app.kubernetes.io/instance`, and Terraform or `kubectl apply` leave nothing distinguishable.
 
@@ -1064,13 +1064,10 @@ What gets reported follows from that:
   `radar_namespace_not_collected` when an `ns:` term names it.
 - **Named kinds may warm within one shared two-second deadline.** Broad searches
   do not wait for warm-up. Kinds still loading are reported as `kind_sync_pending`.
-  Optional list/search enrichment shares a three-second budget, including authorization.
-  At most eight preparations run concurrently; cache scans that outlive cancellation
-  retain their slot until they finish. Waiting for a slot uses the same budget.
-  REST and MCP topology builds have independent one-build gates.
-  After it expires, rows retain health and already-computed issue counts; `omitted`
-  marks `managedBy` as `budget_exceeded`. If preparation itself could not finish,
-  health still appears and `issueCount` is also marked unavailable rather than implying zero.
+  Optional list/search enrichment has a separate three-second budget, including authorization.
+  Rows retain health and prepared issue counts after expiry; `omitted` qualifies unfinished fields
+  with `budget_exceeded`. Failed or saturated preparation can also omit issue counts, rather than
+  imply zero. See [enrichment semantics](ownership.md#the-top-controller).
 - **A kind Radar watches namespace by namespace is searched where it has
   loaded.** A namespace whose informer is still loading is a `kind_sync_pending`
   gap for the kind, and the namespaces that are ready still contribute hits.
@@ -1307,7 +1304,7 @@ See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors)
 
 ### `resourceContext.manager` — which GitOps manager to look at
 
-`get_resource` and `diagnose` add `resourceContext.manager`: which Argo CD or Flux manager to look at, without picking
+`get_resource` and `diagnose` add `resourceContext.manager`: which Argo CD, Flux or native Helm manager to look at, without picking
 a winner the evidence doesn't support ([full rules](ownership.md#what-manages-an-object)).
 
 - `listedBy`: managers whose status lists name the resource. `claims`: managers its labels and annotations name, each
@@ -1321,32 +1318,22 @@ a winner the evidence doesn't support ([full rules](ownership.md#what-manages-an
 
 Helm annotations beside an Argo CD or Kustomization manager mean an adopted Helm install: its next upgrade can still
 overwrite a change. With this answer present, the metadata-only manager warning is left out for the claims it weighs.
-`resourceContext.managedBy` separately names controller-owner evidence and observed non-GitOps managing controllers.
-A hidden spec-derived manager is left out without revealing its relationship. An unreadable controller walk is noted
-as incomplete, as described below. Actual controller references retain their role even when they name a GitOps kind.
+Controller and spec-generator references appear separately in `managedBy` below.
 
 ### `managedBy` — the top controller
 
-`resourceContext.managedBy` and list/search `summaryContext.managedBy` read the caller's controller chain from the
-ownership stack. A TiDB Pod can point through its StatefulSet to `{kind: TidbCluster, group: pingcap.com, source: native}`.
-This is the highest controller Radar can read: inspect it to understand what the controller generates, rather than assuming
-every change belongs there.
+List/search `summaryContext.managedBy` is one inspection lead: highest readable controller, then an observed spec
+generator, then eligible GitOps/Helm evidence. For example, a TiDB Pod can lead through its StatefulSet to a summary
+reference with `kind: TidbCluster`, `group: pingcap.com`, and `source: native`.
 
-Summaries prefer the controller over GitOps/Helm metadata. Without a readable ancestor they prefer an observed
-spec-declared managing controller (a Certificate for its Secret), then an eligible GitOps/Helm lead from the management
-evidence engine. Copied or weak inherited claims and missing, withheld, unresolved or unchecked claims do not become summary pointers. See
-[ownership](ownership.md#the-top-controller) for the exact eligibility rules. Full `resourceContext.manager` remains the
-GitOps evidence answer, including claims, conflicts and ancestor attribution. Follow the controller with `get_resource`
-or use `diagnose` to inspect that evidence. Trivy reports retain their scanned-workload navigation.
+Follow the lead with `get_resource` or `diagnose`. Detail `resourceContext.managedBy` lists controller/spec references;
+`resourceContext.manager` retains the GitOps/Helm evidence to inspect before planning edits. A lead is not an edit target,
+and absence does not prove unmanaged.
 
-Both detail and summary use `omitted: [{field: "managedBy", reason: "unavailable"}]` when Radar couldn't finish the
-controller walk, `cache_cold` for a known uncollected or unsynced owner kind, or `rbac_denied` for unreadable owners. A summary can carry that note even with no pointer. An
-independent GitOps lead can coexist with a note about the incomplete controller lookup. Controller and management lookups use collected inventory and start
-no watches: an uncollected or unsynced CRD can leave a gap. Read that kind with `list_resources` to activate an on-demand cache, then retry. Non-controller owner references (including Strimzi PodSet-to-Kafka) are available as `owner` but do not extend the controller walk. Native custom kinds include their exact API group.
-
-A missing relationship graph or an unavailable observed spec-derived controller also leaves `managedBy` incomplete.
-A denied spec source stays hidden without a note naming or counting that relationship. `omitted` paths are
-relative to their containing context; a readable pointer may coexist with an incompleteness note.
+An `omitted` entry such as `{field: "managedBy", reason: "cache_cold"}` qualifies the answer even when a pointer exists.
+For an on-demand CRD cache, `list_resources` for that kind can warm it before retrying. See the
+[ownership contract](ownership.md#the-top-controller) for eligibility, omission meanings, permissions and Trivy's
+scan-time exception.
 
 ### Node placement context
 

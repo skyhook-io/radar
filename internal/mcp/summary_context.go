@@ -23,8 +23,8 @@ import (
 var summaryTopologyGate = summarycontext.NewBudgetGate(1)
 
 // newResourceSummaryContextBuilder assembles the per-request closure for MCP
-// list_resources. Returns nil when the typed cache is unavailable, in which case the caller should skip context attachment
-// rather than emit empty objects.
+// list_resources. A missing typed cache returns nil; WithBudget turns that into
+// cheap context with omissions for unavailable enrichment.
 //
 // namespaces scopes the issue index to just the rows being returned;
 // pass nil for cluster-wide.

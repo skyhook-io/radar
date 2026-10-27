@@ -42,9 +42,12 @@ type Builder func(obj runtime.Object, u *unstructured.Unstructured, group, kind,
 
 // Budget bounds optional list/search enrichment, including authorization.
 // It starts on the first row; core listing/searching uses the original context.
-// The returned builder and cleanup are sequential, like the ownership View.
 const Budget = 3 * time.Second
 
+// WithBudget returns a non-nil builder that starts preparation on the first row.
+// build gets a context bounded by ctx and Budget, under the shared preparation
+// gate. Failed preparation retains cheap fields with omissions for unknowns.
+// Call cleanup when finished; builder and cleanup must be used sequentially.
 func WithBudget(ctx context.Context, build func(context.Context) Builder) (Builder, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(ctx)
 	stopBudget := func() {}
@@ -83,15 +86,19 @@ func WithBudget(ctx context.Context, build func(context.Context) Builder) (Build
 // caller-specific results or letting one slow preparation block every caller.
 var preparationGate = NewBudgetGate(8)
 
+// BudgetGate limits concurrent work that may outlive an enrichment deadline.
 type BudgetGate struct {
 	slots chan struct{}
 }
 
+// NewBudgetGate allows at most limit concurrent builds; use a positive limit.
 func NewBudgetGate(limit int) *BudgetGate {
 	return &BudgetGate{slots: make(chan struct{}, limit)}
 }
 
-// WithinContext bounds both waiting and work left behind after cancellation.
+// WithinContext bounds waiting and the number of builds left running after
+// cancellation. A build keeps its gate slot until it finishes. Cancellation or
+// a recovered panic returns T's zero value, as can build itself.
 // Each independent cache source owns a gate so one cold source cannot suppress
 // a ready answer from another.
 func WithinContext[T any](ctx context.Context, gate *BudgetGate, build func() T) T {
@@ -127,6 +134,8 @@ func WithinContext[T any](ctx context.Context, gate *BudgetGate, build func() T)
 	}
 }
 
+// IndexedTopology pairs a graph with its own index; a nil Index permits inline
+// edge scans. A nil Topology means the graph is unavailable.
 type IndexedTopology struct {
 	Topology *topology.Topology
 	Index    *topology.RelationshipsIndex
@@ -134,6 +143,8 @@ type IndexedTopology struct {
 
 // BuilderFromIndexes composes canonical ownership next hops and optional issue
 // counts. The graph is obtained only for residual spec-declared relations.
+// canRead gates Trivy scan targets. A nil owners skips other ownership enrichment
+// without an omission note; production callers supply a caller-scoped session.
 func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
 	var topo *topology.Topology
 	var relIdx *topology.RelationshipsIndex

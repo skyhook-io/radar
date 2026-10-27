@@ -36,7 +36,11 @@ Search uses the same exact list permissions as resource reads for Secrets, Roles
 
 **If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). See [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for the `rbac.create: false` + custom `Role` setup.
 
-Ownership answers (owners, children, and which GitOps manager manages an object) follow the same namespace rule in the UI. MCP checks each manager kind exactly, so an agent can see fewer managers than the UI for a user whose namespace access is wider than their GitOps permissions; a manager the caller can't read contributes no evidence (a name in the object's own metadata stays as a `withheld` claim), and the answer says it is `narrowed`.
+Ownership answers (owners, children, and which GitOps manager manages an object) follow the same namespace rule in the UI.
+REST AI context and MCP additionally require exact-kind `get` access for ownership and manager references, so their
+answers can be narrower than the UI's. A manager the caller can't read contributes no evidence; a name in the object's
+own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
+`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
 
 Deletion-impact previews fetch the root as the caller and use caller-readable ownership data. Permission and collection gaps make the result partial; remote or unknown GitOps destinations expose no local inventory. See [Shared deletion preview](mcp.md#shared-deletion-preview). Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
 

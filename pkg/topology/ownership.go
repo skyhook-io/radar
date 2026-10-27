@@ -147,9 +147,10 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	}
 }
 
-// ApplyOwner answers only rel's Owner, and why there is none, and what
-// manages the resource, including other observed managing controllers. It
-// searches for no children. The rest of rel's ownership is left unanswered.
+// ApplyOwner clears ownership fields, then answers Owner, ControllerChain,
+// Ownership.Manager and residual spec controllers in Managers. GitOps recorded
+// managers are not added to Managers; children and member collections stay
+// cleared without being searched. v reads fetched as the caller.
 func ApplyOwner(rel *Relationships, v *ownership.View, fetched ownership.Observation) {
 	if rel == nil || v == nil {
 		return
@@ -366,7 +367,7 @@ func managerEvidence(e ownership.ManagerEvidence) ManagerEvidence {
 }
 
 // ControllerChain is how far up its controller references the caller reads a
-// resource.
+// resource. Readable and Top share Refs; treat their results as read-only.
 type ControllerChain struct {
 	// Refs are the objects the walk read, the resource first.
 	Refs []ResourceRef
@@ -374,7 +375,9 @@ type ControllerChain struct {
 	// discovery, cycle or depth bound) or OwnerWithheld. It is empty for a
 	// settled top, gone/replaced owner, excluded Event, or OwnerUnresolvable
 	// (a malformed reference or an impossible namespace/scope relationship).
-	Stop   string
+	Stop string
+	// Reason is the read gap behind Stop, when available; cycles and depth
+	// bounds can stop a walk without one.
 	Reason readreason.Code
 }
 
@@ -425,6 +428,9 @@ func (c *ControllerChain) Top() *ResourceRef {
 // OtherManagingControllers retains spec-declared graph relations only when
 // they cannot be owner references, controller shortcuts or GitOps evidence.
 // Incomplete means a source could not be checked, not that one was denied.
+// It covers observed edges only: false does not establish collection completeness.
+// A gone or unresolvable owner also suppresses this projection, even though
+// ControllerChain.Stop is empty: its refs are final, but do not rule out a shortcut.
 func OtherManagingControllers(rel *Relationships, v *ownership.View, subject resourceid.Ref) (managers []ResourceRef, incomplete bool) {
 	if rel == nil {
 		return nil, true
