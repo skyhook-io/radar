@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/ingressstatus"
@@ -65,18 +66,21 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 	controllerPods := map[string][]string{} // controller -> namespaces of its ready pods
 	consumers := map[string]*tlsConsumers{} // namespace/secret
 	for _, ing := range ings {
-		if ing.DeletionTimestamp != nil || len(ing.Spec.TLS) == 0 || ingressSSLPassthrough(ing) {
-			continue
-		}
-		controller, ok := ingressController(cache, ing)
-		if !ok || controller == albIngressController {
+		if ing.DeletionTimestamp != nil || len(ing.Spec.TLS) == 0 || ingressTLSServedElsewhere(ing) {
 			continue
 		}
 		addressed := ingressstatus.HasAssignedAddress(ing)
+		controller, ok := ingressController(cache, ing)
+		if !ok && addressed {
+			ok = unresolvedClassOutsideALB(cache, ing)
+		}
+		if !ok || controller == albIngressController {
+			continue
+		}
 		var podNamespaces []string
 		if !addressed {
 			if _, seen := controllerPods[controller]; !seen {
-				controllerPods[controller] = readyControllerPodNamespaces(cache, controller)
+				controllerPods[controller] = readyControllerPodNamespacesMemo(cache, controller)
 			}
 			podNamespaces = controllerPods[controller]
 			if len(podNamespaces) == 0 {
@@ -160,6 +164,51 @@ func ingressController(cache *ResourceCache, ing *networkingv1.Ingress) (string,
 	return defaultIngressClassController(cache)
 }
 
+// unresolvedClassOutsideALB reports whether an addressed Ingress whose class
+// resolves to no IngressClass is still served by something other than the
+// AWS Load Balancer Controller: a legacy class annotation with no IngressClass
+// object (GKE's gce, older ingress-nginx installs), or no class at all while
+// no installed class is ALB's. A class field naming an uninstalled class is
+// not resolved: its address may be left over from a removed controller.
+func unresolvedClassOutsideALB(cache *ResourceCache, ing *networkingv1.Ingress) bool {
+	lister := cache.IngressClasses()
+	if lister == nil || !cache.IsKindReady("ingressclasses") || hasALBAnnotation(ing) {
+		return false
+	}
+	name := ""
+	if ing.Spec.IngressClassName != nil {
+		name = strings.TrimSpace(*ing.Spec.IngressClassName)
+	}
+	if legacy := ingressstatus.LegacyClass(ing); legacy != "" {
+		return legacy != albLegacyIngressClass && (name == "" || name == legacy)
+	}
+	if name != "" {
+		return false
+	}
+	classes, err := lister.List(labels.Everything())
+	if err != nil {
+		return false
+	}
+	for _, ic := range classes {
+		if ic.Spec.Controller == albIngressController {
+			return false
+		}
+	}
+	return true
+}
+
+// ingressTLSServedElsewhere reports an Ingress whose own TLS Secret is not the
+// certificate clients see: SSL passthrough hands TLS to the backend, an
+// ingress-nginx canary takes its TLS from the primary Ingress, and Contour's
+// tls-cert-namespace reads the Secret from another namespace.
+func ingressTLSServedElsewhere(ing *networkingv1.Ingress) bool {
+	if ingressSSLPassthrough(ing) || strings.EqualFold(strings.TrimSpace(ing.Annotations["nginx.ingress.kubernetes.io/canary"]), "true") {
+		return true
+	}
+	_, delegated := ing.Annotations["projectcontour.io/tls-cert-namespace"]
+	return delegated
+}
+
 // sslPassthroughAnnotations hand TLS to the backend (ingress-nginx, HAProxy
 // Ingress and HAProxy Kubernetes Ingress), so the Ingress's own TLS Secret is
 // not what clients see.
@@ -177,6 +226,31 @@ func ingressSSLPassthrough(ing *networkingv1.Ingress) bool {
 		}
 	}
 	return false
+}
+
+// A namespace-filtered compose runs the detector once per namespace, and each
+// run would otherwise scan every pod for the controller's labels.
+const controllerPodMemoTTL = 5 * time.Second
+
+var controllerPodMemo struct {
+	sync.Mutex
+	cache *ResourceCache
+	at    time.Time
+	byKey map[string][]string
+}
+
+func readyControllerPodNamespacesMemo(cache *ResourceCache, controller string) []string {
+	controllerPodMemo.Lock()
+	defer controllerPodMemo.Unlock()
+	if controllerPodMemo.cache != cache || time.Since(controllerPodMemo.at) > controllerPodMemoTTL {
+		controllerPodMemo.cache, controllerPodMemo.at, controllerPodMemo.byKey = cache, time.Now(), map[string][]string{}
+	}
+	namespaces, ok := controllerPodMemo.byKey[controller]
+	if !ok {
+		namespaces = readyControllerPodNamespaces(cache, controller)
+		controllerPodMemo.byKey[controller] = namespaces
+	}
+	return namespaces
 }
 
 // readyControllerPodNamespaces returns the namespaces of the controller's
@@ -226,7 +300,7 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 		reason, fingerprint = TLSCertificateExpiredReason, "tls-certificate-expired"
 		message = fmt.Sprintf("The certificate in this Secret expired %s ago (%s), and %s.",
 			timeutil.FormatAgeShort(now.Sub(*cert.NotAfter)), cert.NotAfter.UTC().Format(time.RFC3339), user)
-		cause = "The certificate's validity period has ended. The ingress controller either serves it, and clients that verify certificates reject the connection, or falls back to its default certificate, which those clients also reject for this host."
+		cause = "The certificate's validity period has ended. The ingress controller either serves it, and clients that verify certificates reject the connection, or falls back to its default certificate, which those clients also reject unless it happens to cover this host."
 	case cert.NotBefore != nil && cert.NotBefore.After(now.Add(tlsNotYetValidTolerance)):
 		reason, fingerprint = TLSCertificateNotYetValidReason, "tls-certificate-not-yet-valid"
 		message = fmt.Sprintf("The certificate in this Secret is not valid until %s (in %s), and %s.",

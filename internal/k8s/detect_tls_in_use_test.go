@@ -251,3 +251,49 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 		t.Fatalf("controller pods must be required evidence: %+v", traefik.RequiredReads)
 	}
 }
+
+// An addressed Ingress is live even when its class resolves to no
+// IngressClass object, unless ALB could be serving it or its address may be
+// left over from a removed controller.
+func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
+	now := time.Now()
+	expired := testCertPEM(t, now.Add(-90*24*time.Hour), now.Add(-time.Hour))
+	secrets := []string{"gce-tls", "classless-tls", "missing-class-tls", "alb-legacy-tls", "canary-tls", "delegated-tls"}
+	base := func() []runtime.Object {
+		objects := []runtime.Object{
+			&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+			tlsIngress("shop", "gce", []string{"gce-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "gce")),
+			tlsIngress("shop", "classless", []string{"classless-tls"}, withAddress),
+			tlsIngress("shop", "missing-class", []string{"missing-class-tls"}, withClass("removed"), withAddress),
+			tlsIngress("shop", "alb-legacy", []string{"alb-legacy-tls"}, withAddress, withAnnotation("kubernetes.io/ingress.class", "alb")),
+			tlsIngress("shop", "canary", []string{"canary-tls"}, withClass("nginx"), withAddress, withAnnotation("nginx.ingress.kubernetes.io/canary", "true")),
+			tlsIngress("shop", "delegated", []string{"delegated-tls"}, withClass("nginx"), withAddress, withAnnotation("projectcontour.io/tls-cert-namespace", "certs")),
+		}
+		for _, s := range secrets {
+			objects = append(objects, tlsSecret("shop", s, expired))
+		}
+		return objects
+	}
+	detect := func(t *testing.T, objects []runtime.Object) string {
+		t.Helper()
+		defer ResetTestState()
+		if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		var names []string
+		for _, d := range detectLiveIngressTLSCertificates(GetResourceCache(), "", now) {
+			if d.Severity != "critical" {
+				t.Errorf("%s severity = %s, want critical", d.Name, d.Severity)
+			}
+			names = append(names, d.Name)
+		}
+		return strings.Join(names, ",")
+	}
+	if got := detect(t, base()); got != "classless-tls,gce-tls" {
+		t.Fatalf("detections = %s, want the legacy-gce and class-less Ingresses only", got)
+	}
+	withALBClass := append(base(), &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "aws"}, Spec: networkingv1.IngressClassSpec{Controller: "ingress.k8s.aws/alb"}})
+	if got := detect(t, withALBClass); got != "gce-tls" {
+		t.Fatalf("with an ALB class installed, detections = %s, want only gce-tls", got)
+	}
+}

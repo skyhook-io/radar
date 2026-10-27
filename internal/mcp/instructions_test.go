@@ -128,7 +128,7 @@ var instructionClaims = []struct{ tool, says, backedBy, param string }{
 	{tool: "top_resources", says: "OOMKills: top_resources", backedBy: "OOMKills"},
 	{tool: "get_neighborhood", says: "service routing): get_neighborhood", backedBy: "service routing"},
 	{tool: "get_neighborhood", says: "The graph around one object (owners, selectors, config references", backedBy: "targetPort/selector/endpoints problems, dependency timeouts, config/secret refs, owner chains"},
-	{tool: "get_cluster_audit", says: "get_cluster_audit is posture, partly live", backedBy: "are live failures"},
+	{tool: "get_cluster_audit", says: "get_cluster_audit is posture, partly live", backedBy: "can be live failures"},
 	{tool: "manage_workload", says: "manage_workload to restart, scale or roll back", backedBy: "'rollback'"},
 }
 

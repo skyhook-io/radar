@@ -145,7 +145,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
 			"audit findings are posture and remediation priority, mostly latent risk though " +
-			"some (expired certificates, dangling references) are live failures; " +
+			"some (expired certificates, dangling references) can be live failures; " +
 			"auditSummary.highestSeverity uses the Checks ladder " +
 			"(critical|high|medium|low; current built-ins are high|medium), separate " +
 			"from issueSummary's live-operational critical|warning; manager: none is not " +
@@ -311,7 +311,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"stale PVCs/PVs). " +
 			"Each finding has remediation guidance. " +
 			"Findings are mostly latent risk, but some (expired certificates, dangling " +
-			"references) are live failures; check them before dismissing. A crashing pod " +
+			"references) can be live failures; check them before dismissing. A crashing pod " +
 			"can have zero findings. Finding severity and the explicit critical/high/medium/low " +
 			"summary counts are posture remediation priority; current built-in checks emit high " +
 			"or medium. They are not the live-issue severity scale. For 'what's broken right now?' " +
@@ -730,7 +730,7 @@ type getResourceInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues, drain-plan. Comma-separated. drain-plan is Node-only: a read-only current pod/PDB estimate with explicit options, up to 100 pods and total/truncated indicators; not controller eviction history. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is mostly latent risk, though some findings (expired certificates, dangling references) are live failures. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is mostly latent risk, though some findings (expired certificates, dangling references) can be live failures. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
 type topologyInput struct {

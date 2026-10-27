@@ -140,7 +140,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_cluster_audit',
-    desc: 'Best-practice and security posture findings — Security, Reliability, Efficiency — each with remediation guidance. Static config posture: mostly latent risk, though some findings (expired certificates, dangling references) are live failures.',
+    desc: 'Best-practice and security posture findings — Security, Reliability, Efficiency — each with remediation guidance. Static config posture: mostly latent risk, though some findings (expired certificates, dangling references) can be live failures.',
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
       { arg: 'category', desc: 'Security, Reliability, or Efficiency' },

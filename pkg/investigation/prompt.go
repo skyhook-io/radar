@@ -74,7 +74,7 @@ func (t Target) Label() string {
 
 // HealthSignal is the compact server-side health frame captured when a run
 // starts. Issue fields describe live operational findings; audit fields are
-// posture findings, mostly latent risk, though some are live failures.
+// posture findings, mostly latent risk, though some can be live failures.
 // Issues/AuditFindings carry the top actual rows (capped) — aggregates alone
 // read as vague and starve the prompt of detail Radar already has.
 type HealthSignal struct {
@@ -404,7 +404,7 @@ func healthFrame(target string, health *HealthSignal) string {
 			}
 			b.WriteString(".")
 		}
-		b.WriteString(" Audit findings are posture and remediation priority, mostly latent risk, but some (expired certificates, dangling references) are live failures; check them before dismissing.")
+		b.WriteString(" Audit findings are posture and remediation priority, mostly latent risk, but some (expired certificates, dangling references) can be live failures; check them before dismissing.")
 	}
 	if len(health.AuditMissingInputs) > 0 {
 		fmt.Fprintf(&b, " The audit scan could not read these inputs: %s. Zero audit findings do not establish that all checks passed.", strings.Join(health.AuditMissingInputs, ", "))
