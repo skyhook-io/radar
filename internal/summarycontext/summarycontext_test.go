@@ -171,6 +171,19 @@ func TestBuildIssueIndex_CountsAffectedResources(t *testing.T) {
 	}
 }
 
+// A NetworkPolicy that isolates a Service counts on that Service too.
+func TestBuildIssueIndex_CountsNetworkPolicyOnIsolatedService(t *testing.T) {
+	p := &fakeIssuesProvider{problems: []k8s.Detection{{
+		Kind: "NetworkPolicy", Group: "networking.k8s.io", Namespace: "shop", Name: "deny-all",
+		Severity: "warning", Reason: k8s.NetworkPolicyDenyAllIngressReason,
+		AffectedRefs: []issuesapi.Ref{{Kind: "Service", Namespace: "shop", Name: "recommendation"}},
+	}}}
+	idx := BuildIssueIndex(p, issues.Filters{CanReadRelated: func(issues.Ref) bool { return true }})
+	if got := idx.Count("", "Service", "shop", "recommendation"); got != 1 {
+		t.Errorf("isolated Service count = %d, want 1", got)
+	}
+}
+
 // TestBuildIssueIndex_GroupedSubjectPropagation is the contract that ties the
 // issues tool to resource drill-down: a Pod-evidenced issue grouped under a
 // Deployment must surface on BOTH the Deployment (the grouped subject an agent

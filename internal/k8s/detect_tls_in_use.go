@@ -24,13 +24,13 @@ const (
 // this host's clock; only a start time clearly in the future is a failure.
 const tlsNotYetValidTolerance = 5 * time.Minute
 
-// tlsConsumers is the live Ingresses using one TLS Secret. addressed is set
-// when at least one has a load-balancer address; otherwise every consumer
-// counts only because its controller's pods are running, and those pods'
-// namespaces are evidence a caller must be able to read.
+// tlsConsumers is the live Ingresses using one TLS Secret: those with a
+// load-balancer address, and those that count only because their
+// controller's pods are running, whose namespaces are evidence a caller must
+// be able to read.
 type tlsConsumers struct {
-	refs          []issuesapi.Ref
-	addressed     bool
+	addressedRefs []issuesapi.Ref
+	runningRefs   []issuesapi.Ref
 	podNamespaces map[string]bool
 }
 
@@ -65,7 +65,7 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 	controllerPods := map[string][]string{} // controller -> namespaces of its ready pods
 	consumers := map[string]*tlsConsumers{} // namespace/secret
 	for _, ing := range ings {
-		if ing.DeletionTimestamp != nil || len(ing.Spec.TLS) == 0 {
+		if ing.DeletionTimestamp != nil || len(ing.Spec.TLS) == 0 || ingressSSLPassthrough(ing) {
 			continue
 		}
 		controller, ok := ingressController(cache, ing)
@@ -95,8 +95,12 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 				c = &tlsConsumers{podNamespaces: map[string]bool{}}
 				consumers[key] = c
 			}
-			c.refs = append(c.refs, issuesapi.Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name})
-			c.addressed = c.addressed || addressed
+			ref := issuesapi.Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name}
+			if addressed {
+				c.addressedRefs = append(c.addressedRefs, ref)
+				continue
+			}
+			c.runningRefs = append(c.runningRefs, ref)
 			for _, ns := range podNamespaces {
 				c.podNamespaces[ns] = true
 			}
@@ -127,20 +131,44 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, no
 }
 
 // ingressController resolves the controller of the IngressClass serving ing.
-// The legacy class annotation names no controller, so it resolves only when
-// it marks the Ingress for the AWS Load Balancer Controller.
+// The legacy class annotation names no controller, and controllers differ on
+// whether it or spec.ingressClassName wins, so an annotation resolves only
+// when it marks the Ingress for the AWS Load Balancer Controller or names the
+// same class as the field.
 func ingressController(cache *ResourceCache, ing *networkingv1.Ingress) (string, bool) {
 	alb, known := ingressServedByALB(cache, ing)
 	if alb {
 		return albIngressController, true
 	}
-	if !known || ingressstatus.LegacyClass(ing) != "" {
+	name := ""
+	if ing.Spec.IngressClassName != nil {
+		name = strings.TrimSpace(*ing.Spec.IngressClassName)
+	}
+	if legacy := ingressstatus.LegacyClass(ing); legacy != "" {
+		if legacy != name {
+			return "", false
+		}
+		return ingressClassController(cache, name)
+	}
+	if !known {
 		return "", false
 	}
-	if name := ing.Spec.IngressClassName; name != nil && strings.TrimSpace(*name) != "" {
-		return ingressClassController(cache, strings.TrimSpace(*name))
+	if name != "" {
+		return ingressClassController(cache, name)
 	}
 	return defaultIngressClassController(cache)
+}
+
+// ingressSSLPassthrough reports a controller annotation (ingress-nginx,
+// HAProxy) that hands TLS to the backend, so the Ingress's own TLS Secret is
+// not what clients see.
+func ingressSSLPassthrough(ing *networkingv1.Ingress) bool {
+	for key, value := range ing.Annotations {
+		if strings.HasSuffix(key, "/ssl-passthrough") && strings.EqualFold(strings.TrimSpace(value), "true") {
+			return true
+		}
+	}
+	return false
 }
 
 // readyControllerPodNamespaces returns the namespaces of the controller's
@@ -177,9 +205,10 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 	if !ok {
 		return Detection{}, false
 	}
+	addressed := len(consumers.addressedRefs) > 0
 	user := "an Ingress whose ingress controller is running references it for TLS"
 	severity := "warning"
-	if consumers.addressed {
+	if addressed {
 		user = "an Ingress with a load-balancer address references it for TLS"
 		severity = "critical"
 	}
@@ -198,8 +227,12 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 	default:
 		return Detection{}, false
 	}
+	// An addressed consumer stands on its own; links to address-less ones would
+	// rest on controller pods the caller may not be allowed to see.
+	refs := append([]issuesapi.Ref(nil), consumers.addressedRefs...)
 	var reads []issuesapi.EvidenceRead
-	if !consumers.addressed {
+	if !addressed {
+		refs = append(refs, consumers.runningRefs...)
 		cause += " No Ingress using it has a load-balancer address, so this rests on its controller running, not on the controller having picked it up."
 		podNamespaces := make([]string, 0, len(consumers.podNamespaces))
 		for ns := range consumers.podNamespaces {
@@ -211,7 +244,6 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 		}
 	}
 
-	refs := append([]issuesapi.Ref(nil), consumers.refs...)
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
 	age := now.Sub(secret.CreationTimestamp.Time)
 	if secret.CreationTimestamp.IsZero() || age < 0 {

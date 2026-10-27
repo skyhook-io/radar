@@ -55,6 +55,15 @@ func withAddress(ing *networkingv1.Ingress) {
 	ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{{IP: "203.0.113.10"}}
 }
 
+func withAnnotation(key, value string) tlsIngressOpt {
+	return func(ing *networkingv1.Ingress) {
+		if ing.Annotations == nil {
+			ing.Annotations = map[string]string{}
+		}
+		ing.Annotations[key] = value
+	}
+}
+
 func withClass(class string) tlsIngressOpt {
 	return func(ing *networkingv1.Ingress) { ing.Spec.IngressClassName = &class }
 }
@@ -90,6 +99,9 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		tlsSecret("shop", "alb-expired-tls", expired),
 		tlsSecret("shop", "pending-expired-tls", expired),
 		tlsSecret("shop", "unknown-class-expired-tls", expired),
+		tlsSecret("shop", "passthrough-expired-tls", expired),
+		tlsSecret("shop", "legacy-match-expired-tls", expired),
+		tlsSecret("shop", "legacy-conflict-expired-tls", expired),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "opaque", Namespace: "shop"}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"tls.crt": expired}},
 		// Two live Ingresses share one expired Secret: one row, both linked.
 		tlsIngress("shop", "web", []string{"expired-tls", "expired-tls"}, nginx, withAddress),
@@ -101,14 +113,20 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		// Class not installed: can't tell which controller serves it.
 		tlsIngress("shop", "orphan", []string{"unknown-class-expired-tls"}, withClass("missing"), withAddress),
 		tlsIngress("shop", "opaque", []string{"opaque", "missing-tls"}, nginx, withAddress),
+		// TLS goes to the backend: the Ingress's Secret is not what clients see.
+		tlsIngress("shop", "passthrough", []string{"passthrough-expired-tls"}, nginx, withAddress, withAnnotation("nginx.ingress.kubernetes.io/ssl-passthrough", "true")),
+		// A legacy annotation naming the same class as the field is unambiguous.
+		tlsIngress("shop", "legacy-match", []string{"legacy-match-expired-tls"}, nginx, withAddress, withAnnotation("kubernetes.io/ingress.class", "nginx")),
+		// Controllers disagree on which of two different classes wins.
+		tlsIngress("shop", "legacy-conflict", []string{"legacy-conflict-expired-tls"}, nginx, withAddress, withAnnotation("kubernetes.io/ingress.class", "other")),
 	}
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 
 	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", now)
-	if len(got) != 2 {
-		t.Fatalf("detections = %+v, want expired-tls and future-tls only", got)
+	if len(got) != 3 || got[2].Name != "legacy-match-expired-tls" {
+		t.Fatalf("detections = %+v, want expired-tls, future-tls and legacy-match-expired-tls only", got)
 	}
 	exp, early := got[0], got[1]
 	if exp.Kind != "Secret" || exp.Namespace != "shop" || exp.Name != "expired-tls" || exp.Reason != TLSCertificateExpiredReason || exp.Severity != "critical" {
@@ -206,8 +224,10 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 		t.Fatalf("detections = %+v, want mixed-tls and traefik-tls", got)
 	}
 	mixed, traefik := got[0], got[1]
-	if mixed.Name != "mixed-tls" || mixed.Severity != "critical" || len(mixed.RequiredReads) != 0 || len(mixed.AffectedRefs) != 2 {
-		t.Fatalf("a Secret any addressed Ingress uses is critical: %+v", mixed)
+	// The address-less consumer stays unlinked: linking it would rest on
+	// controller pods a caller of the critical row may not be allowed to see.
+	if mixed.Name != "mixed-tls" || mixed.Severity != "critical" || len(mixed.RequiredReads) != 0 || len(mixed.AffectedRefs) != 1 || mixed.AffectedRefs[0].Name != "addressed" {
+		t.Fatalf("a Secret any addressed Ingress uses is critical and links only addressed Ingresses: %+v", mixed)
 	}
 	if traefik.Name != "traefik-tls" || traefik.Severity != "warning" || !strings.Contains(traefik.Message, "controller is running") || !strings.Contains(traefik.Cause, "not on the controller having picked it up") {
 		t.Fatalf("running-controller detection = %+v", traefik)
