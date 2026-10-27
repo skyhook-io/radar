@@ -202,6 +202,7 @@ func TestDiffGenericUnstructured_UnkeyedInsertReportsOneItem(t *testing.T) {
 	}{
 		{"prepend", append([]any{rule(99)}, rules...), FieldChange{Path: "spec.rules[0]", OldValue: nil, NewValue: hiddenSetMarker}},
 		{"remove middle", append(append([]any{}, rules[:4]...), rules[5:]...), FieldChange{Path: "spec.rules[4]", OldValue: hiddenSetMarker, NewValue: nil}},
+		{"prepend and edit last", append(append([]any{rule(99)}, rules[:9]...), map[string]any{"alert": "Alert9", "expr": "edited"}), FieldChange{Path: "spec.rules[10].expr", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			new := old.DeepCopy()
@@ -209,6 +210,9 @@ func TestDiffGenericUnstructured_UnkeyedInsertReportsOneItem(t *testing.T) {
 			new.Object["spec"] = map[string]any{"rules": tc.rules}
 			diff := ComputeDiff("PrometheusRule", old, new)
 			want := []FieldChange{tc.want, {Path: "metadata.generation", OldValue: int64(1), NewValue: int64(2)}}
+			if tc.name == "prepend and edit last" {
+				want = append([]FieldChange{{Path: "spec.rules[0]", OldValue: nil, NewValue: hiddenSetMarker}}, want...)
+			}
 			if diff == nil || !reflect.DeepEqual(diff.Fields, want) {
 				t.Fatalf("diff = %+v, want %+v", diff, want)
 			}

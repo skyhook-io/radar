@@ -546,31 +546,112 @@ func collectChangedPaths(path string, oldV, newV any, absentRoot string, ordered
 			}
 			return
 		}
-		// Unkeyed items are compared by position after dropping the equal
-		// prefix and suffix, so one inserted or removed item does not read
-		// as a change to every item after it.
-		prefix := 0
-		for prefix < len(o) && prefix < len(n) && reflect.DeepEqual(o[prefix], n[prefix]) {
-			prefix++
-		}
-		suffix := 0
-		for suffix < len(o)-prefix && suffix < len(n)-prefix && reflect.DeepEqual(o[len(o)-1-suffix], n[len(n)-1-suffix]) {
-			suffix++
-		}
-		oldMid, newMid := o[prefix:len(o)-suffix], n[prefix:len(n)-suffix]
-		for i := 0; i < max(len(oldMid), len(newMid)); i++ {
+		// Unkeyed items are aligned on the items both lists hold unchanged,
+		// so one inserted or removed item does not read as a change to
+		// every item after it. A changed item is named by its new index.
+		for _, pair := range alignUnkeyed(o, n) {
 			var oldItem, newItem any
-			if i < len(oldMid) {
-				oldItem = oldMid[i]
+			index := pair.old
+			if pair.old >= 0 {
+				oldItem = o[pair.old]
 			}
-			if i < len(newMid) {
-				newItem = newMid[i]
+			if pair.new >= 0 {
+				newItem, index = n[pair.new], pair.new
 			}
-			collectChangedPaths(fmt.Sprintf("%s[%d]", path, prefix+i), oldItem, newItem, absentRoot, ordered, out)
+			collectChangedPaths(fmt.Sprintf("%s[%d]", path, index), oldItem, newItem, absentRoot, ordered, out)
 		}
 	default:
 		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot, oldV: oldV, newV: newV})
 	}
+}
+
+// maxAlignCells bounds the quadratic alignment of unkeyed lists; longer
+// middles fall back to positional pairing.
+const maxAlignCells = 10000
+
+// itemPair holds indexes into an old and a new list; -1 is "absent".
+type itemPair struct{ old, new int }
+
+// alignUnkeyed returns the item pairs of two unkeyed lists that differ.
+// After the equal prefix and suffix, equal items are matched by longest
+// common subsequence; the unmatched items between two matches are paired
+// by position, so an edit stays one change beside an insert elsewhere.
+func alignUnkeyed(o, n []any) []itemPair {
+	prefix := 0
+	for prefix < len(o) && prefix < len(n) && reflect.DeepEqual(o[prefix], n[prefix]) {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(o)-prefix && suffix < len(n)-prefix && reflect.DeepEqual(o[len(o)-1-suffix], n[len(n)-1-suffix]) {
+		suffix++
+	}
+	oldMid, newMid := o[prefix:len(o)-suffix], n[prefix:len(n)-suffix]
+
+	var out []itemPair
+	var gapOld, gapNew []int
+	flush := func() {
+		for k := 0; k < max(len(gapOld), len(gapNew)); k++ {
+			pair := itemPair{old: -1, new: -1}
+			if k < len(gapOld) {
+				pair.old = gapOld[k]
+			}
+			if k < len(gapNew) {
+				pair.new = gapNew[k]
+			}
+			out = append(out, pair)
+		}
+		gapOld, gapNew = gapOld[:0], gapNew[:0]
+	}
+	if len(oldMid)*len(newMid) > maxAlignCells {
+		for i := range oldMid {
+			gapOld = append(gapOld, prefix+i)
+		}
+		for j := range newMid {
+			gapNew = append(gapNew, prefix+j)
+		}
+		flush()
+		return out
+	}
+
+	// lcs[i][j] is the common-subsequence length of oldMid[i:] and newMid[j:].
+	lcs := make([][]int, len(oldMid)+1)
+	for i := range lcs {
+		lcs[i] = make([]int, len(newMid)+1)
+	}
+	equal := make([][]bool, len(oldMid))
+	for i := len(oldMid) - 1; i >= 0; i-- {
+		equal[i] = make([]bool, len(newMid))
+		for j := len(newMid) - 1; j >= 0; j-- {
+			if reflect.DeepEqual(oldMid[i], newMid[j]) {
+				equal[i][j] = true
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+	i, j := 0, 0
+	for i < len(oldMid) && j < len(newMid) {
+		switch {
+		case equal[i][j] && lcs[i][j] == lcs[i+1][j+1]+1:
+			flush()
+			i, j = i+1, j+1
+		case lcs[i+1][j] >= lcs[i][j+1]:
+			gapOld = append(gapOld, prefix+i)
+			i++
+		default:
+			gapNew = append(gapNew, prefix+j)
+			j++
+		}
+	}
+	for ; i < len(oldMid); i++ {
+		gapOld = append(gapOld, prefix+i)
+	}
+	for ; j < len(newMid); j++ {
+		gapNew = append(gapNew, prefix+j)
+	}
+	flush()
+	return out
 }
 
 // collapseUntracked reports an uncovered leaf inside a block that exists on
