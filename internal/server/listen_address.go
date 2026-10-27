@@ -127,7 +127,8 @@ func (s *Server) sharedListenerHostAllowed(r *http.Request) bool {
 	}
 	host := requestHostname(r)
 	switch {
-	case host == "":
+	// 253 is the DNS name limit; it also bounds the wildcard walk below.
+	case host == "" || len(host) > 253:
 		return false
 	case browserLoopbackHostname(host), net.ParseIP(host) != nil, !strings.Contains(host, "."),
 		strings.HasSuffix(host, ".svc"), strings.HasSuffix(host, ".svc.cluster.local"):

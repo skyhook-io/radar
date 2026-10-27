@@ -65,7 +65,9 @@ web page cannot reach Radar by rebinding its own hostname to Radar's address
 - `localhost`, `*.localhost` and IP addresses, such as `http://192.168.1.5:9280`
   or a published Docker port at `http://localhost:9280`;
 - single-label names (`http://radar:9280`) and Kubernetes Service names ending
-  in `.svc` or `.svc.cluster.local`;
+  in `.svc` or `.svc.cluster.local`. The two-label `<service>.<namespace>` form
+  can't be told apart from a public domain, so list it (the Helm chart adds its
+  own);
 - the hosts of `--trusted-origins`;
 - hostnames listed in `--allowed-hosts` (env `RADAR_ALLOWED_HOSTS`), e.g.
   `--allowed-hosts=radar.internal,radar.example.com`. Names have no scheme or

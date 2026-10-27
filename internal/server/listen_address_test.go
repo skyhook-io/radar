@@ -268,6 +268,7 @@ func TestProtectUnauthenticatedHost(t *testing.T) {
 		{name: "shared listener wildcard excludes apex", listenAddress: AllInterfacesAddress, host: "example.com", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusForbidden},
 		{name: "shared listener wildcard lookalike", listenAddress: AllInterfacesAddress, host: "radar.example.com.attacker.example", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusForbidden},
 		{name: "shared listener wildcard suffix lookalike", listenAddress: AllInterfacesAddress, host: "radarexample.com", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusForbidden},
+		{name: "shared listener oversized host", listenAddress: AllInterfacesAddress, host: strings.Repeat("a.", 200) + "example.com", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusForbidden},
 		{name: "loopback ignores allowed hosts", listenAddress: DefaultListenAddress, host: "radar.example.com", allowedHosts: []string{"radar.example.com"}, wantStatus: http.StatusForbidden},
 		{name: "authenticated deployment", listenAddress: DefaultListenAddress, host: "radar.example.com", authConfig: auth.Config{Mode: "oidc"}, wantStatus: http.StatusNoContent},
 		{name: "authenticated tunnel", listenAddress: DefaultListenAddress, host: "hub.example.com", tunnel: true, wantStatus: http.StatusNoContent},

@@ -265,8 +265,8 @@ basePath: ""
 # addresses and Kubernetes Service names (radar, radar.<ns>.svc,
 # radar.<ns>.svc.cluster.local). Requests for other hostnames are refused so a
 # web page cannot reach Radar by rebinding its own hostname to Radar's address.
-# ingress.hosts and httpRoute.hostnames are added automatically, as are the hosts
-# of trustedOrigins. List others, e.g. a custom cluster domain; *.example.com
+# The chart adds <service>.<namespace>, ingress.hosts and httpRoute.hostnames,
+# and the server adds the hosts of trustedOrigins. List others, e.g. a custom cluster domain; *.example.com
 # covers names under a domain. "*" turns the check off.
 allowedHosts: []
 

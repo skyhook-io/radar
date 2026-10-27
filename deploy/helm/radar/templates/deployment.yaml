@@ -138,7 +138,7 @@ spec:
             {{- with .Values.trustedOrigins }}
             - {{ printf "--trusted-origins=%s" (join "," .) | quote }}
             {{- end }}
-            {{- $allowedHosts := list }}
+            {{- $allowedHosts := list (printf "%s.%s" (include "radar.fullname" .) .Release.Namespace) }}
             {{- range .Values.allowedHosts }}{{ $allowedHosts = append $allowedHosts . }}{{ end }}
             {{- if .Values.ingress.enabled }}
             {{- range .Values.ingress.hosts }}{{ with .host }}{{ $allowedHosts = append $allowedHosts . }}{{ end }}{{ end }}

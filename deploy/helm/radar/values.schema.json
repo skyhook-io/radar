@@ -144,7 +144,7 @@
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^(\\*|(\\*\\.)?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\\.?)$"
+        "pattern": "^(\\*|(\\*\\.)?[^\\s/:@*,.][^\\s/:@*,]*)$"
       },
       "description": "Hostnames besides localhost, IP addresses and Kubernetes Service names that Radar answers when auth.mode is none, e.g. radar.internal. Ingress and HTTPRoute hostnames are added automatically. Exact names, or *.example.com for names under a domain; \"*\" turns the check off."
     },
