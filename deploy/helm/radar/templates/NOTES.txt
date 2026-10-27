@@ -81,5 +81,10 @@ Warning: no auth (auth.mode=none). Only use this behind a trusted private
 network boundary. Anyone who can reach Radar can use the permissions granted to
 its ServiceAccount. For shared or externally reachable installations, configure
 authentication: {{ $authDocs }}
+
+Without authentication Radar answers only localhost, IP addresses, Kubernetes
+Service names and the ingress and HTTPRoute hostnames set in this chart. Add any
+other hostname users open Radar at, such as a Gateway listener or load balancer
+hostname, to allowedHosts.
 {{- end }}
 {{- end }}

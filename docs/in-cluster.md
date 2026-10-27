@@ -257,6 +257,19 @@ helm upgrade --install radar skyhook/radar \
   -n radar -f values.yaml
 ```
 
+Without authentication Radar answers only hostnames it can trust not to be a
+rebound attacker page: `localhost`, IP addresses, Kubernetes Service names
+(`radar`, `radar.<namespace>`, `radar.<namespace>.svc`), and the ingress and
+HTTPRoute hostnames, which the chart adds for you. If you reach
+Radar by another name (a second DNS name, an external load balancer hostname,
+the Gateway listener hostname when `httpRoute.hostnames` is empty), add it to
+`allowedHosts`; otherwise requests fail with *Radar without
+authentication answers only ...* naming the host. A wildcard ingress host such
+as `*.example.com` is added as is and covers the names under it. Keep the
+ingress forwarding the original `Host`: a controller that rewrites it to the
+Service name or an IP bypasses this check. See
+[HTTP Listener](configuration.md#http-listener).
+
 ### Subpath Ingress (No Strip-Prefix)
 
 If your ingress forwards `/radar/...` to the Radar service as `/radar/...`, set `basePath` to the same prefix:
@@ -654,6 +667,17 @@ kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 ```
 
 If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades. If it does and exec still fails, see the next section: the terminal uses the same address check as changes.
+
+### Requests fail with "Radar without authentication answers only ..."
+
+Without authentication, Radar refuses requests addressed to a hostname it does
+not know, so that a web page cannot reach it by pointing its own hostname at
+Radar's address. The message names the hostname. Add it to `allowedHosts` in
+the Helm chart (outside Helm, `--allowed-hosts` or `RADAR_ALLOWED_HOSTS`), or
+enable authentication. The chart already allows its Service names and the
+ingress and HTTPRoute hostnames you set; names it cannot know include a Gateway
+listener hostname, a load balancer hostname and a custom cluster domain. See
+[HTTP Listener](configuration.md#http-listener).
 
 ### Node drain requests time out
 

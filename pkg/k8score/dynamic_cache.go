@@ -106,6 +106,16 @@ type DynamicResourceCache struct {
 	// CRD discovery completion callbacks
 	crdCallbacks   []func()
 	crdCallbacksMu sync.RWMutex
+
+	// CRDs installed after startup discovery. seenCRDs holds the group/resource
+	// of every CRD that already got a watch decision; pendingCRDs the new ones
+	// waiting for a scan. Guarded by lateCRDMu.
+	seenCRDs        map[string]struct{}
+	pendingCRDs     map[string]struct{}
+	lateCRDTimer    *time.Timer
+	lateCRDScanning bool
+	lateCRDRetries  int
+	lateCRDMu       sync.Mutex
 }
 
 // NewDynamicResourceCache creates a dynamic resource cache with the given config.
@@ -146,6 +156,8 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 		discoveryStatus:  CRDDiscoveryIdle,
 		discoveryDone:    make(chan struct{}),
 		gvrHandlers:      make(map[schema.GroupVersionResource][]cache.ResourceEventHandler),
+		seenCRDs:         make(map[string]struct{}),
+		pendingCRDs:      make(map[string]struct{}),
 	}
 
 	log.Println("Dynamic resource cache initialized")
@@ -2431,6 +2443,9 @@ func (d *DynamicResourceCache) WarmupParallel(gvrs []schema.GroupVersionResource
 // resources are watched eagerly (cheap, full timeline coverage). CRDs with >100
 // resources (calico, cilium, etc.) are deferred to on-demand via EnsureWatching()
 // when the user browses them, avoiding expensive watch connections.
+//
+// Once the startup pass is done, CRDs installed later get the same decision:
+// see watchLateCRDs.
 func (d *DynamicResourceCache) DiscoverAllCRDs() {
 	if d == nil {
 		log.Println("[CRD Discovery] Cache is nil, skipping")
@@ -2466,6 +2481,7 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 				log.Println("[CRD Discovery] CRD discovery terminated due to panic (marked complete to unblock waiters)")
 			} else {
 				log.Println("[CRD Discovery] CRD discovery complete")
+				d.watchLateCRDs()
 			}
 
 			d.notifyCRDDiscoveryComplete()
@@ -2476,139 +2492,362 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 			return
 		}
 
-		resources, err := d.config.Discovery.GetAPIResources()
+		gvrs, keys, err := d.crdWatchCandidates()
 		if err != nil {
 			log.Printf("Failed to get API resources for CRD discovery: %v", err)
 			return
 		}
-
-		best := make(map[string]schema.GroupVersionResource)
-		for _, res := range resources {
-			if !res.IsCRD {
-				continue
-			}
-			gvr := schema.GroupVersionResource{
-				Group:    res.Group,
-				Version:  res.Version,
-				Resource: res.Name,
-			}
-			// Crossplane serves this legacy API with a deprecation warning on every
-			// informer watch renewal. Keep it available on demand, but don't eagerly watch it.
-			if res.Group == "apiextensions.crossplane.io" && res.Name == "usages" {
-				d.retainObservation(gvr, DynamicObservationDeferred, "legacy_api_deferred", false)
-				continue
-			}
-			hasList := false
-			hasWatch := false
-			for _, verb := range res.Verbs {
-				if verb == "list" {
-					hasList = true
-				}
-				if verb == "watch" {
-					hasWatch = true
-				}
-			}
-			if !hasList || !hasWatch {
-				continue
-			}
-			key := res.Group + "/" + res.Name
-			if existing, ok := best[key]; ok {
-				if !IsMoreStableVersion(res.Version, existing.Version) {
-					continue
-				}
-			}
-			best[key] = gvr
-		}
-
-		var gvrs []schema.GroupVersionResource
-		for _, gvr := range best {
-			gvrs = append(gvrs, gvr)
-		}
+		d.markCRDsSeen(keys)
 
 		if len(gvrs) == 0 {
 			log.Println("No watchable CRDs found")
 			return
 		}
 
-		// Filter out GVRs already watched from Phase 1 warmup
-		d.mu.RLock()
-		watched := make(map[schema.GroupVersionResource]struct{}, len(d.informers))
-		for k := range d.informers {
-			watched[k.gvr] = struct{}{}
-		}
-		alreadyWatching := len(watched)
-		var remaining []schema.GroupVersionResource
-		for _, gvr := range gvrs {
-			if _, exists := watched[gvr]; !exists {
-				remaining = append(remaining, gvr)
-			}
-		}
-		d.mu.RUnlock()
-
-		if len(remaining) == 0 {
-			log.Printf("Discovered %d watchable CRDs (all %d already watching from warmup)", len(gvrs), alreadyWatching)
+		stats := d.watchSmallCRDs(gvrs)
+		if stats.eager+stats.deferred+stats.noAccess == 0 {
+			log.Printf("Discovered %d watchable CRDs (all %d already watching from warmup)", len(gvrs), stats.alreadyWatching)
 			return
 		}
-
-		// Probe each remaining CRD to get resource count. CRDs with few resources
-		// (≤100) are cheap to watch and give full timeline coverage. CRDs with many
-		// resources (calico policies, cilium endpoints) are deferred to on-demand.
-		const maxEagerResources = 100
-		type probeResult struct {
-			gvr   schema.GroupVersionResource
-			count int // -1 = no access
-			err   error
-		}
-		results := make(chan probeResult, len(remaining))
-		for _, gvr := range remaining {
-			go func(g schema.GroupVersionResource) {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("[CRD Discovery] Panic probing %s.%s/%s: %v", g.Resource, g.Group, g.Version, r)
-						results <- probeResult{gvr: g, count: -2}
-					}
-				}()
-				count, err := d.probeCount(g)
-				results <- probeResult{gvr: g, count: count, err: err}
-			}(gvr)
-		}
-
-		var eager []schema.GroupVersionResource
-		var deferredCount int
-		var noAccessCount int
-		for range remaining {
-			r := <-results
-			if r.count == -1 {
-				noAccessCount++
-				d.retainAuthProbeFailure(r.gvr, "", true, r.err)
-				continue
-			}
-			if r.count == -2 {
-				// Probe failed (timeout, network error) — defer to be safe
-				deferredCount++
-				d.retainObservation(r.gvr, DynamicObservationDeferred, "resource_count_probe_failed", false)
-				continue
-			}
-			if r.count <= maxEagerResources {
-				eager = append(eager, r.gvr)
-				d.retainObservation(r.gvr, DynamicObservationDeferred, "eager_watch_pending", false)
-			} else {
-				deferredCount++
-				d.retainObservation(r.gvr, DynamicObservationDeferred, "resource_count_exceeds_eager_limit", false)
-				if d.config.DebugEvents {
-					kind := d.gvrToKind(r.gvr)
-					log.Printf("[CRD Discovery] Deferring %s (%d resources > %d threshold)", kind, r.count, maxEagerResources)
-				}
-			}
-		}
-
 		log.Printf("Discovered %d watchable CRDs (%d already watching, %d small → eager, %d large → on-demand, %d no access)",
-			len(gvrs), alreadyWatching, len(eager), deferredCount, noAccessCount)
-
-		if len(eager) > 0 {
-			d.WarmupParallel(eager, 30*time.Second)
-		}
+			len(gvrs), stats.alreadyWatching, stats.eager, stats.deferred, stats.noAccess)
 	}()
+}
+
+// crdWatchCandidates returns one GVR per CRD (its most stable served version)
+// for every CRD that supports list and watch, and the group/resource key of
+// every CRD discovery reports, watchable or not.
+func (d *DynamicResourceCache) crdWatchCandidates() ([]schema.GroupVersionResource, []string, error) {
+	resources, err := d.config.Discovery.GetAPIResources()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	best := make(map[string]schema.GroupVersionResource)
+	allKeys := make(map[string]struct{})
+	for _, res := range resources {
+		if !res.IsCRD {
+			continue
+		}
+		allKeys[res.Group+"/"+res.Name] = struct{}{}
+		gvr := schema.GroupVersionResource{
+			Group:    res.Group,
+			Version:  res.Version,
+			Resource: res.Name,
+		}
+		// Crossplane serves this legacy API with a deprecation warning on every
+		// informer watch renewal. Keep it available on demand, but don't eagerly watch it.
+		if res.Group == "apiextensions.crossplane.io" && res.Name == "usages" {
+			d.retainObservation(gvr, DynamicObservationDeferred, "legacy_api_deferred", false)
+			continue
+		}
+		hasList := false
+		hasWatch := false
+		for _, verb := range res.Verbs {
+			if verb == "list" {
+				hasList = true
+			}
+			if verb == "watch" {
+				hasWatch = true
+			}
+		}
+		if !hasList || !hasWatch {
+			continue
+		}
+		key := res.Group + "/" + res.Name
+		if existing, ok := best[key]; ok {
+			if !IsMoreStableVersion(res.Version, existing.Version) {
+				continue
+			}
+		}
+		best[key] = gvr
+	}
+
+	gvrs := make([]schema.GroupVersionResource, 0, len(best))
+	for _, gvr := range best {
+		gvrs = append(gvrs, gvr)
+	}
+	keys := make([]string, 0, len(allKeys))
+	for key := range allKeys {
+		keys = append(keys, key)
+	}
+	return gvrs, keys, nil
+}
+
+type crdWatchStats struct {
+	alreadyWatching, eager, deferred, noAccess int
+	retry                                      []schema.GroupVersionResource
+}
+
+// maxEagerResources is the object count up to which a CRD is watched eagerly.
+// CRDs with few resources are cheap to watch and give full timeline coverage;
+// CRDs with many (calico policies, cilium endpoints) are deferred to on-demand.
+const maxEagerResources = 100
+
+// watchSmallCRDs probes each GVR that isn't watched yet and starts watching
+// the ones with at most maxEagerResources objects.
+func (d *DynamicResourceCache) watchSmallCRDs(gvrs []schema.GroupVersionResource) crdWatchStats {
+	var stats crdWatchStats
+
+	d.mu.RLock()
+	watched := make(map[schema.GroupVersionResource]struct{}, len(d.informers))
+	for k := range d.informers {
+		watched[k.gvr] = struct{}{}
+	}
+	stats.alreadyWatching = len(watched)
+	var remaining []schema.GroupVersionResource
+	for _, gvr := range gvrs {
+		if _, exists := watched[gvr]; !exists {
+			remaining = append(remaining, gvr)
+		}
+	}
+	d.mu.RUnlock()
+
+	if len(remaining) == 0 {
+		return stats
+	}
+
+	type probeResult struct {
+		gvr   schema.GroupVersionResource
+		count int // -1 = no access
+		err   error
+	}
+	results := make(chan probeResult, len(remaining))
+	for _, gvr := range remaining {
+		go func(g schema.GroupVersionResource) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[CRD Discovery] Panic probing %s.%s/%s: %v", g.Resource, g.Group, g.Version, r)
+					results <- probeResult{gvr: g, count: -2}
+				}
+			}()
+			count, err := d.probeCount(g)
+			results <- probeResult{gvr: g, count: count, err: err}
+		}(gvr)
+	}
+
+	var eager []schema.GroupVersionResource
+	for range remaining {
+		r := <-results
+		if r.count == -1 {
+			stats.noAccess++
+			d.retainAuthProbeFailure(r.gvr, "", true, r.err)
+			continue
+		}
+		if r.count == -2 {
+			// Probe failed (timeout, network error) — defer to be safe
+			stats.deferred++
+			stats.retry = append(stats.retry, r.gvr)
+			d.retainObservation(r.gvr, DynamicObservationDeferred, "resource_count_probe_failed", false)
+			continue
+		}
+		if r.count <= maxEagerResources {
+			eager = append(eager, r.gvr)
+			d.retainObservation(r.gvr, DynamicObservationDeferred, "eager_watch_pending", false)
+		} else {
+			stats.deferred++
+			d.retainObservation(r.gvr, DynamicObservationDeferred, "resource_count_exceeds_eager_limit", false)
+			if d.config.DebugEvents {
+				kind := d.gvrToKind(r.gvr)
+				log.Printf("[CRD Discovery] Deferring %s (%d resources > %d threshold)", kind, r.count, maxEagerResources)
+			}
+		}
+	}
+	stats.eager = len(eager)
+
+	if len(eager) > 0 {
+		d.WarmupParallel(eager, 30*time.Second)
+	}
+	return stats
+}
+
+// ---------------------------------------------------------------------------
+// CRDs installed after startup discovery
+// ---------------------------------------------------------------------------
+
+var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+
+// lateCRDScanDelay batches the CRD events of one install (an operator chart
+// usually creates many CRDs at once, and each becomes Established in a later
+// update) into a single discovery refresh. A scan that leaves a new CRD
+// unresolved (discovery failed or doesn't serve it yet) is retried with
+// doubling delays, up to lateCRDMaxRetries times.
+var lateCRDScanDelay = 3 * time.Second
+
+const lateCRDMaxRetries = 5
+
+// markCRDsSeen records CRDs (group/resource keys) that already went through a
+// watch decision and returns the ones not seen before. Seen CRDs are no longer
+// pending a scan.
+func (d *DynamicResourceCache) markCRDsSeen(keys []string) map[string]struct{} {
+	d.lateCRDMu.Lock()
+	defer d.lateCRDMu.Unlock()
+	fresh := make(map[string]struct{})
+	for _, key := range keys {
+		delete(d.pendingCRDs, key)
+		if _, ok := d.seenCRDs[key]; ok {
+			continue
+		}
+		d.seenCRDs[key] = struct{}{}
+		fresh[key] = struct{}{}
+	}
+	return fresh
+}
+
+// watchLateCRDs subscribes to CRD events so CRDs installed after startup get
+// the same watch decision as DiscoverAllCRDs gave the ones already present,
+// and their resources' changes reach the timeline from install on.
+func (d *DynamicResourceCache) watchLateCRDs() {
+	handler := cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj any) { d.onCRDEvent(obj) },
+		UpdateFunc: func(_, obj any) { d.onCRDEvent(obj) },
+		DeleteFunc: func(obj any) { d.forgetCRD(obj) },
+	}
+	if err := d.AddGVRChangeHandler(crdGVR, handler); err == nil {
+		return
+	}
+	if err := d.EnsureWatching(crdGVR); err != nil {
+		log.Printf("[CRD Discovery] Not watching CRDs, so CRDs installed later are watched only when listed: %v", err)
+		return
+	}
+	if err := d.AddGVRChangeHandler(crdGVR, handler); err != nil {
+		log.Printf("[CRD Discovery] Not watching CRDs, so CRDs installed later are watched only when listed: %v", err)
+	}
+}
+
+// crdKey returns the group/resource key of a CRD object, as used in seenCRDs.
+func crdKey(obj any) (string, bool) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return "", false
+	}
+	group, _, _ := unstructured.NestedString(u.Object, "spec", "group")
+	plural, _, _ := unstructured.NestedString(u.Object, "spec", "names", "plural")
+	if group == "" || plural == "" {
+		return "", false
+	}
+	return group + "/" + plural, true
+}
+
+// onCRDEvent schedules a scan for a CRD that hasn't had a watch decision yet.
+// Updates to known CRDs (cert-manager's cainjector rewrites CRD CA bundles
+// regularly) don't trigger one: a scan refreshes discovery, which is costly.
+func (d *DynamicResourceCache) onCRDEvent(obj any) {
+	key, ok := crdKey(obj)
+	if !ok {
+		return
+	}
+	d.lateCRDMu.Lock()
+	defer d.lateCRDMu.Unlock()
+	if _, seen := d.seenCRDs[key]; seen {
+		return
+	}
+	if _, pending := d.pendingCRDs[key]; !pending {
+		// A newly pending CRD gets the full retry budget, even if it arrives
+		// while earlier CRDs are on their last retry.
+		d.pendingCRDs[key] = struct{}{}
+		d.lateCRDRetries = 0
+	}
+	d.scheduleLateCRDScanLocked(lateCRDScanDelay)
+}
+
+// scheduleLateCRDScanLocked starts a scan after delay unless one is already
+// scheduled or running; a running scan reschedules itself while CRDs remain
+// pending. Caller holds lateCRDMu.
+func (d *DynamicResourceCache) scheduleLateCRDScanLocked(delay time.Duration) {
+	if d.lateCRDTimer != nil || d.lateCRDScanning {
+		return
+	}
+	d.lateCRDTimer = time.AfterFunc(delay, d.runLateCRDScan)
+}
+
+func (d *DynamicResourceCache) runLateCRDScan() {
+	d.lateCRDMu.Lock()
+	d.lateCRDTimer = nil
+	d.lateCRDScanning = true
+	d.lateCRDMu.Unlock()
+
+	d.scanLateCRDs()
+
+	d.lateCRDMu.Lock()
+	defer d.lateCRDMu.Unlock()
+	d.lateCRDScanning = false
+	if d.isStopped() || len(d.pendingCRDs) == 0 {
+		d.lateCRDRetries = 0
+		return
+	}
+	if d.lateCRDRetries >= lateCRDMaxRetries {
+		log.Printf("[CRD Discovery] %d new CRDs still not served after %d retries; they'll be watched when listed", len(d.pendingCRDs), d.lateCRDRetries)
+		clear(d.pendingCRDs)
+		d.lateCRDRetries = 0
+		return
+	}
+	d.lateCRDRetries++
+	d.scheduleLateCRDScanLocked(lateCRDScanDelay << d.lateCRDRetries)
+}
+
+func (d *DynamicResourceCache) isStopped() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.stopped
+}
+
+// forgetCRD lets a deleted CRD be handled again if it's reinstalled.
+func (d *DynamicResourceCache) forgetCRD(obj any) {
+	key, ok := crdKey(obj)
+	if !ok {
+		return
+	}
+	d.lateCRDMu.Lock()
+	delete(d.seenCRDs, key)
+	delete(d.pendingCRDs, key)
+	d.lateCRDMu.Unlock()
+}
+
+func (d *DynamicResourceCache) scanLateCRDs() {
+	if d.isStopped() || d.config.Discovery == nil {
+		return
+	}
+	// A new CRD isn't in the cached API resource list until discovery refreshes.
+	if err := d.config.Discovery.Refresh(); err != nil {
+		log.Printf("[CRD Discovery] Refresh after CRD change failed: %v", err)
+		return
+	}
+	if d.isStopped() {
+		return
+	}
+	gvrs, keys, err := d.crdWatchCandidates()
+	if err != nil {
+		log.Printf("[CRD Discovery] Listing CRDs after CRD change failed: %v", err)
+		return
+	}
+	newKeys := d.markCRDsSeen(keys)
+	var fresh []schema.GroupVersionResource
+	for _, gvr := range gvrs {
+		if _, ok := newKeys[gvr.Group+"/"+gvr.Resource]; ok {
+			fresh = append(fresh, gvr)
+		}
+	}
+	if len(fresh) == 0 {
+		return
+	}
+	stats := d.watchSmallCRDs(fresh)
+	d.lateCRDMu.Lock()
+	for _, gvr := range stats.retry {
+		key := gvr.Group + "/" + gvr.Resource
+		if _, seen := d.seenCRDs[key]; seen {
+			delete(d.seenCRDs, key)
+			d.pendingCRDs[key] = struct{}{}
+		}
+	}
+	d.lateCRDMu.Unlock()
+	// A reinstalled CRD can still have the informer from before its deletion.
+	alreadyWatched := len(fresh) - stats.eager - stats.deferred - stats.noAccess
+	log.Printf("[CRD Discovery] %d CRDs installed after startup (%d small → eager, %d large → on-demand, %d no access, %d already watched)",
+		len(fresh), stats.eager, stats.deferred, stats.noAccess, alreadyWatched)
 }
 
 // ---------------------------------------------------------------------------
@@ -2937,6 +3176,13 @@ func (d *DynamicResourceCache) Stop() {
 			close(d.discoveryDone)
 		}
 		d.discoveryMu.Unlock()
+
+		d.lateCRDMu.Lock()
+		if d.lateCRDTimer != nil {
+			d.lateCRDTimer.Stop()
+			d.lateCRDTimer = nil
+		}
+		d.lateCRDMu.Unlock()
 
 		// Closing stopCh cancels every per-informer context (each informer's
 		// watchdog goroutine selects on it), stopping all watches.

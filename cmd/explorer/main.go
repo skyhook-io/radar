@@ -92,6 +92,7 @@ func main() {
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
 	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen IP address (IPv4 or IPv6), or localhost; loopback is local-only, other addresses (including 0.0.0.0) expose shared access")
 	basePath := flag.String("base-path", "", "URL path prefix to serve Radar under, e.g. /radar (empty = root). Use when an ingress forwards a subpath without stripping it.")
+	allowedHosts := flag.String("allowed-hosts", os.Getenv("RADAR_ALLOWED_HOSTS"), "Comma-separated hostnames, besides localhost, IP addresses and Kubernetes Service names, that an unauthenticated non-loopback listener answers (e.g. radar.internal). Requests for other hostnames are refused so DNS rebinding cannot reach Radar. Exact names or *.example.com for names under a domain; \"*\" turns the check off. Hosts from --trusted-origins are included. Env: RADAR_ALLOWED_HOSTS")
 	trustedOrigins := flag.String("trusted-origins", os.Getenv("RADAR_TRUSTED_ORIGINS"), "Comma-separated origins, besides the address Radar is opened at, that may use Radar's API, including changes and terminals (e.g. http://radar.internal). Set this when a proxy in front of Radar rewrites the Host header and changes fail with \"Radar refused this request\". Exact origins only, no wildcards. Does not apply to /mcp (see RADAR_MCP_TRUSTED_ORIGINS). Env: RADAR_TRUSTED_ORIGINS")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
 	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
@@ -312,6 +313,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --base-path %q: %v", *basePath, err)
 	}
+	parsedAllowedHosts, err := server.ParseAllowedHosts(*allowedHosts)
+	if err != nil {
+		log.Printf("WARNING: ignoring --allowed-hosts (RADAR_ALLOWED_HOSTS) entries Radar cannot use; requests for those hostnames will still be refused:\n%v", err)
+	}
 	parsedTrustedOrigins, err := server.ParseTrustedOrigins(*trustedOrigins)
 	if err != nil {
 		log.Printf("WARNING: ignoring --trusted-origins (RADAR_TRUSTED_ORIGINS) entries Radar cannot use; changes from those addresses will still be refused:\n%v", err)
@@ -416,6 +421,7 @@ func main() {
 		ShowRemoteAccessHint:        true,
 		BasePath:                    normalizedBasePath,
 		TrustedOrigins:              parsedTrustedOrigins,
+		AllowedHosts:                parsedAllowedHosts,
 		NoBrowser:                   *noBrowser,
 		Browser:                     *browser,
 		DevMode:                     *devMode,

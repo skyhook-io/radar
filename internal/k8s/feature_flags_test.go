@@ -15,12 +15,14 @@ const radarFeaturesPath = "../../web/src/api/radarFeatures.ts"
 
 var flagInRadarFeatures = regexp.MustCompile(`flag:\s*['"]([A-Za-z]+)['"]`)
 
-// Flags that hide a control rather than gate an endpoint, so an older Radar
-// shows no upgrade note for them and they have no entry in the table.
+// Flags that hide a control or pick a request shape rather than gate an
+// endpoint, so an older Radar shows no upgrade note for them and they have no
+// entry in the table.
 var flagsWithoutUpgradeNote = map[string]bool{
-	"yamlReview":     true,
-	"yamlSchemas":    true,
-	"workloadImages": true,
+	"yamlReview":               true,
+	"yamlSchemas":              true,
+	"workloadImages":           true,
+	"clusterScopedPlaceholder": true,
 }
 
 // TestFeatureFlagsHaveFrontendGates fails when FeatureCapabilities and the

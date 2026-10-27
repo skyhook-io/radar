@@ -172,7 +172,7 @@ func (s *Server) handleAuditResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
+	namespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	name := chi.URLParam(r, "name")
 
 	// A namespaced subject is audited in its own namespace unless the request
@@ -180,7 +180,7 @@ func (s *Server) handleAuditResource(w http.ResponseWriter, r *http.Request) {
 	// Traefik targets, cert-manager issuers) is read cluster-wide either way,
 	// so a full scan would find nothing more and would evict the shared memo.
 	scopeReq := r
-	if namespace != "" && namespace != "_" && parseNamespaces(r.URL.Query()) == nil {
+	if namespace != "" && parseNamespaces(r.URL.Query()) == nil {
 		scopeReq = withNamespaceFilter(r, namespace)
 	}
 	namespaces := s.parseNamespacesForUser(scopeReq)

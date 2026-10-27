@@ -92,6 +92,8 @@ type Server struct {
 	devMode                 bool
 	enablePprof             *bool
 	trustedOrigins          map[string]struct{} // normalized; see browserOriginAllowed
+	allowedHosts            map[string]struct{} // normalized hostnames; see sharedListenerHostAllowed
+	allowAnyHost            bool
 	staticFS                fs.FS
 	startTime               time.Time
 	listener                net.Listener
@@ -212,6 +214,7 @@ type Config struct {
 	DevMode                 bool         // Serve frontend from filesystem instead of embedded
 	EnablePprof             *bool        // nil uses the listener/authentication default; Cloud always disables profiling
 	TrustedOrigins          []string     // Extra origins allowed to make changes, from ParseTrustedOrigins
+	AllowedHosts            []string     // Extra hostnames an unauthenticated shared listener answers, from ParseAllowedHosts
 	StaticFS                embed.FS     // Embedded frontend files
 	StaticRoot              string       // Path within StaticFS
 	MCPHandler              http.Handler // Full MCP server handler (nil = full endpoint disabled)
@@ -289,6 +292,26 @@ func New(cfg Config) *Server {
 			}
 		}
 		log.Printf("Trusting these origins to make changes in addition to Radar's own address: %s", strings.Join(cfg.TrustedOrigins, ", "))
+	}
+	s.allowedHosts = make(map[string]struct{}, len(cfg.AllowedHosts)+len(cfg.TrustedOrigins))
+	for _, host := range cfg.AllowedHosts {
+		if host == AllowAnyHost {
+			s.allowAnyHost = true
+			continue
+		}
+		s.allowedHosts[normalizeHostname(host)] = struct{}{}
+	}
+	for _, origin := range cfg.TrustedOrigins {
+		if u, err := url.Parse(origin); err == nil && net.ParseIP(u.Hostname()) == nil {
+			if hosts, err := ParseAllowedHosts(u.Hostname()); err == nil {
+				for _, host := range hosts {
+					s.allowedHosts[host] = struct{}{}
+				}
+			}
+		}
+	}
+	if s.allowAnyHost && !cfg.AuthConfig.Enabled() && !cloud.IsLoopbackHostname(cfg.ListenAddress) {
+		log.Printf("WARNING: --allowed-hosts=* turns off Host validation; any web page that rebinds its hostname to this address can use Radar")
 	}
 	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
@@ -451,7 +474,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(s.usageMiddleware)
-	r.Use(s.protectUnauthenticatedLoopback)
+	r.Use(s.protectUnauthenticatedHost)
 	// Note: Timeout middleware is applied per-group below to exempt streaming endpoints
 
 	// gzip response compression (content-type aware: JSON yes, SSE/WS no).
@@ -1458,22 +1481,23 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
-		ResourceReadCoverage:  true,
-		SearchCoverage:        true,
-		YAMLReview:            true,
-		YAMLSchemas:           true,
-		WorkloadImages:        true,
-		ResourceIssues:        true,
-		ResourceIssueCoverage: true,
-		PodEnvironment:        true,
-		PolicyResource:        true,
-		WorkloadHistory:       true,
-		CNPGWorkspace:         true,
-		CNPGProtectionSetup:   true,
-		ServiceEndpointSlices: true,
-		TrafficRecords:        true,
-		GitOpsWriteEvidence:   true,
-		HelmSourceIdentity:    true,
+		ResourceReadCoverage:     true,
+		SearchCoverage:           true,
+		YAMLReview:               true,
+		YAMLSchemas:              true,
+		WorkloadImages:           true,
+		ResourceIssues:           true,
+		ResourceIssueCoverage:    true,
+		PodEnvironment:           true,
+		PolicyResource:           true,
+		WorkloadHistory:          true,
+		CNPGWorkspace:            true,
+		CNPGProtectionSetup:      true,
+		ServiceEndpointSlices:    true,
+		TrafficRecords:           true,
+		GitOpsWriteEvidence:      true,
+		HelmSourceIdentity:       true,
+		ClusterScopedPlaceholder: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
@@ -4312,7 +4336,7 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 // handleUpdateResource updates a Kubernetes resource from YAML
 func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
+	namespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	name := chi.URLParam(r, "name")
 
 	// Read request body (YAML content)
@@ -4379,10 +4403,7 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 // handleDeleteResource deletes a Kubernetes resource
 func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	kind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	if namespace == "_" {
-		namespace = ""
-	}
+	namespace := normalizeNamespaceParam(chi.URLParam(r, "namespace"))
 	name := chi.URLParam(r, "name")
 	force := r.URL.Query().Get("force") == "true"
 	group := r.URL.Query().Get("group")

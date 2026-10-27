@@ -132,6 +132,8 @@ tests:
           pattern: export APP_HOSTNAME=\$\(kubectl get --namespace radar gateway/public-gateway -o jsonpath="\{\.spec\.listeners\[0\]\.hostname\}"\)
       - matchRegexRaw:
           pattern: kubectl get --namespace radar gateway/public-gateway -o yaml
+      - matchRegexRaw:
+          pattern: such as a Gateway listener or load balancer\nhostname, to allowedHosts
 
   - it: OIDC adds the documented sign-in line and the auth docs link
     set:
@@ -146,6 +148,8 @@ tests:
           pattern: Access via port-forward
       - matchRegexRaw:
           pattern: "Authentication: OIDC \\(auth.mode=oidc\\). Radar redirects to your identity\nprovider, validates the token, and creates a session cookie.\nSetup: https://radarhq.io/docs/configuration/authentication"
+      - notMatchRegexRaw:
+          pattern: allowedHosts
       - notMatchRegexRaw:
           pattern: Warning
 

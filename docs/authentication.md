@@ -2,7 +2,7 @@
 
 Radar supports optional user authentication with per-user authorization powered by Kubernetes RBAC. When enabled, each user sees only the namespaces they have access to, and write operations (restart, scale, exec, Helm, etc.) are executed with the user's identity — so K8s RBAC controls what each user can do.
 
-> **No auth by default.** When running locally or without `--auth-mode`, everything works exactly as before — no login, no restrictions.
+> **No auth by default.** When running locally or without `--auth-mode`, everything works exactly as before — no login, no restrictions. What that exposes depends on where Radar listens: see [Without authentication](#without-authentication).
 
 ## How It Works
 
@@ -79,6 +79,39 @@ Two consequences worth knowing before you deploy:
 
 - A Role scoped with `resourceNames` doesn't pass the check, which needs the whole kind. It fails closed, so the user sees less rather than more.
 - Radar queries Prometheus with its own credentials; only the *authorization* is per user. If several tenants share one Prometheus, that backend needs its own isolation — Radar's gate isn't what separates them.
+
+## Without authentication
+
+Radar runs without authentication unless you configure it. Where it listens
+decides who can use it:
+
+- **Loopback** (the CLI and Desktop default, `127.0.0.1`): only programs on the
+  same machine reach Radar, and they act as your kubeconfig user, as `kubectl`
+  would.
+- **Shared** (any other `--listen-address`, including the `0.0.0.0` the Docker
+  image and Helm chart set): **anyone who can reach Radar's address is a full
+  user**, acting with Radar's ServiceAccount or kubeconfig identity. Keep such a
+  listener inside a network where everyone is trusted with that identity, or
+  enable authentication.
+
+Two things still hold on a shared listener without authentication:
+
+1. **A web page cannot use Radar.** A site open in a user's browser cannot act
+   through it: Radar answers only hostnames a page cannot point at Radar's
+   address (see [HTTP Listener](configuration.md#http-listener)), refuses
+   changes a browser started from another site (the browser itself keeps that
+   site from reading Radar's answers), and checks the origin of pod terminal
+   connections and `/mcp`.
+2. **Radar grants no more than its Kubernetes identity.** It gives no access to
+   the machine or process it runs in:
+   - the host local terminal is unavailable;
+   - profiling is off unless `RADAR_PPROF` turns it on;
+   - in a cluster, integration settings are set by the operator (Helm values or
+     flags), not from the UI;
+   - saved Prometheus credentials are sent only to the server they were
+     configured for;
+   - connecting the cluster to Radar Cloud, which outlasts the request, needs an
+     explicit acknowledgement.
 
 ## Auth Modes
 

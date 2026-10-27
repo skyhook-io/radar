@@ -188,9 +188,11 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 		MaxRequestBodyBytes: maxRequestBodyBytes,
 	}
 	// The MCP SDK auto-enables DNS-rebinding protection (Host header must be
-	// loopback) when the server binds to a loopback address. That blocks
+	// loopback) when the connection arrives on a loopback address. That blocks
 	// Docker-isolated callers reaching us via host.docker.internal. Allow
-	// opt-out via env for bench setups.
+	// opt-out via env for bench setups. Radar's own Host check still applies
+	// in front of /mcp: such callers also need --listen-address=0.0.0.0 and
+	// --allowed-hosts=host.docker.internal.
 	if os.Getenv("RADAR_MCP_DISABLE_LOCALHOST_PROTECTION") == "1" {
 		streamOpts.DisableLocalhostProtection = true
 		log.Printf("[mcp] WARNING: DNS-rebinding Host check DISABLED via env (bench mode)")
@@ -216,9 +218,9 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 	prot := http.NewCrossOriginProtection()
 
 	// Allow additional origins for browser-style callers. Does NOT affect
-	// Host header validation — for Docker/external-host access use the
-	// DISABLE env above. RADAR_MCP_TRUSTED_ORIGINS is a comma-separated
-	// list of scheme://host[:port] entries.
+	// Host header validation, which is --allowed-hosts plus the SDK check
+	// above. RADAR_MCP_TRUSTED_ORIGINS is a comma-separated list of
+	// scheme://host[:port] entries.
 	if env := strings.TrimSpace(os.Getenv("RADAR_MCP_TRUSTED_ORIGINS")); env != "" {
 		for _, origin := range strings.Split(env, ",") {
 			origin = strings.TrimSpace(origin)

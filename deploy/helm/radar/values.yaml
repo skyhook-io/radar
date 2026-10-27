@@ -261,6 +261,15 @@ service:
 # Cannot be combined with cloud.enabled — Radar Cloud owns the URL path.
 basePath: ""
 
+# Hostnames that Radar answers when auth.mode is none, besides localhost, IP
+# addresses and Kubernetes Service names (radar, radar.<ns>.svc,
+# radar.<ns>.svc.cluster.local). Requests for other hostnames are refused so a
+# web page cannot reach Radar by rebinding its own hostname to Radar's address.
+# The chart adds <service>.<namespace>, ingress.hosts and httpRoute.hostnames,
+# and the server adds the hosts of trustedOrigins. List others, e.g. a custom cluster domain; *.example.com
+# covers names under a domain. "*" turns the check off.
+allowedHosts: []
+
 # Origins, besides the address Radar is opened at, that may use Radar's API,
 # including changes and pod terminals, e.g. http://radar.internal. Leave empty unless changes fail
 # with "Radar refused this request" because a proxy in front of Radar rewrites the
