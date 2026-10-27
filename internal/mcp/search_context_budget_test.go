@@ -28,7 +28,7 @@ func TestHandleSearchDoesNotWaitOnAColdTopologyBuild(t *testing.T) {
 		<-release
 		return false, nil, nil
 	})
-	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: apps.Group, Version: apps.Version, Name: apps.Resource, Kind: "Application", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: apps.Group, Version: apps.Version, Name: apps.Resource, Kind: "Application", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)

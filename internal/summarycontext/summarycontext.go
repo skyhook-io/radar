@@ -100,6 +100,8 @@ func Within[T any](budget time.Duration, build func() T) T {
 func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
 	var topo *topology.Topology
 	var relIdx *topology.RelationshipsIndex
+	var resourceProvider topology.ResourceProvider
+	var dynamicProvider topology.DynamicProvider
 	loaded := false
 	relationships := func(kind, namespace, name string, obj any) *topology.Relationships {
 		if !loaded {
@@ -109,14 +111,15 @@ func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx,
 			}
 			if topo != nil {
 				relIdx = topology.IndexByResource(topo)
+				resourceProvider = k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
+				dynamicProvider = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 			}
 		}
 		if topo == nil {
 			return nil
 		}
 		return topology.GetRelationshipsWithObject(kind, namespace, name, obj, topo,
-			k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-			k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+			resourceProvider, dynamicProvider, relIdx)
 	}
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		var managedBy *resourcecontext.ManagedByRef

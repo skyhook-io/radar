@@ -1,12 +1,32 @@
 package resourcecontext
 
 import (
+	"context"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
+
+func TestBuildDeniedOwnershipSubjectReportsRBAC(t *testing.T) {
+	pod := &corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "shop"}}
+	rc := Build(context.Background(), pod, Options{Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
+		topology.OwnershipUnavailable(rel, string(readreason.UserForbidden))
+	}})
+	for _, note := range rc.Omitted {
+		if note.Field == "managedBy" {
+			if note.Reason != OmittedRBACDenied {
+				t.Fatalf("reason %s", note.Reason)
+			}
+			return
+		}
+	}
+	t.Fatal("missing managedBy denial")
+}
 
 func TestManagerSummaryEligibility(t *testing.T) {
 	lead := resourceid.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "web"}

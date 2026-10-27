@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -60,7 +61,8 @@ type Options struct {
 	// it.
 	Relationships *topology.Relationships
 
-	// Ownership, when set, answers the relationships' Owner from owner
+	// Ownership is required for ManagedBy and Manager enrichment. When set,
+	// it answers the relationships' Owner from owner
 	// references in place of the topology's manages edges, for fetched, the
 	// object Build describes. Build reads Owner, ControllerChain, other Managers
 	// and the manager answer (rel.Ownership.Manager), so a host
@@ -226,7 +228,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			managedBy = append(managedBy, r)
 		}
 		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(managedBy), "managedBy", nil)
-		if reason := ControllerOmission(chain); reason != "" {
+		reason := ControllerOmission(chain)
+		if chain == nil && rel.Ownership.UnavailableReason == string(readreason.UserForbidden) {
+			reason = OmittedRBACDenied
+		}
+		if reason != "" {
 			omitted.add("managedBy", reason)
 		}
 	}

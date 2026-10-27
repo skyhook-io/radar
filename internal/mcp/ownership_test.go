@@ -28,7 +28,8 @@ import (
 
 func TestAgentOwnershipMCPListAndGetPreferController(t *testing.T) {
 	yes := true
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web", UID: "uid-dep"}}
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web", UID: "uid-dep"}, Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "web", Image: "nginx"}}}}}}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web-a", UID: "uid-pod", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "uid-dep", Controller: &yes}}, Labels: map[string]string{"argocd.argoproj.io/instance": "copied"}}}
 	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}})); err != nil {
 		t.Fatal(err)

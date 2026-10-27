@@ -73,6 +73,34 @@ func TestAgentOwnershipSummaryAndDetailStopAtDeniedAncestor(t *testing.T) {
 	}
 }
 
+func TestAgentOwnershipNamedSecretNeedsGetNotList(t *testing.T) {
+	withOwnershipDiscovery(t)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+	perms.SetCanI("get", "", "secrets", "default", true)
+	perms.SetCanI("list", "", "secrets", "default", false)
+	env.srv.permCache.Set("secret-reader", nil, perms)
+	resp := env.authGet(t, "/api/ai/resources/secrets/default/nginx-tls", "secret-reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var body struct {
+		Context *resourcecontext.ResourceContext `json:"resourceContext"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Context == nil {
+		t.Fatal("missing context")
+	}
+	for _, note := range body.Context.Omitted {
+		if note.Field == "managedBy" && note.Reason == resourcecontext.OmittedRBACDenied {
+			t.Fatal("named get was refused by a list gate")
+		}
+	}
+}
+
 // withOwnershipDiscovery serves the fixture's kinds as Kubernetes does, with
 // delete, so the garbage collector's kinds are the ones searched for
 // dependents. It also marks the relationship graph for a rebuild on the next

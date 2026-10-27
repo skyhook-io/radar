@@ -53,13 +53,19 @@ func (s *Server) newOwnershipAccess(r *http.Request, catalog *ownership.Catalog,
 // CanRead's checks are memoized on the user's permissions, so asking again
 // costs a lookup.
 func (a *requestAccess) CanRead(kind resourceid.GroupKind, namespace string) ownership.Decision {
-	decision := a.canList(kind, namespace)
-	if decision != ownership.Allowed || !a.exactGet {
-		return decision
+	if !a.exactGet {
+		return a.canList(kind, namespace)
 	}
 	resource, namespaced, known := a.resource(kind)
-	if !known {
-		return decision
+	switch {
+	case !known && a.catalog.Ambiguous(kind):
+		return ownership.Undecided
+	case !known:
+		return ownership.Allowed
+	case namespace != "" && a.failed:
+		return ownership.Undecided
+	case namespace != "" && a.namespaces != nil && !slices.Contains(a.namespaces, namespace):
+		return ownership.Denied
 	}
 	allowed, decided := a.s.canReadDecision(a.r, kind.Group, resource, namespace, "get")
 	switch {

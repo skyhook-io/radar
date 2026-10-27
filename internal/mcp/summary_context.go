@@ -48,6 +48,7 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 // are reachable, so composing the cluster-wide index doesn't leak
 // rows the user can't see.
 func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string) summarycontext.Builder {
+	deadline := time.Now().Add(summarycontext.SearchBudget)
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
@@ -57,7 +58,13 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
-	return summarycontext.BuilderFromIndexes(func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) }, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
+	return summarycontext.BuilderFromIndexes(func() *topology.Topology {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil
+		}
+		return summarycontext.Within(remaining, func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) })
+	}, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
 // summaryCtxTopoMemo caches topology builds for the list_resources and search
