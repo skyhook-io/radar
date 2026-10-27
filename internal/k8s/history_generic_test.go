@@ -32,7 +32,7 @@ func TestDiffGenericUnstructured_DesiredStateLeaves(t *testing.T) {
 		{Path: "spec.tidb.password", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker},
 		{Path: "spec.tidb.passwordType", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker},
 		{Path: "spec.tidb.replicas", OldValue: int64(1), NewValue: int64(2)},
-		{Path: "spec.tidb.statefulSetUpdateStrategy", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker},
+		{Path: "spec.tidb.statefulSetUpdateStrategy", OldValue: "RollingUpdate", NewValue: "SomeStrategyForUpdate"},
 		{Path: "metadata.generation", OldValue: int64(1), NewValue: int64(2)},
 	}
 	if !reflect.DeepEqual(changes, want) {
@@ -282,7 +282,7 @@ func TestDiffGenericUnstructured_SampleTidbEdit(t *testing.T) {
 	new.SetGeneration(2)
 	new.Object["spec"].(map[string]any)["tidb"].(map[string]any)["statefulSetUpdateStrategy"] = "SomeStrategyForUpdate"
 	diff := ComputeDiff("TidbCluster", old, new)
-	if diff == nil || diff.Summary != "desired state changes: spec.tidb.statefulSetUpdateStrategy" || len(diff.Fields) != 2 || diff.Fields[0].Path != "spec.tidb.statefulSetUpdateStrategy" || diff.Fields[0].OldValue != hiddenValueMarker || diff.Fields[0].NewValue != hiddenValueMarker {
+	if diff == nil || diff.Summary != "desired state changes: spec.tidb.statefulSetUpdateStrategy" || len(diff.Fields) != 2 || diff.Fields[0].Path != "spec.tidb.statefulSetUpdateStrategy" || diff.Fields[0].OldValue != "RollingUpdate" || diff.Fields[0].NewValue != "SomeStrategyForUpdate" {
 		t.Fatalf("sample diff = %+v", diff)
 	}
 }
