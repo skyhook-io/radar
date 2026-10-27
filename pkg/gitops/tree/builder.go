@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -52,9 +53,10 @@ type VerifiedDynamicGetter interface {
 	GetDynamicWithGroupVerified(ctx context.Context, kind, namespace, name, group string) (*unstructured.Unstructured, error)
 }
 
-// Builder constructs GitOps ownership trees from GitOps inventory and live topology ownership edges.
+// Builder constructs GitOps ownership trees from recorded inventory and cached ownership.
 type Builder struct {
 	dynamic           DynamicGetter
+	ownership         ownership.ReadSession
 	topo              *topology.Topology
 	allowedNamespaces []string
 	isUnknownKind     ErrUnknownKindMatcher
@@ -65,8 +67,17 @@ func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
 	return &Builder{dynamic: dynamic, topo: topo}
 }
 
-// WithAllowedNamespaces limits live object enrichment to namespaces the caller
-// is allowed to inspect. nil means all namespaces; an empty slice means none.
+// WithOwnership supplies the required session for private descendant traversal.
+// Build scopes it to WithAllowedNamespaces and applies WithReadCheck before
+// emitting nodes. This keeps readable descendants of hidden intermediate owners.
+// The session must belong to the same connection as dynamic and topo.
+func (b *Builder) WithOwnership(session ownership.ReadSession) *Builder {
+	b.ownership = session
+	return b
+}
+
+// WithAllowedNamespaces limits enrichment and private descendant traversal.
+// nil means all namespaces; an empty slice means none.
 func (b *Builder) WithAllowedNamespaces(namespaces []string) *Builder {
 	b.allowedNamespaces = namespaces
 	return b
@@ -97,6 +108,9 @@ func (b *Builder) WithUnknownKindMatcher(m ErrUnknownKindMatcher) *Builder {
 // live root object alongside the tree so callers (e.g. the insights handler)
 // can derive additional views without re-fetching from the cache.
 func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string) (*ResourceTree, *unstructured.Unstructured, error) {
+	if b.ownership == nil {
+		return nil, nil, fmt.Errorf("ownership session not available")
+	}
 	if b.dynamic == nil {
 		return nil, nil, fmt.Errorf("dynamic resource cache not available")
 	}
@@ -120,7 +134,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	// a remote destination the declared nodes carry only what the CR says
 	// (sync, persisted health) and nothing local is read for them. Hub-side
 	// hosts merge the destination cluster's own tree on top (mergeGitOpsTrees).
-	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && !gitops.IsInClusterDestination(root)) ||
+	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && (!gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root))) ||
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
 	// HelmRelease has no status.inventory; recover its managed set from live
 	// topology by Helm's recommended labels so the resource tree isn't empty.
@@ -152,7 +166,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	nodes := map[string]Node{rootNode.ID: rootNode}
 	edges := map[string]Edge{}
 	declaredIDs := map[string]bool{}
-	var hiddenTraversalRoots []string
+	var traversalRoots []ResourceRef
 	omittedByReadCheck := false
 	omittedDependencies := false
 
@@ -170,11 +184,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		}
 		topoByID[n.ID] = n
 	}
-	topoIDByTreeID := map[string]string{}
-	treeIDByTopoID := map[string]string{}
 	if liveRoot, ok := findTopoNode(topoByRef, rootRef); ok {
-		topoIDByTreeID[rootNode.ID] = liveRoot.ID
-		treeIDByTopoID[liveRoot.ID] = rootNode.ID
 		// The root's own object outranks topology's summary of it (topology
 		// records a HelmRelease revision of 0 when the v2 API omits it).
 		nodes[rootNode.ID] = enrichNodeFromObject(mergeData(rootNode, liveRoot.Data), root)
@@ -231,15 +241,21 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		fluxRelated = append(fluxRelated, chartSources...)
 	}
 
+	view := ownership.NewView(b.ownership, traversalScope{namespaces: b.allowedNamespaces})
+	view.Seed(ownership.Observe(identity(rootRef), root))
+	for _, obj := range objects {
+		if obj == nil {
+			continue
+		}
+		view.Seed(ownership.Observe(resourceid.NewRef(apiGroup(obj), obj.GetKind(), obj.GetNamespace(), obj.GetName()), obj))
+	}
 	for _, res := range managed {
 		id := nodeID(res.Ref)
+		if !remote {
+			traversalRoots = append(traversalRoots, res.Ref)
+		}
 		if !remote && !b.canEmit(res.Ref) {
 			omittedByReadCheck = true
-			if live, ok := findTopoNode(topoByRef, res.Ref); ok {
-				topoIDByTreeID[id] = live.ID
-				treeIDByTopoID[live.ID] = id
-				hiddenTraversalRoots = append(hiddenTraversalRoots, id)
-			}
 			continue
 		}
 		declaredIDs[id] = true
@@ -252,8 +268,6 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		obj := objects[refKey(res.Ref)]
 		if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
-			topoIDByTreeID[id] = live.ID
-			treeIDByTopoID[live.ID] = id
 		} else {
 			nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
 		}
@@ -289,8 +303,6 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			}
 			if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 				nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, sync, health, HealthSourceController), obj), res.Data)
-				topoIDByTreeID[id] = live.ID
-				treeIDByTopoID[live.ID] = id
 			} else if _, exists := nodes[id]; !exists {
 				nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, sync, health, HealthSourceController), obj), res.Data)
 			} else {
@@ -318,62 +330,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		}
 	}
 
-	adj := map[string][]topology.Edge{}
-	for _, e := range b.topoEdges() {
-		if e.Type != topology.EdgeManages {
-			continue
+	var generatedWarnings []string
+	if !remote {
+		if len(traversalRoots) == 0 {
+			traversalRoots = append(traversalRoots, rootRef)
 		}
-		adj[e.Source] = append(adj[e.Source], e)
-	}
-
-	queue := make([]string, 0, len(declaredIDs)+1)
-	for id := range declaredIDs {
-		queue = append(queue, id)
-	}
-	queue = append(queue, hiddenTraversalRoots...)
-	if len(declaredIDs) == 0 && len(hiddenTraversalRoots) == 0 {
-		queue = append(queue, rootNode.ID)
-	}
-	seen := map[string]bool{}
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-
-		sourceTopoID := topoIDByTreeID[id]
-		if sourceTopoID == "" {
-			continue
-		}
-		for _, e := range adj[sourceTopoID] {
-			targetTopo, ok := topoByID[e.Target]
-			if !ok {
-				continue
-			}
-			targetRef := refFromTopologyNode(targetTopo)
-			targetID := treeIDByTopoID[targetTopo.ID]
-			if targetID == "" {
-				targetID = nodeID(targetRef)
-				treeIDByTopoID[targetTopo.ID] = targetID
-				topoIDByTreeID[targetID] = targetTopo.ID
-			}
-			if b.canEmit(targetRef) {
-				if _, exists := nodes[targetID]; !exists {
-					nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
-				}
-				node := nodes[targetID]
-				node.Dependency = false
-				nodes[targetID] = node
-				if _, sourceVisible := nodes[id]; sourceVisible {
-					edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
-				}
-			} else {
-				omittedByReadCheck = true
-			}
-			queue = append(queue, targetID)
-		}
+		generatedWarnings, omittedByReadCheck = b.addGenerated(ctx, view, traversalRoots, nodes, edges, tool, topoByRef, topoByID, omittedByReadCheck)
 	}
 
 	hasParent := map[string]bool{}
@@ -401,6 +363,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		mergedRoot = r
 	}
 	warnings := append([]string{}, b.topoWarnings()...)
+	warnings = append(warnings, generatedWarnings...)
 	if omittedDependencies {
 		warnings = append(warnings, "Some declared dependency nodes are hidden by read permissions.")
 	}
@@ -420,6 +383,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	out.RemoteDestination = remote
 	if tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") {
 		out.HealthMode = argoHealthMode(root)
+	}
+	if err := b.ownership.ValidateCaches(); err != nil {
+		return nil, nil, err
 	}
 	return out, root, nil
 }

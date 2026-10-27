@@ -29,6 +29,7 @@ import (
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -99,6 +100,10 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 // build. Topology is a deterministic projection of the informer cache, so
 // the short TTL has no semantic effect.
 func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, error) {
+	session, err := k8s.BeginOwnershipRead(req.Cache)
+	if err != nil {
+		return nil, nil, err
+	}
 	opts := topology.DefaultBuildOptions()
 	opts.Namespaces = req.AllowedNamespaces
 	opts.IncludeReplicaSets = true
@@ -114,6 +119,7 @@ func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstr
 	}
 
 	return gitopstree.NewBuilder(req.Cache, topo).
+		WithOwnership(session).
 		WithAllowedNamespaces(req.AllowedNamespaces).
 		WithReadCheck(func(ref gitopstree.ResourceRef) bool {
 			return s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false)
@@ -127,6 +133,8 @@ func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstr
 // status doesn't drift if an upstream error message gets reworded.
 func (s *Server) writeGitOpsBuildError(w http.ResponseWriter, req *gitopsRequest, err error) {
 	switch {
+	case errors.Is(err, ownership.ErrCachesReplaced), errors.Is(err, ownership.ErrNotConnected):
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed or is not ready; retry the resource tree.")
 	case errors.Is(err, k8s.ErrUnknownDynamicKind), errors.Is(err, gitopstree.ErrNotGitOpsResource):
 		s.writeError(w, http.StatusBadRequest, err.Error())
 	case apierrors.IsNotFound(err):

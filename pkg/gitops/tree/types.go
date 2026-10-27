@@ -158,7 +158,8 @@ type ResourceTree struct {
 	// (HealthAPIError says why) and is retrying; ask again now and then.
 	HealthAPIRetrying bool `json:"healthApiRetrying,omitempty"`
 	// RemoteDestination is true for an Argo CD Application whose
-	// spec.destination is another cluster, or a Flux object with
+	// current destination is not confirmed local or whose last comparison
+	// names another destination, or a Flux object with
 	// spec.kubeConfig. Radar's own reads describe the
 	// local cluster, so nothing Radar derives can be attributed to such an
 	// app's resources; hosts must not overlay Radar health onto it.

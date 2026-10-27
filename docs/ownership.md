@@ -32,6 +32,8 @@ and scope; it never proves that no external controller or writer exists.
 
 The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager".
 
+The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, with a namespace-scoped private view and separate per-kind output checks. It can traverse cached hidden intermediates without emitting their identity or metadata. Display topology supplies presentation and classified spec links, not owner-reference truth.
+
 ## Layers
 
 - **`pkg/ownership`: the contract.** A `Source` opens a `ReadSession` over the current caches. A session does no I/O
