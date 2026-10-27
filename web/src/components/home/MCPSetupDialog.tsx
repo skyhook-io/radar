@@ -331,9 +331,9 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
             </div>
             {!readOnly && execTools === false && (
               <p className="text-xs text-theme-text-tertiary">
-                <code className="inline-code">exec_pod</code> is disabled. To allow container commands,
-                enable <code className="inline-code">--mcp-exec-tools</code> and restart Radar with{' '}
-                <code className="inline-code">--disable-exec</code> off. See{' '}
+                <code className="inline-code">exec_pod</code> is disabled. The Radar operator can enable
+                container commands by restarting with <code className="inline-code">--mcp-exec-tools</code>{' '}
+                and without <code className="inline-code">--disable-exec</code>. See{' '}
                 <a href="https://github.com/skyhook-io/radar/blob/main/docs/mcp.md#exec_pod"
                   target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
                   configuration options
