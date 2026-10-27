@@ -5,8 +5,9 @@ import "sync"
 // DetectScope holds the cluster-wide lookups that one compose's detector runs
 // share. A namespace-filtered compose runs the detectors once per namespace;
 // the scope lets those runs read the cluster once, and because it lives for
-// one compose, every answer it gives comes from the same reads. A nil scope
-// loads every lookup afresh.
+// one compose, every answer it gives comes from the same reads. Entry points
+// given no scope start their own, so a single call still reads each lookup
+// once.
 type DetectScope struct {
 	mu     sync.Mutex
 	values map[string]any

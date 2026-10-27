@@ -229,6 +229,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 // DetectProblemsInScope is DetectProblems sharing cluster-wide lookups with
 // the other runs of one compose through scope.
 func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *DetectScope) []Detection {
+	if scope == nil {
+		scope = NewDetectScope()
+	}
 	var problems []Detection
 	now := time.Now()
 	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
