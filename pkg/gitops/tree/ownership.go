@@ -7,11 +7,13 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 const maxGeneratedResources = 1000
+const maxTraversalResources = 10000
 
 // traversalScope describes private cache reads, not what the caller may see.
 // The tree already traverses hidden intermediates inside these namespaces;
@@ -39,15 +41,15 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	for _, ref := range queue {
 		queued[identity(ref)] = true
 	}
-	generated, incomplete, truncated := 0, false, false
+	queuedGenerated, generated, incomplete, truncated := 0, 0, false, false
 	attach := func(parent ResourceRef, child ownership.Observation) {
 		ref := ResourceRef{Group: child.Ref.Group, Kind: child.Ref.Kind, Namespace: child.Ref.Namespace, Name: child.Ref.Name, UID: string(child.UID)}
 		if !queued[child.Ref] {
-			if generated >= maxGeneratedResources {
+			if queuedGenerated >= maxTraversalResources {
 				truncated = true
 				return
 			}
-			generated++
+			queuedGenerated++
 			queued[child.Ref] = true
 			queue = append(queue, ref)
 		}
@@ -57,8 +59,19 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		}
 		id := nodeID(ref)
 		if _, exists := nodes[id]; !exists {
+			live, shown := findTopoNode(topoByRef, ref)
+			// Topology omits inactive ReplicaSets. Keep that presentation policy
+			// while still traversing their current owner references.
+			if b.topo != nil && ref.Group == "apps" && ref.Kind == "ReplicaSet" && !shown {
+				return
+			}
+			if generated >= maxGeneratedResources {
+				truncated = true
+				return
+			}
+			generated++
 			node := syntheticNode(ref, RoleGenerated, tool, "", "", "")
-			if live, ok := findTopoNode(topoByRef, ref); ok {
+			if shown {
 				node = nodeFromTopology(live, ref, RoleGenerated, tool, "", "", "")
 			}
 			nodes[id] = node
@@ -72,7 +85,7 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		}
 	}
 	for i := 0; i < len(queue); i++ {
-		if ctx.Err() != nil || len(seen) >= maxGeneratedResources {
+		if ctx.Err() != nil {
 			truncated = true
 			break
 		}
@@ -83,7 +96,7 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		}
 		seen[key] = true
 		children := view.Children(key)
-		if !children.Complete() && b.canEmit(ref) {
+		if (ownershipReadFailed(children.Subject) || hasOwnershipReadFailure(children.Gaps)) && b.canEmit(ref) {
 			incomplete = true
 		}
 		owned := make(map[resourceid.Ref]bool, len(children.Children))
@@ -98,7 +111,8 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		helmClaims := false
 		if ownership.IsRecordingManager(key.GroupKind()) {
 			members := view.Members(key)
-			if (members.Membership == ownership.MembersUnreadable || len(members.Gaps) > 0) && b.canEmit(ref) {
+			helmClaims = key.GroupKind() == ownership.FluxHelmRelease && members.Subject.Present() && members.Membership == ownership.MembersUnreadable && len(members.Gaps) == 0
+			if (ownershipReadFailed(members.Subject) || hasOwnershipReadFailure(members.Gaps) || members.Subject.Present() && members.Membership == ownership.MembersUnreadable && !helmClaims) && b.canEmit(ref) {
 				incomplete = true
 			}
 			for _, member := range members.Members {
@@ -111,7 +125,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 			// Helm controllers without inventory still identify their resources
 			// by labels. Keep that existing projection only for a local manager
 			// and a claim on the current object, never a graph edge alone.
-			helmClaims = key.GroupKind() == ownership.FluxHelmRelease && members.Subject.Present() && members.Membership == ownership.MembersUnreadable && len(members.Gaps) == 0
 			if !helmClaims {
 				continue
 			}
@@ -167,7 +180,18 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		warnings = append(warnings, "Some generated resources could not be checked; the resource tree may be incomplete.")
 	}
 	if truncated {
-		warnings = append(warnings, "Generated-resource traversal stopped before completion; the resource tree is partial.")
+		warnings = append(warnings, "Some generated resources could not be included; the resource tree is partial.")
 	}
 	return warnings, omitted
+}
+
+func ownershipReadFailed(subject ownership.Subject) bool {
+	return subject.Read.State == ownership.Unavailable && hasOwnershipReadFailure([]ownership.Gap{subject.Read.Gap})
+}
+
+// Match the drawer's distinction between collection scope and failed reads.
+func hasOwnershipReadFailure(gaps []ownership.Gap) bool {
+	return slices.ContainsFunc(gaps, func(g ownership.Gap) bool {
+		return g.Kind.Kind != "" && g.Reason != readreason.RadarKindNotCollected && g.Reason != readreason.RadarNamespaceNotCollected
+	})
 }

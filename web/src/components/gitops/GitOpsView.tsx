@@ -715,6 +715,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       terminatingActionTooltip={terminatingActionTooltip}
       detail={tool ? detail : undefined}
       insight={tool ? insightsQ.data ?? null : null}
+      warnings={tree?.warnings}
       insightLoading={insightsQ.isLoading}
       healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
       remoteDestinationHint={<RemoteDestinationCloudHint />}

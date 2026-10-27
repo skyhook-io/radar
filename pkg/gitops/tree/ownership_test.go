@@ -9,6 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -269,6 +270,111 @@ type countingChildrenSession struct {
 	calls int
 }
 
+type sessionWithGaps struct {
+	ownership.ReadSession
+	gaps []ownership.Gap
+}
+
+func (s sessionWithGaps) DependentCandidates(uid types.UID, scope ownership.SearchScope) ownership.DependentCandidatesRead {
+	out := s.ReadSession.DependentCandidates(uid, scope)
+	out.Gaps = append(out.Gaps, s.gaps...)
+	return out
+}
+
+func TestGeneratedTreeDistinguishesCollectionScopeFromReadFailures(t *testing.T) {
+	prom := ownedObject("monitoring.coreos.com", "Prometheus", "monitoring", "main", nil, false)
+	for _, tc := range []struct {
+		name    string
+		present bool
+		gaps    []ownership.Gap
+		warn    bool
+	}{
+		{name: "collected", present: true},
+		{name: "absent"},
+		{name: "uncollected", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Lease", Group: "coordination.k8s.io"}, Namespace: "monitoring", Reason: readreason.RadarKindNotCollected}}},
+		{name: "namespace scope", present: true, gaps: []ownership.Gap{{Kind: prom.Ref.GroupKind(), Namespace: "monitoring", Reason: readreason.RadarNamespaceNotCollected}}},
+		{name: "partial discovery", present: true, gaps: []ownership.Gap{{Reason: readreason.KindUnknown}}},
+		{name: "loading", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "monitoring", Reason: readreason.KindSyncPending}}, warn: true},
+		{name: "read failure", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "monitoring", Reason: readreason.ReadError}}, warn: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objects := []ownershiptest.Object{}
+			if tc.present {
+				objects = append(objects, prom)
+			} else {
+				objects = append(objects, ownedObject("monitoring.coreos.com", "Prometheus", "monitoring", "another", nil, false))
+			}
+			session := sessionWithGaps{ReadSession: ownershipSession(t, objects...), gaps: tc.gaps}
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): operatorApplication()}}
+			got, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(got.Warnings) > 0) != tc.warn {
+				t.Fatalf("warnings = %v, want warning=%t", got.Warnings, tc.warn)
+			}
+		})
+	}
+}
+
+func TestGeneratedTreeKeepsPodsWithReplicaSetHistory(t *testing.T) {
+	app := operatorApplication()
+	var inventory []any
+	var objects []ownershiptest.Object
+	topo := &topology.Topology{}
+	for i := range 100 {
+		name := fmt.Sprintf("app-%03d", i)
+		dep := ownedObject("apps", "Deployment", "monitoring", name, nil, false)
+		inventory = append(inventory, map[string]any{"group": "apps", "kind": "Deployment", "namespace": "monitoring", "name": name})
+		objects = append(objects, dep)
+		for revision := range 11 {
+			rs := ownedObject("apps", "ReplicaSet", "monitoring", fmt.Sprintf("%s-%02d", name, revision), &dep, true)
+			objects = append(objects, rs)
+			if revision == 10 {
+				topo.Nodes = append(topo.Nodes, topology.Node{ID: name, Kind: topology.KindReplicaSet, Name: rs.Ref.Name, Data: map[string]any{"namespace": "monitoring", "apiVersion": "apps/v1"}})
+				objects = append(objects, ownedObject("", "Pod", "monitoring", name, &rs, true))
+			}
+		}
+	}
+	unstructured.SetNestedSlice(app.Object, inventory, "status", "resources")
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	got, _, err := NewBuilder(getter, topo).WithOwnership(ownershipSession(t, objects...)).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary.Declared != 100 || got.Summary.Generated != 200 || len(got.Warnings) != 0 {
+		t.Fatalf("history crowded out current workloads: summary=%+v warnings=%v", got.Summary, got.Warnings)
+	}
+	for _, node := range got.Nodes {
+		if node.Ref.Kind == "ReplicaSet" && !strings.HasSuffix(node.Ref.Name, "-10") {
+			t.Fatalf("historical ReplicaSet shown: %+v", node.Ref)
+		}
+	}
+}
+
+func TestGeneratedTreeDoesNotSpendExpansionBudgetOnDeclaredRoots(t *testing.T) {
+	app := operatorApplication()
+	var inventory []any
+	var objects []ownershiptest.Object
+	for i := range maxGeneratedResources + 1 {
+		dep := ownedObject("apps", "Deployment", "monitoring", fmt.Sprintf("app-%04d", i), nil, false)
+		inventory = append(inventory, map[string]any{"group": "apps", "kind": "Deployment", "namespace": "monitoring", "name": dep.Ref.Name})
+		objects = append(objects, dep)
+		if i == maxGeneratedResources {
+			objects = append(objects, ownedObject("", "Pod", "monitoring", "last-root-pod", &dep, true))
+		}
+	}
+	unstructured.SetNestedSlice(app.Object, inventory, "status", "resources")
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	got, _, err := NewBuilder(getter, nil).WithOwnership(ownershipSession(t, objects...)).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary.Declared != len(inventory) || got.Summary.Generated != 1 || len(got.Warnings) != 0 {
+		t.Fatalf("last declared root not expanded: summary=%+v warnings=%v", got.Summary, got.Warnings)
+	}
+}
+
 func (s *countingChildrenSession) DependentCandidates(uid types.UID, scope ownership.SearchScope) ownership.DependentCandidatesRead {
 	s.calls++
 	return s.ReadSession.DependentCandidates(uid, scope)
@@ -293,7 +399,7 @@ func TestGeneratedTreeBoundsAndCancellation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Summary.Declared != 1 || got.Summary.Generated > maxGeneratedResources || session.calls > maxGeneratedResources || len(got.Warnings) == 0 {
+			if got.Summary.Declared != 1 || got.Summary.Generated > maxGeneratedResources || session.calls > maxTraversalResources+1 || len(got.Warnings) == 0 {
 				t.Fatalf("unbounded or lost declaration: summary=%+v calls=%d warnings=%v", got.Summary, session.calls, got.Warnings)
 			}
 			if cancel && (session.calls != 0 || got.Summary.Generated != 0) {
