@@ -810,7 +810,7 @@ function PoolEvaluationCard({
       <button
         type="button"
         aria-expanded={expanded}
-        className={`flex w-full items-center gap-2 px-3 py-2.5 text-left ${ROW_HOVER}`}
+        className={`flex w-full items-center gap-2 px-3 py-2.5 text-left phone:flex-wrap phone:gap-y-1 ${ROW_HOVER}`}
         onClick={() => setExpanded((current) => !current)}
       >
         <CollapseChevron open={expanded} className="h-4 w-4" />
@@ -833,7 +833,7 @@ function PoolEvaluationCard({
           {evaluation.pool.name}
         </span>
         <PoolEvaluationBadge result={evaluation.result} />
-        <span className="ml-auto text-[11px] text-theme-text-tertiary">
+        <span className="ml-auto text-[11px] text-theme-text-tertiary phone:whitespace-nowrap">
           {predicateCount} {predicateCount === 1 ? "predicate" : "predicates"}
           {evaluation.evidenceMeta.truncated ? " · truncated" : ""}
         </span>

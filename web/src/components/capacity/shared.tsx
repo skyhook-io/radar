@@ -1080,7 +1080,7 @@ export function KpiTile({
           : ""
       }`}
     >
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 phone:flex-wrap phone:gap-y-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           {label}
         </span>

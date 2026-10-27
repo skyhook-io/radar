@@ -173,7 +173,8 @@ export function CapacityPoolDetail({
 
       {query.error && <RefreshError message={errorMessage(query.error)} />}
 
-      <div className="flex gap-1 border-b border-theme-border">
+      {/* Phones: the tabs stay on one line and scroll sideways. */}
+      <div className="flex gap-1 border-b border-theme-border phone:overflow-x-auto">
         {POOL_SECTIONS.map((tab) => (
           <button
             key={tab.id}
@@ -184,7 +185,7 @@ export function CapacityPoolDetail({
                 tab.id === "summary" ? poolPath : `${poolPath}/${tab.id}`,
               )
             }
-            className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+            className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors phone:shrink-0 phone:whitespace-nowrap ${
               section === tab.id
                 ? "border-skyhook-500 text-theme-text-primary"
                 : "border-transparent text-theme-text-secondary hover:text-theme-text-primary"
