@@ -1159,7 +1159,8 @@ export function TokenGroup({
       <div className="flex flex-wrap gap-1">
         {values.length > 0 ? (
           values.map((value) => (
-            <Badge key={value} tone="structural" size="sm">
+            // Phones: a value wider than the row breaks inside its chip instead of being clipped.
+            <Badge key={value} tone="structural" size="sm" className="phone:[overflow-wrap:anywhere]">
               {value}
             </Badge>
           ))

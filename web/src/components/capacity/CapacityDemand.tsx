@@ -632,6 +632,7 @@ function DemandGroupCard({
                         key={`${constraint.predicate}-${constraint.sourcePath}`}
                         tone="structural"
                         size="sm"
+                        className="phone:[overflow-wrap:anywhere]"
                       >
                         {constraint.key || constraint.predicate}
                         {constraint.operator ? ` ${constraint.operator}` : ""}
@@ -664,6 +665,7 @@ function DemandGroupCard({
                           key={`${toleration.key ?? "*"}-${toleration.effect ?? "*"}-${index}`}
                           tone="structural"
                           size="sm"
+                          className="phone:[overflow-wrap:anywhere]"
                         >
                           {toleration.key || "*"}
                           {toleration.value ? `=${toleration.value}` : ""}
