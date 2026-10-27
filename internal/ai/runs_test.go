@@ -28,9 +28,34 @@ func TestRunWorkDirUnderPrivateRoot(t *testing.T) {
 	if filepath.Dir(a) != m.workRoot {
 		t.Errorf("run dir %q is not under workRoot %q", a, m.workRoot)
 	}
-	none := &RunManager{workRoot: ""}
+	none := &RunManager{}
+	none.workRootOnce.Do(func() {}) // as if creating the root failed
 	if none.runWorkDir("run-1") != "" {
 		t.Error("no root must yield empty workdir, not a predictable path")
+	}
+}
+
+// TestScratchRootCreatedByFirstRun pins that a manager creates its scratch root
+// only when a run needs it: only Shutdown removes the root, so one created at
+// construction leaked from every killed process and every test.
+func TestScratchRootCreatedByFirstRun(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	roots := func() []string {
+		m, _ := filepath.Glob(filepath.Join(tmp, "radar-ai-*"))
+		return m
+	}
+	m := NewRunManager(nil, func() string { return "" }, "", func() string { return "ctx" }, nil)
+	if got := roots(); len(got) != 0 {
+		t.Fatalf("construction created a scratch root: %v", got)
+	}
+	dir := m.runWorkDir("run-1")
+	if got := roots(); len(got) != 1 || filepath.Dir(dir) != got[0] {
+		t.Fatalf("first run: roots %v, workdir %q", got, dir)
+	}
+	m.Shutdown()
+	if got := roots(); len(got) != 0 {
+		t.Fatalf("Shutdown left %v", got)
 	}
 }
 
@@ -2106,6 +2131,7 @@ func TestClearHistoryFencesStartAndAddTurn(t *testing.T) {
 		baseCtx:       baseCtx,
 		baseCancel:    baseCancel,
 		store:         store,
+		workRoot:      t.TempDir(),
 		runs:          map[string]*Run{},
 		maxRetained:   10,
 		maxConcurrent: 3,
