@@ -245,10 +245,10 @@ const ReasonAutoSyncBlockedEmpty = "AutoSyncBlockedEmpty"
 // "<Kind>/<name> is part of applications <this app> and <other app>".
 var argoSharedResourceRE = regexp.MustCompile(`^\S+ is part of applications \S+ and (\S+)$`)
 
-// ArgoSharedResourceOwners returns the other Applications named by Argo
+// argoSharedResourceTrackers returns the other Applications named by Argo
 // SharedResourceWarning messages, sorted and deduplicated. Messages in another
 // shape contribute nothing.
-func ArgoSharedResourceOwners(messages []string) []string {
+func argoSharedResourceTrackers(messages []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, msg := range messages {
@@ -279,19 +279,13 @@ func applicationList(names []string) string {
 	return "Applications " + list
 }
 
-// ArgoConditionAction returns guidance for one type of Argo Application
-// condition, naming what the condition messages identify. appName is the
-// Application as the argocd CLI addresses it; empty omits the command.
-func ArgoConditionAction(condType, appName string, messages []string) string {
-	return ArgoConditionGuidance(condType, appName, messages).Action
-}
-
 // ArgoConditionGuidance preserves the complete action and separates the shared-resource move steps.
+// appName is the Application as the argocd CLI addresses it; empty omits the command.
 func ArgoConditionGuidance(condType, appName string, messages []string) ParsedFailure {
 	switch condType {
 	case "SharedResourceWarning":
 		owner := "the Application that tracks it now"
-		if owners := ArgoSharedResourceOwners(messages); len(owners) > 0 {
+		if owners := argoSharedResourceTrackers(messages); len(owners) > 0 {
 			owner = applicationList(owners)
 		}
 		return sharedResourceAdvice(owner)
@@ -319,7 +313,7 @@ func ArgoSyncHazardAction(prunesEverything, comparisonFailed bool, sharedResourc
 		return ""
 	}
 	owner := "another Application"
-	if owners := ArgoSharedResourceOwners(sharedResourceMessages); len(owners) > 0 {
+	if owners := argoSharedResourceTrackers(sharedResourceMessages); len(owners) > 0 {
 		owner = applicationList(owners)
 	}
 	return "Resolve shared ownership before syncing: some resources are also tracked by " + owner + ". A successful sync can take over their tracking unless it uses FailOnSharedResource=true. While " + owner + " still declares them, its next successful sync can take tracking back. If they should stay with " + owner + ", remove them from this Application's source before syncing."
@@ -355,8 +349,10 @@ func orphanedResourceAction(cliHint string) string {
 	return "Resources exist in the destination namespace that Argo CD doesn't associate with any Application, and it reports only how many. To see which, " + cliHint + "open the Application in the Argo CD UI and show orphaned resources. Add them to an Application if they should be managed, or configure spec.orphanedResources.ignore on the AppProject; spec.orphanedResources.warn controls whether warnings are emitted."
 }
 
-// IsArgoFailedAttemptCondition reports whether the condition repeats a failed
-// operation whose message is available. Argo changed this prefix across releases.
+// IsArgoFailedAttemptCondition matches a condition message starting exactly with
+// "Failed sync attempt to " or "Failed last sync attempt to " when operationMessage
+// is nonblank. It does not compare message bodies or revisions: the caller must
+// establish that the condition belongs to the current failed operation.
 func IsArgoFailedAttemptCondition(message, operationMessage string) bool {
 	return strings.TrimSpace(operationMessage) != "" &&
 		(strings.HasPrefix(message, "Failed sync attempt to ") || strings.HasPrefix(message, "Failed last sync attempt to "))

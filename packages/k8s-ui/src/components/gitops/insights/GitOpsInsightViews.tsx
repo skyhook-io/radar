@@ -1123,9 +1123,9 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
                 const rowKey = refKey(change.ref)
                 const focused = focusKey === rowKey
                 const explanation = change.missing
-                  ? missingResourceMessage(change.sync, syncHazard)
+                  ? missingResourceMessage(change.sync, { hazard: syncHazard })
                   : !change.syncError && !change.message
-                    ? explainChangeStatus(change.sync, change.health, insight.summary, syncHazard)
+                    ? explainChangeStatus(change.sync, change.health, insight.summary, { hazard: syncHazard })
                     : ''
                 const hasInlineDetail = !!(
                   (change.drift && change.drift.entries.length > 0) ||
@@ -1300,11 +1300,12 @@ function explainChangeStatus(
   sync: string | undefined,
   health: string | undefined,
   summary: GitOpsInsight['summary'],
-  syncHazard?: string,
+  context?: { hazard?: string; rolledBack?: boolean },
 ): string {
-  if (syncHazard && (sync === 'OutOfSync' || health === 'Missing')) {
+  if (context?.hazard && (sync === 'OutOfSync' || health === 'Missing')) {
     return 'See the sync warning above before syncing this Application.'
   }
+  if (context?.rolledBack && health === 'Missing') return missingResourceMessage(sync, context)
   const isAuto = (summary.autoSyncMode ?? '').toLowerCase().startsWith('auto')
   const phase = (summary.operationPhase ?? '').toLowerCase()
   const inFlight = phase === 'running'

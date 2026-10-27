@@ -10,8 +10,11 @@ export function issueGuidanceSummary(action?: string, primary?: string, hazard?:
 
 export function IssueGuidance({ action, primary, secondaryTitle, secondary, ordered, hazard, className }: {
   action?: string
+  /** Replaces a supplied action; primary alone renders no action text. */
   primary?: string
+  /** Paired with secondary; no disclosure is shown without both. */
   secondaryTitle?: string
+  /** Paired with secondaryTitle; no disclosure is shown without both. */
   secondary?: string[]
   ordered?: boolean
   hazard?: string

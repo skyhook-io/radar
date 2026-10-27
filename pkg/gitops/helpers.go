@@ -83,10 +83,11 @@ func argoDestination(app *unstructured.Unstructured) (name, server string) {
 	return strings.TrimSpace(name), strings.TrimSpace(server)
 }
 
-// ArgoSyncPrunesEverything reports whether a sync with pruning would delete
-// every resource an Argo Application manages: it manages at least one, and
-// every status.resources entry requires pruning. This holds regardless of sync
-// status, since IgnoreExtraneous resources can leave such an app Synced.
+// ArgoSyncPrunesEverything reports whether the last reported status.resources
+// list is nonempty and every entry has requiresPruning set. It does not account
+// for resource Prune=false/confirm options or a stale list, and does not prove
+// that a pruning sync will delete every resource. Sync status is independent:
+// IgnoreExtraneous resources can leave such an Application Synced.
 func ArgoSyncPrunesEverything(app *unstructured.Unstructured) bool {
 	if app == nil {
 		return false

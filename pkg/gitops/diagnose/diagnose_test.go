@@ -385,7 +385,7 @@ func TestSharedResourceWarningAction(t *testing.T) {
 	if got := ActionForCondition("SharedResourceWarning"); strings.Contains(got, "These resources") || !strings.Contains(got, "remove it from this Application's source") {
 		t.Fatalf("expected number-neutral ownership guidance: %q", got)
 	}
-	one := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{"Deployment/guestbook-ui is part of applications argocd/live-shared-b and live-shared-a"})
+	one := ArgoConditionGuidance("SharedResourceWarning", "argocd/b", []string{"Deployment/guestbook-ui is part of applications argocd/live-shared-b and live-shared-a"}).Action
 	if !strings.HasPrefix(one, "To leave it with Application live-shared-a, ") {
 		t.Fatalf("expected the other owner named: %q", one)
 	}
@@ -429,18 +429,18 @@ func TestSharedResourceWarningAction(t *testing.T) {
 	if strings.Contains(one, "remove it from the others") {
 		t.Fatalf("advice must not leave the side to remove it from ambiguous: %q", one)
 	}
-	many := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{
+	many := ArgoConditionGuidance("SharedResourceWarning", "argocd/b", []string{
 		"Service/a is part of applications argocd/b and owner-2",
 		"Service/b is part of applications argocd/b and owner-1",
 		"Service/c is part of applications argocd/b and owner-2",
 		"Service/d is part of applications argocd/b and owner-3",
 		"Service/e is part of applications argocd/b and owner-4",
 		"a message in some other shape",
-	})
+	}).Action
 	if !strings.HasPrefix(many, "To leave it with Applications owner-1, owner-2, owner-3 and 1 more, ") {
 		t.Fatalf("expected deduplicated, bounded owners: %q", many)
 	}
-	if got := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{"unparseable"}); got != ActionForCondition("SharedResourceWarning") {
+	if got := ArgoConditionGuidance("SharedResourceWarning", "argocd/b", []string{"unparseable"}).Action; got != ActionForCondition("SharedResourceWarning") {
 		t.Fatalf("unparseable message must fall back to generic advice: %q", got)
 	}
 }
@@ -458,7 +458,7 @@ func TestArgoSyncHazardActionSharedTrackingIsTemporary(t *testing.T) {
 }
 
 func TestOrphanedResourceWarningActionSaysWhereToLook(t *testing.T) {
-	got := ArgoConditionAction("OrphanedResourceWarning", "argocd/live-orphan", []string{"Application has 3 orphaned resources"})
+	got := ArgoConditionGuidance("OrphanedResourceWarning", "argocd/live-orphan", []string{"Application has 3 orphaned resources"}).Action
 	if !strings.Contains(got, "Argo CD doesn't associate with any Application") || !strings.Contains(got, `"argocd app resources argocd/live-orphan --orphaned"`) || !strings.Contains(got, "Argo CD UI") || !strings.Contains(got, "spec.orphanedResources.ignore") {
 		t.Fatalf("orphan guidance must say where to see which resources: %q", got)
 	}
@@ -510,7 +510,7 @@ func TestSharedResourceGuidanceSteps(t *testing.T) {
 			t.Fatalf("guard must precede any move: %+v", got)
 		}
 		want := got.ActionPrimary + " " + got.ActionSecondaryTitle + ": " + strings.Join(got.ActionSecondary, " ")
-		if got.Action != want || ArgoConditionAction("SharedResourceWarning", "argocd/billing", messages) != want {
+		if got.Action != want {
 			t.Fatalf("API/MCP action lost steps: %+v", got)
 		}
 	}

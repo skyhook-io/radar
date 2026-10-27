@@ -231,6 +231,8 @@ export interface Issue {
    *  Server-emitted (omitempty); empty for issues without a parser. */
   cause?: string;
   action?: string;
+  /** Independent sync-risk warning, also retained in action. Absence means no
+   *  warning was supplied, not that syncing is safe; older producers omit it. */
   hazard?: string;
   /** Optional presentation split; action always retains the complete guidance. */
   action_primary?: string;

@@ -547,6 +547,9 @@ type Issue struct {
 	// RemediationTarget is the resource it acts on.
 	Cause  string `json:"cause,omitempty"`
 	Action string `json:"action,omitempty"`
+	// Hazard is an independent sync-risk warning, also retained in Action.
+	// Absence means no warning was supplied, not that syncing is safe; older
+	// producers omit it.
 	Hazard string `json:"hazard,omitempty"`
 	// Presentation fields split optional guidance; Action remains complete for all consumers.
 	ActionPrimary        string   `json:"action_primary,omitempty"`
