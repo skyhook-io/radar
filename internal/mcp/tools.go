@@ -128,7 +128,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"compare many similar resources and pick suspects before calling get_resource. " +
 			"managedBy is the controller or manager to inspect next, not an edit target. " +
 			"A lead is not exclusive; omitted can qualify it. " +
-			"No lead or manager.state=none means no evidence, not unmanaged. Read get_resource resourceContext.manager before planning edits. " +
+			"Neither a missing lead nor manager.state=none proves unmanaged. Read get_resource resourceContext.manager before planning edits. " +
 			"Returns {summary, next?, coverage, items}: summary says in words what the rows cover and what was not read; " +
 			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
@@ -479,7 +479,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
 			"summaryContext. managedBy is a controller-first inspection lead, not an edit target; absence never proves unmanaged. " +
 			"A lead is not exclusive; omitted can qualify it. " +
-			"No lead or manager.state=none means no evidence, not unmanaged. Read get_resource resourceContext.manager before planning edits. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
+			"Neither a missing lead nor manager.state=none proves unmanaged. Read get_resource resourceContext.manager before planning edits. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
 			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint. " +
 			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
 		Annotations: readOnly,
