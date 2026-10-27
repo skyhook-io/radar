@@ -39,7 +39,8 @@ func (c changesCollection) sinceHint(history *issuesapi.HistoryCoverage) string 
 	if c.since == "" {
 		return ""
 	}
-	if history != nil && !history.CompleteSince.IsZero() && c.sinceAt.Sub(history.CompleteSince) < collectionStartSlack {
+	// A sentence with no start (per-namespace watches) is never covered.
+	if history != nil && !history.CompleteSince.IsZero() && !c.sinceAt.IsZero() && c.sinceAt.Sub(history.CompleteSince) < collectionStartSlack {
 		return ""
 	}
 	return c.since

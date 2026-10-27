@@ -126,6 +126,9 @@ func TestGetChangesCollectionStartInNamespaceNewerThanRadar(t *testing.T) {
 
 func TestGetChangesCollectionNarrowedToFallbackNamespaces(t *testing.T) {
 	setupWidgets(t, widgetFixture{fallbacks: []string{"alpha", "beta"}})
+	// A store-wide boundary inside the window must not stand in for the
+	// unknown start of per-namespace watches.
+	timeline.SetObservationStartForTest(time.Now().Add(-30 * time.Minute))
 	response, _ := getChangesForTest(t, context.Background(), getChangesInput{Kind: "Widget"})
 	if response.Coverage == nil || !slices.Contains(response.Coverage.NarrowedBy, resourceapi.NarrowedByNamespaceCollection) {
 		t.Fatalf("coverage = %+v, want narrowed to Radar's collection", response.Coverage)
