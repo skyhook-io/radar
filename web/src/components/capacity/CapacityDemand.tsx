@@ -817,7 +817,8 @@ function PoolEvaluationCard({
         <span
           role="link"
           tabIndex={0}
-          className="font-mono text-sm font-medium text-accent-text hover:underline"
+          // Phones: a name longer than the row breaks inside it (chevron + gap = 1.5rem).
+          className="font-mono text-sm font-medium text-accent-text hover:underline phone:max-w-[calc(100%-1.5rem)] phone:break-words"
           onClick={(event) => {
             event.stopPropagation();
             onOpenPool(evaluation.pool.name);

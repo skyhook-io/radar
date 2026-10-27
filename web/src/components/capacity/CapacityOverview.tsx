@@ -521,7 +521,7 @@ export function CapacityOverview({
                         key={subject.label}
                         type="button"
                         onClick={subject.open}
-                        className="font-mono text-accent-text hover:underline"
+                        className="font-mono text-accent-text hover:underline phone:max-w-full phone:break-words phone:text-left"
                       >
                         {subject.label}
                       </button>
