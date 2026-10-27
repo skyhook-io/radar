@@ -39,12 +39,9 @@ type ResourceContext struct {
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`
 	Owner      *ContextRef        `json:"owner,omitempty"`
-	// ManagedBy is the top of the controller chain the caller reads, or a
-	// managing controller off that chain the relationship graph links. With
-	// Manager set it names only what Manager doesn't weigh (Argo CD, Flux and
-	// Helm are Manager's). A manager off the chain the caller can't read is
-	// dropped without an omission note; a chain the walk couldn't read to its
-	// top is noted.
+	// ManagedBy names the highest readable controller and separately observed
+	// non-GitOps managing controllers. Manager carries GitOps/Helm evidence.
+	// An incomplete controller walk is reported in Omitted.
 	ManagedBy []ContextRef `json:"managedBy,omitempty"`
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
@@ -215,10 +212,11 @@ type ManagedByRef struct {
 type ResourceSummaryContext struct {
 	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
 
-	ManagedBy  *ManagedByRef `json:"managedBy,omitempty"`
-	Health     string        `json:"health,omitempty"`
-	IssueCount int           `json:"issueCount,omitempty"`
-	Scanned    *ScannedRef   `json:"scanned,omitempty"`
+	ManagedBy  *ManagedByRef  `json:"managedBy,omitempty"`
+	Health     string         `json:"health,omitempty"`
+	IssueCount int            `json:"issueCount,omitempty"`
+	Scanned    *ScannedRef    `json:"scanned,omitempty"`
+	Omitted    []OmittedField `json:"omitted,omitempty"`
 }
 
 // ScannedRef names the object a security-scan report (Trivy Operator) is

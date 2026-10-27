@@ -82,23 +82,12 @@ func TestBuildNamesNoOwnerForAnEvent(t *testing.T) {
 }
 
 // Without a graph, the managers an object's own labels and annotations name
-// still come through when ownership is answered.
-func TestBuildKeepsManagedByWithoutTopology(t *testing.T) {
-	deploy := &appsv1.Deployment{
-		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
-		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "uid-deploy", Annotations: map[string]string{
-			"argocd.argoproj.io/tracking-id": "storefront:apps/Deployment:shop/web",
-		}},
-	}
-	without := Build(context.Background(), deploy, Options{AccessChecker: allowAllChecker{}})
-	with := Build(context.Background(), deploy, Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
-		rel.Ownership = &topology.OwnershipCoverage{}
-	}})
-	if len(without.ManagedBy) == 0 {
-		t.Fatal("scenario: the tracking annotation must name a manager without ownership")
-	}
-	if len(with.ManagedBy) != len(without.ManagedBy) || with.ManagedBy[0] != without.ManagedBy[0] {
-		t.Fatalf("managedBy with ownership = %+v, without = %+v", with.ManagedBy, without.ManagedBy)
+// Metadata alone must not manufacture a second management answer.
+func TestBuildIgnoresMetadataManagedByWithoutAnOwnershipAnswer(t *testing.T) {
+	deploy := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "storefront:apps/Deployment:shop/web"}}}
+	rc := Build(context.Background(), deploy, Options{AccessChecker: allowAllChecker{}})
+	if len(rc.ManagedBy) != 0 {
+		t.Fatalf("metadata-only managedBy: %+v", rc.ManagedBy)
 	}
 }
 
@@ -167,7 +156,8 @@ func TestBuildManagedByLeavesGitOpsManagersToTheAnswer(t *testing.T) {
 	cert := topology.ResourceRef{Group: "cert-manager.io", Kind: "Certificate", Namespace: "shop", Name: "tls"}
 	build := func(answer *topology.ManagerAnswer) *ResourceContext {
 		return Build(context.Background(), secret, Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
-			rel.ManagedBy = []topology.ResourceRef{app, cert}
+			rel.ManagedBy = []topology.ResourceRef{app}
+			rel.Managers = []topology.ResourceRef{cert}
 			rel.Ownership = &topology.OwnershipCoverage{Manager: answer}
 		}})
 	}
@@ -175,8 +165,8 @@ func TestBuildManagedByLeavesGitOpsManagersToTheAnswer(t *testing.T) {
 	if len(with.ManagedBy) != 1 || with.ManagedBy[0].Kind != "Certificate" {
 		t.Fatalf("managedBy with an answer = %+v; want only the Certificate", with.ManagedBy)
 	}
-	if without := build(nil); len(without.ManagedBy) != 2 {
-		t.Fatalf("managedBy without an answer = %+v; want both", without.ManagedBy)
+	if without := build(nil); len(without.ManagedBy) != 1 {
+		t.Fatalf("managedBy without an answer = %+v; want only the classified Certificate", without.ManagedBy)
 	}
 }
 
@@ -190,7 +180,7 @@ func TestBuildManagedByHidesUnreadableManagersWithoutANote(t *testing.T) {
 	cert := topology.ResourceRef{Group: "cert-manager.io", Kind: "Certificate", Namespace: "team-b", Name: "tls"}
 	build := func(managedBy []topology.ResourceRef) *ResourceContext {
 		return Build(context.Background(), secret, Options{AccessChecker: denyChecker{group: "cert-manager.io", kind: "Certificate", namespace: "team-b"}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
-			rel.ManagedBy = managedBy
+			rel.Managers = managedBy
 			rel.Ownership = &topology.OwnershipCoverage{}
 		}})
 	}
@@ -227,13 +217,13 @@ func TestBuildManagedByReachesTheTopController(t *testing.T) {
 	}{
 		{"the graph stops at the workload", []topology.ResourceRef{sts}, nil, chain, "TidbCluster", ""},
 		{"no pointer", nil, nil, chain, "TidbCluster", ""},
-		{"a GitOps manager without an answer", []topology.ResourceRef{app}, nil, chain, "Application", ""},
+		{"a GitOps manager without an answer", []topology.ResourceRef{app}, nil, chain, "TidbCluster", ""},
 		{"a GitOps manager the answer takes", []topology.ResourceRef{app}, answer, chain, "TidbCluster", ""},
-		{"a GitOps manager at the chain's top stays the answer's", nil, answer, &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Pod", Namespace: "db", Name: "basic-tidb-0"}, sts, app}}, "", ""},
-		{"another managing controller", []topology.ResourceRef{cert}, nil, chain, "Certificate", ""},
+		{"a GitOps manager at the chain's top stays the answer's", nil, answer, &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Pod", Namespace: "db", Name: "basic-tidb-0"}, sts, app}}, "Application", ""},
+		{"another managing controller", []topology.ResourceRef{cert}, nil, chain, "TidbCluster", ""},
 		{"an owner Radar couldn't check", []topology.ResourceRef{sts}, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "unknown"}, "StatefulSet", OmittedUnavailable},
 		{"an owner the caller may not read", nil, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "withheld"}, "StatefulSet", OmittedRBACDenied},
-		{"a GitOps pointer above a stop", []topology.ResourceRef{app}, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "unknown"}, "Application", ""},
+		{"a GitOps pointer above a stop", []topology.ResourceRef{app}, nil, &topology.ControllerChain{Refs: chain.Refs[:2], Stop: "unknown"}, "StatefulSet", OmittedUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rc := Build(context.Background(), pod, Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {

@@ -776,33 +776,6 @@ func TestApplyOwnerReadsTheControllerChainToItsTop(t *testing.T) {
 	}
 }
 
-func TestTopmostOwner(t *testing.T) {
-	rs := ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "db", Name: "x-1"}
-	dep := ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "db", Name: "x"}
-	cr := ResourceRef{Group: "example.io", Kind: "Widget", Namespace: "db", Name: "x"}
-	pod := ResourceRef{Kind: "Pod", Namespace: "db", Name: "x-1-a"}
-	app := ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "x"}
-	chain := &ControllerChain{Refs: []ResourceRef{pod, rs, dep, cr}}
-	for name, tc := range map[string]struct {
-		pointer []ResourceRef
-		chain   *ControllerChain
-		want    []ResourceRef
-	}{
-		"no pointer":                                      {nil, chain, []ResourceRef{cr}},
-		"a pointer the chain passes":                      {[]ResourceRef{dep}, chain, []ResourceRef{cr}},
-		"a pointer without its group":                     {[]ResourceRef{{Kind: "Deployment", Namespace: "db", Name: "x"}}, chain, []ResourceRef{cr}},
-		"a GitOps manager stands":                         {[]ResourceRef{app}, chain, []ResourceRef{app}},
-		"a same-named kind of another group":              {[]ResourceRef{{Group: "other.io", Kind: "Deployment", Namespace: "db", Name: "x"}}, chain, []ResourceRef{{Group: "other.io", Kind: "Deployment", Namespace: "db", Name: "x"}}},
-		"a native Helm install named like a chain object": {[]ResourceRef{{Kind: "HelmRelease", Namespace: "db", Name: "x"}}, &ControllerChain{Refs: []ResourceRef{pod, {Group: "example.io", Kind: "HelmRelease", Namespace: "db", Name: "x"}, cr}}, []ResourceRef{{Kind: "HelmRelease", Namespace: "db", Name: "x"}}},
-		"no chain":      {[]ResourceRef{dep}, nil, []ResourceRef{dep}},
-		"no controller": {nil, &ControllerChain{Refs: []ResourceRef{pod}}, nil},
-	} {
-		if got := TopmostOwner(tc.pointer, tc.chain); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("%s: %v, want %v", name, refsText(got), refsText(tc.want))
-		}
-	}
-}
-
 // A host whose reference checks are stricter than the walk's access cuts the
 // chain below the first object it may not show.
 func TestControllerChainReadable(t *testing.T) {

@@ -95,94 +95,65 @@ func Within[T any](budget time.Duration, build func() T) T {
 	}
 }
 
-// BuilderFromIndexes assembles the per-request closure. The list path
-// passes the same index for both namespacedIdx and clusterIdx (single-
-// kind list, scope already chosen by the caller); search passes two
-// distinct indexes — namespacedIdx scoped to user namespaces, clusterIdx
-// composed cluster-wide. The closure dispatches per-hit by scope so
-// cluster-scoped hits read the cluster-wide index and surface
-// namespace="" issues that the namespaced filter would otherwise drop.
-//
-// topo is the topology snapshot the caller has already obtained from
-// its preferred source (REST: broadcaster cache; MCP: short-TTL
-// memoizer). With nil topo, managedBy uses the row's metadata and controller
-// chain; issueCount still resolves.
-//
-// canRead is the caller's access to a reference (nil allows everything).
-// The topology is shared by every user, so a manager it links may be one
-// the caller can't read: that pointer is dropped, without a note, rather
-// than naming a manager the caller can't see.
-//
-// chains reads each row's controller chain as the caller (nil reads none),
-// so a pointer the graph stops short, as at the StatefulSet an operator's
-// custom resource controls, reaches the chain's top.
-func BuilderFromIndexes(topo *topology.Topology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, chains *k8s.ControllerChains) Builder {
-	resourceProvider := k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
-	dynamicProvider := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-
-	// One inverted-edges index per request — without it each
-	// GetRelationships call would re-scan topo.Edges in O(E), turning
-	// the list/search hot path into O(N × E). See pkg/topology T3.
+// BuilderFromIndexes composes canonical ownership next hops and optional issue
+// counts. The graph is obtained only for residual spec-declared relations.
+func BuilderFromIndexes(topologySource func() *topology.Topology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
+	var topo *topology.Topology
 	var relIdx *topology.RelationshipsIndex
-	if topo != nil {
-		relIdx = topology.IndexByResource(topo)
+	loaded := false
+	relationships := func(kind, namespace, name string, obj any) *topology.Relationships {
+		if !loaded {
+			loaded = true
+			if topologySource != nil {
+				topo = topologySource()
+			}
+			if topo != nil {
+				relIdx = topology.IndexByResource(topo)
+			}
+		}
+		if topo == nil {
+			return nil
+		}
+		return topology.GetRelationshipsWithObject(kind, namespace, name, obj, topo,
+			k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
+			k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
 	}
-
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		var managedBy *resourcecontext.ManagedByRef
 		var scanned *resourcecontext.ScannedRef
-		if u != nil && group == aicontext.TrivyGroup {
-			managedBy, scanned = trivyScanTarget(k8s.GetResourceCache(), u, canRead)
-		} else {
-			// Pass the fetched object when available so synthesis is
-			// group-aware (avoids kind/plural collisions like Knative
-			// Service vs corev1 Service). Falls back to (kind, ns, name)
-			// lookup when neither obj nor u is set.
-			var rawObj any
-			switch {
-			case obj != nil:
-				rawObj = obj
-			case u != nil:
-				rawObj = u
-			}
-			var rel *topology.Relationships
-			if topo != nil {
-				rel = topology.GetRelationshipsWithObject(kind, namespace, name, rawObj, topo, resourceProvider, dynamicProvider, relIdx)
-			} else if m, ok := rawObj.(metav1.Object); ok {
-				// Without a graph, the managers the row's own metadata names
-				// still take precedence over its controllers.
-				if ref := topology.ManagedByFromMeta(m); ref != nil {
-					rel = &topology.Relationships{ManagedBy: []topology.ResourceRef{*ref}}
-				}
-			}
-			var chain *topology.ControllerChain
-			if m, ok := rawObj.(metav1.Object); ok && chains != nil {
-				// The chain reads as the caller's ownership access, which in
-				// REST decides by namespace; the pointer is checked as every
-				// other reference a summary names.
-				chain = chains.Of(m, resourceid.Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}).Readable(func(r topology.ResourceRef) bool {
-					return canRead == nil || canRead(r.Group, r.Kind, r.Namespace)
-				})
-			}
-			managedBy = ManagedByFromRelationships(readableRelationships(rel, canRead), chain)
-		}
+		var omitted []resourcecontext.OmittedField
 		var source runtime.Object = obj
 		if source == nil && u != nil {
 			source = u
 		}
-		// Dispatch by scope: cluster-scoped hits read clusterIdx (composed
-		// at namespace=nil so namespace="" issues are present), namespaced
-		// hits read namespacedIdx (which honors the user's namespace
-		// filter so the per-row count doesn't pull in noise from
-		// namespaces the user can't see).
+		if u != nil && group == aicontext.TrivyGroup {
+			managedBy, scanned = trivyScanTarget(k8s.GetResourceCache(), u, canRead)
+		} else if m, ok := source.(metav1.Object); ok && owners != nil {
+			ref := resourceid.Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}
+			chain := owners.Of(m, ref)
+			if top := chain.Top(); top != nil {
+				managedBy = resourcecontext.ControllerSummary(*top)
+			} else {
+				var other []topology.ResourceRef
+				if chain != nil && chain.Stop == "" && len(chain.Refs) > 0 {
+					other = owners.OtherManagers(relationships(kind, namespace, name, source), ref)
+				}
+				if len(other) > 0 {
+					managedBy = resourcecontext.ControllerSummary(other[0])
+				} else {
+					managedBy = resourcecontext.ManagerSummary(owners.Manager(ref))
+				}
+			}
+			if reason := resourcecontext.ControllerOmission(chain); reason != "" && (managedBy == nil || chain.Top() != nil) {
+				omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: reason}}
+			}
+		}
 		idx := namespacedIdx
 		if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {
 			idx = clusterIdx
 		}
 		return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{
-			ManagedBy:  managedBy,
-			IssueCount: idx.Count(group, kind, namespace, name),
-			Scanned:    scanned,
+			ManagedBy: managedBy, IssueCount: idx.Count(group, kind, namespace, name), Scanned: scanned, Omitted: omitted,
 		})
 	}
 }
@@ -311,52 +282,4 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) IssueIndex {
 		idx[k] = len(ids)
 	}
 	return idx
-}
-
-// ManagedByFromRelationships extracts a compact ManagedByRef from
-// computed topology relationships and the caller's controller chain.
-// Preference order:
-//  1. Relationships.ManagedBy[0] — the server-synthesized topmost
-//     manager (ArgoCD Application > Flux Kustomization/HelmRelease >
-//     Helm release > topmost K8s owner). Walks the owner chain past
-//     ReplicaSets to the controlling Deployment in one shot.
-//  2. Direct Owner — fallback for shapes ManagedBy synthesis declines
-//     (e.g. cluster-scoped roots where the topmost manager is the
-//     resource itself).
-//
-// Either is raised to the top of chain when it is on it, or stands in when
-// neither is set (topology.TopmostOwner). Returns nil when nothing names one.
-func ManagedByFromRelationships(rel *topology.Relationships, chain *topology.ControllerChain) *resourcecontext.ManagedByRef {
-	var pointer []topology.ResourceRef
-	switch {
-	case rel == nil:
-	case len(rel.ManagedBy) > 0:
-		pointer = rel.ManagedBy[:1]
-	case rel.Owner != nil:
-		pointer = []topology.ResourceRef{*rel.Owner}
-	}
-	pointer = topology.TopmostOwner(pointer, chain)
-	if len(pointer) == 0 {
-		return nil
-	}
-	ref := pointer[0]
-	return resourcecontext.ManagedByFromOwner(ref.Kind, ref.Group, ref.Namespace, ref.Name)
-}
-
-// readableRelationships is rel with the managedBy and owner references the
-// caller can't read left out.
-func readableRelationships(rel *topology.Relationships, canRead func(group, kind, namespace string) bool) *topology.Relationships {
-	if rel == nil || canRead == nil {
-		return rel
-	}
-	out := &topology.Relationships{}
-	for _, ref := range rel.ManagedBy {
-		if canRead(ref.Group, ref.Kind, ref.Namespace) {
-			out.ManagedBy = append(out.ManagedBy, ref)
-		}
-	}
-	if rel.Owner != nil && canRead(rel.Owner.Group, rel.Owner.Kind, rel.Owner.Namespace) {
-		out.Owner = rel.Owner
-	}
-	return out
 }

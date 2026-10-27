@@ -626,7 +626,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		// scan. Leaving opts.Relationships unset is the canonical path.
 	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
-		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) })
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)

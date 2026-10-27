@@ -291,15 +291,11 @@ func (a liveManagerAccess) CanRead(kind resourceid.GroupKind, namespace string) 
 
 // The rows of one list read their chains in one session, as the caller, and
 // a session whose caches were replaced answers nothing more.
-func TestControllerChainsReadRowsInOneSession(t *testing.T) {
+func TestAgentOwnershipReadRowsInOneSession(t *testing.T) {
 	_, _, source, _ := historyFixture(t, historyReplicaSet("web-3", "3", 2, 2), historyPod("web-3-a", "web-3"), historyPod("web-3-b", "web-3"))
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 	counted := &countingSource{Source: source}
-	chains := &ControllerChains{source: counted, access: unrestricted}
-	ownerless := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "standalone"}}
-	if c := chains.Of(ownerless, podRef("standalone")); c != nil || counted.begun != 0 {
-		t.Fatalf("ownerless row opened a session or returned a chain: %+v, sessions %d", c, counted.begun)
-	}
+	chains := &AgentOwnership{source: counted, access: unrestricted}
 	for _, name := range []string{"web-3-a", "web-3-b"} {
 		top := chains.Of(historyPod(name, "web-3"), podRef(name)).Top()
 		if top == nil || *top != (topology.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}) {
@@ -310,7 +306,7 @@ func TestControllerChainsReadRowsInOneSession(t *testing.T) {
 		t.Errorf("began %d sessions for two rows, want 1", counted.begun)
 	}
 
-	denied := &ControllerChains{source: source, access: func(*ownership.Catalog) ownership.Access {
+	denied := &AgentOwnership{source: source, access: func(*ownership.Catalog) ownership.Access {
 		return liveManagerAccess{Access: ownership.Unrestricted(), denied: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}}
 	}}
 	if c := denied.Of(historyPod("web-3-a", "web-3"), podRef("web-3-a")); c == nil || c.Top() == nil || c.Top().Kind != "ReplicaSet" || c.Stop != "withheld" {
@@ -319,11 +315,11 @@ func TestControllerChainsReadRowsInOneSession(t *testing.T) {
 
 	// A row read from the API, not the caches, still walks up; here its owner
 	// is gone, so there is nothing above it.
-	if c := (&ControllerChains{source: source, access: unrestricted}).Of(historyPod("web-9-a", "web-9"), podRef("web-9-a")); c == nil || c.Top() != nil {
+	if c := (&AgentOwnership{source: source, access: unrestricted}).Of(historyPod("web-9-a", "web-9"), podRef("web-9-a")); c == nil || c.Top() != nil {
 		t.Errorf("a row whose owner is gone: %+v, want no top", c)
 	}
 
-	replaced := &ControllerChains{source: &scriptedSource{t: t, validate: []error{ownership.ErrCachesReplaced}}, access: unrestricted}
+	replaced := &AgentOwnership{source: &scriptedSource{t: t, validate: []error{ownership.ErrCachesReplaced}}, access: unrestricted}
 	pod := historyPod("web-1-a", "web-1")
 	pod.Namespace = "alpha"
 	if c := replaced.Of(pod, resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "web-1-a"}); c != nil {

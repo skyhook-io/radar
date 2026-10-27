@@ -158,10 +158,10 @@ func OwnershipObservation(obj any) (ownership.Observation, bool) {
 	return ownership.Observe(ref, m), true
 }
 
-// ControllerChains reads controller chains for one caller from one session,
+// AgentOwnership reads controllers and management for one caller in one session,
 // so the rows of one list share their owners' reads. Not safe for concurrent
 // use.
-type ControllerChains struct {
+type AgentOwnership struct {
 	source ownership.Source
 	access func(*ownership.Catalog) ownership.Access
 	view   *ownership.View
@@ -169,19 +169,21 @@ type ControllerChains struct {
 	// its caches were replaced, after which nothing is answered.
 	session ownership.ReadSession
 	failed  bool
+	active  resourceid.Ref
 }
 
-// NewControllerChains reads for the caller access describes once the
+// NewAgentOwnership reads for the caller access describes once the
 // session's catalog is known.
-func NewControllerChains(access func(*ownership.Catalog) ownership.Access) *ControllerChains {
-	return &ControllerChains{source: ownershipSource, access: access}
+func NewAgentOwnership(access func(*ownership.Catalog) ownership.Access) *AgentOwnership {
+	return &AgentOwnership{source: ownershipSource, access: access}
 }
 
 // Of is the controller chain of obj, read from the caches as ref, as the
 // caller reads it; nil when it can't be answered. obj is never modified: the
 // caches share it.
-func (c *ControllerChains) Of(obj metav1.Object, ref resourceid.Ref) *topology.ControllerChain {
-	if obj == nil || ref.Kind == "" || c.failed || metav1.GetControllerOf(obj) == nil {
+func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.ControllerChain {
+	c.active = resourceid.Ref{}
+	if obj == nil || ref.Kind == "" || c.failed {
 		return nil
 	}
 	fetched := ownership.Observe(ref, obj)
@@ -199,8 +201,39 @@ func (c *ControllerChains) Of(obj metav1.Object, ref resourceid.Ref) *topology.C
 		c.failed = true
 		return nil
 	}
+	if chain.Subject.Access == ownership.Denied {
+		return &topology.ControllerChain{Stop: "withheld"}
+	}
+	if chain.Subject.Read.State == ownership.Excluded {
+		return &topology.ControllerChain{}
+	}
 	if !chain.Subject.Present() || chain.Subject.Read.Object.UID != fetched.UID {
 		return nil
 	}
+	c.active = ref
 	return topology.ChainOf(chain)
+}
+
+func (c *AgentOwnership) OtherManagers(rel *topology.Relationships, ref resourceid.Ref) []topology.ResourceRef {
+	if c.view == nil || c.failed || c.active != ref {
+		return nil
+	}
+	out := topology.OtherManagingControllers(rel, c.view, ref)
+	if c.session.ValidateCaches() != nil {
+		c.failed = true
+		return nil
+	}
+	return out
+}
+
+func (c *AgentOwnership) Manager(ref resourceid.Ref) ownership.ManagerAnswer {
+	if c.view == nil || c.failed || c.active != ref {
+		return ownership.ManagerAnswer{}
+	}
+	out := c.view.Manager(ref)
+	if c.session.ValidateCaches() != nil {
+		c.failed = true
+		return ownership.ManagerAnswer{}
+	}
+	return out
 }

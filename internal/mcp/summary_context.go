@@ -21,8 +21,7 @@ import (
 )
 
 // newResourceSummaryContextBuilder assembles the per-request closure for MCP
-// list_resources. Returns nil when the cache or topology isn't
-// available, in which case the caller should skip context attachment
+// list_resources. Returns nil when the typed cache is unavailable, in which case the caller should skip context attachment
 // rather than emit empty objects.
 //
 // namespaces scopes the issue index to just the rows being returned;
@@ -38,7 +37,7 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
-	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(namespaces), idx, idx, summaryRefReader(ctx), summaryControllerChains(ctx))
+	return summarycontext.BuilderFromIndexes(func() *topology.Topology { return buildSummaryContextTopology(namespaces) }, idx, idx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
 // newSearchSummaryContextBuilder is the MCP search variant. Mirrors
@@ -58,7 +57,7 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
-	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(scanNamespaces), namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryControllerChains(ctx))
+	return summarycontext.BuilderFromIndexes(func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) }, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
 // summaryCtxTopoMemo caches topology builds for the list_resources and search
@@ -105,8 +104,8 @@ func summaryRefReader(ctx context.Context) func(group, kind, namespace string) b
 	return func(group, kind, namespace string) bool { return checker.CanRead(ctx, group, kind, namespace) }
 }
 
-// summaryControllerChains reads each row's controller chain as the caller,
+// summaryAgentOwnership reads each row's controller chain as the caller,
 // with the access get_resource's owner answer reads with.
-func summaryControllerChains(ctx context.Context) *k8s.ControllerChains {
-	return k8s.NewControllerChains(func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
+func summaryAgentOwnership(ctx context.Context) *k8s.AgentOwnership {
+	return k8s.NewAgentOwnership(func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
 }

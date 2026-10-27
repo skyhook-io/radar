@@ -2,11 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,6 +25,62 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
+
+func TestAgentOwnershipMCPListAndGetPreferController(t *testing.T) {
+	yes := true
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web", UID: "uid-dep"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web-a", UID: "uid-pod", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "uid-dep", Controller: &yes}}, Labels: map[string]string{"argocd.argoproj.io/instance": "copied"}}}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}})); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "ownership-test"})
+	verbs := metav1.Verbs{"get", "list", "watch", "delete"}
+	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	fd.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "v1", APIResources: []metav1.APIResource{{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: verbs}}},
+		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{{Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: verbs}}},
+	}
+	restore, err := k8s.SetTestResourceDiscovery(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	result, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "pods", Namespace: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := completeListBody(t, result)
+	if len(rows) != 1 {
+		t.Fatalf("rows %+v", rows)
+	}
+	encoded, err := json.Marshal(rows[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row struct {
+		Summary *resourcecontext.ResourceSummaryContext `json:"summaryContext"`
+	}
+	if err := json.Unmarshal(encoded, &row); err != nil {
+		t.Fatal(err)
+	}
+	if row.Summary == nil || row.Summary.ManagedBy == nil || row.Summary.ManagedBy.Kind != "Deployment" {
+		t.Fatalf("summary %+v", row.Summary)
+	}
+	result, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: "pods", Namespace: "alpha", Name: "web-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Context *resourcecontext.ResourceContext `json:"resourceContext"`
+	}
+	if err := json.Unmarshal([]byte(extractText(t, result)), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Context == nil || len(body.Context.ManagedBy) != 1 || body.Context.ManagedBy[0].Kind != "Deployment" {
+		t.Fatalf("context %+v", body.Context)
+	}
+}
 
 // A namespaced kind in any namespace: a cluster-wide grant allows it, and
 // anything else is undecided rather than checked namespace by namespace.

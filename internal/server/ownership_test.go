@@ -16,9 +16,62 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
+
+func TestAgentOwnershipSummaryAndDetailStopAtDeniedAncestor(t *testing.T) {
+	withOwnershipDiscovery(t)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+	perms.SetCanI("get", "", "pods", "default", true)
+	perms.SetCanI("get", "apps", "replicasets", "default", true)
+	perms.SetCanI("get", "apps", "deployments", "default", false)
+	env.srv.permCache.Set("limited-agent", nil, perms)
+	resp := env.authGet(t, "/api/ai/resources/pods?namespace=default", "limited-agent", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status %d", resp.StatusCode)
+	}
+	var rows []struct {
+		Name    string                                  `json:"name"`
+		Summary *resourcecontext.ResourceSummaryContext `json:"summaryContext"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range rows {
+		if row.Name != "nginx-abc-xyz" {
+			continue
+		}
+		found = true
+		if row.Summary == nil || row.Summary.ManagedBy == nil || row.Summary.ManagedBy.Kind != "ReplicaSet" {
+			t.Fatalf("summary %+v, want readable ReplicaSet", row.Summary)
+		}
+		if len(row.Summary.Omitted) != 1 || row.Summary.Omitted[0].Reason != resourcecontext.OmittedRBACDenied {
+			t.Fatalf("summary coverage %+v", row.Summary.Omitted)
+		}
+	}
+	if !found {
+		t.Fatal("missing Pod row")
+	}
+	resp = env.authGet(t, "/api/ai/resources/pods/default/nginx-abc-xyz", "limited-agent", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get status %d", resp.StatusCode)
+	}
+	var detail struct {
+		Context *resourcecontext.ResourceContext `json:"resourceContext"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Context == nil || len(detail.Context.ManagedBy) != 1 || detail.Context.ManagedBy[0].Kind != "ReplicaSet" {
+		t.Fatalf("detail %+v", detail.Context)
+	}
+}
 
 // withOwnershipDiscovery serves the fixture's kinds as Kubernetes does, with
 // delete, so the garbage collector's kinds are the ones searched for

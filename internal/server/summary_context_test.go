@@ -1,6 +1,6 @@
 // Wiring tests for the REST-side ResourceSummaryContext builders. The pure-
 // function tests (issueIndex key arithmetic, BuildIssueIndex over a
-// fake provider, CanonicalSingular, ManagedByFromRelationships) live in
+// fake provider, CanonicalSingular, canonical ownership) live in
 // internal/summarycontext alongside the shared core they exercise.
 
 package server

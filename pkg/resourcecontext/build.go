@@ -43,7 +43,7 @@ type Options struct {
 	AccessChecker RefAccessChecker
 
 	// Topology data sources. When Topology is nil, the topology-derived
-	// fields (Exposes, SelectedBy, ScaledBy, ManagedBy, RunsOn,
+	// fields (Exposes, SelectedBy, ScaledBy, RunsOn,
 	// Uses.ServiceAccount) are skipped.
 	Topology    *topology.Topology
 	Provider    topology.ResourceProvider
@@ -56,14 +56,14 @@ type Options struct {
 	// loop over relationships per row SHOULD pass it to avoid double work.
 	//
 	// Topology MUST still be set when Relationships is set — synthesis
-	// helpers (e.g. ManagedBy owner walk) read Topology and RelIndex through
+	// helpers read Topology and RelIndex through
 	// it.
 	Relationships *topology.Relationships
 
 	// Ownership, when set, answers the relationships' Owner from owner
 	// references in place of the topology's manages edges, for fetched, the
-	// object Build describes. Build reads only Owner, the owner state and the
-	// manager answer (rel.Ownership.Manager) of rel.Ownership, so a host
+	// object Build describes. Build reads Owner, ControllerChain, other Managers
+	// and the manager answer (rel.Ownership.Manager), so a host
 	// needn't search for children (see topology.ApplyOwner). rel is never nil.
 	Ownership func(rel *topology.Relationships, fetched ownership.Observation)
 
@@ -182,20 +182,8 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj)}
 	omitted := newOmittedTracker()
 
-	// Topology-derived relationships drive ManagedBy / Exposes / SelectedBy /
-	// ScaledBy / RunsOn / Uses.ServiceAccount. T23 made
-	// topology.Relationships the canonical projection: server-side
-	// SynthesizeManagedBy walks the owner chain + GitOps signals, and the Pod
-	// hygiene fields (.ServiceAccount, .Node) are populated from pod.Spec.
-	// ManagedBy stays delegated to topology to avoid duplicating its owner-chain
-	// and GitOps logic. The direct Owner field below may still fall back to the
-	// object's controller OwnerReference when topology is absent or cold.
-	//
-	// Single-resource callers (REST GET, MCP get_resource) leave
-	// opts.Relationships nil and let us compute via GetRelationshipsWithObject
-	// — passing obj keeps kind/group disambiguation correct for CRDs whose
-	// plural collides with a core resource. Bulk callers that already loop
-	// over relationships per row pass them in directly.
+	// Topology supplies networking, scaling and spec-declared relations;
+	// the caller's ownership answer supplies controllers and GitOps evidence.
 	rel := opts.Relationships
 	if rel == nil && opts.Topology != nil {
 		// Resolve the topology-pseudo-kind so cross-group CRDs (Knative
@@ -210,9 +198,6 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			opts.Topology, opts.Provider, opts.DynamicProv, opts.RelIndex,
 		)
 	}
-	// Whether the topology answered, before an ownership answer exists to
-	// carry the rest.
-	fromTopology := rel != nil
 	// answered: the host's ownership answer stands, even one with nothing to
 	// say, as for an Event, whose owner references ownership doesn't follow.
 	answered := false
@@ -225,58 +210,25 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		answered = true
 	}
 
-	// 1. ManagedBy — prefer Relationships.ManagedBy (server-synthesized when
-	// a topology is available; covers GitOps signals + owner-chain walk).
-	// Fall back to topology.SynthesizeManagedBy with the obj alone when no
-	// topology is provided — that path still detects Argo/Flux/Helm signals
-	// from labels and annotations without needing a graph.
-	var managedBy []topology.ResourceRef
-	if rel != nil && len(rel.ManagedBy) > 0 {
-		managedBy = rel.ManagedBy
-	} else if !fromTopology {
-		if m, ok := obj.(metav1.Object); ok {
-			managedBy = topology.SynthesizeManagedBy(m, ident.Kind, ident.Namespace, ident.Name, nil, nil, nil)
-		}
-	}
 	if answered && rel.Ownership != nil && rel.Ownership.Manager != nil {
 		rc.Manager = managerContext(rel.Ownership.Manager)
 	}
-	var chain *topology.ControllerChain
-	if answered {
-		chain = rel.ControllerChain.Readable(func(r topology.ResourceRef) bool {
+	if answered && rel.Ownership != nil {
+		chain := rel.ControllerChain.Readable(func(r topology.ResourceRef) bool {
 			ref := toContextRef(r)
 			return checkRef(ctx, opts.AccessChecker, &ref)
 		})
-	}
-	managedBy = slices.DeleteFunc(slices.Clone(managedBy), func(r topology.ResourceRef) bool {
-		ref := toContextRef(r)
-		return !checkRef(ctx, opts.AccessChecker, &ref)
-	})
-	managedBy = topology.TopmostOwner(managedBy, chain)
-	// With a manager answer, the GitOps and Helm managers are its to name:
-	// managedBy keeps the rest (the top controller, cert-manager), not a
-	// second, metadata-only answer to the same question.
-	if rc.Manager != nil {
-		managedBy = slices.DeleteFunc(topology.TopmostOwner(slices.DeleteFunc(slices.Clone(managedBy), answeredManager), chain), answeredManager)
-	}
-	// An owner above the top the walk reached is noted (the direct owner's
-	// own note covers a walk that reached none): the caller reads the owner
-	// reference that names it, so the note reveals nothing.
-	if top := chain.Top(); top != nil && chain.Stop != "" && len(managedBy) > 0 && managedBy[0] == *top {
-		reason := OmittedUnavailable
-		if chain.Stop == "withheld" {
-			reason = OmittedRBACDenied
+		var managedBy []topology.ResourceRef
+		if top := chain.Top(); top != nil {
+			managedBy = append(managedBy, *top)
 		}
-		omitted.add("managedBy", reason)
-	}
-	// Unlike the other references, a GitOps manager or other managedBy the
-	// caller can't read leaves no omission note: the note would say a hidden
-	// manager links to this object. The manager answer's narrowed says the
-	// caller sees only part.
-	if len(managedBy) > 0 {
-		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(managedBy),
-			"managedBy", nil)
+		for _, r := range rel.Managers {
+			managedBy = append(managedBy, r)
+		}
+		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(managedBy), "managedBy", nil)
+		if reason := ControllerOmission(chain); reason != "" {
+			omitted.add("managedBy", reason)
+		}
 	}
 
 	if rel != nil && rel.Owner != nil {
@@ -1735,21 +1687,6 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 		return nil
 	}
 	return out
-}
-
-// answeredManager reports whether ref is a manager kind the manager answer
-// weighs: an Argo CD Application, a Flux Kustomization or HelmRelease, or a
-// native Helm release.
-func answeredManager(ref topology.ResourceRef) bool {
-	switch {
-	case ref.Kind == "Application" && ref.Group == "argoproj.io":
-		return true
-	case ref.Kind == "Kustomization" && ref.Group == "kustomize.toolkit.fluxcd.io":
-		return true
-	case ref.Kind == "HelmRelease" && (ref.Group == "helm.toolkit.fluxcd.io" || ref.Group == ""):
-		return true
-	}
-	return false
 }
 
 // FilterSchedulingSummary applies the same reference permissions as Build without

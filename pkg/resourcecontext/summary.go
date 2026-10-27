@@ -39,6 +39,7 @@ type SummaryOptions struct {
 
 	// Scanned, for a security-scan report, names the object it scanned.
 	Scanned *ScannedRef
+	Omitted []OmittedField
 }
 
 // BuildSummary produces the compact per-result ResourceSummaryContext
@@ -54,7 +55,7 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryConte
 		health = deriveHealth(obj)
 	}
 	pause := CrossplanePauseFor(obj)
-	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil && pause == "" {
+	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil && pause == "" && len(opts.Omitted) == 0 {
 		return nil
 	}
 	return &ResourceSummaryContext{
@@ -63,6 +64,7 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryConte
 		Health:          health,
 		IssueCount:      opts.IssueCount,
 		Scanned:         opts.Scanned,
+		Omitted:         opts.Omitted,
 	}
 }
 

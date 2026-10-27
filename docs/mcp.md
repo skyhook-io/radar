@@ -1323,17 +1323,22 @@ A manager you can't read is left out without a note.
 
 ### `managedBy` — the top controller
 
-`resourceContext.managedBy` and the list and search `summaryContext.managedBy` name the top of the resource's
-controller chain (owner references with `controller: true`) as you can read it: a Pod's Deployment, or the operator's
-custom resource that controls a StatefulSet (`{kind: TidbCluster, group: pingcap.com, source: native}` for a TiDB Pod).
-That object holds the spec the rest is generated from, so a fix belongs there. A GitOps or Helm manager the resource's
-own metadata names, or another managing controller, is named instead, as before; in `resourceContext`, with `manager`
-present, the top controller takes its place. A summary's `group` is set only for a kind that isn't built in.
+`resourceContext.managedBy` and list/search `summaryContext.managedBy` read the caller's controller chain from the
+ownership stack. A TiDB Pod can point through its StatefulSet to `{kind: TidbCluster, group: pingcap.com, source: native}`.
+This is the highest controller Radar can read: inspect it to understand what the controller generates, rather than assuming
+every change belongs there.
 
-The walk stops where it can't read on. In `resourceContext`, `omitted` then says why an owner may sit above the one
-named: `managedBy: unavailable` when Radar couldn't check it (its kind isn't watched yet, discovery can't resolve it,
-or the references loop), `managedBy: rbac_denied` when you may not read it. A summary has no such note: its `managedBy` is the highest
-object you can read, so open it with `get_resource` to see its own `owner`.
+Summaries prefer the controller over GitOps/Helm metadata. Without a readable ancestor they prefer an observed
+spec-declared managing controller (a Certificate for its Secret), then an eligible GitOps/Helm lead from the management
+evidence engine. Missing, withheld, unresolved and unchecked claims do not become summary pointers. See
+[ownership](ownership.md#the-top-controller) for the exact eligibility rules. Full `resourceContext.manager` remains the
+GitOps evidence answer, including claims, conflicts and ancestor attribution. Follow the controller with `get_resource`
+or use `diagnose` to inspect that evidence. Trivy reports retain their scanned-workload navigation.
+
+Both detail and summary use `omitted: [{field: "managedBy", reason: "unavailable"}]` when Radar couldn't finish the
+controller walk, or `rbac_denied` for unreadable owners. A summary can carry that note even with no pointer. An
+independent spec/GitOps lead is not marked as an incomplete controller root. Reads use collected inventory and start
+no watches: an uncollected or unsynced CRD can leave a gap. Native custom kinds include their exact API group.
 
 ### Node placement context
 

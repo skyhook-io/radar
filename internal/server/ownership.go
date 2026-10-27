@@ -29,21 +29,52 @@ type requestAccess struct {
 	// couldn't be discovered.
 	namespaces []string
 	failed     bool
+	exactGet   bool
 }
 
 // ownershipAccess is what the request's user may read; without
 // authentication, everything.
 func (s *Server) ownershipAccess(r *http.Request, catalog *ownership.Catalog) ownership.Access {
+	return s.newOwnershipAccess(r, catalog, false)
+}
+
+func (s *Server) agentOwnershipAccess(r *http.Request, catalog *ownership.Catalog) ownership.Access {
+	return s.newOwnershipAccess(r, catalog, true)
+}
+
+func (s *Server) newOwnershipAccess(r *http.Request, catalog *ownership.Catalog, exactGet bool) ownership.Access {
 	if auth.UserFromContext(r.Context()) == nil {
 		return ownership.Unrestricted()
 	}
 	namespaces, failed := s.getUserNamespacesWithStatus(r, nil)
-	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed}
+	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed, exactGet: exactGet}
 }
 
 // CanRead's checks are memoized on the user's permissions, so asking again
 // costs a lookup.
 func (a *requestAccess) CanRead(kind resourceid.GroupKind, namespace string) ownership.Decision {
+	decision := a.canList(kind, namespace)
+	if decision != ownership.Allowed || !a.exactGet {
+		return decision
+	}
+	resource, namespaced, known := a.resource(kind)
+	if !known {
+		return decision
+	}
+	allowed, decided := a.s.canReadDecision(a.r, kind.Group, resource, namespace, "get")
+	switch {
+	case !decided:
+		return ownership.Undecided
+	case allowed:
+		return ownership.Allowed
+	case namespaced && namespace == "":
+		return ownership.Undecided
+	default:
+		return ownership.Denied
+	}
+}
+
+func (a *requestAccess) canList(kind resourceid.GroupKind, namespace string) ownership.Decision {
 	resource, namespaced, known := a.resource(kind)
 	switch {
 	case !known && a.catalog.Ambiguous(kind):

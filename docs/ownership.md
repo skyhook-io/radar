@@ -24,8 +24,8 @@ Every answer in this package says what it couldn't read. An empty answer means "
 | Which managers record it / what a manager records | `relationships.managers`, `manages` (Related Resources → Managed By / Manages) | Recorded membership, plus graph links for other managing controllers (a cert-manager Certificate) |
 | What manages it, weighed | `relationships.ownership.manager`; `resourceContext.manager` (compact) | Recorded membership and claims, through the controller chain ([below](#what-manages-an-object)) |
 | Legacy manager pointer | `relationships.managedBy` | The manager the object's metadata names (Argo CD, Flux, Helm) if any, else the topmost object its manages edges reach — not a controller-owner answer; read by workload selection and summary grouping |
-| Top controller, or other managers, for agents | `resourceContext.managedBy` | The legacy pointer, filtered to what the caller may read and, when `resourceContext.manager` is present, without the Argo CD, Flux and Helm managers it covers (so a controller or a cert-manager Certificate may remain). A pointer on the controller chain, or none, becomes the chain's top as the caller reads it ([below](#the-top-controller)) |
-| What a list row or search hit belongs to, for triage | `summaryContext.managedBy` (REST and MCP lists and search) | A compact pointer (`source`: `native`, `argocd`, `flux`, `helm`; `group` for a kind that isn't built in): the legacy pointer the caller may read, else the row's direct owner, raised to the chain's top as for `resourceContext.managedBy`; a Trivy report names its scanned object's workload. References Radar reads from the cache are left out when the caller can't read them; coordinates already on the readable report or row stay |
+| Top controller, or other managers, for agents | `resourceContext.managedBy` | The highest readable controller from `View.ControllerChain`, plus observed non-GitOps managing controllers from separately classified spec-derived graph relations. `resourceContext.manager` carries GitOps/Helm evidence. An incomplete chain is noted in `omitted` |
+| What a list row or search hit belongs to, for triage | `summaryContext.managedBy` (REST and MCP lists and search) | Controller-first next hop: the highest readable controller, else an observed spec-declared managing controller, else an eligible `View.Manager` lead. `source` identifies native-controller versus GitOps/Helm evidence; custom native kinds include `group`. `omitted` notes incomplete controller walks. A Trivy report retains its scanned-workload semantics |
 | Where a request change belongs | rightsizing `managedBy: {tool, signal}` | Controller owner, GitOps/Helm metadata, `addonmanager` mode ([mcp.md](mcp.md)) |
 
 The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager".
@@ -98,14 +98,27 @@ GitOps permissions.
 
 ## The top controller
 
-The graph has no node for a custom resource nothing owns, so the legacy pointer's walk over manages edges stops at the
-workload an operator's resource controls (a TidbCluster's StatefulSet). The agent pointers (`resourceContext.managedBy`
-and `summaryContext.managedBy`) also read `View.ControllerChain` as the caller (`topology.TopmostOwner`): a pointer that
-names an object on the chain, or no pointer, becomes the last object the walk read. A pointer off the chain (a GitOps or
-Helm manager the metadata names, a cert-manager Certificate) stands, so it wins where it did. The walk stops at an owner
-the caller may not read or Radar couldn't check and names the last object it read; `resourceContext` then notes
-`managedBy` as `rbac_denied` or `unavailable`, since the caller reads the reference that names that owner. A list reads
-every row's chain in one session and view (`k8s.ControllerChains`), so rows share their owners' reads.
+The agent pointers read `View.ControllerChain` as the caller; they do not walk the topology or reconcile a graph pointer
+with the chain. A Pod can therefore point through its StatefulSet to the operator's custom resource, even when that
+resource is not drawn. This is the highest controller Radar read, not proof that a particular field should be edited there.
+
+List/search summaries prefer this controller to a GitOps or Helm manager, including copied GitOps labels. Without a
+readable controller ancestor, an observed spec-declared managing controller (such as a Certificate for its Secret) takes
+precedence over a GitOps lead. Those residual graph sources use the same classification as Related Resources: exclude
+owner references, controller shortcuts, unreadable objects, GitOps managers and native Helm. An unsettled chain cannot
+establish that a graph source is not an ownership shortcut, so it supplies no residual manager. The graph is loaded and
+indexed only when this residual lookup is needed.
+
+With no controller relation, `View.Manager` supplies a summary lead for `agree`, `listed` or `shared` with a lead. A
+`claimed` lead needs a matching active claim checked `recorded`, `omitted` or `unreadable`, or a native Helm
+`not-recording` claim with release namespace and name. Missing, unresolved, withheld and unchecked claims remain in
+full detail instead of becoming summary pointers. A lead is where to inspect next, never a verdict of exclusive management.
+
+Both detail and summary `omitted` use `managedBy: rbac_denied` or `unavailable` when a controller walk stops short,
+including when no ancestor was readable. An independent spec/GitOps lead is not labelled as a partial controller root.
+Lists share one `k8s.AgentOwnership` session and view across rows. Claim checks share a manager's membership state in
+that view; member enumeration still reads current status. UI ownership retains namespace-level access; REST AI context
+and summaries additionally require exact reference `get` permission before deriving their answers, as MCP does.
 
 ## Coverage
 

@@ -2,6 +2,7 @@ package topology
 
 import (
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -89,8 +90,7 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	for _, s := range sources {
 		r := refIdentity(s)
 		switch {
-		case named[r] || slices.Contains(chain.Chain, r):
-		case !present(v, r):
+		case !managingSource(v, r, named, chain):
 			// The caller may not read the manager, or it is gone since the
 			// graph drew its edge.
 		case ownership.IsRecordingManager(r.GroupKind()) && labelled(r), !ownership.IsRecordingManager(r.GroupKind()) && settled(chain):
@@ -148,15 +148,15 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 }
 
 // ApplyOwner answers only rel's Owner, and why there is none, and what
-// manages the resource, from v: what a resource context reads, which needs no
-// search for children. The rest of rel's ownership is cleared and left
-// unanswered.
+// manages the resource, including other observed managing controllers. It
+// searches for no children. The rest of rel's ownership is left unanswered.
 func ApplyOwner(rel *Relationships, v *ownership.View, fetched ownership.Observation) {
 	if rel == nil || v == nil {
 		return
 	}
 	if cov, _, answered := applyOwner(rel, v, fetched); answered {
 		cov.Manager = managerAnswer(v.Manager(fetched.Ref))
+		rel.Managers = OtherManagingControllers(rel, v, fetched.Ref)
 	}
 }
 
@@ -421,28 +421,31 @@ func (c *ControllerChain) Top() *ResourceRef {
 	return &c.Refs[len(c.Refs)-1]
 }
 
-// TopmostOwner is managedBy, a pointer the graph or the resource's metadata
-// gave, raised to the top of chain when it is empty or names an object on
-// chain: the graph has no node for a custom resource that nothing owns, so
-// its walk stops at the workload such a resource controls. A pointer off the
-// chain, such as a GitOps manager its metadata names, stands.
-func TopmostOwner(managedBy []ResourceRef, chain *ControllerChain) []ResourceRef {
-	top := chain.Top()
-	if top == nil {
-		return managedBy
+// OtherManagingControllers retains spec-declared graph relations only when
+// they cannot be owner references, controller shortcuts or GitOps evidence.
+func OtherManagingControllers(rel *Relationships, v *ownership.View, subject resourceid.Ref) []ResourceRef {
+	if rel == nil || len(rel.manageSources) == 0 {
+		return nil
 	}
-	if len(managedBy) == 0 || slices.ContainsFunc(chain.Refs, func(r ResourceRef) bool { return sameRef(r, managedBy[0]) }) {
-		return []ResourceRef{*top}
+	chain := v.ControllerChain(subject)
+	if !settled(chain) {
+		return nil
 	}
-	return managedBy
+	named := namedOwners(chain.Subject.Read.Object)
+	var out []ResourceRef
+	for _, source := range rel.manageSources {
+		r := refIdentity(source)
+		if ownership.IsRecordingManager(r.GroupKind()) || r.Kind == "HelmRelease" && r.Group == "" {
+			continue
+		}
+		if managingSource(v, r, named, chain) {
+			out = appendResourceRef(out, source)
+		}
+	}
+	slices.SortFunc(out, func(a, b ResourceRef) int { return strings.Compare(refIdentity(a).String(), refIdentity(b).String()) })
+	return out
 }
 
-// sameRef compares a chain object with a pointer whose group may be unset,
-// as a graph node's is for a kind whose group it didn't record. A groupless
-// HelmRelease is a native Helm install, never an object on a chain.
-func sameRef(chain, pointer ResourceRef) bool {
-	if chain.Kind != pointer.Kind || chain.Namespace != pointer.Namespace || chain.Name != pointer.Name {
-		return false
-	}
-	return chain.Group == pointer.Group || pointer.Group == "" && pointer.Kind != "HelmRelease"
+func managingSource(v *ownership.View, ref resourceid.Ref, named map[resourceid.Ref]bool, chain ownership.ControllerChainAnswer) bool {
+	return !named[ref] && !slices.Contains(chain.Chain, ref) && present(v, ref)
 }

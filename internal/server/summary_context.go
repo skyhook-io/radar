@@ -19,8 +19,7 @@ import (
 )
 
 // newResourceSummaryContextBuilder assembles the per-request closure for the
-// list/search handlers. Returns nil when the cache or topology isn't
-// available, in which case callers should skip context attachment
+// list/search handlers. Returns nil when the typed cache is unavailable, in which case callers should skip context attachment
 // rather than emit empty objects.
 //
 // Callers pass the namespace list they're scanning so the issue index
@@ -37,7 +36,7 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
-	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), idx, idx, s.summaryRefReader(r), s.summaryControllerChains(r))
+	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology, idx, idx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 
 // newSearchSummaryContextBuilder is the search-specific variant. Search
@@ -70,7 +69,7 @@ func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces 
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
 	}
-	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), namespacedIdx, clusterIdx, s.summaryRefReader(r), s.summaryControllerChains(r))
+	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology, namespacedIdx, clusterIdx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 
 // summaryRefReader is the caller's access to a reference a summary names, as
@@ -80,8 +79,8 @@ func (s *Server) summaryRefReader(r *http.Request) func(group, kind, namespace s
 	return func(group, kind, namespace string) bool { return checker.CanRead(r.Context(), group, kind, namespace) }
 }
 
-// summaryControllerChains reads each row's controller chain as the request's
-// user, with the access the resource context's owner answer reads with.
-func (s *Server) summaryControllerChains(r *http.Request) *k8s.ControllerChains {
-	return k8s.NewControllerChains(func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+// summaryAgentOwnership reads each row's controller chain as the request's
+// user, with the exact access the agent resource context reads with.
+func (s *Server) summaryAgentOwnership(r *http.Request) *k8s.AgentOwnership {
+	return k8s.NewAgentOwnership(func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) })
 }
