@@ -55,7 +55,7 @@ export function diagnosticFactLabel(type: string): string {
     case 'network_policy_isolates':
       return 'Affected resources';
     case 'tls_certificate_consumers':
-      return 'Ingresses using it';
+      return 'Used for TLS by';
     default:
       return type.replace(/_/g, ' ');
   }

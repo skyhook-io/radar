@@ -6,7 +6,8 @@ import (
 )
 
 // factTLSCertificateConsumers links an invalid-certificate Secret issue to
-// the live Ingresses that use it, so the issue also shows up on them.
+// the live Ingresses and Gateways that use it, so the issue also shows up on
+// them.
 const factTLSCertificateConsumers = "tls_certificate_consumers"
 
 func tlsCertificateConsumersContext(p k8s.Detection) *issuesapi.DiagnosticContext {
@@ -17,6 +18,6 @@ func tlsCertificateConsumersContext(p k8s.Detection) *issuesapi.DiagnosticContex
 	// describe resources the caller can't read.
 	return &issuesapi.DiagnosticContext{
 		Role:  issuesapi.DiagnosticRoleCandidate,
-		Facts: []issuesapi.DiagnosticFact{affectedRefsFact(factTLSCertificateConsumers, "These live Ingresses use this Secret for TLS.", p.AffectedRefs)},
+		Facts: []issuesapi.DiagnosticFact{affectedRefsFact(factTLSCertificateConsumers, "These live Ingresses and Gateways use this Secret for TLS.", p.AffectedRefs)},
 	}
 }

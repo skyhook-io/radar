@@ -147,13 +147,13 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	got := detectLiveTLSCertificates(GetResourceCache(), "", nil, now)
 	// A compose's scope, shared across namespaces, gives the same answer.
 	scope := NewDetectScope()
-	if scoped := detectLiveIngressTLSCertificates(GetResourceCache(), "shop", scope, now); len(scoped) != len(got) {
+	if scoped := detectLiveTLSCertificates(GetResourceCache(), "shop", scope, now); len(scoped) != len(got) {
 		t.Fatalf("scoped detections = %d, want %d", len(scoped), len(got))
 	}
-	if again := detectLiveIngressTLSCertificates(GetResourceCache(), "other", scope, now); len(again) != 0 {
+	if again := detectLiveTLSCertificates(GetResourceCache(), "other", scope, now); len(again) != 0 {
 		t.Fatalf("other namespace through the same scope = %+v", again)
 	}
 	var names []string
@@ -222,7 +222,7 @@ func TestDetectLiveIngressTLSCertificatesUncoveredSecretNamespace(t *testing.T) 
 	if err := InitScopedTestResourceCache(fake.NewClientset(objects...), scopes); err != nil {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	got := detectLiveTLSCertificates(GetResourceCache(), "", nil, now)
 	if len(got) != 1 || got[0].Namespace != "shop" || got[0].Name != "custom-tls" {
 		t.Fatalf("detections = %+v, want only the other controller's custom-tls", got)
 	}
@@ -271,7 +271,7 @@ func TestDetectLiveIngressTLSCertificatesRunningControllerWithoutAddress(t *test
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	got := detectLiveTLSCertificates(GetResourceCache(), "", nil, now)
 	if len(got) != 2 {
 		t.Fatalf("detections = %+v, want mixed-tls and traefik-tls", got)
 	}
@@ -354,7 +354,7 @@ func TestDetectLiveIngressTLSCertificatesSelection(t *testing.T) {
 			t.Fatalf("InitTestResourceCache: %v", err)
 		}
 		var names []string
-		for _, d := range detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now) {
+		for _, d := range detectLiveTLSCertificates(GetResourceCache(), "", nil, now) {
 			if d.Severity != "critical" {
 				t.Errorf("%s severity = %s, want critical", d.Name, d.Severity)
 			}
@@ -433,12 +433,12 @@ func TestDetectLiveIngressTLSCertificatesSharedHost(t *testing.T) {
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	got := detectLiveTLSCertificates(GetResourceCache(), "", nil, now)
 	if len(got) != 1 || got[0].Name != "twin-expired-tls" || len(got[0].AffectedRefs) != 2 {
 		t.Fatalf("detections = %+v, want only the twin Secret, linked twice", got)
 	}
 	// A namespace-filtered scan still weighs the competitor in another namespace.
-	if got := detectLiveIngressTLSCertificates(GetResourceCache(), "other", nil, now); len(got) != 0 {
+	if got := detectLiveTLSCertificates(GetResourceCache(), "other", nil, now); len(got) != 0 {
 		t.Fatalf("other-scoped detections = %+v, want none", got)
 	}
 }
@@ -463,7 +463,7 @@ func TestDetectLiveIngressTLSCertificatesExpiringSoon(t *testing.T) {
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	got := detectLiveTLSCertificates(GetResourceCache(), "", nil, now)
 	if len(got) != 1 {
 		t.Fatalf("detections = %+v, want only soon-tls", got)
 	}

@@ -422,7 +422,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Description: "Use for 'what's broken right now?': live state, not posture. Returns " +
 			"grouped critical/warning failures in workloads, Jobs/CronJobs, HPAs, " +
 			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions, " +
-			"expired, not-yet-valid or <24h-to-expiry TLS certificates live Ingresses serve (kind=Secret). " +
+			"expired, not-yet-valid or <24h-to-expiry TLS certs live Ingresses/Gateways serve (kind=Secret). " +
 			"Not covered: later expiry and other config posture (get_cluster_audit); an empty " +
 			"result doesn't rule out failures outside these detectors. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +

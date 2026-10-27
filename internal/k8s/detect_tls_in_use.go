@@ -32,13 +32,19 @@ const maxTLSMessageHosts = 3
 // this host's clock; only a start time clearly in the future is a failure.
 const tlsNotYetValidTolerance = 5 * time.Minute
 
-// tlsConsumers is the live uses of one TLS Secret: those with a load-balancer
-// address, and those that count only because their controller's pods are
-// running, whose namespaces are evidence a caller must be able to read.
+// tlsConsumers is the live uses of one TLS Secret. addressedRefs are the
+// Ingresses with a load-balancer address and the live Gateways; runningRefs
+// are the Ingresses that count only because their controller's pods are
+// running, whose namespaces (podNamespaces) are evidence a caller must be able
+// to read. A Gateway in another namespace than the Secret is evidence the same
+// way (gatewayNamespaces) when nothing in the Secret's own namespace makes the
+// row critical (sameNamespace).
 type tlsConsumers struct {
-	addressedRefs []issuesapi.Ref
-	runningRefs   []issuesapi.Ref
-	podNamespaces map[string]bool
+	addressedRefs     []issuesapi.Ref
+	runningRefs       []issuesapi.Ref
+	podNamespaces     map[string]bool
+	gatewayNamespaces map[string]bool
+	sameNamespace     bool
 }
 
 // tlsUse is one live resource using a TLS Secret for a host. An empty host
@@ -71,10 +77,11 @@ func (idx *tlsServingIndex) reference(controller, secretNamespace, secretName, h
 	idx.referenced[controller][key][host] = true
 }
 
-// detectLiveIngressTLSCertificates reports a kubernetes.io/tls Secret whose
-// leaf certificate is expired, not yet valid, or within a day of expiry
-// while a live Ingress uses it for TLS. Audit lists every expiring
-// certificate; this reports only the ones something serves.
+// detectLiveTLSCertificates reports a kubernetes.io/tls Secret whose leaf
+// certificate is expired, not yet valid, or within a day of expiry while a
+// live Ingress or Gateway listener uses it for TLS. Audit lists every
+// expiring certificate; this reports only the ones something serves. A live
+// Gateway listener (addGatewayTLSUses) makes the row critical.
 //
 // The Ingress must resolve to a controller that takes certificates from its
 // Secret (not the AWS Load Balancer Controller, which uses ACM), and must
@@ -93,7 +100,7 @@ func (idx *tlsServingIndex) reference(controller, secretNamespace, secretName, h
 // the host and no other currently valid certificate any resource of the same
 // controller references does. Anything else may never be served, so it is
 // left to audit.
-func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, scope *DetectScope, now time.Time) []Detection {
+func detectLiveTLSCertificates(cache *ResourceCache, namespace string, scope *DetectScope, now time.Time) []Detection {
 	secLister := cache.Secrets()
 	if secLister == nil {
 		return nil
@@ -116,11 +123,16 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, sc
 		key := use.secretNamespace + "/" + use.secretName
 		c := consumers[key]
 		if c == nil {
-			c = &tlsConsumers{podNamespaces: map[string]bool{}}
+			c = &tlsConsumers{podNamespaces: map[string]bool{}, gatewayNamespaces: map[string]bool{}}
 			consumers[key] = c
 		}
 		if use.addressed {
 			c.addressedRefs = appendUniqueRef(c.addressedRefs, use.ref)
+			if use.ref.Namespace == use.secretNamespace {
+				c.sameNamespace = true
+			} else {
+				c.gatewayNamespaces[use.ref.Namespace] = true
+			}
 			continue
 		}
 		c.runningRefs = appendUniqueRef(c.runningRefs, use.ref)
@@ -156,53 +168,58 @@ func detectLiveIngressTLSCertificates(cache *ResourceCache, namespace string, sc
 func tlsServingIndexFor(cache *ResourceCache, scope *DetectScope) *tlsServingIndex {
 	return scope.get("tlsServingIndex", func() any {
 		idx := &tlsServingIndex{referenced: map[string]map[string]map[string]bool{}}
-		ingLister := cache.Ingresses()
-		if ingLister == nil || !cache.IsKindClusterWide("ingresses") {
-			return idx
-		}
-		ings, _ := ingLister.List(labels.Everything())
-		for _, ing := range ings {
-			controller, addressed, ok := tlsIngressController(cache, ing)
-			if !ok {
-				continue
-			}
-			for _, tls := range ing.Spec.TLS {
-				if tls.SecretName == "" {
-					continue
-				}
-				for _, rule := range ing.Spec.Rules {
-					idx.reference(controller, ing.Namespace, tls.SecretName, normalizeTLSHost(rule.Host))
-				}
-			}
-			var podNamespaces []string
-			if _, known := ingressstatus.ControllerPodLabels[controller]; known {
-				podNamespaces = readyControllerPodNamespaces(cache, scope, controller)
-				if len(podNamespaces) == 0 {
-					continue
-				}
-			} else if !addressed {
-				continue
-			}
-			if addressed {
-				podNamespaces = nil
-			}
-			ref := issuesapi.Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name}
-			for _, tls := range ing.Spec.TLS {
-				if tls.SecretName == "" {
-					continue
-				}
-				for _, rule := range ing.Spec.Rules {
-					if host := normalizeTLSHost(rule.Host); host != "" {
-						idx.uses = append(idx.uses, tlsUse{
-							secretNamespace: ing.Namespace, secretName: tls.SecretName, host: host,
-							controller: controller, ref: ref, addressed: addressed, podNamespaces: podNamespaces,
-						})
-					}
-				}
-			}
-		}
+		addIngressTLSUses(cache, scope, idx)
+		addGatewayTLSUses(idx)
 		return idx
 	}).(*tlsServingIndex)
+}
+
+func addIngressTLSUses(cache *ResourceCache, scope *DetectScope, idx *tlsServingIndex) {
+	ingLister := cache.Ingresses()
+	if ingLister == nil || !cache.IsKindClusterWide("ingresses") {
+		return
+	}
+	ings, _ := ingLister.List(labels.Everything())
+	for _, ing := range ings {
+		controller, addressed, ok := tlsIngressController(cache, ing)
+		if !ok {
+			continue
+		}
+		for _, tls := range ing.Spec.TLS {
+			if tls.SecretName == "" {
+				continue
+			}
+			for _, rule := range ing.Spec.Rules {
+				idx.reference(controller, ing.Namespace, tls.SecretName, normalizeTLSHost(rule.Host))
+			}
+		}
+		var podNamespaces []string
+		if _, known := ingressstatus.ControllerPodLabels[controller]; known {
+			podNamespaces = readyControllerPodNamespaces(cache, scope, controller)
+			if len(podNamespaces) == 0 {
+				continue
+			}
+		} else if !addressed {
+			continue
+		}
+		if addressed {
+			podNamespaces = nil
+		}
+		ref := issuesapi.Ref{Group: "networking.k8s.io", Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name}
+		for _, tls := range ing.Spec.TLS {
+			if tls.SecretName == "" {
+				continue
+			}
+			for _, rule := range ing.Spec.Rules {
+				if host := normalizeTLSHost(rule.Host); host != "" {
+					idx.uses = append(idx.uses, tlsUse{
+						secretNamespace: ing.Namespace, secretName: tls.SecretName, host: host,
+						controller: controller, ref: ref, addressed: addressed, podNamespaces: podNamespaces,
+					})
+				}
+			}
+		}
+	}
 }
 
 // tlsUseSelectsCertificate reports whether the use's controller presents
@@ -395,7 +412,7 @@ func tlsCertificateAction(secret *corev1.Secret) string {
 	if name := strings.TrimSpace(secret.Annotations["cert-manager.io/certificate-name"]); name != "" {
 		renew = fmt.Sprintf("cert-manager issues it from Certificate %s/%s, so check that Certificate's status and events", secret.Namespace, name)
 	}
-	return fmt.Sprintf("Replace the certificate in Secret %s/%s with a valid one; %s. To see what clients receive: openssl s_client -connect <ingress address>:443 -servername <host> </dev/null | openssl x509 -noout -dates", secret.Namespace, secret.Name, renew)
+	return fmt.Sprintf("Replace the certificate in Secret %s/%s with a valid one; %s. To see what clients receive: openssl s_client -connect <address>:<port> -servername <host> </dev/null | openssl x509 -noout -dates", secret.Namespace, secret.Name, renew)
 }
 
 func normalizeTLSHost(host string) string {
@@ -499,7 +516,19 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 	user := "an Ingress references it for TLS and its ingress controller is running, so it is likely, not confirmed, served"
 	severity := "warning"
 	if addressed {
-		user = "an Ingress with a load-balancer address references it for TLS"
+		// When the Secret's own namespace makes the row critical, remote
+		// Gateways need no evidence, so the text leaves them out: a caller who
+		// can't read their namespaces must not learn of them from it.
+		described := consumers.addressedRefs
+		if consumers.sameNamespace {
+			described = nil
+			for _, ref := range consumers.addressedRefs {
+				if ref.Namespace == secret.Namespace {
+					described = append(described, ref)
+				}
+			}
+		}
+		user = liveConsumersPhrase(described)
 		severity = "critical"
 	}
 	// The hostnames come from the certificate, which the caller reads with the
@@ -518,7 +547,7 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 		reason, fingerprint = TLSCertificateExpiredReason, "tls-certificate-expired"
 		message = fmt.Sprintf("%s expired %s ago (%s), and %s.",
 			subject, timeutil.FormatAgeShort(now.Sub(*cert.NotAfter)), cert.NotAfter.UTC().Format(time.RFC3339), user)
-		cause = "The certificate's validity period has ended. The ingress controller either serves it, and clients that verify certificates reject the connection, or falls back to its default certificate, which those clients also reject unless it happens to cover this host."
+		cause = "The certificate's validity period has ended. The controller terminating TLS either serves it, and clients that verify certificates reject the connection, or falls back to a default certificate, which those clients also reject unless it happens to cover this host."
 	case cert.NotBefore != nil && cert.NotBefore.After(now.Add(tlsNotYetValidTolerance)):
 		reason, fingerprint = TLSCertificateNotYetValidReason, "tls-certificate-not-yet-valid"
 		message = fmt.Sprintf("%s is not valid until %s (in %s), and %s.",
@@ -537,20 +566,28 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 	// rest on controller pods the caller may not be allowed to see.
 	refs := append([]issuesapi.Ref(nil), consumers.addressedRefs...)
 	var reads []issuesapi.EvidenceRead
+	if addressed && !consumers.sameNamespace {
+		for _, ns := range sortedSetKeys(consumers.gatewayNamespaces) {
+			reads = append(reads, issuesapi.EvidenceRead{Group: gatewayAPIGroup, Resource: "gateways", Namespace: ns, Verb: "list"})
+		}
+	}
 	if !addressed {
 		refs = append(refs, consumers.runningRefs...)
 		cause += " No Ingress using it has a load-balancer address, so this rests on its controller running, not on the controller having picked it up."
-		podNamespaces := make([]string, 0, len(consumers.podNamespaces))
-		for ns := range consumers.podNamespaces {
-			podNamespaces = append(podNamespaces, ns)
-		}
-		sort.Strings(podNamespaces)
-		for _, ns := range podNamespaces {
+		for _, ns := range sortedSetKeys(consumers.podNamespaces) {
 			reads = append(reads, issuesapi.EvidenceRead{Resource: "pods", Namespace: ns, Verb: "list"})
 		}
 	}
 
-	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Kind != refs[j].Kind {
+			return refs[i].Kind > refs[j].Kind // Ingresses before Gateways
+		}
+		if refs[i].Namespace != refs[j].Namespace {
+			return refs[i].Namespace < refs[j].Namespace
+		}
+		return refs[i].Name < refs[j].Name
+	})
 	age := now.Sub(secret.CreationTimestamp.Time)
 	if secret.CreationTimestamp.IsZero() || age < 0 {
 		age = 0
@@ -575,4 +612,28 @@ func liveTLSCertificateProblem(secret *corev1.Secret, consumers *tlsConsumers, n
 		AffectedRefs:  refs,
 		RequiredReads: reads,
 	}, true
+}
+
+func liveConsumersPhrase(refs []issuesapi.Ref) string {
+	var ingress, gateway bool
+	for _, ref := range refs {
+		ingress = ingress || ref.Kind == "Ingress"
+		gateway = gateway || ref.Kind == "Gateway"
+	}
+	switch {
+	case ingress && gateway:
+		return "live Ingresses and Gateway listeners reference it for TLS"
+	case gateway:
+		return "a programmed Gateway listener with attached routes references it for TLS"
+	}
+	return "an Ingress with a load-balancer address references it for TLS"
+}
+
+func sortedSetKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
