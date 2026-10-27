@@ -305,3 +305,21 @@ func TestDetectLiveIngressTLSCertificatesUnresolvedClass(t *testing.T) {
 		t.Fatalf("with an ALB class installed, detections = %s, want none", got)
 	}
 }
+
+func TestTLSHostCovers(t *testing.T) {
+	for _, tc := range []struct {
+		tls, rule string
+		want      bool
+	}{
+		{"shop.example.test", "SHOP.example.test", true},
+		{"*.example.test", "api.example.test", true},
+		{"*.example.test", "*.example.test", true},
+		{"*.example.test", "a.b.example.test", false},
+		{"*.example.test", "example.test", false},
+		{"old.example.test", "shop.example.test", false},
+	} {
+		if got := tlsHostCovers(tc.tls, tc.rule); got != tc.want {
+			t.Errorf("tlsHostCovers(%q, %q) = %v, want %v", tc.tls, tc.rule, got, tc.want)
+		}
+	}
+}

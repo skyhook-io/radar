@@ -206,12 +206,27 @@ func tlsEntryServed(ing *networkingv1.Ingress, tls networkingv1.IngressTLS) bool
 	}
 	for _, host := range tls.Hosts {
 		for _, rule := range ing.Spec.Rules {
-			if strings.EqualFold(strings.TrimSpace(host), strings.TrimSpace(rule.Host)) {
+			if tlsHostCovers(host, rule.Host) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// tlsHostCovers matches a TLS host against a rule host, a wildcard covering
+// exactly one leading label.
+func tlsHostCovers(tlsHost, ruleHost string) bool {
+	tlsHost, ruleHost = strings.ToLower(strings.TrimSpace(tlsHost)), strings.ToLower(strings.TrimSpace(ruleHost))
+	if tlsHost == ruleHost {
+		return true
+	}
+	suffix, ok := strings.CutPrefix(tlsHost, "*.")
+	if !ok {
+		return false
+	}
+	label, rest, found := strings.Cut(ruleHost, ".")
+	return found && label != "" && rest == suffix
 }
 
 // ingressTLSServedElsewhere reports an Ingress whose own TLS Secret is not the
