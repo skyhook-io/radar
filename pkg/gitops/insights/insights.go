@@ -2241,10 +2241,10 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 		if typ == "SharedResourceWarning" {
 			hazard = syncHazard
 		}
-		actionPrimary, actionSecondaryTitle := "", ""
-		var actionSecondary []string
+		guidance := diagnose.ArgoConditionGuidance(typ, gitops.ArgoCLIName(root), []string{msg})
+		actionPrimary, actionSecondaryTitle, actionSecondary := guidance.ActionPrimary, guidance.ActionSecondaryTitle, guidance.ActionSecondary
 		var remediation *Remediation
-		action := diagnose.ArgoConditionAction(typ, gitops.ArgoCLIName(root), []string{msg})
+		action := guidance.Action
 		if typ == argoSyncErrorConditionType {
 			parsed := diagnose.ParseArgoOperationError(msg)
 			if parsed.Reason != "" {

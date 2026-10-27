@@ -231,6 +231,7 @@ export interface Issue {
    *  Server-emitted (omitempty); empty for issues without a parser. */
   cause?: string;
   action?: string;
+  hazard?: string;
   /** Optional presentation split; action always retains the complete guidance. */
   action_primary?: string;
   action_secondary_title?: string;

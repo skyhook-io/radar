@@ -278,6 +278,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			}
 			if hazard != "" {
 				d.Action += " " + hazard
+				d.Hazard = hazard
 			}
 			out = append(out, d)
 		}
@@ -294,9 +295,13 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			d.Fingerprint = "argo-condition:" + ct
 			if ct == "SyncError" {
 				applyArgoOperationDiagnosis(&d, app, cmsg)
+				d.Hazard = argoSyncHazardAction(app)
+				if d.Hazard != "" && d.Reason == diagnose.ReasonAutoSyncBlockedEmpty && !strings.Contains(d.Action, d.Hazard) {
+					d.Action += " " + d.Hazard
+				}
 				// A failed sync's advice is to retry, and its one-click fix syncs.
-				if hazard := argoSyncHazardAction(app); hazard != "" && d.Reason != diagnose.ReasonAutoSyncBlockedEmpty {
-					d.Action = hazard
+				if d.Hazard != "" && d.Reason != diagnose.ReasonAutoSyncBlockedEmpty {
+					d.Action = d.Hazard
 					d.RemediationKind, d.RemediationTarget = "", ""
 				}
 			}
@@ -333,6 +338,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			dd.Action = "Sync the Application to recreate its managed resources."
 			if hazard := argoSyncHazardAction(app); hazard != "" {
 				dd.Action = hazard
+				dd.Hazard = hazard
 			}
 			out = append(out, dd)
 			continue
@@ -372,6 +378,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			dd.Action = "Review the drift in Changes, then Sync the application (or enable auto-sync) if the drift is unintended."
 			if hazard := argoSyncHazardAction(app); hazard != "" {
 				dd.Action = hazard
+				dd.Hazard = hazard
 			}
 			out = append(out, dd)
 		}
@@ -467,7 +474,13 @@ func argoResourceWarningProblems(app *unstructured.Unstructured, now time.Time) 
 		d.RawMessage = strings.Join(rawMessages, "; ")
 		// Counts and resource messages change each comparison; the warning episode does not.
 		d.Fingerprint = typ
-		d.Action = diagnose.ArgoConditionAction(typ, gitops.ArgoCLIName(app), messages)
+		guidance := diagnose.ArgoConditionGuidance(typ, gitops.ArgoCLIName(app), messages)
+		d.Action = guidance.Action
+		d.ActionPrimary, d.ActionSecondaryTitle, d.ActionSecondary = guidance.ActionPrimary, guidance.ActionSecondaryTitle, guidance.ActionSecondary
+		if typ == "SharedResourceWarning" {
+			d.Hazard = argoSyncHazardAction(app)
+			d.Action += " " + d.Hazard
+		}
 		if !w.onset.IsZero() {
 			setDetectionOnset(&d, now, w.onset)
 		}

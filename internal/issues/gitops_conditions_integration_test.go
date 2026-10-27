@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	"github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,7 +82,7 @@ func TestGitOpsConditionsFixtureThroughIssues(t *testing.T) {
 			}
 			switch row.Reason {
 			case "AutoSyncBlockedEmpty":
-				if row.ActionPrimary == "" || row.ActionSecondaryTitle != "If removing all managed resources is intended" || len(row.ActionSecondary) != 2 || row.Action != row.ActionPrimary+" "+strings.Join(row.ActionSecondary, " ") {
+				if row.Hazard == "" || row.ActionPrimary == "" || row.ActionSecondaryTitle != "If removing all managed resources is intended" || len(row.ActionSecondary) != 2 || row.Action != row.ActionPrimary+" "+strings.Join(row.ActionSecondary, " ") {
 					t.Fatalf("lost split or complete guidance: %+v", row)
 				}
 				wire, err := json.Marshal(response)
@@ -92,6 +93,16 @@ func TestGitOpsConditionsFixtureThroughIssues(t *testing.T) {
 					t.Fatalf("lost safe blocked-auto-sync diagnosis: %+v", row)
 				}
 			case "SharedResourceWarning", "OrphanedResourceWarning":
+				if row.Reason == "SharedResourceWarning" {
+					guidance := diagnose.ArgoConditionGuidance(row.Reason, "", []string{"Deployment/web is part of applications argocd/billing and payments"})
+					if row.ActionPrimary == "" || row.ActionSecondaryTitle != guidance.ActionSecondaryTitle || len(row.ActionSecondary) != len(guidance.ActionSecondary) || row.Action != row.ActionPrimary+" "+row.ActionSecondaryTitle+": "+strings.Join(row.ActionSecondary, " ")+" "+row.Hazard || row.Hazard == "" {
+						t.Fatalf("cluster Issues lost move steps or hazard: %+v", row)
+					}
+					wire, err := json.Marshal(row)
+					if err != nil || !strings.Contains(string(wire), `"hazard":`) {
+						t.Fatalf("wire lost hazard: %s, %v", wire, err)
+					}
+				}
 				if row.Category != issuesapi.CategoryGitOpsResourceWarning || row.Severity != SeverityWarning || row.Action == "" {
 					t.Fatalf("lost warning: %+v", row)
 				}
@@ -106,6 +117,9 @@ func TestGitOpsConditionsFixtureThroughIssues(t *testing.T) {
 		t.Fatalf("detail must retain one condition row each, got %+v", detail.Issues)
 	}
 	for _, issue := range detail.Issues {
+		if issue.Reason == "SharedResourceWarning" && (issue.ActionPrimary == "" || issue.ActionSecondaryTitle != "To move it to this Application" || len(issue.ActionSecondary) != 12 || issue.Action != issue.ActionPrimary+" "+issue.ActionSecondaryTitle+": "+strings.Join(issue.ActionSecondary, " ")) {
+			t.Fatalf("detail insights lost ordered move guidance: %+v", issue)
+		}
 		if issue.Reason == "RepeatedResourceWarning" && issue.Severity != insights.SeverityInfo {
 			t.Fatalf("detail must retain repeated as info: %+v", issue)
 		}

@@ -283,18 +283,24 @@ func applicationList(names []string) string {
 // condition, naming what the condition messages identify. appName is the
 // Application as the argocd CLI addresses it; empty omits the command.
 func ArgoConditionAction(condType, appName string, messages []string) string {
+	return ArgoConditionGuidance(condType, appName, messages).Action
+}
+
+// ArgoConditionGuidance preserves the complete action and separates the shared-resource move steps.
+func ArgoConditionGuidance(condType, appName string, messages []string) ParsedFailure {
 	switch condType {
 	case "SharedResourceWarning":
+		owner := "the Application that tracks it now"
 		if owners := ArgoSharedResourceOwners(messages); len(owners) > 0 {
-			owner := applicationList(owners)
-			return "Also tracked by " + owner + ". " + sharedResourceAdvice(owner)
+			owner = applicationList(owners)
 		}
+		return sharedResourceAdvice(owner)
 	case "OrphanedResourceWarning":
 		if appName != "" {
-			return orphanedResourceAction(fmt.Sprintf("run \"argocd app resources %s --orphaned\" or ", appName))
+			return ParsedFailure{Action: orphanedResourceAction(fmt.Sprintf("run \"argocd app resources %s --orphaned\" or ", appName))}
 		}
 	}
-	return ActionForCondition(condType)
+	return ParsedFailure{Action: ActionForCondition(condType)}
 }
 
 // ArgoSyncHazardAction replaces "review the diff, then sync" advice when a sync
@@ -322,8 +328,27 @@ func ArgoSyncHazardAction(prunesEverything, comparisonFailed bool, sharedResourc
 // Pause the current tracker so it cannot take tracking back before its source
 // drops the resource and then prune it. Stopping an operation cannot undo a
 // deletion already submitted, and a template edit may not update a live child.
-func sharedResourceAdvice(owner string) string {
-	return "To leave it with " + owner + ", remove it from this Application's source. To move it here, first note the resource's live UID. Note whether " + owner + " has auto-sync on, and turn it off if so. Do not sync it manually during the move. For an ApplicationSet or parent-managed Application, disable auto-sync in the template or Git so it stays off. For a generated child, confirm its live auto-sync is off. Its ApplicationSet sync policy may prevent a template change from reaching it. Finish or terminate any running or retrying operation on " + owner + ". Turning off auto-sync does not stop it. Before syncing this Application, confirm no operation is running or retrying on " + owner + ". Check that " + owner + " and the resource are not being deleted. If deletion has started, stop the move and recover. Then sync this Application. Confirm the live resource's tracking metadata names this Application. Confirm its UID is unchanged and it is not being deleted. If it is deleting, was deleted, or was replaced, stop the move and recover. Remove it from the source of " + owner + ". Then restore " + owner + "'s previous auto-sync setting."
+func sharedResourceAdvice(owner string) ParsedFailure {
+	out := ParsedFailure{
+		ActionPrimary:        "To leave it with " + owner + ", remove it from this Application's source.",
+		ActionSecondaryTitle: "To move it to this Application",
+		ActionSecondary: []string{
+			"Check this Application's sync options for FailOnSharedResource=true. If set, the sync will refuse the takeover. Stop unless taking it over is intended and allowed.",
+			"Note the resource's live UID.",
+			"Note whether " + owner + " has auto-sync on, and turn it off if so. Do not sync it manually during the move.",
+			"For an ApplicationSet or parent-managed Application, disable auto-sync in the template or Git so it stays off.",
+			"For a generated child, confirm its live auto-sync is off. Its ApplicationSet sync policy may prevent a template change from reaching it.",
+			"Finish or terminate any running or retrying operation on " + owner + ", and confirm none is left. Turning off auto-sync does not stop it.",
+			"Check that " + owner + " and the resource are not being deleted. If deletion has started, stop the move and recover.",
+			"Sync this Application.",
+			"Confirm the live resource's tracking metadata names this Application.",
+			"Confirm its UID is unchanged and it is not being deleted. If it is deleting, was deleted, or was replaced, stop the move and recover.",
+			"Remove it from the source of " + owner + ".",
+			"Restore " + owner + "'s previous auto-sync setting.",
+		},
+	}
+	out.Action = out.ActionPrimary + " " + out.ActionSecondaryTitle + ": " + strings.Join(out.ActionSecondary, " ")
+	return out
 }
 
 func orphanedResourceAction(cliHint string) string {
@@ -374,7 +399,7 @@ func ActionForCondition(condType string) string {
 	case "ExcludedResourceWarning":
 		return "A managed resource is excluded by the Argo controller's resource.exclusions. Adjust controller config or remove the resource."
 	case "SharedResourceWarning":
-		return sharedResourceAdvice("the Application that tracks it now")
+		return sharedResourceAdvice("the Application that tracks it now").Action
 	default:
 		return ""
 	}

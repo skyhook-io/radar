@@ -2046,7 +2046,11 @@ func TestArgoApplicationConditionsNameWhatTheWarningCannot(t *testing.T) {
 	for _, issue := range argoApplicationConditions(root, argoSyncHazardAction(root)) {
 		switch issue.Reason {
 		case "SharedResourceWarning":
-			if !strings.HasPrefix(issue.Action, "Also tracked by Application payments. ") || strings.Contains(issue.Action, "These resources") {
+			guidance := diagnose.ArgoConditionGuidance(issue.Reason, "argocd/billing", []string{"Deployment/web is part of applications argocd/billing and payments"})
+			if issue.Action != guidance.Action || issue.ActionPrimary != guidance.ActionPrimary || issue.ActionSecondaryTitle != guidance.ActionSecondaryTitle || !reflect.DeepEqual(issue.ActionSecondary, guidance.ActionSecondary) {
+				t.Fatalf("shared row lost split or full guidance: %+v", issue)
+			}
+			if !strings.HasPrefix(issue.Action, "To leave it with Application payments, ") || strings.Contains(issue.Action, "These resources") {
 				t.Errorf("shared row must name the other owner in the singular: %q", issue.Action)
 			}
 		case "OrphanedResourceWarning":

@@ -270,6 +270,7 @@ func foldGroup(members []Issue) Issue {
 	if dg, ok := agreedDiagnosis(members); ok {
 		g.Cause = dg.Cause
 		g.Action = dg.Action
+		g.Hazard = dg.Hazard
 		g.ConditionalCleanup = dg.ConditionalCleanup
 		g.ActionPrimary = dg.ActionPrimary
 		g.ActionSecondaryTitle = dg.ActionSecondaryTitle
@@ -400,7 +401,7 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 			picked = m
 			continue
 		}
-		if m.Cause != picked.Cause || m.Action != picked.Action || !reflect.DeepEqual(m.ConditionalCleanup, picked.ConditionalCleanup) ||
+		if m.Hazard != picked.Hazard || m.Cause != picked.Cause || m.Action != picked.Action || !reflect.DeepEqual(m.ConditionalCleanup, picked.ConditionalCleanup) ||
 			m.ActionPrimary != picked.ActionPrimary || m.ActionSecondaryTitle != picked.ActionSecondaryTitle || !slices.Equal(m.ActionSecondary, picked.ActionSecondary) ||
 			m.RemediationKind != picked.RemediationKind || m.RemediationTarget != picked.RemediationTarget ||
 			m.OperationRetryCount != picked.OperationRetryCount || m.Stuck != picked.Stuck {
@@ -411,7 +412,7 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 }
 
 func hasDiagnosis(i Issue) bool {
-	return i.Cause != "" || i.Action != "" || i.ConditionalCleanup != nil || i.RemediationKind != "" || i.RemediationTarget != "" ||
+	return i.Hazard != "" || i.Cause != "" || i.Action != "" || i.ConditionalCleanup != nil || i.RemediationKind != "" || i.RemediationTarget != "" ||
 		i.OperationRetryCount != 0 || i.Stuck
 }
 

@@ -114,3 +114,77 @@ describe('empty-render guidance', () => {
     expect(element.querySelectorAll('button[aria-controls]')).toHaveLength(0)
   })
 })
+
+const moveSteps = [
+  "Check this Application's sync options for FailOnSharedResource=true. If set, the sync will refuse the takeover. Stop unless taking it over is intended and allowed.",
+  "Note the resource's live UID.",
+  'Sync this Application.',
+]
+const movePrimary = "To leave it with Application payments, remove it from this Application's source."
+const moveTitle = 'To move it to this Application'
+const move: GitOpsIssue = {
+  severity: 'warning', scope: 'condition', reason: 'SharedResourceWarning', message: 'Also tracked by payments',
+  action: `${movePrimary} ${moveTitle}: ${moveSteps.join(' ')}`, actionPrimary: movePrimary,
+  actionSecondaryTitle: moveTitle, actionSecondary: moveSteps,
+}
+
+describe('shared-resource move guidance', () => {
+  it.each(['detail', 'cluster'] as const)('renders numbered steps on the %s surface', async (surface) => {
+    const row: Issue = { ...issue, reason: move.reason, message: move.message, action: move.action,
+      action_primary: movePrimary, action_secondary_title: moveTitle, action_secondary: moveSteps }
+    await act(async () => root.render(surface === 'detail'
+      ? <GitOpsIssuesBand issues={[move]} />
+      : <IssueRow issue={row} open={true} onToggle={() => {}} />))
+    const button = [...element.querySelectorAll('button')].find((b) => b.textContent?.includes(moveTitle))!
+    expect(button).toBeDefined()
+    await act(async () => button.click())
+    const panel = document.getElementById(button.getAttribute('aria-controls')!)!
+    expect([...panel.querySelectorAll('ol > li')].map((li) => li.textContent)).toEqual(moveSteps)
+    expect(panel.querySelector('[inert]')).toBeNull()
+    expect(element.textContent).toContain(movePrimary)
+  })
+})
+
+describe('cluster sync hazards', () => {
+  const hazard = 'Resolve shared ownership before syncing: another Application can take tracking back.'
+  it.each([undefined, { nextStep: 'Host next step', cause: 'Host cause' }])('keeps a warning ahead of any next-step source (%j)', async (diagnosisSource) => {
+    await act(async () => root.render(<IssueRow
+      issue={{ ...issue, action_primary: undefined, action_secondary: undefined, action_secondary_title: undefined, hazard }}
+      open={true} onToggle={() => {}} diagnosisSource={diagnosisSource} />))
+    const warning = [...element.querySelectorAll('p')].find((p) => p.textContent === hazard)!
+    expect(warning).toBeDefined()
+    expect(warning.closest('.text-warning-text')).not.toBeNull()
+    expect(warning.closest('[inert]')).toBeNull()
+    expect(element.textContent!.indexOf(hazard)).toBeLessThan(element.textContent!.indexOf(diagnosisSource?.nextStep ?? primary))
+    if (diagnosisSource) expect(element.textContent).toContain(diagnosisSource.nextStep)
+  })
+
+  it('shows a hazard on a collapsed row with no split guidance or action', async () => {
+    await act(async () => root.render(<IssueRow
+      issue={{ ...issue, action: undefined, action_primary: undefined, action_secondary: undefined, action_secondary_title: undefined, hazard }}
+      open={false} onToggle={() => {}} diagnosisSource={{ nextStep: 'Host next step' }} />))
+    const warning = [...element.querySelectorAll('p')].find((p) => p.textContent === hazard)!
+    expect(warning).toBeDefined()
+    expect(warning.closest('[inert]')).toBeNull()
+    expect(warning.closest('.text-warning-text')).not.toBeNull()
+  })
+})
+
+describe('hazard text retained only once in presentation', () => {
+  it.each([false, true])('keeps empty-render guidance and one warning (open=%s)', async (open) => {
+    await act(async () => root.render(<IssueRow issue={{ ...issue, hazard: primary }} open={open} onToggle={() => {}} />))
+    expect([...element.querySelectorAll('p')].filter((p) => p.textContent === primary)).toHaveLength(1)
+    await checkDisclosure()
+  })
+
+  it.each(['hazard only', 'appended hazard'])('keeps one warning for %s actions', async (mode) => {
+    const hazard = 'Sync can take over shared tracking.'
+    const nextStep = "Open the application's sync operation details."
+    const action = mode === 'hazard only' ? hazard : `${nextStep} ${hazard}`
+    await act(async () => root.render(<IssueRow issue={{ ...issue, hazard, action,
+      action_primary: undefined, action_secondary: undefined, action_secondary_title: undefined }} open={true} onToggle={() => {}} />))
+    expect(element.textContent!.split(hazard)).toHaveLength(2)
+    if (mode === 'hazard only') expect(element.textContent).not.toContain('Next step')
+    else expect(element.textContent).toContain(nextStep)
+  })
+})

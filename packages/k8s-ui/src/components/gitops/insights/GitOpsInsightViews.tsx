@@ -707,7 +707,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
 // band. Wrapped, never truncated: a next step often ends in the caveat that
 // makes it safe (what not to sync), which truncation would cut.
 function IssueNextStep({ issue, className }: { issue: GitOpsIssue; className?: string }) {
-  return <IssueGuidance action={issue.action} primary={issue.actionPrimary} secondaryTitle={issue.actionSecondaryTitle} secondary={issue.actionSecondary} className={clsx('text-[11px] text-theme-text-tertiary', className)} />
+  return <IssueGuidance action={issue.action} primary={issue.actionPrimary} secondaryTitle={issue.actionSecondaryTitle} secondary={issue.actionSecondary} ordered={issue.reason === 'SharedResourceWarning'} className={clsx('text-[11px] text-theme-text-tertiary', className)} />
 }
 
 // firstSentence/remainderAfterFirstSentence split a string at the first

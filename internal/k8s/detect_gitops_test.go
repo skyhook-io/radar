@@ -1153,6 +1153,9 @@ func TestDetectArgoAppProblems_ManualDriftAdviceRespectsSyncHazards(t *testing.T
 			if !ok {
 				t.Fatal("missing OutOfSyncManual")
 			}
+			if want := argoSyncHazardAction(app); d.Hazard != want {
+				t.Errorf("hazard = %q, want %q", d.Hazard, want)
+			}
 			if !strings.Contains(d.Action, tc.want) {
 				t.Errorf("action %q, want %q", d.Action, tc.want)
 			}
@@ -1231,6 +1234,9 @@ func TestDetectArgoAppProblems_SyncHazardDisarmsRetryAdvice(t *testing.T) {
 				if d.RemediationKind != "" {
 					t.Errorf("%s still offers a fix that syncs: %+v", d.Reason, d)
 				}
+				if want := argoSyncHazardAction(app); d.Hazard != want {
+					t.Errorf("hazard = %q, want %q", d.Hazard, want)
+				}
 				if !strings.Contains(d.Action, tc.want) {
 					t.Errorf("%s action %q, want %q", d.Reason, d.Action, tc.want)
 				}
@@ -1239,5 +1245,28 @@ func TestDetectArgoAppProblems_SyncHazardDisarmsRetryAdvice(t *testing.T) {
 				t.Fatal("no failure row to check")
 			}
 		})
+	}
+}
+
+func TestDetectArgoAppProblems_MissingCarriesSyncHazard(t *testing.T) {
+	app := argoApp("billing", "argocd", "Missing", "OutOfSync", "", true, []any{
+		map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"},
+	})
+	d, ok := findDetectionReason(detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now()), "HealthMissing")
+	if !ok || d.Hazard == "" || d.Hazard != d.Action {
+		t.Fatalf("missing-resource sync advice lost its hazard: %+v", d)
+	}
+}
+
+func TestDetectArgoAppProblems_EmptyGuardWithFailedComparisonKeepsHazardInAction(t *testing.T) {
+	app := argoApp("billing", "argocd", "Healthy", "OutOfSync", "", true, []any{
+		map[string]any{"type": "SyncError", "message": "Skipping sync attempt: auto-sync will wipe out all resources"},
+		map[string]any{"type": "ComparisonError", "message": "repository unavailable"},
+	})
+	_ = unstructured.SetNestedField(app.Object, true, "spec", "syncPolicy", "automated", "prune")
+	_ = unstructured.SetNestedSlice(app.Object, argoPrunedResources(), "status", "resources")
+	d, ok := findDetectionReason(detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now()), "AutoSyncBlockedEmpty")
+	if !ok || !strings.Contains(d.Hazard, "latest comparison reported an error") || !strings.Contains(d.Action, d.Hazard) {
+		t.Fatalf("complete action lost the failed-comparison hazard: %+v", d)
 	}
 }

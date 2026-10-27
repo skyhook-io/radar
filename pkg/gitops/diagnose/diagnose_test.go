@@ -386,12 +386,12 @@ func TestSharedResourceWarningAction(t *testing.T) {
 		t.Fatalf("expected number-neutral ownership guidance: %q", got)
 	}
 	one := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{"Deployment/guestbook-ui is part of applications argocd/live-shared-b and live-shared-a"})
-	if !strings.HasPrefix(one, "Also tracked by Application live-shared-a. ") {
+	if !strings.HasPrefix(one, "To leave it with Application live-shared-a, ") {
 		t.Fatalf("expected the other owner named: %q", one)
 	}
 	for _, want := range []string{
 		"To leave it with Application live-shared-a, remove it from this Application's source.",
-		"To move it here, first note the resource's live UID. Note whether Application live-shared-a has auto-sync on, and turn it off if so. Do not sync it manually during the move.",
+		"Note the resource's live UID. Note whether Application live-shared-a has auto-sync on, and turn it off if so. Do not sync it manually during the move.",
 		"For an ApplicationSet or parent-managed Application, disable auto-sync in the template or Git so it stays off.",
 	} {
 		if !strings.Contains(one, want) {
@@ -400,22 +400,22 @@ func TestSharedResourceWarningAction(t *testing.T) {
 	}
 	last := -1
 	for _, step := range []string{
-		"first note the resource's live UID",
+		"Note the resource's live UID",
 		"Note whether Application live-shared-a has auto-sync on, and turn it off if so",
 		"disable auto-sync in the template or Git so it stays off",
 		"For a generated child, confirm its live auto-sync is off",
 		"Its ApplicationSet sync policy may prevent a template change from reaching it",
 		"Finish or terminate any running or retrying operation on Application live-shared-a",
+		"and confirm none is left",
 		"Turning off auto-sync does not stop it",
-		"Before syncing this Application, confirm no operation is running or retrying on Application live-shared-a",
 		"Check that Application live-shared-a and the resource are not being deleted",
 		"If deletion has started, stop the move and recover",
-		"Then sync this Application",
+		"Sync this Application",
 		"Confirm the live resource's tracking metadata names this Application",
 		"Confirm its UID is unchanged and it is not being deleted",
 		"If it is deleting, was deleted, or was replaced, stop the move and recover",
 		"Remove it from the source of Application live-shared-a",
-		"restore Application live-shared-a's previous auto-sync setting",
+		"Restore Application live-shared-a's previous auto-sync setting",
 	} {
 		at := strings.Index(one, step)
 		if at <= last {
@@ -437,7 +437,7 @@ func TestSharedResourceWarningAction(t *testing.T) {
 		"Service/e is part of applications argocd/b and owner-4",
 		"a message in some other shape",
 	})
-	if !strings.HasPrefix(many, "Also tracked by Applications owner-1, owner-2, owner-3 and 1 more. ") {
+	if !strings.HasPrefix(many, "To leave it with Applications owner-1, owner-2, owner-3 and 1 more, ") {
 		t.Fatalf("expected deduplicated, bounded owners: %q", many)
 	}
 	if got := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{"unparseable"}); got != ActionForCondition("SharedResourceWarning") {
@@ -492,6 +492,26 @@ func TestArgoSyncHazardAction(t *testing.T) {
 		}
 		if !strings.Contains(got, tc.contains) || strings.Contains(got, "click Sync") {
 			t.Errorf("%s: got %q, want %q and no click-Sync advice", tc.name, got, tc.contains)
+		}
+	}
+}
+
+func TestSharedResourceGuidanceSteps(t *testing.T) {
+	for _, messages := range [][]string{{"Deployment/web is part of applications argocd/billing and payments"}, {"unparseable"}} {
+		got := ArgoConditionGuidance("SharedResourceWarning", "argocd/billing", messages)
+		owner := "Application payments"
+		if messages[0] == "unparseable" {
+			owner = "the Application that tracks it now"
+		}
+		if got.ActionPrimary != "To leave it with "+owner+", remove it from this Application's source." || got.ActionSecondaryTitle != "To move it to this Application" {
+			t.Fatalf("wrong presentation: %+v", got)
+		}
+		if len(got.ActionSecondary) != 12 || got.ActionSecondary[0] != "Check this Application's sync options for FailOnSharedResource=true. If set, the sync will refuse the takeover. Stop unless taking it over is intended and allowed." || got.ActionSecondary[1] != "Note the resource's live UID." {
+			t.Fatalf("guard must precede any move: %+v", got)
+		}
+		want := got.ActionPrimary + " " + got.ActionSecondaryTitle + ": " + strings.Join(got.ActionSecondary, " ")
+		if got.Action != want || ArgoConditionAction("SharedResourceWarning", "argocd/billing", messages) != want {
+			t.Fatalf("API/MCP action lost steps: %+v", got)
 		}
 	}
 }

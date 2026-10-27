@@ -169,6 +169,7 @@ type Detection struct {
 	DiagnosisSource      *corev1.ObjectReference `json:"-"`
 	Cause                string
 	Action               string
+	Hazard               string
 	ActionPrimary        string
 	ActionSecondaryTitle string
 	ActionSecondary      []string
