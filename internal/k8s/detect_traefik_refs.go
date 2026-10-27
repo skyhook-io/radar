@@ -55,6 +55,9 @@ func DetectLiveTraefikMissingRefs(cache *ResourceCache, dynamicCache *DynamicRes
 	if cache == nil || dynamicCache == nil || discovery == nil {
 		return nil
 	}
+	if scope == nil {
+		scope = NewDetectScope()
+	}
 	routeGVR, ok := discovery.GetGVRWithGroup("IngressRoute", traefikGroup)
 	if !ok {
 		return nil
@@ -608,4 +611,35 @@ func dedupeEvidenceReads(in []issuesapi.EvidenceRead) []issuesapi.EvidenceRead {
 		}
 	}
 	return out
+}
+
+// addTraefikIngressRouteTLSReferences adds the certificates IngressRoutes
+// name to Traefik's pool: Traefik loads them into the same store as its
+// Ingress and Gateway certificates, so a valid one can be what clients get
+// for a host an Ingress also serves. When IngressRoutes exist but Radar can't
+// list them all, the pool's competitors are unknown.
+func addTraefikIngressRouteTLSReferences(idx *tlsServingIndex) {
+	dynamicCache := GetDynamicResourceCache()
+	discovery := GetResourceDiscovery()
+	if dynamicCache == nil || discovery == nil {
+		return
+	}
+	gvr, ok := discovery.GetGVRWithGroup("IngressRoute", traefikGroup)
+	if !ok {
+		return
+	}
+	if !dynamicCache.IsClusterWideSynced(gvr) {
+		idx.uncertain[traefikIngressController] = true
+		return
+	}
+	routes, err := dynamicCache.ListWatched(gvr)
+	if err != nil {
+		idx.uncertain[traefikIngressController] = true
+		return
+	}
+	for _, route := range routes {
+		if secretName, _, _ := unstructured.NestedString(route.Object, "spec", "tls", "secretName"); secretName != "" {
+			idx.reference(traefikIngressController, route.GetNamespace(), secretName, "")
+		}
+	}
 }

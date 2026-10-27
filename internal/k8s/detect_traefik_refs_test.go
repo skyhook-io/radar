@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/certs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -664,4 +665,24 @@ func keys(m map[string]Detection) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// IngressRoute certificates join Traefik's pool as competitors for any host,
+// and a pool whose IngressRoutes Radar can't fully list reports nothing.
+func TestTraefikIngressRouteTLSJoinsPool(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, "--providers.kubernetescrd"),
+		ingressRoute("shop", "tls-route", map[string]any{"tls": map[string]any{"secretName": "route-tls"}}, svcRef("web"), nil))
+	idx := &tlsServingIndex{referenced: map[string]map[string]map[string]bool{}, uncertain: map[string]bool{}}
+	addTraefikIngressRouteTLSReferences(idx)
+	if !idx.referenced[traefikIngressController]["shop/route-tls"][""] || idx.uncertain[traefikIngressController] {
+		t.Fatalf("index = %+v, want shop/route-tls referenced for any host", idx)
+	}
+	idx.uncertain[traefikIngressController] = true
+	use := tlsUse{secretNamespace: "shop", secretName: "expired-tls", host: "shop.example.test", controller: traefikIngressController}
+	cert := certs.Input{Domains: []string{"shop.example.test"}}
+	if tlsUseSelectsCertificate(idx, use, cert, time.Now(), func(string, string) (certs.Input, bool, bool) { return certs.Input{}, false, true }) {
+		t.Fatal("an uncertain pool selected a certificate")
+	}
 }

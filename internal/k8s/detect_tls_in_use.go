@@ -64,6 +64,9 @@ type tlsUse struct {
 type tlsServingIndex struct {
 	uses       []tlsUse
 	referenced map[string]map[string]map[string]bool // controller -> namespace/secret -> hosts
+	// uncertain marks pools whose competitors Radar can't fully list, so no
+	// Secret in them is reported.
+	uncertain map[string]bool
 }
 
 func (idx *tlsServingIndex) reference(controller, secretNamespace, secretName, host string) {
@@ -167,9 +170,10 @@ func detectLiveTLSCertificates(cache *ResourceCache, namespace string, scope *De
 // namespaces can't establish.
 func tlsServingIndexFor(cache *ResourceCache, scope *DetectScope) *tlsServingIndex {
 	return scope.get("tlsServingIndex", func() any {
-		idx := &tlsServingIndex{referenced: map[string]map[string]map[string]bool{}}
+		idx := &tlsServingIndex{referenced: map[string]map[string]map[string]bool{}, uncertain: map[string]bool{}}
 		addIngressTLSUses(cache, scope, idx)
 		addGatewayTLSUses(idx)
+		addTraefikIngressRouteTLSReferences(idx)
 		return idx
 	}).(*tlsServingIndex)
 }
@@ -234,6 +238,9 @@ func addIngressTLSUses(cache *ResourceCache, scope *DetectScope, idx *tlsServing
 // holds no certificate contests it too, as the controller may fall back to a
 // default certificate.
 func tlsUseSelectsCertificate(idx *tlsServingIndex, use tlsUse, cert certs.Input, now time.Time, certFor func(ns, name string) (certs.Input, bool, bool)) bool {
+	if idx.uncertain[use.controller] {
+		return false
+	}
 	hosts := []string{use.host}
 	if use.host == "" {
 		hosts = cert.Domains
