@@ -15,6 +15,7 @@ import (
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -37,7 +38,7 @@ func setupWidgets(t *testing.T, f widgetFixture) *k8s.DynamicResourceCache {
 	}
 	t.Cleanup(k8s.ResetTestState)
 	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "w"}}}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", {Group: "serving.knative.dev", Version: "v1", Resource: "services"}: "ServiceList"}, widget)
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", {Group: "serving.knative.dev", Version: "v1", Resource: "services"}: "ServiceList", {Group: "projectcalico.org", Version: "v3", Resource: "networkpolicies"}: "NetworkPolicyList"}, widget)
 	if f.fallbacks != nil {
 		dyn.PrependReactor("list", "widgets", func(a ktesting.Action) (bool, runtime.Object, error) {
 			if a.GetNamespace() == "" {
@@ -90,6 +91,23 @@ func TestGetChangesReportsCollectionOfCustomKind(t *testing.T) {
 	}
 }
 
+// A kind Radar began collecting shortly after it started still gets its own
+// sentence when the window starts after Radar did: nothing else says that
+// the window's first seconds weren't collected.
+func TestGetChangesCollectionStartNearRadarStart(t *testing.T) {
+	setupWidgets(t, widgetFixture{})
+	timeline.SetObservationStartForTest(time.Now().Add(-30 * time.Second))
+
+	response, _ := getChangesForTest(t, context.Background(), getChangesInput{Kind: "Widget", Since: "20s"})
+	if !strings.Contains(response.NarrowHint, "Radar has watched widgets only since") {
+		t.Fatalf("window after Radar's start: narrowHint = %q, want the collection start", response.NarrowHint)
+	}
+	response, _ = getChangesForTest(t, context.Background(), getChangesInput{Kind: "Widget", Since: "1h"})
+	if strings.Contains(response.NarrowHint, "Radar has watched widgets") || response.HistoryCoverage == nil {
+		t.Fatalf("window before Radar's start: narrowHint = %q coverage = %+v, want only the store-wide boundary", response.NarrowHint, response.HistoryCoverage)
+	}
+}
+
 func TestGetChangesCollectionNarrowedToFallbackNamespaces(t *testing.T) {
 	setupWidgets(t, widgetFixture{fallbacks: []string{"alpha", "beta"}})
 	response, _ := getChangesForTest(t, context.Background(), getChangesInput{Kind: "Widget"})
@@ -127,6 +145,9 @@ func TestGetChangesCollectionHints(t *testing.T) {
 		{Group: "two.example", Version: "v1", Kind: "Twin", Name: "twins", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
 		{Group: "", Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
 		{Group: "serving.knative.dev", Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
+		// Discovery here lacks the built-in NetworkPolicy, as partial
+		// discovery can; its history rows still match the kind.
+		{Group: "projectcalico.org", Version: "v3", Kind: "NetworkPolicy", Name: "networkpolicies", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
 	}}
 	for _, tc := range []struct {
 		name  string
@@ -138,6 +159,7 @@ func TestGetChangesCollectionHints(t *testing.T) {
 		// Beside core Service, Knative Service is checked by itself and
 		// named by group; no coverage field, since rows mix both.
 		{"custom kind sharing a core name", getChangesInput{Kind: "Service", Since: "1h"}, "Radar has watched services.serving.knative.dev only since"},
+		{"custom namesake of a built-in missing from discovery", getChangesInput{Kind: "NetworkPolicy", Since: "1h"}, "networkpolicies.projectcalico.org"},
 		// Native Helm history needs no watch, so the name is never unknown.
 		{"helm without flux", getChangesInput{Kind: "HelmRelease"}, ""},
 		// A short name the history query accepts is not an unknown kind.

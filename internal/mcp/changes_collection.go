@@ -64,7 +64,7 @@ func changesKindCollection(ctx context.Context, kind, namespace string, since ti
 	// Beside a built-in kind or Helm history of the same name, the answer
 	// mixes sources: the custom kind is named by group and gets no coverage
 	// field, which would read as describing every row.
-	shared := len(ids) > 1 || helm
+	shared := len(ids) > 1 || helm || builtin
 	label := id.Name
 	if shared {
 		label = id.Name + "." + id.Group
@@ -90,17 +90,17 @@ func changesKindCollection(ctx context.Context, kind, namespace string, since ti
 		}
 		var err error
 		if target, err = resolveReadTargetFrom(ctx, started, requested); err != nil {
-			return out, collectionError(&out, err, shared)
+			return out, collectionError(&out, err, shared, label)
 		}
 		// Change rows need list on the kind itself, not just namespace
 		// access, so coverage checks the same.
 		if readable, gaps, err = narrowByExactAccess(ctx, target.namespaces, id.Group, id.Name, "list"); err != nil {
-			return out, collectionError(&out, withListCoverage(ctx, err, id.Name, target, clusterScoped), shared)
+			return out, collectionError(&out, withListCoverage(ctx, err, id.Name, target, clusterScoped), shared, label)
 		}
 	}
 	r, err := readDynamicList(ctx, started, id.Name, id.Group, target, readable, gaps, clusterScoped, false)
 	if err != nil {
-		return out, collectionError(&out, err, shared)
+		return out, collectionError(&out, err, shared, label)
 	}
 	cov := r.coverage(ctx, clusterScoped)
 	if !shared {
@@ -139,7 +139,7 @@ func customKindIdentities(kind string) []k8score.APIResource {
 // collectionError keeps a failed collection check as an explanation, so the
 // changes still return. A changed connection fails the answer instead: its
 // rows and its coverage may describe different clusters.
-func collectionError(out *changesCollection, err error, shared bool) error {
+func collectionError(out *changesCollection, err error, shared bool, label string) error {
 	var re *readError
 	if !errors.As(err, &re) {
 		return err
@@ -150,7 +150,12 @@ func collectionError(out *changesCollection, err error, shared bool) error {
 	if !shared {
 		out.coverage = re.coverage
 	}
-	out.hints = append(out.hints, readErrorHint(err))
+	hint := readErrorHint(err)
+	if shared {
+		// Rows of the same name from other sources may still be listed.
+		hint = "For " + label + ": " + hint
+	}
+	out.hints = append(out.hints, hint)
 	return nil
 }
 
@@ -197,8 +202,8 @@ func collectionSentence(ctx context.Context, resource string, cov resourceapi.Co
 }
 
 // collectionSinceSentence says when collection of the kind started, if that
-// was inside the window and well after Radar's own start, which
-// historyCoverage already reports. Only a cluster-wide watch has one start
+// was inside the window. A start shortly after Radar's own is left to
+// historyCoverage when the window reaches back before Radar started. Only a cluster-wide watch has one start
 // for every namespace; per-namespace watches start separately, so then the
 // start is not established. A cluster-wide watch still loading is a gap in
 // coverage instead.
@@ -216,13 +221,18 @@ func collectionSinceSentence(resource, name, group string, since time.Duration) 
 		return ""
 	}
 	watched, ok := dynamicCache.WatchedSince(gvr)
-	if !ok || !watched.After(time.Now().Add(-since)) || watched.Sub(timeline.ObservationStart()) < collectionStartSlack {
+	windowStart := time.Now().Add(-since)
+	if !ok || !watched.After(windowStart) {
+		return ""
+	}
+	// When the window also starts before Radar did, historyCoverage already
+	// says history is incomplete up to Radar's start.
+	if started := timeline.ObservationStart(); started.After(windowStart) && watched.Sub(started) < collectionStartSlack {
 		return ""
 	}
 	return fmt.Sprintf("Radar has watched %s only since %s; earlier changes in the window are unknown.", resource, watched.UTC().Format(time.RFC3339))
 }
 
 // collectionStartSlack is how long after Radar starts its startup watches
-// may take to begin. A kind watched from then on has the history the
-// store-wide boundary already states.
+// may take to begin.
 const collectionStartSlack = time.Minute
