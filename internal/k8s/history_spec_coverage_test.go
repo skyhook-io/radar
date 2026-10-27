@@ -1297,7 +1297,9 @@ func TestComputeDiff_FreeFormStringsHidden(t *testing.T) {
 	}
 	// Identifiers and enums stay visible.
 	if !safeStringField("spec.listeners[http].hostname") || !safeStringField("spec.hostnames[0]") ||
-		!safeStringField("spec.template.spec.priorityClassName") || safeStringField("spec.description.text") {
+		!safeStringField("spec.template.spec.priorityClassName") || safeStringField("spec.description.text") ||
+		!safeStringField("spec.tidb.statefulSetUpdateStrategy") || !safeStringField("spec.strategy") ||
+		safeStringField("spec.config.strategy") {
 		t.Fatal("safeStringField classification changed")
 	}
 }

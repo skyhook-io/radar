@@ -1116,12 +1116,13 @@ var safeStringFields = map[string]bool{
 	"effect": true, "key": true, "resource": true, "resources": true, "verbs": true, "operations": true,
 	"apiGroups": true, "apiVersions": true, "scope": true, "schedule": true,
 	"timeZone": true, "image": true, "matchPolicy": true, "sideEffects": true, "failurePolicy": true,
-	"sizeLimit": true,
+	"sizeLimit": true, "strategy": true,
 }
 
 // safeStringSuffixes cover enum and reference fields by naming convention
-// (restartPolicy, serviceAccountName, ingressClassName, pathType...).
-var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode"}
+// (restartPolicy, serviceAccountName, ingressClassName, pathType,
+// statefulSetUpdateStrategy...).
+var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode", "Strategy"}
 
 // freeFormMaps hold arbitrary user keys, so a key that happens to be called
 // "name" or "type" inside them says nothing about its value.

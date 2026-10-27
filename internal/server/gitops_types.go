@@ -2,12 +2,6 @@ package server
 
 import "strings"
 
-// sanitizeForLog replaces CR/LF/tab with U+FFFD so user-controlled values
-// (URL params like kind/namespace/name, and error strings that wrap them)
-// can't forge log lines when shipped to shared aggregators in in-cluster
-// deployments. Other characters pass through so legitimate names log readably.
-// Uses strings.ReplaceAll on the line-terminator runes specifically so static
-// analysis recognizes it as a log-injection barrier.
 // normalizeNamespaceParam converts the "_" placeholder the web client uses for
 // an empty namespace path segment back to "", so RBAC checks and upstream
 // lookups don't treat "_" as a real namespace.
@@ -18,6 +12,12 @@ func normalizeNamespaceParam(ns string) string {
 	return ns
 }
 
+// sanitizeForLog replaces CR/LF/tab with U+FFFD so user-controlled values
+// (URL params like kind/namespace/name, and error strings that wrap them)
+// can't forge log lines when shipped to shared aggregators in in-cluster
+// deployments. Other characters pass through so legitimate names log readably.
+// Uses strings.ReplaceAll on the line-terminator runes specifically so static
+// analysis recognizes it as a log-injection barrier.
 func sanitizeForLog(s string) string {
 	if s == "" {
 		return s

@@ -5843,7 +5843,9 @@ export function ResourcesView({
   const selectedKindName = selectedKind.name.toLowerCase()
   const canBulkRestartSelectedKind = onBulkRestart != null && BULK_RESTART_WORKLOAD_KINDS.has(selectedKindName)
   const canBulkScaleSelectedKind = onBulkScale != null && BULK_SCALE_WORKLOAD_KINDS.has(selectedKindName)
-  const canBulkSelect = onBulkDelete != null || canBulkRestartSelectedKind || canBulkScaleSelectedKind
+  // Phones skip bulk selection and create (see the toolbar): phone triage
+  // is one resource at a time.
+  const canBulkSelect = !isPhone && (onBulkDelete != null || canBulkRestartSelectedKind || canBulkScaleSelectedKind)
   const isBulkMutating = isBulkDeleting || isBulkRestarting || isBulkScaling
 
   const openBulkScaleDialog = useCallback(() => {
@@ -6571,7 +6573,7 @@ export function ResourcesView({
               </div>
             )}
           </div>
-          {onCreateResource && (
+          {onCreateResource && !isPhone && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
                 aria-label={`Create ${selectedKind.kind || 'resource'}`}

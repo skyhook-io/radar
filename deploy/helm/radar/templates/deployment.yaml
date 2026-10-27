@@ -138,6 +138,17 @@ spec:
             {{- with .Values.trustedOrigins }}
             - {{ printf "--trusted-origins=%s" (join "," .) | quote }}
             {{- end }}
+            {{- $allowedHosts := list (printf "%s.%s" (include "radar.fullname" .) .Release.Namespace) }}
+            {{- range .Values.allowedHosts }}{{ $allowedHosts = append $allowedHosts . }}{{ end }}
+            {{- if .Values.ingress.enabled }}
+            {{- range .Values.ingress.hosts }}{{ with .host }}{{ $allowedHosts = append $allowedHosts . }}{{ end }}{{ end }}
+            {{- end }}
+            {{- if .Values.httpRoute.enabled }}
+            {{- range .Values.httpRoute.hostnames }}{{ $allowedHosts = append $allowedHosts . }}{{ end }}
+            {{- end }}
+            {{- with $allowedHosts | uniq }}
+            - {{ printf "--allowed-hosts=%s" (join "," .) | quote }}
+            {{- end }}
             - --timeline-storage={{ .Values.timeline.storage }}
             {{- if eq .Values.timeline.storage "sqlite" }}
             - --timeline-db={{ .Values.timeline.dbPath }}

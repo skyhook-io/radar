@@ -327,7 +327,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
       {/* Pod filter */}
-      <fieldset disabled={sourceUnavailable} className="flex items-center gap-2 disabled:opacity-50">
+      <fieldset disabled={sourceUnavailable} className="flex items-center gap-2 disabled:opacity-50 phone:flex-wrap">
       <div className="relative">
         <button
           onClick={() => setShowPodFilter(v => !v)}

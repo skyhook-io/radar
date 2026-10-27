@@ -140,6 +140,14 @@
       "pattern": "^$|^/?[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*/?$",
       "description": "Optional URL path prefix served by Radar itself, e.g. /radar. Use when ingress forwards the subpath without stripping it. Path segments accept letters, digits, '-', '_', '.' and '~', and no segment may be '.' or '..' — matching the server's --base-path validation, so an invalid value fails at install time instead of crash-looping the pod."
     },
+    "allowedHosts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(\\*|(\\*\\.)?[^\\s/:@*,.][^\\s/:@*,]*)$"
+      },
+      "description": "Hostnames besides localhost, IP addresses and Kubernetes Service names that Radar answers when auth.mode is none, e.g. radar.internal. Ingress and HTTPRoute hostnames are added automatically. Exact names, or *.example.com for names under a domain; \"*\" turns the check off."
+    },
     "trustedOrigins": {
       "type": "array",
       "items": {

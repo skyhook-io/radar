@@ -60,10 +60,35 @@ This flag affects Radar's HTTP server; port-forward address options remain
 
 A non-loopback listener can be reached by non-browser clients; CORS is not an
 authentication boundary. Enable Radar authentication and restrict network
-access whenever binding a non-loopback address. The loopback `Host` protection above does not
-apply to a shared listener, and Origin checks alone do not stop DNS rebinding
-there. Treat an unauthenticated shared listener as accessible to any browser
-that can reach the network and do not expose it outside a fully trusted network.
+access whenever binding a non-loopback address. Treat an unauthenticated shared
+listener as accessible to anything that can reach the network and do not expose
+it outside a fully trusted network.
+
+Without authentication, a shared listener still checks the request `Host`, so a
+web page cannot reach Radar by rebinding its own hostname to Radar's address
+(Origin checks alone do not stop that). It answers:
+
+- `localhost`, `*.localhost` and IP addresses, such as `http://192.168.1.5:9280`
+  or a published Docker port at `http://localhost:9280`;
+- single-label names (`http://radar:9280`) and Kubernetes Service names ending
+  in `.svc` or `.svc.cluster.local`. The two-label `<service>.<namespace>` form
+  can't be told apart from a public domain, so list it (the Helm chart adds its
+  own);
+- the hosts of `--trusted-origins`;
+- hostnames listed in `--allowed-hosts` (env `RADAR_ALLOWED_HOSTS`), e.g.
+  `--allowed-hosts=radar.internal,radar.example.com`. Names have no scheme or
+  port; `*.example.com` covers every name under `example.com` but not
+  `example.com` itself. A custom cluster domain (`radar.radar.svc.example`)
+  must be listed.
+
+Any other hostname gets `403` naming the host to add. `--allowed-hosts='*'` turns
+the check off and logs a warning. The list does not apply to a loopback-only
+listener, which keeps the stricter rule above, or with authentication enabled.
+
+The check sees the `Host` Radar receives. A proxy without authentication in
+front of Radar must pass the browser's original `Host` through, or itself accept
+only the hostnames you serve Radar at: a catch-all proxy that rewrites every
+request to `Host: radar` or an IP address hides a rebound hostname from Radar.
 The host local terminal is unavailable on a shared listener even if a client
 sends a loopback `Host` value.
 
