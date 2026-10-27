@@ -52,6 +52,7 @@ customer-managed read permissions for caller-authorized tools when needed. This
 baseline exception is not a full-object UI/REST confidentiality guarantee; runtime
 response authorization remains separate. It does not revoke
 permissions already granted by other roles.
+
 ## Flagger
 
 Radar provides native details and concise REST/MCP summaries for `flagger.app`
@@ -90,7 +91,7 @@ No new workflow actions, topology edge types, traffic queries or MCP tools are a
 
 | Resource | Group | Topology | Detail View | AI Summary |
 |---|---|---|---|---|
-| Canary | flagger.app | Existing observed ownership to primary resources; no new target-reference edge | Recorded rollout, analysis and explicit refs | Recorded outcome, suspension and target |
+| Canary | flagger.app | No dedicated nodes or edges; primary navigation is in Related Resources | Recorded rollout, analysis and explicit refs | Recorded outcome, suspension and target |
 | MetricTemplate | flagger.app | No new edges | Provider and query configuration | Provider type and configuration state |
 
 **In-cluster collection is opt-in:** set `rbac.crdGroups.flagger=true` in the Radar
