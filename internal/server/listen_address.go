@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/net/idna"
+
 	"github.com/skyhook-io/radar/internal/cloud"
 )
 
@@ -89,13 +91,17 @@ func ParseAllowedHosts(raw string) ([]string, error) {
 			hosts = append(hosts, entry)
 			continue
 		}
-		host := normalizeHostname(entry)
-		name, wildcard := strings.CutPrefix(host, "*.")
-		if name == "" || strings.ContainsAny(name, "*/:@ ") || (wildcard && !strings.Contains(name, ".")) {
+		name, wildcard := strings.CutPrefix(normalizeHostname(entry), "*.")
+		// Browsers send internationalized names in their ASCII (punycode) form.
+		ascii, err := idna.Lookup.ToASCII(name)
+		if err != nil || ascii == "" || strings.ContainsAny(ascii, "*/:@ ") || (wildcard && !strings.Contains(ascii, ".")) {
 			errs = append(errs, fmt.Errorf("%q: expected a hostname such as radar.example.com or *.example.com, without scheme or port (or %q alone)", entry, AllowAnyHost))
 			continue
 		}
-		hosts = append(hosts, host)
+		if wildcard {
+			ascii = "*." + ascii
+		}
+		hosts = append(hosts, ascii)
 	}
 	return hosts, errors.Join(errs...)
 }

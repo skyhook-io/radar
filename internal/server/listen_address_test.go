@@ -369,11 +369,11 @@ func TestSharedListenerHostProtectionIsMounted(t *testing.T) {
 }
 
 func TestParseAllowedHosts(t *testing.T) {
-	hosts, err := ParseAllowedHosts(" Radar.Example.com. , *, radar.internal,*.Corp.Example,,")
+	hosts, err := ParseAllowedHosts(" Radar.Example.com. , *, radar.internal,*.Corp.Example,bücher.example,*.Bücher.example,,")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(hosts, ",") != "radar.example.com,*,radar.internal,*.corp.example" {
+	if strings.Join(hosts, ",") != "radar.example.com,*,radar.internal,*.corp.example,xn--bcher-kva.example,*.xn--bcher-kva.example" {
 		t.Fatalf("hosts = %q", hosts)
 	}
 	for _, bad := range []string{"https://radar.example.com", "radar.example.com:9280", "*.com", "a.*.example.com", "**.example.com", "user@radar", "[::1]"} {
