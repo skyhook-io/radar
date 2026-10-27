@@ -266,8 +266,8 @@ basePath: ""
 # radar.<ns>.svc.cluster.local). Requests for other hostnames are refused so a
 # web page cannot reach Radar by rebinding its own hostname to Radar's address.
 # ingress.hosts and httpRoute.hostnames are added automatically, as are the hosts
-# of trustedOrigins. List others, e.g. a custom cluster domain. "*" turns the
-# check off.
+# of trustedOrigins. List others, e.g. a custom cluster domain; *.example.com
+# covers names under a domain. "*" turns the check off.
 allowedHosts: []
 
 # Origins, besides the address Radar is opened at, that may use Radar's API,

@@ -262,7 +262,10 @@ rebound attacker page: `localhost`, IP addresses, Kubernetes Service names, and
 the ingress and HTTPRoute hostnames, which the chart adds for you. If you reach
 Radar by another name (a second DNS name, an external load balancer hostname),
 add it to `allowedHosts`; otherwise requests fail with *Radar without
-authentication answers only ...* naming the host. See
+authentication answers only ...* naming the host. A wildcard ingress host such
+as `*.example.com` is added as is and covers the names under it. Keep the
+ingress forwarding the original `Host`: a controller that rewrites it to the
+Service name or an IP bypasses this check. See
 [HTTP Listener](configuration.md#http-listener).
 
 ### Subpath Ingress (No Strip-Prefix)

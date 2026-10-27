@@ -68,13 +68,19 @@ web page cannot reach Radar by rebinding its own hostname to Radar's address
   in `.svc` or `.svc.cluster.local`;
 - the hosts of `--trusted-origins`;
 - hostnames listed in `--allowed-hosts` (env `RADAR_ALLOWED_HOSTS`), e.g.
-  `--allowed-hosts=radar.internal,radar.example.com`. Exact names only, no
-  scheme or port. A custom cluster domain (`radar.radar.svc.example`) must be
-  listed.
+  `--allowed-hosts=radar.internal,radar.example.com`. Names have no scheme or
+  port; `*.example.com` covers every name under `example.com` but not
+  `example.com` itself. A custom cluster domain (`radar.radar.svc.example`)
+  must be listed.
 
 Any other hostname gets `403` naming the host to add. `--allowed-hosts='*'` turns
 the check off and logs a warning. The list does not apply to a loopback-only
 listener, which keeps the stricter rule above, or with authentication enabled.
+
+The check sees the `Host` Radar receives. A proxy without authentication in
+front of Radar must pass the browser's original `Host` through, or itself accept
+only the hostnames you serve Radar at: a catch-all proxy that rewrites every
+request to `Host: radar` or an IP address hides a rebound hostname from Radar.
 The host local terminal is unavailable on a shared listener even if a client
 sends a loopback `Host` value.
 

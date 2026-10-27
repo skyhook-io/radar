@@ -74,7 +74,9 @@ func requestHostIsLoopback(r *http.Request) bool {
 // an unauthenticated shared listener.
 const AllowAnyHost = "*"
 
-// ParseAllowedHosts reads --allowed-hosts: exact hostnames, or "*" alone.
+// ParseAllowedHosts reads --allowed-hosts: hostnames, *.<domain> for any name
+// under a domain (as an Ingress or HTTPRoute wildcard host reaches Radar), or
+// "*" alone.
 func ParseAllowedHosts(raw string) ([]string, error) {
 	var hosts []string
 	var errs []error
@@ -88,8 +90,9 @@ func ParseAllowedHosts(raw string) ([]string, error) {
 			continue
 		}
 		host := normalizeHostname(entry)
-		if host == "" || strings.ContainsAny(host, "*/:@ ") {
-			errs = append(errs, fmt.Errorf("%q: expected a hostname such as radar.example.com, without scheme, port or wildcards (or %q alone)", entry, AllowAnyHost))
+		name, wildcard := strings.CutPrefix(host, "*.")
+		if name == "" || strings.ContainsAny(name, "*/:@ ") || (wildcard && !strings.Contains(name, ".")) {
+			errs = append(errs, fmt.Errorf("%q: expected a hostname such as radar.example.com or *.example.com, without scheme or port (or %q alone)", entry, AllowAnyHost))
 			continue
 		}
 		hosts = append(hosts, host)
@@ -110,6 +113,8 @@ func requestHostname(r *http.Request) string {
 // public DNS, so IP literals, single-label names and Kubernetes Service names
 // are safe without configuration; any other name must be listed. A custom
 // cluster domain is not inferred from ".svc.": svc.attacker.example would match.
+// A *.<domain> entry matches names under the domain, not the domain itself,
+// as Gateway API hostnames do.
 func (s *Server) sharedListenerHostAllowed(r *http.Request) bool {
 	if s.allowAnyHost {
 		return true
@@ -122,8 +127,16 @@ func (s *Server) sharedListenerHostAllowed(r *http.Request) bool {
 		strings.HasSuffix(host, ".svc"), strings.HasSuffix(host, ".svc.cluster.local"):
 		return true
 	}
-	_, ok := s.allowedHosts[host]
-	return ok
+	if _, ok := s.allowedHosts[host]; ok {
+		return true
+	}
+	for rest := host; strings.Contains(rest, "."); {
+		_, rest, _ = strings.Cut(rest, ".")
+		if _, ok := s.allowedHosts["*."+rest]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Without authentication, the request Host is what separates a direct client

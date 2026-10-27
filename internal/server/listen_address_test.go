@@ -263,6 +263,11 @@ func TestProtectUnauthenticatedHost(t *testing.T) {
 		{name: "authenticated shared listener", listenAddress: AllInterfacesAddress, host: "attacker.example", authConfig: auth.Config{Mode: "proxy"}, wantStatus: http.StatusNoContent},
 		{name: "shared listener tunnel", listenAddress: AllInterfacesAddress, host: "hub.example.com", tunnel: true, wantStatus: http.StatusNoContent},
 		{name: "explicit ipv4 listener rebinding", listenAddress: "192.0.2.10", host: "attacker.example:9280", wantStatus: http.StatusForbidden},
+		{name: "shared listener wildcard subdomain", listenAddress: AllInterfacesAddress, host: "radar.example.com", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusNoContent},
+		{name: "shared listener wildcard nested", listenAddress: AllInterfacesAddress, host: "a.radar.example.com", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusNoContent},
+		{name: "shared listener wildcard excludes apex", listenAddress: AllInterfacesAddress, host: "example.com", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusForbidden},
+		{name: "shared listener wildcard lookalike", listenAddress: AllInterfacesAddress, host: "radar.example.com.attacker.example", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusForbidden},
+		{name: "shared listener wildcard suffix lookalike", listenAddress: AllInterfacesAddress, host: "radarexample.com", allowedHosts: []string{"*.example.com"}, wantStatus: http.StatusForbidden},
 		{name: "loopback ignores allowed hosts", listenAddress: DefaultListenAddress, host: "radar.example.com", allowedHosts: []string{"radar.example.com"}, wantStatus: http.StatusForbidden},
 		{name: "authenticated deployment", listenAddress: DefaultListenAddress, host: "radar.example.com", authConfig: auth.Config{Mode: "oidc"}, wantStatus: http.StatusNoContent},
 		{name: "authenticated tunnel", listenAddress: DefaultListenAddress, host: "hub.example.com", tunnel: true, wantStatus: http.StatusNoContent},
@@ -364,14 +369,14 @@ func TestSharedListenerHostProtectionIsMounted(t *testing.T) {
 }
 
 func TestParseAllowedHosts(t *testing.T) {
-	hosts, err := ParseAllowedHosts(" Radar.Example.com. , *, radar.internal,,")
+	hosts, err := ParseAllowedHosts(" Radar.Example.com. , *, radar.internal,*.Corp.Example,,")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(hosts, ",") != "radar.example.com,*,radar.internal" {
+	if strings.Join(hosts, ",") != "radar.example.com,*,radar.internal,*.corp.example" {
 		t.Fatalf("hosts = %q", hosts)
 	}
-	for _, bad := range []string{"https://radar.example.com", "radar.example.com:9280", "*.example.com", "user@radar", "[::1]"} {
+	for _, bad := range []string{"https://radar.example.com", "radar.example.com:9280", "*.com", "a.*.example.com", "**.example.com", "user@radar", "[::1]"} {
 		if hosts, err := ParseAllowedHosts(bad + ",ok.example"); err == nil || strings.Join(hosts, ",") != "ok.example" {
 			t.Errorf("%q: hosts=%q err=%v, want rejected entry and ok.example kept", bad, hosts, err)
 		}

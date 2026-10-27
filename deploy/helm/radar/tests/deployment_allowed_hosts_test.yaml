@@ -43,6 +43,21 @@ tests:
           content: --allowed-hosts=radar.example.com
           any: true
 
+  - it: keeps wildcard route hosts for the server to match
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: "*.example.com"
+      httpRoute:
+        enabled: true
+        parentRefs: [{name: gw}]
+        hostnames: ["*.gw.example"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=*.example.com,*.gw.example
+
   - it: passes the wildcard through
     set:
       allowedHosts: ["*"]
