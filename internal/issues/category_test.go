@@ -129,6 +129,8 @@ func TestClassify(t *testing.T) {
 		{"ingress alb action invalid", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Invalid ALB action annotation"}, issuesapi.CategoryIngressBackendMissing},
 		{"ingress class missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing IngressClass"}, issuesapi.CategoryIngressClassMissing},
 		{"gateway backend missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway backend Service"}, issuesapi.CategoryGatewayRouteInvalid},
+		{"traefik router service missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingServiceReason}, issuesapi.CategoryIngressBackendMissing},
+		{"traefik router middleware missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingMiddlewareReason}, issuesapi.CategoryIngressBackendMissing},
 		{"gateway reference grant missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway ReferenceGrant"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"ingress tls secret is config", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing TLS Secret"}, issuesapi.CategoryMissingConfigRef},
 		{"webhook backend down", classifyInput{Source: SourceMissingRef, Kind: "ValidatingWebhookConfiguration", APIGroup: "admissionregistration.k8s.io", Reason: k8s.MissingWebhookBackendReason}, issuesapi.CategoryWebhookBackendDown},

@@ -492,7 +492,7 @@ Target links use the API group in `targetRef.apiVersion`. Built-in targets witho
 
 ### Cluster Audit checks
 
-Traefik ships no admission webhook or linter, so a typo'd reference is accepted silently and the route or middleware just doesn't do what you wrote. Radar's Cluster Audit catches the common dangling-reference cases as **Reliability** checks:
+Traefik ships no admission webhook or linter, so a typo'd reference is accepted, and Traefik then does not load any router that needs it: the route serves nothing (a 404 unless another router matches) and the error shows only in Traefik's log and dashboard. When a running Traefik loads the IngressRoute, `issues` reports it as a live failure on the IngressRoute (see [MCP](mcp.md)). Radar's Cluster Audit catches the common dangling-reference cases as **Reliability** checks:
 
 | Check | What it catches |
 |-------|-----------------|

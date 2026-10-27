@@ -56,7 +56,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		// config/resource reference.
 		switch in.Reason {
 		case "Missing backend Service", "Missing backend Service port",
-			"Missing ALB action annotation", "Invalid ALB action annotation":
+			"Missing ALB action annotation", "Invalid ALB action annotation",
+			k8s.TraefikRouterMissingServiceReason, k8s.TraefikRouterMissingMiddlewareReason:
 			return issuesapi.CategoryIngressBackendMissing
 		case "Missing IngressClass":
 			return issuesapi.CategoryIngressClassMissing
