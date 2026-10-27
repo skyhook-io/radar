@@ -91,6 +91,8 @@ web/src → (npm run build) → web/dist → (make embed) → internal/static/di
 
 `make help` lists every target — read the Makefile when uncertain. The day-to-day set: `make build` (frontend + embed + binary), `make restart` (full rebuild + restart) / `make restart-fe` (frontend + embed + restart), `make watch-backend` / `make watch-frontend` (Air :9280 + Vite :9273), `make test`, `make tsc`, `make lint` (`go vet` on both Go modules, the root and `pkg/`). `go run ./cmd/explorer --dev` serves the frontend from `web/dist` without the embed step. Web unit tests: `cd web && npm test` (`vitest run src`); a bare `npx vitest run` also collects the Playwright specs in `web/e2e` and reports them as failed files.
 
+**Fast dev loop above all.** While iterating, run `make test-changed` (only the changed Go packages, tsc, and `vitest related` for changed frontend files) once per batch of fixes, not a full suite per edit. The full run happens once at the end, and CI on the pushed head is that run; run the full suite locally only for a branch CI won't test, such as a stacked PR. Don't run suites alongside other heavy work; a failure in an untouched file under load gets rerun alone before anyone debugs it. Details: `.claude/commands/qa.md`.
+
 ### Visual Testing
 ```bash
 ./scripts/visual-test-start.sh          # Build + launch on random port (9300-9399)
