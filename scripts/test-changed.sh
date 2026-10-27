@@ -16,6 +16,8 @@
 #
 # This is the iteration tier. The completion check is CI on the pushed head
 # (or, for a branch CI doesn't run, `make test` plus both full vitest suites once).
+# Go test results come from Go's test cache when nothing they depend on changed;
+# GO_TEST_FRESH=1 runs them anyway (-count=1), e.g. to recheck a flaky test.
 # GO_TEST_RUN=<regexp> passes -run to go test, e.g. to keep internal/server short.
 # Works with the bash 3.2 macOS ships.
 set -euo pipefail
@@ -51,6 +53,7 @@ done <<< "$changed"
 dedup() { tr ' ' '\n' <<< "$1" | sed '/^$/d' | sort -u | tr '\n' ' '; }
 pkg_pkgs=$(dedup "$pkg_pkgs"); root_pkgs=$(dedup "$root_pkgs")
 run_flag=(); [ -n "${GO_TEST_RUN:-}" ] && run_flag=(-run "$GO_TEST_RUN")
+[ -n "${GO_TEST_FRESH:-}" ] && run_flag+=(-count=1)
 
 # Node 25 exposes a localStorage global that breaks jsdom's.
 if [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 25 ]; then
@@ -64,11 +67,11 @@ fi
   if [ "$root_module" = 1 ]; then echo "== go: go.mod changed, build + vet ./..."; go build ./... && go vet ./...; fi
   if [ -n "$pkg_pkgs" ]; then
     echo "== go (pkg module): $pkg_pkgs"
-    (cd pkg && go vet $pkg_pkgs && go test -count=1 ${run_flag[@]+"${run_flag[@]}"} $pkg_pkgs)
+    (cd pkg && go vet $pkg_pkgs && go test ${run_flag[@]+"${run_flag[@]}"} $pkg_pkgs)
   fi
   if [ -n "$root_pkgs" ]; then
     echo "== go: $root_pkgs"
-    go vet $root_pkgs && go test -count=1 ${run_flag[@]+"${run_flag[@]}"} $root_pkgs
+    go vet $root_pkgs && go test ${run_flag[@]+"${run_flag[@]}"} $root_pkgs
   fi
   if [ -n "$k8sui$web" ] || [ "$fe_config" = 1 ]; then
     echo "== tsc"

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -52,4 +53,10 @@ export default defineConfig({
   },
   // Handle client-side routing - serve index.html for all routes
   appType: 'spa',
+  test: {
+    fsModuleCache: true,
+    // Worktrees symlink node_modules to one checkout, so the default cache
+    // location would be shared by every worktree.
+    fsModuleCachePath: path.resolve(__dirname, '.vitest-cache'),
+  },
 })
