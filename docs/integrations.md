@@ -94,18 +94,19 @@ No new workflow actions, topology edge types, traffic queries or MCP tools are a
 | Canary | flagger.app | No dedicated nodes or edges; primary navigation is in Related Resources | Recorded rollout, analysis and explicit refs | Recorded outcome, suspension and target |
 | MetricTemplate | flagger.app | No new edges | Provider and query configuration | Provider type and configuration state |
 
+**Access limitation:** existing namespace-authorized REST, YAML and MCP paths can
+return full Canary and MetricTemplate objects, including credential-bearing
+webhook metadata and provider headers, to callers with namespace visibility.
+Native summaries omit those fields; this integration does not add a per-kind
+response-authorization or redaction boundary.
+
 **In-cluster collection is opt-in:** set `rbac.crdGroups.flagger=true` in the Radar
 Helm chart to grant its collector `get/list/watch` on Canaries and MetricTemplates.
 Without collection access, in-cluster browsing and failed-rollout Issues for these
 kinds are unavailable. Locally, Radar uses the current Kubernetes identity's access.
-This switch does not grant Cloud callers access: the integration-read baseline
-withholds these full objects because webhook metadata and provider headers may
-contain inline credentials. Supply explicit customer-managed read permissions.
-Default collector/caller access for existing integrations is unchanged. The
-baseline is not a UI/REST confidentiality guarantee: runtime response and Issues
-authorization remain separate. Existing namespace-scoped response paths can
-expose full Canary and MetricTemplate objects, including arbitrary inline
-configuration, in visible namespaces.
+The Cloud integration-read baseline does not add these resources to generated
+caller-role grants. That baseline is not a deny rule for the response paths above.
+Default collector/caller access for existing integrations is unchanged.
 
 ## ConfigMap and Secret reflection (Reflector)
 

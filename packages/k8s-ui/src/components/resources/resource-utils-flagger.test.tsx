@@ -66,6 +66,14 @@ describe('Flagger drawer identity and useful states', () => {
     expect(html).toContain('approve')
     expect(html).toContain('confirm-rollout')
   })
+  it('describes an active confirmation wait only while not suspended', () => {
+    const analysis = { webhooks: [{ name: 'approve', type: 'confirm-rollout' }] }
+    expect(render('flagger.app/v1beta1', 'Canary', { analysis }, { phase: 'Waiting' })).toContain('Flagger is waiting for a confirmation hook')
+    const suspended = render('flagger.app/v1beta1', 'Canary', { suspend: true, analysis }, { phase: 'Waiting' })
+    expect(suspended).not.toContain('Flagger is waiting for a confirmation hook')
+    expect(suspended).toContain('approve')
+    expect(suspended).toContain('Recorded phase')
+  })
   for (const kind of ['Canary', 'MetricTemplate']) it(`keeps foreign ${kind} generic`, () => {
     const html = render('other.example/v1', kind, { custom: 'generic-visible' })
     expect(html).toContain('generic-visible')

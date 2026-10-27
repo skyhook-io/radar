@@ -64,7 +64,7 @@ export function FlaggerCanaryRenderer({ data, onNavigate }: Props) {
     {analysis.webhooks?.length > 0 && <Section title={`Analysis Hooks (${analysis.webhooks.length})`} defaultExpanded={['Waiting', 'WaitingPromotion'].includes(data.status?.phase)}>
       <PropertyList>{(showAllHooks ? analysis.webhooks : analysis.webhooks.slice(0, 5)).map((hook: any, index: number) => <Property key={index} label={hook.name} value={hook.type || 'rollout'} />)}</PropertyList>
       {analysis.webhooks.length > 5 && <button type="button" className="mt-2 text-sm text-accent-text hover:underline" onClick={() => setShowAllHooks(!showAllHooks)}>{showAllHooks ? 'Show fewer hooks' : `Show all ${analysis.webhooks.length} hooks`}</button>}
-      {['Waiting', 'WaitingPromotion'].includes(data.status?.phase) && <p className="mt-2 text-xs text-theme-text-tertiary">Flagger is waiting for a confirmation hook. Inspect the confirm-rollout or confirm-promotion hook and this Canary’s events.</p>}
+      {data.spec?.suspend !== true && ['Waiting', 'WaitingPromotion'].includes(data.status?.phase) && <p className="mt-2 text-xs text-theme-text-tertiary">Flagger is waiting for a confirmation hook. Inspect the confirm-rollout or confirm-promotion hook and this Canary’s events.</p>}
     </Section>}
     <ConditionsSection conditions={data.status?.conditions} getConditionTone={condition => condition.type === 'Promoted' ? data.status?.phase === 'Failed' ? 'fail' : condition.status === 'True' ? 'ok' : 'neutral' : 'unknown'} />
   </>
