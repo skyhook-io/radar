@@ -107,8 +107,7 @@ List/search summaries prefer this controller to a GitOps or Helm manager, includ
 readable controller ancestor, an observed spec-declared managing controller (such as a Certificate for its Secret) takes
 precedence over a GitOps lead. Those residual graph sources use the same classification as Related Resources: exclude
 owner references, controller shortcuts, unreadable objects, GitOps managers and native Helm. An unsettled chain cannot
-establish that a graph source is not an ownership shortcut, so it supplies no residual manager. GatewayClass is excluded from the agent projection: it selects an implementation rather than generating the Gateway. The graph is loaded and
-indexed only when this residual lookup is needed.
+establish that a graph source is not an ownership shortcut, so it supplies no residual manager. GatewayClass is excluded from the agent projection: it selects an implementation rather than generating the Gateway. The host’s existing graph and cached index are loaded only when this residual lookup is needed; standalone MCP shares its indexed graph with detail. A summary names one deterministic inspection lead, even when detail records multiple spec generators.
 
 With no controller relation, `View.Manager` supplies a summary lead for `agree`, `listed` or `shared` with a lead. A
 `claimed` lead needs a matching active claim checked `recorded`, `omitted` or `unreadable`, or a native Helm
@@ -120,6 +119,8 @@ including when no ancestor was readable and a GitOps lead is available. The note
 controller lookup, not the eligibility of the lead shown. A cold graph, an unavailable spec source, or management
 evidence with no eligible navigation lead also adds `unavailable`; absence never establishes that an object is unmanaged. `unavailable` is not a promise that retrying will help: full manager evidence may explain a conflict or a claim without a usable local lead. Even `manager.state=none` means no evidence in this model, not proof that no controller or external writer exists.
 The relationship-cache graph retains unused Secrets targeted by a Certificate, so a newly issued Certificate can name its Secret before any workload consumes it. The normal visual graph still hides unused Secrets. MCP summaries use the same full relationship options as detail.
+
+REST AI lists, search and MCP share a three-second budget for optional enrichment, including authorization. Health and already-prepared issue counts survive expiry; unprepared counts and Trivy scan pointers carry explicit omission reasons. At most eight preparations continue concurrently; uncancellable cache scans retain a slot until they finish. Queue time uses the same budget. A saturated shared process can therefore return rows without issue counts, including search results used by the Omnibar. REST and MCP topology waits are bounded independently, while both reuse the server’s indexed graph.
 
 Lists share one `k8s.AgentOwnership` session and view across rows. Claim checks share a manager's membership state in
 that view; member enumeration still reads current status. The cache source validates each immutable inventory observation once per request (identity, UID, resource version and API version); empty versions are not memoized. Searches still read the current atomic union of member and unreadable index buckets. Identical permission-filtered unreadable-reference slices are shared without freezing later permissions or status changes. The remaining unreadable-manager search cost is proportional to rows × unreadable managers. UI ownership retains namespace-level access; REST AI context

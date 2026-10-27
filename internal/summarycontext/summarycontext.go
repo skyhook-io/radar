@@ -3,8 +3,8 @@
 // hits, and the MCP list_resources / search variants.
 //
 // The REST and MCP wrappers (internal/server, internal/mcp) differ only
-// in their topology source — REST reads from a server-wide broadcaster
-// cache; MCP memoizes per-process builds. Everything else (issue index,
+// in their topology source — REST and hosted MCP reuse the server graph;
+// standalone MCP memoizes its builds. Everything else (issue index,
 // kind canonicalization, managedBy resolution, per-row dispatch by
 // scope) is identical, so it lives here.
 //
@@ -58,13 +58,15 @@ func WithBudget(ctx context.Context, build func(context.Context) Builder) (Build
 				if budgetCtx.Err() != nil {
 					reason = resourcecontext.OmittedBudgetExceeded
 				}
-				builder = func(obj runtime.Object, u *unstructured.Unstructured, _, _, _, _ string) *resourcecontext.ResourceSummaryContext {
+				builder = func(obj runtime.Object, u *unstructured.Unstructured, group, _, _, _ string) *resourcecontext.ResourceSummaryContext {
 					if obj == nil && u != nil {
 						obj = u
 					}
-					return resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{Omitted: []resourcecontext.OmittedField{
-						{Field: "managedBy", Reason: reason}, {Field: "issueCount", Reason: reason},
-					}})
+					omitted := []resourcecontext.OmittedField{{Field: "managedBy", Reason: reason}, {Field: "issueCount", Reason: reason}}
+					if group == aicontext.TrivyGroup {
+						omitted = append(omitted, resourcecontext.OmittedField{Field: "scanned", Reason: reason})
+					}
+					return resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{Omitted: omitted})
 				}
 			}
 		}
@@ -114,9 +116,14 @@ func WithinContext[T any](ctx context.Context, gate *BudgetGate, build func() T)
 	}
 }
 
+type IndexedTopology struct {
+	Topology *topology.Topology
+	Index    *topology.RelationshipsIndex
+}
+
 // BuilderFromIndexes composes canonical ownership next hops and optional issue
 // counts. The graph is obtained only for residual spec-declared relations.
-func BuilderFromIndexes(ctx context.Context, topologySource func() *topology.Topology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
+func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
 	var topo *topology.Topology
 	var relIdx *topology.RelationshipsIndex
 	var resourceProvider topology.ResourceProvider
@@ -126,10 +133,10 @@ func BuilderFromIndexes(ctx context.Context, topologySource func() *topology.Top
 		if !loaded {
 			loaded = true
 			if topologySource != nil {
-				topo = topologySource()
+				snapshot := topologySource()
+				topo, relIdx = snapshot.Topology, snapshot.Index
 			}
 			if topo != nil {
-				relIdx = topology.IndexByResource(topo)
 				resourceProvider = k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
 				dynamicProvider = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 			}

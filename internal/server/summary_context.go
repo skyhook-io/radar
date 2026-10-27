@@ -16,7 +16,6 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/pkg/ownership"
-	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 var summaryTopologyGate = summarycontext.NewBudgetGate(1)
@@ -39,8 +38,11 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
-	return summarycontext.BuilderFromIndexes(r.Context(), func() *topology.Topology {
-		return summarycontext.WithinContext(r.Context(), summaryTopologyGate, s.broadcaster.GetCachedTopology)
+	return summarycontext.BuilderFromIndexes(r.Context(), func() summarycontext.IndexedTopology {
+		return summarycontext.WithinContext(r.Context(), summaryTopologyGate, func() summarycontext.IndexedTopology {
+			graph, index := s.broadcaster.GetCachedTopologyWithIndex()
+			return summarycontext.IndexedTopology{Topology: graph, Index: index}
+		})
 	}, idx, idx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 
@@ -74,8 +76,11 @@ func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces 
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
 	}
-	return summarycontext.BuilderFromIndexes(r.Context(), func() *topology.Topology {
-		return summarycontext.WithinContext(r.Context(), summaryTopologyGate, s.broadcaster.GetCachedTopology)
+	return summarycontext.BuilderFromIndexes(r.Context(), func() summarycontext.IndexedTopology {
+		return summarycontext.WithinContext(r.Context(), summaryTopologyGate, func() summarycontext.IndexedTopology {
+			graph, index := s.broadcaster.GetCachedTopologyWithIndex()
+			return summarycontext.IndexedTopology{Topology: graph, Index: index}
+		})
 	}, namespacedIdx, clusterIdx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 

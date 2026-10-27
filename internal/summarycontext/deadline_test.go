@@ -2,11 +2,12 @@ package summarycontext
 
 import (
 	"context"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -14,9 +15,9 @@ import (
 func TestExpiredBudgetPreservesHealthAndPreparedIssues(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	build := BuilderFromIndexes(ctx, func() *topology.Topology {
+	build := BuilderFromIndexes(ctx, func() IndexedTopology {
 		t.Fatal("expired enrichment loaded the graph")
-		return nil
+		return IndexedTopology{}
 	}, IssueIndex{issueIndexKey("", "Pod", "shop", "web"): 7}, nil, nil, nil)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Status: corev1.PodStatus{Phase: corev1.PodFailed}}
 	got := build(pod, nil, "", "Pod", "shop", "web")
@@ -89,5 +90,25 @@ func TestSlowPreparationDoesNotDisableOtherCallers(t *testing.T) {
 	got := fast(&corev1.Pod{}, nil, "", "Pod", "shop", "web")
 	if got == nil || got.IssueCount != 7 {
 		t.Fatalf("another caller lost readable context: %+v", got)
+	}
+}
+
+func TestTrivyPreparationFailureMarksScanned(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		if expired {
+			cancel()
+		}
+		build, stop := WithBudget(ctx, func(context.Context) Builder { return nil })
+		got := build(&corev1.Pod{}, nil, aicontext.TrivyGroup, "VulnerabilityReport", "shop", "report")
+		stop()
+		cancel()
+		want := resourcecontext.OmittedUnavailable
+		if expired {
+			want = resourcecontext.OmittedBudgetExceeded
+		}
+		if !slices.Contains(got.Omitted, resourcecontext.OmittedField{Field: "scanned", Reason: want}) {
+			t.Fatalf("expired=%v: scanned omission missing: %+v", expired, got.Omitted)
+		}
 	}
 }

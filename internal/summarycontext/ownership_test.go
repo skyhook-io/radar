@@ -113,10 +113,10 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loaded := false
-			graph := func() *topology.Topology {
+			graph := func() IndexedTopology {
 				loaded = true
 				if tc.name == "recorded without graph" || tc.name == "no graph or manager" {
-					return nil
+					return IndexedTopology{}
 				}
 				nodes := []topology.Node{
 					{ID: "deployment/shop/standalone", Kind: topology.KindDeployment, Name: "standalone", Data: map[string]any{"namespace": "shop", "apiVersion": "apps/v1"}},
@@ -127,11 +127,12 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 					{ID: "sealedsecret/shop/sealed", Kind: topology.KindSealedSecret, Name: "sealed", Data: map[string]any{"namespace": "shop", "apiVersion": "bitnami.com/v1alpha1"}},
 					{ID: "application/argocd/web", Kind: topology.KindApplication, Name: "web", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
 				}
-				return &topology.Topology{Nodes: nodes, Edges: []topology.Edge{
+				value := &topology.Topology{Nodes: nodes, Edges: []topology.Edge{
 					{Source: "certificate/shop/tls", Target: "secret/shop/tls", Type: topology.EdgeManages},
 					{Source: "sealedsecret/shop/sealed", Target: "secret/shop/sealed", Type: topology.EdgeManages},
 					{Source: "application/argocd/web", Target: "configmap/shop/unmanaged", Type: topology.EdgeManages},
 				}}
+				return IndexedTopology{Topology: value, Index: topology.IndexByResource(value)}
 			}
 			owners := k8s.NewAgentOwnership(func(*ownership.Catalog) ownership.Access { return tc.access })
 			build := BuilderFromIndexes(context.Background(), graph, nil, nil, nil, owners)

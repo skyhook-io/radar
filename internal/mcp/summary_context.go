@@ -4,8 +4,8 @@
 // The shared core (issue index, kind canonicalization, managedBy
 // resolution, per-row scope dispatch) lives in
 // internal/summarycontext. This file is the MCP-specific wrapper — it
-// sources topology from a short-TTL per-process memoizer (MCP has no
-// shared broadcaster cache) and otherwise just plumbs arguments through.
+// reuses the host’s indexed relationship graph, or the shared detail memo
+// when standalone, and otherwise just plumbs arguments through.
 
 package mcp
 
@@ -39,8 +39,8 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
-	return summarycontext.BuilderFromIndexes(ctx, func() *topology.Topology {
-		return summarycontext.WithinContext(ctx, summaryTopologyGate, func() *topology.Topology { return buildSummaryContextTopology(namespaces) })
+	return summarycontext.BuilderFromIndexes(ctx, func() summarycontext.IndexedTopology {
+		return summarycontext.WithinContext(ctx, summaryTopologyGate, buildSummaryContextTopology)
 	}, idx, idx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
@@ -61,47 +61,18 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
-	return summarycontext.BuilderFromIndexes(ctx, func() *topology.Topology {
-		return summarycontext.WithinContext(ctx, summaryTopologyGate, func() *topology.Topology { return buildSummaryContextTopology(scanNamespaces) })
+	return summarycontext.BuilderFromIndexes(ctx, func() summarycontext.IndexedTopology {
+		return summarycontext.WithinContext(ctx, summaryTopologyGate, buildSummaryContextTopology)
 	}, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
-// summaryCtxTopoMemo caches topology builds for the list_resources and search
-// summary context, and for the resource context get_resource and diagnose
-// attach (mcpTopologyForContext). MCP has no shared broadcaster cache, so without
-// memoization every one of those calls from an agent pays a full topology
-// build (multi-second on multi-thousand-resource clusters). 5s TTL matches
-// the REST broadcaster's cadence, long enough that a burst of agent calls
-// amortizes the build cost. Callers scope each build to the generation of
-// the resource cache it reads, so a context switch never serves the previous
-// cluster's graph.
-//
-// Other MCP topology reads build inline and are not memoized.
+// summaryCtxTopoMemo is the standalone-host fallback shared by detail and
+// summaries. The server supplies its maintained relationship graph instead.
 var summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
 
-// buildSummaryContextTopology returns a topology snapshot suitable for
-// resolving managedBy pointers, reusing a cached snapshot when one is
-// fresh. Returns nil on failure — the caller falls back to a
-// managedBy-less ResourceSummaryContext rather than failing the response.
-func buildSummaryContextTopology(namespaces []string) *topology.Topology {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil
-	}
-	opts := topology.RelationshipBuildOptions()
-	opts.IncludeSecrets = true
-	if len(namespaces) > 0 {
-		opts.Namespaces = namespaces
-	}
-	topo, err := summaryCtxTopoMemo.GetScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
-		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-		return builder.Build(opts)
-	})
-	if err != nil {
-		return nil
-	}
-	return topo
+func buildSummaryContextTopology() summarycontext.IndexedTopology {
+	graph, index, _, _, _ := mcpTopologyForContext()
+	return summarycontext.IndexedTopology{Topology: graph, Index: index}
 }
 
 // summaryRefReader is the caller's access to a reference a summary names, as
