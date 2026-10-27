@@ -1130,10 +1130,11 @@ export function KeyValueRows({ rows }: { rows: [string, ReactNode][] }) {
       {rows.map(([label, value], index) => (
         <div
           key={`${label}-${index}`}
-          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0"
+          // Phones: a value too long for the row moves under its label and breaks inside it.
+          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0 phone:flex-wrap phone:gap-y-0.5"
         >
           <span className="text-sm text-theme-text-secondary">{label}</span>
-          <span className="text-right font-mono text-sm text-theme-text-primary">
+          <span className="text-right font-mono text-sm text-theme-text-primary phone:ml-auto phone:min-w-0 phone:[overflow-wrap:anywhere]">
             {value}
           </span>
         </div>
