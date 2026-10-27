@@ -1609,13 +1609,20 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		requested = []string{input.Namespace}
 	}
 	allowed := filterNamespacesForUser(ctx, requested)
-	// History is read only in the caller's namespaces, so a cluster-scoped
-	// kind's changes don't come back here; its coverage would vouch for an
-	// empty answer it doesn't describe.
-	if collection.clusterScoped != "" && allowed != nil {
+	// A caller limited to some namespaces reads history only there, and
+	// cluster-scoped rows are in none of them. For a named kind and no
+	// namespace, the kind's cluster-scoped groups the caller may list are
+	// read separately, limited to those groups before the store's bound.
+	var clusterGroups []string
+	if input.Kind != "" && input.Namespace == "" && allowed != nil {
+		clusterGroups = readableClusterScopedGroups(ctx, input.Kind)
+	}
+	// Without that read, coverage would vouch for an empty answer it
+	// doesn't describe.
+	if collection.clusterScoped != "" && allowed != nil && len(clusterGroups) == 0 {
 		collection = changesCollection{hints: []string{fmt.Sprintf("Changes to %s are cluster-scoped, and get_changes reads history only in the namespaces you can see, so they are not listed here.", collection.clusterScoped)}}
 	}
-	if allowed != nil && len(allowed) == 0 {
+	if allowed != nil && len(allowed) == 0 && len(clusterGroups) == 0 {
 		if input.Kind != "" && currentReadCache() != started {
 			return nil, nil, errConnectionChanged()
 		}
@@ -1645,9 +1652,29 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		query.Kinds = []string{input.Kind}
 	}
 
-	recentResult, err := meaningfulchanges.Recent(ctx, query)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+	var recentResult meaningfulchanges.RecentResult
+	if allowed == nil || len(allowed) > 0 {
+		var err error
+		if recentResult, err = meaningfulchanges.Recent(ctx, query); err != nil {
+			return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+		}
+	}
+	if len(clusterGroups) > 0 {
+		clusterQuery := query
+		clusterQuery.Namespaces = []string{""}
+		clusterQuery.Groups = clusterGroups
+		clusterResult, err := meaningfulchanges.Recent(ctx, clusterQuery)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+		}
+		recentResult.Changes = append(recentResult.Changes, clusterResult.Changes...)
+		recentResult.OutputCapped = recentResult.OutputCapped || clusterResult.OutputCapped
+		recentResult.FetchSaturated = recentResult.FetchSaturated || clusterResult.FetchSaturated
+		// A namespace created after Radar started clears the namespaced
+		// read's history gap; cluster scope has no such namespace.
+		if clusterResult.History.Incomplete {
+			recentResult.History = clusterResult.History
+		}
 	}
 	changes := recentResult.Changes
 	var sourcesErrored []string

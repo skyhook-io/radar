@@ -251,6 +251,11 @@ type Query struct {
 	// TrackedOnly restricts internally selected sources to their tracked API
 	// groups. User kind/name filters may instead name colliding custom kinds.
 	TrackedOnly bool
+	// Groups, when set, limits every store read to these API groups and to
+	// rows that record their apiVersion, before the store applies its limit,
+	// so rows outside them can't take its places. A read whose own groups
+	// don't overlap Groups is skipped.
+	Groups []string
 
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
@@ -646,14 +651,26 @@ var (
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
 	includeCustom := !q.TrackedOnly && (len(q.Kinds) > 0 || q.Name != "")
+	trackedGroups := commonTrackedAPIGroups(queryKinds)
+	skipTracked := false
+	if len(q.Groups) > 0 {
+		if trackedGroups == nil {
+			trackedGroups = q.Groups
+		} else {
+			trackedGroups = slices.DeleteFunc(slices.Clone(trackedGroups), func(g string) bool { return !slices.Contains(q.Groups, g) })
+			skipTracked = len(trackedGroups) == 0
+		}
+	}
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
 		Kinds:      queryKinds,
 		Names:      compactNames(q.Name),
-		APIGroups:  commonTrackedAPIGroups(queryKinds),
-		Since:      q.start,
-		Sources:    []timeline.EventSource{timeline.SourceInformer},
-		EventTypes: eventTypes,
+		APIGroups:  trackedGroups,
+		// Groups are matched against the recorded apiVersion.
+		RequireAPIVersion: len(q.Groups) > 0,
+		Since:             q.start,
+		Sources:           []timeline.EventSource{timeline.SourceInformer},
+		EventTypes:        eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the
 		// persistent store retains other contexts' events across switches,
 		// and serving those here hands agents phantom changes.
@@ -662,15 +679,19 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		IncludeManaged:   false,
 		IncludeK8sEvents: false,
 	}
-	events, err := store.Query(ctx, opts)
-	if err != nil {
-		return nil, false, err
+	var events []timeline.TimelineEvent
+	saturated := false
+	if !skipTracked {
+		var err error
+		if events, err = store.Query(ctx, opts); err != nil {
+			return nil, false, err
+		}
+		saturated = len(events) > bound
+		if saturated {
+			events = events[:bound]
+		}
+		events = filterTrackedGroupEvents(events)
 	}
-	saturated := len(events) > bound
-	if saturated {
-		events = events[:bound]
-	}
-	events = filterTrackedGroupEvents(events)
 	if !includeCustom {
 		return events, saturated, nil
 	}
@@ -678,7 +699,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 	// Scan custom resources separately so owned built-ins cannot crowd out
 	// the tracked rows before the store applies its limit.
 	scanBound := 4 * bound
-	opts.APIGroups = nil
+	opts.APIGroups = q.Groups
 	opts.IncludeManaged = true
 	opts.Limit = scanBound + 1
 	custom, err := store.Query(ctx, opts)
