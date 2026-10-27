@@ -16,16 +16,25 @@ func NewDetectScope() *DetectScope {
 	return &DetectScope{values: map[string]any{}}
 }
 
+// get returns the value for key, loading it on first use. The lock covers
+// only the map: loaders call get for the lookups they build on, and two runs
+// racing on one key just load it twice.
 func (s *DetectScope) get(key string, load func() any) any {
 	if s == nil {
 		return load()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	v, ok := s.values[key]
-	if !ok {
-		v = load()
-		s.values[key] = v
+	s.mu.Unlock()
+	if ok {
+		return v
 	}
+	v = load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if prev, ok := s.values[key]; ok {
+		return prev
+	}
+	s.values[key] = v
 	return v
 }

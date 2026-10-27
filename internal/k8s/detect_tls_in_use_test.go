@@ -148,6 +148,14 @@ func TestDetectLiveIngressTLSCertificates(t *testing.T) {
 	}
 
 	got := detectLiveIngressTLSCertificates(GetResourceCache(), "", nil, now)
+	// A compose's scope, shared across namespaces, gives the same answer.
+	scope := NewDetectScope()
+	if scoped := detectLiveIngressTLSCertificates(GetResourceCache(), "shop", scope, now); len(scoped) != len(got) {
+		t.Fatalf("scoped detections = %d, want %d", len(scoped), len(got))
+	}
+	if again := detectLiveIngressTLSCertificates(GetResourceCache(), "other", scope, now); len(again) != 0 {
+		t.Fatalf("other namespace through the same scope = %+v", again)
+	}
 	var names []string
 	for _, d := range got {
 		names = append(names, d.Name)
