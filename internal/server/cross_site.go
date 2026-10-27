@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
@@ -22,7 +21,7 @@ import (
 // "same-origin" or "none", no Origin at all (curl, scripts, MCP), an Origin
 // matching the request's Host, and the Vite dev proxy under --dev.
 func (s *Server) browserOriginAllowed(r *http.Request) bool {
-	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
+	if viaTunnel(r) {
 		return true
 	}
 	origin := r.Header.Get("Origin")
@@ -56,7 +55,7 @@ func (s *Server) browserOriginAllowed(r *http.Request) bool {
 func (s *Server) browserReadAllowed(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "cross-site", "same-site":
-		return cloud.IsAuthenticatedTunnelRequest(r.Context()) || s.originTrusted(r.Header.Get("Origin"))
+		return viaTunnel(r) || s.originTrusted(r.Header.Get("Origin"))
 	}
 	return true
 }

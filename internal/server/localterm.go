@@ -14,7 +14,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -91,25 +90,6 @@ func setEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(env, prefix+value)
-}
-
-func (s *Server) localTerminalUnavailable(r *http.Request) (int, string) {
-	if k8s.ForceDisableLocalTerminal {
-		return http.StatusForbidden, "local terminal is disabled"
-	}
-	if s.authConfig.Enabled() {
-		return http.StatusForbidden, "local terminal is unavailable when authentication is enabled"
-	}
-	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
-		return http.StatusForbidden, "local terminal is unavailable over the Radar Hub tunnel"
-	}
-	if k8s.IsInCluster() {
-		return http.StatusBadRequest, "local terminal not available in-cluster mode"
-	}
-	if s.sharedListener() || !requestHostIsLoopback(r) {
-		return http.StatusForbidden, "local terminal is only available over a loopback address"
-	}
-	return 0, ""
 }
 
 // handleLocalTerminal opens a shell only when expectedContext matches the
