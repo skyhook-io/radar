@@ -385,7 +385,29 @@ export function DiagnoseSurface({
   const d = useDiagnose();
   // A hosted agent runs on the host's backend, where a local CLI's sign-in
   // says nothing.
-  const signin = useAgentSignin(d.selectedAgent, d.needsConsent && !d.hosted);
+  const signin = useAgentSignin(
+    d.selectedAgent,
+    d.profile,
+    d.needsConsent && !d.hosted,
+  );
+  // Approving before the check answers would start the run the warning is
+  // there to prevent. Wait for it (bounded by the server's timeout); a
+  // signed-out answer stops here so the warning shows, and approving again
+  // proceeds.
+  const [approveWaiting, setApproveWaiting] = useState(false);
+  const { approveConsent } = d;
+  const { pending: signinPending, settle: settleSignin } = signin;
+  const approveAfterSignin = useCallback(() => {
+    if (!signinPending) {
+      approveConsent();
+      return;
+    }
+    setApproveWaiting(true);
+    void settleSignin().then((status) => {
+      setApproveWaiting(false);
+      if (status?.state !== "signed-out") approveConsent();
+    });
+  }, [approveConsent, signinPending, settleSignin]);
   const signinNotice =
     signin.status?.state === "signed-out" && signin.status.signinCmd ? (
       <AgentSigninNotice
@@ -584,7 +606,8 @@ export function DiagnoseSurface({
           onOpenSettings={openSettings ?? undefined}
           error={d.consentError}
           notice={signinNotice}
-          onApprove={d.approveConsent}
+          approveBusy={approveWaiting}
+          onApprove={approveAfterSignin}
           onCancel={d.cancelConsent}
         />
       </div>
@@ -661,7 +684,8 @@ export function DiagnoseSurface({
         onOpenSettings={openSettings ?? undefined}
         error={d.consentError}
         notice={signinNotice}
-        onApprove={d.approveConsent}
+        approveBusy={approveWaiting}
+        onApprove={approveAfterSignin}
         onCancel={d.cancelConsent}
       />
     </div>

@@ -280,7 +280,8 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 
 // handleAgentSignin asks an installed agent CLI whether it is signed in, so
 // the consent card can say so before the user approves a run. GET
-// ?agent=<name>[&refresh=1]. Gated like consent: only where the engine exists
+// ?agent=<name>[&profile=<execution profile>][&refresh=1]; the profile
+// defaults to the agent's default one. Gated like consent: only where the engine exists
 // (local, no auth, investigation MCP mounted, not operator-managed), and it
 // needs no cluster. The agent name only selects one of the engine's own
 // backends; the command and its arguments are fixed per backend. Answers are
@@ -297,7 +298,15 @@ func (s *Server) handleAgentSignin(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "agent is required")
 		return
 	}
-	status, ok := diagnoser.CheckSignin(r.Context(), name, r.URL.Query().Get("refresh") == "1")
+	profile := ai.ExecutionProfile(strings.TrimSpace(r.URL.Query().Get("profile")))
+	if profile == "" {
+		profile = ai.DefaultProfileFor(name)
+	}
+	if !ai.SupportsProfile(name, profile) {
+		s.writeError(w, http.StatusBadRequest, "unsupported execution profile for "+ai.AgentLabel(name))
+		return
+	}
+	status, ok := diagnoser.CheckSignin(r.Context(), name, profile, r.URL.Query().Get("refresh") == "1")
 	if !ok {
 		s.writeError(w, http.StatusNotFound, ai.AgentLabel(name)+" isn't installed")
 		return

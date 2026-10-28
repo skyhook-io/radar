@@ -236,8 +236,6 @@ func agentSignin(t *testing.T, s *Server, query string) *httptest.ResponseRecord
 func TestAgentSigninFollowsTheInvestigationGate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("CODEX_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "")
 	marker := filepath.Join(home, "ran")
 	bin := filepath.Join(home, "codex")
 	script := "#!/bin/sh\ntouch " + marker + "\necho 'Not logged in' >&2\nexit 1\n"
@@ -273,6 +271,9 @@ func TestAgentSigninFollowsTheInvestigationGate(t *testing.T) {
 	})
 	if rec := agentSignin(t, on, ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("no agent: status=%d", rec.Code)
+	}
+	if rec := agentSignin(t, on, "agent=codex&profile=nope"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown profile: status=%d", rec.Code)
 	}
 	if rec := agentSignin(t, on, "agent=claude"); rec.Code != http.StatusNotFound {
 		t.Fatalf("agent that isn't a backend: status=%d body=%s", rec.Code, rec.Body.String())

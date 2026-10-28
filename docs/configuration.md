@@ -164,9 +164,12 @@ Codex (`codex login status`). If the agent says it isn't signed in, the consent
 card shows the command that signs it in and a **Check again** button; you can
 still continue, since a status command can miss credentials it doesn't know
 about. Radar waits at most 2 seconds for the answer and remembers it for a
-minute; with no clear answer, the card shows nothing. Codex with
-`CODEX_API_KEY` or `OPENAI_API_KEY` set is never reported as signed out, because
-`codex login status` doesn't see those. Cursor and OpenCode aren't checked:
+minute; with no clear answer, the card shows nothing. If you approve before the
+answer arrives, Radar waits for it first. With **Your agent setup**, Codex isn't
+reported as signed out when `CODEX_API_KEY` or `OPENAI_API_KEY` is set or its
+`config.toml` names a `model_provider`, because `codex login status` doesn't
+see those; Radar safeguards use neither, so there only the Codex login counts.
+Cursor and OpenCode aren't checked:
 `cursor-agent status` contacts Cursor's servers, and OpenCode signs in per
 model provider.
 

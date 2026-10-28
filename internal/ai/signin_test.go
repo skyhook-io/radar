@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -162,19 +164,19 @@ func newTestChecker(f *fakeRun) *signinChecker {
 func TestSigninCheckStates(t *testing.T) {
 	agent := signinTestAgent{name: "claude", path: "/bin/claude"}
 	t.Run("signed out carries the sign-in command", func(t *testing.T) {
-		got := newTestChecker(&fakeRun{code: 1, out: claudeSignedOut}).check(context.Background(), agent, false)
+		got := newTestChecker(&fakeRun{code: 1, out: claudeSignedOut}).check(context.Background(), agent, ExecutionProfileSafeguarded, false)
 		if got.State != SigninSignedOut || got.SigninCmd != "claude auth login" || got.Agent != "claude" {
 			t.Fatalf("got %+v", got)
 		}
 	})
 	t.Run("signed in", func(t *testing.T) {
-		got := newTestChecker(&fakeRun{out: claudeSignedIn}).check(context.Background(), agent, false)
+		got := newTestChecker(&fakeRun{out: claudeSignedIn}).check(context.Background(), agent, ExecutionProfileSafeguarded, false)
 		if got.State != SigninSignedIn || got.SigninCmd != "" {
 			t.Fatalf("got %+v", got)
 		}
 	})
 	t.Run("spawn failure is unknown", func(t *testing.T) {
-		got := newTestChecker(&fakeRun{err: errors.New("exec format error")}).check(context.Background(), agent, false)
+		got := newTestChecker(&fakeRun{err: errors.New("exec format error")}).check(context.Background(), agent, ExecutionProfileSafeguarded, false)
 		if got.State != SigninUnknown {
 			t.Fatalf("got %+v", got)
 		}
@@ -184,7 +186,7 @@ func TestSigninCheckStates(t *testing.T) {
 		c := newTestChecker(f)
 		c.timeout = 20 * time.Millisecond
 		start := time.Now()
-		got := c.check(context.Background(), agent, false)
+		got := c.check(context.Background(), agent, ExecutionProfileSafeguarded, false)
 		if got.State != SigninUnknown {
 			t.Fatalf("got %+v", got)
 		}
@@ -195,7 +197,7 @@ func TestSigninCheckStates(t *testing.T) {
 	t.Run("agents without a cheap status command are never run", func(t *testing.T) {
 		for _, name := range []string{"cursor-agent", "opencode"} {
 			f := &fakeRun{out: claudeSignedIn}
-			got := newTestChecker(f).check(context.Background(), signinTestAgent{name: name, path: "/bin/" + name}, false)
+			got := newTestChecker(f).check(context.Background(), signinTestAgent{name: name, path: "/bin/" + name}, ExecutionProfileSafeguarded, false)
 			if got.State != SigninUnknown || f.count() != 0 {
 				t.Fatalf("%s: got %+v after %d runs", name, got, f.count())
 			}
@@ -203,16 +205,50 @@ func TestSigninCheckStates(t *testing.T) {
 	})
 }
 
-func TestSigninCheckCodexEnvCredentialMakesSignedOutUnknown(t *testing.T) {
+func TestSigninCheckCodexOtherCredentialsDependOnProfile(t *testing.T) {
 	agent := signinTestAgent{name: "codex", path: "/bin/codex"}
+	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("CODEX_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
-	if got := newTestChecker(&fakeRun{code: 1, out: codexSignedOut}).check(context.Background(), agent, false); got.State != SigninSignedOut || got.SigninCmd != "codex login" {
-		t.Fatalf("without an env key: got %+v", got)
+	signedOut := func(profile ExecutionProfile) SigninStatus {
+		return newTestChecker(&fakeRun{code: 1, out: codexSignedOut}).check(context.Background(), agent, profile, false)
 	}
+	for _, profile := range []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal} {
+		if got := signedOut(profile); got.State != SigninSignedOut || got.SigninCmd != "codex login" {
+			t.Fatalf("%s, no other credentials: got %+v", profile, got)
+		}
+	}
+
 	t.Setenv("CODEX_API_KEY", "sk-test")
-	if got := newTestChecker(&fakeRun{code: 1, out: codexSignedOut}).check(context.Background(), agent, false); got.State != SigninUnknown {
-		t.Fatalf("with CODEX_API_KEY: got %+v", got)
+	if got := signedOut(ExecutionProfileFullLocal); got.State != SigninUnknown {
+		t.Fatalf("full-local with CODEX_API_KEY: got %+v", got)
+	}
+	// Safeguarded runs drop the key, so the stored login is all that counts.
+	if got := signedOut(ExecutionProfileSafeguarded); got.State != SigninSignedOut {
+		t.Fatalf("safeguarded with CODEX_API_KEY: got %+v", got)
+	}
+	t.Setenv("CODEX_API_KEY", "")
+
+	cfg := "model = \"llama\"\n\n[profiles.local]\nmodel_provider = \"ollama\"\n"
+	if err := os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := signedOut(ExecutionProfileFullLocal); got.State != SigninUnknown {
+		t.Fatalf("full-local with a custom model provider: got %+v", got)
+	}
+	if got := signedOut(ExecutionProfileSafeguarded); got.State != SigninSignedOut {
+		t.Fatalf("safeguarded ignores the user's config: got %+v", got)
+	}
+}
+
+func TestSigninCheckCachesPerProfile(t *testing.T) {
+	agent := signinTestAgent{name: "claude", path: "/bin/claude"}
+	f := &fakeRun{code: 1, out: claudeSignedOut}
+	c := newTestChecker(f)
+	c.check(context.Background(), agent, ExecutionProfileSafeguarded, false)
+	c.check(context.Background(), agent, ExecutionProfileFullLocal, false)
+	if f.count() != 2 {
+		t.Fatalf("one profile's answer served the other: %d runs", f.count())
 	}
 }
 
@@ -223,8 +259,8 @@ func TestSigninCheckCachesAndRefreshes(t *testing.T) {
 	now := time.Unix(1000, 0)
 	c.now = func() time.Time { return now }
 
-	c.check(context.Background(), agent, false)
-	c.check(context.Background(), agent, false)
+	c.check(context.Background(), agent, ExecutionProfileSafeguarded, false)
+	c.check(context.Background(), agent, ExecutionProfileSafeguarded, false)
 	if f.count() != 1 {
 		t.Fatalf("a cached answer re-ran the CLI: %d runs", f.count())
 	}
@@ -232,18 +268,18 @@ func TestSigninCheckCachesAndRefreshes(t *testing.T) {
 	f.mu.Lock()
 	f.code, f.out = 0, claudeSignedIn
 	f.mu.Unlock()
-	if got := c.check(context.Background(), agent, true); got.State != SigninSignedIn || f.count() != 2 {
+	if got := c.check(context.Background(), agent, ExecutionProfileSafeguarded, true); got.State != SigninSignedIn || f.count() != 2 {
 		t.Fatalf("refresh: got %+v after %d runs", got, f.count())
 	}
 
 	now = now.Add(signinCacheTTL + time.Second)
-	c.check(context.Background(), agent, false)
+	c.check(context.Background(), agent, ExecutionProfileSafeguarded, false)
 	if f.count() != 3 {
 		t.Fatalf("an expired answer was served: %d runs", f.count())
 	}
 
 	moved := signinTestAgent{name: "claude", path: "/opt/claude"}
-	c.check(context.Background(), moved, false)
+	c.check(context.Background(), moved, ExecutionProfileSafeguarded, false)
 	if f.count() != 4 {
 		t.Fatalf("a moved CLI was answered from the old path's cache: %d runs", f.count())
 	}
@@ -259,7 +295,7 @@ func TestSigninCheckRunsOneCommandPerAgentAtATime(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if c.check(context.Background(), agent, true).State == SigninSignedOut {
+			if c.check(context.Background(), agent, ExecutionProfileSafeguarded, true).State == SigninSignedOut {
 				signedOut.Add(1)
 			}
 		}()
@@ -278,8 +314,8 @@ func TestSigninCheckWaiterCancelDoesNotCancelTheCheck(t *testing.T) {
 	cancel()
 	// The first caller's request is already gone; the command still finishes
 	// and its answer is cached for the next caller.
-	c.check(ctx, agent, false)
-	if got := c.check(context.Background(), agent, false); got.State != SigninSignedOut || f.count() != 1 {
+	c.check(ctx, agent, ExecutionProfileSafeguarded, false)
+	if got := c.check(context.Background(), agent, ExecutionProfileSafeguarded, false); got.State != SigninSignedOut || f.count() != 1 {
 		t.Fatalf("got %+v after %d runs", got, f.count())
 	}
 }
@@ -296,7 +332,7 @@ func TestRunSigninCommandKillsAHungCLI(t *testing.T) {
 	c := newSigninChecker()
 	c.timeout = 200 * time.Millisecond
 	start := time.Now()
-	got := c.check(context.Background(), signinTestAgent{name: "claude", path: bin}, false)
+	got := c.check(context.Background(), signinTestAgent{name: "claude", path: bin}, ExecutionProfileSafeguarded, false)
 	if got.State != SigninUnknown {
 		t.Fatalf("got %+v", got)
 	}
@@ -314,10 +350,46 @@ func TestRunSigninCommandReadsExitCodeAndOutput(t *testing.T) {
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CODEX_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "")
-	got := newSigninChecker().check(context.Background(), signinTestAgent{name: "codex", path: bin}, false)
+	got := newSigninChecker().check(context.Background(), signinTestAgent{name: "codex", path: bin}, ExecutionProfileSafeguarded, false)
 	if got.State != SigninSignedOut {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A CLI that exits while a child it started still holds the output pipes must
+// not leave that child running.
+func TestRunSigninCommandKillsAChildLeftHoldingThePipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script fixture")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nsleep 30 &\necho $! > " + pidFile + "\necho '{\"loggedIn\": false}'\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	got := newSigninChecker().check(context.Background(), signinTestAgent{name: "claude", path: bin}, ExecutionProfileSafeguarded, false)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("the child held the check for %s", elapsed)
+	}
+	if got.State != SigninSignedOut {
+		t.Fatalf("got %+v", got)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for pidAlive(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d is still running", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

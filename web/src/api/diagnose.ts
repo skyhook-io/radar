@@ -286,14 +286,16 @@ export interface AgentSigninStatus {
   signinCmd?: string;
 }
 
-// fetchAgentSignin asks the server to run the agent's status command (cached
-// briefly server-side). refresh discards that cache: the user's "check again".
+// fetchAgentSignin asks the server to run the agent's status command for runs
+// with this profile (cached briefly server-side). refresh discards that cache:
+// the user's "check again".
 export async function fetchAgentSignin(
   agent: string,
+  profile: ExecutionProfile,
   refresh: boolean,
   signal?: AbortSignal,
 ): Promise<AgentSigninStatus> {
-  const params = new URLSearchParams({ agent });
+  const params = new URLSearchParams({ agent, profile });
   if (refresh) params.set("refresh", "1");
   const res = await fetch(`${getApiBase()}/agents/signin?${params}`, {
     credentials: getCredentialsMode(),

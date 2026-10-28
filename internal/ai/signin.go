@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -43,12 +47,12 @@ const signinCacheTTL = time.Minute
 
 // signinProbe is one agent's status command and how to read it.
 type signinProbe struct {
-	args []string
-	// envCredential names environment variables that authenticate a real run
-	// but that the status command ignores. With one set, "signed out" from the
-	// status command is not trustworthy, so the answer becomes unknown.
-	envCredential []string
-	parse         func(exitCode int, stdout, stderr string) SigninState
+	args  []string
+	parse func(exitCode int, stdout, stderr string) SigninState
+	// otherCredentials reports whether a run with this profile can
+	// authenticate in a way the status command doesn't see. "Signed out" is
+	// then not trustworthy, so the answer becomes unknown.
+	otherCredentials func(profile ExecutionProfile) bool
 }
 
 // signinProbeFor returns the status check for agents whose CLI has a cheap,
@@ -63,16 +67,52 @@ func signinProbeFor(agent string) *signinProbe {
 	switch agent {
 	case "claude":
 		// Reports API keys, OAuth tokens and Bedrock/Vertex from the
-		// environment itself, so no envCredential is needed.
+		// environment itself. Every profile passes those variables through.
 		return &signinProbe{args: []string{"auth", "status", "--json"}, parse: parseClaudeAuthStatus}
 	case "codex":
 		return &signinProbe{
-			args:          []string{"login", "status"},
-			envCredential: []string{"CODEX_API_KEY", "OPENAI_API_KEY"},
-			parse:         parseCodexLoginStatus,
+			args:             []string{"login", "status"},
+			parse:            parseCodexLoginStatus,
+			otherCredentials: codexOtherCredentials,
 		}
 	}
 	return nil
+}
+
+var codexModelProviderLine = regexp.MustCompile(`(?m)^\s*model_provider\s*=`)
+
+// codexOtherCredentials: a safeguarded run uses neither the environment's API
+// keys (codexEnv drops them) nor the user's config, so only the stored login
+// counts. A full-local run can authenticate with CODEX_API_KEY or
+// OPENAI_API_KEY, or through a custom model provider in config.toml, none of
+// which `codex login status` reports.
+func codexOtherCredentials(profile ExecutionProfile) bool {
+	if profile != ExecutionProfileFullLocal {
+		return false
+	}
+	for _, key := range []string{"CODEX_API_KEY", "OPENAI_API_KEY"} {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	dir := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return true
+		}
+		dir = filepath.Join(home, ".codex")
+	}
+	f, err := os.Open(filepath.Join(dir, "config.toml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	cfg, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	return err != nil || codexModelProviderLine.Match(cfg)
 }
 
 // parseClaudeAuthStatus reads `claude auth status --json`: {"loggedIn": bool, ...}.
@@ -103,6 +143,11 @@ func parseCodexLoginStatus(exitCode int, stdout, stderr string) SigninState {
 	return SigninUnknown
 }
 
+type signinKey struct {
+	agent   string
+	profile ExecutionProfile
+}
+
 type signinEntry struct {
 	path   string
 	state  SigninState
@@ -114,7 +159,7 @@ type signinEntry struct {
 // command per agent at a time, whoever asks.
 type signinChecker struct {
 	mu      sync.Mutex
-	entries map[string]*signinEntry
+	entries map[signinKey]*signinEntry
 	now     func() time.Time
 	timeout time.Duration
 	run     func(ctx context.Context, path string, args []string) (int, string, string, error)
@@ -122,16 +167,18 @@ type signinChecker struct {
 
 func newSigninChecker() *signinChecker {
 	return &signinChecker{
-		entries: map[string]*signinEntry{},
+		entries: map[signinKey]*signinEntry{},
 		now:     time.Now,
 		timeout: signinCheckTimeout,
 		run:     runSigninCommand,
 	}
 }
 
-// check answers for one agent backend. refresh discards a cached answer.
-func (c *signinChecker) check(ctx context.Context, agent Agent, refresh bool) SigninStatus {
+// check answers for one agent backend run with profile. refresh discards a
+// cached answer.
+func (c *signinChecker) check(ctx context.Context, agent Agent, profile ExecutionProfile, refresh bool) SigninStatus {
 	name := agent.Name()
+	key := signinKey{agent: name, profile: profile}
 	status := SigninStatus{Agent: name, State: SigninUnknown}
 	probe := signinProbeFor(name)
 	if probe == nil {
@@ -140,7 +187,7 @@ func (c *signinChecker) check(ctx context.Context, agent Agent, refresh bool) Si
 	path := agent.Path()
 	for {
 		c.mu.Lock()
-		e := c.entries[name]
+		e := c.entries[key]
 		if e != nil && e.path == path && e.inProg != nil {
 			wait := e.inProg
 			c.mu.Unlock()
@@ -160,10 +207,10 @@ func (c *signinChecker) check(ctx context.Context, agent Agent, refresh bool) Si
 			break
 		}
 		e = &signinEntry{path: path, inProg: make(chan struct{})}
-		c.entries[name] = e
+		c.entries[key] = e
 		c.mu.Unlock()
 
-		state := c.probe(ctx, path, probe)
+		state := c.probe(ctx, path, probe, profile)
 
 		c.mu.Lock()
 		e.state, e.at = state, c.now()
@@ -179,7 +226,7 @@ func (c *signinChecker) check(ctx context.Context, agent Agent, refresh bool) Si
 	return status
 }
 
-func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe) SigninState {
+func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe, profile ExecutionProfile) SigninState {
 	// Detached from the request: a caller that gives up must not leave the
 	// waiters behind it with a cancelled answer.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
@@ -189,12 +236,8 @@ func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe) 
 		return SigninUnknown
 	}
 	state := p.parse(code, stdout, stderr)
-	if state == SigninSignedOut {
-		for _, key := range p.envCredential {
-			if strings.TrimSpace(os.Getenv(key)) != "" {
-				return SigninUnknown
-			}
-		}
+	if state == SigninSignedOut && p.otherCredentials != nil && p.otherCredentials(profile) {
+		return SigninUnknown
 	}
 	return state
 }
@@ -203,7 +246,9 @@ func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe) 
 // agent: Radar's environment, which every profile's environment is a subset
 // of, so "signed out" here holds for every profile. It starts in the home
 // directory so a project config in Radar's working directory can't change the
-// answer, and reads no input. The process group is killed on timeout.
+// answer, and reads no input. The process group is killed on timeout, and
+// after the command exits so a child it left holding the output pipes can't
+// outlive it.
 func runSigninCommand(ctx context.Context, path string, args []string) (int, string, string, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
 	addAgentDirToPath(cmd)
@@ -215,6 +260,14 @@ func runSigninCommand(ctx context.Context, path string, args []string) (int, str
 	stdout, stderr := &cappedBuffer{limit: 64 << 10}, &cappedBuffer{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
+	// Windows has no process group to signal after the parent exits; its
+	// taskkill tree walk only helps while pipes are still held.
+	if cmd.Process != nil && (runtime.GOOS != "windows" || errors.Is(err, exec.ErrWaitDelay)) {
+		_ = cmd.Cancel()
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), stdout.String(), stderr.String(), nil

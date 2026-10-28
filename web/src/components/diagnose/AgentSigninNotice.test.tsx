@@ -63,6 +63,25 @@ describe("ConsentCard sign-in notice", () => {
     expect(approveButton).not.toContain("disabled");
   });
 
+  it("says Approve is waiting on the check", () => {
+    const html = renderToStaticMarkup(
+      <ConsentCard
+        agentName="Codex"
+        agent="codex"
+        profile="safeguarded"
+        approveBusy
+        onApprove={noop}
+        onCancel={noop}
+      />,
+    );
+    const label = html.indexOf("Checking sign-in…");
+    expect(label).toBeGreaterThan(-1);
+    expect(html.slice(html.lastIndexOf("<button", label), label)).toContain(
+      "disabled",
+    );
+    expect(html).not.toContain("Approve &amp; investigate");
+  });
+
   it("renders as before without a notice (signed in or unknown)", () => {
     const html = renderToStaticMarkup(
       <ConsentCard
