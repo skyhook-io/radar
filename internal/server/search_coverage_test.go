@@ -422,7 +422,7 @@ func TestSearchKindRBACBudgetAndCancellation(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(review)
 	}))
 	t.Cleanup(api.Close)
-	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json", AcceptContentTypes: "application/json"}})
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json", AcceptContentTypes: "application/json"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -105,8 +105,37 @@ export interface EvidenceCoverageGroup {
   limitations: InvestigationEvidenceLimitation[];
   hasError: boolean;
   historyOnly: boolean;
-  /** Every entry is a sampling cap or a history bound: bookkeeping for the record, not an open question. */
-  bookkeepingOnly: boolean;
+  /** Every entry is a sampling cap or a history bound: routine, not an open question. */
+  routineOnly: boolean;
+}
+
+/** A sampling cap or a history bound: bookkeeping for the record, not an open question. */
+function routineLimitation(entry: InvestigationEvidenceLimitation): boolean {
+  return (
+    entry.kind === "truncated" ||
+    (entry.kind === "unknown" && entry.presentation === "history")
+  );
+}
+
+/**
+ * Radar's own limits for the assessment headline, one line per source.
+ * `open` holds reads Radar could not complete, which qualify the answer and
+ * sit under Still open; `routine` holds sampling caps and history bounds,
+ * which hold on most runs and are shown folded beneath it. A source with
+ * anything else keeps its whole line open, so the line matches the one
+ * Captured results groups and is not repeated there.
+ */
+export function assessmentLimitLines(
+  limitations: InvestigationEvidenceLimitation[],
+): { open: string[]; routine: string[] } {
+  const open: string[] = [];
+  const routine: string[] = [];
+  for (const group of groupEvidenceCoverage(limitations)) {
+    const line = `${group.label}: ${group.summary}`;
+    if (group.routineOnly) routine.push(line);
+    else open.push(line);
+  }
+  return { open, routine };
 }
 
 /** Group the presentation, not the underlying limitations or health qualification. */
@@ -126,11 +155,7 @@ export function groupEvidenceCoverage(
         (entry) => entry.kind === "unknown" && entry.presentation === "history",
       );
       const truncated = entries.some((entry) => entry.kind === "truncated");
-      const ordinaryLimits = entries.every(
-        (entry) =>
-          entry.kind === "truncated" ||
-          (entry.kind === "unknown" && entry.presentation === "history"),
-      );
+      const ordinaryLimits = entries.every(routineLimitation);
       let summary: string;
       if (errors.length) {
         // Never replace permission/transport failures with a benign sampling note.
@@ -160,7 +185,7 @@ export function groupEvidenceCoverage(
         limitations: entries,
         hasError: errors.length > 0,
         historyOnly,
-        bookkeepingOnly: ordinaryLimits,
+        routineOnly: ordinaryLimits,
       };
     })
     .sort(

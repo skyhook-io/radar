@@ -377,8 +377,11 @@ func TestSlowRecheckKeepsTheWorkingClient(t *testing.T) {
 // A background re-check that finds the server slow keeps the connection
 // and records no connect failure: if the connection is later lost for
 // another reason (a port-forward exiting), reads say "connecting" again
-// rather than repeat an old timeout. Takes probeEndpointTimeout (8s).
+// rather than repeat an old timeout.
 func TestSlowRecheck_LeavesNoFailureBehind(t *testing.T) {
+	previousTimeout := probeEndpointTimeout
+	probeEndpointTimeout = time.Second
+	t.Cleanup(func() { probeEndpointTimeout = previousTimeout })
 	if testing.Short() {
 		t.Skip("waits for the reachability probe's own timeout")
 	}

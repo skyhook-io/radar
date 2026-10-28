@@ -10,6 +10,8 @@ import { storyPlainText } from "./investigationStory";
 export interface AssessmentCopyRadar {
   /** Reads Radar could not complete, as shown in Still open. */
   limits?: readonly string[];
+  /** Sampling caps and history bounds, as folded beneath Still open. */
+  routineLimits?: readonly string[];
   /** Adverse Radar cards the agent explained, as shown in Still open. */
   signals?: readonly string[];
   /** Adverse Radar cards nothing explains, as shown above a healthy verdict. */
@@ -143,6 +145,15 @@ export function assessmentCopyText(
       );
     } else parts.push(["Next steps:", ...steps].join("\n"));
   }
+  // Routine limits travel with the paste, after what a reader acts on.
+  const routine = (radar.routineLimits ?? []).filter((item) => item.trim());
+  if (routine.length > 0)
+    parts.push(
+      [
+        "Radar's coverage (routine limits):",
+        ...routine.map((item) => `- ${item}`),
+      ].join("\n"),
+    );
   if (radar.context)
     parts.push(
       "Full analysis and every captured result: open the investigation in Radar.",

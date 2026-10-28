@@ -144,6 +144,41 @@ describe("ResultCard under the story contract", () => {
     expect(html).toContain("Previous logs: could not be read");
   });
 
+  it("folds Radar's routine limits into one muted line beneath Still open", () => {
+    const routine = [
+      "Cluster-scoped admission changes: Radar has recorded changes only since 2026-10-27T23:42:31Z; earlier changes in the window are unknown.",
+      "Container logs: Only part of the logs was checked.",
+    ];
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={storyDiagnosis}
+        section="conclusion"
+        assessmentRoutineLimits={routine}
+      />,
+    );
+    const stillOpen = html.slice(
+      html.indexOf("data-assessment-unresolved"),
+      html.indexOf("data-assessment-routine-limits"),
+    );
+    expect(stillOpen).toContain("Whether the Atlas password was rotated");
+    expect(stillOpen).not.toContain("Radar has recorded changes only since");
+    expect(html).toContain("Radar&#x27;s coverage · 2 routine limits");
+    expect(html).toContain('aria-expanded="false"');
+    // Folded, never dropped: the lines stay in the document for the disclosure.
+    expect(html).toContain("Radar has recorded changes only since");
+
+    // Without open questions the folded line still renders on its own.
+    const alone = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{ ...storyDiagnosis, unresolved: [] }}
+        section="conclusion"
+        assessmentRoutineLimits={routine.slice(1)}
+      />,
+    );
+    expect(alone).not.toContain("data-assessment-unresolved");
+    expect(alone).toContain("Radar&#x27;s coverage · 1 routine limit<");
+  });
+
   it("says nothing when the agent listed nothing unresolved: the certainty word carries it", () => {
     const html = renderToStaticMarkup(
       <ResultCard
@@ -281,6 +316,24 @@ describe("assessmentCopyText", () => {
     );
     expect(text.indexOf("Radar flagged:")).toBeLessThan(
       text.indexOf("Still open:"),
+    );
+  });
+  it("copies routine limits after the steps, apart from Still open", () => {
+    const text = assessmentCopyText(storyDiagnosis, {
+      limits: ["Previous logs: could not be read"],
+      routineLimits: ["Recent changes: Change history is incomplete."],
+    });
+    expect(text).toContain(
+      "Radar's coverage (routine limits):\n- Recent changes: Change history is incomplete.",
+    );
+    const stillOpen = text.slice(
+      text.indexOf("Still open:"),
+      text.indexOf("\n\n", text.indexOf("Still open:")),
+    );
+    expect(stillOpen).toContain("- Previous logs: could not be read");
+    expect(stillOpen).not.toContain("Change history is incomplete");
+    expect(text.indexOf("Next steps:")).toBeLessThan(
+      text.indexOf("Radar's coverage"),
     );
   });
   it("names the recommended step and counts the rest for a legacy remediation list", () => {

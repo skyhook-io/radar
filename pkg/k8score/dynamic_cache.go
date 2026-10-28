@@ -30,6 +30,8 @@ var ErrCollectionNotSupported = errors.New("collection is not supported")
 
 const directCountProbeLimit int64 = 2
 
+var scopeProbeBaseBudget = 5 * time.Second
+
 // informerKey identifies one informer. ns == "" means a cluster-wide watch;
 // a non-empty ns is a namespace-scoped watch. A GVR can have one cluster-wide
 // informer OR several namespace-scoped ones (for users denied cluster-wide
@@ -795,9 +797,9 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 		}
 		d.mu.RUnlock()
 	}
-	budget := 5 * time.Second
+	budget := scopeProbeBaseBudget
 	if n := len(fallbacks); n > 1 {
-		budget = min(5*time.Second+time.Duration(n)*500*time.Millisecond, 15*time.Second)
+		budget = min(scopeProbeBaseBudget+time.Duration(n)*500*time.Millisecond, 15*time.Second)
 	}
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()

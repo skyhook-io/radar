@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/internal/upgrade"
 )
 
 func TestUpgradeReadinessNamespacesIgnoresBrowsingFilter(t *testing.T) {
@@ -91,10 +92,14 @@ func TestUpgradeReadinessEndpointLargeMetrics(t *testing.T) {
 		{name: "process_then_html", invalidBody: "process_start_time_seconds 1721234567\n<html>Sign in</html>\n", wantStatus: upgradereadiness.CheckUnknown, wantText: "could not read or parse"},
 		{name: "observed_empty", bytes: 1 << 20, noDeprecated: true, wantStatus: upgradereadiness.CheckPassed},
 		{name: "large_observed_empty", bytes: 17 << 20, noDeprecated: true, wantStatus: upgradereadiness.CheckPassed},
-		{name: "large_slow_complete", bytes: 17 << 20, chunkDelay: 150 * time.Millisecond, wantStatus: upgradereadiness.CheckBlocked},
-		{name: "large_slow_timeout", bytes: 64 << 20, chunkDelay: 300 * time.Millisecond, timesOut: true, wantStatus: upgradereadiness.CheckUnknown, wantText: "could not read or parse"},
+		{name: "large_slow_complete", bytes: 17 << 20, chunkDelay: 50 * time.Millisecond, wantStatus: upgradereadiness.CheckBlocked},
+		{name: "large_slow_timeout", bytes: 64 << 20, chunkDelay: 150 * time.Millisecond, timesOut: true, wantStatus: upgradereadiness.CheckUnknown, wantText: "could not read or parse"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			const collectionTimeout = 8 * time.Second
+			if tc.timesOut {
+				t.Cleanup(upgrade.SetTestAPIMetricsCollectionTimeout(collectionTimeout))
+			}
 			// A distinct scope prevents a previous case's memoized scan from serving this request.
 			k8s.SetNamespaceScopeOverride(fmt.Sprintf("metrics-%d", time.Now().UnixNano()))
 			var metricsRequests atomic.Int32
@@ -199,8 +204,8 @@ func TestUpgradeReadinessEndpointLargeMetrics(t *testing.T) {
 				case <-time.After(time.Second):
 					t.Fatal("metrics server did not observe the canceled stream")
 				}
-				if elapsed < 9*time.Second || elapsed > 15*time.Second {
-					t.Fatalf("scan took %s, expected the real 10-second collection deadline", elapsed)
+				if elapsed < collectionTimeout*9/10 || elapsed > collectionTimeout*3/2 {
+					t.Fatalf("scan took %s, expected the %s collection deadline", elapsed, collectionTimeout)
 				}
 				if bytesWritten.Load() <= 16<<20 || bytesWritten.Load() >= int64(tc.bytes) || !streamCanceled.Load() {
 					t.Fatalf("bytes sent=%d of %d, canceled=%v; want a large response interrupted while still streaming", bytesWritten.Load(), tc.bytes, streamCanceled.Load())

@@ -131,6 +131,8 @@ func initTraefikFixture(t *testing.T, pod *corev1.Pod, extra ...runtime.Object) 
 		if err := dynCache.EnsureWatching(gvr); err != nil {
 			t.Fatalf("EnsureWatching %s: %v", gvr.Resource, err)
 		}
+	}
+	for gvr := range gvrs {
 		if !dynCache.WaitForSync(gvr, 2*time.Second) {
 			t.Fatalf("%s did not sync", gvr.Resource)
 		}

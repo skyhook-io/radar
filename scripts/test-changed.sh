@@ -41,7 +41,7 @@ while IFS= read -r f; do
   case "$f" in
     go.mod|go.sum) root_module=1 ;;
     pkg/go.mod|pkg/go.sum) pkg_module=1 ;;
-    package.json|package-lock.json|web/package.json|packages/k8s-ui/package.json|web/tsconfig*.json|packages/k8s-ui/tsconfig*.json|web/vite*.config.*|web/vitest*.config.*|packages/k8s-ui/vite*.config.*|packages/k8s-ui/vitest*.config.*) fe_config=1 ;;
+    package.json|package-lock.json|web/package.json|packages/k8s-ui/package.json|web/tsconfig*.json|packages/k8s-ui/tsconfig*.json|web/vite*.config.*|web/vitest*.config.*|packages/k8s-ui/vite*.config.*|packages/k8s-ui/vitest*.config.*|scripts/vitest-*.ts) fe_config=1 ;;
     */testdata/*)
       add_go "${f%%/testdata/*}"
       [ -e "$f" ] && k8sui="$k8sui ../../$f" && web="$web ../$f" ;;

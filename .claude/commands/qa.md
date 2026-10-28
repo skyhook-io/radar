@@ -40,12 +40,13 @@ verification rounds.
   `TestUpgradeReadinessEndpointLargeMetrics` are timing-sensitive.
 - Vitest keeps transformed modules in `.vitest-cache/` in each project (one per
   worktree, gitignored), so a second run skips most transforms.
-- `packages/k8s-ui` runs most test files without isolation: a worker reuses its
-  modules across files (`vitest.config.ts`). Files that call `vi.mock` run
-  isolated, picked automatically from their source. A test that passes alone but
-  fails in the suite is probably leaking or reading module state from another
-  file: reset that state in the tests (see `touch-intent.test.ts`). Shuffling
-  the file order finds such pairs:
+- Both frontend projects run most test files without isolation: a worker reuses
+  its modules across files. Files that call `vi.mock`, `vi.doMock` or
+  `vi.resetModules` run isolated, picked automatically from their source
+  (`scripts/vitest-isolated-tests.ts`). A test that passes alone but fails in the
+  suite is probably leaking or reading module state from another file: reset that
+  state in the tests (see `touch-intent.test.ts`). Shuffling the file order finds
+  such pairs:
   `npx vitest run --project shared --sequence.shuffle.files --sequence.seed=<n>`.
 - Node 25: run vitest with `NODE_OPTIONS=--no-experimental-webstorage`
   (the script sets it).

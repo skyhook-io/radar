@@ -82,6 +82,7 @@ jobs:
               - 'scripts/gpu-ecosystem-demo/**'
               - 'scripts/workload-metrics-demo/**'
               - 'scripts/check-whats-new.sh'
+              - 'scripts/vitest-*.ts'
             # What the settings browser journeys build and serve: the frontend
             # embedded in cmd/testserver. Go tests and their fixtures are not part
             # of it; web fixtures are, since the build type-checks web tests.

@@ -75,6 +75,10 @@ func ClusterScopedForNamespace(ctx context.Context, namespace string, nsLabels N
 			incomplete = append(incomplete, kind+" changes are not readable by the caller.")
 		}
 	}
+	// The investigation UI tells the startup, watch-start and eviction
+	// sentences apart from the other gaps by their exact wording
+	// (web/src/components/diagnose/investigationEvidence/adapters/changes.ts),
+	// so a change to their wording must change it there too.
 	var startup []string
 	defer func() {
 		if len(incomplete) > 0 || !quietStartup {
