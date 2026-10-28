@@ -103,3 +103,56 @@ export function useAgentSignin(agent: string, profile: ExecutionProfile, enabled
 
   return { status, pending, rechecking, recheck, settle }
 }
+
+/**
+ * Consent actions that respect a sign-in check still in flight. Approving
+ * before it answers would start the run the warning is there to prevent, so
+ * Approve waits for it (bounded by settle) and stops on a signed-out answer,
+ * which then shows; approving again proceeds. The wait belongs to one
+ * approval: Cancel, unmounting, or a new attemptKey (another agent, profile
+ * or consent request) abandons it, and its answer approves nothing.
+ */
+export function useApproveAfterSignin({
+  approve,
+  cancel,
+  signin,
+  attemptKey,
+}: {
+  approve: () => void
+  cancel: () => void
+  signin: Pick<AgentSigninCheck, 'pending' | 'settle'>
+  attemptKey: string
+}) {
+  const [waiting, setWaiting] = useState(false)
+  const attempt = useRef(0)
+  const abandon = useCallback(() => {
+    attempt.current++
+    setWaiting(false)
+  }, [])
+  useEffect(() => abandon, [abandon, attemptKey])
+
+  // The approval in effect when the answer lands: the consent request may
+  // have been replaced by another target while waiting.
+  const latestApprove = useRef(approve)
+  latestApprove.current = approve
+  const { pending, settle } = signin
+  const approveWhenChecked = useCallback(() => {
+    if (!pending) {
+      latestApprove.current()
+      return
+    }
+    const mine = ++attempt.current
+    setWaiting(true)
+    void settle().then((status) => {
+      if (mine !== attempt.current) return
+      setWaiting(false)
+      if (status?.state !== 'signed-out') latestApprove.current()
+    })
+  }, [pending, settle])
+  const cancelAndAbandon = useCallback(() => {
+    abandon()
+    cancel()
+  }, [abandon, cancel])
+
+  return { approve: approveWhenChecked, cancel: cancelAndAbandon, waiting }
+}

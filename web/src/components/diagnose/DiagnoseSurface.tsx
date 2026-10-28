@@ -50,7 +50,10 @@ import {
 } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { AgentSigninNotice } from "./AgentSigninNotice";
-import { useAgentSignin } from "../../hooks/useAgentSignin";
+import {
+  useAgentSignin,
+  useApproveAfterSignin,
+} from "../../hooks/useAgentSignin";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
@@ -390,24 +393,12 @@ export function DiagnoseSurface({
     d.profile,
     d.needsConsent && !d.hosted,
   );
-  // Approving before the check answers would start the run the warning is
-  // there to prevent. Wait for it (bounded by the server's timeout); a
-  // signed-out answer stops here so the warning shows, and approving again
-  // proceeds.
-  const [approveWaiting, setApproveWaiting] = useState(false);
-  const { approveConsent } = d;
-  const { pending: signinPending, settle: settleSignin } = signin;
-  const approveAfterSignin = useCallback(() => {
-    if (!signinPending) {
-      approveConsent();
-      return;
-    }
-    setApproveWaiting(true);
-    void settleSignin().then((status) => {
-      setApproveWaiting(false);
-      if (status?.state !== "signed-out") approveConsent();
-    });
-  }, [approveConsent, signinPending, settleSignin]);
+  const consentActions = useApproveAfterSignin({
+    approve: d.approveConsent,
+    cancel: d.cancelConsent,
+    signin,
+    attemptKey: `${d.selectedAgent}\u0000${d.profile}\u0000${d.needsConsent}`,
+  });
   const signinNotice =
     signin.status?.state === "signed-out" && signin.status.signinCmd ? (
       <AgentSigninNotice
@@ -606,9 +597,9 @@ export function DiagnoseSurface({
           onOpenSettings={openSettings ?? undefined}
           error={d.consentError}
           notice={signinNotice}
-          approveBusy={approveWaiting}
-          onApprove={approveAfterSignin}
-          onCancel={d.cancelConsent}
+          approveBusy={consentActions.waiting}
+          onApprove={consentActions.approve}
+          onCancel={consentActions.cancel}
         />
       </div>
     </div>
@@ -684,9 +675,9 @@ export function DiagnoseSurface({
         onOpenSettings={openSettings ?? undefined}
         error={d.consentError}
         notice={signinNotice}
-        approveBusy={approveWaiting}
-        onApprove={approveAfterSignin}
-        onCancel={d.cancelConsent}
+        approveBusy={consentActions.waiting}
+        onApprove={consentActions.approve}
+        onCancel={consentActions.cancel}
       />
     </div>
   ) : setupPending ? (
