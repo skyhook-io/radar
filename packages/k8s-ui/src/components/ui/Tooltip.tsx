@@ -1,10 +1,10 @@
-import { ReactNode, useState, useRef, useEffect, useCallback } from 'react'
+import { Fragment, ReactNode, useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { computeTooltipPosition } from './tooltip-position'
 import { isTouchIntent } from '../../utils/touch-intent'
 
-const ENABLED_CONTROL = 'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [role="button"]:not([aria-disabled="true"])'
+const ENABLED_CONTROL = 'button:not(:disabled):not([aria-disabled="true"]), a[href]:not([aria-disabled="true"]), input:not(:disabled):not([aria-disabled="true"]), select:not(:disabled):not([aria-disabled="true"]), textarea:not(:disabled):not([aria-disabled="true"]), [role="button"]:not([aria-disabled="true"])'
 
 // Module-level singleton coordinator: only one Tooltip can be visible
 // at a time across the whole app. Without this, two Tooltip instances
@@ -23,6 +23,7 @@ let activeHide: (() => void) | null = null
 
 interface TooltipProps {
   content: ReactNode
+  preserveWords?: boolean
   children: ReactNode
   /** Delay before showing tooltip in ms (default: 300) */
   delay?: number
@@ -42,6 +43,7 @@ interface TooltipProps {
 
 export function Tooltip({
   content,
+  preserveWords = false,
   children,
   delay = 300,
   position = 'top',
@@ -280,7 +282,9 @@ export function Tooltip({
             onMouseEnter={cancelHide}
             onMouseLeave={scheduleHideTooltip}
           >
-            {content}
+            {preserveWords && typeof content === 'string'
+              ? content.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)
+              : content}
           </span>,
           document.body
         )}

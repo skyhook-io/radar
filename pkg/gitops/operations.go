@@ -62,7 +62,32 @@ var (
 	// ErrResourceSuspended: a Flux object in a sync-with-source chain has
 	// spec.suspend set, so its controller ignores reconcile requests. HTTP 409.
 	ErrResourceSuspended = errors.New("resource is suspended")
+	// ErrSyncWithSourceUnsupported means there is no reconcilable source. HTTP 400.
+	ErrSyncWithSourceUnsupported = errors.New("sync with source is not supported for this resource")
 )
+
+// PartialSyncError records accepted reconcile requests, not controller completion.
+type PartialSyncError struct {
+	Requested []SourceRef
+	Err       error
+}
+
+func (e *PartialSyncError) Error() string { return e.Err.Error() + ". " + e.Note() }
+func (e *PartialSyncError) Unwrap() error { return e.Err }
+func (e *PartialSyncError) Note() string {
+	objects := make([]string, 0, len(e.Requested))
+	for _, ref := range e.Requested {
+		objects = append(objects, fmt.Sprintf("%s %s/%s", ref.Kind, ref.Namespace, ref.Name))
+	}
+	return "Reconcile already requested for " + strings.Join(objects, ", ") + "."
+}
+
+type syncWithSourceUnsupported string
+
+func (e syncWithSourceUnsupported) Error() string { return string(e) }
+func (e syncWithSourceUnsupported) Is(target error) bool {
+	return target == ErrSyncWithSourceUnsupported
+}
 
 // assertNotTerminating returns ErrResourceTerminating wrapped with a
 // caller-friendly message when the object has metadata.deletionTimestamp
@@ -248,6 +273,7 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	}
 
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -379,6 +405,7 @@ func ValidateArgoResource(ctx context.Context, dynClient dynamic.Interface, name
 	defer ticker.Stop()
 	for {
 		app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return ArgoResourceValidationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found while validating: %w", namespace, name, err)
@@ -473,6 +500,7 @@ func stringValue(value any) string {
 // SetArgoAutoSync enables or disables automated sync on an ArgoCD Application.
 func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace, name string, enable bool) (OperationResult, error) {
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -603,6 +631,7 @@ func RefreshArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace,
 // TerminateArgoSync terminates an ongoing sync operation on an ArgoCD Application.
 func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (OperationResult, error) {
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -651,8 +680,10 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	_, err = dynClient.Resource(argoAppGVR).Namespace(namespace).Patch(
 		ctx, name, types.JSONPatchType, patchBytes, metav1.PatchOptions{},
 	)
+	err = ClassifyPermissionError(err, "patch", argoAppGVR, namespace, name)
 	if err != nil {
-		if apierrors.IsInvalid(err) {
+		var admission *AdmissionDenied
+		if apierrors.IsInvalid(err) && !errors.As(err, &admission) {
 			return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s (completed before terminate could fire): %w", namespace, name, ErrNoOperationInProgress)
 		}
 		return OperationResult{}, fmt.Errorf("failed to terminate sync for Application %s/%s: %w", namespace, name, err)
@@ -677,6 +708,7 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 		return OperationResult{}, fmt.Errorf("rollback requires a positive history id")
 	}
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -763,6 +795,7 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 	// false-positive "Reconciliation triggered" toast. Costs one extra
 	// round-trip on the happy path; trade is correctness.
 	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	err = ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
@@ -803,6 +836,7 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 // SetFluxSuspend sets the suspend field on a FluxCD resource.
 func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry FluxKindEntry, namespace, name string, suspend bool) (OperationResult, error) {
 	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	err = ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
@@ -863,6 +897,7 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 	entry = entry.Served(resolve)
 
 	resource, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	err = ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
@@ -873,18 +908,23 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		return OperationResult{}, err
 	}
 
-	if entry.Kind != "Kustomization" && entry.Kind != "HelmRelease" {
-		return OperationResult{}, fmt.Errorf("sync-with-source only supported for Kustomization and HelmRelease")
-	}
-	if _, ok := resource.Object["spec"].(map[string]any); !ok {
-		return OperationResult{}, fmt.Errorf("invalid resource spec for %s %s/%s", entry.Kind, namespace, name)
-	}
-	source, ok := syncSourceFor(resource)
-	if !ok {
-		return OperationResult{}, fmt.Errorf("no source reference found in %s %s/%s", entry.Kind, namespace, name)
-	}
-
 	timestamp := time.Now().Format(time.RFC3339Nano)
+	chain, err := FluxSyncSources(resource, func(target FluxSyncTarget) (*unstructured.Unstructured, error) {
+		obj, err := dynClient.Resource(target.Entry.GVR).Namespace(target.Namespace).Get(ctx, target.Name, metav1.GetOptions{})
+		err = ClassifyPermissionError(err, "get", target.Entry.GVR, target.Namespace, target.Name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, sourceNotPatchable(target.Entry.Kind, target.Namespace, target.Name, err)
+			}
+			return nil, fmt.Errorf("failed to read source %s %s/%s: %w", target.Entry.Kind, target.Namespace, target.Name, err)
+		}
+		return obj, assertSyncable(obj, target.Entry.Kind, target.Namespace, target.Name)
+	}, resolve)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	source, _ := syncSourceFor(resource)
+
 	reconcilePatch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{
@@ -909,55 +949,29 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		}, nil
 	}
 
-	type link struct {
-		entry           FluxKindEntry
-		namespace, name string
+	var requested []SourceRef
+	withRequested := func(err error) error {
+		if len(requested) == 0 {
+			return err
+		}
+		return &PartialSyncError{Requested: requested, Err: err}
 	}
-	var chain []link
-	for ref := &source; ref != nil; {
-		sourceEntry, err := ResolveFluxKind(ref.Kind)
-		if err != nil {
-			return OperationResult{}, fmt.Errorf("unknown source kind: %s", ref.Kind)
-		}
-		sourceEntry = sourceEntry.Served(resolve)
-		chain = append([]link{{sourceEntry, ref.Namespace, ref.Name}}, chain...)
-		// Every link must be read before anything is written: without the
-		// object there is no suspend or deletion state to check, and no chart
-		// sourceRef to follow.
-		obj, err := dynClient.Resource(sourceEntry.GVR).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return OperationResult{}, sourceNotPatchable(sourceEntry.Kind, ref.Namespace, ref.Name, err)
-			}
-			return OperationResult{}, fmt.Errorf("failed to read source %s %s/%s: %w", sourceEntry.Kind, ref.Namespace, ref.Name, err)
-		}
-		if err := assertSyncable(obj, sourceEntry.Kind, ref.Namespace, ref.Name); err != nil {
-			return OperationResult{}, err
-		}
-		ref = nil
-		if sourceEntry.Kind == "HelmChart" {
-			if upstream := FluxSourceReferences(obj); len(upstream) > 0 {
-				ref = &upstream[0]
-			}
-		}
-	}
-
 	for _, l := range chain {
-		if err := mergePatch(ctx, dynClient, l.entry.GVR, l.namespace, l.name, reconcilePatch); err != nil {
+		if err := mergePatch(ctx, dynClient, l.Entry.GVR, l.Namespace, l.Name, reconcilePatch); err != nil {
 			if apierrors.IsNotFound(err) {
-				return OperationResult{}, sourceNotPatchable(l.entry.Kind, l.namespace, l.name, err)
+				return OperationResult{}, withRequested(sourceNotPatchable(l.Entry.Kind, l.Namespace, l.Name, err))
 			}
-			return OperationResult{}, fmt.Errorf("failed to reconcile source %s %s/%s: %w", l.entry.Kind, l.namespace, l.name, err)
+			return OperationResult{}, withRequested(fmt.Errorf("failed to reconcile source %s %s/%s: %w", l.Entry.Kind, l.Namespace, l.Name, err))
 		}
+		requested = append(requested, SourceRef{Kind: l.Entry.Kind, Namespace: l.Namespace, Name: l.Name})
 	}
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, reconcilePatch); err != nil {
-		return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s (note: its sources were reconciled): %w",
-			entry.Kind, namespace, name, err)
+		return OperationResult{}, withRequested(fmt.Errorf("failed to reconcile %s %s/%s: %w", entry.Kind, namespace, name, err))
 	}
 
 	steps := make([]string, 0, len(chain))
 	for _, l := range chain {
-		steps = append(steps, fmt.Sprintf("%s %s/%s", l.entry.Kind, l.namespace, l.name))
+		steps = append(steps, fmt.Sprintf("%s %s/%s", l.Entry.Kind, l.Namespace, l.Name))
 	}
 	return OperationResult{
 		Message:     fmt.Sprintf("Sync with source triggered for FluxCD %s %s/%s after %s", entry.Kind, namespace, name, strings.Join(steps, ", then ")),
@@ -969,6 +983,52 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		RequestedAt: timestamp,
 		Source:      &SourceRef{Kind: source.Kind, Namespace: source.Namespace, Name: source.Name},
 	}, nil
+}
+
+type FluxSyncTarget struct {
+	Entry           FluxKindEntry
+	Namespace, Name string
+}
+
+// FluxSyncSources lists patch targets upstream-first using the same source
+// contracts as the operation. visit runs consumer-first so it can read a
+// HelmChart's source and preflight every link before any writes. A permission
+// check may skip reads of terminal sources, whose spec cannot extend the chain.
+func FluxSyncSources(resource *unstructured.Unstructured, visit func(FluxSyncTarget) (*unstructured.Unstructured, error), resolve FluxGVRResolver) ([]FluxSyncTarget, error) {
+	kind, namespace, name := resource.GetKind(), resource.GetNamespace(), resource.GetName()
+	if kind != "Kustomization" && kind != "HelmRelease" {
+		return nil, syncWithSourceUnsupported("Sync with source is only supported for Kustomization and HelmRelease")
+	}
+	if _, ok := resource.Object["spec"].(map[string]any); !ok {
+		return nil, syncWithSourceUnsupported(fmt.Sprintf("invalid resource spec for %s %s/%s", kind, namespace, name))
+	}
+	source, ok := syncSourceFor(resource)
+	if !ok {
+		return nil, syncWithSourceUnsupported(fmt.Sprintf("no source reference found in %s %s/%s", kind, namespace, name))
+	}
+	if source.Kind == "ExternalArtifact" {
+		return nil, nil
+	}
+	var chain []FluxSyncTarget
+	for ref := &source; ref != nil; {
+		entry, err := ResolveFluxKind(ref.Kind)
+		if err != nil {
+			return chain, syncWithSourceUnsupported(fmt.Sprintf("unknown source kind: %s", ref.Kind))
+		}
+		target := FluxSyncTarget{Entry: entry.Served(resolve), Namespace: ref.Namespace, Name: ref.Name}
+		chain = append([]FluxSyncTarget{target}, chain...)
+		obj, err := visit(target)
+		if err != nil {
+			return chain, err
+		}
+		ref = nil
+		if entry.Kind == "HelmChart" {
+			if upstream := FluxSourceReferences(obj); len(upstream) > 0 {
+				ref = &upstream[0]
+			}
+		}
+	}
+	return chain, nil
 }
 
 // assertSyncable rejects a chain member its controller won't act on: one being
@@ -1029,5 +1089,5 @@ func mergePatch(ctx context.Context, dynClient dynamic.Interface, gvr schema.Gro
 	_, err = dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{},
 	)
-	return err
+	return ClassifyPermissionError(err, "patch", gvr, namespace, name)
 }

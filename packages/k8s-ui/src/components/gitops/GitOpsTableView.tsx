@@ -284,6 +284,7 @@ export interface GitOpsTableViewProps {
   // SyncOptionsDialog). When undefined the actions column is omitted
   // entirely — keeps Hub and other consumers' layout unchanged until they
   // opt in.
+  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   // In-flight action state, keyed by `row.id`. Drives the per-item
   // spinner so the user can tell which Sync/Refresh is still running.
@@ -329,6 +330,7 @@ export function GitOpsTableView({
   globalNamespaces,
   onClearNamespaces,
   onRowAction,
+  renderRowActions,
   pendingRowActions,
   filtersSide = 'left',
 }: GitOpsTableViewProps) {
@@ -856,6 +858,7 @@ export function GitOpsTableView({
               showDestination={showDestination}
               onDestinationClick={onDestinationClick}
               destinationHrefFor={destinationHrefFor}
+              renderRowActions={renderRowActions}
               onRowAction={onRowAction}
               pendingRowActions={pendingRowActions}
             />
@@ -1291,6 +1294,7 @@ function GitOpsTable({
   onDestinationClick,
   destinationHrefFor,
   onRowAction,
+  renderRowActions,
   pendingRowActions,
 }: {
   rows: GitOpsRow[]
@@ -1301,6 +1305,7 @@ function GitOpsTable({
   showDestination?: boolean
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
+  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
 }) {
@@ -1409,7 +1414,7 @@ function GitOpsTable({
                   className="overflow-visible border-b border-theme-border px-2 py-2 text-right align-middle"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions)} />
+                  {renderRowActions ? renderRowActions(row, buildRowActionItems(row, onRowAction, pendingRowActions)) : <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions)} />}
                 </td>
               )}
             </tr>

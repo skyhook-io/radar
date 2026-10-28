@@ -1,6 +1,7 @@
-import { useEffect, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import { ArrowDownUp, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
+import { gitOpsDenialMessage, uniqueGitOpsPermissions, type GitOpsPermission } from '../../utils/gitops-permissions'
 import { PaneLoader } from '../ui/PaneLoader'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
@@ -8,6 +9,15 @@ import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
 import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
+
+const ARGO_ACTION_LABELS: Record<string, string> = {
+  sync: 'sync',
+  refresh: 'refresh',
+  terminate: 'terminate a sync',
+  suspend: 'change auto-sync',
+  resume: 'change auto-sync',
+  rollback: 'roll back',
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -157,6 +167,24 @@ export interface GitOpsDetailLayoutProps {
   isFlux: boolean
   isFluxWorkload: boolean  // Kustomization | HelmRelease — gates the
                             // "Sync with source" button
+  /**
+   * Buttons gate on these capability action keys: selective sync → `sync`,
+   * hard refresh → `refresh`, resource validation → `validate`, Flux source chain → `sync-with-source`.
+   * A non-empty string disables with that reason; absent or empty means not restricted.
+   */
+  actionDisabledReasons?: Record<string, string | undefined>
+  permissionCheckUnavailable?: boolean
+  /**
+   * Explanatory data for the restriction panel, keyed like actionDisabledReasons;
+   * buttons gate on actionDisabledReasons. Denied lists operations checked and denied;
+   * a denied read can hide later Flux source hops. Unsupported actions are not role restrictions.
+   */
+  actionPermissions?: Record<string, {
+    allowed?: boolean
+    unsupported?: boolean
+    denied?: GitOpsPermission[]
+  }>
+  isCloudDeployment?: boolean
   argo?: ArgoActionHandlers
   flux?: FluxActionHandlers
 
@@ -267,6 +295,28 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
   // nothing to open, so the header must not announce expanded.
   const helmValuesShown = !!helmValuesOpen && !!helmValuesContent
   const helmValuesDisclosure = useDisclosure(helmValuesShown)
+  const [permissionsOpen, setPermissionsOpen] = useState(false)
+  const permissionsDisclosure = useDisclosure(permissionsOpen)
+  const rolePermissions = Object.values(props.actionPermissions || {}).filter(permission => !permission.unsupported)
+  const allActionsRestricted = rolePermissions.length > 0 && rolePermissions.every(permission => permission.allowed === false)
+  const deniedPermissions = uniqueGitOpsPermissions(rolePermissions.filter(permission => permission.allowed === false).flatMap(permission => permission.denied ?? []))
+  const deniedArgoActions = [...new Set(Object.entries(ARGO_ACTION_LABELS)
+    .filter(([action]) => action !== 'terminate' || argo?.isRunning)
+    .filter(([action]) => props.actionPermissions?.[action]?.allowed === false && !props.actionPermissions[action].unsupported)
+    .map(([, label]) => label))]
+  const argoDenialReason = deniedArgoActions.length > 0
+    ? `Your role can't ${deniedArgoActions.length === 1 ? deniedArgoActions[0] : `${deniedArgoActions.slice(0, -1).join(', ')} or ${deniedArgoActions.at(-1)}`} for this Application.`
+    : undefined
+  // With permission details, one merged sentence covers every denied action;
+  // a host passing only reasons gets them listed as-is.
+  const denialReasons = deniedPermissions.length > 0
+    ? [isArgoApp && argoDenialReason ? argoDenialReason : gitOpsDenialMessage(deniedPermissions)]
+    : [...new Set(Object.entries(props.actionDisabledReasons || {})
+      .filter(([action]) => !props.actionPermissions?.[action]?.unsupported)
+      .map(([, reason]) => reason)
+      .filter((reason): reason is string => !!reason))]
+  const deniedGrants = [...new Set(deniedPermissions
+    .map(denial => `${denial.verb} ${denial.resource}${denial.group ? `.${denial.group}` : ''} in ${denial.namespace}`))]
 
   // Document title side effect — opt-in so hub-web can take ownership of
   // its own title format.
@@ -354,6 +404,32 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   </span>
                 )}
               </div>
+              {denialReasons.length > 0 && (
+                <div className="mt-2 text-xs text-theme-text-secondary">
+                  <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-primary">
+                    {allActionsRestricted ? 'Actions restricted for your role' : 'Some actions restricted for your role'} · <span className="text-accent-text">Why?</span>
+                    <CollapseChevron open={permissionsOpen} />
+                  </button>
+                  <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
+                    <div className="mt-2 max-w-xl space-y-2 rounded border border-theme-border bg-theme-surface p-3">
+                      {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
+                      {props.isCloudDeployment && isArgoApp && <p>Radar Cloud owners: the Argo CD write grant is off by default because it delegates the Argo CD controller's deployment authority. To turn it on, see Chart RBAC settings, then apply it with <code>helm upgrade</code>; one-click upgrades update only the image.</p>}
+                      <p>{props.isCloudDeployment && isArgoApp ? 'For other roles, an admin can grant access with' : 'An admin can grant access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
+                      {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
+                        {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</span>)}</li>)}
+                        {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
+                      </ul>}
+                      <div className="flex flex-wrap gap-3">
+                        <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
+                        {props.isCloudDeployment && isArgoApp && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#cloud-owner-integration-writes" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
+                      </div>
+                    </div>
+                  </Collapse>
+                </div>
+              )}
+              {props.permissionCheckUnavailable && (
+                <p className="mt-2 text-xs text-theme-text-secondary">Couldn't check your permissions. You can still try.</p>
+              )}
               {/* Spec/config row */}
               {detail && (
                 <div className="mt-2 flex flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
@@ -376,12 +452,12 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     icon={ArrowDownUp}
                     loading={argo.syncing}
                     onClick={argo.onSyncRequested}
-                    disabled={effectiveSuspended || terminating || argoOperationInProgress}
+                    disabled={effectiveSuspended || terminating || argoOperationInProgress || !!props.actionDisabledReasons?.['sync']}
                     disabledReason={terminating
                       ? terminatingActionTooltip
                       : argoOperationInProgress
                         ? 'Wait for the current Argo operation to finish.'
-                        : undefined}
+                        : props.actionDisabledReasons?.['sync']}
                     primary
                   />
                   <ActionButton
@@ -389,6 +465,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     description="Re-check Git for new commits and recompute sync status. Doesn't apply anything."
                     icon={RefreshCw}
                     loading={argo.refreshing && argo.refreshingKind === 'normal'}
+                    disabled={!!props.actionDisabledReasons?.['refresh']}
+                    disabledReason={props.actionDisabledReasons?.['refresh']}
                     onClick={() => argo.onRefresh('normal')}
                   />
                   <ActionButton
@@ -396,6 +474,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     description="Like Refresh, but also bypasses Argo's manifest cache (re-renders Helm/Kustomize)."
                     icon={Zap}
                     loading={argo.refreshing && argo.refreshingKind === 'hard'}
+                    disabled={!!props.actionDisabledReasons?.['refresh']}
+                    disabledReason={props.actionDisabledReasons?.['refresh']}
                     onClick={() => argo.onRefresh('hard')}
                   />
                   {argo.isRunning && (
@@ -404,6 +484,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       description="Cancel the in-progress sync operation."
                       icon={XCircle}
                       loading={argo.terminating}
+                      disabled={!!props.actionDisabledReasons?.['terminate']}
+                      disabledReason={props.actionDisabledReasons?.['terminate']}
                       onClick={argo.onTerminate}
                       danger
                     />
@@ -415,8 +497,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Pause}
                       loading={argo.suspending}
                       onClick={argo.onSuspend}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
                     />
                   ) : (
                     <ActionButton
@@ -425,8 +507,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Play}
                       loading={argo.resuming}
                       onClick={argo.onResume}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['resume']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
                     />
                   )}
                 </>
@@ -439,8 +521,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     icon={RefreshCw}
                     loading={flux.reconciling}
                     onClick={flux.onReconcile}
-                    disabled={effectiveSuspended || terminating}
-                    disabledReason={terminating ? terminatingActionTooltip : undefined}
+                    disabled={effectiveSuspended || terminating || !!props.actionDisabledReasons?.['reconcile']}
+                    disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['reconcile']}
                     primary
                   />
                   {isFluxWorkload && (
@@ -450,8 +532,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={GitCommit}
                       loading={flux.syncingWithSource}
                       onClick={flux.onSyncWithSource}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['sync-with-source']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['sync-with-source']}
                     />
                   )}
                   {effectiveSuspended ? (
@@ -461,8 +543,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Play}
                       loading={flux.resuming}
                       onClick={flux.onResume}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['resume']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
                     />
                   ) : (
                     <ActionButton
@@ -471,14 +553,19 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Pause}
                       loading={flux.suspending}
                       onClick={flux.onSuspend}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
                     />
                   )}
                 </>
               )}
             </div>
           </div>
+          {props.actionPermissions?.['sync-with-source']?.unsupported && props.actionDisabledReasons?.['sync-with-source'] && (
+            <p className="mt-2 text-xs text-theme-text-tertiary">
+              {props.actionDisabledReasons?.['sync-with-source']}
+            </p>
+          )}
         </div>
       )}
       {!fullscreen && (
@@ -638,9 +725,9 @@ function ActionButton({
     : danger
       ? 'border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
       : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-  const tooltip = disabled && disabledReason ? disabledReason : (description || label)
+  const tooltip = disabled && disabledReason ? disabledReason : description
   return (
-    <Tooltip content={tooltip}>
+    <Tooltip content={tooltip} disabled={!tooltip} preserveWords={!!disabledReason}>
       <button
         type="button"
         onClick={onClick}

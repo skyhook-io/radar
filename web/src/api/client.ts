@@ -3,7 +3,7 @@ import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDelete
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
@@ -70,6 +70,7 @@ import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
+  isRadarFeatureUnsupported,
   RadarFeatureUnsupportedError,
   guardRadarFeature,
   radarFeatureSupport,
@@ -77,6 +78,7 @@ import {
   type RadarFeature,
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
+import { isGitOpsActionTarget, GitOpsActionError, gitOpsActionPermissions, gitOpsDisabledReasons, type GitOpsActionCapabilities } from './gitOpsPermissions'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { DeploymentMode } from '../types'
 
@@ -6910,6 +6912,68 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
+const GITOPS_PERMISSION_MAX_AGE = 120_000;
+
+type CachedGitOpsActionCapabilities = GitOpsActionCapabilities & {
+  confirmedAt: Record<string, number>;
+};
+
+export function useGitOpsActionCapabilities(kind: string, group: string | undefined, namespace: string, name: string, enabled = true) {
+  const active = enabled && isGitOpsActionTarget(kind, group);
+  const queryClient = useQueryClient();
+  const { support, guard, gatedKey } = useRadarFeature("gitopsActionCapabilities");
+  const queryKey = ["gitops-action-capabilities", getApiBase(), kind, group, namespace, name, ...gatedKey];
+  const [, setExpiryTime] = useState(0);
+  const query = useQuery<CachedGitOpsActionCapabilities>({
+    queryKey,
+    queryFn: () => guard(async () => {
+      const next = await fetchJSON<GitOpsActionCapabilities>(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`);
+      const previous = queryClient.getQueryData<CachedGitOpsActionCapabilities>(queryKey);
+      const now = Date.now();
+      const confirmedAt: Record<string, number> = {};
+      for (const [action, capability] of Object.entries(next.actions)) {
+        if (capability.allowed !== undefined || capability.unsupported) {
+          confirmedAt[action] = now;
+        } else if (!capability.unsupported && previous?.confirmedAt[action] !== undefined && now - previous.confirmedAt[action] < GITOPS_PERMISSION_MAX_AGE) {
+          next.actions[action] = previous.actions[action];
+          confirmedAt[action] = previous.confirmedAt[action];
+        }
+      }
+      return { ...next, confirmedAt };
+    }),
+    enabled: active && Boolean(namespace && name) && support !== 'unsupported',
+    staleTime: 15_000,
+    refetchInterval: active ? 30_000 : false,
+  });
+  const now = Date.now();
+  const expiries = Object.values(query.data?.confirmedAt ?? {}).map(time => time + GITOPS_PERMISSION_MAX_AGE).filter(time => time > now);
+  const nextExpiry = expiries.length ? Math.min(...expiries) : undefined;
+  useEffect(() => {
+    if (nextExpiry === undefined) return;
+    const timer = setTimeout(() => setExpiryTime(Date.now()), Math.max(0, nextExpiry - Date.now()));
+    return () => clearTimeout(timer);
+  }, [nextExpiry]);
+  const data: GitOpsActionCapabilities | undefined = query.data && {
+    actions: Object.fromEntries(Object.entries(query.data.actions).map(([action, capability]) => [action,
+      (capability.allowed !== undefined || capability.unsupported) && now - query.data!.confirmedAt[action] >= GITOPS_PERMISSION_MAX_AGE
+        ? { reason: "Couldn't check your permissions — retrying" }
+        : capability,
+    ])),
+  };
+  const featureUnsupported = isRadarFeatureUnsupported(query.error, 'gitopsActionCapabilities');
+  const permissions = active ? gitOpsActionPermissions(support, data, featureUnsupported) : undefined;
+  const permissionCheckUnavailable = active && support !== 'unsupported' && !featureUnsupported && (
+    (!data && query.isError) || Object.values(permissions ?? {}).some(capability => capability.allowed === undefined && !capability.unsupported && !!capability.reason)
+  );
+  return {
+    ...query,
+    data,
+    permissions,
+    permissionCheckUnavailable,
+    disabledReasons: active ? gitOpsDisabledReasons(support, data, featureUnsupported) : {},
+  };
+}
+
 interface GitOpsMutationConfig<TVariables> {
   getPath: (variables: TVariables) => string;
   getBody?: (variables: TVariables) => unknown;
@@ -6946,7 +7010,7 @@ function createGitOpsMutation<TVariables>(
         );
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+          throw new GitOpsActionError(error, response.status);
         }
         return response.json() as Promise<GitOpsOperationResponse>;
       },
@@ -7130,7 +7194,7 @@ export function useArgoResourceValidation() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json() as Promise<ArgoResourceValidationResult>;
     },
@@ -7194,7 +7258,7 @@ export function useArgoRefresh() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json();
     },

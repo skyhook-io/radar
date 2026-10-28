@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
 	"regexp"
@@ -67,5 +68,19 @@ func TestFeatureFlagsHaveFrontendGates(t *testing.T) {
 	}
 	if len(unadvertised) > 0 {
 		t.Errorf("%s gates on flags FeatureCapabilities does not advertise: %v", radarFeaturesPath, unadvertised)
+	}
+}
+
+func TestGitOpsActionCapabilitiesWireKey(t *testing.T) {
+	body, err := json.Marshal(FeatureCapabilities{GitOpsActionCapabilities: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var features map[string]bool
+	if err := json.Unmarshal(body, &features); err != nil {
+		t.Fatal(err)
+	}
+	if !features["gitopsActionCapabilities"] {
+		t.Fatalf("missing enabled gitopsActionCapabilities in %s", body)
 	}
 }

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -114,6 +115,27 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 	}
 
 	if err != nil {
+		var denied *gitops.PermissionDenied
+		var admission *gitops.AdmissionDenied
+		var body map[string]any
+		switch {
+		case errors.As(err, &denied):
+			body = map[string]any{"error": denied.Summary(), "error_code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind}
+		case errors.As(err, &admission):
+			body = map[string]any{"error": admission.Summary(), "error_code": "admission_denied"}
+		}
+		if body != nil {
+			var partial *gitops.PartialSyncError
+			if errors.As(err, &partial) {
+				body["note"] = partial.Note()
+			}
+			response, _, marshalErr := toJSONResult(body)
+			if marshalErr != nil {
+				return nil, nil, marshalErr
+			}
+			response.IsError = true
+			return response, nil, nil
+		}
 		return nil, nil, err
 	}
 

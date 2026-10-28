@@ -174,11 +174,12 @@ type FeatureCapabilities struct {
 	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
-	CNPGWorkspace         bool `json:"cnpgWorkspace"`
-	CNPGProtectionSetup   bool `json:"cnpgProtectionSetup"`
-	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
+	CNPGWorkspace            bool `json:"cnpgWorkspace"`
+	CNPGProtectionSetup      bool `json:"cnpgProtectionSetup"`
+	ServiceEndpointSlices    bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords           bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
+	GitOpsWriteEvidence      bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	GitOpsActionCapabilities bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
@@ -744,21 +745,13 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 	// Split "pods/exec" as k8score.CanI does: webhook authorizers only
 	// recognize a subresource in its own field.
 	baseResource, subresource, _ := strings.Cut(resource, "/")
-	review := &authv1.SubjectAccessReview{
-		Spec: authv1.SubjectAccessReviewSpec{
-			User:   username,
-			Groups: groups,
-			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace:   namespace,
-				Group:       group,
-				Verb:        verb,
-				Resource:    baseResource,
-				Subresource: subresource,
-			},
-		},
-	}
-
-	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	status, err := pkgauth.ReviewSubjectAccess(ctx, client, username, groups, authv1.ResourceAttributes{
+		Namespace:   namespace,
+		Group:       group,
+		Verb:        verb,
+		Resource:    baseResource,
+		Subresource: subresource,
+	})
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("Warning: SubjectAccessReview failed for user=%s %s %s: %v", SanitizeForLog(username), SanitizeForLog(verb), SanitizeForLog(resource), err)
@@ -766,7 +759,7 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		return false, true
 	}
 
-	return result.Status.Allowed, false
+	return status.Allowed, false
 }
 
 // InvalidateUserCapabilitiesCache clears all per-user capability caches
