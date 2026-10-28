@@ -261,8 +261,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Rollback guidance and its source-mode warning: 66,669 bytes without exec.
-		maxCatalogBytes         = 66700
+		// Rollback guidance, its source-mode warning and sync_options
+		// inheritance: 66,869 bytes without exec.
+		maxCatalogBytes         = 66900
 		maxToolDescriptionBytes = 3200
 	)
 

@@ -2169,6 +2169,37 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 	}
 }
 
+// An operation held by a sync window stays Running with Argo's "blocked by
+// sync window" message; the issue must say so instead of "currently running",
+// and a termination requested meanwhile must say it waits for the window too.
+func TestBuildIssuesArgoSyncWindowBlockedOperation(t *testing.T) {
+	for _, tc := range []struct {
+		phase, message, wantReason string
+	}{
+		{phase: "Running", message: "Sync operation blocked by sync window", wantReason: "SyncWindowBlocked"},
+		{phase: "Terminating", message: "Sync operation blocked by sync window", wantReason: "SyncWindowBlocked"},
+		{phase: "Running", message: "waiting for completion of hook batch/Job/migrate", wantReason: "Running"},
+	} {
+		t.Run(tc.phase+"/"+tc.message, func(t *testing.T) {
+			root := argoApp(map[string]any{
+				"operationState": map[string]any{"phase": tc.phase, "message": tc.message},
+			})
+			issues := buildIssues(root, nil, "argocd", nil)
+			if len(issues) != 1 || issues[0].Reason != tc.wantReason {
+				t.Fatalf("issues = %+v, want one %s issue", issues, tc.wantReason)
+			}
+			if tc.wantReason == "SyncWindowBlocked" {
+				if issues[0].Severity != SeverityWarning || !strings.Contains(issues[0].Message, "sync window") {
+					t.Fatalf("blocked issue = %+v, want a warning naming the sync window", issues[0])
+				}
+				if tc.phase == "Running" && !strings.Contains(issues[0].Action, "Changing the Application's source settings does not update a sync already waiting; terminate it and sync again after such edits.") {
+					t.Fatalf("blocked action = %q, want guidance to resubmit after source edits", issues[0].Action)
+				}
+			}
+		})
+	}
+}
+
 func TestFluxDependencyChangesDoNotClaimInventoryOwnership(t *testing.T) {
 	tree := &gitopstree.ResourceTree{
 		Nodes: []gitopstree.Node{

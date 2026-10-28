@@ -618,6 +618,8 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				suppressedNamespaces[parsed.RemediationTarget] = true
 			}
 			out = append(out, issue)
+		} else if blocked := argoSyncWindowBlockedIssue(phase, root); blocked != nil {
+			out = append(out, *blocked)
 		} else if phase == "Running" {
 			out = append(out, Issue{Severity: SeverityInfo, Scope: ScopeOperation, Reason: "Running", Message: "A sync operation is currently running.", Action: "Wait for completion or terminate if it is stuck."})
 		} else if mismatch := DetectArgoRollbackRevisionMismatch(root); mismatch != nil {
@@ -956,6 +958,37 @@ func WorstResourceProblem(problems []ResourceProblem) (ResourceProblem, bool) {
 		}
 	}
 	return best, true
+}
+
+// argoSyncWindowBlockedIssue reports an operation the Argo CD controller is
+// holding for a sync window: it stays Running, with the message "Sync
+// operation blocked by sync window", until a window allows it, so "currently
+// running" would misdescribe it. A termination requested meanwhile waits for
+// the window too, since the controller only acts on the operation then.
+func argoSyncWindowBlockedIssue(phase string, root *unstructured.Unstructured) *Issue {
+	if phase != "Running" && phase != "Terminating" {
+		return nil
+	}
+	message, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
+	if !strings.Contains(message, "blocked by sync window") {
+		return nil
+	}
+	if phase == "Terminating" {
+		return &Issue{
+			Severity: SeverityWarning,
+			Scope:    ScopeOperation,
+			Reason:   "SyncWindowBlocked",
+			Message:  "This operation was terminated while a sync window held it. Argo CD completes the termination when a window allows syncing. It applies nothing more; changes already applied stay.",
+			Action:   "Wait for the window to open, or change the AppProject's sync windows.",
+		}
+	}
+	return &Issue{
+		Severity: SeverityWarning,
+		Scope:    ScopeOperation,
+		Reason:   "SyncWindowBlocked",
+		Message:  "A sync window is holding this sync. Argo CD continues it when the AppProject's sync windows allow syncing.",
+		Action:   "Wait for the window, or terminate the operation to drop it. A terminated operation stays Terminating until a window allows syncing; it applies nothing more, and changes already applied stay. Changing the Application's source settings does not update a sync already waiting; terminate it and sync again after such edits.",
+	}
 }
 
 // dedupeIssues removes Issues that share the same (scope, reason, message,

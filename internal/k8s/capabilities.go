@@ -184,6 +184,13 @@ type FeatureCapabilities struct {
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
 	// operation.rollback the API server prunes, and leaves enabled: false set.
 	ArgoRollbackSync bool `json:"argoRollbackSync"`
+	// POST /api/argo/applications/{namespace}/{name}/sync (and
+	// .../validate-resource) with syncOptions omitted uses the Application's
+	// spec.syncPolicy.syncOptions, and an omitted prune does not prune. An
+	// older Radar syncs with no options and prunes. Also signals that enabling
+	// auto-sync on a never-suspended Application starts with prune off and
+	// selfHeal on.
+	ArgoSyncInheritance bool `json:"argoSyncInheritance"`
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
