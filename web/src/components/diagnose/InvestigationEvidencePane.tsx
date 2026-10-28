@@ -411,8 +411,16 @@ export function InvestigationEvidencePane({
   // A card behind the fold may be mounted and inert, or not mounted at all
   // before the fold first opens; either way the fold opens first and the
   // card is found once it has settled.
+  const [storyReveal, setStoryReveal] = useState<{
+    domId: string;
+    requestId: number;
+  }>();
   const revealStoryTarget = useCallback(
     (target: StoryPlacementTarget) => {
+      setStoryReveal((previous) => ({
+        domId: target.domId,
+        requestId: (previous?.requestId ?? 0) + 1,
+      }));
       const land = (placed: HTMLElement) => {
         placed.scrollIntoView({
           block: "center",
@@ -706,6 +714,7 @@ export function InvestigationEvidencePane({
         onGroupOpenChange,
         revealSourceId: caseReveal?.sourceId ?? revealRequest?.sourceId,
         revealRequestId: caseReveal?.requestId ?? revealRequest?.requestId,
+        storyReveal,
         caseByGroup: investigationCaseByGroup(investigationCase),
         excludedByItem: new Map(
           (investigationCase?.ruledOut ?? []).map((entry) => [

@@ -30,22 +30,24 @@ describe("storyExcerpt", () => {
     });
   });
 
-  it("shows a placed chart whatever its role or compact marker, but not in the collapsed preview", () => {
+  it("shows a placed chart whatever its role, folding a compact one the story does not rest on", () => {
     const metrics = observation({ type: "metrics", origin: "query" } as never);
     expect(
       storyExcerpt(metrics, [{ role: "context" }], { compact: false }),
-    ).toEqual({ kind: "chart", size: "short" });
+    ).toEqual({ kind: "chart", size: "short", folded: false });
     expect(
       storyExcerpt(metrics, [{ role: "rules_out" }], { compact: true }),
-    ).toEqual({ kind: "chart", size: "short" });
+    ).toEqual({ kind: "chart", size: "short", folded: true });
+    // The agent marks a card compact for the prose's flow, so a symptom
+    // placed compact still starts open.
     expect(
       storyExcerpt(metrics, [{ role: "symptom" }], { compact: true }),
-    ).toEqual({ kind: "chart", size: "full" });
+    ).toEqual({ kind: "chart", size: "full", folded: false });
     expect(
       storyExcerpt(metrics, [{ role: "context" }, { role: "cause" }], {
-        compact: false,
+        compact: true,
       }),
-    ).toEqual({ kind: "chart", size: "full" });
+    ).toEqual({ kind: "chart", size: "full", folded: false });
     expect(
       storyExcerpt(metrics, [{ role: "cause" }], {
         compact: true,

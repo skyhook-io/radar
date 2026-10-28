@@ -70,6 +70,45 @@ function MetricsValueTable({
   );
 }
 
+/**
+ * One line of what a folded chart shows, so its card says something before it
+ * is opened: one series' first and last value with any low or peak between
+ * them (a dip, a counter reset), or the range across several series. Missing
+ * samples are said, not smoothed over. Undefined when nothing was captured.
+ */
+export function metricsReading(
+  data: EvidenceDataOf<"metrics">,
+): string | undefined {
+  const unit = data.unit ?? "";
+  const format = (value: number) => formatMetricValue(value, unit);
+  const values = data.series.map((series) =>
+    finiteSamples(series).map((point) => point.value as number),
+  );
+  const all = values.flat();
+  if (all.length === 0) return undefined;
+  const low = Math.min(...all);
+  const peak = Math.max(...all);
+  const gaps = data.series.some((series) =>
+    series.dataPoints.some((point) => typeof point.value !== "number"),
+  )
+    ? " · with gaps"
+    : "";
+  if (data.series.length > 1) {
+    return `${data.series.length} series · ${format(low)} to ${format(peak)}${gaps}`;
+  }
+  const samples = values[0];
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  if (data.mode === "instant" || samples.length === 1) {
+    return `${format(last)}${gaps}`;
+  }
+  const between = [
+    low < first && low < last ? `low ${format(low)}` : "",
+    peak > first && peak > last ? `peak ${format(peak)}` : "",
+  ].filter(Boolean);
+  return [`${format(first)} → ${format(last)}`, ...between].join(" · ") + gaps;
+}
+
 /** Rendered height of a chart drawn short beside the story's prose. */
 const SHORT_CHART_HEIGHT_PX = 140;
 

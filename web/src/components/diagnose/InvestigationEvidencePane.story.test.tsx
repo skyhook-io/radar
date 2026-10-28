@@ -1,4 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
@@ -774,18 +777,88 @@ describe("story card defaults", () => {
     const symptom = render("Memory climbs.\n\n[[radar:evidence=0]]");
     expect(symptom).toContain("data-story-metrics");
     expect(symptom).not.toContain("height:140px");
-    // A compact marker or a context role drops the agent's note, not the
-    // chart; the role only draws it short.
+    // A context role draws the chart short; it starts open.
     const context = [{ ...evidence[0], role: "context" as const }];
     const contextHtml = render(
-      "Memory climbs.\n\n[[radar:evidence=0|compact]]",
+      "Memory climbs.\n\n[[radar:evidence=0]]",
       context,
     );
     expect(contextHtml).toContain("data-story-metrics");
     expect(contextHtml).toContain("height:140px");
+    expect(contextHtml).toContain('aria-expanded="true"');
+    expect(contextHtml).not.toContain("data-chart-reading");
+    // Compact folds it, and the header says what the chart shows.
+    const folded = render(
+      "Memory climbs.\n\n[[radar:evidence=0|compact]]",
+      context,
+    );
+    expect(folded).not.toContain("data-story-metrics");
+    expect(folded).toContain('aria-expanded="false"');
+    expect(folded).toMatch(/data-chart-reading[^>]*>161\.5 Mi?B?/);
+    // A symptom placed compact stays open: the role keeps it, never folds it.
+    const compactSymptom = render(
+      "Memory climbs.\n\n[[radar:evidence=0|compact]]",
+    );
+    expect(compactSymptom).toContain("data-story-metrics");
+    expect(compactSymptom).not.toContain("height:140px");
     // The collapsed preview bounds its height and leaves the chart out.
     expect(
       render("Memory climbs.\n\n[[radar:evidence=0]]\n\nMore after the fold."),
     ).not.toContain("data-story-metrics");
+
+    // The reader opens a folded chart and folds an open one.
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const pane = (report: string, items: DiagnosisEvidenceItem[]) => (
+      <InvestigationEvidencePane
+        projection={projection}
+        investigationCase={resolveInvestigationCase(
+          projection,
+          { evidence: items },
+          0,
+        )}
+        story={{ report, evidence: items }}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={() => {}}
+        onViewActivity={() => {}}
+      />
+    );
+    // The story's card comes first; Captured results follows it.
+    const header = () =>
+      container.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    act(() =>
+      root.render(
+        pane("Memory climbs.\n\n[[radar:evidence=0|compact]]", context),
+      ),
+    );
+    expect(container.querySelector("[data-story-metrics]")).toBeNull();
+    act(() => header().click());
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("[data-story-metrics]")).not.toBeNull();
+    expect(container.querySelector("[data-chart-reading]")).toBeNull();
+    act(() => header().click());
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector("[data-chart-reading]")).not.toBeNull();
+    // A reference that jumps to a folded chart opens it.
+    act(() =>
+      root.render(
+        pane(
+          "Memory climbs.\n\n[[radar:evidence=0|compact]]\n\nSee [[radar:evidence=0]] again.",
+          context,
+        ),
+      ),
+    );
+    act(() => header().click());
+    expect(container.querySelector("[data-chart-reading]")).not.toBeNull();
+    const reference = container.querySelector<HTMLButtonElement>(
+      "[data-story-ref-direction]",
+    )!;
+    Element.prototype.scrollIntoView ??= () => {};
+    act(() => reference.click());
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    act(() => root.unmount());
+    container.remove();
   });
 });

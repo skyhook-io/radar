@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { MetricsBody } from "./metrics";
+import { MetricsBody, metricsReading } from "./metrics";
 import type { EvidenceDataOf } from "../cardParts";
 
 const QUERY =
@@ -59,5 +59,53 @@ describe("MetricsBody", () => {
     expect(
       renderToStaticMarkup(<MetricsBody data={range(QUERY)} />),
     ).not.toContain("height:140px");
+  });
+});
+
+describe("metricsReading", () => {
+  const points = (...values: (number | null)[]) =>
+    values.map((value, index) => ({ timestamp: 1_788_679_043 + index, value }));
+  const data = (
+    series: ReturnType<typeof points>[],
+    mode: "range" | "instant" = "range",
+  ) =>
+    ({
+      ...range("up"),
+      // Values read in the chart's own unit formatting.
+      unit: "count",
+      mode,
+      series: series.map((dataPoints) => ({ labels: {}, dataPoints })),
+    }) as EvidenceDataOf<"metrics">;
+
+  it("reads one series from its first to its last value", () => {
+    expect(metricsReading(data([points(3, 9, 12)]))).toBe("3 → 12");
+  });
+
+  it("adds a peak or a low that the first and last values hide", () => {
+    expect(metricsReading(data([points(3, 40, 12)]))).toBe("3 → 12 · peak 40");
+    // A dip to zero or a counter reset is the incident; it must not fold away.
+    expect(metricsReading(data([points(1, 0, 1)]))).toBe("1 → 1 · low 0");
+    expect(metricsReading(data([points(100, 0, 101)]))).toBe(
+      "100 → 101 · low 0",
+    );
+  });
+
+  it("says when samples are missing and reads several series by their range", () => {
+    expect(metricsReading(data([points(5, 7, null, null)]))).toBe(
+      "5 → 7 · with gaps",
+    );
+    expect(metricsReading(data([points(1, 2), points(8, 3)]))).toBe(
+      "2 series · 1 to 8",
+    );
+    // A series with no samples still counts as one of the series read.
+    expect(metricsReading(data([points(1, 2), points(null)]))).toBe(
+      "2 series · 1 to 2 · with gaps",
+    );
+  });
+
+  it("reads an instant value as itself and says nothing without a sample", () => {
+    expect(metricsReading(data([points(4)], "instant"))).toBe("4");
+    expect(metricsReading(data([points(null)]))).toBeUndefined();
+    expect(metricsReading(data([]))).toBeUndefined();
   });
 });

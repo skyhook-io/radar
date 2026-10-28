@@ -21,15 +21,16 @@ export const VISIBLE_LOG_EVIDENCE_LINES = 12;
  * names, the workload's own row in a ranking, the findings on it, or the
  * chart. The role the agent gave the card never hides any of it; it only
  * sizes a chart, full height for what the story rests on and short for the
- * rest. Nothing here is the agent's text; every excerpt is a slice of
- * Radar's record.
+ * rest. A compact marker starts a chart folded behind the card's chevron,
+ * except one the story rests on. Nothing here is the agent's text; every
+ * excerpt is a slice of Radar's record.
  */
 export type StoryExcerpt =
   | { kind: "lines"; head: string[]; rest: string[] }
   | { kind: "rows"; entries: ReturnType<typeof namedInventoryRows> }
   | { kind: "ranking"; rows: InvestigationRankingRow[] }
   | { kind: "posture"; findings: InvestigationPostureFinding[] }
-  | { kind: "chart"; size: "full" | "short" };
+  | { kind: "chart"; size: "full" | "short"; folded: boolean };
 
 export interface StoryExcerptItem {
   role?: DiagnosisEvidenceRole;
@@ -51,14 +52,19 @@ export function storyExcerpt(
     return { kind: "lines", head: lines.slice(-2), rest: lines.slice(0, -2) };
   }
   // So is the chart: a compact card drops the agent's note, not Radar's
-  // record, and has no body to open. Only the collapsed preview, which
-  // bounds its height, leaves the chart out.
+  // record. Compact folds the chart, but the agent marks cards compact for
+  // the prose's flow, not their weight, so a cause or symptom stays open.
+  // Only the collapsed preview, which bounds its height, leaves it out.
   if (data.type === "metrics") {
     if (options.preview) return undefined;
     const rests = items.some(
       (item) => item.role === "cause" || item.role === "symptom",
     );
-    return { kind: "chart", size: rests ? "full" : "short" };
+    return {
+      kind: "chart",
+      size: rests ? "full" : "short",
+      folded: options.compact && !rests,
+    };
   }
   if (options.compact) return undefined;
   const named = (row: { kind: string; namespace?: string; name: string }) =>
