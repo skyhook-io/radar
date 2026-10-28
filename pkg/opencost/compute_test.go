@@ -289,6 +289,42 @@ func TestComputeCostSummary_DedupesPersistentVolumeClaimRefs(t *testing.T) {
 	if !strings.Contains(storageQuery, `label_replace(kube_persistentvolume_claim_ref, "namespace", "$1", "claim_namespace", "(.+)")`) {
 		t.Fatalf("storage query must normalize claim_namespace before namespace aggregation:\n%s", storageQuery)
 	}
+	if !strings.Contains(storageQuery, "kube_persistentvolume_capacity_bytes") {
+		t.Fatalf("storage query must scale the per-GiB pv_hourly_cost by volume size:\n%s", storageQuery)
+	}
+}
+
+// avg_over_time only averages the samples a series has, so a pod that lived
+// five minutes would be billed for the whole hour. Allocation must be
+// weighted by the time each series was present.
+func TestComputeCostSummary_AllocationIsTimeWeighted(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query().Get("query"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(vectorBody(map[string]float64{"checkout": 1.0})))
+	}))
+	defer srv.Close()
+	client := prom.NewClient(prom.NewHTTPTransport(srv.URL, "", nil))
+
+	ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+
+	var checked int
+	for _, q := range queries {
+		if !strings.Contains(q, "container_cpu_allocation") && !strings.Contains(q, "container_memory_allocation_bytes") {
+			continue
+		}
+		checked++
+		if strings.Contains(q, "avg_over_time") {
+			t.Errorf("allocation query must not use avg_over_time:\n%s", q)
+		}
+		if !strings.Contains(q, "[1h:1m]) / 60") {
+			t.Errorf("allocation query must be time-weighted over the hour:\n%s", q)
+		}
+	}
+	if checked != 2 {
+		t.Fatalf("expected CPU and memory allocation queries, saw %d", checked)
+	}
 }
 
 func TestWindowHours(t *testing.T) {
