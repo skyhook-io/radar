@@ -29,6 +29,22 @@ function targetLabel(target: Target): string {
   return target.name ? formatInvestigationTarget(target) : "this investigation";
 }
 
+// A start refused without a cluster name (a host that sends none) has
+// nothing to compare, so it is taken as this one.
+export function capacityCluster(
+  refusedIn: string | undefined,
+  current: string | undefined,
+): "same" | "changed" | "unknown" {
+  if (!refusedIn || current === refusedIn) return "same";
+  return current ? "changed" : "unknown";
+}
+
+function without(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
+  const next = new Set(set);
+  next.delete(id);
+  return next;
+}
+
 const SECONDARY_BUTTON =
   "rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -42,12 +58,16 @@ const SECONDARY_BUTTON =
  * runsKnown is false until the runs list has loaded, or while it fails: an
  * empty list then says nothing about free slots, so Start stays available
  * and the server decides.
+ *
+ * cluster compares the cluster the start was refused in with the current
+ * one. A retry resolves the same namespace and name against whatever Radar
+ * is connected to, so it waits for a confirmed match.
  */
 export function InvestigationCapacityNotice({
   capacity,
   runs,
   runsKnown,
-  clusterChanged,
+  cluster,
   onOpenRun,
   onStop,
   onStart,
@@ -56,31 +76,35 @@ export function InvestigationCapacityNotice({
   capacity: StartCapacity;
   runs: RunSummary[];
   runsKnown: boolean;
-  clusterChanged: boolean;
+  cluster: "same" | "changed" | "unknown";
   onOpenRun: (id: string) => void;
   onStop: (id: string) => Promise<void>;
   onStart: () => void;
   onDismiss: () => void;
 }) {
-  // Runs whose stop request is in flight. Cleared when it settles: a stopped
-  // run then leaves the list, and one that didn't stop can be stopped again.
+  // Runs whose stop request is in flight, then the ones it settled for. The
+  // server marks a run stopped before answering, so a settled run the
+  // refreshed list still shows running did not stop.
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set());
+  const [stopSettled, setStopSettled] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const holding = runsHoldingSlots(runs);
   const slotFree = runsKnown && holding.length < capacity.limit;
+  const canStart = cluster === "same" && (!runsKnown || slotFree);
   const target = targetLabel(capacity.target);
 
   const stop = (id: string) => {
     setStopping((prev) => new Set(prev).add(id));
-    const settle = () =>
-      setStopping((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
+    setStopSettled((prev) => without(prev, id));
+    const settle = () => {
+      setStopping((prev) => without(prev, id));
+      setStopSettled((prev) => new Set(prev).add(id));
+    };
     onStop(id).then(settle, settle);
   };
 
-  if (clusterChanged) {
+  if (cluster === "changed") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <p className="text-sm text-theme-text-secondary">
@@ -120,6 +144,10 @@ export function InvestigationCapacityNotice({
             {holding.map((run) => {
               const isStopping =
                 stopping.has(run.id) || run.status === "stopping";
+              const didNotStop =
+                !isStopping &&
+                stopSettled.has(run.id) &&
+                run.status === "running";
               return (
                 <li key={run.id} className="flex items-center gap-3 px-3 py-2">
                   <div className="min-w-0 flex-1">
@@ -129,7 +157,9 @@ export function InvestigationCapacityNotice({
                     <div className="text-xs text-theme-text-tertiary">
                       {isStopping
                         ? "Stopping…"
-                        : `Started ${formatRelativeAgeTime(run.createdAt)}`}
+                        : didNotStop
+                          ? "Still running. Radar couldn’t stop it; try again."
+                          : `Started ${formatRelativeAgeTime(run.createdAt)}`}
                     </div>
                   </div>
                   <button
@@ -156,11 +186,13 @@ export function InvestigationCapacityNotice({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={runsKnown && !slotFree}
+            disabled={!canStart}
             title={
-              runsKnown && !slotFree
-                ? "Available once one of these finishes or you stop one"
-                : undefined
+              cluster === "unknown"
+                ? "Checking which cluster Radar is connected to…"
+                : !canStart
+                  ? "Available once one of these finishes or you stop one"
+                  : undefined
             }
             onClick={onStart}
             className="btn-brand px-3 py-1.5 text-sm"
@@ -194,9 +226,7 @@ export function InvestigationCapacityRecovery({
       capacity={capacity}
       runs={d.runs}
       runsKnown={d.runsLoaded && !d.runsLoadFailed}
-      clusterChanged={
-        !!capacity.context && !!current && current !== capacity.context
-      }
+      cluster={capacityCluster(capacity.context, current)}
       onOpenRun={d.openRun}
       onStop={async (id) => {
         await stopRun(id);

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunSummary } from "../../api/diagnose";
 import {
+  capacityCluster,
   InvestigationCapacityNotice,
   runsHoldingSlots,
 } from "./InvestigationCapacityNotice";
@@ -50,6 +51,16 @@ describe("runsHoldingSlots", () => {
   });
 });
 
+describe("capacityCluster", () => {
+  it("retries only in the cluster the start was refused in", () => {
+    expect(capacityCluster("dev", "dev")).toBe("same");
+    expect(capacityCluster("dev", "prod")).toBe("changed");
+    // Contexts reloading after a switch: not yet known to be the same.
+    expect(capacityCluster("dev", undefined)).toBe("unknown");
+    expect(capacityCluster(undefined, "prod")).toBe("same");
+  });
+});
+
 describe("InvestigationCapacityNotice", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -77,7 +88,10 @@ describe("InvestigationCapacityNotice", () => {
 
   const render = (
     runs: RunSummary[],
-    { runsKnown = true, clusterChanged = false } = {},
+    {
+      runsKnown = true,
+      cluster = "same" as "same" | "changed" | "unknown",
+    } = {},
   ) =>
     act(async () =>
       root.render(
@@ -85,7 +99,7 @@ describe("InvestigationCapacityNotice", () => {
           capacity={capacity}
           runs={runs}
           runsKnown={runsKnown}
-          clusterChanged={clusterChanged}
+          cluster={cluster}
           {...handlers}
         />,
       ),
@@ -163,11 +177,30 @@ describe("InvestigationCapacityNotice", () => {
   });
 
   it("won't retry a start after the cluster changed", async () => {
-    await render(threeRunning, { clusterChanged: true });
+    await render(threeRunning, { cluster: "changed" });
     expect(container.textContent).toContain("The cluster changed");
     expect(button("Start investigation")).toBeUndefined();
     await act(async () => button("Dismiss").click());
     expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the retry until the current cluster is confirmed", async () => {
+    await render(
+      threeRunning.filter((r) => r.id !== "b"),
+      {
+        cluster: "unknown",
+      },
+    );
+    expect(button("Start investigation").disabled).toBe(true);
+  });
+
+  it("says when a stop didn't take", async () => {
+    await render(threeRunning);
+    await act(async () => button("Stop Deployment.apps prod/api").click());
+    // The refreshed list still shows it running.
+    await render([...threeRunning]);
+    expect(container.textContent).toContain("Radar couldn’t stop it");
+    expect(button("Stop Deployment.apps prod/api").disabled).toBe(false);
   });
 
   it("cancels the pending start", async () => {
