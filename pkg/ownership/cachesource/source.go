@@ -84,6 +84,8 @@ type session struct {
 	// ("" for a watched one).
 	unwatched           map[schema.GroupResource]readreason.Code
 	dependentKinds      []ownership.CatalogKind
+	preparedNamespaced  bool
+	preparedCluster     bool
 	unwatchedNamespaced []ownership.Gap
 	unwatchedCluster    []ownership.Gap
 	unwatchedAll        []ownership.Gap

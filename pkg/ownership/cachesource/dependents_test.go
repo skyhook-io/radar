@@ -590,7 +590,7 @@ func TestDependentCandidatesOfATypedKindLoadingInSomeNamespaces(t *testing.T) {
 func TestDependentCoverageAnswersSurviveLaterSearches(t *testing.T) {
 	f := newFixture(t, k8score.CacheConfig{}, nil)
 	s := begin(t, f.source())
-	scopes := []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", ""}}, {IncludeClusterScoped: true}, {}, {Namespaces: []string{"beta", ""}}}
+	scopes := []ownership.SearchScope{{IncludeClusterScoped: true}, ownership.InNamespace("alpha"), ownership.Everywhere(), {Namespaces: []string{"alpha", ""}}, {}, {Namespaces: []string{"beta", ""}}}
 	type capture struct{ answer, want []ownership.Gap }
 	var captures []capture
 	for range 2 {
@@ -611,5 +611,23 @@ func TestDependentCoverageAnswersSurviveLaterSearches(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestDependentCandidatesOnlyPrepareSearchedScopes(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{}, nil)
+	s := begin(t, f.source())
+	first := s.DependentCandidates("uid-deploy", ownership.SearchScope{IncludeClusterScoped: true})
+	firstGaps := slices.Clone(first.Gaps)
+	f.watch(t, widgets)
+	for _, scope := range []ownership.SearchScope{ownership.InNamespace("alpha"), ownership.Everywhere()} {
+		got := s.DependentCandidates("uid-deploy", scope)
+		if !slices.Contains(candidateRefs(got), ref("example.io", "Widget", "alpha", "w1")) ||
+			slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind }) {
+			t.Fatalf("scope %+v: %v, gaps %v; want the newly watched Widget", scope, candidateRefs(got), got.Gaps)
+		}
+	}
+	if !slices.Equal(first.Gaps, firstGaps) {
+		t.Fatal("preparing another scope changed an earlier answer")
 	}
 }

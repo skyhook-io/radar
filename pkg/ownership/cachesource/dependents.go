@@ -45,7 +45,7 @@ func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope
 	}
 	searches := scope.Searches(true) || scope.Searches(false)
 	if searches {
-		s.prepareDependentKinds()
+		s.prepareDependentKinds(scope)
 	}
 	if !s.catalog.Complete() && searches {
 		q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.ReadError})
@@ -107,14 +107,20 @@ func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope
 	return r
 }
 
-// Unwatched kinds have no UID-specific work. Capture their existing session
-// state once, but keep reading watched stores so loading can finish mid-request.
-func (s *session) prepareDependentKinds() {
-	if s.dependentKinds != nil {
+// Unwatched kinds have no UID-specific work. Prepare only searched scopes so
+// a typed-only search does not prematurely capture dynamic watches.
+func (s *session) prepareDependentKinds(scope ownership.SearchScope) {
+	namespaced := scope.Searches(true) && !s.preparedNamespaced
+	cluster := scope.Searches(false) && !s.preparedCluster
+	if !namespaced && !cluster {
 		return
 	}
-	s.dependentKinds = []ownership.CatalogKind{}
+	s.preparedNamespaced = s.preparedNamespaced || namespaced
+	s.preparedCluster = s.preparedCluster || cluster
 	for _, kind := range s.catalog.DependentKinds() {
+		if kind.Namespaced && !namespaced || !kind.Namespaced && !cluster {
+			continue
+		}
 		var reason readreason.Code
 		if _, typed := typedKinds[kind.GroupKind]; !typed {
 			if s.caches.Dynamic == nil {
@@ -134,10 +140,16 @@ func (s *session) prepareDependentKinds() {
 			s.unwatchedCluster = append(s.unwatchedCluster, gap)
 		}
 	}
-	slices.SortFunc(s.unwatchedNamespaced, compareGaps)
-	slices.SortFunc(s.unwatchedCluster, compareGaps)
+	if namespaced {
+		slices.SortFunc(s.unwatchedNamespaced, compareGaps)
+	}
+	if cluster {
+		slices.SortFunc(s.unwatchedCluster, compareGaps)
+	}
 	s.unwatchedAll = append(slices.Clone(s.unwatchedNamespaced), s.unwatchedCluster...)
 	slices.SortFunc(s.unwatchedAll, compareGaps)
+	s.lastExtraGaps = nil
+	s.lastCombinedGaps = nil
 }
 
 // gap records that kind in namespace went unread; "" stands for the kind
