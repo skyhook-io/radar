@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,6 +27,7 @@ type operatorDiagnoseResponse struct {
 	EventsTotalGroups       int                              `json:"eventsTotalGroups,omitempty"`
 	EventsError             string                           `json:"eventsError,omitempty"`
 	Warnings                []string                         `json:"warnings,omitempty"`
+	DeclaredTarget          *diagnosedWorkload               `json:"declaredTarget,omitempty"`
 	OwnedWorkloads          []diagnosedWorkload              `json:"ownedWorkloads,omitempty"`
 	OwnedWorkloadsTruncated bool                             `json:"ownedWorkloadsTruncated,omitempty"`
 }
@@ -38,6 +40,8 @@ type diagnosedWorkload struct {
 
 func operatorDiagnoseTarget(kind string) (canonical, group, resource string, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "canary", "canaries":
+		return "Canary", "flagger.app", "canaries", true
 	case "opentelemetrycollector", "opentelemetrycollectors":
 		return "OpenTelemetryCollector", "opentelemetry.io", "opentelemetrycollectors", true
 	}
@@ -101,6 +105,28 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 		}
 		if !children.WorkloadsComplete {
 			resp.Warnings = append(resp.Warnings, "Some workload inventories could not be checked. Follow the listed references, retry after caches load, or ask a reader with broader access before ruling out other runtime workloads.")
+		}
+	}
+	if kind == "Canary" {
+		if target, ok := configrefs.FlaggerTargetReference(u); ok {
+			ref := resourcecontext.ContextRef{Group: target.Group, Kind: target.Kind, Namespace: target.Namespace, Name: target.Name}
+			entry := &diagnosedWorkload{Ref: ref}
+			if target.Group == "apps" && (target.Kind == "Deployment" || target.Kind == "DaemonSet") {
+				resource := normalizeDiagnoseKind(target.Kind)
+				if !canReadInNamespace(ctx, target.Group, resource, target.Namespace, "get") {
+					entry.Error = fmt.Sprintf("forbidden: cannot get %s.%s in namespace %q", resource, target.Group, target.Namespace)
+				} else {
+					child := input
+					child.Kind, child.Group, child.Namespace, child.Name = target.Kind, target.Group, target.Namespace, target.Name
+					entry.Diagnosis, err = diagnoseWorkload(ctx, child, nil)
+					if err != nil {
+						entry.Error = boundDiagnoseMetricsError(err.Error())
+					}
+				}
+			} else {
+				entry.Error = "Runtime bundles support apps Deployments and DaemonSets for declared targets. Read this reference with get_resource instead."
+			}
+			resp.DeclaredTarget = entry
 		}
 	}
 	// Refuse a mixed-cluster answer or one whose root was recreated while
