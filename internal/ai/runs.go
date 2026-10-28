@@ -457,6 +457,9 @@ func (m *RunManager) countInFlightLocked() int {
 	return n
 }
 
+// MaxConcurrent is how many agent turns may run at once.
+func (m *RunManager) MaxConcurrent() int { return m.maxConcurrent }
+
 // beginTurn atomically reserves a turn slot for r: enforces the concurrency cap
 // and the run's preconditions, then marks it in-flight — so two concurrent turn
 // requests can't both spawn an agent. Returns the session to resume.

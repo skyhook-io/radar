@@ -1,0 +1,137 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunSummary } from "../../api/diagnose";
+import {
+  InvestigationCapacityNotice,
+  runsHoldingSlots,
+} from "./InvestigationCapacityNotice";
+
+function run(
+  id: string,
+  name: string,
+  status: string,
+  createdAt: string,
+): RunSummary {
+  return {
+    id,
+    kind: "Deployment",
+    group: "apps",
+    namespace: "prod",
+    name,
+    context: "test",
+    profile: "safeguarded",
+    status,
+    createdAt,
+    updatedAt: createdAt,
+  } as RunSummary;
+}
+
+const capacity = {
+  target: { kind: "Pod", group: "", namespace: "shop", name: "cart-0" },
+  limit: 3,
+};
+
+const threeRunning = [
+  run("c", "checkout", "running", "2026-10-28T10:04:00Z"),
+  run("a", "api", "running", "2026-10-28T10:00:00Z"),
+  run("done", "old", "completed", "2026-10-28T09:00:00Z"),
+  run("b", "billing", "running", "2026-10-28T10:02:00Z"),
+];
+
+describe("runsHoldingSlots", () => {
+  it("keeps only live runs, longest-running first", () => {
+    expect(runsHoldingSlots(threeRunning).map((r) => r.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+});
+
+describe("InvestigationCapacityNotice", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const handlers = {
+    onOpenRun: vi.fn(),
+    onStop: vi.fn(async () => {}),
+    onStart: vi.fn(),
+    onDismiss: vi.fn(),
+  };
+
+  beforeEach(() => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-28T10:05:00Z"));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    Object.values(handlers).forEach((h) => h.mockClear());
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+  });
+
+  const render = (runs: RunSummary[]) =>
+    act(async () =>
+      root.render(
+        <InvestigationCapacityNotice
+          capacity={capacity}
+          runs={runs}
+          {...handlers}
+        />,
+      ),
+    );
+  const button = (text: string) =>
+    [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === text || b.getAttribute("aria-label") === text,
+    )!;
+
+  it("says how many are running and lists each with its elapsed time", async () => {
+    await render(threeRunning);
+    expect(container.textContent).toContain(
+      "3 investigations are already running",
+    );
+    expect(container.textContent).toContain(
+      "Stop one to start Pod shop/cart-0",
+    );
+    const rows = [...container.querySelectorAll("li")].map(
+      (li) => li.textContent,
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("Deployment.apps prod/api");
+    expect(rows[0]).toContain("Running 5m");
+    expect(rows[2]).toContain("Running 1m");
+    expect(button("Start investigation").disabled).toBe(true);
+  });
+
+  it("opens and stops the run the user picks", async () => {
+    await render(threeRunning);
+    await act(async () => button("Open").click());
+    expect(handlers.onOpenRun).toHaveBeenCalledWith("a");
+    await act(async () => button("Stop Deployment.apps prod/billing").click());
+    expect(handlers.onStop).toHaveBeenCalledWith("b");
+    expect(button("Stop Deployment.apps prod/billing").disabled).toBe(true);
+    expect(container.textContent).toContain("Stopping…");
+  });
+
+  it("offers the same start once a slot frees, without starting it itself", async () => {
+    await render(threeRunning);
+    await render(threeRunning.filter((r) => r.id !== "b"));
+    expect(container.textContent).toContain("A slot is free");
+    expect(handlers.onStart).not.toHaveBeenCalled();
+    const start = button("Start investigation");
+    expect(start.disabled).toBe(false);
+    await act(async () => start.click());
+    expect(handlers.onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the pending start", async () => {
+    await render(threeRunning);
+    await act(async () => button("Cancel").click());
+    expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
+  });
+});

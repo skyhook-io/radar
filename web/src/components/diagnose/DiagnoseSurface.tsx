@@ -39,6 +39,7 @@ import {
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
+import { InvestigationCapacityRecovery } from "./InvestigationCapacityNotice";
 import { useNavCustomization } from "../../context/NavCustomization";
 import { InvestigationView } from "./InvestigationView";
 import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
@@ -608,6 +609,8 @@ export function DiagnoseSurface({
         View investigations
       </button>
     </div>
+  ) : d.startCapacity ? (
+    <InvestigationCapacityRecovery capacity={d.startCapacity} />
   ) : d.startError ? (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-sm text-theme-text-secondary">{d.startError}</p>

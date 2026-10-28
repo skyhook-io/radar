@@ -4,6 +4,8 @@ import {
   createRun,
   DiagnoseError,
   fetchAgents,
+  investigationCapacityLimit,
+  investigationRefusal,
   subscribeRun,
   type DiagnoseStreamEvent,
 } from "./diagnose";
@@ -313,6 +315,26 @@ describe("refused requests", () => {
     expect(e.code).toBe("ai_quota_exhausted");
     expect(e.reason).toBe("allowance_used_free");
     expect(e.action).toBe("upgrade");
+  });
+
+  it("reads Radar's capacity refusal as recoverable, not a host refusal", async () => {
+    refuse(
+      409,
+      JSON.stringify({
+        error: "3 investigations are already running.",
+        code: "investigations_at_capacity",
+        limit: 3,
+      }),
+    );
+    const e = await startError();
+    expect(e.message).toBe("3 investigations are already running.");
+    expect(investigationCapacityLimit(e)).toBe(3);
+    expect(investigationRefusal(e)).toBeNull();
+  });
+
+  it("does not read other conflicts as capacity", async () => {
+    refuse(409, JSON.stringify({ error: "Codex isn't installed." }));
+    expect(investigationCapacityLimit(await startError())).toBeNull();
   });
 
   it("applies the same reading to follow-up turns", async () => {

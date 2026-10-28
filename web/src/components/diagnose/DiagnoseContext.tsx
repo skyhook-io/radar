@@ -29,6 +29,7 @@ import {
   recordConsent,
   DiagnoseError,
   investigationRefusal,
+  investigationCapacityLimit,
 } from "../../api/diagnose";
 import { getApiBase } from "../../api/config";
 import {
@@ -56,6 +57,19 @@ export interface Target {
   fresh?: boolean;
 }
 export type DiagnoseView = "home" | "investigation";
+
+export interface StartCapacity {
+  target: Target;
+  limit: number;
+}
+
+function startCapacity(
+  error: unknown,
+  target: Target,
+): StartCapacity | undefined {
+  const limit = investigationCapacityLimit(error);
+  return limit === null ? undefined : { target, limit };
+}
 
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
@@ -107,6 +121,9 @@ interface DiagnoseCtx {
   // The host's refusal behind startError, when it sent one, so the surface can
   // offer the host's action beside the message.
   startRefusal: InvestigationRefusal | null;
+  // Set when the start failed because every investigation slot is taken: the
+  // start to retry once one is free, and how many run at once.
+  startCapacity: StartCapacity | null;
   // Kept apart from startError: the consent card renders this as "why your
   // approval was refused", and a run-start failure landing in the same slot
   // would be read as exactly that — the two paths don't share a lifecycle.
@@ -475,6 +492,7 @@ function RoutedDiagnoseProvider({
   const [startFailure, setStartFailure] = useState<{
     message: string;
     refusal: InvestigationRefusal | null;
+    capacity?: StartCapacity;
   } | null>(null);
   const [consentError, setConsentError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
@@ -786,6 +804,7 @@ function RoutedDiagnoseProvider({
               ? e.message
               : "Couldn't start the investigation.",
           refusal: investigationRefusal(e),
+          capacity: startCapacity(e, t),
         });
       });
   };
@@ -1125,6 +1144,7 @@ function RoutedDiagnoseProvider({
     needsConsent: !!pendingTarget,
     startError: startFailure?.message ?? null,
     startRefusal: startFailure?.refusal ?? null,
+    startCapacity: startFailure?.capacity ?? null,
     consentError,
     openInvestigation,
     openRun,
