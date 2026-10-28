@@ -187,13 +187,6 @@ export function InvestigationCapacityNotice({
           <button
             type="button"
             disabled={!canStart}
-            title={
-              cluster === "unknown"
-                ? "Checking which cluster Radar is connected to…"
-                : !canStart
-                  ? "Available once one of these finishes or you stop one"
-                  : undefined
-            }
             onClick={onStart}
             className="btn-brand px-3 py-1.5 text-sm"
           >
@@ -206,6 +199,11 @@ export function InvestigationCapacityNotice({
           >
             Cancel
           </button>
+          {cluster === "unknown" ? (
+            <span className="text-xs text-theme-text-tertiary">
+              Checking which cluster Radar is connected to…
+            </span>
+          ) : null}
         </div>
       </div>
     </div>
