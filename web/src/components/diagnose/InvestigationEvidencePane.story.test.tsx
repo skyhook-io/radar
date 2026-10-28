@@ -773,11 +773,9 @@ describe("story card defaults", () => {
           onViewActivity={() => {}}
         />,
       );
-    // The symptom's chart is drawn at full height.
     const symptom = render("Memory climbs.\n\n[[radar:evidence=0]]");
     expect(symptom).toContain("data-story-metrics");
     expect(symptom).not.toContain("height:140px");
-    // A context role draws the chart short; it starts open.
     const context = [{ ...evidence[0], role: "context" as const }];
     const contextHtml = render(
       "Memory climbs.\n\n[[radar:evidence=0]]",
@@ -787,7 +785,6 @@ describe("story card defaults", () => {
     expect(contextHtml).toContain("height:140px");
     expect(contextHtml).toContain('aria-expanded="true"');
     expect(contextHtml).not.toContain("data-chart-reading");
-    // Compact folds it, and the header says what the chart shows.
     const folded = render(
       "Memory climbs.\n\n[[radar:evidence=0|compact]]",
       context,
@@ -795,7 +792,8 @@ describe("story card defaults", () => {
     expect(folded).not.toContain("data-story-metrics");
     expect(folded).toContain('aria-expanded="false"');
     expect(folded).toMatch(/data-chart-reading[^>]*>161\.5 Mi?B?/);
-    // A symptom placed compact stays open: the role keeps it, never folds it.
+    // Agents mark cards compact for the prose's flow, not their weight, so a
+    // compact symptom stays open.
     const compactSymptom = render(
       "Memory climbs.\n\n[[radar:evidence=0|compact]]",
     );
@@ -806,7 +804,6 @@ describe("story card defaults", () => {
       render("Memory climbs.\n\n[[radar:evidence=0]]\n\nMore after the fold."),
     ).not.toContain("data-story-metrics");
 
-    // The reader opens a folded chart and folds an open one.
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -841,7 +838,6 @@ describe("story card defaults", () => {
     act(() => header().click());
     expect(header().getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("[data-chart-reading]")).not.toBeNull();
-    // A reference that jumps to a folded chart opens it.
     act(() =>
       root.render(
         pane(
