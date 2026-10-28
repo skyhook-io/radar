@@ -37,6 +37,8 @@ interface HelmReleaseDrawerProps {
   isOpen?: boolean
   /** Right inset in px so the drawer sits beside a docked side panel (AI), not under it. */
   rightInset?: number
+  /** Top inset in px: the app's chrome above the drawer. */
+  headerHeight?: number
 }
 
 export function effectiveHelmStorageNamespace(release: SelectedHelmRelease): string {
@@ -147,7 +149,7 @@ const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
 export const DEFAULT_SHOW_EFFECTIVE_VALUES = false
 
-export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
+export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0, headerHeight = 49 }: HelmReleaseDrawerProps) {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
@@ -598,7 +600,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     void runUpgrade(upgradePreviewRequest.targetVersion, upgradePreviewRequest.values, upgradePreviewRequest.repositoryName, selection)
   }
 
-  const headerHeight = 49
   const dockInset = useDockReservedHeight()
 
   const tabs: { id: TabId; label: string; icon: typeof Package }[] = [

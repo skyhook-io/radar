@@ -1567,7 +1567,7 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	m1 := persistedManager(t, st, "ctx-a")
 	r := &Run{
 		ID: "run-1", Kind: "Rollout", Group: "argoproj.io", Namespace: "ns", Name: "p", Context: "ctx-a",
-		Agent: "claude", store: st, status: "running", hydrated: true,
+		Agent: "claude", issueID: "0123456789abcdef", store: st, status: "running", hydrated: true,
 		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{},
 	}
 	m1.mu.Lock()
@@ -1594,6 +1594,9 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	}
 	if got := m2.Get("run-1").Group; got != "argoproj.io" {
 		t.Fatalf("hydrated run group = %q, want argoproj.io", got)
+	}
+	if got := runs[0].IssueID; got != "0123456789abcdef" {
+		t.Fatalf("restart lost the issue the run started from: %q", got)
 	}
 	// Replay parity: Subscribe hydrates the transcript from the store.
 	r2 := m2.Get("run-1")
@@ -2160,7 +2163,7 @@ func TestClearHistoryFencesStartAndAddTurn(t *testing.T) {
 	started := make(chan startResult, 1)
 	go func() {
 		close(startReady)
-		summary, err := manager.Start("Pod", "", "default", "new", "claude", ExecutionProfileSafeguarded, "", "", "", nil)
+		summary, err := manager.Start("Pod", "", "default", "new", "claude", ExecutionProfileSafeguarded, "", "", "", "", nil)
 		started <- startResult{summary: summary, err: err}
 	}()
 	<-startReady
@@ -2505,4 +2508,63 @@ func waitForMutexHeld(t *testing.T, mu *sync.Mutex) {
 		runtime.Gosched()
 	}
 	t.Fatal("timed out waiting for concurrent operation to hold mutex")
+}
+
+// TestStart_JoinedRunKeepsOneIssue pins the attribution a live run keeps when
+// another start request joins it instead of starting a duplicate: the same
+// issue or the bare resource leaves it, a different issue drops it (Findings
+// then offers no alert rather than one for the wrong issue), and a dropped
+// attribution is not re-adopted or lost across a restart.
+func TestStart_JoinedRunKeepsOneIssue(t *testing.T) {
+	st, _ := testStore(t)
+	m := persistedManager(t, st, "ctx-a")
+	live := func(id, issueID string) *Run {
+		r := &Run{
+			ID: id, Kind: "Deployment", Group: "apps", Namespace: "shop", Name: id, Context: "ctx-a",
+			Agent: "claude", Profile: ExecutionProfileSafeguarded, issueID: issueID, store: st,
+			status: "running", hydrated: true, CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{},
+		}
+		m.mu.Lock()
+		m.runs[r.ID] = r
+		m.order = append(m.order, r.ID)
+		m.mu.Unlock()
+		st.SaveRun(r.Summary())
+		return r
+	}
+	join := func(name, issueID string) RunSummary {
+		t.Helper()
+		sum, err := m.Start("Deployment", "apps", "shop", name, "claude", ExecutionProfileSafeguarded, "", "", "", issueID, nil)
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if sum.ID != name {
+			t.Fatalf("Start(%s) started a new run %s instead of joining", name, sum.ID)
+		}
+		return sum
+	}
+
+	live("api", "issue-a")
+	if got := join("api", "issue-a").IssueID; got != "issue-a" {
+		t.Fatalf("same issue: issueId = %q, want issue-a", got)
+	}
+	if got := join("api", "").IssueID; got != "issue-a" {
+		t.Fatalf("bare resource: issueId = %q, want issue-a", got)
+	}
+	if got := join("api", "issue-b").IssueID; got != "" {
+		t.Fatalf("different issue: issueId = %q, want none", got)
+	}
+	if got := join("api", "issue-a").IssueID; got != "" {
+		t.Fatalf("after a conflict: issueId = %q, want none", got)
+	}
+
+	live("web", "")
+	if got := join("web", "issue-c").IssueID; got != "" {
+		t.Fatalf("bare run joined from an issue: issueId = %q, want none", got)
+	}
+
+	st.(*sqliteRunStore).barrier()
+	m2 := persistedManager(t, st, "ctx-a")
+	if got := m2.Get("api").Summary().IssueID; got != "" {
+		t.Fatalf("restart restored a dropped attribution: %q", got)
+	}
 }

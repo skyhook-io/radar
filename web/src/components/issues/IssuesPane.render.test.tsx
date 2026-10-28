@@ -8,7 +8,10 @@ const state = vi.hoisted(() => ({
   fleet: { data: undefined as IssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
   subject: { data: undefined as SubjectIssuesResponse | undefined, isLoading: false, error: null as Error | null, dataUpdatedAt: 0, refetch: vi.fn() },
 }))
-vi.mock('../../api/client', () => ({ useIssues: () => state.fleet, useSubjectIssues: () => state.subject }))
+vi.mock('../../api/client', () => ({ useIssues: () => state.fleet, useSubjectIssues: () => state.subject, useClusterInfo: () => ({ data: undefined }) }))
+// The Radar Cloud hints are off here; their gating has its own tests.
+vi.mock('../cloudHints/cloudHints', () => ({ useCloudHintsEnabled: () => false }))
+vi.mock('../diagnose/DiagnoseContext', () => ({ useDiagnose: () => ({ setupState: 'ready', unavailableReason: '' }) }))
 vi.mock('../../api/apiResources', () => ({ useAPIResources: () => ({ data: undefined }), karpenterCapacityAvailable: () => false }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({}) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected' } }) }))

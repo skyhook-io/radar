@@ -894,9 +894,20 @@ Radar is free and fully functional without an account. A Cloud button in the
 header offers to connect the cluster to [Radar Cloud](https://app.radarhq.io) —
 optional, and nothing else depends on it.
 
+A few places also mention Radar Cloud where it adds something the local app
+can't do: the timeline notes that the cluster doesn't store history before
+Radar started watching, an expanded issue offers alerts, a problem assessment
+offers an alert, the AI setup screen lists Radar Cloud after the local agents,
+and a thin row appears after several back-and-forth context switches. Each one
+opens the same Cloud dialog. The alert prompts and the switching row have a
+control that hides them for good; the others are a sentence inside text that is
+there anyway. None of them sends anything on its own. When one opens the Cloud
+dialog, the dialog's copy request and the links you open from it name that hint
+(below, and `utm_term` on the links).
+
 | Variable | Effect |
 |---|---|
-| `RADAR_CLOUD_FUNNEL=off` | Removes the Cloud button entirely. `on` forces it on. |
+| `RADAR_CLOUD_FUNNEL=off` | Removes the Cloud button and every in-app Radar Cloud hint. `on` forces them on. |
 | `RADAR_HUB_URL` | Connect to your own Radar Cloud Self-Managed control plane instead of the hosted service. |
 | `RADAR_HUB_APP_URL` | That control plane's web origin, when it differs from `RADAR_HUB_URL`. |
 
@@ -920,8 +931,11 @@ request, all to Skyhook, none containing your resources, logs or events:
   release-only lookups when fetching release metadata.
 - **[Anonymous usage stats](usage-stats.md)**: once a day, strictly opt-in.
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
-  current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
-  stops this request from ever happening.
+  current terms shown in it. It names which kind of setup footer the dialog
+  shows, whether Radar runs locally or in-cluster, and, when an in-app hint
+  opened the dialog, which one (a fixed name such as `timeline-history`). No
+  identifiers are sent. `RADAR_CLOUD_FUNNEL=off` stops this request from ever
+  happening.
 
 Disable automatic version checks with `--no-version-check`,
 `RADAR_DISABLE_VERSION_CHECK=1` (or `true`), or `"noVersionCheck": true` in

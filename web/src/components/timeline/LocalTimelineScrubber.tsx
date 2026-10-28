@@ -12,6 +12,8 @@ import {
 import type { TimelineEvent } from '../../types'
 import { localOverviewFromEvents } from '../../api/timelineSource'
 import { groupBuckets, buildPresets, type ScrubberDomainInfo } from './RetainedTimelineScrubber'
+import { CloudHintLink } from '../cloudHints/CloudHintLink'
+import { useCloudHintsEnabled } from '../cloudHints/cloudHints'
 
 const HOUR_MS = 60 * 60 * 1000
 const MINUTE_MS = 60_000
@@ -73,8 +75,9 @@ export function LocalTimelineScrubber({
   // When recording began: the oldest LIVE-fed event (informer / k8s event).
   // Historical events are synthesized from resource metadata and can be years
   // old, so they don't mark where the ring's real coverage starts. The strip
-  // dims the query region before this — "Radar wasn't watching yet" is the
-  // honest answer to "why can't I scroll further back".
+  // dims the query region before this: Kubernetes expires events and keeps no
+  // history of its own, so nothing before Radar started can be shown.
+  const cloudHints = useCloudHintsEnabled()
   const recordingStartMs = useMemo(() => {
     let min: number | null = null
     for (const e of events) {
@@ -186,6 +189,16 @@ export function LocalTimelineScrubber({
         loading={loading}
         domain={domain}
         historyUnavailableBeforeMs={recordingStartMs}
+        renderHistoryFloorHint={
+          cloudHints
+            ? (_floorMs, floorStamp) => (
+                <>
+                  The cluster doesn't store history before {floorStamp}. Use{' '}
+                  <CloudHintLink entry="timeline-history" /> to keep it.
+                </>
+              )
+            : undefined
+        }
         // Exact count with the SAME predicate the toolbar chips use — edge
         // buckets spill a few events, so a bucket sum tells a second story.
         totalInQueryRange={events.reduce((n, e) => {

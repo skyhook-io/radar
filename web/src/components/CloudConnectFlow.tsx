@@ -10,6 +10,7 @@ import {
   cancelCloudInstall,
   type CloudInstallBlocked,
   type CloudInstallRecoveryGuidance,
+  type CloudInstallConnected,
   type CloudInstallStatus,
   dismissCloudInstall,
   startCloudInstall,
@@ -20,16 +21,25 @@ import { showApiError } from './ui/Toast'
 // flow itself is server-owned (it survives modal close and page reloads);
 // this component only renders the observed status and issues transitions.
 export function CloudConnectFlow({
-  status,
+  status: observed,
   blocked,
   exit,
   where,
   onStatus,
   onExit,
+  tagUrl = (url) => url,
+  connectedAction,
 }: {
   status: CloudInstallStatus
   blocked: CloudInstallBlocked | null
   exit: BlockedExit
+  // Marks the Hub approval link with which hint opened the dialog, so the
+  // page the person opens can say where they came from.
+  tagUrl?: (url: string) => string
+  // What the person came to do once the cluster is in Radar Cloud (set up an
+  // alert, open a resource with the team), offered as the connected card's
+  // main action.
+  connectedAction?: (connected: CloudInstallConnected) => { label: string; href: string } | null
   // Which cluster this is, for the note a blocked person hands to an admin.
   where?: AdminNoteContext
   // Push a mutation's status response into the shared query state.
@@ -39,6 +49,14 @@ export function CloudConnectFlow({
 }) {
   if (blocked) {
     return <BlockedView blocked={blocked} exit={exit} where={where} onExit={onExit} />
+  }
+
+  const status: CloudInstallStatus = {
+    ...observed,
+    ...(observed.connectUrl && { connectUrl: tagUrl(observed.connectUrl) }),
+    ...(observed.connected?.clusterUrl && {
+      connected: { ...observed.connected, clusterUrl: tagUrl(observed.connected.clusterUrl) },
+    }),
   }
 
   switch (status.state) {
@@ -52,7 +70,7 @@ export function CloudConnectFlow({
         </div>
       )
     case 'ready':
-      return <PlanCard status={status} onStatus={onStatus} onExit={onExit} />
+      return <PlanCard status={status} onStatus={onStatus} onExit={onExit} tagUrl={tagUrl} />
     case 'starting':
     case 'awaiting_approval':
       return <ApprovalCard status={status} onStatus={onStatus} />
@@ -62,7 +80,14 @@ export function CloudConnectFlow({
     case 'waiting_tunnel':
       return <ProgressCard status={status} onStatus={onStatus} />
     case 'connected':
-      return <ConnectedCard status={status} onStatus={onStatus} onExit={onExit} />
+      return (
+        <ConnectedCard
+          status={status}
+          onStatus={onStatus}
+          onExit={onExit}
+          action={status.connected && connectedAction ? connectedAction(status.connected) : null}
+        />
+      )
     case 'failed':
       return <FailedCard status={status} where={where} onStatus={onStatus} onExit={onExit} />
     default:
@@ -432,10 +457,12 @@ function PlanCard({
   status,
   onStatus,
   onExit,
+  tagUrl,
 }: {
   status: CloudInstallStatus
   onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
+  tagUrl: (url: string) => string
 }) {
   const plan = status.plan
   const [clusterName, setClusterName] = useState(plan?.defaultClusterName ?? '')
@@ -463,10 +490,11 @@ function PlanCard({
       // flight, and opening its connectUrl anyway would present an approvable
       // request for a flow the user already stopped.
       if (st.connectUrl && st.state === 'awaiting_approval') {
+        const connectUrl = tagUrl(st.connectUrl)
         if (approvalTab.current && !approvalTab.current.closed) {
-          approvalTab.current.location.href = st.connectUrl
+          approvalTab.current.location.href = connectUrl
         } else {
-          window.open(st.connectUrl, '_blank', 'noopener')
+          window.open(connectUrl, '_blank', 'noopener')
         }
       } else {
         approvalTab.current?.close()
@@ -759,10 +787,12 @@ function ConnectedCard({
   status,
   onStatus,
   onExit,
+  action,
 }: {
   status: CloudInstallStatus
   onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
+  action?: { label: string; href: string } | null
 }) {
   const dismiss = useDismiss(status, onStatus, onExit)
   const connected = status.connected
@@ -783,13 +813,23 @@ function ConnectedCard({
       </p>
       <div className="flex items-center gap-4 mb-4">
         <a
-          href={connected.clusterUrl}
+          href={action?.href ?? connected.clusterUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13px] font-bold transition-all inline-flex items-center gap-1.5"
         >
-          Open in Radar Cloud <ArrowUpRight className="w-3.5 h-3.5" />
+          {action?.label ?? 'Open in Radar Cloud'} <ArrowUpRight className="w-3.5 h-3.5" />
         </a>
+        {action && (
+          <a
+            href={connected.clusterUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2"
+          >
+            Open the cluster
+          </a>
+        )}
         <button onClick={dismiss} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
           Done
         </button>
