@@ -409,7 +409,7 @@ function observationMatchesSubject(
   // name is the handle that tells them apart.
   if (observation.data.type === "alerts" && subject.name !== undefined)
     return observation.data.rule.name === subject.name;
-  const identities = observationIdentities(observation);
+  const identities = observationIdentities(observation, targetPods);
   // An observation that states no resource of its own (an agent-run query
   // whose selectors do not name the target exactly, a topology summary) can
   // only be named by its evidence kind; the ref and the uniqueness rule do
@@ -428,6 +428,7 @@ function observationMatchesSubject(
  */
 function observationIdentities(
   observation: InvestigationEvidenceObservation,
+  targetPods: ReadonlySet<string>,
 ): ObservationSubjectIdentity[] {
   const stated = observationSubjectIdentity(observation);
   const identities = stated ? [stated] : [];
@@ -461,16 +462,17 @@ function observationIdentities(
       });
     }
   }
-  // An agent-run query states the target as its subject once its selectors
-  // name only the target's own pods; when they name exactly one Pod, the
-  // agent naming that Pod names the same chart.
+  // An agent-run query about the target that selects exactly one Pod is
+  // also that Pod's chart, but only for a Pod established as the target's
+  // own: a workload label can make a query target-scoped while its pod
+  // matcher names a sibling.
   if (
     observation.data.type === "metrics" &&
     observation.data.origin === "query" &&
     stated
   ) {
     const pod = metricsSelectedPod(observation.data.selectors ?? []);
-    if (pod)
+    if (pod && targetPods.has(pod))
       identities.push({
         kind: "Pod",
         group: "",

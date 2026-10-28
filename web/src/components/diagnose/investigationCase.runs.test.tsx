@@ -98,6 +98,47 @@ describe("a Pod cited for the agent's own Prometheus query", () => {
   });
 });
 
+describe("a Pod cited for a target query that selects a sibling", () => {
+  it("does not pin the sibling to the target's chart", () => {
+    const run = recorded["run-7885e0cdb0"];
+    // `deployment="api"` makes the query target-scoped while the pod
+    // matcher names a Pod nothing established as the target's own.
+    const timeline = run.timeline.map((item) => {
+      if (item.kind !== "tool" || item.tool !== "query_prometheus") return item;
+      const result = JSON.parse(item.result ?? "{}");
+      result.selectors = [
+        {
+          metric: "kube_pod_container_status_restarts_total",
+          matchers: [
+            { label: "namespace", op: "=", value: "gl-crash-config" },
+            { label: "deployment", op: "=", value: "api" },
+            { label: "pod", op: "=", value: "sibling-0" },
+          ],
+        },
+      ];
+      return { ...item, result: JSON.stringify(result) };
+    });
+    const evidence = run.diagnosis.evidence.map((entry, index) =>
+      index === 2 && entry.subject
+        ? { ...entry, subject: { ...entry.subject, name: "sibling-0" } }
+        : entry,
+    );
+    const { projection, investigationCase } = resolve({
+      ...run,
+      timeline,
+      diagnosis: { ...run.diagnosis, evidence },
+    });
+    const chart = projection.groups
+      .flatMap((group) => group.observations)
+      .find((observation) => observation.source.tool === "query_prometheus");
+    expect(chart?.relevance).toBe("target");
+    const item = investigationCase.items.find(
+      (candidate) => candidate.index === 2,
+    );
+    expect(item?.placement).toBe("source");
+  });
+});
+
 describe("run-8b924c437a", () => {
   it("places every story citation", () => {
     const html = renderPane(recorded["run-8b924c437a"]);
