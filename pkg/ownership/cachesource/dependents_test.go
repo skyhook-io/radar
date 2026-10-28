@@ -224,15 +224,19 @@ func TestDependentCandidatesThroughAPromotion(t *testing.T) {
 			t.Fatalf("%+v from the unloaded replacement = %+v; want a Widget kind_sync_pending gap and no Widgets", scope, got)
 		}
 	}
+	loading := during.DependentCandidates("uid-deploy", ownership.Everywhere())
+	loadingGaps := slices.Clone(loading.Gaps)
 	p.hold.Store(false)
 	if !f.caches.Dynamic.WaitForSync(widgets, 5*time.Second) {
 		t.Fatal("the replacement did not sync")
 	}
-	after := begin(t, source)
-	got := after.DependentCandidates("uid-deploy", ownership.Everywhere())
+	got := during.DependentCandidates("uid-deploy", ownership.Everywhere())
 	if !slices.Contains(candidateRefs(got), ref("example.io", "Widget", "alpha", "w1")) ||
 		slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind }) {
 		t.Fatalf("from the loaded replacement = %+v", got)
+	}
+	if !slices.Equal(loading.Gaps, loadingGaps) {
+		t.Fatal("loading completed by changing an earlier answer")
 	}
 }
 
@@ -579,6 +583,33 @@ func TestDependentCandidatesOfATypedKindLoadingInSomeNamespaces(t *testing.T) {
 		}
 		if !slices.Equal(rsGaps, tc.want) {
 			t.Errorf("%+v: ReplicaSet gaps %+v; want %+v", tc.scope, rsGaps, tc.want)
+		}
+	}
+}
+
+func TestDependentCoverageAnswersSurviveLaterSearches(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{}, nil)
+	s := begin(t, f.source())
+	scopes := []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", ""}}, {IncludeClusterScoped: true}, {}, {Namespaces: []string{"beta", ""}}}
+	type capture struct{ answer, want []ownership.Gap }
+	var captures []capture
+	for range 2 {
+		for _, scope := range scopes {
+			got := s.DependentCandidates("uid-none", scope)
+			want := begin(t, f.source()).DependentCandidates("uid-none", scope)
+			if !slices.Equal(got.Gaps, want.Gaps) {
+				t.Fatalf("scope %+v: %v, want %v", scope, got.Gaps, want.Gaps)
+			}
+			captures = append(captures, capture{got.Gaps, slices.Clone(got.Gaps)})
+			editable := slices.Clone(got.Gaps)
+			if len(editable) > 0 {
+				editable[0].Namespace = "edited"
+			}
+			for _, earlier := range captures {
+				if !slices.Equal(earlier.answer, earlier.want) {
+					t.Fatal("a later search changed an earlier answer")
+				}
+			}
 		}
 	}
 }

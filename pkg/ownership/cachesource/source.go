@@ -82,7 +82,15 @@ type session struct {
 	byNamespace map[schema.GroupVersionResource][]string
 	// unwatched holds why each resource with no watched version is unread
 	// ("" for a watched one).
-	unwatched        map[schema.GroupResource]readreason.Code
+	unwatched           map[schema.GroupResource]readreason.Code
+	dependentKinds      []ownership.CatalogKind
+	unwatchedNamespaced []ownership.Gap
+	unwatchedCluster    []ownership.Gap
+	unwatchedAll        []ownership.Gap
+	lastGapMode         uint8
+	lastExtraGaps       []ownership.Gap
+	lastCombinedGaps    []ownership.Gap
+
 	membershipStates map[resourceid.Ref]membershipStateObservation
 	// recordingManagersRead, set only by tests, runs after RecordingManagers reads a manager
 	// kind, with the keys it read together.

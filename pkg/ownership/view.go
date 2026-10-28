@@ -226,17 +226,31 @@ func (v *View) Children(ref resourceid.Ref) ChildrenAnswer {
 		}
 		a.Children = append(a.Children, c)
 	}
-	for _, g := range found.Gaps {
-		if v.coversReadable(g, scope) {
-			a.Gaps = append(a.Gaps, g)
+	a.Gaps = found.Gaps
+	for i, g := range found.Gaps {
+		if !v.coversReadable(g, scope) {
+			a.Gaps = slices.Clone(found.Gaps[:i])
+			for _, later := range found.Gaps[i+1:] {
+				if v.coversReadable(later, scope) {
+					a.Gaps = append(a.Gaps, later)
+				}
+			}
+			break
 		}
 	}
-	// Objects the view couldn't read: the caller may read them, the view read
-	// them for it.
-	a.Gaps = append(a.Gaps, unread...)
-	a.Gaps = append(a.Gaps, unresolved...)
-	slices.SortFunc(a.Gaps, compareGaps)
-	a.Gaps = slices.Compact(a.Gaps)
+	if len(unread)+len(unresolved) > 0 {
+		a.Gaps = slices.Clone(a.Gaps)
+		a.Gaps = append(a.Gaps, unread...)
+		a.Gaps = append(a.Gaps, unresolved...)
+	}
+	for i := 1; i < len(a.Gaps); i++ {
+		if compareGaps(a.Gaps[i-1], a.Gaps[i]) >= 0 {
+			a.Gaps = slices.Clone(a.Gaps)
+			slices.SortFunc(a.Gaps, compareGaps)
+			a.Gaps = slices.Compact(a.Gaps)
+			break
+		}
+	}
 	return a
 }
 

@@ -44,10 +44,27 @@ func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope
 		}
 	}
 	searches := scope.Searches(true) || scope.Searches(false)
+	if searches {
+		s.prepareDependentKinds()
+	}
 	if !s.catalog.Complete() && searches {
 		q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.ReadError})
 	}
-	for _, kind := range s.catalog.DependentKinds() {
+	var stable []ownership.Gap
+	var gapMode uint8
+	namespaced := scope.AllNamespaces || len(q.namespaces) > 0
+	switch {
+	case namespaced && scope.IncludeClusterScoped:
+		stable = s.unwatchedAll
+		gapMode = 3
+	case namespaced:
+		stable = s.unwatchedNamespaced
+		gapMode = 1
+	case scope.IncludeClusterScoped:
+		stable = s.unwatchedCluster
+		gapMode = 2
+	}
+	for _, kind := range s.dependentKinds {
 		if !scope.Searches(kind.Namespaced) {
 			continue
 		}
@@ -71,9 +88,56 @@ func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope
 			r.Gaps = append(r.Gaps, read.Gap)
 		}
 	}
-	slices.SortFunc(r.Gaps, compareGaps)
-	r.Gaps = slices.Compact(r.Gaps)
+	// Reuse representation only after live gaps were read and compared; never
+	// let later searches change a gap slice an earlier answer retained.
+	if len(r.Gaps) == 0 {
+		r.Gaps = stable[:len(stable):len(stable)]
+	} else {
+		slices.SortFunc(r.Gaps, compareGaps)
+		r.Gaps = slices.Compact(r.Gaps)
+		if s.lastGapMode != gapMode || !slices.Equal(s.lastExtraGaps, r.Gaps) {
+			s.lastGapMode = gapMode
+			s.lastExtraGaps = r.Gaps
+			s.lastCombinedGaps = append(slices.Clone(stable), r.Gaps...)
+			slices.SortFunc(s.lastCombinedGaps, compareGaps)
+			s.lastCombinedGaps = slices.Compact(s.lastCombinedGaps)
+		}
+		r.Gaps = s.lastCombinedGaps[:len(s.lastCombinedGaps):len(s.lastCombinedGaps)]
+	}
 	return r
+}
+
+// Unwatched kinds have no UID-specific work. Capture their existing session
+// state once, but keep reading watched stores so loading can finish mid-request.
+func (s *session) prepareDependentKinds() {
+	if s.dependentKinds != nil {
+		return
+	}
+	s.dependentKinds = []ownership.CatalogKind{}
+	for _, kind := range s.catalog.DependentKinds() {
+		var reason readreason.Code
+		if _, typed := typedKinds[kind.GroupKind]; !typed {
+			if s.caches.Dynamic == nil {
+				reason = readreason.RadarKindNotCollected
+			} else {
+				reason, _ = s.unwatchedReason(kind, s.servingVersions(kind))
+			}
+		}
+		if reason == "" {
+			s.dependentKinds = append(s.dependentKinds, kind)
+			continue
+		}
+		gap := ownership.Gap{Kind: kind.GroupKind, Reason: reason}
+		if kind.Namespaced {
+			s.unwatchedNamespaced = append(s.unwatchedNamespaced, gap)
+		} else {
+			s.unwatchedCluster = append(s.unwatchedCluster, gap)
+		}
+	}
+	slices.SortFunc(s.unwatchedNamespaced, compareGaps)
+	slices.SortFunc(s.unwatchedCluster, compareGaps)
+	s.unwatchedAll = append(slices.Clone(s.unwatchedNamespaced), s.unwatchedCluster...)
+	slices.SortFunc(s.unwatchedAll, compareGaps)
 }
 
 // gap records that kind in namespace went unread; "" stands for the kind
