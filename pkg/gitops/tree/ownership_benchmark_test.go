@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -20,6 +21,12 @@ import (
 )
 
 func BenchmarkGeneratedTreeCachedOwnership(b *testing.B) {
+	for _, dynamic := range []bool{false, true} {
+		b.Run(fmt.Sprintf("dynamic=%t", dynamic), func(b *testing.B) { benchmarkGeneratedTreeCachedOwnership(b, dynamic) })
+	}
+}
+
+func benchmarkGeneratedTreeCachedOwnership(b *testing.B, withDynamic bool) {
 	var objects []runtime.Object
 	var inventory []any
 	topo := &topology.Topology{}
@@ -53,7 +60,17 @@ func BenchmarkGeneratedTreeCachedOwnership(b *testing.B) {
 		b.Fatal(err)
 	}
 	b.Cleanup(cache.Stop)
-	source := cachesource.New(func() cachesource.Caches { return cachesource.Caches{Typed: cache, Discovery: discovery} })
+	var dynamic *k8score.DynamicResourceCache
+	if withDynamic {
+		dynamic, err = k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), Discovery: discovery})
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(dynamic.Stop)
+	}
+	source := cachesource.New(func() cachesource.Caches {
+		return cachesource.Caches{Typed: cache, Dynamic: dynamic, Discovery: discovery}
+	})
 	app := operatorApplication()
 	unstructured.SetNestedSlice(app.Object, inventory, "status", "resources")
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}

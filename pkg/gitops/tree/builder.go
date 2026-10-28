@@ -362,13 +362,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if r, ok := nodes[rootNode.ID]; ok {
 		mergedRoot = r
 	}
-	warnings := append([]string{}, b.topoWarnings()...)
-	warnings = append(warnings, generatedWarnings...)
-	if omittedDependencies {
-		warnings = append(warnings, "Some declared dependency nodes are hidden by read permissions.")
-	}
-	if omittedByReadCheck {
-		warnings = append(warnings, "Some resource nodes are hidden by read permissions; readable descendants may be disconnected from their omitted owners.")
+	warnings := generatedWarnings
+	if omittedDependencies || omittedByReadCheck {
+		warnings = append(warnings, "Some managed resources are hidden by RBAC.")
 	}
 	if w := unknownKindsWarning(unknownKinds); w != "" {
 		warnings = append(append([]string{}, warnings...), w)
@@ -596,20 +592,6 @@ func (b *Builder) topoNodes() []topology.Node {
 		return nil
 	}
 	return b.topo.Nodes
-}
-
-func (b *Builder) topoEdges() []topology.Edge {
-	if b.topo == nil {
-		return nil
-	}
-	return b.topo.Edges
-}
-
-func (b *Builder) topoWarnings() []string {
-	if b.topo == nil {
-		return nil
-	}
-	return b.topo.Warnings
 }
 
 func findTopoNode(nodes map[string]topology.Node, ref ResourceRef) (topology.Node, bool) {

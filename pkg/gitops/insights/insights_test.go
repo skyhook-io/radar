@@ -2781,3 +2781,28 @@ func TestBuildIssuesRollbackWithoutAppliedRevisions(t *testing.T) {
 		t.Fatalf("missing verification warning: %+v", issues)
 	}
 }
+
+func TestBuildIssues_RemoteComparisonOffersNoLocalRemediationOrEventCause(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			root := argoApp(map[string]any{
+				"health":    map[string]any{"status": "Degraded"},
+				"sync":      map[string]any{"comparedTo": map[string]any{"destination": map[string]any{"server": "https://remote.example"}}},
+				"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "payments", "name": "web", "status": "Synced"}},
+			})
+			if failed {
+				unstructured.SetNestedMap(root.Object, map[string]any{"phase": "Failed", "message": `namespaces "payments" not found`}, "status", "operationState")
+			}
+			resolver := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "LOCAL object failure", Count: 3}}}}
+			issues := buildIssues(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", resolver)
+			for _, issue := range issues {
+				if issue.Remediation != nil || issue.Reason == "PossibleCause" {
+					t.Fatalf("remote comparison used local evidence: %+v", issues)
+				}
+			}
+			if failed && len(issues) == 0 {
+				t.Fatal("lost the recorded operation failure")
+			}
+		})
+	}
+}

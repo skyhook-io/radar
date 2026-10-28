@@ -209,7 +209,7 @@ func TestGeneratedTreeFollowsNestedLocalInventory(t *testing.T) {
 			if got.Summary.Generated != wantGenerated {
 				t.Fatalf("nested inventory: %+v", got)
 			}
-			if state == ownership.MembersUnreadable && len(got.Warnings) == 0 {
+			if state == ownership.MembersUnreadable && !strings.Contains(strings.Join(got.Warnings, " "), "resource lists are unavailable") {
 				t.Fatal("unreadable nested inventory lacked a warning")
 			}
 		})
@@ -453,5 +453,47 @@ func TestGeneratedTreePreservesSpecGeneratorAndReportsUnsettledChain(t *testing.
 				t.Fatalf("spec generator lost: %+v", got)
 			}
 		})
+	}
+}
+
+func TestGeneratedTreeDoesNotExposeUnrelatedTopologyWarnings(t *testing.T) {
+	prom := ownedObject("monitoring.coreos.com", "Prometheus", "monitoring", "main", nil, false)
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): operatorApplication()}}
+	got, _, err := NewBuilder(getter, &topology.Topology{Warnings: []string{"Failed to list unrelated objects: private details"}}).WithOwnership(ownershipSession(t, prom)).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Warnings) != 0 {
+		t.Fatalf("unrelated topology warning exposed: %v", got.Warnings)
+	}
+}
+
+type declaredRootsSession struct {
+	ownership.ReadSession
+	calls int
+}
+
+func (s *declaredRootsSession) Object(ref resourceid.Ref) ownership.ObjectRead {
+	return ownership.ObjectRead{State: ownership.Present, Object: ownership.Observation{Ref: ref, UID: types.UID(ref.Name)}}
+}
+func (s *declaredRootsSession) DependentCandidates(types.UID, ownership.SearchScope) ownership.DependentCandidatesRead {
+	s.calls++
+	return ownership.DependentCandidatesRead{}
+}
+func TestGeneratedTreeBoundsSearchesOfLargeDeclaredInventory(t *testing.T) {
+	app := operatorApplication()
+	var inventory []any
+	for i := range maxTraversalResources + 1 {
+		inventory = append(inventory, map[string]any{"group": "apps", "kind": "Deployment", "namespace": "monitoring", "name": fmt.Sprintf("app-%05d", i)})
+	}
+	unstructured.SetNestedSlice(app.Object, inventory, "status", "resources")
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	session := &declaredRootsSession{ReadSession: ownershipSession(t)}
+	got, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.calls != maxTraversalResources || got.Summary.Declared != len(inventory) || len(got.Warnings) == 0 {
+		t.Fatalf("calls=%d summary=%+v warnings=%v", session.calls, got.Summary, got.Warnings)
 	}
 }

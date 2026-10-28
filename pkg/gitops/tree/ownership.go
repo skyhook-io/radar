@@ -41,7 +41,7 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	for _, ref := range queue {
 		queued[identity(ref)] = true
 	}
-	queuedGenerated, generated, incomplete, truncated := 0, 0, false, false
+	queuedGenerated, generated, incomplete, truncated, inventoryUnavailable := 0, 0, false, false, false
 	attach := func(parent ResourceRef, child ownership.Observation) {
 		ref := ResourceRef{Group: child.Ref.Group, Kind: child.Ref.Kind, Namespace: child.Ref.Namespace, Name: child.Ref.Name, UID: string(child.UID)}
 		if !queued[child.Ref] {
@@ -85,7 +85,7 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		}
 	}
 	for i := 0; i < len(queue); i++ {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || len(seen) >= maxTraversalResources {
 			truncated = true
 			break
 		}
@@ -112,8 +112,12 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		if ownership.IsRecordingManager(key.GroupKind()) {
 			members := view.Members(key)
 			helmClaims = key.GroupKind() == ownership.FluxHelmRelease && members.Subject.Present() && members.Membership == ownership.MembersUnreadable && len(members.Gaps) == 0
-			if (ownershipReadFailed(members.Subject) || hasOwnershipReadFailure(members.Gaps) || members.Subject.Present() && members.Membership == ownership.MembersUnreadable && !helmClaims) && b.canEmit(ref) {
-				incomplete = true
+			if b.canEmit(ref) {
+				if ownershipReadFailed(members.Subject) || hasOwnershipReadFailure(members.Gaps) {
+					incomplete = true
+				} else if members.Subject.Present() && members.Membership == ownership.MembersUnreadable && !helmClaims {
+					inventoryUnavailable = true
+				}
 			}
 			for _, member := range members.Members {
 				if ctx.Err() != nil {
@@ -181,6 +185,9 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	}
 	if truncated {
 		warnings = append(warnings, "Some generated resources could not be included; the resource tree is partial.")
+	}
+	if inventoryUnavailable {
+		warnings = append(warnings, "Some GitOps resource lists are unavailable; the resource tree may be incomplete.")
 	}
 	return warnings, omitted
 }
