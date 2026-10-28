@@ -61,6 +61,7 @@ export function EvidenceCard({
   spanFullRow = false,
   prominence = "primary",
   compact = false,
+  storyPreview = false,
   placedInStory = false,
   gapRoles,
   noteMode = "full",
@@ -87,6 +88,11 @@ export function EvidenceCard({
    * card. A story log card keeps its cited lines: they are the card.
    */
   compact?: boolean;
+  /**
+   * The card sits in the story's collapsed preview, which bounds its height;
+   * a compact card outside it still shows a placed chart.
+   */
+  storyPreview?: boolean;
   /** This card also appears inside the story above. */
   placedInStory?: boolean;
   /** Roles whose "does not cover" line is shown; undefined shows every gap. */
@@ -183,6 +189,7 @@ export function EvidenceCard({
   const excerpt = storyCard
     ? storyExcerpt(observation, cardItems, {
         compact,
+        preview: storyPreview,
         scopeNamespace: listingScopeNamespace(observation.source),
       })
     : undefined;

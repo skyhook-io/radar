@@ -196,3 +196,18 @@ describe('AreaChart gaps and selection', () => {
     expect(html).toContain('cursor:crosshair')
   })
 })
+
+describe('AreaChart dashboard height', () => {
+  const data = [series([[0, 1], [600, 2]])]
+
+  it('renders the dashboard layout at the height asked for, and 240 by default', () => {
+    const short = render({ series: data, layout: 'dashboard', height: 140 })
+    expect(short).toContain('height:140px')
+    expect(attrs(short, 'svg', 'viewBox')[0]).toMatch(/ 140$/)
+    expect(render({ series: data, layout: 'dashboard' })).toContain('height:240px')
+  })
+
+  it('ignores the height outside the dashboard layout', () => {
+    expect(render({ series: data, layout: 'auto', height: 140 })).not.toContain('height:140px')
+  })
+})

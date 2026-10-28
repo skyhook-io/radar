@@ -130,7 +130,11 @@ export function StoryExcerpt({
     case "chart":
       return data.type === "metrics" ? (
         <div data-story-metrics className={padding}>
-          <MetricsBody data={data} changeCoverage={changeCoverage} />
+          <MetricsBody
+            data={data}
+            changeCoverage={changeCoverage}
+            size={excerpt.size}
+          />
         </div>
       ) : null;
   }

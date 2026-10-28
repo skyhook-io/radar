@@ -19,7 +19,7 @@ export interface ChartTimeRange {
   end: number
 }
 
-export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, stepSeconds, layout = 'full', shadedRanges, selection, onSelectRange }: {
+export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, stepSeconds, layout = 'full', height: dashboardHeight = 240, shadedRanges, selection, onSelectRange }: {
   series: TimeSeries[]
   color: string
   fillColor: string
@@ -45,6 +45,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
    * keeps text and plot height stable as its container resizes.
    */
   layout?: 'full' | 'auto' | 'compact' | 'dashboard'
+  /** Rendered height in px of the 'dashboard' layout; ignored by the others. */
+  height?: number
   /** Ranges drawn hatched, e.g. where no sample exists; `label` says why and shows on hover. */
   shadedRanges?: (ChartTimeRange & { label?: string })[]
   /** A selected range, drawn as a band. */
@@ -116,7 +118,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   // Layout constants. marginLeft sized for the widest expected Y-tick label
   // ("422.4 MiB" etc.) — narrow grid panels squeeze the X axis so labels
   // need extra viewBox-space to survive the down-scale.
-  const base = chartLayout(compact, layout === 'dashboard', renderedWidth)
+  const measured = chartLayout(compact, layout === 'dashboard', renderedWidth)
+  const base = layout === 'dashboard' ? { ...measured, height: dashboardHeight } : measured
   const { width, height, marginRight, marginTop, marginBottom, fontSize, yIntervals, xIntervals } = base
   const yValues = chartData ? yAxisValues(chartData.yMin, chartData.yMax, yIntervals, countAxis) : []
   const yLabels = yValues.map(val => formatMetricValue(val, unit))
@@ -368,7 +371,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
         className="w-full h-full"
-        style={layout === 'dashboard' ? { height: 240 } : undefined}
+        style={layout === 'dashboard' ? { height: dashboardHeight } : undefined}
         preserveAspectRatio="xMidYMid meet"
         data-chart-layout={compact ? 'compact' : 'full'}
       >

@@ -621,7 +621,12 @@ describe("story card defaults", () => {
         matches: 1,
         row: { kind: "ConfigMap", namespace: "b", name: "config" },
       },
-      { key: "ConfigMap//missing", label: "missing", matches: 0, row: undefined },
+      {
+        key: "ConfigMap//missing",
+        label: "missing",
+        matches: 0,
+        row: undefined,
+      },
     ]);
     // Rows of a namespace-scoped listing omit their namespace: the scope is
     // theirs, and only that namespace satisfies a namespaced citation.
@@ -749,21 +754,38 @@ describe("story card defaults", () => {
         },
       },
     ];
-    const html = renderToStaticMarkup(
-      <InvestigationEvidencePane
-        projection={projection}
-        investigationCase={resolveInvestigationCase(
-          projection,
-          { evidence },
-          0,
-        )}
-        story={{ report: "Memory climbs.\n\n[[radar:evidence=0]]", evidence }}
-        collecting={false}
-        animateGroupIds={new Set()}
-        onViewSource={() => {}}
-        onViewActivity={() => {}}
-      />,
+    const render = (report: string, items = evidence) =>
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          investigationCase={resolveInvestigationCase(
+            projection,
+            { evidence: items },
+            0,
+          )}
+          story={{ report, evidence: items }}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={() => {}}
+          onViewActivity={() => {}}
+        />,
+      );
+    // The symptom's chart is drawn at full height.
+    const symptom = render("Memory climbs.\n\n[[radar:evidence=0]]");
+    expect(symptom).toContain("data-story-metrics");
+    expect(symptom).not.toContain("height:140px");
+    // A compact marker or a context role drops the agent's note, not the
+    // chart; the role only draws it short.
+    const context = [{ ...evidence[0], role: "context" as const }];
+    const contextHtml = render(
+      "Memory climbs.\n\n[[radar:evidence=0|compact]]",
+      context,
     );
-    expect(html).toContain("data-story-metrics");
+    expect(contextHtml).toContain("data-story-metrics");
+    expect(contextHtml).toContain("height:140px");
+    // The collapsed preview bounds its height and leaves the chart out.
+    expect(
+      render("Memory climbs.\n\n[[radar:evidence=0]]\n\nMore after the fold."),
+    ).not.toContain("data-story-metrics");
   });
 });

@@ -325,10 +325,13 @@ export function AnalysisStory({
 }: {
   /** Resolved once by the host, which also needs it for its own counts. */
   placements: StoryPlacements;
-  /** Renders the card for a placed item; `compact` when it sits in the collapsed preview. */
+  /**
+   * Renders the card for a placed item: `compact` when the agent placed it
+   * compact or it sits in the collapsed preview, `preview` for the latter.
+   */
   renderPlacement: (
     target: StoryPlacementTarget,
-    options: { compact: boolean },
+    options: { compact: boolean; preview: boolean },
   ) => ReactNode;
   onReveal: (target: StoryPlacementTarget) => void;
   /** Opens a cited call's raw result in Activity when Radar renders no card for it. */
@@ -443,6 +446,7 @@ export function AnalysisStory({
       >
         {renderPlacement(resolution.target, {
           compact: compact || segment.compact === true,
+          preview: compact,
         })}
       </div>
     );

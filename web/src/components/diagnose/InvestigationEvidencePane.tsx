@@ -91,7 +91,6 @@ export function InvestigationEvidencePane({
     report: string;
     evidence?: DiagnosisEvidenceItem[];
   };
-  /** Open the story fully instead of the bounded preview — when the layout has room for it. */
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (
@@ -352,7 +351,10 @@ export function InvestigationEvidencePane({
     projection.groups.map((group) => [group.id, group] as const),
   );
   const renderStoryPlacement = useCallback(
-    (target: StoryPlacementTarget, { compact }: { compact: boolean }) => {
+    (
+      target: StoryPlacementTarget,
+      { compact, preview }: { compact: boolean; preview: boolean },
+    ) => {
       const group = target.item.groupId
         ? groupsById.get(target.item.groupId)
         : undefined;
@@ -366,6 +368,7 @@ export function InvestigationEvidencePane({
           onViewSource={onViewSource}
           spanFullRow
           compact={compact}
+          storyPreview={preview}
           noteMode="chip"
           gapRoles={storyGapRoles}
         />
