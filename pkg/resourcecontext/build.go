@@ -35,11 +35,19 @@ import (
 // Hosts pre-compute issue, audit and policy summaries; Build never calls
 // internal services.
 type Options struct {
-	Reflections ReflectionLookup
-	Tier        ContextTier
+	// AutoInstrumentation was computed from access-checked cache reads by the
+	// host. A connection change discards the whole observation.
+	AutoInstrumentation *AutoInstrumentationContext
+	// AutoInstrumentationUnavailable requires nil AutoInstrumentation: the
+	// host discarded the observation. Nil/false means none was supplied.
+	AutoInstrumentationUnavailable bool
+	Reflections                    ReflectionLookup
+	Tier                           ContextTier
 
-	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
-	// as fully authorized — local-kubeconfig / tests).
+	// AccessChecker gates Build-projected references, including Children when
+	// supplied. Hosts authorize other precomputed blocks, including
+	// AutoInstrumentation and any declared but
+	// unresolved coordinates within it. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
 	// Topology supplies relationships when Relationships is nil. Without
@@ -171,8 +179,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		return &ResourceContext{Tier: opts.Tier}
 	}
 
-	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj)}
+	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj), AutoInstrumentation: opts.AutoInstrumentation}
 	omitted := newOmittedTracker()
+	if opts.AutoInstrumentationUnavailable {
+		omitted.add("autoInstrumentation", OmittedUnavailable)
+	}
 
 	// Topology supplies networking, scaling and spec-declared relations;
 	// the caller's ownership answer supplies controllers and GitOps evidence.
