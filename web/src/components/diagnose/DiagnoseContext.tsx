@@ -58,20 +58,6 @@ export interface Target {
 }
 export type DiagnoseView = "home" | "investigation";
 
-export interface StartCapacity {
-  target: Target;
-  limit: number;
-  context?: string;
-}
-
-function startCapacity(
-  error: unknown,
-  target: Target,
-): StartCapacity | undefined {
-  const capacity = investigationCapacity(error);
-  return capacity ? { target, ...capacity } : undefined;
-}
-
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
 //  - "needs-install": the feature is supported here but no agent CLI is installed
@@ -249,6 +235,20 @@ const AGENT_LABELS: Record<string, string> = {
 
 export function agentLabelFor(name: string, fallbackLabel?: string): string {
   return AGENT_LABELS[name] || fallbackLabel || name || "your AI agent";
+}
+
+export interface StartCapacity {
+  target: Target;
+  limit: number;
+  context?: string;
+}
+
+function startCapacity(
+  error: unknown,
+  target: Target,
+): StartCapacity | undefined {
+  const capacity = investigationCapacity(error);
+  return capacity ? { target, ...capacity } : undefined;
 }
 
 // openDiagnoseSettings opens the Settings dialog (App.tsx listens for this DOM
