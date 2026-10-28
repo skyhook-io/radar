@@ -231,8 +231,11 @@ export interface Issue {
    *  Server-emitted (omitempty); empty for issues without a parser. */
   cause?: string;
   action?: string;
-  /** Independent sync-risk warning, also retained in action. Absence means no
-   *  warning was supplied, not that syncing is safe; older producers omit it. */
+  /** What the suggested or most obvious action could destroy or take over,
+   *  such as a GitOps sync that would prune every managed resource. Show it
+   *  even when replacing cause or action with other guidance; action also
+   *  contains it. Absence means no warning was supplied, not that the action
+   *  is safe; older producers omit it. */
   hazard?: string;
   /** Optional presentation split; action always retains the complete guidance. */
   action_primary?: string;
