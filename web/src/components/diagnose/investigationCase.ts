@@ -8,6 +8,7 @@ import {
   investigationEvidenceSubjectRef,
   investigationSourceArgs,
   isInvestigationEvidenceRef,
+  metricsSelectedPod,
   sameKind,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
@@ -459,6 +460,23 @@ function observationIdentities(
         name: row.name,
       });
     }
+  }
+  // An agent-run query states the target as its subject once its selectors
+  // name only the target's own pods; when they name exactly one Pod, the
+  // agent naming that Pod names the same chart.
+  if (
+    observation.data.type === "metrics" &&
+    observation.data.origin === "query" &&
+    stated
+  ) {
+    const pod = metricsSelectedPod(observation.data.selectors ?? []);
+    if (pod)
+      identities.push({
+        kind: "Pod",
+        group: "",
+        namespace: stated.namespace,
+        name: pod,
+      });
   }
   if (observation.data.type === "logs" && stated) {
     const args = investigationSourceArgs(observation.source);

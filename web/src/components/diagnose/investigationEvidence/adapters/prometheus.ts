@@ -441,6 +441,30 @@ function exactPodSet(value: string): string[] | undefined {
     : undefined;
 }
 /**
+ * The one Pod a query is about, when every selector names exactly that Pod
+ * and nothing else. A query over two Pods is about neither alone, and a
+ * selector without a pod matcher is about whatever else it selects.
+ */
+export function metricsSelectedPod(
+  selectors: readonly InvestigationMetricsSelector[],
+): string | undefined {
+  let pod: string | undefined;
+  for (const selector of selectors) {
+    const named = selector.matchers.filter(
+      (matcher) => matcher.label === "pod",
+    );
+    if (named.length === 0) return undefined;
+    for (const { op, value } of named) {
+      const names =
+        op === "=" ? [value] : op === "=~" ? exactPodSet(value) : undefined;
+      if (names?.length !== 1 || (pod !== undefined && names[0] !== pod))
+        return undefined;
+      pod = names[0];
+    }
+  }
+  return pod;
+}
+/**
  * Whether a workload identity label names the target: the label
  * kube-state-metrics uses for the kind (`deployment`, `job_name`, …) or a
  * generic `workload` label, with the exact name.
