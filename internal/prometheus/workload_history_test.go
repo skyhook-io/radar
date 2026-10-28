@@ -136,6 +136,9 @@ func TestHistoricalOwnershipStopsOnCallerCancellation(t *testing.T) {
 }
 
 func TestHistoricalPartitionDiscoveryHasSeparateBudget(t *testing.T) {
+	previousBudget := historicalPartitionProbeBudget
+	historicalPartitionProbeBudget = time.Second
+	t.Cleanup(func() { historicalPartitionProbeBudget = previousBudget })
 	pod := prom.WorkloadPodIdentity{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: map[string]string{"namespace": "shop", "pod": pod.Name, "uid": pod.UID, "cluster": "west"}}}, ""))
@@ -147,15 +150,31 @@ func TestHistoricalPartitionDiscoveryHasSeparateBudget(t *testing.T) {
 	default:
 		t.Fatal("discovery gate busy")
 	}
-	release := time.AfterFunc(9*time.Second, func() { <-discoveryGate })
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	var got prom.WorkloadMetricsScope
+	var err error
+	done := make(chan struct{})
+	held := true
 	defer func() {
-		if release.Stop() {
+		if held {
 			<-discoveryGate
 		}
+		cancel()
+		<-done
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	got, err := c.historicalClusterScope(ctx, PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{pod}}, nil)
+	go func() {
+		got, err = c.historicalClusterScope(ctx, PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{pod}}, nil)
+		close(done)
+	}()
+	waitFor(t, "historical discovery to start", func() bool {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		return c.flightActive
+	})
+	time.Sleep(2 * historicalPartitionProbeBudget)
+	<-discoveryGate
+	held = false
+	<-done
 	if err != nil || got.ClusterLabels["cluster"] != "west" {
 		t.Fatalf("discovery consumed proof budget: %+v %v", got, err)
 	}

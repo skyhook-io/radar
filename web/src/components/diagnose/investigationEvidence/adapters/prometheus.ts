@@ -747,7 +747,8 @@ export function adaptQueryPrometheus(
       source,
       "Prometheus query",
       `The result of \`${value.query}\` was too large to keep${parts.length ? ` (${parts.join(", ")})` : ""}, so Radar cannot chart it.${note ? ` ${note}` : ""}`,
-      "truncated",
+      // No series is kept, so this is an unknown, not a sample of the answer.
+      "unknown",
     );
     return;
   }

@@ -974,7 +974,8 @@ describe("query_prometheus evidence", () => {
     ]);
     expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
     expect(projection.limitations).toHaveLength(1);
-    expect(projection.limitations[0].kind).toBe("truncated");
+    expect(projection.limitations[0].kind).toBe("unknown");
+    expect(projection.limitations[0].presentation).toBeUndefined();
     expect(projection.limitations[0].message).toContain("812 series");
     expect(projection.limitations[0].message).toContain(
       "812 distinct pod values",

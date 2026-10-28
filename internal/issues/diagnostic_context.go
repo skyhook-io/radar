@@ -236,7 +236,7 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 				switch fact.Type {
 				case factNodeStartupCorroboration:
 					b.add(issuesapi.DiagnosticRoleContext, fact)
-				case factNetworkPolicyIsolates:
+				case factNetworkPolicyIsolates, factTLSCertificateConsumers:
 					b.add(issuesapi.DiagnosticRoleCandidate, fact)
 				}
 			}

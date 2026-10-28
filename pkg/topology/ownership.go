@@ -2,6 +2,7 @@ package topology
 
 import (
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -89,8 +90,7 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	for _, s := range sources {
 		r := refIdentity(s)
 		switch {
-		case named[r] || slices.Contains(chain.Chain, r):
-		case !present(v, r):
+		case !managingSource(v, r, named, chain):
 			// The caller may not read the manager, or it is gone since the
 			// graph drew its edge.
 		case ownership.IsRecordingManager(r.GroupKind()) && labelled(r), !ownership.IsRecordingManager(r.GroupKind()) && settled(chain):
@@ -147,16 +147,17 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	}
 }
 
-// ApplyOwner answers only rel's Owner, and why there is none, and what
-// manages the resource, from v: what a resource context reads, which needs no
-// search for children. The rest of rel's ownership is cleared and left
-// unanswered.
+// ApplyOwner clears ownership fields, then answers Owner, ControllerChain,
+// Ownership.Manager and residual spec controllers in Managers. GitOps recorded
+// managers are not added to Managers; children and member collections stay
+// cleared without being searched. v reads fetched as the caller.
 func ApplyOwner(rel *Relationships, v *ownership.View, fetched ownership.Observation) {
 	if rel == nil || v == nil {
 		return
 	}
 	if cov, _, answered := applyOwner(rel, v, fetched); answered {
 		cov.Manager = managerAnswer(v.Manager(fetched.Ref))
+		rel.Managers, rel.OtherManagersIncomplete = OtherManagingControllers(rel, v, fetched.Ref)
 	}
 }
 
@@ -206,6 +207,7 @@ func applyOwner(rel *Relationships, v *ownership.View, fetched ownership.Observa
 			cov.OwnerReason = string(owner.Resolution.Gap.Reason)
 		}
 	}
+	rel.ControllerChain = ChainOf(v.ControllerChain(fetched.Ref))
 	return cov, owner, true
 }
 
@@ -292,6 +294,8 @@ func OwnershipUnavailable(rel *Relationships, reason string) {
 
 func clearOwnership(rel *Relationships) *OwnershipCoverage {
 	rel.Owner, rel.Owners, rel.Deployment, rel.Children, rel.OlderRevisions, rel.Managers, rel.Manages = nil, nil, nil, nil, nil, nil, nil
+	rel.ControllerChain = nil
+	rel.OtherManagersIncomplete = false
 	rel.Ownership = &OwnershipCoverage{}
 	return rel.Ownership
 }
@@ -360,4 +364,110 @@ func managerEvidence(e ownership.ManagerEvidence) ManagerEvidence {
 		out.Claims = append(out.Claims, ManagerClaim{Manager: refOf(c.Manager), Source: string(c.Source), Check: string(c.Check), Copied: c.Copied, Weak: c.Weak})
 	}
 	return out
+}
+
+// ControllerChain is how far up its controller references the caller reads a
+// resource. Readable and Top share Refs; treat their results as read-only.
+type ControllerChain struct {
+	// Refs are the objects the walk read, the resource first.
+	Refs []ResourceRef
+	// Stop mirrors an unfollowed OwnerUnknown (unobserved kind, incomplete
+	// discovery, cycle or depth bound) or OwnerWithheld. It is empty for a
+	// settled top, gone/replaced owner, excluded Event, or OwnerUnresolvable
+	// (a malformed reference or an impossible namespace/scope relationship).
+	Stop string
+	// Reason is the read gap behind Stop, when available; cycles and depth
+	// bounds can stop a walk without one.
+	Reason readreason.Code
+}
+
+// ChainOf projects a controller walk the caller made; nil when the caller
+// didn't read the resource.
+func ChainOf(a ownership.ControllerChainAnswer) *ControllerChain {
+	if !a.Subject.Present() {
+		return nil
+	}
+	c := &ControllerChain{}
+	for _, r := range a.Chain {
+		c.Refs = append(c.Refs, refOf(r))
+	}
+	switch u := a.UnfollowedReference; {
+	case u != nil && (u.State == ownership.OwnerUnknown || u.State == ownership.OwnerWithheld):
+		c.Stop = u.State.String()
+		c.Reason = u.Gap.Reason
+	case a.Cycle, a.Truncated:
+		c.Stop = ownership.OwnerUnknown.String()
+	}
+	return c
+}
+
+// Readable is c cut below the first object above the resource that readable
+// refuses, as withheld, so a host whose reference checks are stricter than
+// the walk's access never names past what it may show.
+func (c *ControllerChain) Readable(readable func(ResourceRef) bool) *ControllerChain {
+	if c == nil || readable == nil {
+		return c
+	}
+	for i := 1; i < len(c.Refs); i++ {
+		if !readable(c.Refs[i]) {
+			return &ControllerChain{Refs: c.Refs[:i], Stop: "withheld"}
+		}
+	}
+	return c
+}
+
+// Top is the highest object the walk read above the resource, nil when the
+// resource has no controller the caller reads.
+func (c *ControllerChain) Top() *ResourceRef {
+	if c == nil || len(c.Refs) < 2 {
+		return nil
+	}
+	return &c.Refs[len(c.Refs)-1]
+}
+
+// OtherManagingControllers retains spec-declared graph relations only when
+// they cannot be owner references, controller shortcuts or GitOps evidence.
+// Incomplete means a source could not be checked, not that one was denied.
+// It covers observed edges only: false does not establish collection completeness.
+// A gone or unresolvable owner also suppresses this projection, even though
+// ControllerChain.Stop is empty: its refs are final, but do not rule out a shortcut.
+func OtherManagingControllers(rel *Relationships, v *ownership.View, subject resourceid.Ref) (managers []ResourceRef, incomplete bool) {
+	if rel == nil {
+		return nil, true
+	}
+	if len(rel.manageSources) == 0 {
+		return nil, false
+	}
+	chain := v.ControllerChain(subject)
+	if !settled(chain) {
+		return nil, false
+	}
+	named := namedOwners(chain.Subject.Read.Object)
+	var out []ResourceRef
+	for _, source := range rel.manageSources {
+		r := refIdentity(source)
+		if ownership.IsRecordingManager(r.GroupKind()) || r.Kind == "HelmRelease" && r.Group == "" {
+			continue
+		}
+		// A GatewayClass selects an implementation; it does not generate the Gateway.
+		if r.Group == "gateway.networking.k8s.io" && r.Kind == "GatewayClass" {
+			continue
+		}
+		if named[r] || slices.Contains(chain.Chain, r) {
+			continue
+		}
+		read, _ := v.References(r)
+		switch {
+		case read.Access == ownership.Undecided, read.Access == ownership.Allowed && read.Read.State == ownership.Unavailable:
+			incomplete = true
+		case read.Present():
+			out = appendResourceRef(out, source)
+		}
+	}
+	slices.SortFunc(out, func(a, b ResourceRef) int { return strings.Compare(refIdentity(a).String(), refIdentity(b).String()) })
+	return out, incomplete
+}
+
+func managingSource(v *ownership.View, ref resourceid.Ref, named map[resourceid.Ref]bool, chain ownership.ControllerChainAnswer) bool {
+	return !named[ref] && !slices.Contains(chain.Chain, ref) && present(v, ref)
 }

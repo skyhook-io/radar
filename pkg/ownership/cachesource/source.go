@@ -82,7 +82,8 @@ type session struct {
 	byNamespace map[schema.GroupVersionResource][]string
 	// unwatched holds why each resource with no watched version is unread
 	// ("" for a watched one).
-	unwatched map[schema.GroupResource]readreason.Code
+	unwatched        map[schema.GroupResource]readreason.Code
+	membershipStates map[resourceid.Ref]membershipStateObservation
 	// recordingManagersRead, set only by tests, runs after RecordingManagers reads a manager
 	// kind, with the keys it read together.
 	recordingManagersRead func(kind resourceid.GroupKind, keys []string)

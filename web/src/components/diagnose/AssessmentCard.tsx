@@ -65,6 +65,7 @@ export function ResultCard({
   readOnlyAssessment = false,
   revisedAfter,
   assessmentLimits,
+  assessmentRoutineLimits,
   assessmentCopy,
   healthSignals,
   onRevealSource,
@@ -88,6 +89,8 @@ export function ResultCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  /** Sampling caps and history bounds Radar hit; folded beneath Still open. */
+  assessmentRoutineLimits?: string[];
   assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
   healthSignals?: InvestigationHealthSignal[];
   onRevealSource?: (sourceId: string) => void;
@@ -150,6 +153,7 @@ export function ResultCard({
         storyInline={storyInline}
         revisedAfter={revisedAfter}
         assessmentLimits={assessmentLimits}
+        assessmentRoutineLimits={assessmentRoutineLimits}
         assessmentCopy={assessmentCopy}
         healthSignals={healthSignals}
         onRevealSource={onRevealSource}
@@ -183,6 +187,7 @@ export function ResultCard({
           storyInline={storyInline}
           revisedAfter={revisedAfter}
           assessmentLimits={assessmentLimits}
+          assessmentRoutineLimits={assessmentRoutineLimits}
           assessmentCopy={assessmentCopy}
         />
         {section === "full" && (diagnosis.steps?.length ?? 0) > 0 ? (
@@ -234,6 +239,7 @@ export function ResultCard({
       readOnlyAssessment={readOnlyAssessment}
       revisedAfter={revisedAfter}
       assessmentLimits={assessmentLimits}
+      assessmentRoutineLimits={assessmentRoutineLimits}
       assessmentCopy={assessmentCopy}
     />
   );
@@ -277,6 +283,7 @@ function AssessmentHeadline({
   tone,
   revisedAfter,
   limits = [],
+  routineLimits = [],
   signals,
   flags,
   copy,
@@ -286,6 +293,8 @@ function AssessmentHeadline({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment, one line each. */
   limits?: string[];
+  /** Sampling caps and history bounds, one line each; folded beneath Still open. */
+  routineLimits?: string[];
   /** Adverse Radar cards the agent explained, with its position; first in Still open. */
   signals?: { text: string; onReveal?: () => void }[];
   /** Adverse Radar cards nothing explains; shown above a healthy verdict, copied with it. */
@@ -312,6 +321,7 @@ function AssessmentHeadline({
         <CopyButton
           text={assessmentCopyText(diagnosis, {
             limits,
+            routineLimits,
             signals: (signals ?? []).map((signal) => signal.text),
             flags,
             ...copy,
@@ -398,6 +408,44 @@ function AssessmentHeadline({
           </ul>
         </div>
       ) : null}
+      {routineLimits.length > 0 ? (
+        <RoutineLimits lines={routineLimits} />
+      ) : null}
+    </div>
+  );
+}
+
+// Radar's ordinary limits — a capped sample, history that starts when Radar
+// started watching — hold on most runs and rarely bear on the cause. They stay
+// above the fold, and in the channel copy, but folded to one muted line so the
+// agent's own open questions lead.
+function RoutineLimits({ lines }: { lines: string[] }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <div data-assessment-routine-limits>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 text-[11px] text-theme-text-tertiary hover:text-theme-text-secondary"
+      >
+        <CollapseChevron open={open} className="h-3 w-3" />
+        Radar&apos;s coverage · {lines.length} routine{" "}
+        {lines.length === 1 ? "limit" : "limits"}
+      </button>
+      <div id={id}>
+        <Collapse open={open}>
+          <ul className="mt-1 space-y-0.5 pl-4 text-[11px] text-theme-text-tertiary">
+            {lines.map((line, index) => (
+              <li key={`routine-${index}`} className="[overflow-wrap:anywhere]">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </Collapse>
+      </div>
     </div>
   );
 }
@@ -893,6 +941,7 @@ function DiagnosisResult({
   readOnlyAssessment = false,
   revisedAfter,
   assessmentLimits,
+  assessmentRoutineLimits,
   assessmentCopy,
 }: {
   diagnosis: Diagnosis;
@@ -910,6 +959,8 @@ function DiagnosisResult({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  /** Sampling caps and history bounds Radar hit; folded beneath Still open. */
+  assessmentRoutineLimits?: string[];
   assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
 }) {
   // The story contract: a summary headline above, the story rendered by the
@@ -1076,6 +1127,7 @@ function DiagnosisResult({
             tone="cause"
             revisedAfter={revisedAfter}
             limits={assessmentLimits}
+            routineLimits={assessmentRoutineLimits}
             copy={assessmentCopy}
           />
         </div>
@@ -1255,6 +1307,7 @@ export function AllClearCard({
   storyInline = false,
   revisedAfter,
   assessmentLimits,
+  assessmentRoutineLimits,
   assessmentCopy,
   healthSignals,
   onRevealSource,
@@ -1272,6 +1325,8 @@ export function AllClearCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  /** Sampling caps and history bounds Radar hit; folded beneath Still open. */
+  assessmentRoutineLimits?: string[];
   assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
   /** Adverse Radar cards with the agent's position on each (story shape). */
   healthSignals?: InvestigationHealthSignal[];
@@ -1376,6 +1431,7 @@ export function AllClearCard({
           revisedAfter={revisedAfter}
           flags={flagged.map(healthFlagSentence)}
           limits={assessmentLimits}
+          routineLimits={assessmentRoutineLimits}
           copy={assessmentCopy}
           signals={stillOpenSignals}
         />
@@ -1459,6 +1515,7 @@ export function InconclusiveCard({
   storyInline = false,
   revisedAfter,
   assessmentLimits,
+  assessmentRoutineLimits,
   assessmentCopy,
 }: {
   diagnosis: Diagnosis;
@@ -1470,6 +1527,8 @@ export function InconclusiveCard({
   assessmentAction?: ReactNode;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  /** Sampling caps and history bounds Radar hit; folded beneath Still open. */
+  assessmentRoutineLimits?: string[];
   assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
 }) {
   const storyShape = diagnosisHasStoryShape(diagnosis);
@@ -1496,6 +1555,7 @@ export function InconclusiveCard({
             tone="inconclusive"
             revisedAfter={revisedAfter}
             limits={assessmentLimits}
+            routineLimits={assessmentRoutineLimits}
             copy={assessmentCopy}
           />
         ) : null}

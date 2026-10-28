@@ -288,12 +288,12 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	// so we pass nil here to compose cluster-wide.
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newResourceSummaryContextBuilder(r, idxNamespaces); builder != nil {
-			// Typed list resolves group from each object's TypeMeta —
-			// MinifyList sets it via SetTypeMeta before producing rows,
-			// so we can trust apiVersion on the typed source.
-			summarycontext.AttachToTypedList(results, objs, builder)
-		}
+		builder, cancel := summarycontext.WithBudget(r.Context(), func(ctx context.Context) summarycontext.Builder {
+			return s.newResourceSummaryContextBuilder(r.WithContext(ctx), idxNamespaces)
+		})
+		defer cancel()
+		// MinifyList sets TypeMeta, so attachment can resolve each row's group.
+		summarycontext.AttachToTypedList(results, objs, builder)
 	}
 	if readCache() != cache {
 		s.writeReadFailure(w, kind, errReadHandlesChanged, &target)
@@ -347,9 +347,15 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newResourceSummaryContextBuilder(r, idxNamespaces); builder != nil {
-			summarycontext.AttachToUnstructuredList(results, allItems, builder)
-		}
+		builder, cancel := summarycontext.WithBudget(r.Context(), func(ctx context.Context) summarycontext.Builder {
+			return s.newResourceSummaryContextBuilder(r.WithContext(ctx), idxNamespaces)
+		})
+		defer cancel()
+		summarycontext.AttachToUnstructuredList(results, allItems, builder)
+	}
+	if readCache() != cache {
+		s.writeReadFailure(w, kind, errReadHandlesChanged, &target)
+		return
 	}
 
 	s.writeJSON(w, results)
@@ -622,7 +628,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		// scan. Leaving opts.Relationships unset is the canonical path.
 	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
-		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) })
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)

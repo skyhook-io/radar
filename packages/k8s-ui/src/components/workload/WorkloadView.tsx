@@ -930,7 +930,7 @@ export function WorkloadView({
       icon: <Activity className="w-4 h-4" />,
       badge: resourceEvents.length > 0 ? <span className="ml-1 badge-sm bg-theme-elevated">{resourceEvents.length}</span> : undefined,
     },
-    { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" />, hidden: !logsTabVisible },
+    { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" />, hidden: !logsTabVisible, phoneCompactHeader: true },
     { id: 'metrics', label: 'Metrics', icon: <BarChart3 className="w-4 h-4" />, hidden: !metricsTabVisible },
     {
       id: 'reachability',
@@ -1164,10 +1164,35 @@ export function WorkloadView({
   }
 
   // ── Expanded (full) mode ─────────────────────────────────────────────────
+    const nameAndCopy = (
+      <>
+        <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+        <Tooltip content="Copy name" delay={150}>
+          <button
+            onClick={() => copyToClipboard(name, 'name')}
+            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
+            aria-label="Copy name"
+          >
+            {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+        </Tooltip>
+      </>
+    )
   return (
     <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
     <DetailShell
       breadcrumb={breadcrumb}
+      compactIdentity={
+        // The namespace stays: Restart and the other actions sit right below.
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          {titlePrefix}
+          <div className="flex min-w-0 max-w-full items-center gap-2">{nameAndCopy}</div>
+          {namespace && namespace !== '_' && (
+            <span className="whitespace-nowrap text-sm text-theme-text-secondary">Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+          )}
+          {namespace && namespace !== '_' && namespaceNote}
+        </div>
+      }
       wrapHeader={inlineBadges}
       subheader={resourceGone ? undefined : subheader}
       nav={
@@ -1184,20 +1209,6 @@ export function WorkloadView({
         )
       }
       identity={(() => {
-        const nameAndCopy = (
-          <>
-            <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
-            <Tooltip content="Copy name" delay={150}>
-              <button
-                onClick={() => copyToClipboard(name, 'name')}
-                className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-                aria-label="Copy name"
-              >
-                {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </Tooltip>
-          </>
-        )
         const kindAndStatus = (
           <>
             {!hideKindBadge && (
@@ -1457,10 +1468,12 @@ export function WorkloadView({
           </div>
         )}
         {effectiveTab === 'yaml' && (
-          <div className="flex h-full min-h-0">
+          // Phones put the objects in a scrolling row above the YAML, which
+          // gets the full width.
+          <div className="flex h-full min-h-0 phone:flex-col">
             {renderRelatedYaml && yamlObjects.length > 1 && (
-              <div className="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-theme-border bg-theme-base px-2 py-2">
-                <div className="px-1.5 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">Objects</div>
+              <div className="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-theme-border bg-theme-base px-2 py-2 phone:w-full phone:flex-row phone:gap-1 phone:overflow-x-auto phone:overflow-y-hidden phone:border-b phone:border-r-0">
+                <div className="px-1.5 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary phone:hidden">Objects</div>
                 {yamlObjects.map((o) => {
                   const active = o.primary ? yamlObjectId === null : yamlObjectId === o.id
                   return (
@@ -1469,7 +1482,7 @@ export function WorkloadView({
                       type="button"
                       onClick={() => setYamlObjectId(o.primary ? null : o.id)}
                       className={clsx(
-                        'flex w-full flex-col rounded-md px-1.5 py-1.5 text-left transition-colors',
+                        'flex w-full flex-col rounded-md px-1.5 py-1.5 text-left transition-colors phone:w-auto phone:max-w-[11rem] phone:shrink-0',
                         active ? 'selection selection-ring' : 'hover:bg-theme-hover',
                       )}
                     >

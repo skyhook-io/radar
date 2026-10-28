@@ -29,21 +29,58 @@ type requestAccess struct {
 	// couldn't be discovered.
 	namespaces []string
 	failed     bool
+	exactGet   bool
 }
 
 // ownershipAccess is what the request's user may read; without
 // authentication, everything.
 func (s *Server) ownershipAccess(r *http.Request, catalog *ownership.Catalog) ownership.Access {
+	return s.newOwnershipAccess(r, catalog, false)
+}
+
+func (s *Server) agentOwnershipAccess(r *http.Request, catalog *ownership.Catalog) ownership.Access {
+	return s.newOwnershipAccess(r, catalog, true)
+}
+
+func (s *Server) newOwnershipAccess(r *http.Request, catalog *ownership.Catalog, exactGet bool) ownership.Access {
 	if auth.UserFromContext(r.Context()) == nil {
 		return ownership.Unrestricted()
 	}
 	namespaces, failed := s.getUserNamespacesWithStatus(r, nil)
-	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed}
+	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed, exactGet: exactGet}
 }
 
 // CanRead's checks are memoized on the user's permissions, so asking again
 // costs a lookup.
 func (a *requestAccess) CanRead(kind resourceid.GroupKind, namespace string) ownership.Decision {
+	if !a.exactGet {
+		return a.canList(kind, namespace)
+	}
+	resource, namespaced, known := a.resource(kind)
+	switch {
+	case !known && a.catalog.Ambiguous(kind):
+		return ownership.Undecided
+	case !known:
+		return ownership.Allowed
+	case namespace != "" && a.failed:
+		return ownership.Undecided
+	case namespace != "" && a.namespaces != nil && !slices.Contains(a.namespaces, namespace):
+		return ownership.Denied
+	}
+	allowed, decided := a.s.canReadDecision(a.r, kind.Group, resource, namespace, "get")
+	switch {
+	case !decided:
+		return ownership.Undecided
+	case allowed:
+		return ownership.Allowed
+	case namespaced && namespace == "":
+		return ownership.Undecided
+	default:
+		return ownership.Denied
+	}
+}
+
+func (a *requestAccess) canList(kind resourceid.GroupKind, namespace string) ownership.Decision {
 	resource, namespaced, known := a.resource(kind)
 	switch {
 	case !known && a.catalog.Ambiguous(kind):

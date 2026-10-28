@@ -135,7 +135,7 @@ type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'w
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
 // the PR that gives it a phone layout.
-const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology'])
+const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology', 'capacity'])
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {

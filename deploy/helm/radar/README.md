@@ -591,7 +591,7 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. Common CRD groups are enabled by default. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger is explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
 
 **Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
@@ -621,6 +621,7 @@ retain their finite grants.
 | `envoyGateway` | `gateway.envoyproxy.io` |
 | `externalDns` | `externaldns.k8s.io` |
 | `externalSecrets` | `external-secrets.io` |
+| `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
 | `flux` | `*.toolkit.fluxcd.io` |
 | `gatewayApi` | `gateway.networking.k8s.io` |
 | `gcpMonitoring` | `monitoring.googleapis.com` |

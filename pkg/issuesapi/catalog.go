@@ -114,7 +114,7 @@ var categoryDescription = map[Category]string{
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
 	CategoryServiceMixedBackends:  "A Service's selector matches pods of workloads that don't all serve it (different applications, or a port some don't declare), so part of its traffic reaches pods that may not serve it.",
-	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s.",
+	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s — or a Traefik router needs a Service or Middleware that doesn't exist, so Traefik doesn't load it.",
 	CategoryIngressClassMissing:   "An Ingress names an IngressClass that doesn't exist, so no matching controller can serve it.",
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",
 	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed — its listeners aren't serving.",
@@ -136,7 +136,7 @@ var categoryDescription = map[Category]string{
 	CategoryHPALimitedOrFailed: "A HorizontalPodAutoscaler can't scale — missing metrics, pinned at max replicas, or scaling errors.",
 	// Security
 	CategoryRBACForbidden:        "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
-	CategoryCertificateNotReady:  "A certificate isn't usable or soon won't be — cert-manager issuance is failing or pending, or a certificate (including CloudNativePG's operator-managed ones) is expiring or has expired.",
+	CategoryCertificateNotReady:  "A certificate isn't usable or soon won't be — cert-manager issuance is failing or pending, or a certificate (including CloudNativePG's operator-managed ones) is expiring or has expired, or a live Ingress or Gateway uses a TLS Secret whose certificate is expired, not yet valid or about to expire.",
 	CategoryPodSecurityViolation: "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
 	// Control plane
 	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer hasn't been released, often because its controller is down, missing, or failing its cleanup.",

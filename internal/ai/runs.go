@@ -46,12 +46,15 @@ type RunManager struct {
 	baseCtx    context.Context // parent of every run ctx; cancelled on Shutdown
 	baseCancel context.CancelFunc
 
-	// workRoot is a private, randomly-named scratch root created once per process
-	// (mode 0700). Per-run dirs live UNDER it, so run scratch can't collide across
-	// Radar restarts or co-running processes and isn't at a predictable /tmp path.
-	// "" only if creating it failed (then runs get no workdir — Cursor falls back to
+	// workRoot is a private, randomly-named scratch root (mode 0700), created by
+	// the first run that needs it. Per-run dirs live UNDER it, so run scratch can't
+	// collide across Radar restarts or co-running processes and isn't at a
+	// predictable /tmp path. Only Shutdown removes it, so a manager that never runs
+	// an agent must not create one: a killed process or a test would leak it.
+	// "" if creating it failed (then runs get no workdir — Cursor falls back to
 	// its own temp workspace per turn, losing cross-turn resume but staying correct).
-	workRoot string
+	workRootOnce sync.Once
+	workRoot     string
 
 	// store persists runs + event logs across restarts (nil = memory-only,
 	// the historical behavior). Owned here: Shutdown closes it.
@@ -212,12 +215,6 @@ func turnTimeout() time.Duration {
 // hydrated into the manager here.
 func NewRunManager(d *Diagnoser, mcpAddress func() string, mcpBasePath string, ctxLabel func() string, store RunStore) *RunManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	// Best-effort: a failure here just means runs get no shared workdir (logged).
-	root, err := os.MkdirTemp("", "radar-ai-")
-	if err != nil {
-		log.Printf("[ai] could not create AI scratch root: %v (Cursor resume will be degraded)", err)
-		root = ""
-	}
 	m := &RunManager{
 		d:             d,
 		mcpAddress:    mcpAddress,
@@ -225,7 +222,6 @@ func NewRunManager(d *Diagnoser, mcpAddress func() string, mcpBasePath string, c
 		ctxLabel:      ctxLabel,
 		baseCtx:       ctx,
 		baseCancel:    cancel,
-		workRoot:      root,
 		store:         store,
 		runs:          map[string]*Run{},
 		maxRetained:   defaultMaxRetained,
@@ -380,6 +376,18 @@ func newEvidenceScope() string {
 // across a run's turns so a workspace-scoped resume (Cursor) reattaches to the
 // prior turn's session. "" when no root exists (backends then self-manage).
 func (m *RunManager) runWorkDir(id string) string {
+	m.workRootOnce.Do(func() {
+		if m.workRoot != "" {
+			return
+		}
+		// Best-effort: a failure here just means runs get no shared workdir (logged).
+		root, err := os.MkdirTemp("", "radar-ai-")
+		if err != nil {
+			log.Printf("[ai] could not create AI scratch root: %v (Cursor resume will be degraded)", err)
+			return
+		}
+		m.workRoot = root
+	})
 	if m.workRoot == "" {
 		return ""
 	}
@@ -428,7 +436,9 @@ func (m *RunManager) Shutdown() {
 	if m.store != nil {
 		m.store.Close()
 	}
-	// Drop every run's scratch in one shot — the process is going away.
+	// Drop every run's scratch in one shot — the process is going away. Settling
+	// the Once first also keeps a late run from creating a root nobody removes.
+	m.workRootOnce.Do(func() {})
 	if m.workRoot != "" {
 		_ = os.RemoveAll(m.workRoot)
 	}

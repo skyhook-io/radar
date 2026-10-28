@@ -213,7 +213,9 @@ export function projectInvestigationEvidence(
           source,
           investigationResultLabel(source),
           "Only part of this investigation result was saved, so Radar could not summarize it here.",
-          "truncated",
+          // Nothing of the result is shown, so this is an unknown, not a
+          // sampling cap that still shows part of the answer.
+          "unknown",
         );
         continue;
       }

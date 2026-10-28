@@ -62,6 +62,9 @@ var crdGroupToChart = map[string]string{
 	// CloudNativePG
 	"postgresql.cnpg.io": "cloudnative-pg",
 
+	// Flagger
+	"flagger.app": "flagger",
+
 	// OpenTelemetry
 	"opentelemetry.io": "opentelemetry-operator",
 

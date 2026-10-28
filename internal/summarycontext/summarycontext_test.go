@@ -7,6 +7,7 @@
 package summarycontext
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -17,9 +18,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/policyreports"
-	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // fakeIssuesProvider is a minimal issues.Provider for the BuildIssueIndex
@@ -133,6 +133,54 @@ func TestBuildIssueIndex_GroupAware(t *testing.T) {
 	}
 	if got := idx.Count("serving.knative.dev", "Service", "prod", "api"); got != 1 {
 		t.Errorf("Knative Service count = %d, want 1 (two same-category rows fold to one grouped issue)", got)
+	}
+}
+
+// An issue about another subject counts on each resource it affects that the
+// caller can read, as the related-issues lookup shows it there.
+func TestBuildIssueIndex_CountsAffectedResources(t *testing.T) {
+	p := &fakeIssuesProvider{problems: []k8s.Detection{{
+		Kind: "Secret", Namespace: "shop", Name: "shop-tls", Severity: "critical", Reason: k8s.TLSCertificateExpiredReason,
+		AffectedRefs: []issuesapi.Ref{
+			{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "shop", Name: "web"},
+			{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "shop", Name: "api"},
+		},
+	}}}
+	readAll := func(issues.Ref) bool { return true }
+	idx := BuildIssueIndex(p, issues.Filters{CanReadRelated: readAll})
+	for _, name := range []string{"web", "api"} {
+		if got := idx.Count("networking.k8s.io", "Ingress", "shop", name); got != 1 {
+			t.Errorf("Ingress %s count = %d, want 1", name, got)
+		}
+	}
+	if got := idx.Count("", "Secret", "shop", "shop-tls"); got != 1 {
+		t.Errorf("Secret count = %d, want 1", got)
+	}
+	notAPI := func(ref issues.Ref) bool { return ref.Name != "api" }
+	idx = BuildIssueIndex(p, issues.Filters{CanReadRelated: notAPI})
+	if got := idx.Count("networking.k8s.io", "Ingress", "shop", "api"); got != 0 {
+		t.Errorf("unreadable Ingress count = %d, want 0", got)
+	}
+	noSecrets := func(ref issues.Ref) bool { return ref.Kind != "Secret" }
+	idx = BuildIssueIndex(p, issues.Filters{CanReadRelated: readAll, CanReadSubject: noSecrets})
+	if got := idx.Count("networking.k8s.io", "Ingress", "shop", "web"); got != 0 {
+		t.Errorf("Ingress count without Secret access = %d, want 0", got)
+	}
+	if got := BuildIssueIndex(p, issues.Filters{}).Count("networking.k8s.io", "Ingress", "shop", "web"); got != 0 {
+		t.Errorf("Ingress count without an authorizer = %d, want 0", got)
+	}
+}
+
+// A NetworkPolicy that isolates a Service counts on that Service too.
+func TestBuildIssueIndex_CountsNetworkPolicyOnIsolatedService(t *testing.T) {
+	p := &fakeIssuesProvider{problems: []k8s.Detection{{
+		Kind: "NetworkPolicy", Group: "networking.k8s.io", Namespace: "shop", Name: "deny-all",
+		Severity: "warning", Reason: k8s.NetworkPolicyDenyAllIngressReason,
+		AffectedRefs: []issuesapi.Ref{{Kind: "Service", Namespace: "shop", Name: "recommendation"}},
+	}}}
+	idx := BuildIssueIndex(p, issues.Filters{CanReadRelated: func(issues.Ref) bool { return true }})
+	if got := idx.Count("", "Service", "shop", "recommendation"); got != 1 {
+		t.Errorf("isolated Service count = %d, want 1", got)
 	}
 }
 
@@ -306,7 +354,7 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	// scope. Replay the dispatch via the shared helper to pin the
 	// end-to-end shape. Topology is nil; managedBy is nil but
 	// issueCount dispatch is what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx, nil)
+	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 1 {
 		t.Errorf("Node hit via builder: got %+v, want IssueCount=1 (was 0 pre-fix)", sc)
 	}
@@ -334,7 +382,7 @@ func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 
 	// Topology is nil — managedBy is nil but issueCount dispatch is
 	// what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx, nil)
+	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
 
 	// Cluster-scoped Node hit — must read clusterIdx.
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 2 {
@@ -353,111 +401,5 @@ func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 	// likewise returns 0.
 	if sc := build(nil, nil, "", "Pod", "prod", "worker-1"); sc != nil && sc.IssueCount != 0 {
 		t.Errorf("Pod hit using Node-bucket name leaked count: %+v", sc)
-	}
-}
-
-// TestManagedByFromRelationships_PrefersManagedBy pins the topmost-manager
-// shortcut: when topology has synthesized a ManagedBy chain (Pod →
-// ReplicaSet → Deployment), the helper surfaces the Deployment, not the
-// noisy hash-suffixed ReplicaSet that sits in Owner.
-func TestManagedByFromRelationships_PrefersManagedBy(t *testing.T) {
-	rel := &topology.Relationships{
-		Owner: &topology.ResourceRef{Kind: "ReplicaSet", Namespace: "prod", Name: "api-7d5", Group: "apps"},
-		ManagedBy: []topology.ResourceRef{
-			{Kind: "Deployment", Namespace: "prod", Name: "api", Group: "apps"},
-		},
-	}
-	got := ManagedByFromRelationships(rel)
-	want := &resourcecontext.ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: "prod"}
-	if got == nil || got.Kind != want.Kind || got.Name != want.Name || got.Namespace != want.Namespace || got.Source != want.Source {
-		t.Errorf("got %#v, want %#v", got, want)
-	}
-}
-
-// TestManagedByFromRelationships_FallsBackToOwner covers the case where
-// topology synthesis declined ManagedBy (e.g. cluster-scoped roots) —
-// we still surface the direct Owner so the row isn't context-less.
-func TestManagedByFromRelationships_FallsBackToOwner(t *testing.T) {
-	rel := &topology.Relationships{
-		Owner: &topology.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "storefront", Group: "argoproj.io"},
-	}
-	got := ManagedByFromRelationships(rel)
-	if got == nil {
-		t.Fatalf("got nil, want Application ref")
-	}
-	if got.Source != "argocd" {
-		t.Errorf("Source = %q, want argocd", got.Source)
-	}
-}
-
-// TestManagedByFromRelationships_ManagedByWinsOverOwner pins that when
-// both ManagedBy and Owner are set, ManagedBy[0] takes precedence — the
-// server-synthesized topmost-manager walk should never be shadowed by
-// the direct owner ref left over for back-compat.
-func TestManagedByFromRelationships_ManagedByWinsOverOwner(t *testing.T) {
-	rel := &topology.Relationships{
-		Owner: &topology.ResourceRef{Kind: "ReplicaSet", Namespace: "prod", Name: "api-7d5", Group: "apps"},
-		ManagedBy: []topology.ResourceRef{
-			{Kind: "Application", Namespace: "argocd", Name: "storefront", Group: "argoproj.io"},
-		},
-	}
-	got := ManagedByFromRelationships(rel)
-	if got == nil || got.Kind != "Application" || got.Source != "argocd" {
-		t.Errorf("got %#v, want Application/argocd", got)
-	}
-}
-
-func TestManagedByFromRelationships_NilSafe(t *testing.T) {
-	if got := ManagedByFromRelationships(nil); got != nil {
-		t.Errorf("nil rel: got %#v, want nil", got)
-	}
-	if got := ManagedByFromRelationships(&topology.Relationships{}); got != nil {
-		t.Errorf("empty rel: got %#v, want nil", got)
-	}
-}
-
-func TestBuildIssueIndexAuthorizesInventoryEvidence(t *testing.T) {
-	clusterGVR := schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
-	scheduleGVR := schema.GroupVersionResource{Group: clusterGVR.Group, Version: "v1", Resource: "scheduledbackups"}
-	cluster := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster", "metadata": map[string]any{"namespace": "db", "name": "pg"}}}
-	schedule := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "postgresql.cnpg.io/v1", "kind": "ScheduledBackup", "metadata": map[string]any{"namespace": "db", "name": "nightly"}, "spec": map[string]any{"cluster": map[string]any{"name": "pg"}}}}
-	p := &fakeIssuesProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{clusterGVR: {cluster}, scheduleGVR: {schedule}}, kinds: map[schema.GroupVersionResource]string{clusterGVR: "Cluster", scheduleGVR: "ScheduledBackup"}}
-	for _, tc := range []struct {
-		name    string
-		filters issues.Filters
-		count   int
-	}{
-		{"no authorizer", issues.Filters{}, 0},
-		{"target denied", issues.Filters{CanReadEvidence: func(r issues.EvidenceRead) bool { return r.Resource != "clusters" }}, 0},
-		{"all evidence authorized", issues.Filters{CanReadEvidence: func(issues.EvidenceRead) bool { return true }}, 1},
-		{"internal composition", issues.Filters{AllowUnfilteredEvidence: true}, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := BuildIssueIndex(p, tc.filters).Count(clusterGVR.Group, "ScheduledBackup", "db", "nightly"); got != tc.count {
-				t.Fatalf("count=%d, want %d", got, tc.count)
-			}
-		})
-	}
-}
-
-// The topology is shared by every user: a manager it links that the caller
-// can't read is left out of the row's pointer, with nothing in its place
-// that says one exists. A readable owner still answers.
-func TestReadableRelationshipsDropsManagersTheCallerCantRead(t *testing.T) {
-	app := topology.ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "shop"}
-	owner := topology.ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "shop", Name: "web-1"}
-	noApps := func(group, kind, _ string) bool { return !(group == "argoproj.io" && kind == "Application") }
-	rel := &topology.Relationships{ManagedBy: []topology.ResourceRef{app}, Owner: &owner}
-	got := ManagedByFromRelationships(readableRelationships(rel, noApps))
-	if got == nil || got.Kind != "ReplicaSet" {
-		t.Fatalf("pointer = %+v; want the readable owner, not the hidden Application", got)
-	}
-	alone := ManagedByFromRelationships(readableRelationships(&topology.Relationships{ManagedBy: []topology.ResourceRef{app}}, noApps))
-	none := ManagedByFromRelationships(readableRelationships(&topology.Relationships{}, noApps))
-	if alone != nil || none != nil {
-		t.Fatalf("hidden manager alone = %+v, nothing = %+v; want both absent", alone, none)
-	}
-	if got := ManagedByFromRelationships(readableRelationships(rel, nil)); got == nil || got.Kind != "Application" {
-		t.Fatalf("no access check: %+v; want the Application", got)
 	}
 }

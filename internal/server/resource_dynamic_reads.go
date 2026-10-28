@@ -21,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+var resourceListDynamicSyncWait = 3 * time.Second
+
 // Rows and observations use these captured handles. A lifecycle change before
 // capture completes is retryable rather than mixing data from two clusters.
 func dynamicReadHandles(cache *k8s.ResourceCache, kind, group string) (*k8s.DynamicResourceCache, schema.GroupVersionResource, error) {
@@ -223,7 +225,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 				var settled bool
 				items, settled, readErr = readCachedDynamicList(dynamicCache, gvr, namespace, func(first bool) ([]*unstructured.Unstructured, error) {
 					if first {
-						return dynamicCache.ListBlockingContext(ctx, gvr, namespace, 3*time.Second)
+						return dynamicCache.ListBlockingContext(ctx, gvr, namespace, resourceListDynamicSyncWait)
 					}
 					return dynamicCache.ListContext(ctx, gvr, namespace)
 				})

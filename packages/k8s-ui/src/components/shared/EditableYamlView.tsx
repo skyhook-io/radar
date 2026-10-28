@@ -23,6 +23,7 @@ import type { SelectedResource } from '../../types'
 import { resourceToYaml } from '../../utils/yaml'
 import { triggerDownload } from '../../utils/download'
 import { isCoreBatchJob } from '../../utils/api-resources'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 
 // ============================================================================
 // SUCCESS ANIMATION
@@ -199,6 +200,10 @@ export function EditableYamlView({
   onDownload,
 }: EditableYamlViewProps) {
   const draftKey = `radar_yaml_draft:${resource.kind}/${resource.namespace}/${resource.name}`
+  // Phones read YAML but don't start an edit or a duplicate: authoring YAML by
+  // touch is error-prone. Not folded into readOnly, which would discard an edit
+  // already open when a phone rotates from landscape to portrait.
+  const isPhone = usePhoneLayout()
 
   // Restore draft from sessionStorage (e.g., after session-expiry redirect).
   // All sessionStorage calls are wrapped in try-catch — storage can throw
@@ -559,7 +564,7 @@ export function EditableYamlView({
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-theme-text-secondary">YAML</span>
         <div className="flex items-center gap-2">
-          {!readOnly && (
+          {!readOnly && !isPhone && (
             <button
               onClick={handleStartEdit}
               className="flex items-center gap-1 px-2 py-1 text-xs text-accent-text hover:text-accent-light hover:bg-theme-elevated rounded"
@@ -588,7 +593,7 @@ export function EditableYamlView({
               Download
             </button>
           </Tooltip>
-          {onDuplicate && (
+          {onDuplicate && !isPhone && (
             <Tooltip content="Duplicate as new resource">
               <button
                 onClick={() =>

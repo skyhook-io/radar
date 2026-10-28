@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 
@@ -247,6 +248,14 @@ type Query struct {
 
 	// Viewer gates what rows say about other objects.
 	Viewer Viewer
+	// TrackedOnly restricts internally selected sources to their tracked API
+	// groups. User kind/name filters may instead name colliding custom kinds.
+	TrackedOnly bool
+	// Groups, when set, limits every store read to these API groups and to
+	// rows that record their apiVersion, before the store applies its limit,
+	// so rows outside them can't take its places. A read whose own groups
+	// don't overlap Groups is skipped.
+	Groups []string
 
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
@@ -440,13 +449,14 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 // negative-claim gating.
 func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) (RecentResult, error) {
 	return Recent(ctx, Query{
-		Namespaces: []string{namespace},
-		Kinds:      []string{canonicalKind(kind)},
-		Name:       name,
-		Since:      since,
-		Limit:      limit,
-		FieldLimit: fieldLimit,
-		Viewer:     viewer,
+		Namespaces:  []string{namespace},
+		Kinds:       []string{canonicalKind(kind)},
+		Name:        name,
+		Since:       since,
+		Limit:       limit,
+		FieldLimit:  fieldLimit,
+		Viewer:      viewer,
+		TrackedOnly: true,
 	})
 }
 
@@ -490,6 +500,7 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 		sourceQuery := q
 		sourceQuery.Kinds = []string{canonicalResourceKind}
 		sourceQuery.Name = resourceName
+		sourceQuery.TrackedOnly = true
 		for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
 			got, saturated, err := queryCandidates(ctx, store, sourceQuery, sourceQuery.Kinds, eventTypes, NamedFetchBound)
 			if err != nil {
@@ -635,19 +646,31 @@ var (
 
 // queryCandidates reads up to bound of the newest matching rows and reports
 // whether the window held more: it asks for one extra row, which it drops.
-// The returned events are group-filtered; when all kinds share one known
-// group, the store applies that group before its limit, and heterogeneous
-// queries keep the row-level guard.
+// Tracked-source queries filter groups before the limit where possible.
+// Explicit user filters also admit custom resources, including owned ones.
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
+	includeCustom := !q.TrackedOnly && (len(q.Kinds) > 0 || q.Name != "")
+	trackedGroups := commonTrackedAPIGroups(queryKinds)
+	skipTracked := false
+	if len(q.Groups) > 0 {
+		if trackedGroups == nil {
+			trackedGroups = q.Groups
+		} else {
+			trackedGroups = slices.DeleteFunc(slices.Clone(trackedGroups), func(g string) bool { return !slices.Contains(q.Groups, g) })
+			skipTracked = len(trackedGroups) == 0
+		}
+	}
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
 		Kinds:      queryKinds,
 		Names:      compactNames(q.Name),
-		APIGroups:  commonTrackedAPIGroups(queryKinds),
-		Since:      q.start,
-		Sources:    []timeline.EventSource{timeline.SourceInformer},
-		EventTypes: eventTypes,
+		APIGroups:  trackedGroups,
+		// Groups are matched against the recorded apiVersion.
+		RequireAPIVersion: len(q.Groups) > 0,
+		Since:             q.start,
+		Sources:           []timeline.EventSource{timeline.SourceInformer},
+		EventTypes:        eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the
 		// persistent store retains other contexts' events across switches,
 		// and serving those here hands agents phantom changes.
@@ -656,15 +679,56 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		IncludeManaged:   false,
 		IncludeK8sEvents: false,
 	}
-	events, err := store.Query(ctx, opts)
+	var events []timeline.TimelineEvent
+	saturated := false
+	if !skipTracked {
+		var err error
+		if events, err = store.Query(ctx, opts); err != nil {
+			return nil, false, err
+		}
+		saturated = len(events) > bound
+		if saturated {
+			events = events[:bound]
+		}
+		events = filterTrackedGroupEvents(events)
+	}
+	if !includeCustom {
+		return events, saturated, nil
+	}
+
+	// Scan custom resources separately so owned built-ins cannot crowd out
+	// the tracked rows before the store applies its limit.
+	scanBound := 4 * bound
+	opts.APIGroups = q.Groups
+	opts.IncludeManaged = true
+	opts.Limit = scanBound + 1
+	custom, err := store.Query(ctx, opts)
 	if err != nil {
 		return nil, false, err
 	}
-	saturated := len(events) > bound
-	if saturated {
+	if len(custom) > scanBound {
+		saturated = true
+		custom = custom[:scanBound]
+	}
+	trackedIDs := make(map[string]bool, len(events))
+	for _, e := range events {
+		trackedIDs[e.ID] = true
+	}
+	// The custom read is a superset of the tracked read. Its prefix orders
+	// overlapping rows, including store-specific ties; tracked rows outside
+	// that prefix follow it in their original order.
+	merged := make([]timeline.TimelineEvent, 0, len(events)+len(custom))
+	for _, e := range custom {
+		if isCustomResourceEvent(e) || trackedIDs[e.ID] {
+			merged = append(merged, e)
+		}
+	}
+	events = dedupeEvents(append(merged, events...))
+	if len(events) > bound {
+		saturated = true
 		events = events[:bound]
 	}
-	return filterTrackedGroupEvents(events), saturated, nil
+	return events, saturated, nil
 }
 
 // commonTrackedAPIGroups returns a store-level filter only when every queried
@@ -708,6 +772,14 @@ func filterTrackedGroupEvents(events []timeline.TimelineEvent) []timeline.Timeli
 		}
 	}
 	return out
+}
+
+func isCustomResourceEvent(e timeline.TimelineEvent) bool {
+	if e.APIVersion != "" {
+		return !k8score.IsBuiltInAPIGroup(resourceid.GroupFromAPIVersion(e.APIVersion))
+	}
+	_, builtin := resourceid.BuiltinGroup(e.Kind)
+	return !builtin
 }
 
 func eventGroupMatchesTracked(kind, apiVersion string) bool {
@@ -776,12 +848,15 @@ func annotateConfigConsumers(ctx context.Context, changes []issuesapi.RecentChan
 	}
 	namespaces := map[string]bool{}
 	for _, change := range changes {
-		if (change.Kind == "ConfigMap" || change.Kind == "Secret") && change.Namespace != "" {
+		if eventGroupMatchesTracked(change.Kind, change.APIVersion) && (change.Kind == "ConfigMap" || change.Kind == "Secret") && change.Namespace != "" {
 			namespaces[change.Namespace] = true
 		}
 	}
 	index, pods := configConsumerIndex(ctx, cache, namespaces, q)
 	for i := range changes {
+		if !eventGroupMatchesTracked(changes[i].Kind, changes[i].APIVersion) {
+			continue
+		}
 		entry := index[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
 		changes[i].ConsumedBy = entry.names
 		changes[i].ConsumedByWithheld = withheldCount(len(entry.withheld))
@@ -1080,7 +1155,7 @@ func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange 
 		RankReason:     reason,
 	}
 	if e.Diff != nil {
-		if hasApplicationConfigField(e.Kind, e.Diff.Fields) {
+		if eventGroupMatchesTracked(e.Kind, e.APIVersion) && hasApplicationConfigField(e.Kind, e.Diff.Fields) {
 			change.ApplicationConfigurationChange = true
 		}
 		fields := e.Diff.Fields
@@ -1125,21 +1200,21 @@ func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {
 		return "", ""
 	}
 	if e.EventType == timeline.EventTypeAdd || e.EventType == timeline.EventTypeDelete {
-		if isLifecycleOnlyKind(e.Kind) {
+		if isLifecycleOnlyKind(e.Kind) && eventGroupMatchesTracked(e.Kind, e.APIVersion) {
 			if e.EventType == timeline.EventTypeDelete {
 				return issuesapi.ChangeCategoryLifecycle, "secret deleted (name only)"
 			}
 			return "", ""
 		}
-		if isConfigKind(e.Kind) || isSpecKind(e.Kind) {
-			// A recreate-join add carries the diff against the object it
-			// replaced — that's a desired-state change, not mere lifecycle.
-			if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated && e.Diff != nil && len(e.Diff.Fields) > 0 {
-				return issuesapi.ChangeCategorySpecConfig, "recreated with desired-state or configuration changes"
-			}
-			return issuesapi.ChangeCategoryLifecycle, lifecycleRankReason
+		// Candidate queries restrict the default feed's kinds; explicit kind
+		// or name queries also admit custom-resource lifecycle rows.
+		if !isConfigKind(e.Kind) && !isSpecKind(e.Kind) && !isCustomResourceEvent(e) {
+			return "", ""
 		}
-		return "", ""
+		if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated && e.Diff != nil && len(e.Diff.Fields) > 0 {
+			return issuesapi.ChangeCategorySpecConfig, "recreated with desired-state or configuration changes"
+		}
+		return issuesapi.ChangeCategoryLifecycle, lifecycleRankReason
 	}
 	if e.Diff == nil || len(e.Diff.Fields) == 0 {
 		return "", ""
@@ -1157,12 +1232,13 @@ func hasSpecConfigField(e timeline.TimelineEvent) bool {
 	// ConfigMap data and admission webhook configs hold their configuration at
 	// the top level (data / webhooks[]), not under spec. — the path-prefix
 	// heuristic below would drop their (curated, status-free) diffs entirely.
-	if isConfigKind(e.Kind) || isWebhookConfigKind(e.Kind) {
+	trackedGroup := eventGroupMatchesTracked(e.Kind, e.APIVersion)
+	if trackedGroup && (isConfigKind(e.Kind) || isWebhookConfigKind(e.Kind)) {
 		return true
 	}
 	for _, f := range e.Diff.Fields {
 		p := strings.ToLower(f.Path)
-		if strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || p == "immutable" || strings.HasPrefix(p, "data") {
+		if strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || (trackedGroup && (p == "immutable" || strings.HasPrefix(p, "data"))) {
 			return true
 		}
 	}
@@ -1224,7 +1300,7 @@ func secretRankReason(change issuesapi.RecentChange) string {
 }
 
 func classifyApplicationConfigurationChange(change *issuesapi.RecentChange) {
-	if change == nil || change.NotLinkedToReturnedIssues {
+	if change == nil || change.NotLinkedToReturnedIssues || !eventGroupMatchesTracked(change.Kind, change.APIVersion) {
 		return
 	}
 	if change.Kind == "Secret" && change.ChangeCategory == issuesapi.ChangeCategorySpecConfig {
@@ -1402,13 +1478,13 @@ func compactNames(name string) []string {
 // the paired delete would present one change as two entries. True deletions —
 // no recreate add after them — always survive.
 func coalesceRecreatePairs(events []timeline.TimelineEvent) []timeline.TimelineEvent {
-	var recreates map[string]time.Time
+	var recreates map[resourceid.Ref]time.Time
 	for _, e := range events {
 		if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated {
 			if recreates == nil {
-				recreates = map[string]time.Time{}
+				recreates = map[resourceid.Ref]time.Time{}
 			}
-			key := e.Kind + "/" + e.Namespace + "/" + e.Name
+			key := resourceid.NewRef(resourceid.GroupFromAPIVersion(e.APIVersion), e.Kind, e.Namespace, e.Name)
 			if ts, ok := recreates[key]; !ok || e.Timestamp.After(ts) {
 				recreates[key] = e.Timestamp
 			}
@@ -1420,7 +1496,8 @@ func coalesceRecreatePairs(events []timeline.TimelineEvent) []timeline.TimelineE
 	out := make([]timeline.TimelineEvent, 0, len(events))
 	for _, e := range events {
 		if e.EventType == timeline.EventTypeDelete {
-			if ts, ok := recreates[e.Kind+"/"+e.Namespace+"/"+e.Name]; ok && !e.Timestamp.After(ts) {
+			key := resourceid.NewRef(resourceid.GroupFromAPIVersion(e.APIVersion), e.Kind, e.Namespace, e.Name)
+			if ts, ok := recreates[key]; ok && !e.Timestamp.After(ts) {
 				continue
 			}
 		}
@@ -1435,7 +1512,7 @@ func dedupeEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
 	for _, e := range events {
 		key := e.ID
 		if key == "" {
-			key = fmt.Sprintf("%s/%s/%s/%s/%s", e.Timestamp.Format(time.RFC3339Nano), e.Kind, e.Namespace, e.Name, e.EventType)
+			key = fmt.Sprintf("%s/%s/%s/%s/%s/%s", e.Timestamp.Format(time.RFC3339Nano), resourceid.GroupFromAPIVersion(e.APIVersion), e.Kind, e.Namespace, e.Name, e.EventType)
 		}
 		if seen[key] {
 			continue
@@ -1481,6 +1558,10 @@ func isWorkloadKind(kind string) bool {
 		return false
 	}
 }
+
+// CanonicalKind is the Kind a change query matches for kind: a kind, its
+// plural or a short name, as get_changes accepts them.
+func CanonicalKind(kind string) string { return canonicalKind(kind) }
 
 func canonicalKind(kind string) string {
 	// Discovery is the authority: lowercase-keyed by kind AND plural, yields

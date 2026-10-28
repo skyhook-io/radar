@@ -117,7 +117,7 @@ import { formatInvestigationTarget } from "./target";
 import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { diagnosisHasStoryShape } from "./investigationStory";
-import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
+import { assessmentLimitLines } from "./investigationEvidencePresentation";
 
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
@@ -1529,12 +1529,10 @@ export function InvestigationView({
       currentAssessment?.diagnosis?.omittedEntries)
       ? assessmentSourcesNode
       : undefined;
-  const assessmentLimits = useMemo(() => {
-    const lines = groupEvidenceCoverage(currentAssessmentProjection.limitations)
-      // A capped preview or a history bound is bookkeeping for the record; Still
-      // open keeps the reads Radar could not complete.
-      .filter((group) => !group.historyOnly && !group.bookkeepingOnly)
-      .map((group) => `${group.label}: ${group.summary}`);
+  const { assessmentLimits, assessmentRoutineLimits } = useMemo(() => {
+    const { open: lines, routine } = assessmentLimitLines(
+      currentAssessmentProjection.limitations,
+    );
     // Two coverage gaps carry no limitation of their own; name the one that
     // applies.
     const gaps = investigationEvidenceCoverageGaps(
@@ -1547,7 +1545,7 @@ export function InvestigationView({
       lines.push(
         "Radar's full diagnose of this workload was not collected, so this check is partial",
       );
-    return lines;
+    return { assessmentLimits: lines, assessmentRoutineLimits: routine };
   }, [currentAssessmentProjection, kind]);
   const healthSignals = useMemo(
     () =>
@@ -2439,6 +2437,9 @@ export function InvestigationView({
                           assessmentLimits={
                             storyShape ? assessmentLimits : undefined
                           }
+                          assessmentRoutineLimits={
+                            storyShape ? assessmentRoutineLimits : undefined
+                          }
                           assessmentCopy={assessmentCopy}
                           healthSignals={storyShape ? healthSignals : undefined}
                           onRevealSource={viewEvidenceSource}
@@ -2567,7 +2568,11 @@ export function InvestigationView({
                         : undefined
                     }
                     storyShell={storyShell}
-                    summarizedLimits={storyShape ? assessmentLimits : undefined}
+                    summarizedLimits={
+                      storyShape
+                        ? [...assessmentLimits, ...assessmentRoutineLimits]
+                        : undefined
+                    }
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||

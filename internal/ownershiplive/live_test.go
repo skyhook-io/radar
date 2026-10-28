@@ -150,6 +150,7 @@ func TestLiveParity(t *testing.T) {
 			Ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
 			APIVersion: gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
 			OwnerReferences: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
+			Labels: u.GetLabels(), Annotations: u.GetAnnotations(),
 		}
 		if ownership.IsRecordingManager(gk) {
 			o.Membership, o.Members, o.DestinationNamespace = liveMembership(gk, u, scope)

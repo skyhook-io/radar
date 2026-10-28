@@ -54,6 +54,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Admission dependency';
     case 'network_policy_isolates':
       return 'Affected resources';
+    case 'tls_certificate_consumers':
+      return 'Used for TLS by';
     default:
       return type.replace(/_/g, ' ');
   }

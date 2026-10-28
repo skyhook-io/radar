@@ -271,8 +271,9 @@ export function CoverageStrip({
   onOpenChange: (open: boolean) => void;
 }) {
   const hasError = groups.some((group) => group.hasError);
-  const historyOnly = groups.every((group) => group.historyOnly);
-  const quiet = historyOnly;
+  // Sampling caps and history bounds read as routine, as in the assessment
+  // headline; any other gap keeps the alert treatment.
+  const quiet = groups.every((group) => group.routineOnly);
   const { elementRef, revealAfterToggle } =
     useDisclosureReveal<HTMLDivElement>();
   const regionId = "investigation-evidence-coverage";
@@ -314,11 +315,11 @@ export function CoverageStrip({
                 : "font-semibold text-theme-text-primary",
             )}
           >
-            {historyOnly
-              ? "Change history is limited"
+            {quiet
+              ? `Radar's coverage · ${groups.length} routine ${groups.length === 1 ? "limit" : "limits"}`
               : "Evidence coverage is incomplete"}
           </span>
-          {!historyOnly && !open && summary ? (
+          {!open && summary ? (
             <span className="line-clamp-2 text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
               {summary}
             </span>

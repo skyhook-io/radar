@@ -74,7 +74,7 @@ func (t Target) Label() string {
 
 // HealthSignal is the compact server-side health frame captured when a run
 // starts. Issue fields describe live operational findings; audit fields are
-// static posture findings and should not be treated as proof of an outage.
+// posture findings, mostly latent risk, though some can be live failures.
 // Issues/AuditFindings carry the top actual rows (capped) — aggregates alone
 // read as vague and starve the prompt of detail Radar already has.
 type HealthSignal struct {
@@ -386,7 +386,7 @@ func healthFrame(target string, health *HealthSignal) string {
 		b.WriteString(" The crossplane.io/paused annotation requests a pause for this resource, corroborated by its recorded Synced=False/ReconcilePaused condition. Recorded availability is not a fresh external check while reconciliation is paused.")
 	}
 	if health.AuditCount > 0 {
-		fmt.Fprintf(&b, " Radar audit also reports %d static posture finding%s", health.AuditCount, pluralS(health.AuditCount))
+		fmt.Fprintf(&b, " Radar audit also reports %d posture finding%s", health.AuditCount, pluralS(health.AuditCount))
 		if health.AuditSeverity != "" || health.TopFinding != "" {
 			b.WriteString(";")
 			if health.AuditSeverity != "" {
@@ -404,7 +404,7 @@ func healthFrame(target string, health *HealthSignal) string {
 			}
 			b.WriteString(".")
 		}
-		b.WriteString(" Treat audit findings as static posture and remediation priority, not evidence of an active outage.")
+		b.WriteString(" Audit findings are posture and remediation priority, mostly latent risk, but some (expired certificates, dangling references) can be live failures; check them before dismissing.")
 	}
 	if len(health.AuditMissingInputs) > 0 {
 		fmt.Fprintf(&b, " The audit scan could not read these inputs: %s. Zero audit findings do not establish that all checks passed.", strings.Join(health.AuditMissingInputs, ", "))

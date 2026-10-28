@@ -258,9 +258,11 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// semantics in the catalog so agents do not infer fresh external health
 	// or treat absence as ruling out another pause mechanism.
 	const (
-		// Includes root-bound deletion and manager/pause guidance: 65,281 bytes without exec.
-		maxCatalogBytes         = 65400
-		maxToolDescriptionBytes = 3000
+		// Includes controller-first navigation and the separate GitOps edit boundary.
+		// issues states what it covers and what it doesn't (expiring
+		// certificates, other posture), so an empty result isn't read as healthy.
+		maxCatalogBytes         = 66500
+		maxToolDescriptionBytes = 3200
 	)
 
 	for _, enabled := range []bool{false, true} {

@@ -8,9 +8,7 @@
 // receive the same shape; presentation specifics (token budgets, prose
 // hints, tier-based filtering) live in the caller, not in this package.
 //
-// This package is types-only: it deliberately depends on nothing from
-// pkg/topology or internal/* so that it can be imported by any layer
-// (handlers, generators, tests) without producing import cycles.
+// This package has no internal/* dependencies; hosts supply their data sources.
 //
 // All enum string values are snake_case — both for readability in Go code
 // and for stable, machine-friendly JSON output.
@@ -39,10 +37,9 @@ type ResourceContext struct {
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`
 	Owner      *ContextRef        `json:"owner,omitempty"`
-	// ManagedBy is the topmost owner or managing controller the relationship
-	// graph links. With Manager set it names only what Manager doesn't weigh
-	// (Argo CD, Flux and Helm are Manager's), and one the caller can't read is
-	// dropped without an omission note.
+	// ManagedBy names the highest readable controller and separately observed
+	// non-GitOps managing controllers. Manager carries GitOps/Helm evidence.
+	// An incomplete controller walk is reported in Omitted.
 	ManagedBy []ContextRef `json:"managedBy,omitempty"`
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
@@ -193,10 +190,12 @@ type ManagerClaimContext struct {
 // ManagedByRef is the compact form of a "managed-by" pointer used in
 // ResourceSummaryContext (list/search rows). Carries Kind alongside Source so
 // consumers can distinguish e.g. a Flux Kustomization from a Flux
-// HelmRelease without re-parsing the Source string. Intentionally lacks
-// Group to keep per-row bytes minimal.
+// HelmRelease without re-parsing Source. Native controller/spec references
+// include Group unless their identity matches the built-in kind and group.
+// "native" describes the relationship, including custom controllers, not a vendor.
 type ManagedByRef struct {
-	Kind      string `json:"kind"`   // "Application" | "Kustomization" | "HelmRelease" | "Deployment" | "DaemonSet" | "StatefulSet" | "Rollout" | …
+	Kind      string `json:"kind"` // "Application" | "Kustomization" | "HelmRelease" | "Deployment" | "DaemonSet" | "StatefulSet" | "Rollout" | …
+	Group     string `json:"group,omitempty"`
 	Source    string `json:"source"` // "argocd" | "flux" | "helm" | "native"
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
@@ -205,16 +204,20 @@ type ManagedByRef struct {
 // ResourceSummaryContext is the per-row enrichment attached to
 // list_resources and search hits. The row-tier companion to
 // ResourceContext (the detail-tier enrichment on GET responses) —
-// bounded to triage facts (typically ~60 bytes, plus at most 33 bytes for
-// annotation pause intent). Always-on when the caller did not opt out via
+// bounded to triage facts. Always-on when the caller did not opt out via
 // context=none.
 type ResourceSummaryContext struct {
 	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
 
-	ManagedBy  *ManagedByRef `json:"managedBy,omitempty"`
-	Health     string        `json:"health,omitempty"`
-	IssueCount int           `json:"issueCount,omitempty"`
-	Scanned    *ScannedRef   `json:"scanned,omitempty"`
+	// ManagedBy is one controller-first inspection lead, not an edit target.
+	ManagedBy *ManagedByRef `json:"managedBy,omitempty"`
+	Health    string        `json:"health,omitempty"`
+	// IssueCount is omitted at zero; an Omitted entry for issueCount instead
+	// means the count is unknown.
+	IssueCount int         `json:"issueCount,omitempty"`
+	Scanned    *ScannedRef `json:"scanned,omitempty"`
+	// Omitted qualifies missing or incomplete fields, including a present pointer.
+	Omitted []OmittedField `json:"omitted,omitempty"`
 }
 
 // ScannedRef names the object a security-scan report (Trivy Operator) is
@@ -875,8 +878,9 @@ type KyvernoFinding struct {
 	Message string `json:"message,omitempty"`
 }
 
-// OmittedField records a field that was intentionally dropped from the
-// response. See the "omitted.field path convention" in the v1 contract:
+// OmittedField records an unavailable field or an incomplete value. A readable
+// managedBy prefix can coexist with a note that its controller walk is incomplete.
+// Paths are relative to the containing resourceContext or summaryContext:
 //   - top-level field: bare name (e.g. "selectedBy")
 //   - nested: dotted path (e.g. "policySummary.kyverno")
 //   - whole resourceContext skipped: "*"
@@ -885,7 +889,7 @@ type OmittedField struct {
 	Reason OmittedReason `json:"reason"`
 }
 
-// OmittedReason is the closed enum of reasons a field can be omitted.
+// OmittedReason explains an unavailable field or incomplete value.
 type OmittedReason string
 
 const (

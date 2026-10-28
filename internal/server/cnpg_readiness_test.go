@@ -50,7 +50,7 @@ func TestCNPGReadAdapterRequiresTypedInitialSync(t *testing.T) {
 		MinimalSet:          map[string]bool{"pods": true, "services": true},
 		PatienceWindow:      20 * time.Millisecond,
 		SyncTimeout:         200 * time.Millisecond,
-		DeferredSyncTimeout: 3 * time.Second,
+		DeferredSyncTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

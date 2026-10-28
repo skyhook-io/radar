@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 
 // Shared tabbed detail chrome. Hosts provide all data-aware pieces; this owns
 // only the header, tab strip, optional controls, overlay, and content frame.
@@ -11,6 +12,8 @@ export interface DetailShellTab<TId extends string = string> {
   badge?: ReactNode
   /** Omit the tab from the strip without disturbing the others' identity. */
   hidden?: boolean
+  /** On a phone, show `compactIdentity` alone in the header while this tab is active. */
+  phoneCompactHeader?: boolean
 }
 
 export interface DetailShellProps<TId extends string = string> {
@@ -23,6 +26,8 @@ export interface DetailShellProps<TId extends string = string> {
   /** Inline leading control on the identity row — a back button in standalone Radar. */
   nav?: ReactNode
   identity: ReactNode
+  /** Replaces the identity on a phone while a `phoneCompactHeader` tab is active (e.g. the name). The breadcrumb and nav stay. */
+  compactIdentity?: ReactNode
   headerActions?: ReactNode
   /** A line under the identity row, above the tabs — e.g. a status summary that holds on every tab. */
   subheader?: ReactNode
@@ -46,6 +51,7 @@ export function DetailShell<TId extends string = string>({
   breadcrumb,
   nav,
   identity,
+  compactIdentity,
   headerActions,
   subheader,
   scopeControls,
@@ -71,6 +77,11 @@ export function DetailShell<TId extends string = string>({
     }
   }, [activeTab, compact])
 
+  // A tab that wants the screen (Logs) swaps the header for the host's compact
+  // identity on a phone, so its content gets the rest of the height.
+  const isPhone = usePhoneLayout()
+  const phoneCompact = isPhone && compactIdentity != null && !!visibleTabs.find((t) => t.id === activeTab)?.phoneCompactHeader
+
   return (
     <div className="flex flex-col h-full w-full bg-theme-base">
       {/* Header */}
@@ -85,10 +96,10 @@ export function DetailShell<TId extends string = string>({
               {/* Wrapping on, the identity's basis is its one-line width, so the
                   actions move below whenever the whole title line would not fit
                   beside them — never squeezing the name to keep them up. */}
-              <div className={clsx('min-w-0 phone:basis-[calc(100%-3rem)]', wrapHeader ? 'flex-auto' : 'flex-1')}>{identity}</div>
-              {wrapHeader ? <div className="ml-auto flex shrink-0 items-start gap-4">{headerActions}</div> : headerActions}
+              <div className={clsx('min-w-0 phone:basis-[calc(100%-3rem)]', wrapHeader ? 'flex-auto' : 'flex-1')}>{phoneCompact ? compactIdentity : identity}</div>
+              {phoneCompact ? null : wrapHeader ? <div className="ml-auto flex shrink-0 items-start gap-4">{headerActions}</div> : headerActions}
             </div>
-            {subheader && <div className="-mt-1 px-6 pb-3 phone:px-4">{subheader}</div>}
+            {subheader && !phoneCompact && <div className="-mt-1 px-6 pb-3 phone:px-4">{subheader}</div>}
           </>
         )}
 

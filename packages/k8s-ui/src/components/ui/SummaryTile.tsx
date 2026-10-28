@@ -8,6 +8,7 @@ export type SummaryTone = 'neutral' | 'success' | 'warning' | 'error' | 'info'
 // Applications both surface their status rollup as a row of these in the header.
 export function SummaryTile({
   label,
+  phoneLabel,
   value,
   tone = 'neutral',
   onClick,
@@ -15,6 +16,8 @@ export function SummaryTile({
   loading = false,
 }: {
   label: string
+  /** Shorter label for phones, where a row of tiles has to fit 360px. */
+  phoneLabel?: string
   value: number
   tone?: SummaryTone
   onClick?: () => void
@@ -42,10 +45,17 @@ export function SummaryTile({
   ) : (
     <div className={`text-sm font-semibold ${toneClass}`}>{value}</div>
   )
-  const label$ = <div className="text-xs text-theme-text-tertiary">{label}</div>
+  const label$ = phoneLabel ? (
+    <div className="text-xs text-theme-text-tertiary">
+      <span className="phone:hidden">{label}</span>
+      <span className="hidden phone:inline">{phoneLabel}</span>
+    </div>
+  ) : (
+    <div className="text-xs text-theme-text-tertiary">{label}</div>
+  )
   if (!onClick) {
     return (
-      <div className="rounded-md border border-theme-border bg-theme-base px-3 py-2">
+      <div className="rounded-md border border-theme-border bg-theme-base px-3 py-2 phone:flex-1 phone:basis-0 phone:whitespace-nowrap phone:px-2 phone:py-1.5">
         {value$}
         {label$}
       </div>
@@ -57,7 +67,7 @@ export function SummaryTile({
       onClick={onClick}
       aria-pressed={active}
       className={clsx(
-        'cursor-pointer rounded-md border bg-theme-base px-3 py-2 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyhook-500',
+        'cursor-pointer rounded-md border bg-theme-base px-3 py-2 phone:flex-1 phone:basis-0 phone:whitespace-nowrap phone:px-2 phone:py-1.5 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyhook-500',
         active ? activeBorderClass : 'border-theme-border',
       )}
     >

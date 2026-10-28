@@ -17,7 +17,8 @@ import (
 // found it searching an owner's dependents, and answers every question from
 // that capture, so an object reads the same in every answer. Member lists
 // aren't captured: Members reads a manager's status each time it is asked,
-// and RecordingManagers searches for an object's managers once. Answers read the
+// claim checks capture its membership state once, and RecordingManagers searches
+// for an object's managers once. Answers read the
 // cache as it is when asked, so one can be a moment older than another, as
 // any informer read can. It searches each owner's dependents at most once.
 // It never reads an object the caller may not read, and says nothing of
@@ -25,11 +26,13 @@ import (
 // ValidateCaches passes once they are built. They share the view's captures,
 // so they must not be modified. A View is not safe for concurrent use.
 type View struct {
-	session   ReadSession
-	access    Access
-	reads     map[resourceid.Ref]accessRead
-	searches  map[resourceid.Ref]DependentCandidatesRead
-	recording map[resourceid.Ref]RecordingManagersAnswer
+	session         ReadSession
+	access          Access
+	reads           map[resourceid.Ref]accessRead
+	searches        map[resourceid.Ref]DependentCandidatesRead
+	recording       map[resourceid.Ref]RecordingManagersAnswer
+	claimMembership map[resourceid.Ref]MembersRead
+	unreadable      []resourceid.Ref
 }
 
 type accessRead struct {
@@ -40,11 +43,12 @@ type accessRead struct {
 // NewView answers for the caller access describes, from s.
 func NewView(s ReadSession, access Access) *View {
 	return &View{
-		session:   s,
-		access:    access,
-		reads:     map[resourceid.Ref]accessRead{},
-		searches:  map[resourceid.Ref]DependentCandidatesRead{},
-		recording: map[resourceid.Ref]RecordingManagersAnswer{},
+		session:         s,
+		access:          access,
+		reads:           map[resourceid.Ref]accessRead{},
+		searches:        map[resourceid.Ref]DependentCandidatesRead{},
+		recording:       map[resourceid.Ref]RecordingManagersAnswer{},
+		claimMembership: map[resourceid.Ref]MembersRead{},
 	}
 }
 
@@ -537,11 +541,24 @@ func (v *View) recordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 			a.Managers = append(a.Managers, r.read.Object)
 		}
 	}
+	// Consecutive rows commonly see the same unreadable inventories. Share
+	// their filtered references without freezing index reads or permissions.
+	a.Unreadable = v.unreadable
+	shared, n := true, 0
 	for _, m := range found.Unreadable {
 		if may(m.GroupKind(), m.Namespace) {
-			a.Unreadable = append(a.Unreadable, m)
+			if shared && (n == len(a.Unreadable) || a.Unreadable[n] != m) {
+				a.Unreadable = slices.Clone(a.Unreadable[:n])
+				shared = false
+			}
+			if !shared {
+				a.Unreadable = append(a.Unreadable, m)
+			}
+			n++
 		}
 	}
+	a.Unreadable = a.Unreadable[:n:n]
+	v.unreadable = a.Unreadable
 	for _, m := range found.Remote {
 		if may(m.GroupKind(), m.Namespace) {
 			a.Remote = append(a.Remote, m)

@@ -346,12 +346,12 @@ export function CapacityOverview({
             <button
               type="button"
               onClick={() => setShowExplain(true)}
-              className="mt-1 text-xs font-medium text-accent-text hover:underline"
+              className="mt-1 text-xs font-medium text-accent-text hover:underline phone:text-left"
             >
               Scheduling capacity ≠ actual usage — how to read these numbers
             </button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 phone:flex-wrap phone:gap-y-1">
             <ScopeBadges coverage={coverage} />
             <CapacityFreshness
               meta={data}
@@ -373,7 +373,9 @@ export function CapacityOverview({
         </Notice>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
+      {/* Phones: managers take the full row, the counts pair up beside each
+          other, and a count left alone on the last row takes it whole. */}
+      <div className="grid grid-cols-2 gap-3 phone:[&>:last-child:nth-child(even)]:col-span-2 lg:grid-cols-3 xl:grid-cols-5">
         <ManagersTile
           managers={summary.managers}
           groups={data.groups}
@@ -419,6 +421,8 @@ export function CapacityOverview({
               "Claim inventory",
             )}
             attention={(summary.claimStages?.failed ?? 0) > 0}
+            // Keeps the row full when the denied Pending pods tile below takes its own.
+            className={podsDeniedFlag ? "phone:col-span-2" : undefined}
           />
         )}
         {podsDeniedFlag ? (
@@ -426,6 +430,8 @@ export function CapacityOverview({
             label="Pending pods"
             value="Unavailable"
             sub="Pod access denied — not zero"
+            // "Unavailable" is wider than a half-width tile on a phone.
+            className="phone:col-span-2"
             certainty="unknown"
             certaintyTitle="Unknown — the current identity cannot list Pods. Absence of data is not zero."
           />
@@ -496,7 +502,7 @@ export function CapacityOverview({
             signals.map((signal) => (
               <div
                 key={signal.key}
-                className="flex items-start gap-3 px-4 py-2.5 hover:bg-theme-hover/40"
+                className="flex items-start gap-3 px-4 py-2.5 hover:bg-theme-hover/40 phone:flex-wrap phone:gap-y-1"
               >
                 <Badge
                   severity={signal.severity}
@@ -515,7 +521,7 @@ export function CapacityOverview({
                         key={subject.label}
                         type="button"
                         onClick={subject.open}
-                        className="font-mono text-accent-text hover:underline"
+                        className="font-mono text-accent-text hover:underline phone:max-w-full phone:break-words phone:text-left"
                       >
                         {subject.label}
                       </button>
@@ -526,7 +532,8 @@ export function CapacityOverview({
                 {signal.action && (
                   <LinkButton
                     onClick={signal.action.run}
-                    className="shrink-0 self-center"
+                    // Phones: the action drops under the text, lined up with it.
+                    className="shrink-0 self-center phone:basis-full phone:pl-[3.75rem]"
                   >
                     {signal.action.label} →
                   </LinkButton>
@@ -606,7 +613,7 @@ function ManagersTile({
     ? autoscalerStatus?.observedAt
     : undefined;
   return (
-    <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+    <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm phone:col-span-2">
       <div className="flex items-center gap-1.5">
         <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           Capacity managers

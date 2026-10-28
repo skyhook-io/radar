@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -257,10 +258,9 @@ func KindHasDiffer(kind string) bool {
 func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
+	oldDesired, newDesired := genericDesiredState(oldU), genericDesiredState(newU)
 
-	// Kinds whose deletion does not bump generation (CustomResourceDefinition)
-	// can still fold a spec edit into a +1 update, so the spec must match too.
-	if deletionAccountsForGenerationBump(oldU, newU) && reflect.DeepEqual(oldU.Object["spec"], newU.Object["spec"]) {
+	if oldU.GetDeletionTimestamp() == nil && newU.GetDeletionTimestamp() != nil && reflect.DeepEqual(oldDesired, newDesired) {
 		// Without this row the update would read as "resource changed".
 		changes = append(changes, FieldChange{
 			Path:     "metadata.deletionTimestamp",
@@ -269,12 +269,34 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 		})
 		summary = append(summary, "deletion started")
 	} else if oldGen, newGen := oldU.GetGeneration(), newU.GetGeneration(); oldGen != newGen && oldGen > 0 && newGen > 0 {
-		changes = append(changes, FieldChange{
-			Path:     "metadata.generation",
-			OldValue: oldGen,
-			NewValue: newGen,
-		})
-		summary = append(summary, fmt.Sprintf("spec changed (gen %d→%d, fields not specifically tracked)", oldGen, newGen))
+		var paths []changedSpecPath
+		for _, root := range unionKeys(oldDesired, newDesired) {
+			oldValue, oldFound := oldDesired[root]
+			newValue, newFound := newDesired[root]
+			before := len(paths)
+			// A custom kind's list order may be significant (route or
+			// rule precedence), and its schema cannot say, so any reorder
+			// of a keyed list is reported.
+			collectChangedPaths(root, oldValue, newValue, "", func(string) bool { return true }, &paths)
+			if len(paths) == before && (oldFound != newFound || !reflect.DeepEqual(oldValue, newValue)) {
+				paths = append(paths, changedSpecPath{path: root + " (order or structure changed)", oldV: hiddenValueMarker, newV: hiddenValueMarker})
+			}
+		}
+		paths = collapseUntracked(paths, nil, nil)
+		for i := range paths {
+			// A bare key has no schema-backed identifier meaning on a CR.
+			if sensitivePath(paths[i].path) || slices.Contains(splitSpecPath(paths[i].path), "key") {
+				paths[i].oldV, paths[i].newV = hiddenValues(paths[i].oldV != nil, paths[i].newV != nil)
+			}
+		}
+		changes, summary = untrackedSpecRows("desired state", paths)
+		if len(changes) == 0 && desiredStateStripped(newU) {
+			changes = []FieldChange{{Path: "spec.versions[].schema or spec.conversion", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker}}
+			summary = []string{"schema or conversion changed (fields Radar does not keep)"}
+		}
+		if len(changes) > 0 {
+			changes = append(changes, FieldChange{Path: "metadata.generation", OldValue: oldGen, NewValue: newGen})
+		}
 	}
 
 	genChanged := len(changes) > 0
@@ -305,6 +327,26 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 		OldValue: "changed",
 		NewValue: "changed",
 	}}, []string{"resource changed"}
+}
+
+// desiredStateStripped reports kinds whose informer transform removes
+// desired-state fields (pkg/k8score/transform.go drops CRD schemas and
+// conversion settings), so a generation bump with no visible desired-state
+// change is still an edit.
+func desiredStateStripped(u *unstructured.Unstructured) bool {
+	return u.GetKind() == "CustomResourceDefinition" && resourceid.GroupFromAPIVersion(u.GetAPIVersion()) == "apiextensions.k8s.io"
+}
+
+func genericDesiredState(u *unstructured.Unstructured) map[string]any {
+	out := make(map[string]any, len(u.Object))
+	for key, value := range u.Object {
+		switch key {
+		case "apiVersion", "kind", "metadata", "status":
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func genericConditionChanges(oldU, newU *unstructured.Unstructured, fields ...string) []FieldChange {
@@ -358,6 +400,7 @@ func genericConditionSignalMap(obj map[string]any, fields ...string) map[string]
 
 func normalizedUnstructuredForTimeline(u *unstructured.Unstructured) map[string]any {
 	cp := u.DeepCopy().Object
+	unstructured.RemoveNestedField(cp, "metadata", "generation")
 	normalizeTimelineObject(cp)
 	return cp
 }
