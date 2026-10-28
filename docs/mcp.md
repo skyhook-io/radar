@@ -1531,3 +1531,13 @@ values are omitted from ordinary tool-argument logs.
 
 
 Confirmation tokens are process-local. Use a single Radar replica or session affinity so preview and confirmation reach the same process; a restart invalidates outstanding tokens. `/mcp-apply` is an authenticated subset of writable `/mcp`, intended for built-in agents, not a private network endpoint.
+
+## Native operator summaries
+
+Collector, Flagger Canary and Instrumentation rows in `list_resources`, REST AI lists and search summaries include bounded integration-specific facts, without fetching related resources. Full objects remain available through `get_resource`.
+
+- `collector.reportedPodReadiness` copies the operator's `status.scale.statusReplicas` at its last reconcile: ready/observed Pods for Deployment/StatefulSet, ready/scheduled for DaemonSet. It is not a current runtime readiness check. `collector.declaredPipelines` counts configured pipeline names, not functioning pipelines. An absent block means config could not be summarized, not zero pipelines; `count: 0` is a readable config with none declared. Alpha YAML parsing is limited to 64 KiB.
+- Flagger `strategy` describes the current declaration: `Canary`, `Blue/green`, `A/B testing`, or a mirroring variant. Optional `canary.reportedWeightPercent`, `reportedFailedChecks` and `reportedIterations` copy recorded status counters; omitted means unreported, while zero remains zero. Weight is only shown for weighted canaries, iterations for iteration-based strategies. Flagger does not attest these counters to the current spec, and reported weight is not measured live traffic. Read the full analysis for configured thresholds and limits.
+- `instrumentation.blockedUpgradeLanguages` names languages in the operator's recorded `status.upgradeBlockedVersions`; it excludes the arbitrary message values. This is a startup upgrade record, not application health or proof the current image remains blocked.
+
+Pipeline previews contain the first five sorted names; blocked-upgrade previews the first ten. Counts include all names before limits. Names are shortened after 160 UTF-8-safe bytes, so a `namesTruncated` or `blockedUpgradeLanguagesTruncated` flag means entries were omitted **or** a name was shortened. Neither absence of a summary nor absence of a reported issue establishes healthy telemetry delivery.

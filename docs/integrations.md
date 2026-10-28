@@ -31,9 +31,15 @@ image upgrades are highlighted. This does not attribute injected Pods or infer
 collector relationships from endpoint strings.
 
 **REST and MCP:** existing resource list/get tools gain concise native summaries.
-Collector summaries include reconciliation state, mode, version and image; the
-reconciliation-time Pod count is confined to the labeled UI. Instrumentation summaries distinguish configuration from blocked upgrades.
-No new MCP tool or response field is introduced. Existing generic ownership remains;
+Collector summaries include reconciliation state, mode, version and image.
+The optional `collector.reportedPodReadiness` is the operator's Pod-count snapshot,
+not current readiness. `collector.declaredPipelines` gives the declared count and
+up to five sorted names, with truncation reported. That block is omitted when
+configuration cannot be previewed; omission does not mean zero pipelines. Alpha
+YAML previews are limited to 64 KiB. Instrumentation summaries name up to ten
+languages with recorded upgrade blocks and report the total and truncation,
+without copying arbitrary status messages. These are additive summary fields;
+no new MCP tool is introduced. Existing generic ownership remains;
 no endpoint-derived topology edges, telemetry queries, or new Issues source are added.
 Existing condition Issues surface managed reconciliation failures and status-read
 errors with the operator's message; unmanaged and stale observations are suppressed.
@@ -88,6 +94,12 @@ not used. Without that condition the onset remains unknown. Inspect the Canary's
 cause. A failed new rollout does not imply the primary is down. Suspended failed
 rollouts remain visible; ordinary waiting/progress and `Promoted=False` remain quiet.
 No new workflow actions, topology edge types, traffic queries or MCP tools are added.
+
+Compact REST/MCP summaries also identify the configured strategy and carry the
+reported counters under `canary`: weight percentage for weighted analysis, iteration
+for iteration-based analysis, and failed checks when reported. A reported zero
+is retained; an absent counter means unreported, not zero. These counters are
+controller snapshots, with the same freshness limits as the recorded phase.
 
 | Resource | Group | Topology | Detail View | AI Summary |
 |---|---|---|---|---|
