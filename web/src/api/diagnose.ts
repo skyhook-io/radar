@@ -275,6 +275,36 @@ export async function fetchAgents(
 }
 
 /**
+ * What an agent CLI's own status command says about its sign-in. "unknown"
+ * covers agents Radar doesn't check, timeouts and unrecognized answers; only
+ * "signed-out" is acted on.
+ */
+export interface AgentSigninStatus {
+  agent: string;
+  state: "signed-in" | "signed-out" | "unknown";
+  /** The command that signs the agent in; set only when signed out. */
+  signinCmd?: string;
+}
+
+// fetchAgentSignin asks the server to run the agent's status command (cached
+// briefly server-side). refresh discards that cache: the user's "check again".
+export async function fetchAgentSignin(
+  agent: string,
+  refresh: boolean,
+  signal?: AbortSignal,
+): Promise<AgentSigninStatus> {
+  const params = new URLSearchParams({ agent });
+  if (refresh) params.set("refresh", "1");
+  const res = await fetch(`${getApiBase()}/agents/signin?${params}`, {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+    signal,
+  });
+  if (!res.ok) throw new Error(`agent sign-in: ${res.status}`);
+  return res.json();
+}
+
+/**
  * Why a host refused an investigation, and what would unblock it. Hosts that
  * meter investigations send these beside the sentence to show, so an embedding
  * app can offer the matching action. Radar's own backend never sends them.

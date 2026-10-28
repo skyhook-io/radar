@@ -278,6 +278,33 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, map[string]any{"ok": true, "consented": currentConsents()})
 }
 
+// handleAgentSignin asks an installed agent CLI whether it is signed in, so
+// the consent card can say so before the user approves a run. GET
+// ?agent=<name>[&refresh=1]. Gated like consent: only where the engine exists
+// (local, no auth, investigation MCP mounted, not operator-managed), and it
+// needs no cluster. The agent name only selects one of the engine's own
+// backends; the command and its arguments are fixed per backend. Answers are
+// cached briefly and one status command runs per agent at a time, so
+// repeated requests can't fan out into processes.
+func (s *Server) handleAgentSignin(w http.ResponseWriter, r *http.Request) {
+	diagnoser, runs := s.aiEngine()
+	if diagnoser == nil || runs == nil {
+		s.writeError(w, http.StatusNotImplemented, "AI investigations are not available")
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("agent"))
+	if name == "" {
+		s.writeError(w, http.StatusBadRequest, "agent is required")
+		return
+	}
+	status, ok := diagnoser.CheckSignin(r.Context(), name, r.URL.Query().Get("refresh") == "1")
+	if !ok {
+		s.writeError(w, http.StatusNotFound, ai.AgentLabel(name)+" isn't installed")
+		return
+	}
+	s.writeJSON(w, status)
+}
+
 // aiReady gates every diagnose endpoint: the engine exists only in no-auth
 // standalone Radar with the investigation MCP mounted, once an agent CLI is found. Returns
 // the run manager, or false (having written the error) when unavailable.

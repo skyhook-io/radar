@@ -223,3 +223,69 @@ func TestDiagnoseStartRefusesAnAgentThatIsNotInstalled(t *testing.T) {
 		t.Fatalf("start with an uninstalled agent = %d %s, want 409 naming Codex", rec.Code, rec.Body.String())
 	}
 }
+
+func agentSignin(t *testing.T, s *Server, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.handleAgentSignin(rec, httptest.NewRequest(http.MethodGet, "/api/agents/signin?"+query, nil))
+	return rec
+}
+
+// The sign-in check spawns the agent CLI, so it is available exactly where
+// investigations are, and runs nothing anywhere else.
+func TestAgentSigninFollowsTheInvestigationGate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	marker := filepath.Join(home, "ran")
+	bin := filepath.Join(home, "codex")
+	script := "#!/bin/sh\ntouch " + marker + "\necho 'Not logged in' >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RADAR_AI_CLI_BIN", bin)
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+	off := &Server{
+		authConfig:              auth.Config{Mode: "proxy"},
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	off.refreshAIEngine(t.Context())
+	if rec := agentSignin(t, off, "agent=codex"); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("auth-enabled Radar: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("auth-enabled Radar ran the agent CLI")
+	}
+
+	on := &Server{
+		authConfig:              auth.Config{Mode: "none"},
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	on.refreshAIEngine(t.Context())
+	t.Cleanup(func() {
+		if runs := on.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
+	if rec := agentSignin(t, on, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("no agent: status=%d", rec.Code)
+	}
+	if rec := agentSignin(t, on, "agent=claude"); rec.Code != http.StatusNotFound {
+		t.Fatalf("agent that isn't a backend: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec := agentSignin(t, on, "agent=codex")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["agent"] != "codex" || got["state"] != "signed-out" || got["signinCmd"] != "codex login" {
+		t.Fatalf("answer: %s", rec.Body.String())
+	}
+}

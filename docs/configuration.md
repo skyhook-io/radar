@@ -158,6 +158,18 @@ Radar picks up a newly installed CLI automatically, or when you click **Check
 again** in AI investigations. The startup output has an `AI investigations`
 line that says which agent Radar will use, or why investigations are off.
 
+Before the first investigation, while it asks for your consent, Radar runs the
+agent's own sign-in status command for Claude Code (`claude auth status`) and
+Codex (`codex login status`). If the agent says it isn't signed in, the consent
+card shows the command that signs it in and a **Check again** button; you can
+still continue, since a status command can miss credentials it doesn't know
+about. Radar waits at most 2 seconds for the answer and remembers it for a
+minute; with no clear answer, the card shows nothing. Codex with
+`CODEX_API_KEY` or `OPENAI_API_KEY` set is never reported as signed out, because
+`codex login status` doesn't see those. Cursor and OpenCode aren't checked:
+`cursor-agent status` contacts Cursor's servers, and OpenCode signs in per
+model provider.
+
 If the CLI is somewhere else, for example an npm global install under nvm, start
 Radar from a terminal where the CLI works, or set `RADAR_AI_CLI_BIN` to its full
 path:

@@ -49,6 +49,8 @@ import {
   statusWord,
 } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
+import { AgentSigninNotice } from "./AgentSigninNotice";
+import { useAgentSignin } from "../../hooks/useAgentSignin";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
@@ -381,6 +383,18 @@ export function DiagnoseSurface({
   onBrowseIssues?: () => void;
 }) {
   const d = useDiagnose();
+  // A hosted agent runs on the host's backend, where a local CLI's sign-in
+  // says nothing.
+  const signin = useAgentSignin(d.selectedAgent, d.needsConsent && !d.hosted);
+  const signinNotice =
+    signin.status?.state === "signed-out" && signin.status.signinCmd ? (
+      <AgentSigninNotice
+        agentName={d.agentLabel}
+        signinCmd={signin.status.signinCmd}
+        rechecking={signin.rechecking}
+        onRecheck={signin.recheck}
+      />
+    ) : null;
   const { data: contexts } = useContexts();
   const currentContext = contexts?.find((context) => context.isCurrent)?.name;
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -569,6 +583,7 @@ export function DiagnoseSurface({
           copy={consentCopy}
           onOpenSettings={openSettings ?? undefined}
           error={d.consentError}
+          notice={signinNotice}
           onApprove={d.approveConsent}
           onCancel={d.cancelConsent}
         />
@@ -645,6 +660,7 @@ export function DiagnoseSurface({
         copy={consentCopy}
         onOpenSettings={openSettings ?? undefined}
         error={d.consentError}
+        notice={signinNotice}
         onApprove={d.approveConsent}
         onCancel={d.cancelConsent}
       />
