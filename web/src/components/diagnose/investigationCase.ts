@@ -462,16 +462,25 @@ function observationIdentities(
       });
     }
   }
-  // An agent-run query about the target that selects exactly one Pod is
-  // also that Pod's chart, but only for a Pod established as the target's
-  // own: a workload label can make a query target-scoped while its pod
-  // matcher names a sibling.
+  // A chart about the target that covers exactly one Pod is also that Pod's
+  // chart, and only for a Pod established as the target's own. An agent-run
+  // query says which Pod in its selectors, and a workload label can make it
+  // target-scoped while its pod matcher names a sibling. A diagnose bundle's
+  // chart parses no selectors; it covers one Pod only when it summed one and
+  // Radar established exactly one, so a multi-pod aggregate never stands in
+  // for one of its pods.
   if (
     observation.data.type === "metrics" &&
-    observation.data.origin === "query" &&
+    observation.relevance === "target" &&
     stated
   ) {
-    const pod = metricsSelectedPod(observation.data.selectors ?? []);
+    const { data } = observation;
+    const pod =
+      data.origin === "query"
+        ? metricsSelectedPod(data.selectors ?? [])
+        : data.pods === 1 && data.partial !== true && targetPods.size === 1
+          ? [...targetPods][0]
+          : undefined;
     if (pod && targetPods.has(pod))
       identities.push({
         kind: "Pod",

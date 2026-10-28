@@ -139,6 +139,101 @@ describe("a Pod cited for a target query that selects a sibling", () => {
   });
 });
 
+describe("a Pod cited for a diagnose bundle's chart", () => {
+  // The herring run rules out memory pressure on the bundle's memory chart,
+  // naming the Deployment's one Pod: `{kind: Pod, observation:
+  // "metrics:memory"}` against charts that state the Deployment.
+  const run = recorded["run-01f749634a"];
+  const itemThree = (candidate: RecordedRun) =>
+    resolve(candidate).investigationCase.items.find((item) => item.index === 3);
+  // Rewrites the diagnose payload, the source of both the charts and the
+  // pods Radar establishes as the target's own.
+  const withDiagnose = (
+    edit: (payload: Record<string, unknown>) => void,
+  ): RecordedRun => ({
+    ...run,
+    timeline: run.timeline.map((item) => {
+      if (item.kind !== "tool" || item.tool !== "diagnose") return item;
+      const payload = JSON.parse(item.result ?? "{}");
+      edit(payload);
+      return { ...item, result: JSON.stringify(payload) };
+    }),
+  });
+
+  it("pins the citation to the chart its category names when the target has one Pod", () => {
+    expect(run.diagnosis.evidence[3].subject).toMatchObject({
+      kind: "Pod",
+      name: "batch-worker-74b5656749-phx2t",
+      observation: "metrics:memory",
+    });
+    const item = itemThree(run);
+    expect(item?.placement).toBe("card");
+    expect(item?.source.tool).toBe("diagnose");
+    expect(item?.groupId).toBe(
+      resolve(run).projection.groups.find(
+        (group) =>
+          group.kind === "metrics" &&
+          group.identity.endsWith(":memory") &&
+          group.latest.source.tool === "diagnose",
+      )?.id,
+    );
+  });
+
+  it("does not pin one Pod of a target with two", () => {
+    const twoPods = withDiagnose((payload) => {
+      payload.podNames = [
+        "batch-worker-74b5656749-phx2t",
+        "batch-worker-74b5656749-zzzzz",
+      ];
+    });
+    expect(resolve(twoPods).projection.targetPods).toHaveLength(2);
+    expect(itemThree(twoPods)?.placement).toBe("source");
+  });
+
+  it("does not pin a Pod to a chart that summed more than one", () => {
+    const summedTwo = withDiagnose((payload) => {
+      (payload.metrics as { pods: number }).pods = 2;
+    });
+    expect(itemThree(summedTwo)?.placement).toBe("source");
+  });
+
+  it("does not pin a Pod the target does not have", () => {
+    const other: RecordedRun = {
+      ...run,
+      diagnosis: {
+        ...run.diagnosis,
+        evidence: run.diagnosis.evidence.map((entry, index) =>
+          index === 3 && entry.subject
+            ? {
+                ...entry,
+                subject: { ...entry.subject, name: "batch-worker-other" },
+              }
+            : entry,
+        ),
+      },
+    };
+    expect(itemThree(other)?.placement).toBe("source");
+  });
+
+  it("does not pick one of the bundle's charts for a Pod citation without a category", () => {
+    const bare: RecordedRun = {
+      ...run,
+      diagnosis: {
+        ...run.diagnosis,
+        evidence: run.diagnosis.evidence.map((entry, index) =>
+          index === 3 && entry.subject
+            ? {
+                ...entry,
+                subject: { ...entry.subject, observation: "metrics" },
+              }
+            : entry,
+        ),
+      },
+    };
+    expect(itemThree(bare)?.placement).toBe("source");
+  });
+});
+
 describe("run-8b924c437a", () => {
   it("places every story citation", () => {
     const html = renderPane(recorded["run-8b924c437a"]);
