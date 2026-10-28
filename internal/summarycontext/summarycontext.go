@@ -44,6 +44,8 @@ type Builder func(obj runtime.Object, u *unstructured.Unstructured, group, kind,
 // It starts on the first row; core listing/searching uses the original context.
 const Budget = 3 * time.Second
 
+var enrichmentBudget = Budget
+
 // WithBudget returns a non-nil builder that starts preparation on the first row.
 // build gets a context bounded by ctx and Budget, under the shared preparation
 // gate. Failed preparation retains cheap fields with omissions for unknowns.
@@ -65,7 +67,7 @@ func withBudget(ctx context.Context, build func(context.Context) Builder, naviga
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		if builder == nil {
 			var budgetCtx context.Context
-			budgetCtx, stopBudget = context.WithTimeout(ctx, Budget)
+			budgetCtx, stopBudget = context.WithTimeout(ctx, enrichmentBudget)
 			builder = WithinContext(budgetCtx, preparationGate, func() Builder { return build(budgetCtx) })
 			if builder == nil {
 				reason := resourcecontext.OmittedUnavailable

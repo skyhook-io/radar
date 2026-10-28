@@ -21,6 +21,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -30,6 +31,8 @@ import (
 )
 
 func TestAgentListAndSearchBoundSlowOwnershipAuthorization(t *testing.T) {
+	t.Cleanup(summarycontext.SetTestEnrichmentBudget(time.Second))
+
 	withOwnershipDiscovery(t)
 	objects := []runtime.Object{}
 	for i := range 80 {
