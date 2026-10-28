@@ -35,11 +35,25 @@ import (
 // Hosts pre-compute issue, audit and policy summaries; Build never calls
 // internal services.
 type Options struct {
-	Reflections ReflectionLookup
-	Tier        ContextTier
+	// Children is an access-aware direct-child preview, precomputed by hosts.
+	Children *ChildrenContext
+	// ChildrenUnavailable requires nil Children: the whole host observation was
+	// discarded. With both nil/false, this host supplied no child observation.
+	ChildrenUnavailable bool
 
-	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
-	// as fully authorized — local-kubeconfig / tests).
+	// AutoInstrumentation was computed from access-checked cache reads by the
+	// host. A connection change discards the whole observation.
+	AutoInstrumentation *AutoInstrumentationContext
+	// AutoInstrumentationUnavailable requires nil AutoInstrumentation: the
+	// host discarded the observation. Nil/false means none was supplied.
+	AutoInstrumentationUnavailable bool
+	Reflections                    ReflectionLookup
+	Tier                           ContextTier
+
+	// AccessChecker gates Build-projected references, including Children when
+	// supplied. Hosts authorize other precomputed blocks, including
+	// AutoInstrumentation and any declared but
+	// unresolved coordinates within it. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
 	// Topology supplies relationships when Relationships is nil. Without
@@ -171,8 +185,27 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		return &ResourceContext{Tier: opts.Tier}
 	}
 
-	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj)}
+	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj), Children: opts.Children, AutoInstrumentation: opts.AutoInstrumentation}
 	omitted := newOmittedTracker()
+	// Canonical context references still require Get access, even when a
+	// host's relationship view intentionally exposes namespace-readable names.
+	if opts.Children != nil {
+		children := *opts.Children
+		children.Items = filterRefs(ctx, opts.AccessChecker, opts.Children.Items, "children", nil)
+		if len(children.Items) != len(opts.Children.Items) {
+			children.Narrowed = true
+		}
+		if children.Items == nil {
+			children.Items = []ContextRef{}
+		}
+		rc.Children = &children
+	}
+	if opts.ChildrenUnavailable {
+		omitted.add("children", OmittedUnavailable)
+	}
+	if opts.AutoInstrumentationUnavailable {
+		omitted.add("autoInstrumentation", OmittedUnavailable)
+	}
 
 	// Topology supplies networking, scaling and spec-declared relations;
 	// the caller's ownership answer supplies controllers and GitOps evidence.

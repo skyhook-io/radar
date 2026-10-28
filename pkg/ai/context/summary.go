@@ -55,6 +55,9 @@ type ResourceSummary struct {
 	Finalizers []string `json:"finalizers,omitempty"`
 
 	CrossplanePause resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
+	Collector       *CollectorSummary                    `json:"collector,omitempty"`
+	Canary          *CanarySummary                       `json:"canary,omitempty"`
+	Instrumentation *InstrumentationSummary              `json:"instrumentation,omitempty"`
 
 	// Type-specific fields (only populated when relevant)
 	Image     string   `json:"image,omitempty"`

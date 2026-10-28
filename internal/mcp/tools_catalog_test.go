@@ -254,6 +254,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// get_resource's result shapes, with "only object_not_found means it is
 	// absent", a third, and get_resource's "manager: none is not unmanaged" a
 	// fourth.
+	// OTel request evaluation must distinguish NEW Pod configuration from existing
+	// admission history. Its concise contract appears on both detail tools (+416-byte allowance).
 	// Annotation pause intent and stored acknowledgement need distinct source
 	// semantics in the catalog so agents do not infer fresh external health
 	// or treat absence as ruling out another pause mechanism.
@@ -261,7 +263,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		maxCatalogBytes         = 66500
+		maxCatalogBytes         = 66916
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -738,4 +740,13 @@ func TestSearchDescriptionNamesCoverageStatus(t *testing.T) {
 		}
 	}
 	t.Fatal("search tool missing")
+}
+
+func TestAutoInstrumentationContractIsDiscoverableOnDetailTools(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		has := strings.Contains(tool.Description, "per-language refs for NEW Pods, never existing injection")
+		if (tool.Name == "get_resource" || tool.Name == "diagnose") != has {
+			t.Errorf("%s prospective request contract present=%v", tool.Name, has)
+		}
+	}
 }

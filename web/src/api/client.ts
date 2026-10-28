@@ -26,7 +26,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
+import { focusManager, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
@@ -828,12 +828,16 @@ export function useResourceAudit(
 // the "Operational Issues" section in the resource detail. Cluster-scoped
 // resources pass "_" for namespace; namespaced ones also scope the scan via
 // ?namespaces= for a cheap, bounded Compose.
+// rootObservation is an opaque root UID/resourceVersion token: changes schedule
+// a refresh at most every 10s, without creating a query key per version. Omit it
+// to retain only the visible-tab timer and stale-view/focus refreshes.
 export function useResourceIssues(
   kind: string,
   group: string | undefined,
   namespace: string,
   name: string,
   enabled = true,
+  rootObservation?: string,
 ) {
   const clusterScoped = !namespace;
   const pathNs = clusterScoped ? "_" : encodeURIComponent(namespace);
@@ -843,16 +847,52 @@ export function useResourceIssues(
   const qs = params.toString();
   // An older Radar without the endpoint settles as unsupported, so the
   // renderers fall back to their own status-derived problem banners.
-  const { guard, gatedKey } = useRadarFeature("resourceIssues");
-  return useQuery<Issue[]>({
-    queryKey: ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
+  const { guard, gatedKey, support } = useRadarFeature("resourceIssues");
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(() => ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
+    [kind, group, namespace, name, gatedKey]);
+  const query = useQuery<Issue[]>({
+    queryKey,
     queryFn: () => guard(() => fetchJSON<Issue[]>(`${path}${qs ? `?${qs}` : ""}`)),
     retry: shouldRetryRadarQuery,
-    // No refetchInterval: a drawer doesn't need to poll; staleTime keeps it fresh
-    // on reopen without re-running an uncapped Compose every 30s.
     staleTime: 30000,
+    // Time-based detections can change without a resource watch update.
+    refetchInterval: (q) => clusterScoped || q.state.error instanceof RadarFeatureUnsupportedError ? false : 60000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: (q) => !(q.state.error instanceof RadarFeatureUnsupportedError),
     enabled: enabled && !!kind && !!name,
   });
+  const { error, refetch } = query;
+  useEffect(() => {
+    if (enabled && kind && name && support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
+  }, [enabled, kind, name, support, error, refetch]);
+  const identity = JSON.stringify(queryKey);
+  const previous = useRef<{ identity: string; rootObservation: string | undefined; refreshedAt: number } | null>(null);
+  useEffect(() => {
+    const prior = previous.current;
+    if (prior?.identity !== identity) {
+      previous.current = { identity, rootObservation, refreshedAt: Date.now() };
+      return;
+    }
+    if (prior.rootObservation === undefined) {
+      prior.rootObservation = rootObservation;
+      return;
+    }
+    if (clusterScoped || !enabled || !kind || !name || query.error instanceof RadarFeatureUnsupportedError ||
+      rootObservation === undefined || prior.rootObservation === rootObservation) return;
+
+    // Keep the rootObservation out of the query key, and bound Compose requests even
+    // when a busy workload's resource version changes continuously.
+    const delay = Math.max(0, 10000 - (Date.now() - Math.max(prior.refreshedAt, query.dataUpdatedAt)));
+    const timer = window.setTimeout(() => {
+      prior.rootObservation = rootObservation;
+      prior.refreshedAt = Date.now();
+      void queryClient.invalidateQueries({ queryKey, exact: true,
+        refetchType: focusManager.isFocused() ? 'active' : 'none' });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [identity, rootObservation, enabled, kind, name, clusterScoped, queryClient, query.error, query.dataUpdatedAt, queryKey]);
+  return query;
 }
 
 // The Issues page narrowed to one subject: the same per-resource lookup with

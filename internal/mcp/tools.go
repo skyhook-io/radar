@@ -59,6 +59,8 @@ import (
 // steers. Put conditional advice in response guidance so it arrives when
 // relevant; otherwise describe only fields whose names are insufficient for
 // correct interpretation, not every response field.
+const autoInstrumentationContract = "autoInstrumentation checks per-language refs for NEW Pods, never existing injection. resolved is not admission: a failing language can block all injection. unknown/absence is not no injection. default_ambiguous means multiple Instrumentation CRs (CRD mode)."
+
 func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramRegistry *toolParamRegistry) {
 	boolPtr := func(b bool) *bool { return &b }
 	// Kubernetes API tools have a closed domain; optional container execution
@@ -159,7 +161,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"carry `application_configuration_change: true`, it is a factual edit " +
 			"classification and narrow ranking hint, not a causal or universal relevance verdict. " +
 			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses. " + autoInstrumentationContract,
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
@@ -223,25 +225,25 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
-	diagnoseDescription := "Get a bounded, point-in-time evidence bundle for one narrowed workload, " +
-		"GitOps reconciler or network entry. Combines signals in one round-trip; " +
-		"it does not run an agent and is not an authoritative root-cause verdict or an exhaustive account. " +
+	diagnoseDescription := "Get a bounded, point-in-time evidence bundle in one round-trip; " +
+		"it does not run an agent and is not an authoritative root-cause verdict. " +
 		"Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, GitOps sync/health, " +
 		"or traffic not reaching a service, route or ingress. Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout " +
 		"bundle resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
-		"related issues and recent workload/ConfigMap changes. " +
-		"Warning events are a capped sample for the observed resource and Pods; UID-less evidence cannot prove an incarnation. Use get_events for a broader, dedicated event read, including history. " +
+		"related issues and recent workload/ConfigMap changes. OpenTelemetryCollector/Canary: root reconciliation and owned workloads; Canary adds declaredTarget. " +
+		autoInstrumentationContract + " " +
+		"Warning events are a capped sample for this resource/Pods; UID-less evidence cannot prove incarnation. Use get_events for a broader, dedicated event read with history. " +
 		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
 		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "`. Inspect source logs for low-confidence " +
-		"selections; `traceback_header_only` means the informative line was not captured. " +
-		"`auditSummary.highestSeverity` uses static-posture critical|high|medium|low (built-ins high|medium), " +
-		"unlike live `issueSummary` critical|warning. `application_configuration_change: true` classifies an edit; " +
+		"results; `traceback_header_only` lacks the informative line. " +
+		"`auditSummary.highestSeverity`: static posture critical|high|medium|low (built-ins high|medium); " +
+		"live `issueSummary` critical|warning. `application_configuration_change: true` classifies an edit; " +
 		"it is not a causal or universal relevance verdict. Application, Kustomization and Flux HelmRelease return " +
 		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
-		"API-server proxy reached it, not the live path. Point-in-time means frozen from this call, " +
-		"not that every source was read atomically; preserve collection limits, errors, timestamps, and confidence. " +
+		"API-server proxy reached it, not the live path. Point-in-time freezes this call's result, " +
+		"not that every source was read atomically; preserve limits, errors, timestamps and confidence. " +
 		"For one facet, prefer resource/log/event tools; use get_resource for other kinds."
 	if includeWrites {
 		tool := &mcp.Tool{
@@ -1337,6 +1339,10 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 }
 
 func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
+	return buildMCPResourceContextWithOperatorChildren(ctx, obj, kind, namespace, name, tier, staleChecks, issueSummary, nil)
+}
+
+func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary, children *k8s.OperatorChildren) *resourcecontext.ResourceContext {
 	if obj == nil {
 		return nil
 	}
@@ -1392,6 +1398,17 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 		opts.Provider = prov
 		opts.DynamicProv = dyn
 	}
+	if children == nil {
+		children = k8s.OperatorChildrenForObject(obj, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
+	}
+	if children != nil {
+		opts.Children = children.Context
+		opts.ChildrenUnavailable = children.Unavailable != ""
+	}
+
+	opts.AutoInstrumentation, opts.AutoInstrumentationUnavailable = k8s.AutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
+		return (namespace == "" || checkNamespaceAccess(ctx, namespace)) && canReadInNamespace(ctx, group, resource, namespace, verb)
+	})
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
 	}
