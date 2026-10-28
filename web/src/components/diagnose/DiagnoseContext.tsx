@@ -839,6 +839,9 @@ function RoutedDiagnoseProvider({
   const openRun = useCallback(
     (id: string) => {
       unavailableRunIDsRef.current.delete(id);
+      // A start still in flight no longer owns the pane: its refusal must not
+      // replace the run the user just chose.
+      startSeqRef.current++;
       setStartFailure(null);
       setActiveRunId(id);
       setView("investigation");
