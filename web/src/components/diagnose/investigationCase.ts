@@ -466,9 +466,10 @@ function observationIdentities(
   // chart, and only for a Pod established as the target's own. An agent-run
   // query says which Pod in its selectors, and a workload label can make it
   // target-scoped while its pod matcher names a sibling. A diagnose bundle's
-  // chart parses no selectors; it covers one Pod only when it summed one and
-  // Radar established exactly one, so a multi-pod aggregate never stands in
-  // for one of its pods.
+  // chart parses no selectors; its own call lists the pods it summed, so it
+  // is a Pod's chart only when that list is the one Pod. A multi-pod
+  // aggregate never stands in for one of its pods, and a later read of a
+  // replacement Pod does not change what an earlier chart covered.
   if (
     observation.data.type === "metrics" &&
     observation.relevance === "target" &&
@@ -478,8 +479,10 @@ function observationIdentities(
     const pod =
       data.origin === "query"
         ? metricsSelectedPod(data.selectors ?? [])
-        : data.pods === 1 && data.partial !== true && targetPods.size === 1
-          ? [...targetPods][0]
+        : data.pods === 1 &&
+            data.partial !== true &&
+            data.podNames?.length === 1
+          ? data.podNames[0]
           : undefined;
     if (pod && targetPods.has(pod))
       identities.push({

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { DiagnosisEvidenceItem } from "../../api/diagnose";
+import type {
+  DiagnosisEvidenceItem,
+  DiagnosisRuledOut,
+} from "../../api/diagnose";
 import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
 import { resolveInvestigationCase } from "./investigationCase";
 import {
@@ -16,7 +19,11 @@ import runs from "./testdata/story-runs.json";
 interface RecordedRun {
   target: InvestigationEvidenceTarget;
   timeline: InvestigationEvidenceTimelineItem[];
-  diagnosis: { evidence: DiagnosisEvidenceItem[]; report: string };
+  diagnosis: {
+    evidence: DiagnosisEvidenceItem[];
+    report: string;
+    ruledOut?: DiagnosisRuledOut[];
+  };
 }
 const recorded = runs as unknown as Record<string, RecordedRun>;
 
@@ -181,13 +188,53 @@ describe("a Pod cited for a diagnose bundle's chart", () => {
 
   it("does not pin one Pod of a target with two", () => {
     const twoPods = withDiagnose((payload) => {
+      payload.pods = 2;
       payload.podNames = [
         "batch-worker-74b5656749-phx2t",
         "batch-worker-74b5656749-zzzzz",
       ];
+      (payload.metrics as { pods: number }).pods = 2;
     });
     expect(resolve(twoPods).projection.targetPods).toHaveLength(2);
     expect(itemThree(twoPods)?.placement).toBe("source");
+  });
+
+  it("does not pin a Pod when the bundle's pod list was cut short", () => {
+    const truncated = withDiagnose((payload) => {
+      payload.podNamesTruncated = true;
+    });
+    expect(itemThree(truncated)?.placement).toBe("source");
+  });
+
+  it("keeps the citation pinned when a later turn diagnoses a replacement Pod", () => {
+    // A follow-up reads the workload again after its Pod was replaced. The
+    // first chart still covered only the first Pod, so the first assessment's
+    // citation stays on that read, now a revision under the newer chart.
+    const diagnose = run.timeline.find(
+      (item) => item.kind === "tool" && item.tool === "diagnose",
+    )!;
+    const payload = JSON.parse(
+      (diagnose as { result?: string }).result ?? "{}",
+    );
+    payload.podNames = ["batch-worker-74b5656749-new01"];
+    const later = {
+      ...diagnose,
+      id: "toolu_followup_diagnose",
+      result: JSON.stringify(payload),
+      evidenceRef: undefined,
+    } as InvestigationEvidenceTimelineItem;
+    const projection = projectInvestigationEvidence(
+      [{ timeline: run.timeline }, { timeline: [later] }],
+      run.target,
+    );
+    expect(projection.targetPods).toHaveLength(2);
+    const item = resolveInvestigationCase(
+      projection,
+      run.diagnosis,
+      0,
+    ).items.find((candidate) => candidate.index === 3);
+    expect(item?.placement).toBe("revision");
+    expect(item?.observation?.source.id).toBe(item?.source.id);
   });
 
   it("does not pin a Pod to a chart that summed more than one", () => {
@@ -231,6 +278,44 @@ describe("a Pod cited for a diagnose bundle's chart", () => {
       },
     };
     expect(itemThree(bare)?.placement).toBe("source");
+  });
+});
+
+describe("a healthy verdict's Pod citations (run-40c65bb5ed)", () => {
+  // boutique/adservice: one ready Pod. The agent rules out restarts on its own
+  // 7-day query and resource pressure on the bundle's memory chart, naming
+  // the Pod both times.
+  const run = recorded["run-40c65bb5ed"];
+
+  it("places both citations and keeps both ruled-out hypotheses", () => {
+    const { investigationCase } = resolve(run);
+    const byIndex = (index: number) =>
+      investigationCase.items.find((item) => item.index === index);
+    expect(byIndex(2)).toMatchObject({
+      placement: "card",
+      source: { tool: "query_prometheus" },
+    });
+    expect(byIndex(3)).toMatchObject({
+      placement: "card",
+      source: { tool: "diagnose" },
+    });
+    expect(byIndex(3)?.observation?.data).toMatchObject({
+      type: "metrics",
+      origin: "diagnose",
+      label: "Memory working set",
+    });
+    expect(investigationCase.ruledOut.map((entry) => entry.hypothesis)).toEqual(
+      [
+        "Crash loop or OOM-kill restarts",
+        "Container pressing against its memory/CPU limits",
+      ],
+    );
+  });
+
+  it("loses no cited result in the story", () => {
+    const html = renderPane(run);
+    expect(html).not.toContain("could not be shown here");
+    expect(html).not.toContain("data-story-lost-support");
   });
 });
 
