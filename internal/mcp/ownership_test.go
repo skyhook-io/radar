@@ -23,6 +23,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/summarycontext"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
@@ -33,6 +34,8 @@ import (
 )
 
 func TestAgentMCPListBoundsSlowOwnershipAuthorization(t *testing.T) {
+	const authorizationDelay = 50 * time.Millisecond
+	t.Cleanup(summarycontext.SetTestEnrichmentBudget(30 * authorizationDelay))
 	for _, tc := range []struct {
 		name        string
 		dynamic     bool
@@ -104,7 +107,7 @@ func TestAgentMCPListBoundsSlowOwnershipAuthorization(t *testing.T) {
 			stubSubjectCanI(t, func(ctx context.Context, _ kubernetes.Interface, _ string, _ []string, namespace, _ string, checkedResource, verb string) (bool, error) {
 				if namespace != "" && checkedResource == resource && verb == "get" {
 					gets.Add(1)
-					timer := time.NewTimer(100 * time.Millisecond)
+					timer := time.NewTimer(authorizationDelay)
 					defer timer.Stop()
 					select {
 					case <-timer.C:
@@ -159,7 +162,7 @@ func TestAgentMCPListBoundsSlowOwnershipAuthorization(t *testing.T) {
 				return
 			}
 			if gets.Load() >= 60 || budgetNotes == 0 {
-				t.Errorf("list enrichment escaped its 3-second budget: elapsed=%s checks=%d budget_omissions=%d", elapsed, gets.Load(), budgetNotes)
+				t.Errorf("list enrichment escaped its test budget: elapsed=%s checks=%d budget_omissions=%d", elapsed, gets.Load(), budgetNotes)
 			}
 		})
 	}
