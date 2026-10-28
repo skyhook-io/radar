@@ -178,6 +178,7 @@ export interface FeatureCapabilities {
   gitopsWriteEvidence?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
+  argoRollbackSync?: boolean
   clusterScopedPlaceholder?: boolean
 }
 

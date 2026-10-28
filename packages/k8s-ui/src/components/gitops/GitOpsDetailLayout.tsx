@@ -7,7 +7,9 @@ import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
 import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
+import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -76,11 +78,16 @@ export interface ArgoActionHandlers {
   terminating: boolean
   suspending: boolean
   resuming: boolean
-  // autoSyncEnabled: caller derives from spec.syncPolicy.automated.
+  // autoSyncEnabled: caller derives via isArgoAutoSyncEnabled.
   autoSyncEnabled: boolean
   // isRunning: caller derives from status.operationState.phase === 'Running'.
   isRunning: boolean
   operationInProgress?: boolean
+  // Set when the connected Radar is too old to turn this app's auto-sync back
+  // on (isArgoAutoSyncSwitchedOff): Enable auto-sync renders disabled, with
+  // the upgrade note under the header.
+  resumeUpgrade?: RadarUpgradeRequirement | null
+  resumeBlockedReason?: string
 }
 
 export interface FluxActionHandlers {
@@ -280,6 +287,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
 
   const effectiveSuspended = status?.suspended ?? false
   const argoOperationInProgress = argo?.operationInProgress ?? argo?.isRunning ?? false
+  const resumeUpgrade = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeUpgrade ?? null : null
+  const resumeBlockedReason = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeBlockedReason : undefined
   // graphFullscreen hides everything chrome-side; the body region expands.
   // Mirrors the OSS GitOpsDetailView shell behavior so the visual chrome
   // class set carries through.
@@ -365,6 +374,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   {detail.autoSyncMode && <AppFact label="Sync mode" value={detail.autoSyncMode} />}
                 </div>
               )}
+              {resumeBlockedReason && <p className="mt-2 text-xs text-theme-text-secondary">{resumeBlockedReason}</p>}
+              {resumeUpgrade && <RadarUpgradeNote requirement={resumeUpgrade} className="mt-2" />}
             </div>
             {/* Action buttons */}
             <div className="flex flex-wrap items-center gap-2">
@@ -424,9 +435,13 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       description="Re-enable automatic syncing of Git changes to the cluster."
                       icon={Play}
                       loading={argo.resuming}
-                      onClick={argo.onResume}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      onClick={() => !resumeBlockedReason && !resumeUpgrade && argo.onResume()}
+                      disabled={terminating || !!resumeUpgrade || !!resumeBlockedReason}
+                      disabledReason={terminating
+                        ? terminatingActionTooltip
+                        : resumeBlockedReason || (resumeUpgrade
+                          ? radarUpgradeNoteText(resumeUpgrade)
+                          : undefined)}
                     />
                   )}
                 </>

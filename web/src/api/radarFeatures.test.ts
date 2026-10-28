@@ -6,6 +6,8 @@ import {
   RadarFeatureUnsupportedError,
   guardRadarFeature,
   isRadarFeatureUnsupported,
+  radarControlBlocked,
+  radarControlBlockedReason,
   radarFeatureSupport,
   radarSpecSupport,
   type RadarFeatureSpec,
@@ -62,6 +64,28 @@ describe('workload history, whose flag shipped with its endpoint', () => {
     expect(radarFeatureSupport('workloadHistory', { features: { policyResource: true } }, 'v1.15.0')).toBe('unsupported')
     expect(radarFeatureSupport('workloadHistory', { features: {} }, 'dev')).toBe('unsupported')
     expect(radarFeatureSupport('workloadHistory', undefined, 'v1.15.0')).toBe('unknown')
+  })
+})
+
+// A behavior change on endpoints every Radar serves: only the flag tells.
+describe('Argo CD rollback and auto-sync, gated on argoRollbackSync', () => {
+  it.each(['argoRollback', 'argoAutoSyncEnable'] as const)('%s trusts the flag and reads its absence as too old', (feature) => {
+    expect(radarFeatureSupport(feature, { features: { argoRollbackSync: true } }, 'v1.16.3')).toBe('supported')
+    expect(radarFeatureSupport(feature, { features: { workloadHistory: true } }, 'v1.16.3')).toBe('unsupported')
+    expect(radarFeatureSupport(feature, {}, 'dev')).toBe('unsupported')
+    expect(radarFeatureSupport(feature, undefined, 'v1.16.3')).toBe('unknown')
+  })
+})
+
+describe('radarControlBlocked', () => {
+  // A control can't be probed like a request: its outcome on an older Radar
+  // is wrong, not a 404. So it fails closed when /api/capabilities failed,
+  // and stays usable only while the answer is still loading.
+  it('blocks a known-old Radar, and an unknown one whose capabilities failed', () => {
+    expect(radarControlBlocked('unsupported', false)).toBe(true)
+    expect(radarControlBlocked('unknown', true)).toBe(true)
+    expect(radarControlBlocked('unknown', false)).toBe(false)
+    expect(radarControlBlocked('supported', true)).toBe(false)
   })
 })
 
@@ -138,5 +162,19 @@ describe('shouldRetryRadarQuery', () => {
       expect(shouldRetryRadarQuery(0, error)).toBe(true)
       expect(shouldRetryRadarQuery(1, error)).toBe(false)
     }
+  })
+})
+
+describe('affirmative mutation support', () => {
+  it.each(['argoRollback', 'argoAutoSyncEnable'] as const)('%s distinguishes checking, failed and known answers', feature => {
+    expect(radarControlBlockedReason(feature, 'unknown', false)).toBe("Checking this cluster's Radar…")
+    expect(radarControlBlockedReason(feature, 'unknown', true)).toBe("Couldn't check this cluster's Radar support. Refresh to try again.")
+    expect(radarControlBlockedReason(feature, 'supported', false)).toBeUndefined()
+    expect(radarControlBlockedReason(feature, 'supported', true)).toBe("Couldn't check this cluster's Radar support. Refresh to try again.")
+    expect(radarControlBlockedReason(feature, 'unsupported', false)).toBeUndefined()
+  })
+  it('preserves permissive loading for other features', () => {
+    expect(radarControlBlockedReason('workloadHistory', 'unknown', false)).toBeUndefined()
+    expect(radarControlBlocked('unknown', false)).toBe(false)
   })
 })

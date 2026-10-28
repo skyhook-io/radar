@@ -9,6 +9,7 @@ import {
   entryTone,
   gitopsToSeverity,
   healthStatusRank,
+  historyRollbackBlockedReason,
   isArgoResourceSyncEligible,
   messageToPhase,
   missingResourceMessage,
@@ -28,6 +29,21 @@ describe('confirmed missing resources', () => {
     expect(resourceStatusCounts([item]).missing).toBe(1)
     expect(changeMatchesFacets(item, new Set(['missing']))).toBe(true)
     expect(isArgoResourceSyncEligible(item, true)).toBe(true)
+  })
+
+  it.each(['OutOfSync', 'Unknown', undefined])('defers to the hazard before rollback advice for %s', (sync) => {
+    expect(missingResourceMessage(sync, { hazard: 'Sync can delete resources.', rolledBack: true })).toBe('Not present in the cluster. See the sync warning above before syncing this Application.')
+    expect(missingResourceMessage(sync, { hazard: 'Sync can delete resources.' })).toBe('Not present in the cluster. See the sync warning above before syncing this Application.')
+  })
+
+  it('keeps refresh advice for Synced even with hazard and rollback context', () => {
+    expect(missingResourceMessage('Synced', { hazard: 'Sync can delete resources.', rolledBack: true })).toBe(missingResourceMessage('Synced'))
+  })
+
+  it('uses named rollback context and treats an empty hazard as absent', () => {
+    expect(missingResourceMessage('OutOfSync', { rolledBack: true })).toBe('Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.')
+    expect(missingResourceMessage('OutOfSync', { hazard: '', rolledBack: true })).toBe(missingResourceMessage('OutOfSync', { rolledBack: true }))
+    expect(missingResourceMessage('OutOfSync', { rolledBack: false })).toBe(missingResourceMessage('OutOfSync'))
   })
 
   it('defers creation advice to the sync hazard while preserving stale Synced refresh advice', () => {
@@ -241,5 +257,26 @@ describe('syncStatusRank / healthStatusRank', () => {
   it('ascending health rank surfaces Missing/Degraded before Healthy', () => {
     expect(healthStatusRank('Missing')).toBeLessThan(healthStatusRank('Degraded'))
     expect(healthStatusRank('Degraded')).toBeLessThan(healthStatusRank('Healthy'))
+  })
+})
+
+describe('historyRollbackBlockedReason', () => {
+  const autoSync = 'Auto-sync is enabled.'
+  it('allows an entry the backend marks rollbackable', () => {
+    expect(historyRollbackBlockedReason({ id: '0', rollbackable: true })).toBeUndefined()
+  })
+  it('blocks an entry that records no source', () => {
+    expect(historyRollbackBlockedReason({ id: '1', rollbackable: false })).toMatch(/records no source/)
+  })
+  // Turning auto-sync off would not make this entry rollbackable.
+  it('names the missing source over auto-sync', () => {
+    expect(historyRollbackBlockedReason({ id: '1', rollbackable: false }, autoSync)).toMatch(/records no source/)
+  })
+  it('passes the app-wide reason through for a rollbackable entry', () => {
+    expect(historyRollbackBlockedReason({ id: '0', rollbackable: true }, autoSync)).toBe(autoSync)
+  })
+  // A Radar that predates the field omits it; the rollback API decides.
+  it('leaves an entry without the field enabled', () => {
+    expect(historyRollbackBlockedReason({ id: '2' })).toBeUndefined()
   })
 })
