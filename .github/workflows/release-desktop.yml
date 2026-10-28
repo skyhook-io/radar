@@ -364,12 +364,20 @@ jobs:
           rm -f checksums-darwin.txt checksums-windows.txt checksums-linux.txt
           echo "=== Desktop checksums ==="
           cat checksums-desktop.txt
-          # Every installed Radar Desktop reads this file to verify its own
-          # update, and older builds accept only "<sha256>  <name>".
+          # Every installed Radar Desktop verifies its update against this file,
+          # and builds before #2411's fix accept only "<sha256>  <name>". Check
+          # the format, that each uploaded asset is listed once, and the hashes.
           if grep -vqE '^[0-9a-f]{64}  radar-desktop_[^ *]+$' checksums-desktop.txt; then
             echo "::error::checksums-desktop.txt has a line older Radar Desktop builds cannot read"
             exit 1
           fi
+          for f in radar-desktop_*; do
+            if [ "$(awk -v f="$f" '$2 == f' checksums-desktop.txt | wc -l)" -ne 1 ]; then
+              echo "::error::$f is not listed exactly once in checksums-desktop.txt"
+              exit 1
+            fi
+          done
+          sha256sum --check --strict checksums-desktop.txt
 
       - name: Wait for GitHub Release to exist
         env:
