@@ -222,10 +222,16 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 		slices.Sort(watchedByNamespace)
 		namespaces = slices.Compact(watchedByNamespace)
 	}
-	// Explaining an unread namespace needs the version's collection scope,
-	// which the cache would otherwise rebuild from every informer for each
-	// namespace.
-	obs := s.caches.Dynamic.NewObservationView(versions)
+	// Reuse scope bookkeeping across searches. The view refreshes when
+	// informers change and still reads readiness live.
+	obs := s.observationViews[gk]
+	if obs == nil {
+		obs = s.caches.Dynamic.NewObservationView(versions)
+		if s.observationViews == nil {
+			s.observationViews = map[resourceid.GroupKind]*k8score.DynamicObservationView{}
+		}
+		s.observationViews[gk] = obs
+	}
 	for _, ns := range namespaces {
 		s.readNamespace(q, gk, versions, ns, index, keys, obs, found)
 	}

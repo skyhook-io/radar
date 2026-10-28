@@ -87,6 +87,8 @@ type session struct {
 	// recordingManagersRead, set only by tests, runs after RecordingManagers reads a manager
 	// kind, with the keys it read together.
 	recordingManagersRead func(kind resourceid.GroupKind, keys []string)
+
+	observationViews map[resourceid.GroupKind]*k8score.DynamicObservationView
 }
 
 // TypedCache returns the typed cache s reads from, when this package began s.
