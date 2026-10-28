@@ -47,7 +47,10 @@ const signinCacheTTL = time.Minute
 
 // signinProbe is one agent's status command and how to read it.
 type signinProbe struct {
-	args  []string
+	args []string
+	// env is the environment a run with the profile gets; nil inherits
+	// Radar's, as a full-local run does.
+	env   func(profile ExecutionProfile) []string
 	parse func(exitCode int, stdout, stderr string) SigninState
 	// otherCredentials reports whether a run with this profile can
 	// authenticate in a way the status command doesn't see. "Signed out" is
@@ -68,15 +71,31 @@ func signinProbeFor(agent string) *signinProbe {
 	case "claude":
 		// Reports API keys, OAuth tokens and Bedrock/Vertex from the
 		// environment itself. Every profile passes those variables through.
-		return &signinProbe{args: []string{"auth", "status", "--json"}, parse: parseClaudeAuthStatus}
+		return &signinProbe{
+			args:  []string{"auth", "status", "--json"},
+			env:   safeguardedEnv(scrubbedEnv),
+			parse: parseClaudeAuthStatus,
+		}
 	case "codex":
 		return &signinProbe{
 			args:             []string{"login", "status"},
+			env:              safeguardedEnv(codexEnv),
 			parse:            parseCodexLoginStatus,
 			otherCredentials: codexOtherCredentials,
 		}
 	}
 	return nil
+}
+
+// safeguardedEnv gives a safeguarded check the environment a safeguarded run
+// of that agent gets, and a full-local one Radar's own.
+func safeguardedEnv(env func() []string) func(ExecutionProfile) []string {
+	return func(profile ExecutionProfile) []string {
+		if profile == ExecutionProfileSafeguarded {
+			return env()
+		}
+		return nil
+	}
 }
 
 var codexModelProviderLine = regexp.MustCompile(`(?m)^\s*model_provider\s*=`)
@@ -162,7 +181,7 @@ type signinChecker struct {
 	entries map[signinKey]*signinEntry
 	now     func() time.Time
 	timeout time.Duration
-	run     func(ctx context.Context, path string, args []string) (int, string, string, error)
+	run     func(ctx context.Context, path string, args, env []string) (int, string, string, error)
 }
 
 func newSigninChecker() *signinChecker {
@@ -231,7 +250,11 @@ func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe, 
 	// waiters behind it with a cancelled answer.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
 	defer cancel()
-	code, stdout, stderr, err := c.run(cctx, path, p.args)
+	var env []string
+	if p.env != nil {
+		env = p.env(profile)
+	}
+	code, stdout, stderr, err := c.run(cctx, path, p.args, env)
 	if err != nil || cctx.Err() != nil {
 		return SigninUnknown
 	}
@@ -242,15 +265,15 @@ func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe, 
 	return state
 }
 
-// runSigninCommand runs a status command the way a full-local run spawns the
-// agent: Radar's environment, which every profile's environment is a subset
-// of, so "signed out" here holds for every profile. It starts in the home
-// directory so a project config in Radar's working directory can't change the
-// answer, and reads no input. The process group is killed on timeout, and
-// after the command exits so a child it left holding the output pipes can't
-// outlive it.
-func runSigninCommand(ctx context.Context, path string, args []string) (int, string, string, error) {
+// runSigninCommand runs a status command with the environment of the run it
+// stands for (env, or Radar's when nil), plus the agent's directory on PATH
+// as every run gets. It starts in the home directory so a project config in
+// Radar's working directory can't change the answer, and reads no input. The
+// process group is killed on timeout, and after the command exits so a child
+// it left holding the output pipes can't outlive it.
+func runSigninCommand(ctx context.Context, path string, args, env []string) (int, string, string, error) {
 	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = env
 	addAgentDirToPath(cmd)
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home

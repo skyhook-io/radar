@@ -132,11 +132,13 @@ type fakeRun struct {
 	out   string
 	err   error
 	delay time.Duration
+	env   []string
 }
 
-func (f *fakeRun) run(ctx context.Context, _ string, _ []string) (int, string, string, error) {
+func (f *fakeRun) run(ctx context.Context, _ string, _, env []string) (int, string, string, error) {
 	f.mu.Lock()
 	f.calls++
+	f.env = env
 	code, out, err, delay := f.code, f.out, f.err, f.delay
 	f.mu.Unlock()
 	if delay > 0 {
@@ -391,5 +393,28 @@ func TestRunSigninCommandKillsAChildLeftHoldingThePipes(t *testing.T) {
 			t.Fatalf("child %d is still running", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A check stands for a run, so it gets that run's environment: a safeguarded
+// Codex check sees no API keys, a full-local one sees Radar's environment.
+func TestSigninCheckUsesTheProfilesEnvironment(t *testing.T) {
+	t.Setenv("CODEX_API_KEY", "sk-test")
+	t.Setenv("CODEX_HOME", t.TempDir())
+	agent := signinTestAgent{name: "codex", path: "/bin/codex"}
+	f := &fakeRun{code: 0, out: codexSignedIn}
+	newTestChecker(f).check(context.Background(), agent, ExecutionProfileSafeguarded, false)
+	if f.env == nil {
+		t.Fatal("safeguarded check inherited Radar's environment")
+	}
+	for _, kv := range f.env {
+		if strings.HasPrefix(kv, "CODEX_API_KEY=") {
+			t.Fatalf("safeguarded check saw %s", kv)
+		}
+	}
+	f = &fakeRun{code: 0, out: codexSignedIn}
+	newTestChecker(f).check(context.Background(), agent, ExecutionProfileFullLocal, false)
+	if f.env != nil {
+		t.Fatalf("full-local check got a narrowed environment: %v", f.env)
 	}
 }

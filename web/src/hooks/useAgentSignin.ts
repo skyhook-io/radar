@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRadarFeature } from '../api/client'
 import { getApiBase } from '../api/config'
@@ -134,7 +134,9 @@ export function useApproveAfterSignin({
   // The approval in effect when the answer lands: the consent request may
   // have been replaced by another target while waiting.
   const latestApprove = useRef(approve)
-  latestApprove.current = approve
+  useLayoutEffect(() => {
+    latestApprove.current = approve
+  }, [approve])
   const { pending, settle } = signin
   const approveWhenChecked = useCallback(() => {
     if (!pending) {
