@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { formatCompactAge } from "@skyhook-io/k8s-ui/utils/format";
+import { formatRelativeAgeTime } from "@skyhook-io/k8s-ui/utils/format";
 import { stopRun, type RunSummary } from "../../api/diagnose";
+import { useContexts } from "../../api/client";
 import {
   useDiagnose,
   type StartCapacity,
@@ -8,8 +9,7 @@ import {
 } from "./DiagnoseContext";
 import { formatInvestigationTarget } from "./target";
 
-// The runs holding a slot, longest-running first: the likeliest to finish
-// soon, and the order in which they were started.
+// The runs holding a slot, oldest first: the order they were started in.
 export function runsHoldingSlots(runs: RunSummary[]): RunSummary[] {
   return runs
     .filter((r) => r.status === "running" || r.status === "stopping")
@@ -38,10 +38,16 @@ const SECONDARY_BUTTON =
  * starts the same request again once a slot is free. Starting stays a click:
  * it spends an agent run and takes over the panel, and by the time a slot
  * frees the user may be reading one of the others.
+ *
+ * runsKnown is false until the runs list has loaded, or while it fails: an
+ * empty list then says nothing about free slots, so Start stays available
+ * and the server decides.
  */
 export function InvestigationCapacityNotice({
   capacity,
   runs,
+  runsKnown,
+  clusterChanged,
   onOpenRun,
   onStop,
   onStart,
@@ -49,20 +55,43 @@ export function InvestigationCapacityNotice({
 }: {
   capacity: StartCapacity;
   runs: RunSummary[];
+  runsKnown: boolean;
+  clusterChanged: boolean;
   onOpenRun: (id: string) => void;
   onStop: (id: string) => Promise<void>;
   onStart: () => void;
   onDismiss: () => void;
 }) {
+  // Runs whose stop request is in flight. Cleared when it settles: a stopped
+  // run then leaves the list, and one that didn't stop can be stopped again.
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set());
   const holding = runsHoldingSlots(runs);
-  const slotFree = holding.length < capacity.limit;
+  const slotFree = runsKnown && holding.length < capacity.limit;
   const target = targetLabel(capacity.target);
 
   const stop = (id: string) => {
     setStopping((prev) => new Set(prev).add(id));
-    void onStop(id);
+    const settle = () =>
+      setStopping((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    onStop(id).then(settle, settle);
   };
+
+  if (clusterChanged) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-sm text-theme-text-secondary">
+          {`The cluster changed since you asked to investigate ${target}, so Radar won’t start it here. Open the resource in this cluster to investigate it.`}
+        </p>
+        <button type="button" onClick={onDismiss} className={SECONDARY_BUTTON}>
+          Dismiss
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col overflow-y-auto px-4 py-6">
@@ -79,7 +108,11 @@ export function InvestigationCapacityNotice({
               : `Radar runs up to ${capacity.limit} at a time. Stop one to start ${target}, or wait for one to finish.`}
           </p>
         </div>
-        {holding.length > 0 && (
+        {!runsKnown ? (
+          <p className="text-sm text-theme-text-tertiary">
+            Loading the running investigations…
+          </p>
+        ) : holding.length > 0 ? (
           <ul
             aria-label="Running investigations"
             className="divide-y divide-theme-border rounded-lg border border-theme-border"
@@ -96,7 +129,7 @@ export function InvestigationCapacityNotice({
                     <div className="text-xs text-theme-text-tertiary">
                       {isStopping
                         ? "Stopping…"
-                        : `Running ${formatCompactAge(run.createdAt)}`}
+                        : `Started ${formatRelativeAgeTime(run.createdAt)}`}
                     </div>
                   </div>
                   <button
@@ -119,11 +152,11 @@ export function InvestigationCapacityNotice({
               );
             })}
           </ul>
-        )}
+        ) : null}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            disabled={!slotFree}
+            disabled={runsKnown && !slotFree}
             onClick={onStart}
             className="btn-brand px-3 py-1.5 text-sm"
           >
@@ -149,14 +182,20 @@ export function InvestigationCapacityRecovery({
   capacity: StartCapacity;
 }) {
   const d = useDiagnose();
+  const { data: contexts } = useContexts();
+  const current = contexts?.find((c) => c.isCurrent)?.name;
   return (
     <InvestigationCapacityNotice
       capacity={capacity}
       runs={d.runs}
+      runsKnown={d.runsLoaded && !d.runsLoadFailed}
+      clusterChanged={
+        !!capacity.context && !!current && current !== capacity.context
+      }
       onOpenRun={d.openRun}
       onStop={async (id) => {
         await stopRun(id);
-        d.refreshRuns();
+        await d.refreshRuns();
       }}
       onStart={() => d.openInvestigation(capacity.target)}
       onDismiss={d.dismissError}

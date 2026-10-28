@@ -75,12 +75,17 @@ describe("InvestigationCapacityNotice", () => {
     vi.useRealTimers();
   });
 
-  const render = (runs: RunSummary[]) =>
+  const render = (
+    runs: RunSummary[],
+    { runsKnown = true, clusterChanged = false } = {},
+  ) =>
     act(async () =>
       root.render(
         <InvestigationCapacityNotice
           capacity={capacity}
           runs={runs}
+          runsKnown={runsKnown}
+          clusterChanged={clusterChanged}
           {...handlers}
         />,
       ),
@@ -103,12 +108,13 @@ describe("InvestigationCapacityNotice", () => {
     );
     expect(rows).toHaveLength(3);
     expect(rows[0]).toContain("Deployment.apps prod/api");
-    expect(rows[0]).toContain("Running 5m");
-    expect(rows[2]).toContain("Running 1m");
+    expect(rows[0]).toContain("Started 5m ago");
+    expect(rows[2]).toContain("Started 1m ago");
     expect(button("Start investigation").disabled).toBe(true);
   });
 
   it("opens and stops the run the user picks", async () => {
+    handlers.onStop.mockImplementationOnce(() => new Promise<void>(() => {}));
     await render(threeRunning);
     await act(async () => button("Open").click());
     expect(handlers.onOpenRun).toHaveBeenCalledWith("a");
@@ -127,6 +133,41 @@ describe("InvestigationCapacityNotice", () => {
     expect(start.disabled).toBe(false);
     await act(async () => start.click());
     expect(handlers.onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a stop that didn't take be tried again", async () => {
+    let fail!: () => void;
+    handlers.onStop.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => (fail = () => reject(new Error("x")))),
+    );
+    await render(threeRunning);
+    const stop = () => button("Stop Deployment.apps prod/api");
+    await act(async () => stop().click());
+    expect(stop().disabled).toBe(true);
+    await act(async () => fail());
+    expect(stop().disabled).toBe(false);
+    expect(container.textContent).not.toContain("Stopping…");
+  });
+
+  it("claims no free slot before the running list is known", async () => {
+    await render([], { runsKnown: false });
+    expect(container.textContent).toContain(
+      "3 investigations are already running",
+    );
+    expect(container.textContent).toContain(
+      "Loading the running investigations",
+    );
+    // The server decides; the button must not dead-end on missing data.
+    expect(button("Start investigation").disabled).toBe(false);
+  });
+
+  it("won't retry a start after the cluster changed", async () => {
+    await render(threeRunning, { clusterChanged: true });
+    expect(container.textContent).toContain("The cluster changed");
+    expect(button("Start investigation")).toBeUndefined();
+    await act(async () => button("Dismiss").click());
+    expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("cancels the pending start", async () => {

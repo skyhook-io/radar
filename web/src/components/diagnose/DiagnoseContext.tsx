@@ -29,7 +29,7 @@ import {
   recordConsent,
   DiagnoseError,
   investigationRefusal,
-  investigationCapacityLimit,
+  investigationCapacity,
 } from "../../api/diagnose";
 import { getApiBase } from "../../api/config";
 import {
@@ -61,14 +61,15 @@ export type DiagnoseView = "home" | "investigation";
 export interface StartCapacity {
   target: Target;
   limit: number;
+  context?: string;
 }
 
 function startCapacity(
   error: unknown,
   target: Target,
 ): StartCapacity | undefined {
-  const limit = investigationCapacityLimit(error);
-  return limit === null ? undefined : { target, limit };
+  const capacity = investigationCapacity(error);
+  return capacity ? { target, ...capacity } : undefined;
 }
 
 // Setup readiness of local AI investigations, derived from the agents API:
@@ -122,7 +123,8 @@ interface DiagnoseCtx {
   // offer the host's action beside the message.
   startRefusal: InvestigationRefusal | null;
   // Set when the start failed because every investigation slot is taken: the
-  // start to retry once one is free, and how many run at once.
+  // start to retry once one is free, how many run at once, and the cluster
+  // the start was refused in.
   startCapacity: StartCapacity | null;
   // Kept apart from startError: the consent card renders this as "why your
   // approval was refused", and a run-start failure landing in the same slot

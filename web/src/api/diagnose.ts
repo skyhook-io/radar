@@ -286,6 +286,7 @@ export interface DiagnoseRefusal {
   reason?: string;
   action?: string;
   limit?: number;
+  context?: string;
 }
 
 // The sentence to show is `detail` when a host sends one, else `error`. A
@@ -312,6 +313,7 @@ async function diagnoseError(res: Response): Promise<DiagnoseError> {
       typeof body?.limit === "number" && body.limit > 0
         ? body.limit
         : undefined,
+    context: str(body?.context),
   });
 }
 
@@ -321,8 +323,10 @@ export class DiagnoseError extends Error {
   code?: string;
   reason?: string;
   action?: string;
-  /** With INVESTIGATIONS_AT_CAPACITY: how many investigations run at once. */
+  /** With INVESTIGATIONS_AT_CAPACITY: how many investigations run at once,
+   * and the cluster the start was refused in. */
   limit?: number;
+  context?: string;
   constructor(status: number, message: string, refusal?: DiagnoseRefusal) {
     super(message);
     this.status = status;
@@ -330,22 +334,33 @@ export class DiagnoseError extends Error {
     this.reason = refusal?.reason;
     this.action = refusal?.action;
     this.limit = refusal?.limit;
+    this.context = refusal?.context;
   }
 }
 
 /** Code Radar sends when every investigation slot is taken. */
 export const INVESTIGATIONS_AT_CAPACITY = "investigations_at_capacity";
 
-/** How many investigations run at once, when error is Radar refusing a start
- * because all of them are taken; otherwise null. */
-export function investigationCapacityLimit(error: unknown): number | null {
+export interface InvestigationCapacity {
+  /** How many investigations run at once. */
+  limit: number;
+  /** The cluster the start was refused in. */
+  context?: string;
+}
+
+/** Set when error is Radar refusing a start because every investigation slot
+ * is taken; otherwise null. */
+export function investigationCapacity(
+  error: unknown,
+): InvestigationCapacity | null {
   if (
     !(error instanceof DiagnoseError) ||
-    error.code !== INVESTIGATIONS_AT_CAPACITY
+    error.code !== INVESTIGATIONS_AT_CAPACITY ||
+    !error.limit
   ) {
     return null;
   }
-  return error.limit ?? null;
+  return { limit: error.limit, context: error.context };
 }
 
 /** A host's refusal of an investigation request, with what would unblock it. */
@@ -360,7 +375,7 @@ export interface InvestigationRefusal {
 
 /** The refusal a DiagnoseError carries, or null when the host sent none.
  * Radar's own capacity code is not a host refusal: the UI recovers from it
- * itself (see investigationCapacityLimit). */
+ * itself (see investigationCapacity). */
 export function investigationRefusal(
   error: unknown,
 ): InvestigationRefusal | null {

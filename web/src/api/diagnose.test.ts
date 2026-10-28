@@ -4,7 +4,7 @@ import {
   createRun,
   DiagnoseError,
   fetchAgents,
-  investigationCapacityLimit,
+  investigationCapacity,
   investigationRefusal,
   subscribeRun,
   type DiagnoseStreamEvent,
@@ -324,17 +324,18 @@ describe("refused requests", () => {
         error: "3 investigations are already running.",
         code: "investigations_at_capacity",
         limit: 3,
+        context: "kind-dev",
       }),
     );
     const e = await startError();
     expect(e.message).toBe("3 investigations are already running.");
-    expect(investigationCapacityLimit(e)).toBe(3);
+    expect(investigationCapacity(e)).toEqual({ limit: 3, context: "kind-dev" });
     expect(investigationRefusal(e)).toBeNull();
   });
 
   it("does not read other conflicts as capacity", async () => {
     refuse(409, JSON.stringify({ error: "Codex isn't installed." }));
-    expect(investigationCapacityLimit(await startError())).toBeNull();
+    expect(investigationCapacity(await startError())).toBeNull();
   });
 
   it("applies the same reading to follow-up turns", async () => {
@@ -382,9 +383,17 @@ describe("refused requests", () => {
   });
 
   it.each([
-    ["an empty detail", JSON.stringify({ error: "Busy.", detail: "" }), "Busy."],
+    [
+      "an empty detail",
+      JSON.stringify({ error: "Busy.", detail: "" }),
+      "Busy.",
+    ],
     ["a non-JSON body", "upstream timeout", "request failed (502)"],
-    ["no message at all", JSON.stringify({ error: "  " }), "request failed (502)"],
+    [
+      "no message at all",
+      JSON.stringify({ error: "  " }),
+      "request failed (502)",
+    ],
   ])("falls back past %s", async (_name, body, message) => {
     refuse(502, body);
     expect((await startError()).message).toBe(message);
