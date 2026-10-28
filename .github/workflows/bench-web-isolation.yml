@@ -1,0 +1,27 @@
+name: Bench web isolation (temporary)
+on: pull_request
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Alternate shared vs fully isolated, 3 rounds each
+        working-directory: web
+        run: |
+          nproc
+          npx vitest run src > /dev/null 2>&1 || true   # warm transform cache
+          for round in 1 2 3; do
+            for mode in shared isolate; do
+              args=(); [ $mode = isolate ] && args=(--isolate)
+              s=$(date +%s)
+              npx vitest run src "${args[@]}" > out.log 2>&1; rc=$?
+              echo "round$round $mode exit=$rc wall=$(( $(date +%s)-s ))s $(sed 's/\x1b\[[0-9;]*m//g' out.log | grep -E '^ +(Tests|Duration) ' | tr -s ' ' | tr '\n' ' ')" | tee -a summary.txt
+            done
+          done
+          cat summary.txt >> "$GITHUB_STEP_SUMMARY"
