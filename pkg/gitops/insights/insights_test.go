@@ -657,7 +657,8 @@ func TestDetectAutoDriftSelfHealOff(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectAutoDriftSelfHealOff(stuckLoopApp(t, tc.mut))
+			root := stuckLoopApp(t, tc.mut)
+			got := detectAutoDriftSelfHealOff(root, argoSyncHazardAction(root))
 			if (got != nil) != tc.wantFire {
 				t.Errorf("fire = %v, want %v; issue=%+v", got != nil, tc.wantFire, got)
 			}
@@ -719,7 +720,8 @@ func TestDetectManualDriftWithoutAutoSync(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectManualDriftWithoutAutoSync(stuckLoopApp(t, tc.mut))
+			root := stuckLoopApp(t, tc.mut)
+			got := detectManualDriftWithoutAutoSync(root, argoSyncHazardAction(root))
 			if (got != nil) != tc.wantFire {
 				t.Errorf("fire = %v, want %v; issue=%+v", got != nil, tc.wantFire, got)
 			}
@@ -739,7 +741,7 @@ func TestArgoApplicationConditions_MapsTypesToSeverity(t *testing.T) {
 			map[string]any{"type": "", "message": ""}, // skipped
 		},
 	})
-	got := argoApplicationConditions(root)
+	got := argoApplicationConditions(root, argoSyncHazardAction(root))
 	if len(got) != 3 {
 		t.Fatalf("expected 3 conditions (one filtered), got %d: %+v", len(got), got)
 	}
@@ -1839,6 +1841,348 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 	if out := Build(root, tree, nil); out.Summary.RemoteDestination {
 		t.Error("an Application with no destination is invalid, not deploying elsewhere")
 	}
+}
+
+// prunedResources is status.resources as Argo reports it while the empty-render
+// guard holds: every managed resource requires pruning.
+func prunedResources() []any {
+	return []any{
+		map[string]any{"version": "v1", "kind": "Service", "namespace": "demo", "name": "web", "status": "OutOfSync", "requiresPruning": true},
+		map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "demo", "name": "web", "status": "OutOfSync", "requiresPruning": true},
+	}
+}
+
+func TestBuildIssuesArgoEmptyAutoSyncAdvice(t *testing.T) {
+	message := "Skipping sync attempt to [new-revision]: auto-sync will wipe out all resources"
+	for _, phase := range []string{"", "Failed", "Error"} {
+		for _, opMessage := range []string{"admission webhook denied the request", ""} {
+			root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "resources": prunedResources(), "conditions": []any{map[string]any{"type": "SyncError", "message": message, "lastTransitionTime": "2026-10-09T23:58:00Z"}}})
+			_ = unstructured.SetNestedMap(root.Object, map[string]any{"prune": true, "selfHeal": true}, "spec", "syncPolicy", "automated")
+			if phase != "" {
+				_ = unstructured.SetNestedMap(root.Object, map[string]any{"phase": phase, "message": opMessage}, "status", "operationState")
+			}
+			got := buildIssues(root, nil, "argocd", nil)
+			want := 1
+			if phase != "" {
+				want++
+			}
+			if len(got) != want {
+				t.Fatalf("want %d issues, got %+v", want, got)
+			}
+			var found bool
+			for _, d := range got {
+				if d.Reason == "AutoSyncBlockedEmpty" {
+					found = true
+					if d.Scope != ScopeCondition || !strings.Contains(d.Cause, "the render includes none of the resources this Application manages") || !strings.Contains(d.Action, "A sync with Prune enabled") || !strings.Contains(d.Action, "allowEmpty") || strings.Contains(d.Action, "retry") || d.Remediation != nil {
+						t.Fatalf("expected condition-only safe advice, got %+v", d)
+					}
+					if !strings.HasPrefix(d.Message, "Auto-sync blocked") || d.RawMessage != message {
+						t.Fatalf("headline must lead with the meaning and keep the controller text raw: %+v", d)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("missing empty guard alongside stale operation: %+v", got)
+			}
+		}
+	}
+}
+
+func TestBuildIssuesArgoFailedAttemptConditionDedup(t *testing.T) {
+	for _, phase := range []string{"Failed", "Error"} {
+		for _, message := range []string{"Failed sync attempt to [old]: failed to apply", "Failed last sync attempt to [old]: failed to apply", "Skipping sync attempt to [new]: auto-sync will wipe out all resources", "a different sync error"} {
+			root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "resources": prunedResources(), "operationState": map[string]any{"phase": phase, "message": "failed to apply"}, "conditions": []any{map[string]any{"type": "SyncError", "message": message, "lastTransitionTime": "2026-10-09T23:58:00Z"}}})
+			_ = unstructured.SetNestedMap(root.Object, map[string]any{"prune": true, "selfHeal": true}, "spec", "syncPolicy", "automated")
+			got := buildIssues(root, nil, "argocd", nil)
+			want := 2
+			if strings.HasPrefix(message, "Failed") {
+				want = 1
+			}
+			if len(got) != want {
+				t.Fatalf("%s/%s: want %d, got %+v", phase, message, want, got)
+			}
+		}
+	}
+}
+
+func TestBuildIssuesArgoStaleEmptyGuard(t *testing.T) {
+	guard := []any{map[string]any{"type": "SyncError", "message": "Skipping sync attempt to [old]: auto-sync will wipe out all resources", "lastTransitionTime": "2026-10-09T23:58:00Z"}}
+	for _, sync := range []string{"Synced", "Unknown", ""} {
+		root := argoApp(map[string]any{"sync": map[string]any{"status": sync}, "resources": prunedResources(), "conditions": guard})
+		if got := buildIssues(root, nil, "argocd", nil); len(got) != 0 {
+			t.Fatalf("%s: stale guard: %+v", sync, got)
+		}
+	}
+	// Argo leaves the condition behind when a sync window blocks auto-sync
+	// after the render recovers. Later drift makes the app OutOfSync again,
+	// but no resource requires pruning, so the guard is not what holds it.
+	drifted := []any{
+		map[string]any{"version": "v1", "kind": "Service", "namespace": "demo", "name": "web", "status": "Synced"},
+		map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "demo", "name": "web", "status": "OutOfSync"},
+	}
+	for name, resources := range map[string][]any{"stale guard plus drift": drifted, "no resources": nil} {
+		root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "operationState": map[string]any{"phase": "Succeeded"}, "conditions": guard})
+		if resources != nil {
+			_ = unstructured.SetNestedSlice(root.Object, resources, "status", "resources")
+		}
+		_ = unstructured.SetNestedMap(root.Object, map[string]any{"prune": true}, "spec", "syncPolicy", "automated")
+		got := buildIssues(root, nil, "argocd", nil)
+		var drift bool
+		for _, issue := range got {
+			if issue.Reason == "AutoSyncBlockedEmpty" || issue.Severity == SeverityCritical {
+				t.Fatalf("%s: stale guard raised: %+v", name, got)
+			}
+			drift = drift || issue.Reason == "SelfHealDisabled"
+		}
+		if !drift {
+			t.Fatalf("%s: the real drift must still surface: %+v", name, got)
+		}
+	}
+}
+
+// With the guard holding, any sync prunes everything: no row may tell the
+// operator to sync, and a drift row would misexplain the OutOfSync.
+func TestBuildIssuesArgoEmptyGuardSuppressesSyncAdvice(t *testing.T) {
+	recent := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	for name, automated := range map[string]map[string]any{
+		"self-heal off": {"prune": true},
+		"self-heal on":  {"prune": true, "selfHeal": true},
+	} {
+		root := argoApp(map[string]any{
+			"sync":           map[string]any{"status": "OutOfSync"},
+			"resources":      prunedResources(),
+			"operationState": map[string]any{"phase": "Succeeded"},
+			"reconciledAt":   recent,
+			"conditions":     []any{map[string]any{"type": "SyncError", "message": "Skipping sync attempt to [abc]: auto-sync will wipe out all resources"}},
+		})
+		_ = unstructured.SetNestedMap(root.Object, automated, "spec", "syncPolicy", "automated")
+		got := buildIssues(root, nil, "argocd", nil)
+		if len(got) != 1 || got[0].Reason != "AutoSyncBlockedEmpty" {
+			t.Fatalf("%s: want only the guard, got %+v", name, got)
+		}
+	}
+}
+
+func TestBuildIssuesArgoDriftAdviceRespectsSyncHazards(t *testing.T) {
+	shared := []any{map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"}}
+	for _, tc := range []struct {
+		name, reason, wantAction string
+		automated                map[string]any
+		status                   map[string]any
+	}{
+		{"manual, shared", "ManualDrift", "also tracked by Application payments", nil, map[string]any{"conditions": shared}},
+		{"self-heal off, shared", "SelfHealDisabled", "also tracked by Application payments", map[string]any{"prune": true}, map[string]any{"conditions": shared}},
+		{"manual, empty render", "ManualDrift", "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options.", nil, map[string]any{"resources": prunedResources()}},
+		{"manual, plain drift", "ManualDrift", "click Sync", nil, map[string]any{}},
+	} {
+		status := map[string]any{"sync": map[string]any{"status": "OutOfSync"}}
+		for k, v := range tc.status {
+			status[k] = v
+		}
+		root := argoApp(status)
+		if tc.automated != nil {
+			_ = unstructured.SetNestedMap(root.Object, tc.automated, "spec", "syncPolicy", "automated")
+		}
+		var drift *Issue
+		for _, issue := range buildIssues(root, nil, "argocd", nil) {
+			if issue.Reason == tc.reason {
+				drift = &issue
+			}
+		}
+		if drift == nil {
+			t.Fatalf("%s: missing %s", tc.name, tc.reason)
+		}
+		if !strings.Contains(drift.Action, tc.wantAction) {
+			t.Errorf("%s: action %q, want %q", tc.name, drift.Action, tc.wantAction)
+		}
+		if tc.wantAction == "click Sync" {
+			if drift.Hazard != "" {
+				t.Errorf("%s: plain drift must not carry a hazard: %+v", tc.name, drift)
+			}
+		} else if drift.Hazard != drift.Action {
+			t.Errorf("%s: resource rows need the same hazard as the drift advice: %+v", tc.name, drift)
+		}
+		if tc.wantAction != "click Sync" && (strings.Contains(drift.Action, "click Sync") || strings.Contains(drift.Message, "click Sync") || strings.Contains(drift.Message, "until you sync")) {
+			t.Errorf("%s: sync advice despite the hazard: %+v", tc.name, drift)
+		}
+	}
+}
+
+func TestBuildIssuesCarriesConditionSyncHazardWithoutFailedOperation(t *testing.T) {
+	for _, tc := range []struct {
+		condition, message, reason string
+	}{
+		{"SyncError", "Skipping sync attempt to [abc]: auto-sync will wipe out all resources", "AutoSyncBlockedEmpty"},
+		{"SharedResourceWarning", "ConfigMap/settings is part of applications argocd/billing and payments", "SharedResourceWarning"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			root := argoApp(map[string]any{
+				"sync":       map[string]any{"status": "OutOfSync"},
+				"resources":  prunedResources(),
+				"conditions": []any{map[string]any{"type": tc.condition, "message": tc.message}},
+			})
+			_ = unstructured.SetNestedMap(root.Object, map[string]any{"prune": true}, "spec", "syncPolicy", "automated")
+			if tc.condition == "SharedResourceWarning" {
+				unstructured.RemoveNestedField(root.Object, "status", "resources")
+			}
+			for _, issue := range buildIssues(root, nil, "argocd", nil) {
+				if issue.Reason == tc.reason {
+					if want := argoSyncHazardAction(root); want == "" || issue.Hazard != want {
+						t.Fatalf("condition must carry the hazard for resource rows: %+v, want %q", issue, want)
+					}
+					return
+				}
+			}
+			t.Fatal("missing condition issue")
+		})
+	}
+}
+
+func TestArgoApplicationConditionsNameWhatTheWarningCannot(t *testing.T) {
+	root := argoApp(map[string]any{"conditions": []any{
+		map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"},
+		map[string]any{"type": "OrphanedResourceWarning", "message": "Application has 3 orphaned resources"},
+	}})
+	for _, issue := range argoApplicationConditions(root, argoSyncHazardAction(root)) {
+		switch issue.Reason {
+		case "SharedResourceWarning":
+			guidance := diagnose.ArgoConditionGuidance(issue.Reason, "argocd/billing", []string{"Deployment/web is part of applications argocd/billing and payments"})
+			if issue.Action != guidance.Action || issue.ActionPrimary != guidance.ActionPrimary || issue.ActionSecondaryTitle != guidance.ActionSecondaryTitle || !reflect.DeepEqual(issue.ActionSecondary, guidance.ActionSecondary) {
+				t.Fatalf("shared row lost split or full guidance: %+v", issue)
+			}
+			if !strings.HasPrefix(issue.Action, "To leave it with Application payments, ") || strings.Contains(issue.Action, "These resources") {
+				t.Errorf("shared row must name the other owner in the singular: %q", issue.Action)
+			}
+		case "OrphanedResourceWarning":
+			if !strings.Contains(issue.Action, "argocd app resources argocd/billing --orphaned") {
+				t.Errorf("orphan row must say where to see which: %q", issue.Action)
+			}
+		}
+	}
+}
+
+func TestBuildIssuesArgoFailedAttemptWithoutOperationMessage(t *testing.T) {
+	for _, phase := range []string{"Failed", "Error"} {
+		for _, prefix := range []string{"Failed sync attempt", "Failed last sync attempt"} {
+			root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "operationState": map[string]any{"phase": phase, "message": ""}, "conditions": []any{map[string]any{"type": "SyncError", "message": prefix + ` to x: namespaces "foo" not found`}}})
+			got := buildIssues(root, nil, "argocd", nil)
+			var found bool
+			for _, issue := range got {
+				if issue.Scope == ScopeCondition && issue.Reason == "SyncError" {
+					found = true
+					if issue.Cause == "" || issue.Remediation == nil || issue.Remediation.Target != "foo" || issue.Action == "" {
+						t.Fatalf("%s/%s: lost actionable condition: %+v", phase, prefix, issue)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("%s/%s: missing condition: %+v", phase, prefix, got)
+			}
+		}
+	}
+}
+
+func TestBuildIssuesArgoFailedAttemptRemoteRemediation(t *testing.T) {
+	root := argoApp(map[string]any{"operationState": map[string]any{"phase": "Failed", "message": ""}, "conditions": []any{map[string]any{"type": "SyncError", "message": `Failed sync attempt to x: namespaces "foo" not found`}}})
+	_ = unstructured.SetNestedField(root.Object, "https://remote.example.com", "spec", "destination", "server")
+	got := buildIssues(root, nil, "argocd", nil)
+	for _, issue := range got {
+		if issue.Scope == ScopeCondition {
+			if issue.Cause == "" || issue.Remediation != nil || !strings.Contains(issue.Action, "destination cluster") {
+				t.Fatalf("remote condition must keep cause without a local mutation: %+v", issue)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing actionable remote condition: %+v", got)
+}
+
+// A failed sync's one-click fix (create the namespace, then sync) and its
+// "retry" advice are syncs too; they must not survive a sync hazard.
+func TestBuildIssuesArgoSyncHazardDisarmsRetryAdvice(t *testing.T) {
+	sharedWarning := map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"}
+	guard := map[string]any{"type": "SyncError", "message": "Skipping sync attempt to [new]: auto-sync will wipe out all resources"}
+	for _, tc := range []struct {
+		name   string
+		status map[string]any
+		want   string
+	}{
+		{"failed namespace sync, then an empty render", map[string]any{
+			"sync": map[string]any{"status": "OutOfSync"}, "resources": prunedResources(),
+			"operationState": map[string]any{"phase": "Failed", "message": `namespaces "demo" not found`},
+			"conditions":     []any{guard},
+		}, "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options."},
+		{"failed namespace sync, everything else extraneous", map[string]any{
+			"sync": map[string]any{"status": "Synced"}, "resources": prunedResources(),
+			"operationState": map[string]any{"phase": "Failed", "message": `namespaces "demo" not found`},
+		}, "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options."},
+		{"failed namespace sync with shared resources", map[string]any{
+			"sync":           map[string]any{"status": "OutOfSync"},
+			"operationState": map[string]any{"phase": "Failed", "message": `namespaces "demo" not found`},
+			"conditions":     []any{sharedWarning},
+		}, "also tracked by Application payments"},
+		{"failed-attempt condition carrying the namespace fix, shared", map[string]any{
+			"sync":           map[string]any{"status": "OutOfSync"},
+			"operationState": map[string]any{"phase": "Failed", "message": ""},
+			"conditions":     []any{map[string]any{"type": "SyncError", "message": `Failed sync attempt to x: namespaces "demo" not found`}, sharedWarning},
+		}, "also tracked by Application payments"},
+		{"generic sync error with shared resources", map[string]any{
+			"sync":       map[string]any{"status": "OutOfSync"},
+			"conditions": []any{map[string]any{"type": "SyncError", "message": "a different sync error"}, sharedWarning},
+		}, "also tracked by Application payments"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var checked int
+			for _, issue := range buildIssues(argoApp(tc.status), nil, "argocd", nil) {
+				if issue.Reason == "AutoSyncBlockedEmpty" || issue.Reason == "SharedResourceWarning" {
+					continue
+				}
+				checked++
+				if issue.Remediation != nil {
+					t.Errorf("%s still offers a fix that syncs: %+v", issue.Reason, issue)
+				}
+				// The failure card keeps its next step and states the hazard
+				// apart from it, ahead of the cause's own advice; other rows
+				// replace their sync advice with the hazard.
+				warning := issue.Action
+				if issue.Severity == SeverityCritical && issue.Scope == ScopeOperation {
+					warning = issue.Hazard
+					if issue.Action == "" || strings.Contains(issue.Action, tc.want) {
+						t.Errorf("%s: next step %q must be present and not repeat the hazard", issue.Reason, issue.Action)
+					}
+				} else if issue.Hazard != issue.Action {
+					t.Errorf("%s: resource rows need the same hazard as the action: %+v", issue.Reason, issue)
+				}
+				if !strings.Contains(warning, tc.want) || strings.Contains(issue.Action, "retry") {
+					t.Errorf("%s warning %q, action %q, want %q and no retry", issue.Reason, warning, issue.Action, tc.want)
+				}
+			}
+			if checked == 0 {
+				t.Fatal("no failure row to check")
+			}
+		})
+	}
+}
+
+// A remote failure's next step names the destination cluster; a hazard warns
+// alongside it rather than replacing it.
+func TestBuildIssuesArgoRemoteFailureKeepsNextStepBesideHazard(t *testing.T) {
+	root := argoApp(map[string]any{
+		"sync":           map[string]any{"status": "OutOfSync"},
+		"operationState": map[string]any{"phase": "Failed", "message": `namespaces "demo" not found`},
+		"conditions":     []any{map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"}},
+	})
+	_ = unstructured.SetNestedField(root.Object, "https://remote.example.com", "spec", "destination", "server")
+	for _, issue := range buildIssues(root, nil, "argocd", nil) {
+		if issue.Severity != SeverityCritical || issue.Scope != ScopeOperation {
+			continue
+		}
+		if !strings.Contains(issue.Action, "destination cluster") || !strings.Contains(issue.Hazard, "also tracked by Application payments") || issue.Remediation != nil {
+			t.Fatalf("want the destination-cluster step and the shared-ownership hazard, no fix: %+v", issue)
+		}
+		return
+	}
+	t.Fatal("missing operation failure")
 }
 
 func TestFluxDependencyChangesDoNotClaimInventoryOwnership(t *testing.T) {

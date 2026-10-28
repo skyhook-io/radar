@@ -30,6 +30,34 @@ describe('confirmed missing resources', () => {
     expect(isArgoResourceSyncEligible(item, true)).toBe(true)
   })
 
+  it('defers creation advice to the sync hazard while preserving stale Synced refresh advice', () => {
+    for (const sync of ['OutOfSync', 'Unknown', undefined]) {
+      expect(missingResourceMessage(sync, { hazard: 'Resolve shared ownership before syncing.' })).toBe(
+        'Not present in the cluster. See the sync warning above before syncing this Application.',
+      )
+    }
+    expect(missingResourceMessage('Synced', { hazard: 'A pruning sync could delete everything.' })).toContain('Refresh')
+  })
+
+  it('warns that recreating a missing resource can undo a rollback', () => {
+    for (const sync of ['OutOfSync', 'Unknown', undefined]) {
+      expect(missingResourceMessage(sync, { rolledBack: true })).toBe(
+        'Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.',
+      )
+    }
+  })
+
+  it('prioritizes the sync hazard over rollback advice', () => {
+    for (const sync of ['OutOfSync', 'Unknown', undefined]) {
+      expect(missingResourceMessage(sync, { hazard: 'Resolve shared tracking.', rolledBack: true })).toBe(
+        'Not present in the cluster. See the sync warning above before syncing this Application.',
+      )
+    }
+    // Argo calling it Synced means the cluster view is stale: refresh, whatever the context.
+    expect(missingResourceMessage('Synced', { hazard: 'Resolve shared tracking.', rolledBack: true })).toContain('Refresh the application')
+    expect(missingResourceMessage('OutOfSync', {})).toContain('Sync the application')
+  })
+
   it('asks for a refresh when Argo still reports Synced', () => {
     expect(missingResourceMessage('Synced')).toContain('Refresh')
     expect(missingResourceMessage('Synced')).not.toContain('Sync the application')

@@ -92,6 +92,16 @@ type Run struct {
 	Effort    string           // immutable — optional reasoning effort (Codex; "" = default)
 	ManagedBy string           // immutable — GitOps/Helm owner of the target ("" = none), for the Apply warning
 	Health    *ResourceHealthSignal
+	// Question, Namespaces and LookBack are immutable: the engineer's opening
+	// description of the problem and where and since when to start looking.
+	// A run with a Question and no Name has no target.
+	Question   string
+	Namespaces []string
+	LookBack   string
+	// AskedAt is when the engineer first asked Question; zero means at
+	// CreatedAt. A run narrowed or re-run from an earlier one keeps the
+	// earlier time, so its look-back still covers the same incident.
+	AskedAt   time.Time
 	CreatedAt time.Time
 	// OwnerPID is the process that owns this run's lifecycle. Persisted so a
 	// second process sharing the history DB (standalone beside a long-running
@@ -138,12 +148,17 @@ type RunSummary struct {
 	Effort    string                `json:"effort,omitempty"`
 	ManagedBy string                `json:"managedBy,omitempty"`
 	Health    *ResourceHealthSignal `json:"health,omitempty"`
-	Status    string                `json:"status"`
-	SessionID string                `json:"sessionId,omitempty"`
-	OwnerPID  int                   `json:"ownerPid,omitempty"`
-	Preview   string                `json:"preview,omitempty"`
-	CreatedAt time.Time             `json:"createdAt"`
-	UpdatedAt time.Time             `json:"updatedAt"`
+	// Question is the run's opening question, not a later turn's.
+	Question   string     `json:"question,omitempty"`
+	Namespaces []string   `json:"namespaces,omitempty"`
+	LookBack   string     `json:"lookBack,omitempty"`
+	AskedAt    *time.Time `json:"askedAt,omitempty"`
+	Status     string     `json:"status"`
+	SessionID  string     `json:"sessionId,omitempty"`
+	OwnerPID   int        `json:"ownerPid,omitempty"`
+	Preview    string     `json:"preview,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
 }
 
 var (
@@ -165,6 +180,9 @@ var (
 	// invalid. Unlike ErrHistoryUnavailable, retrying cannot repair it; the user
 	// must clear the retained history or start a new investigation.
 	ErrHistoryCorrupt = errors.New("this investigation's retained history is corrupt and cannot be replayed")
+	// ErrApplyNeedsTarget is returned for an apply turn on a run opened by a
+	// question alone: a confirmed fix binds its writes to the run's resource.
+	ErrApplyNeedsTarget = errors.New("this investigation isn't about one resource, so Radar can't apply a fix from it — investigate the resource the fix changes, then apply it there")
 	// ErrInvalidTurn is returned when mutually exclusive turn modes are combined.
 	ErrInvalidTurn = errors.New("apply and verify cannot be requested together")
 	// ErrVerificationQuestionRequired rejects a manual verification that carries
@@ -287,7 +305,9 @@ func (m *RunManager) loadPersisted() {
 			ID: s.ID, Kind: s.Kind, Group: s.Group, Namespace: s.Namespace, Name: s.Name,
 			Context: s.Context, Agent: s.Agent, Profile: s.Profile,
 			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
-			Health: s.Health, CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
+			Health: s.Health, Question: s.Question, Namespaces: s.Namespaces, LookBack: s.LookBack,
+			AskedAt:   derefTime(s.AskedAt),
+			CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
 			store:  m.store,
 			status: s.Status, sessionID: s.SessionID, preview: s.Preview,
 			updatedAt: s.UpdatedAt,
@@ -506,16 +526,35 @@ func (m *RunManager) ctx() string {
 	return ""
 }
 
+// StartSpec is what an investigation opens with: a resource, the engineer's
+// question, or both, and how the agent runs.
+type StartSpec struct {
+	Kind, Group, Namespace, Name string
+	Question                     string
+	Namespaces                   []string
+	LookBack                     string
+	AskedAt                      time.Time
+	Agent                        string
+	Profile                      ExecutionProfile
+	Model, Effort                string
+	ManagedBy                    string
+	Health                       *ResourceHealthSignal
+}
+
 // Start creates and launches an investigation, or focuses an existing live run for
-// the same target+context instead of duplicating it. Returns ErrAtCapacity when
-// the concurrent-running cap is reached.
-func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
+// the same target+context instead of duplicating it. A run opened with a
+// question is always new: two questions about one resource are two
+// investigations. Returns ErrAtCapacity when the concurrent-running cap is reached.
+func (m *RunManager) Start(spec StartSpec) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
 	// Focus an existing live run for this exact target+mode rather than duplicate it.
 	for _, id := range m.order {
+		if spec.Question != "" {
+			break
+		}
 		r := m.runs[id]
-		if r.matchesTarget(kind, group, namespace, name, cur, agent, profile, model, effort) &&
+		if r.matchesTarget(spec.Kind, spec.Group, spec.Namespace, spec.Name, cur, spec.Agent, spec.Profile, spec.Model, spec.Effort) &&
 			r.snapshotStatus() == "running" {
 			m.mu.Unlock()
 			return r.Summary(), nil
@@ -527,9 +566,11 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 	}
 	id := newRunID()
 	r := &Run{
-		ID: id, Kind: kind, Group: group, Namespace: namespace,
-		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Profile: profile,
-		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
+		ID: id, Kind: spec.Kind, Group: spec.Group, Namespace: spec.Namespace,
+		Name: spec.Name, Context: cur, Agent: spec.Agent, WorkDir: m.runWorkDir(id), Profile: spec.Profile,
+		Model: spec.Model, Effort: spec.Effort, ManagedBy: spec.ManagedBy, Health: spec.Health,
+		Question: spec.Question, Namespaces: spec.Namespaces, LookBack: spec.LookBack,
+		AskedAt: spec.AskedAt, CreatedAt: nowUTC(),
 		OwnerPID: os.Getpid(),
 		store:    m.store,
 		status:   "running", inFlight: true, updatedAt: nowUTC(),
@@ -575,6 +616,9 @@ func (m *RunManager) addTurn(id, question string, apply bool, fix string, verify
 	}
 	if !SupportsProfile(r.Agent, r.Profile) {
 		return fmt.Errorf("ai: run uses unsupported execution profile %q", r.Profile)
+	}
+	if apply && r.Name == "" {
+		return ErrApplyNeedsTarget
 	}
 	// A follow-up on a run loaded from history must extend the PERSISTED log —
 	// hydrate before beginTurn so the new turn's sequence numbers continue it.
@@ -693,6 +737,9 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 			Explanation: turn.explanation,
 			Agent:       r.Agent, Profile: r.Profile, Model: r.Model, Effort: r.Effort,
 			Health: r.Health, WorkDir: r.WorkDir,
+			Opening: investigation.Question{
+				Text: r.Question, Namespaces: r.Namespaces, LookBack: r.LookBack, AskedAt: r.askedAt(), OpensAt: nowUTC(),
+			},
 			Metrics: m.metricsForTurn(turn),
 		}, func(ev StreamEvent) {
 			if turn.apply {
@@ -1304,8 +1351,9 @@ func (r *Run) summaryLocked() RunSummary {
 		ID: r.ID, Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
 		Context: r.Context, Agent: r.Agent, Profile: r.Profile,
 		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy,
-		Health: r.Health,
-		Status: r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,
+		Health: r.Health, Question: r.Question, Namespaces: r.Namespaces, LookBack: r.LookBack,
+		AskedAt: optionalTime(r.AskedAt),
+		Status:  r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,
 		Preview: r.preview, CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,
 	}
 }
@@ -1416,12 +1464,36 @@ func (r *Run) markStale() bool {
 	return true
 }
 
+// askedAt is when the run's question was first asked. Immutable fields, so no
+// lock needed.
+func (r *Run) askedAt() time.Time {
+	if r.AskedAt.IsZero() {
+		return r.CreatedAt
+	}
+	return r.AskedAt
+}
+
+func optionalTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func derefTime(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
+}
+
 // matchesTarget reports whether r is the same investigation as a Start request —
 // same resource + cluster AND same agent/execution profile. The profile is part of the
 // key so starting safeguarded Codex never silently focuses a full-local run
 // run for the same resource. Immutable fields, so no lock needed.
 func (r *Run) matchesTarget(kind, group, namespace, name, ctx, agent string, profile ExecutionProfile, model, effort string) bool {
-	return r.Kind == kind && r.Group == group && r.Namespace == namespace && r.Name == name &&
+	return r.Question == "" &&
+		r.Kind == kind && r.Group == group && r.Namespace == namespace && r.Name == name &&
 		r.Context == ctx && r.Agent == agent && r.Profile == profile &&
 		r.Model == model && r.Effort == effort
 }

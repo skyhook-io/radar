@@ -47,9 +47,11 @@ export function changeHealth(change: GitOpsChange): GitOpsHealthStatus {
   return normalizeHealthStatus(change.health)
 }
 
-export function missingResourceMessage(sync?: string): string {
-  return sync === 'Synced'
-    ? 'Argo reports this resource as synced, but it is not present in the cluster. Refresh the application to check its status.'
+export function missingResourceMessage(sync?: string, context?: { hazard?: string; rolledBack?: boolean }): string {
+  if (sync === 'Synced') return 'Argo reports this resource as synced, but it is not present in the cluster. Refresh the application to check its status.'
+  if (context?.hazard) return 'Not present in the cluster. See the sync warning above before syncing this Application.'
+  return context?.rolledBack
+    ? 'Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.'
     : 'Not present in the cluster. Sync the application to create it.'
 }
 

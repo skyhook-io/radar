@@ -1,6 +1,8 @@
 # Radar
 
-<a href="https://www.producthunt.com/products/radar-7?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1130618&theme=neutral&period=daily" alt="Radar - The missing open-source Kubernetes UI | Product Hunt" width="250" height="54" /></a>
+<a href="https://www.producthunt.com/products/radar-7?launch=radar-101&utm_source=github-readme&utm_medium=badge&utm_campaign=ph-launch-2026-10" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1295110&theme=neutral" alt="Radar - You don't need an AI SRE. Give your agent Radar. | Product Hunt" width="250" height="54" /></a>
+
+🚀 **We're on Product Hunt today** with Radar's upgraded MCP server and AI investigations. [Come say hi and drop us a comment](https://www.producthunt.com/products/radar-7?launch=radar-101&utm_source=github-readme&utm_medium=text&utm_campaign=ph-launch-2026-10).
 
 **The missing open-source Kubernetes UI.**
 <br>Single binary. No account required. Free forever.

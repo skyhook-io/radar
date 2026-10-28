@@ -1,8 +1,10 @@
 package insights
 
 import (
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 )
@@ -62,4 +64,68 @@ func TestConfirmedAbsenceCreatesIssueDespiteHealthyControllerVerdict(t *testing.
 			t.Fatal("controller health must remain available")
 		}
 	}
+}
+
+// A missing resource's "sync to create it" advice gets the same hazard
+// treatment as other sync advice: here a sync would also take over shared
+// resources.
+func TestMissingResourceAdviceCarriesSyncHazard(t *testing.T) {
+	refs := []gitopstree.ResourceRef{
+		{Kind: "ConfigMap", Namespace: "prod", Name: "values"},
+		{Kind: "ConfigMap", Namespace: "prod", Name: "settings"},
+	}
+	var resources []any
+	tree := &gitopstree.ResourceTree{}
+	for _, ref := range refs {
+		resources = append(resources, map[string]any{"kind": ref.Kind, "namespace": ref.Namespace, "name": ref.Name, "status": "OutOfSync"})
+		tree.Nodes = append(tree.Nodes, gitopstree.Node{Ref: ref, Missing: true})
+	}
+	app := argoApp(map[string]any{
+		"resources":  resources,
+		"conditions": []any{map[string]any{"type": "SharedResourceWarning", "message": "ConfigMap/shared is part of applications argocd/demo and other"}},
+	})
+	found := 0
+	for _, issue := range buildIssues(app, tree, "argocd", nil) {
+		if issue.Scope == ScopeResource && issue.Reason == "Missing" {
+			if !strings.HasPrefix(issue.Action, "Resolve shared ownership before syncing") || issue.Hazard != issue.Action {
+				t.Fatalf("missing-resource advice ignores the sync hazard: %+v", issue)
+			}
+			found++
+		}
+	}
+	if found != len(refs) {
+		t.Fatalf("want %d missing-resource issues, got %d", len(refs), found)
+	}
+}
+
+// After a comparison error, the reported pruning flags cannot establish the
+// current render or justify offering a remediation that syncs.
+func TestFailedComparisonKeepsReportedPruneHazard(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"namespace": "argocd", "name": "demo"},
+		"spec": map[string]any{
+			"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "demo"},
+			"syncPolicy":  map[string]any{"automated": map[string]any{"prune": true}},
+		},
+		"status": map[string]any{
+			"sync":           map[string]any{"status": "Unknown"},
+			"operationState": map[string]any{"phase": "Failed", "message": `namespaces "demo" not found`},
+			"resources":      []any{map[string]any{"kind": "ConfigMap", "name": "settings", "namespace": "demo", "requiresPruning": true}},
+			"conditions":     []any{map[string]any{"type": "ComparisonError", "message": "Failed to load target state: revision not found"}},
+		},
+	}}
+	for _, issue := range Build(app, nil, nil).Issues {
+		if issue.Scope != ScopeOperation {
+			continue
+		}
+		if !strings.Contains(issue.Hazard, "last reported resource list marks every listed resource for pruning, and its latest comparison reported an error") || strings.HasPrefix(issue.Hazard, "The render includes none") {
+			t.Fatalf("hazard = %q, want the last-reported-list wording", issue.Hazard)
+		}
+		if issue.Remediation != nil {
+			t.Fatalf("remediation offered while a sync could still prune everything: %+v", issue.Remediation)
+		}
+		return
+	}
+	t.Fatal("no operation issue")
 }

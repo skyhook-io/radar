@@ -96,6 +96,10 @@ type Request struct {
 	// Metrics is the RunManager's probe of the metrics backend for this turn.
 	// Only a confirmed connection reaches the prompt; the zero value says nothing.
 	Metrics MetricsAvailability
+	// Opening is the run's opening question, carried on every turn but read
+	// only by the opening turn and the system prompt. Question above is this
+	// turn's own follow-up and is empty on the opening turn.
+	Opening investigation.Question
 }
 
 // MetricsAvailability is the prompt's view of the metrics probe.
@@ -115,6 +119,10 @@ func turnPrompt(req Request) string {
 	}
 	opts := investigation.Options{Citations: investigation.CiteRun, Metrics: req.Metrics}
 	switch {
+	case strings.TrimSpace(req.Question) == "" && req.Opening.Text != "" && req.Name == "":
+		return investigation.QuestionTaskPrompt(req.Opening, opts)
+	case strings.TrimSpace(req.Question) == "" && req.Opening.Text != "":
+		return investigation.TargetQuestionPrompt(target, req.Health, req.Opening, opts)
 	case strings.TrimSpace(req.Question) == "":
 		return investigation.TaskPrompt(target, req.Health, opts)
 	case req.Verify:
@@ -122,6 +130,16 @@ func turnPrompt(req Request) string {
 	default:
 		return investigation.FollowUpPrompt(req.Question, opts)
 	}
+}
+
+// systemPrompt frames a fresh session. A run opened by a question keeps its
+// question framing on read-only turns; an apply turn acts on one confirmed
+// resource and always gets the resource framing.
+func systemPrompt(req Request) string {
+	if req.Opening.Text != "" && !req.Apply {
+		return investigation.QuestionSystemPrompt
+	}
+	return investigation.SystemPrompt
 }
 
 // ResourceHealthSignal is the health frame captured when a run starts; the
@@ -509,7 +527,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	prompt := turnPrompt(req)
 	sys := ""
 	if sessionID == "" {
-		sys = investigation.SystemPrompt // a fresh session establishes the SRE + security framing
+		sys = systemPrompt(req)
 	}
 
 	cmd, cleanup, err := agent.command(ctx, turnSpec{

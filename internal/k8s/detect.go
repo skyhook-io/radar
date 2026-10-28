@@ -167,11 +167,15 @@ type Detection struct {
 	// names a structured one-click fix (e.g. "create-namespace") and
 	// RemediationTarget the resource it acts on.
 	// Cross-resource diagnosis must be withheld when its source is unreadable.
-	DiagnosisSource   *corev1.ObjectReference `json:"-"`
-	Cause             string
-	Action            string
-	RemediationKind   string
-	RemediationTarget string
+	DiagnosisSource      *corev1.ObjectReference `json:"-"`
+	Cause                string
+	Action               string
+	Hazard               string
+	ActionPrimary        string
+	ActionSecondaryTitle string
+	ActionSecondary      []string
+	RemediationKind      string
+	RemediationTarget    string
 	// OperationRetryCount / Stuck describe a controller operation that keeps
 	// failing: the retry count parsed from a GitOps controller's message and
 	// whether it has crossed the "no longer transient" threshold. Named
