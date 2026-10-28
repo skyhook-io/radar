@@ -157,6 +157,11 @@ export function InvestigationCapacityNotice({
           <button
             type="button"
             disabled={runsKnown && !slotFree}
+            title={
+              runsKnown && !slotFree
+                ? "Available once one of these finishes or you stop one"
+                : undefined
+            }
             onClick={onStart}
             className="btn-brand px-3 py-1.5 text-sm"
           >
