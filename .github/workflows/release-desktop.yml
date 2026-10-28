@@ -202,7 +202,9 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          sha256sum "radar-desktop_${VERSION}_windows_amd64.zip" >> checksums-windows.txt
+          # sha256sum on Windows marks binary files with "*" before the name;
+          # Radar Desktop builds before this fix only read the two-space form.
+          sha256sum "radar-desktop_${VERSION}_windows_amd64.zip" | sed 's/ \*/  /' >> checksums-windows.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -362,6 +364,12 @@ jobs:
           rm -f checksums-darwin.txt checksums-windows.txt checksums-linux.txt
           echo "=== Desktop checksums ==="
           cat checksums-desktop.txt
+          # Every installed Radar Desktop reads this file to verify its own
+          # update, and older builds accept only "<sha256>  <name>".
+          if grep -vqE '^[0-9a-f]{64}  radar-desktop_[^ *]+$' checksums-desktop.txt; then
+            echo "::error::checksums-desktop.txt has a line older Radar Desktop builds cannot read"
+            exit 1
+          fi
 
       - name: Wait for GitHub Release to exist
         env:
