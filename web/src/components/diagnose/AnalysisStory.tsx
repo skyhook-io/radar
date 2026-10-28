@@ -1,4 +1,11 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { clsx } from "clsx";
 import { TRANSITION_CHEVRON } from "@skyhook-io/k8s-ui/utils/animation";
 import { AlertTriangle, ChevronDown, FileSearch } from "lucide-react";
@@ -300,6 +307,14 @@ function ReferenceChip({
   );
 }
 
+// The story opens by itself where a paragraph reads at full measure — the
+// investigations page or a widened panel — and keeps the bounded preview in
+// the default docked panel. The gap between the two widths absorbs a
+// scrollbar appearing when the story opens, which would otherwise fold it
+// straight back.
+const STORY_OPEN_MIN_WIDTH = 640;
+const STORY_FOLD_BELOW_WIDTH = 600;
+
 const STORY_PROSE_CLASS =
   "text-sm leading-relaxed text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-primary [&_p]:my-1.5 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0";
 
@@ -308,11 +323,13 @@ const STORY_PROSE_CLASS =
  * prose is the agent's; every placed card is rendered by the host from Radar's
  * record, so a reader checks each sentence against the fact beneath it.
  *
- * Collapsed by default to a bounded preview: the paragraph before the first
- * placed card, line-clamped, plus that card in compact form — never a sliced
- * card, and never more than the agent's prose decides. The fold bounds the
- * scroll to the next steps below it; it does not decide what matters, which is
- * why the summary and the unresolved list live above it.
+ * Open at reading width. In a narrow panel it starts as a bounded preview: the
+ * paragraph before the first placed card, line-clamped, plus that card in
+ * compact form — never a sliced card, and never more than the agent's prose
+ * decides. The fold bounds the scroll to the next steps below it; it does not
+ * decide what matters, which is why the summary, the unresolved list and the
+ * count of citations that could not be shown stay outside it. Once the reader
+ * opens or closes the story, that choice holds whatever the width does.
  */
 export function AnalysisStory({
   placements: story,
@@ -325,10 +342,13 @@ export function AnalysisStory({
 }: {
   /** Resolved once by the host, which also needs it for its own counts. */
   placements: StoryPlacements;
-  /** Renders the card for a placed item; `compact` when it sits in the collapsed preview. */
+  /**
+   * Renders the card for a placed item: `compact` when the agent placed it
+   * compact or it sits in the collapsed preview, `preview` for the latter.
+   */
   renderPlacement: (
     target: StoryPlacementTarget,
-    options: { compact: boolean },
+    options: { compact: boolean; preview: boolean },
   ) => ReactNode;
   onReveal: (target: StoryPlacementTarget) => void;
   /** Opens a cited call's raw result in Activity when Radar renders no card for it. */
@@ -339,13 +359,50 @@ export function AnalysisStory({
   openRequest?: number;
   className?: string;
 }) {
-  // An open requested before mount opens the story from its first render.
-  const [open, setOpen] = useState(openRequest > 0);
-  // The wide layout is measured after mount; when it asks for the story open,
-  // open it. Narrowing never closes what the reader opened.
+  // The reader's own fold choice; a reveal that needs the story open counts
+  // as one. Until there is one, the width decides.
+  const [choice, setChoice] = useState<boolean | null>(
+    openRequest > 0 ? true : null,
+  );
   useEffect(() => {
-    if (openRequest > 0) setOpen(true);
+    if (openRequest > 0) setChoice(true);
   }, [openRequest]);
+  const sectionRef = useRef<HTMLElement>(null);
+  // Null until measured, which happens before the first paint.
+  const [wide, setWide] = useState<boolean | null>(null);
+  const wideRef = useRef<boolean | null>(null);
+  useLayoutEffect(() => {
+    const element = sectionRef.current;
+    if (!element) return;
+    const measure = () => {
+      const width = element.clientWidth;
+      const next = wideRef.current
+        ? width >= STORY_FOLD_BELOW_WIDTH
+        : width >= STORY_OPEN_MIN_WIDTH;
+      // Folding would make the focused element inert and drop keyboard
+      // focus; a reader working in what the fold hides keeps it open.
+      const focused = document.activeElement;
+      if (
+        wideRef.current &&
+        !next &&
+        focused &&
+        element.contains(focused) &&
+        focused.closest("[data-story-folds]")
+      )
+        setChoice((current) => current ?? true);
+      wideRef.current = next;
+      setWide(next);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const open = choice ?? wide === true;
+  // The first measurement remounts the collapses in their measured state, so
+  // a story that opens for its width appears open instead of unfolding on load.
+  const collapseKey = wide === null ? "unmeasured" : "measured";
   const regionId = useId();
   const firstPlacedAt = story.segments.findIndex(
     (segment) =>
@@ -354,7 +411,7 @@ export function AnalysisStory({
   );
   // The preview is the prose immediately before the first placed card plus
   // that card; with nothing placed, the first prose block. Everything else
-  // is what "Expand" reveals.
+  // is what the fold hides.
   const firstProseAt = story.segments.findIndex(
     (segment) => segment.kind === "prose",
   );
@@ -443,6 +500,7 @@ export function AnalysisStory({
       >
         {renderPlacement(resolution.target, {
           compact: compact || segment.compact === true,
+          preview: compact,
         })}
       </div>
     );
@@ -473,6 +531,7 @@ export function AnalysisStory({
     );
   return (
     <section
+      ref={sectionRef}
       aria-label="Analysis"
       data-story
       data-story-open={open || !foldable ? "true" : "false"}
@@ -480,8 +539,10 @@ export function AnalysisStory({
     >
       <div id={regionId}>
         {before.length > 0 ? (
-          <Collapse open={open} mountLazily>
-            <div className="space-y-2 pb-2">{before}</div>
+          <Collapse key={`before-${collapseKey}`} open={open} mountLazily>
+            <div data-story-folds className="space-y-2 pb-2">
+              {before}
+            </div>
           </Collapse>
         ) : null}
         <div className="space-y-2">{preview}</div>
@@ -491,7 +552,7 @@ export function AnalysisStory({
           <div
             data-story-teaser
             className="relative mt-2 cursor-pointer"
-            onClick={() => setOpen(true)}
+            onClick={() => setChoice(true)}
           >
             <div
               aria-hidden
@@ -520,8 +581,8 @@ export function AnalysisStory({
           </div>
         ) : null}
         {after.length > 0 || trailing ? (
-          <Collapse open={open} mountLazily>
-            <div className="space-y-2 pt-2">
+          <Collapse key={`after-${collapseKey}`} open={open} mountLazily>
+            <div data-story-folds className="space-y-2 pt-2">
               {after}
               {trailing}
             </div>
@@ -540,7 +601,7 @@ export function AnalysisStory({
           type="button"
           aria-expanded={open}
           aria-controls={regionId}
-          onClick={() => setOpen(!open)}
+          onClick={() => setChoice(!open)}
           className="flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
           <ChevronDown
@@ -551,9 +612,14 @@ export function AnalysisStory({
               open && "rotate-180",
             )}
           />
-          {open ? "Collapse" : "Expand"}
+          {open ? "Show less" : readFullLabel(story.placedCount)}
         </button>
       ) : null}
     </section>
   );
+}
+
+function readFullLabel(cards: number): string {
+  if (cards === 0) return "Read full analysis";
+  return `Read full analysis · ${cards} evidence ${cards === 1 ? "card" : "cards"}`;
 }
