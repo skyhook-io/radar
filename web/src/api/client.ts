@@ -1801,6 +1801,7 @@ export interface VersionInfo {
   installMethod: InstallMethod;
   updateCommand?: string;
   error?: string;
+  productHuntLaunch?: { enabled: boolean; url: string; start: string; end: string };
 }
 
 const UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-update-check';

@@ -560,6 +560,8 @@ export interface InvestigationMetricsEvidence {
   selectorsUnknown?: boolean;
   subject?: DiagnosisResourceRef;
   pods?: number;
+  /** The pods a diagnose chart summed, by name, when its bundle listed them all. */
+  podNames?: string[];
   partial?: boolean;
 }
 export interface InvestigationEvidenceObservation {

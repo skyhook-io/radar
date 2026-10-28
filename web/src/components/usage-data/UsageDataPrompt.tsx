@@ -4,6 +4,7 @@ import { BarChart3, X } from 'lucide-react'
 import { useMarkUsagePromptShown, useSetUsageData, type UsageDataStatus } from '../../api/usage-data'
 import { useVersionCheck } from '../../api/client'
 import { isUpdateDismissed } from '../ui/UpdateNotification'
+import { launchNoticeHoldsCorner, resolveLaunch } from '../product-hunt/launchWindow'
 import { UsageDataAnswered, UsageDataBlurb } from './UsageDataAsk'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
@@ -12,6 +13,14 @@ import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../ut
 // question about it.
 export const FIRST_RUN_PROMPT_DELAY_MS = 15_000
 const THANKS_MS = 4_000
+
+// The server stops offering the prompt the moment it is shown, so other corner
+// cards read whether it is on screen from here instead.
+let promptOnScreen = false
+export const USAGE_PROMPT_VISIBILITY_EVENT = 'radar:usage-prompt-visibility'
+export function usagePromptOnScreen(): boolean {
+  return promptOnScreen
+}
 
 // The update notice uses the same corner. One nudge at a time.
 export function updateNoticeVisible(latest: string | undefined, updateAvailable: boolean | undefined): boolean {
@@ -64,7 +73,7 @@ export function UsageDataPrompt({ status }: { status: UsageDataStatus | undefine
   const eligible = shouldShowFirstRunPrompt({
     status,
     ready,
-    updateNoticeShowing: updateNoticeVisible(versionInfo?.latestVersion, versionInfo?.updateAvailable),
+    updateNoticeShowing: updateNoticeVisible(versionInfo?.latestVersion, versionInfo?.updateAvailable) || launchNoticeHoldsCorner(resolveLaunch(versionInfo?.productHuntLaunch), Date.now()),
   })
   useEffect(() => {
     if (eligible && !recorded.current) {
@@ -81,6 +90,15 @@ export function UsageDataPrompt({ status }: { status: UsageDataStatus | undefine
   }, [answer])
 
   const show = latched && !dismissed && cardStillAsking(status, answer)
+  useEffect(() => {
+    if (!show) return
+    promptOnScreen = true
+    window.dispatchEvent(new Event(USAGE_PROMPT_VISIBILITY_EVENT))
+    return () => {
+      promptOnScreen = false
+      window.dispatchEvent(new Event(USAGE_PROMPT_VISIBILITY_EVENT))
+    }
+  }, [show])
   const { shouldRender, isOpen } = useAnimatedUnmount(show, overlayExitMs('menu'))
   if (!shouldRender) return null
 

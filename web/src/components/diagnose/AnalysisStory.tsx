@@ -212,7 +212,16 @@ function removeInlineMarker(markdown: string, index: number): string {
   return before + after;
 }
 
-const LOSS_COPY: Record<Exclude<StoryPlacementLoss, object>, string> = {
+type NamedLoss = Exclude<StoryPlacementLoss, object>;
+
+// The chip names which failure it is; the tooltip says what it means.
+const LOSS_LABEL: Record<NamedLoss, string> = {
+  invalid: "unknown citation",
+  unlinked: "unverified",
+  unplaced: "unclear citation",
+};
+
+const LOSS_COPY: Record<NamedLoss, string> = {
   invalid: "The agent cited a result Radar cannot identify.",
   unlinked: "Radar could not verify this citation against its record.",
   unplaced:
@@ -269,7 +278,7 @@ function LostSupport({
           className="h-3 w-3 shrink-0 text-amber-500"
           aria-hidden
         />
-        unverified
+        {LOSS_LABEL[reason]}
       </span>
     </Tooltip>
   );

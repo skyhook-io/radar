@@ -1442,11 +1442,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
+	var info *version.UpdateInfo
 	if deploymentMode() == k8s.DeploymentModeCloud {
-		s.writeJSON(w, version.CheckForUpdateRelease(r.Context()))
-		return
+		info = version.CheckForUpdateRelease(r.Context())
+	} else {
+		info = version.CheckForUpdate(r.Context())
 	}
-	s.writeJSON(w, version.CheckForUpdate(r.Context()))
+	s.writeJSON(w, version.WithProductHuntLaunch(info))
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
