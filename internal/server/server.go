@@ -203,13 +203,21 @@ type Server struct {
 	aiChecked bool
 	// clusterSupervisor manages child workers for multi-cluster sessions.
 	clusterSupervisor *ClusterSupervisor
+	isWorker          bool
+}
+
+// IsWorker reports whether this server is running as a supervised cluster worker subprocess.
+func (s *Server) IsWorker() bool {
+	return s.isWorker
 }
 
 // Config holds server configuration
 type Config struct {
-	Worker                  bool        // True when running as a child cluster worker process
-	KubeconfigPath          string      // Path to kubeconfig
-	KubeconfigDirs          []string    // Additional kubeconfig directories
+	Worker                    bool                // True when running as a child cluster worker process
+	WorkerSupervisorSupported bool                // True when the entrypoint supports spawning worker processes
+	WorkerLaunchConfig        *WorkerLaunchConfig // Configuration passed down to worker subprocesses
+	KubeconfigPath            string              // Path to kubeconfig
+	KubeconfigDirs            []string            // Additional kubeconfig directories
 	Port                    int
 	PortFallback            bool // Port is a preference: when it's taken, bind an OS-assigned port instead of failing
 	ListenAddress           string
@@ -328,8 +336,16 @@ func New(cfg Config) *Server {
 	s.aiHistoryDB = cfg.AIHistoryDB
 	s.refreshAIEngine(context.Background())
 
-	if !cfg.Worker && !k8s.IsInCluster() {
-		s.clusterSupervisor = NewClusterSupervisor(k8s.GetContextName(), cfg.KubeconfigPath, cfg.KubeconfigDirs)
+	s.isWorker = cfg.Worker
+	if cfg.WorkerSupervisorSupported && !cfg.Worker && !k8s.IsInCluster() && !cfg.AuthConfig.Enabled() && cloud.IsLoopbackHostname(cfg.ListenAddress) {
+		launchCfg := cfg.WorkerLaunchConfig
+		if launchCfg == nil {
+			launchCfg = &WorkerLaunchConfig{
+				KubeconfigPath: cfg.KubeconfigPath,
+				KubeconfigDirs: cfg.KubeconfigDirs,
+			}
+		}
+		s.clusterSupervisor = NewClusterSupervisor(k8s.GetContextName(), launchCfg)
 	}
 
 	// Register a single context-switch callback so every PerformContextSwitch
@@ -337,12 +353,15 @@ func New(cfg Config) *Server {
 	// state cleared automatically. Fires inside step 5 of the swap, strictly
 	// before PerformContextSwitch returns. Mirrors the MCP package's pattern
 	// for mcpPermCache.
-	k8s.OnContextSwitch(func(_ string) {
+	k8s.OnContextSwitch(func(newCtx string) {
 		s.finalizePostContextSwitch()
 		// Alongside the subsystem resets in PerformContextSwitch (prometheus,
 		// traffic, helm): the Argo CD connection references the previous
 		// cluster's endpoint/port-forward.
 		argocd.Reset()
+		if s.clusterSupervisor != nil {
+			s.clusterSupervisor.SetPrimaryContext(newCtx)
+		}
 	})
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
 	// cluster, so an in-flight agent (especially an apply) can't write to it.
@@ -1504,6 +1523,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPEnabled = s.mcpEnabled()
 	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.MCPExecTools = s.mcpHandler != nil && s.mcpExecTools
+	caps.ClusterSessions = s.clusterSupervisor != nil
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
@@ -4901,6 +4921,12 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	}
 	name = decodedName
 
+	// Worker mode must never switch contexts
+	if s.isWorker {
+		s.writeError(w, http.StatusBadRequest, "context switching is not permitted in a cluster worker session")
+		return
+	}
+
 	// Check if we're in-cluster mode
 	if k8s.IsInCluster() {
 		s.writeError(w, http.StatusBadRequest, "cannot switch context when running in-cluster")
@@ -4944,6 +4970,9 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 // Control Center multi-cluster session handlers
 
 func (s *Server) handleControlCenterSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	if s.clusterSupervisor == nil {
 		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
 		return
@@ -4953,6 +4982,9 @@ func (s *Server) handleControlCenterSessions(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleControlCenterReleaseSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	if s.clusterSupervisor == nil {
 		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
 		return
@@ -4970,6 +5002,9 @@ func (s *Server) handleControlCenterReleaseSession(w http.ResponseWriter, r *htt
 }
 
 func (s *Server) handleControlCenterReleaseAll(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	if s.clusterSupervisor == nil {
 		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
 		return
@@ -4981,11 +5016,22 @@ func (s *Server) handleControlCenterReleaseAll(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) handleClusterSessionRedirect(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "cluster multi-session supervisor is disabled")
+		return
+	}
 	ctxParam := chi.URLParam(r, "context")
-	http.Redirect(w, r, "/c/"+ctxParam+"/", http.StatusFound)
+	slug := s.clusterSupervisor.SlugForContext(ctxParam)
+	http.Redirect(w, r, s.basePath+"/c/"+slug+"/", http.StatusFound)
 }
 
 func (s *Server) handleClusterSessionProxy(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	if s.clusterSupervisor == nil {
 		s.writeError(w, http.StatusNotFound, "cluster multi-session supervisor is disabled")
 		return
@@ -4996,11 +5042,14 @@ func (s *Server) handleClusterSessionProxy(w http.ResponseWriter, r *http.Reques
 		ctxParam = decoded
 	}
 
-	if ctxParam == s.clusterSupervisor.primaryCtx {
-		target := strings.TrimPrefix(r.URL.Path, "/c/"+ctxParam)
-		if target == "" {
-			target = "/"
+	if s.clusterSupervisor.IsPrimary(ctxParam) {
+		prefix := s.basePath + "/c/" + ctxParam
+		remainder := strings.TrimPrefix(r.URL.Path, prefix)
+		cleanTarget := pathpkg.Clean("/" + strings.TrimLeft(remainder, "/\\"))
+		if !strings.HasPrefix(cleanTarget, "/") || strings.HasPrefix(cleanTarget, "//") || strings.HasPrefix(cleanTarget, "/\\") {
+			cleanTarget = "/"
 		}
+		target := s.basePath + cleanTarget
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
 		}

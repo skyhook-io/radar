@@ -1957,16 +1957,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CloudFunnelButton />
 
           {/* Cluster Control Center */}
-          <Tooltip content="Cluster Control Center (Sessions & Memory)" position="bottom">
-            <button
-              onClick={() => setShowControlCenter(true)}
-              aria-label="Cluster Control Center"
-              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors flex items-center gap-1.5 text-xs font-medium"
-            >
-              <Layers className="w-4 h-4 text-blue-400" />
-              <span className="hidden @min-[1200px]:inline">Sessions</span>
-            </button>
-          </Tooltip>
+          {capabilities.clusterSessions && (
+            <Tooltip content="Cluster Control Center (Sessions & Memory)" position="bottom">
+              <button
+                onClick={() => setShowControlCenter(true)}
+                aria-label="Cluster Control Center"
+                className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors flex items-center gap-1.5 text-xs font-medium"
+              >
+                <Layers className="w-4 h-4 text-theme-text-primary" />
+                <span className="hidden @min-[1200px]:inline">Sessions</span>
+              </button>
+            </Tooltip>
+          )}
 
           {/* Local terminal */}
           {capabilities.localTerminal && (

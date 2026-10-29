@@ -57,6 +57,8 @@ func TestMiddleware_ExemptPaths(t *testing.T) {
 		{"/api/resources/pods", http.StatusUnauthorized},   // requires auth
 		{"/api/topology", http.StatusUnauthorized},         // requires auth
 		{"/mcp", http.StatusUnauthorized},                  // requires auth
+		{"/c/cluster-name/api/resources/pods", http.StatusUnauthorized}, // worker path — requires auth
+		{"/c/cluster-name/", http.StatusUnauthorized},                  // worker path — requires auth
 	}
 
 	for _, tt := range tests {

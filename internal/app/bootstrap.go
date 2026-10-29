@@ -42,8 +42,10 @@ var clusterConnectionProbe = k8s.TestClusterConnection
 type AppConfig struct {
 	Kubeconfig     string
 	KubeconfigDirs []string
-	Context        string // Explicitly requested initial kubeconfig context name
-	Worker         bool   // True if running as a supervised cluster worker subprocess
+	Context                   string // Explicitly requested initial kubeconfig context name
+	Worker                    bool   // True if running as a supervised cluster worker subprocess
+	WorkerSupervisorSupported bool   // True if the entrypoint supports spawning worker processes
+	NoVersionCheck            bool
 	// Zero value is the deliberate one: an entrypoint that never sets this
 	// starts on the kubeconfig's current-context. Only cmd/desktop opts in.
 	RestoreLastDesktopContext   bool
@@ -459,6 +461,9 @@ func persistKubecostContextBindings(cfg AppConfig) AppConfig {
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	if cfg.Worker {
+		DisableMCPPortFile()
+	}
 	if !cfg.operatorSettingsLoaded {
 		if err := loadOperatorSettings(cfg); err != nil {
 			log.Fatalf("Invalid operator settings: %v", err)
@@ -511,7 +516,25 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	serverCfg := server.Config{
-		Worker:                cfg.Worker,
+		Worker:                    cfg.Worker,
+		WorkerSupervisorSupported: cfg.WorkerSupervisorSupported,
+		WorkerLaunchConfig: &server.WorkerLaunchConfig{
+			KubeconfigPath:       cfg.Kubeconfig,
+			KubeconfigDirs:       cfg.KubeconfigDirs,
+			DisableExec:          cfg.DisableExec,
+			DisableLocalTerminal: cfg.DisableLocalTerminal,
+			DisableHelmWrite:     cfg.DisableHelmWrite,
+			PodShellDefault:      cfg.PodShellDefault,
+			Namespace:            cfg.Namespace,
+			Namespaces:           cfg.Namespaces,
+			NamespaceScope:       cfg.NamespaceScope,
+			TimelineStorage:      cfg.TimelineStorage,
+			TimelineDBPath:       cfg.TimelineDBPath,
+			TimelineRetention:    cfg.TimelineRetention,
+			TimelineMaxSizeBytes: cfg.TimelineMaxSizeBytes,
+			NoVersionCheck:       cfg.NoVersionCheck,
+			DevMode:              cfg.DevMode,
+		},
 		KubeconfigPath:        cfg.Kubeconfig,
 		KubeconfigDirs:        cfg.KubeconfigDirs,
 		Port:                  cfg.Port,

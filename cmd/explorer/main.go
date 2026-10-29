@@ -418,6 +418,8 @@ func main() {
 		KubeconfigDirs:              resolvedKubeconfigDirs,
 		Context:                     *contextFlag,
 		Worker:                      *workerFlag,
+		WorkerSupervisorSupported:   true,
+		NoVersionCheck:              *noVersionCheck,
 		Namespace:                   resolvedNamespace,
 		Namespaces:                  resolvedNamespaces,
 		Port:                        *port,
@@ -700,8 +702,10 @@ func startServer(srv *server.Server, startupStart time.Time) (context.Context, c
 	<-ready
 	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
 
-	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
+	// Write port file so MCP clients can discover the running server (primary instance only)
+	if !srv.IsWorker() {
+		app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
+	}
 
 	return rootCtx, rootCancel
 }

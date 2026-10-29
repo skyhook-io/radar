@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
-import { X, Layers, ExternalLink, Power, RefreshCw, Activity, Cpu } from 'lucide-react'
-import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { X, Layers, ExternalLink, Power, RefreshCw, Activity, Cpu, AlertCircle } from 'lucide-react'
+import { Badge } from '@skyhook-io/k8s-ui'
+import { getBasename, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { Tooltip } from '../ui/Tooltip'
 
 export interface ClusterSession {
   context: string
+  slug: string
   isCurrent: boolean
   isPrimary: boolean
   status: 'active' | 'starting' | 'sleeping'
@@ -22,26 +24,41 @@ interface ControlCenterModalProps {
 export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
   const [sessions, setSessions] = useState<ClusterSession[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [releasingContext, setReleasingContext] = useState<string | null>(null)
   const [releasingAll, setReleasingAll] = useState(false)
 
+  // In worker tabs, getBasename() ends with /c/{slug}. Strip it so API calls reach the parent server.
+  const parentBase = useMemo(() => {
+    const base = getBasename()
+    return base.replace(/\/c\/[^/]+$/, '')
+  }, [])
+
+  const buildParentApiUrl = useCallback((endpoint: string) => {
+    return `${parentBase}/api${endpoint}`
+  }, [parentBase])
+
   const fetchSessions = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
-      const res = await fetch(apiUrl('/control-center/sessions'), {
+      const res = await fetch(buildParentApiUrl('/control-center/sessions'), {
         headers: getAuthHeaders(),
         credentials: getCredentialsMode(),
       })
       if (res.ok) {
         const data = await res.json()
         setSessions(data)
+      } else {
+        setError(`Failed to retrieve cluster sessions (${res.status} ${res.statusText})`)
       }
     } catch (err) {
       console.error('Failed to load control center sessions:', err)
+      setError('Unable to connect to the cluster supervisor.')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [buildParentApiUrl])
 
   useEffect(() => {
     if (open) {
@@ -49,10 +66,10 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
     }
   }, [open, fetchSessions])
 
-  const handleRelease = async (contextName: string) => {
-    setReleasingContext(contextName)
+  const handleRelease = async (slugOrContext: string) => {
+    setReleasingContext(slugOrContext)
     try {
-      const res = await fetch(apiUrl(`/control-center/sessions/${encodeURIComponent(contextName)}/release`), {
+      const res = await fetch(buildParentApiUrl(`/control-center/sessions/${encodeURIComponent(slugOrContext)}/release`), {
         method: 'POST',
         headers: getAuthHeaders(),
         credentials: getCredentialsMode(),
@@ -61,7 +78,7 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
         await fetchSessions()
       }
     } catch (err) {
-      console.error(`Failed to release session for ${contextName}:`, err)
+      console.error(`Failed to release session for ${slugOrContext}:`, err)
     } finally {
       setReleasingContext(null)
     }
@@ -70,7 +87,7 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
   const handleReleaseAll = async () => {
     setReleasingAll(true)
     try {
-      const res = await fetch(apiUrl('/control-center/release-all'), {
+      const res = await fetch(buildParentApiUrl('/control-center/release-all'), {
         method: 'POST',
         headers: getAuthHeaders(),
         credentials: getCredentialsMode(),
@@ -90,15 +107,14 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
   const activeWorkers = sessions.filter(s => !s.isPrimary && s.status === 'active')
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-theme-base/80 backdrop-blur-sm animate-in fade-in duration-150">
       <div
         className="w-full max-w-2xl bg-theme-surface border border-theme-border rounded-xl shadow-theme-lg overflow-hidden flex flex-col max-h-[85vh]"
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-theme-border bg-theme-base/50">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400">
+            <div className="p-2 rounded-lg bg-theme-elevated text-theme-text-primary">
               <Layers className="w-5 h-5" />
             </div>
             <div>
@@ -127,15 +143,14 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
           </div>
         </div>
 
-        {/* Stats strip */}
         <div className="grid grid-cols-3 gap-2 px-6 py-3 border-b border-theme-border bg-theme-elevated/40 text-xs">
           <div className="flex items-center gap-2">
-            <Activity className="w-3.5 h-3.5 text-blue-400" />
+            <Activity className="w-3.5 h-3.5 text-theme-text-secondary" />
             <span className="text-theme-text-secondary">Available Clusters:</span>
             <span className="font-semibold text-theme-text-primary">{sessions.length}</span>
           </div>
           <div className="flex items-center gap-2">
-            <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+            <Cpu className="w-3.5 h-3.5 text-theme-text-secondary" />
             <span className="text-theme-text-secondary">Active Workers:</span>
             <span className="font-semibold text-theme-text-primary">{activeWorkers.length}</span>
           </div>
@@ -144,7 +159,7 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
               <button
                 onClick={handleReleaseAll}
                 disabled={releasingAll}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 rounded-md transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-warning-text bg-theme-elevated hover:bg-theme-hover border border-theme-border rounded-md transition-colors"
               >
                 <Power className="w-3 h-3" />
                 {releasingAll ? 'Releasing...' : 'Release All Workers'}
@@ -153,15 +168,37 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
           </div>
         </div>
 
-        {/* Cluster list */}
         <div className="p-6 overflow-y-auto space-y-3 flex-1">
+          {error && (
+            <div className="p-4 rounded-lg border border-theme-border bg-theme-elevated flex items-start gap-3">
+              <AlertCircle className="w-4 h-4 text-warning-text shrink-0 mt-0.5" />
+              <div className="flex-1 text-xs">
+                <p className="text-theme-text-primary font-medium">{error}</p>
+                <button
+                  onClick={fetchSessions}
+                  className="mt-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary underline"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!error && sessions.length === 0 && !loading && (
+            <div className="text-center py-8 text-xs text-theme-text-tertiary">
+              No cluster sessions available.
+            </div>
+          )}
+
           {sessions.map(s => {
-            const isReleasing = releasingContext === s.context
-            const targetUrl = s.isPrimary ? '/' : `/c/${s.context}/`
+            const isReleasing = releasingContext === (s.slug || s.context)
+            const targetUrl = s.isPrimary
+              ? (parentBase ? `${parentBase}/` : '/')
+              : (parentBase ? `${parentBase}/c/${s.slug}/` : `/c/${s.slug}/`)
 
             return (
               <div
-                key={s.context}
+                key={s.slug || s.context}
                 className="flex items-center justify-between p-3.5 rounded-lg border border-theme-border bg-theme-base/60 hover:bg-theme-base transition-colors"
               >
                 <div className="flex items-center gap-3 min-w-0">
@@ -171,19 +208,18 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
                         {s.context}
                       </span>
                       {s.isPrimary && (
-                        <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-500/15 text-blue-400">
+                        <Badge severity="info" size="sm">
                           Primary
-                        </span>
+                        </Badge>
                       )}
                       {s.status === 'active' ? (
-                        <span className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-500/15 text-emerald-400">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        <Badge severity="success" size="sm">
                           Active
-                        </span>
+                        </Badge>
                       ) : (
-                        <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-theme-elevated text-theme-text-tertiary">
+                        <Badge severity="neutral" size="sm">
                           Sleeping
-                        </span>
+                        </Badge>
                       )}
                     </div>
                     <div className="text-[11px] text-theme-text-tertiary flex items-center gap-2 mt-0.5">
@@ -194,7 +230,6 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
                   </div>
                 </div>
 
-                {/* Actions */}
                 <div className="flex items-center gap-2 shrink-0">
                   <a
                     href={targetUrl}
@@ -208,9 +243,9 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
 
                   {!s.isPrimary && s.status === 'active' && (
                     <button
-                      onClick={() => handleRelease(s.context)}
+                      onClick={() => handleRelease(s.slug || s.context)}
                       disabled={isReleasing}
-                      className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 rounded-md transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary bg-theme-hover rounded-md transition-colors disabled:opacity-50 border border-theme-border"
                     >
                       <Power className="w-3 h-3" />
                       <span>{isReleasing ? 'Freeing...' : 'Sleep'}</span>
@@ -222,7 +257,6 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
           })}
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-between px-6 py-3 border-t border-theme-border bg-theme-base/30 text-xs text-theme-text-tertiary">
           <span>Workers automatically idle after 15 minutes of inactivity.</span>
           <button

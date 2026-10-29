@@ -2140,6 +2140,7 @@ func TestSmokeRequireConnected(t *testing.T) {
 		"/api/resources/deployments/default/nginx",
 		"/api/changes",
 		"/api/ai/resources/deployments",
+		"/api/control-center/sessions",
 	}
 
 	// Temporarily disconnect

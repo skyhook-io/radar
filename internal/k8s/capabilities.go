@@ -120,6 +120,7 @@ type Capabilities struct {
 	MCPReadOnly      bool                     `json:"mcpReadOnly"`
 	MCPExecTools     bool                     `json:"mcpExecTools"`
 	MCPEnabled       bool                     `json:"mcpEnabled"`              // MCP server is running
+	ClusterSessions  bool                     `json:"clusterSessions"`         // Multi-cluster session supervisor is active
 	Deployment       DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
 	Features         FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
 	AuthEnabled      bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
