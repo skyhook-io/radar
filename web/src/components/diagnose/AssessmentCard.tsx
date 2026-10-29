@@ -1077,11 +1077,12 @@ function DiagnosisResult({
                 className="mb-1.5 text-[13px] leading-snug text-warning-text"
               >
                 {/* The agent writes a full sentence; after "Only if" its first
-                    capital drops, unless the word is an acronym (API, OOM). */}
+                    capital drops when it is an ordinary word ("You"), never
+                    for a name with more capitals (API, ConfigMap). */}
                 Only if{" "}
                 {step.precondition
                   .replace(/^(if|when|once)\s+/i, "")
-                  .replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}
+                  .replace(/^[A-Z](?=[a-z]+\b)/, (c) => c.toLowerCase())}
               </p>
             ) : null}
             {isRec && diagnosis.recommendedReason && (
