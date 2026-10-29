@@ -212,8 +212,10 @@ func TestSigninCheckCodexOtherCredentialsDependOnProfile(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("CODEX_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
+	var last *fakeRun
 	signedOut := func(profile ExecutionProfile) SigninStatus {
-		return newTestChecker(&fakeRun{code: 1, out: codexSignedOut}).check(context.Background(), agent, profile, false)
+		last = &fakeRun{code: 1, out: codexSignedOut}
+		return newTestChecker(last).check(context.Background(), agent, profile, false)
 	}
 	for _, profile := range []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal} {
 		if got := signedOut(profile); got.State != SigninSignedOut || got.SigninCmd != "codex login" {
@@ -222,8 +224,8 @@ func TestSigninCheckCodexOtherCredentialsDependOnProfile(t *testing.T) {
 	}
 
 	t.Setenv("CODEX_API_KEY", "sk-test")
-	if got := signedOut(ExecutionProfileFullLocal); got.State != SigninUnknown {
-		t.Fatalf("full-local with CODEX_API_KEY: got %+v", got)
+	if got := signedOut(ExecutionProfileFullLocal); got.State != SigninUnknown || last.count() != 0 {
+		t.Fatalf("full-local with CODEX_API_KEY: got %+v after %d runs", got, last.count())
 	}
 	// Safeguarded runs drop the key, so the stored login is all that counts.
 	if got := signedOut(ExecutionProfileSafeguarded); got.State != SigninSignedOut {
@@ -235,8 +237,8 @@ func TestSigninCheckCodexOtherCredentialsDependOnProfile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := signedOut(ExecutionProfileFullLocal); got.State != SigninUnknown {
-		t.Fatalf("full-local with a custom model provider: got %+v", got)
+	if got := signedOut(ExecutionProfileFullLocal); got.State != SigninUnknown || last.count() != 0 {
+		t.Fatalf("full-local with a custom model provider: got %+v after %d runs", got, last.count())
 	}
 	if got := signedOut(ExecutionProfileSafeguarded); got.State != SigninSignedOut {
 		t.Fatalf("safeguarded ignores the user's config: got %+v", got)
@@ -412,9 +414,10 @@ func TestSigninCheckUsesTheProfilesEnvironment(t *testing.T) {
 			t.Fatalf("safeguarded check saw %s", kv)
 		}
 	}
+	t.Setenv("CODEX_API_KEY", "")
 	f = &fakeRun{code: 0, out: codexSignedIn}
 	newTestChecker(f).check(context.Background(), agent, ExecutionProfileFullLocal, false)
-	if f.env != nil {
+	if f.count() != 1 || f.env != nil {
 		t.Fatalf("full-local check got a narrowed environment: %v", f.env)
 	}
 }

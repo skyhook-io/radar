@@ -165,8 +165,8 @@ card shows the command that signs it in and a **Check again** button; you can
 still continue, since a status command can miss credentials it doesn't know
 about. Radar waits at most 2 seconds for the answer and remembers it for a
 minute; with no clear answer, the card shows nothing. If you approve before the
-answer arrives, Radar waits for it first. With **Your agent setup**, Codex isn't
-reported as signed out when `CODEX_API_KEY` or `OPENAI_API_KEY` is set or its
+answer arrives, Radar waits for it first. With **Your agent setup**, Radar
+doesn't check Codex when `CODEX_API_KEY` or `OPENAI_API_KEY` is set or its
 `config.toml` names a `model_provider`, because `codex login status` doesn't
 see those; Radar safeguards use neither, so there only the Codex login counts.
 Cursor and OpenCode aren't checked:

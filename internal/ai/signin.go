@@ -54,7 +54,10 @@ type signinProbe struct {
 	parse func(exitCode int, stdout, stderr string) SigninState
 	// otherCredentials reports whether a run with this profile can
 	// authenticate in a way the status command doesn't see. "Signed out" is
-	// then not trustworthy, so the answer becomes unknown.
+	// then not trustworthy and "signed in" shows the same card as unknown, so
+	// the command isn't run at all: a CLI too old to know the status
+	// subcommand may take its arguments as a prompt, and these credentials
+	// would let it send one.
 	otherCredentials func(profile ExecutionProfile) bool
 }
 
@@ -246,6 +249,9 @@ func (c *signinChecker) check(ctx context.Context, agent Agent, profile Executio
 }
 
 func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe, profile ExecutionProfile) SigninState {
+	if p.otherCredentials != nil && p.otherCredentials(profile) {
+		return SigninUnknown
+	}
 	// Detached from the request: a caller that gives up must not leave the
 	// waiters behind it with a cancelled answer.
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.timeout)
@@ -258,11 +264,7 @@ func (c *signinChecker) probe(ctx context.Context, path string, p *signinProbe, 
 	if err != nil || cctx.Err() != nil {
 		return SigninUnknown
 	}
-	state := p.parse(code, stdout, stderr)
-	if state == SigninSignedOut && p.otherCredentials != nil && p.otherCredentials(profile) {
-		return SigninUnknown
-	}
-	return state
+	return p.parse(code, stdout, stderr)
 }
 
 // runSigninCommand runs a status command with the environment of the run it
