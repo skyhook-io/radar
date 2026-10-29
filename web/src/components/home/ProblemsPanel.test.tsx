@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { Issue } from '@skyhook-io/k8s-ui'
 import { ProblemsPanel } from './HomeView'
 import { uncheckedSourceLines } from '../issues/uncheckedSources'
 import type { IssuesResponse } from '../../api/client'
+
+vi.mock('../diagnose/LocalDiagnoseAction', () => ({ IssueDiagnoseButton: () => null }))
 
 const line = "Helm releases couldn't be checked, so failed or stuck releases may be missing."
 const generic = "Some issue checks couldn't run, so issues may be missing."
