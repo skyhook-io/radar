@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -108,6 +109,9 @@ func (b *Builder) WithUnknownKindMatcher(m ErrUnknownKindMatcher) *Builder {
 // live root object alongside the tree so callers (e.g. the insights handler)
 // can derive additional views without re-fetching from the cache.
 func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string) (*ResourceTree, *unstructured.Unstructured, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if b.ownership == nil {
 		return nil, nil, fmt.Errorf("ownership session not available")
 	}
@@ -136,11 +140,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	// hosts merge the destination cluster's own tree on top (mergeGitOpsTrees).
 	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && (!gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root))) ||
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
-	// HelmRelease has no status.inventory; recover its managed set from live
-	// topology by Helm's recommended labels so the resource tree isn't empty.
+	// Without recorded Helm inventory, recover roots from topology labels.
 	// A remote release's objects aren't in local topology, so a local match is
 	// someone else's.
-	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 && !remote {
+	recordedInventory := gitops.FluxMembersReadable(root)
+	helmProjection := !recordedInventory && tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 && !remote
+	if helmProjection {
 		managed = fluxHelmReleaseManaged(root, b.topoNodes())
 	}
 	status := rootStatus(root, tool)
@@ -210,6 +215,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		enrichRefs = append(enrichRefs, res.Ref)
 	}
 	objects, unknownKinds, missing := b.prefetchObjects(ctx, enrichRefs)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	// A referenced chart's source is local to that observed chart. Follow only
 	// the already-prefetched chart, never every chart in the cluster.
 	var chartSources []relatedResource
@@ -363,6 +371,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		mergedRoot = r
 	}
 	warnings := generatedWarnings
+	if tool == ToolArgoCD && gitops.IsInClusterDestination(root) && gitops.ArgoAppliesElsewhere(root) {
+		warnings = append(warnings, "The Application targets this cluster, but its recorded resource list does not yet confirm that destination. Radar will check local resources after Argo CD compares it here.")
+	}
+	if helmProjection && b.limitedHelmProjection() && !slices.Contains(warnings, limitedHelmProjectionWarning) {
+		warnings = append(warnings, limitedHelmProjectionWarning)
+	}
 	if omittedDependencies || omittedByReadCheck {
 		warnings = append(warnings, "Some managed resources are hidden by RBAC.")
 	}
@@ -379,6 +393,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	out.RemoteDestination = remote
 	if tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") {
 		out.HealthMode = argoHealthMode(root)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
 	if err := b.ownership.ValidateCaches(); err != nil {
 		return nil, nil, err

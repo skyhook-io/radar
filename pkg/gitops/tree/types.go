@@ -119,7 +119,8 @@ type Edge struct {
 	Type   EdgeType `json:"type"`
 }
 
-// Summary contains high-level counts for the tree.
+// Summary counts the emitted resource nodes, not every object in the cluster.
+// When Warnings reports an incomplete tree, these counts describe only the shown subset.
 type Summary struct {
 	Declared  int `json:"declared"`
 	Generated int `json:"generated"`

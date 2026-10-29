@@ -12,8 +12,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
-const maxGeneratedResources = 1000
-const maxTraversalResources = 10000
+// Bound repeated searches and candidate processing, including hidden intermediates.
+// An indexed search still reads its complete result; this is not a byte limit.
+const maxExpansionSteps = 20000
 
 // traversalScope describes private cache reads, not what the caller may see.
 // The tree already traverses hidden intermediates inside these namespaces;
@@ -41,51 +42,64 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	for _, ref := range queue {
 		queued[identity(ref)] = true
 	}
-	queuedGenerated, generated, incomplete, truncated, inventoryUnavailable := 0, 0, false, false, false
+	steps, incomplete, truncated, inventoryUnavailable, remoteMembers, limitedClaims := 0, false, false, false, false, false
+	hiddenRevisions := map[resourceid.Ref]bool{}
+	revisionParentsHidden, graphIncomplete := false, false
+	takeStep := func() bool {
+		if steps >= maxExpansionSteps {
+			truncated = true
+			return false
+		}
+		steps++
+		return true
+	}
 	attach := func(parent ResourceRef, child ownership.Observation) {
 		ref := ResourceRef{Group: child.Ref.Group, Kind: child.Ref.Kind, Namespace: child.Ref.Namespace, Name: child.Ref.Name, UID: string(child.UID)}
-		if !queued[child.Ref] {
-			if queuedGenerated >= maxTraversalResources {
-				truncated = true
-				return
-			}
-			queuedGenerated++
-			queued[child.Ref] = true
-			queue = append(queue, ref)
-		}
-		if !b.canEmit(ref) {
-			omitted = true
-			return
-		}
 		id := nodeID(ref)
-		if _, exists := nodes[id]; !exists {
-			live, shown := findTopoNode(topoByRef, ref)
-			// Topology omits inactive ReplicaSets. Keep that presentation policy
-			// while still traversing their current owner references.
-			if b.topo != nil && ref.Group == "apps" && ref.Kind == "ReplicaSet" && !shown {
+		_, retained := nodes[id]
+		if !takeStep() {
+			// The child has already been validated. Preserve its edge when both
+			// endpoints are retained, even if it cannot be searched further.
+			if !retained {
 				return
 			}
-			if generated >= maxGeneratedResources {
-				truncated = true
+		} else {
+			if !queued[child.Ref] {
+				queued[child.Ref] = true
+				queue = append(queue, ref)
+			}
+			if !b.canEmit(ref) {
+				omitted = true
 				return
 			}
-			generated++
-			node := syntheticNode(ref, RoleGenerated, tool, "", "", "")
-			if shown {
-				node = nodeFromTopology(live, ref, RoleGenerated, tool, "", "", "")
+			if !retained {
+				live, shown := findTopoNode(topoByRef, ref)
+				// Keep topology's inactive-ReplicaSet display policy, while still
+				// searching it for current dependents such as terminating Pods.
+				if b.topo != nil && ref.Group == "apps" && ref.Kind == "ReplicaSet" && !shown {
+					hiddenRevisions[child.Ref] = true
+					return
+				}
+				node := syntheticNode(ref, RoleGenerated, tool, "", "", "")
+				if shown {
+					node = nodeFromTopology(live, ref, RoleGenerated, tool, "", "", "")
+				}
+				nodes[id] = node
 			}
-			nodes[id] = node
 		}
 		node := nodes[id]
 		node.Dependency = false
 		nodes[id] = node
+		if hiddenRevisions[identity(parent)] {
+			revisionParentsHidden = true
+		}
 		parentID := nodeID(parent)
 		if _, visible := nodes[parentID]; visible && parentID != id {
 			edges[edgeKey(parentID, id)] = Edge{Source: parentID, Target: id, Type: EdgeOwns}
 		}
 	}
 	for i := 0; i < len(queue); i++ {
-		if ctx.Err() != nil || len(seen) >= maxTraversalResources {
+		if ctx.Err() != nil {
 			truncated = true
 			break
 		}
@@ -93,6 +107,9 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		key := identity(ref)
 		if seen[key] {
 			continue
+		}
+		if !takeStep() {
+			break
 		}
 		seen[key] = true
 		children := view.Children(key)
@@ -110,11 +127,16 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		}
 		helmClaims := false
 		if ownership.IsRecordingManager(key.GroupKind()) {
+			if !takeStep() {
+				break
+			}
 			members := view.Members(key)
 			helmClaims = key.GroupKind() == ownership.FluxHelmRelease && members.Subject.Present() && members.Membership == ownership.MembersUnreadable && len(members.Gaps) == 0
 			if b.canEmit(ref) {
 				if ownershipReadFailed(members.Subject) || hasOwnershipReadFailure(members.Gaps) {
 					incomplete = true
+				} else if members.Membership == ownership.MembersRemote {
+					remoteMembers = true
 				} else if members.Subject.Present() && members.Membership == ownership.MembersUnreadable && !helmClaims {
 					inventoryUnavailable = true
 				}
@@ -132,10 +154,16 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 			if !helmClaims {
 				continue
 			}
+			if b.canEmit(ref) && b.limitedHelmProjection() {
+				limitedClaims = true
+			}
 		}
 		live, ok := findTopoNode(topoByRef, ref)
 		if !ok {
 			continue
+		}
+		if b.canEmit(ref) && len(b.topo.Warnings) > 0 {
+			graphIncomplete = true
 		}
 		_, outgoing := index.EdgesFor(live.ID)
 		for _, edge := range outgoing {
@@ -154,6 +182,9 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 			targetKey := identity(targetRef)
 			if owned[targetKey] {
 				continue
+			}
+			if !takeStep() {
+				break
 			}
 			if helmClaims {
 				subject, _ := view.References(targetKey)
@@ -184,10 +215,22 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		warnings = append(warnings, "Some generated resources could not be checked; the resource tree may be incomplete.")
 	}
 	if truncated {
-		warnings = append(warnings, "Some generated resources could not be included; the resource tree is partial.")
+		warnings = append(warnings, "The resource search reached its limit; additional descendants may be missing.")
 	}
 	if inventoryUnavailable {
 		warnings = append(warnings, "Some GitOps resource lists are unavailable; the resource tree may be incomplete.")
+	}
+	if remoteMembers {
+		warnings = append(warnings, "Some nested GitOps resource lists describe another or unconfirmed cluster; those resources are not expanded here.")
+	}
+	if limitedClaims {
+		warnings = append(warnings, limitedHelmProjectionWarning)
+	}
+	if revisionParentsHidden {
+		warnings = append(warnings, "Some resources appear without their inactive ReplicaSet parents.")
+	}
+	if graphIncomplete {
+		warnings = append(warnings, "Some graph data could not be loaded; additional generated relationships may be missing.")
 	}
 	return warnings, omitted
 }
@@ -196,9 +239,9 @@ func ownershipReadFailed(subject ownership.Subject) bool {
 	return subject.Read.State == ownership.Unavailable && hasOwnershipReadFailure([]ownership.Gap{subject.Read.Gap})
 }
 
-// Match the drawer's distinction between collection scope and failed reads.
+// Uncollected kinds define the search scope; failed discovery does not.
 func hasOwnershipReadFailure(gaps []ownership.Gap) bool {
 	return slices.ContainsFunc(gaps, func(g ownership.Gap) bool {
-		return g.Kind.Kind != "" && g.Reason != readreason.RadarKindNotCollected && g.Reason != readreason.RadarNamespaceNotCollected
+		return g.Reason != readreason.RadarKindNotCollected && g.Reason != readreason.RadarNamespaceNotCollected
 	})
 }

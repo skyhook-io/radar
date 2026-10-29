@@ -2806,3 +2806,21 @@ func TestBuildIssues_RemoteComparisonOffersNoLocalRemediationOrEventCause(t *tes
 		})
 	}
 }
+
+func TestDegradedRollupQualifiesIncompleteTree(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "app", "namespace": "team"}}}
+	for _, partial := range []bool{false, true} {
+		tree := &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 2}}
+		if partial {
+			tree.Warnings = []string{"Some generated resources could not be included; the resource tree is partial."}
+		}
+		issues := buildIssues(root, tree, "fluxcd", nil)
+		want := "2 managed resources are degraded"
+		if partial {
+			want += " among the resources shown"
+		}
+		if len(issues) != 1 || issues[0].Message != want {
+			t.Fatalf("partial=%t issues=%+v", partial, issues)
+		}
+	}
+}

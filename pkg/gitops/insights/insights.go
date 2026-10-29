@@ -770,7 +770,11 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			degraded = unexplainedFluxDegraded(resourceTree, out)
 		}
 		if degraded > 0 {
-			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
+			message := fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded))
+			if len(resourceTree.Warnings) > 0 {
+				message += " among the resources shown"
+			}
+			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: message, Action: "Use the graph or Resources tab to inspect affected resources."})
 		}
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure

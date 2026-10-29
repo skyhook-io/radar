@@ -1158,7 +1158,7 @@ function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
   const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
   return (
     <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary sm:flex">
-      <span><span className="text-theme-text-primary">{total}</span> resources</span>
+      <span><span className="text-theme-text-primary">{total}</span> resources shown</span>
       {dependencies > 0 && <span><span className="text-theme-text-primary">{dependencies}</span> {dependencies === 1 ? 'dependency' : 'dependencies'}</span>}
       {failingDependencies > 0 && <span className="flex items-center gap-1 font-medium text-red-600 dark:text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {failingDependencies} {failingDependencies === 1 ? 'dependency' : 'dependencies'} failing</span>}
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}

@@ -1,6 +1,8 @@
 package tree
 
 import (
+	"context"
+	"slices"
 	"sort"
 	"testing"
 
@@ -150,5 +152,45 @@ func TestFluxHelmReleaseManaged_SortsForStableOutput(t *testing.T) {
 	sort.Strings(names)
 	if names[0] != "Deployment" || names[1] != "Service" {
 		t.Errorf("kinds = %v, want [Deployment Service]", names)
+	}
+}
+
+func TestHelmProjectionDisclosesScopeAndUnavailableTopology(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		topo       *topology.Topology
+		namespaces []string
+		want       bool
+	}{
+		{name: "complete", topo: &topology.Topology{}},
+		{name: "absent", want: true},
+		{name: "failed", topo: &topology.Topology{Warnings: []string{"private API failure details"}}, want: true},
+		{name: "scoped", topo: &topology.Topology{}, namespaces: []string{"team"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hr := helmRelease("team", "app")
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}): hr}}
+			got, _, err := newTestBuilder(t, getter, tc.topo).WithAllowedNamespaces(tc.namespaces).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(got.Warnings, limitedHelmProjectionWarning) != tc.want || slices.Contains(got.Warnings, "private API failure details") {
+				t.Fatalf("warnings=%v", got.Warnings)
+			}
+		})
+	}
+}
+
+func TestHelmRecordedEmptyInventoryDoesNotRestoreLabelMatches(t *testing.T) {
+	hr := helmRelease("team", "app")
+	unstructured.SetNestedSlice(hr.Object, []any{}, "status", "inventory", "entries")
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}): hr}}
+	topo := &topology.Topology{Nodes: []topology.Node{topoNode("Deployment", "team", "old", map[string]string{fluxHelmNameLabel: "app", fluxHelmNamespaceLabel: "team"})}}
+	got, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary.Declared != 0 {
+		t.Fatalf("empty inventory replaced by stale labels: %+v", got.Summary)
 	}
 }
