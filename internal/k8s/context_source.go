@@ -128,6 +128,13 @@ func IsEphemeralContext(name string) bool {
 // place before the deferred loader builds its inner config — it captures
 // CurrentContext on the first RawConfig()/ClientConfig() call and caches it.
 func applyContextPreference(path string, preferred ContextRef, overrides *clientcmd.ConfigOverrides) {
+	if preferred.Name != "" && preferred.SourceFile == "" {
+		cfg, err := clientcmd.LoadFromFile(path)
+		if err == nil && clientcmd.ConfirmUsable(*cfg, preferred.Name) == nil {
+			overrides.CurrentContext = preferred.Name
+			return
+		}
+	}
 	if preferred.Empty() || preferred.SourceFile != path {
 		reportContextPreferenceMiss(preferred)
 		return

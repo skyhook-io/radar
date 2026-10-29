@@ -42,6 +42,8 @@ var clusterConnectionProbe = k8s.TestClusterConnection
 type AppConfig struct {
 	Kubeconfig     string
 	KubeconfigDirs []string
+	Context        string // Explicitly requested initial kubeconfig context name
+	Worker         bool   // True if running as a supervised cluster worker subprocess
 	// Zero value is the deliberate one: an entrypoint that never sets this
 	// starts on the kubeconfig's current-context. Only cmd/desktop opts in.
 	RestoreLastDesktopContext   bool
@@ -509,6 +511,9 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	serverCfg := server.Config{
+		Worker:                cfg.Worker,
+		KubeconfigPath:        cfg.Kubeconfig,
+		KubeconfigDirs:        cfg.KubeconfigDirs,
 		Port:                  cfg.Port,
 		PortFallback:          cfg.PortFallback,
 		ListenAddress:         cfg.ListenAddress,

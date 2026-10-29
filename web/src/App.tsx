@@ -71,7 +71,8 @@ import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import type { ClusterLoadState } from './types/clusterLoadState'
 import { useClusterLoadState } from './hooks/useClusterLoadState'
-import { Network, Sun, Moon, Star, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
+import { Network, Sun, Moon, Star, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw, Layers } from 'lucide-react'
+import { ControlCenterModal } from './components/control-center/ControlCenterModal'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -630,6 +631,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Settings dialog state
   const [showSettings, setShowSettings] = useState(false)
+  const [showControlCenter, setShowControlCenter] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('overview')
   const openSettings = useCallback((section: SettingsSectionId = 'overview') => {
     setSettingsSection(section)
@@ -1954,6 +1956,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
           <CloudFunnelButton />
 
+          {/* Cluster Control Center */}
+          <Tooltip content="Cluster Control Center (Sessions & Memory)" position="bottom">
+            <button
+              onClick={() => setShowControlCenter(true)}
+              aria-label="Cluster Control Center"
+              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors flex items-center gap-1.5 text-xs font-medium"
+            >
+              <Layers className="w-4 h-4 text-blue-400" />
+              <span className="hidden @min-[1200px]:inline">Sessions</span>
+            </button>
+          </Tooltip>
+
           {/* Local terminal */}
           {capabilities.localTerminal && (
             <Tooltip content={connection.context || connection.state === 'disconnected' ? 'Open local terminal' : 'Waiting for a context to open a terminal'}>
@@ -2601,6 +2615,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         initialSection={settingsSection}
         onClose={() => setShowSettings(false)}
         onNavigateToResource={navigateToResourceList}
+      />
+
+      {/* Cluster Control Center dialog */}
+      <ControlCenterModal
+        open={showControlCenter}
+        onClose={() => setShowControlCenter(false)}
       />
 
       {/* Debug overlay — dev mode, standalone only. Embedded hosts (Radar Hub)

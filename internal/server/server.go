@@ -201,10 +201,15 @@ type Server struct {
 	aiHistoryDB         string
 	// aiChecked is set after the first refreshAIEngine, at startup.
 	aiChecked bool
+	// clusterSupervisor manages child workers for multi-cluster sessions.
+	clusterSupervisor *ClusterSupervisor
 }
 
 // Config holds server configuration
 type Config struct {
+	Worker                  bool        // True when running as a child cluster worker process
+	KubeconfigPath          string      // Path to kubeconfig
+	KubeconfigDirs          []string    // Additional kubeconfig directories
 	Port                    int
 	PortFallback            bool // Port is a preference: when it's taken, bind an OS-assigned port instead of failing
 	ListenAddress           string
@@ -322,6 +327,10 @@ func New(cfg Config) *Server {
 	s.aiInvestigationRefs = cfg.InvestigationRefs
 	s.aiHistoryDB = cfg.AIHistoryDB
 	s.refreshAIEngine(context.Background())
+
+	if !cfg.Worker && !k8s.IsInCluster() {
+		s.clusterSupervisor = NewClusterSupervisor(k8s.GetContextName(), cfg.KubeconfigPath, cfg.KubeconfigDirs)
+	}
 
 	// Register a single context-switch callback so every PerformContextSwitch
 	// path (REST switch, CAPI connect, periodic re-auth, …) gets per-user
@@ -954,6 +963,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/whats-new", s.handleGetWhatsNew)
 			r.Post("/whats-new/seen", s.handleMarkWhatsNewSeen)
 
+			// Control Center multi-cluster session routes
+			r.Get("/control-center/sessions", s.handleControlCenterSessions)
+			r.Post("/control-center/sessions/{name}/release", s.handleControlCenterReleaseSession)
+			r.Post("/control-center/release-all", s.handleControlCenterReleaseAll)
+
 			// Self-upgrade: Hub calls this over the yamux tunnel to patch this
 			// Deployment's image. Cloud-owner-gated; uses the SA client (not user
 			// impersonation).
@@ -1048,6 +1062,12 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// cleanly with a 404 so clients proceed without an auth handshake.
 	r.Get("/.well-known/oauth-protected-resource", http.NotFound)
 	r.Get("/.well-known/oauth-authorization-server", http.NotFound)
+
+	// Multi-cluster session proxy (/c/{context}/*)
+	if s.clusterSupervisor != nil {
+		r.Get("/c/{context}", s.handleClusterSessionRedirect)
+		r.HandleFunc("/c/{context}/*", s.handleClusterSessionProxy)
+	}
 
 	// Static files (frontend) - index.html fallback for client-side routes.
 	if s.staticFS != nil {
@@ -1374,6 +1394,9 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	if s.clusterSupervisor != nil {
+		s.clusterSupervisor.Shutdown()
+	}
 	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if runs := s.aiRunManager(); runs != nil {
@@ -4916,6 +4939,76 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, info)
+}
+
+// Control Center multi-cluster session handlers
+
+func (s *Server) handleControlCenterSessions(w http.ResponseWriter, r *http.Request) {
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
+		return
+	}
+	sessions := s.clusterSupervisor.GetSessions()
+	s.writeJSON(w, sessions)
+}
+
+func (s *Server) handleControlCenterReleaseSession(w http.ResponseWriter, r *http.Request) {
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
+		return
+	}
+	name := chi.URLParam(r, "name")
+	decoded, err := url.PathUnescape(name)
+	if err == nil && decoded != "" {
+		name = decoded
+	}
+	ok := s.clusterSupervisor.ReleaseWorker(name)
+	s.writeJSON(w, map[string]any{
+		"released": ok,
+		"context":  name,
+	})
+}
+
+func (s *Server) handleControlCenterReleaseAll(w http.ResponseWriter, r *http.Request) {
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
+		return
+	}
+	count := s.clusterSupervisor.ReleaseAll()
+	s.writeJSON(w, map[string]any{
+		"releasedCount": count,
+	})
+}
+
+func (s *Server) handleClusterSessionRedirect(w http.ResponseWriter, r *http.Request) {
+	ctxParam := chi.URLParam(r, "context")
+	http.Redirect(w, r, "/c/"+ctxParam+"/", http.StatusFound)
+}
+
+func (s *Server) handleClusterSessionProxy(w http.ResponseWriter, r *http.Request) {
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "cluster multi-session supervisor is disabled")
+		return
+	}
+	ctxParam := chi.URLParam(r, "context")
+	decoded, err := url.PathUnescape(ctxParam)
+	if err == nil && decoded != "" {
+		ctxParam = decoded
+	}
+
+	if ctxParam == s.clusterSupervisor.primaryCtx {
+		target := strings.TrimPrefix(r.URL.Path, "/c/"+ctxParam)
+		if target == "" {
+			target = "/"
+		}
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
+
+	s.clusterSupervisor.ServeHTTP(w, r, ctxParam)
 }
 
 // Connection status handlers (for graceful startup)

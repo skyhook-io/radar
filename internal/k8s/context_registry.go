@@ -234,6 +234,11 @@ func pickInitialContext(
 	if qName, entry, ok := matchPreferred(registry, fileConfigs, preferred); ok {
 		return qName, entry, true
 	}
+	if preferred.Name != "" {
+		if entry, ok := registry[preferred.Name]; ok {
+			return preferred.Name, entry, true
+		}
+	}
 	reportContextPreferenceMiss(preferred)
 
 	// First pass: honor CurrentContext in file order.
