@@ -2148,6 +2148,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               navigate({ pathname: `/resources/${kind}`, search: newParams.toString() })
             }}
             onNavigateToResource={navigateFromIssue}
+            // The same write as Topology's own large-cluster picker. State and
+            // URL move together so the URL-sync effects don't restore the old
+            // scope over the destination's.
+            onOpenTopologyNamespace={(ns) => {
+              setNamespaces([ns])
+              setActiveNamespace.mutate({ namespaces: [ns] })
+              setMainView('topology', { namespaces: ns })
+            }}
             // Certs has no Radar view, so it can't ride the view-redirect effect
             // above — wire the Certificate Health card straight to the host's
             // fleet Certs page (scoped to this cluster) when claimed. `assign`

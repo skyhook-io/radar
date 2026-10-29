@@ -42,6 +42,7 @@ interface HomeViewProps {
   onNavigateToView: (view: ExtendedMainView, params?: Record<string, string>) => void
   onNavigateToResourceKind: (kind: string, group?: string, filters?: Record<string, string[]>) => void
   onNavigateToResource: (resource: SelectedResource) => void
+  onOpenTopologyNamespace: (namespace: string) => void
   fallbackClusterLoadState?: ClusterLoadState
   /**
    * Optional override for the Certificate Health card's click. When an embedded
@@ -58,7 +59,7 @@ interface HomeViewProps {
   onShowWhatsNew?: () => void
 }
 
-export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath, onShowWhatsNew }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onOpenTopologyNamespace, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath, onShowWhatsNew }: HomeViewProps) {
   // The card itself decides whether the cluster has a capacity story
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
@@ -188,6 +189,13 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                 topology={scopedTopology}
                 namespaceSelected={namespaces.length > 0}
                 onNavigate={() => onNavigateToView('topology')}
+                issues={{
+                  issues,
+                  truncated: issueCount > issues.length,
+                  incomplete: !!issuesData?.visibility?.impact || (issuesData?.unchecked_sources?.length ?? 0) > 0,
+                  loading: issuesLoading && !issuesData,
+                }}
+                onOpenNamespace={onOpenTopologyNamespace}
               />
               <ActivitySummary
                 namespaces={namespaces}

@@ -2,11 +2,56 @@ import { useMemo } from 'react'
 import type { Topology } from '../../types'
 import { Network, ArrowRight } from 'lucide-react'
 import { clsx } from 'clsx'
+import { StatusDot, pluralNoun, type Issue } from '@skyhook-io/k8s-ui'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import { Tooltip } from '../ui/Tooltip'
+
+/** What the Home issues query holds, for ranking namespaces when the graph is withheld. */
+export interface TopologyPreviewIssues {
+  issues: Issue[]
+  /** The response held fewer issues than matched, so per-namespace counts are lower bounds. */
+  truncated: boolean
+  /** Some issue sources went unchecked or unread, so namespaces can have issues not counted here. */
+  incomplete: boolean
+  loading: boolean
+}
 
 interface TopologyPreviewProps {
   topology: Topology | null
   namespaceSelected: boolean
   onNavigate: () => void
+  issues: TopologyPreviewIssues
+  /** Opens Topology scoped to one namespace. */
+  onOpenNamespace: (namespace: string) => void
+}
+
+const MAX_NAMESPACE_ROWS = 4
+
+export interface RankedNamespace {
+  name: string
+  critical: number
+  total: number
+}
+
+/**
+ * Namespaces with the most active issues: critical count first, then all
+ * issues, then name. Cluster-scoped issues have no namespace to open.
+ */
+export function rankNamespacesByIssues(issues: Issue[], limit = MAX_NAMESPACE_ROWS): RankedNamespace[] {
+  const byName = new Map<string, RankedNamespace>()
+  for (const issue of issues) {
+    if (!issue.namespace) continue
+    let row = byName.get(issue.namespace)
+    if (!row) {
+      row = { name: issue.namespace, critical: 0, total: 0 }
+      byName.set(issue.namespace, row)
+    }
+    row.total++
+    if (issue.severity === 'critical') row.critical++
+  }
+  return [...byName.values()]
+    .sort((a, b) => b.critical - a.critical || b.total - a.total || a.name.localeCompare(b.name))
+    .slice(0, limit)
 }
 
 /**
@@ -132,13 +177,12 @@ const kindDotColors: Record<string, string> = {
   ReplicaSet: 'bg-green-400', HPA: 'bg-pink-500', PVC: 'bg-cyan-400',
 }
 
-export function TopologyPreview({ topology, namespaceSelected, onNavigate }: TopologyPreviewProps) {
+export function TopologyPreview({ topology, namespaceSelected, onNavigate, issues, onOpenNamespace }: TopologyPreviewProps) {
   const stats = useTopologyStats(topology)
 
   // A large cluster with no namespace filter gets an empty graph carrying this
-  // flag instead of a build. There is no graph to preview and there never will
-  // be until the user filters, so the card says that rather than counting a
-  // refusal as zero.
+  // flag instead of a build. There is no graph to preview until the user
+  // filters, so the card offers namespaces to start from instead.
   //
   // With a pick already active the same flag means something else entirely: SSE
   // only learns to filter server-side after a flagged frame arrives, so a
@@ -156,6 +200,10 @@ export function TopologyPreview({ topology, namespaceSelected, onNavigate }: Top
     return { nodeCount: topology.nodes.length, edgeCount: topology.edges.length }
   }, [topology])
 
+  if (needsNamespaceFilter) {
+    return <NamespaceStartCard issues={issues} onNavigate={onNavigate} onOpenNamespace={onOpenNamespace} />
+  }
+
   return (
     <button
       onClick={onNavigate}
@@ -171,23 +219,13 @@ export function TopologyPreview({ topology, namespaceSelected, onNavigate }: Top
           <span className="text-[11px] text-theme-text-tertiary">
             {counts.nodeCount} resources &middot; {counts.edgeCount} conn
           </span>
-        ) : needsNamespaceFilter ? null : (
+        ) : (
           <span className="h-3 w-28 rounded bg-theme-text-tertiary/20 animate-pulse" />
         )}
       </div>
 
       {/* Stats (left) + Schematic (right) */}
       <div className="flex-1 flex items-stretch min-h-0 px-3 py-1.5 gap-2">
-        {needsNamespaceFilter ? (
-          <div className="flex-1 flex items-center justify-center px-4">
-            <p className="text-[11px] leading-relaxed text-theme-text-tertiary text-center">
-              This cluster is too large to graph every namespace.
-              <br />
-              <span className="text-theme-text-secondary font-medium">Select a namespace</span> to view the topology.
-            </p>
-          </div>
-        ) : (
-          <>
         {/* Left: compact stats */}
         <div className="flex flex-col justify-center gap-0.5 min-w-0 w-[105px] shrink-0">
           {stats ? (
@@ -251,8 +289,6 @@ export function TopologyPreview({ topology, namespaceSelected, onNavigate }: Top
         <div className="flex-1 flex items-center min-w-0">
           <TopologySchematic />
         </div>
-          </>
-        )}
       </div>
 
       <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary group-hover:text-theme-text-primary transition-colors">
@@ -261,5 +297,81 @@ export function TopologyPreview({ topology, namespaceSelected, onNavigate }: Top
       </div>
       </div>
     </button>
+  )
+}
+
+function NamespaceStartCard({ issues, onNavigate, onOpenNamespace }: Pick<TopologyPreviewProps, 'issues' | 'onNavigate' | 'onOpenNamespace'>) {
+  const ranked = useMemo(() => rankNamespacesByIssues(issues.issues), [issues.issues])
+  const bound = issues.truncated || issues.incomplete ? '≥' : ''
+
+  return (
+    <div className="h-[260px] rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden flex flex-col">
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-theme-border/50">
+        <Network className="w-4 h-4 text-theme-text-tertiary" />
+        <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">Topology</span>
+      </div>
+
+      <div className="flex-1 min-h-0 flex flex-col px-3 py-2">
+        <p className="px-2 pb-1.5 text-[11px] leading-snug text-theme-text-tertiary">
+          Too large to graph every namespace at once.
+          {ranked.length > 0 && (issues.truncated
+            // The list holds only the most severe issues, so a namespace with
+            // many older ones can be missing: these are places to start, not
+            // a ranking of the whole cluster.
+            ? ` Namespaces from the ${issues.issues.length} most severe issues:`
+            : issues.incomplete
+              ? ' Namespaces with the most issues Radar could check:'
+              : ' Namespaces with the most issues:')}
+        </p>
+        {issues.loading ? (
+          <div className="flex flex-col gap-1.5 px-2 pt-1" aria-label="Loading namespaces">
+            {Array.from({ length: 3 }, (_, i) => (
+              <span key={i} className="h-5 rounded bg-theme-text-tertiary/15 animate-pulse" />
+            ))}
+          </div>
+        ) : ranked.length > 0 ? (
+          <ul className="flex flex-col">
+            {ranked.map(ns => (
+              <li key={ns.name}>
+                <Tooltip content={`Open ${ns.name} in Topology. Sets the namespace for all of Radar.`} wrapperClassName="block w-full">
+                <button
+                  type="button"
+                  onClick={() => onOpenNamespace(ns.name)}
+                  className="group/row w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-theme-hover transition-colors"
+                >
+                  <StatusDot tone={ns.critical > 0 ? 'unhealthy' : 'degraded'} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-theme-text-primary">{ns.name}</span>
+                  <span className="shrink-0 text-[10px] tabular-nums text-theme-text-tertiary">
+                    {ns.critical > 0 && <><span className={SEVERITY_TEXT.error}>{bound}{ns.critical} critical</span> &middot; </>}
+                    {bound}{ns.total} {pluralNoun(ns.total, 'issue')}
+                  </span>
+                  <ArrowRight className="w-3 h-3 shrink-0 text-theme-text-tertiary opacity-0 group-hover/row:opacity-100 transition-opacity" />
+                </button>
+                </Tooltip>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <button
+              type="button"
+              onClick={onNavigate}
+              className="btn-brand-muted text-xs px-3 py-1.5 rounded-md"
+            >
+              Choose a namespace
+            </button>
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={onNavigate}
+        className="group px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+      >
+        Open Topology
+        <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+      </button>
+    </div>
   )
 }
