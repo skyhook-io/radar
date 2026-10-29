@@ -1076,7 +1076,12 @@ function DiagnosisResult({
                 data-step-precondition
                 className="mb-1.5 text-[13px] leading-snug text-warning-text"
               >
-                Only if {step.precondition.replace(/^(if|when|once)\s+/i, "")}
+                {/* The agent writes a full sentence; after "Only if" its first
+                    capital drops, unless the word is an acronym (API, OOM). */}
+                Only if{" "}
+                {step.precondition
+                  .replace(/^(if|when|once)\s+/i, "")
+                  .replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase())}
               </p>
             ) : null}
             {isRec && diagnosis.recommendedReason && (
@@ -1567,10 +1572,7 @@ export function InconclusiveCard({
       </div>
       <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
         <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-        <span>
-          Try a follow-up with more context, or investigate again after
-          addressing any errors shown in Activity.
-        </span>
+        <span>Try a follow-up with more context, or investigate again.</span>
       </div>
       <AssessmentDetails
         diagnosis={diagnosis}
