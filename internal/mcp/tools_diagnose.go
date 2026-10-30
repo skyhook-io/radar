@@ -342,7 +342,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if podsErr != nil && !podsNotListable && !podsCacheWarming {
 		return nil, nil, podsErr
 	}
-	issueSummary, issueRows := computeMCPIssueContext(ctx, cache, canonicalGroup, canonicalKind, input.Namespace, input.Name, true)
+	issueSummary, issueRows, _ := computeMCPIssueContext(ctx, cache, canonicalGroup, canonicalKind, input.Namespace, input.Name, true)
 	resCtx := buildMCPResourceContextWithStaleChecks(
 		ctx,
 		obj,

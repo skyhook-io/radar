@@ -27,6 +27,15 @@ The node page retains this tab's last UI drain result until dismissal, reload or
 context switch. It is a recorded result, not live node health or a history of
 drains started by other users or MCP clients.
 
+## Node certificate reports
+
+`get_resource` for a Node can include `nodeCertificateReport` with default
+context or `include=issues`. It contains the RKE2/K3s monitor's original report,
+last-report time and reported validity dates. Fresh urgent reports also appear
+in `issues`; stale or incomplete observations remain unverified context.
+No report does not establish certificate health. See [Node certificate reports](nodes.md#certificate-reports)
+for thresholds, recovery and history limits.
+
 ## Why MCP instead of raw kubectl?
 
 Giving an AI agent raw `kubectl` access has problems:
