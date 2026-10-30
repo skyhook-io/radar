@@ -274,9 +274,9 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
         </Section>
       )}
 
-      {/* Release History */}
+      {/* History is low priority when the deployed release is shown above. */}
       {(history.length > 1 || (history.length === 1 && !lastRelease)) && (
-        <Section title={`History (${history.length} ${history.length === 1 ? 'revision' : 'revisions'})`} icon={History} defaultExpanded={false}>
+        <Section title={`History (${history.length} ${history.length === 1 ? 'revision' : 'revisions'})`} icon={History} defaultExpanded={!lastRelease}>
           <div className="space-y-2 max-h-48 overflow-y-auto">
             {history.map((release: any, idx: number) => (
               <div
