@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -260,6 +261,11 @@ type DashboardHelmSummary struct {
 	Total      int                    `json:"total"`
 	Releases   []DashboardHelmRelease `json:"releases"`
 	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases (RBAC-denied)
+	// KubernetesCredentials accompanies Restricted: "user-token" means the
+	// person's own token was denied, so no Cloud role would change it. Older
+	// Radar sends Restricted without it, or an ErrorCode, and may have meant
+	// another denial.
+	KubernetesCredentials string `json:"kubernetesCredentials,omitempty"`
 	// Error + ErrorCode are populated when the Helm read failed for a
 	// reason other than RBAC (Helm client not initialized, no resolved
 	// rest.Config, network error). Lets the dashboard widget render
@@ -1285,8 +1291,23 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 
 	releases, err := helmClient.ListReleasesAcrossNamespaces(r.Context(), namespaces, auth.UserFromContext(r.Context()))
 	if err != nil {
+		if helm.IsUnauthorizedError(err) {
+			return DashboardHelmSummary{
+				Releases:  []DashboardHelmRelease{},
+				Error:     helm.UnauthorizedListMessage(),
+				ErrorCode: ErrCodeAuthRequired,
+			}
+		}
+		if helm.IsImpersonationDenied(err) {
+			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Error: helm.ImpersonationDeniedListMessage}
+		}
 		if helm.ReleaseReadDeniedForCaller(err) {
-			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
+			return DashboardHelmSummary{
+				Releases:              []DashboardHelmRelease{},
+				Restricted:            true,
+				ErrorCode:             ErrCodeRBACDenied,
+				KubernetesCredentials: string(pkgauth.CurrentCredentialMode()),
+			}
 		}
 		if !errors.Is(r.Context().Err(), context.Canceled) {
 			log.Printf("[dashboard] Failed to list Helm releases: %v", err)

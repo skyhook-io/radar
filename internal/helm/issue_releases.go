@@ -84,20 +84,20 @@ func IssueReadDenied(err error) bool {
 // refusal of a request without a user token isn't either: the caller's RBAC
 // was never asked.
 func ReleaseReadDeniedForCaller(err error) bool {
-	return err != nil && isReleaseReadForbidden(err) && !isImpersonationDenied(err) && !k8s.IsUserTokenRequired(err.Error())
+	return err != nil && isReleaseReadForbidden(err) && !IsImpersonationDenied(err) && !k8s.IsUserTokenRequired(err.Error())
 }
 
-// isImpersonationDenied matches the API server refusing Radar's identity
-// permission to impersonate the caller ("... cannot impersonate resource
-// \"users\" ..."). The request never reached the caller's own RBAC.
 func issueReadReason(err error) issuesapi.UncheckedReason {
-	if isImpersonationDenied(err) {
+	if IsImpersonationDenied(err) {
 		return issuesapi.UncheckedReasonCollectorAccessDenied
 	}
 	return issuesapi.UncheckedReasonReadFailed
 }
 
-func isImpersonationDenied(err error) bool {
+// IsImpersonationDenied matches the API server refusing Radar's identity
+// permission to impersonate the caller ("... cannot impersonate resource
+// \"users\" ..."). The request never reached the caller's own RBAC.
+func IsImpersonationDenied(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "cannot impersonate")
 }
 
@@ -180,7 +180,7 @@ func issueReadFailureClass(err error) string {
 		partial = "partial:"
 	}
 	switch {
-	case isImpersonationDenied(err):
+	case IsImpersonationDenied(err):
 		return partial + "impersonation"
 	case apierrors.IsUnauthorized(err):
 		return partial + "unauthorized"

@@ -518,6 +518,10 @@ export interface DashboardHelmSummary {
   total: number;
   releases: DashboardHelmRelease[];
   restricted?: boolean; // True when user lacks permissions to list Helm releases (RBAC-denied)
+  // With restricted: "user-token" when the person's own token was denied.
+  // Absent from older Radar, which also sends restricted without errorCode
+  // "rbac_denied" and may have meant a different denial.
+  kubernetesCredentials?: string;
   // error + errorCode populated when the Helm read failed for a non-RBAC
   // reason (client not initialized, unconfigured, network). Surfaced
   // via the dashboard widget so empty results aren't mistaken for

@@ -2,6 +2,7 @@ import type { DashboardHelmSummary } from '../../api/client'
 import { Package, ArrowRight, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from '../ui/Tooltip'
+import { HelmRestrictedState } from '../helm/HelmRestrictedState'
 
 interface HelmSummaryProps {
   data?: DashboardHelmSummary
@@ -77,22 +78,23 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
             ))}
           </div>
         ) : data.restricted ? (
-          <div className="flex flex-col items-center justify-center h-full py-4 text-theme-text-tertiary">
-            <Shield className="w-8 h-8 text-amber-400 mb-2" />
-            <span className="text-xs font-medium text-theme-text-secondary">Access Restricted</span>
-            <span className="text-[11px] mt-1">Insufficient permissions to list Helm releases</span>
-          </div>
+          <HelmRestrictedState
+            compact
+            denial={{ tagged: data.errorCode === 'rbac_denied', userToken: data.kubernetesCredentials === 'user-token' }}
+          />
         ) : data.error ? (
           <div className="flex flex-col items-center justify-center h-full py-4 text-theme-text-tertiary">
             <Shield className="w-8 h-8 text-amber-400 mb-2" />
             <span className="text-xs font-medium text-theme-text-secondary">
-              {data.errorCode === 'unconfigured' ? 'Helm not configured' : 'Helm unavailable'}
+              {data.errorCode === 'unconfigured'
+                ? 'Helm not connected yet'
+                : data.errorCode === 'auth_required'
+                  ? 'Cluster rejected credentials'
+                  : 'Helm unavailable'}
             </span>
             <Tooltip content={data.error} wrapperClassName="!block mt-1 min-w-0 w-full text-center">
             <span className="text-[11px] text-center px-2 line-clamp-2 [overflow-wrap:anywhere] max-w-full">
-              {data.errorCode === 'unconfigured'
-                ? 'Set rbac.helm=true in the Radar Helm chart values.'
-                : data.error}
+              {data.errorCode === 'unconfigured' ? 'Still connecting. Check back soon.' : data.error}
             </span>
             </Tooltip>
           </div>
