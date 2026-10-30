@@ -486,10 +486,22 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 		return
 	}
-	s.writeJSON(w, map[string]any{
+	response := map[string]any{
 		"resource":        minified,
 		"resourceContext": rc,
-	})
+	}
+	if node, ok := obj.(*corev1.Node); ok && s.canRead(r, "", "nodes", "", "list") {
+		if provider := issues.NewCacheProvider(); provider != nil {
+			if report := provider.NodeCertificateReport(node.Name); report != nil {
+				response["nodeCertificateReport"] = report
+			}
+		}
+	}
+	if readCache() != cache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
+	s.writeJSON(w, response)
 }
 
 // fetchAIResource resolves the resource from the typed cache or dynamic cache.

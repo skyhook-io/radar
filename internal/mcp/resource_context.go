@@ -91,13 +91,13 @@ func (a mcpPolicyReportLookupAdapter) FindingsFor(group, kind, namespace, name s
 // Pascal-singular kind required: the composer's Filters.Kinds matcher
 // case-folds both sides but doesn't plural-to-singular convert. Callers
 // pass canonicalKind from obj's TypeMeta.
-func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue) {
+func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue, *k8s.NodeCertificateReport) {
 	if cache == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	namespaces := issueNamespacesForResource(namespace)
 	// RelatedIssues is owner-aware and uncapped: get_resource on a workload
@@ -112,8 +112,12 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		CanReadSubject:         issueSubjectAccess(ctx),
 		CanReadEvidence:        issueEvidenceAccess(ctx),
 	}, group, kind, namespace, name)
+	var nodeReport *k8s.NodeCertificateReport
+	if group == "" && kind == "Node" && namespace == "" && issueClusterScopedAccess(ctx)("Node", "") {
+		nodeReport = provider.NodeCertificateReport(name)
+	}
 	if len(matched) == 0 {
-		return nil, nil
+		return nil, nil, nodeReport
 	}
 	bySource := make(map[string]int, len(matched))
 	for _, row := range matched {
@@ -133,7 +137,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		TopReason:       matched[0].Reason,
 		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
-	}, matched
+	}, matched, nodeReport
 }
 
 func issueNamespacesForResource(namespace string) []string {
