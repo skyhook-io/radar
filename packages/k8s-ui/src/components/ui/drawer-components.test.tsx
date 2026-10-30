@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { AlertBanner, EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
+import { AlertBanner, EventsSection, PodTemplateSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
 import type { Relationships } from '../../types'
 
 const problems = [
@@ -514,5 +514,28 @@ describe('RelatedResourcesSection capped lists', () => {
     const whole = text({ children: pods, ownership: { children: { complete: true } } })
     expect(whole).toContain('Children (12)')
     expect(whole).toContain('Show all 12')
+  })
+})
+
+describe('PodTemplateSection pod-level resources', () => {
+  const container = { name: 'app', image: 'app:1', resources: { requests: { cpu: '100m' } } }
+
+  it('shows spec.resources as its own Pod (aggregate) row beside the container rows', () => {
+    const html = renderToString(
+      <PodTemplateSection
+        template={{ spec: { resources: { requests: { cpu: '2', memory: '1Gi' }, limits: { memory: '2Gi' } }, containers: [container] } }}
+      />
+    )
+    expect(html).toContain('Pod (aggregate)')
+    expect(html).toContain('CPU: 2 cores, Mem: 1.00 GiB')
+    expect(html).toContain('Mem: 2.00 GiB')
+    expect(html).toContain('CPU: 0.10 cores')
+  })
+
+  it('renders no aggregate row when the template sets no pod-level resources', () => {
+    const html = renderToString(<PodTemplateSection template={{ spec: { containers: [container] } }} />)
+    expect(html).not.toContain('Pod (aggregate)')
+    expect(renderToString(<PodTemplateSection template={{ spec: { resources: {}, containers: [container] } }} />)).not.toContain('Pod (aggregate)')
+    expect(renderToString(<PodTemplateSection template={{ spec: { resources: { requests: {}, limits: {} }, containers: [container] } }} />)).not.toContain('Pod (aggregate)')
   })
 })
