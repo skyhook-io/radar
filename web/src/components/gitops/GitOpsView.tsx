@@ -1043,7 +1043,7 @@ function normalizeDetailResource(kind: string, group: string, tool: 'argo' | 'fl
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: newestConditionTime(resource),
+    lastSync: '',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
@@ -1096,14 +1096,6 @@ function isTerminating(resource: any): boolean {
 // on the field path.
 function terminationStartedAt(resource: any): string | undefined {
   return resource?.metadata?.deletionTimestamp || undefined
-}
-
-function newestConditionTime(resource: any): string {
-  const times = (resource.status?.conditions ?? [])
-    .map((condition: any) => condition.lastTransitionTime)
-    .filter(Boolean)
-    .sort()
-  return times[times.length - 1] ?? ''
 }
 
 

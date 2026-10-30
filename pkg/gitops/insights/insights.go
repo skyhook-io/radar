@@ -49,6 +49,8 @@ type Summary struct {
 	TargetRevision      string `json:"targetRevision,omitempty"`
 	LastRevision        string `json:"lastRevision,omitempty"`
 	LastReconcile       string `json:"lastReconcile,omitempty"`
+	LastApplyAttempt    string `json:"lastApplyAttempt,omitempty"`
+	LastDeployed        string `json:"lastDeployed,omitempty"`
 	PartialReason       string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
 	// "Manual", "Auto", "Auto · prune", "Auto · self-heal",
@@ -478,7 +480,12 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 		s.OperationMessage, s.RawOperationMessage = diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 		s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "sync", "revision")
 		s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "operationState", "syncResult", "revision")
-		s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "reconciledAt")
+		if root.GetKind() == "Application" {
+			value, _, _ := unstructured.NestedString(root.Object, "status", "reconciledAt")
+			if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil && !parsed.IsZero() {
+				s.LastReconcile = parsed.UTC().Format(time.RFC3339Nano)
+			}
+		}
 		source, _, _ := unstructured.NestedMap(root.Object, "spec", "source")
 		if len(source) == 0 {
 			sources, _, _ := unstructured.NestedSlice(root.Object, "spec", "sources")
@@ -496,9 +503,10 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	s.Health = status.health
 	s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAttemptedRevision")
 	s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAppliedRevision")
-	s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "lastHandledReconcileAt")
-	if s.LastReconcile == "" {
-		s.LastReconcile = newestConditionTime(root)
+	s.LastApplyAttempt = gitops.FluxLastApplyAttempt(root)
+	if release := gitops.FluxDeployedRelease(root); release != nil && release.ChartVersion != "" {
+		s.LastRevision = release.ChartVersion
+		s.LastDeployed = release.LastDeployed
 	}
 	if sources := gitops.FluxSourceReferences(root); len(sources) > 0 {
 		s.Source = sources[0].Kind + "/" + sources[0].Name
@@ -1766,16 +1774,6 @@ func parseWave(value string) (int, bool) {
 	}
 	i, err := strconv.Atoi(value)
 	return i, err == nil
-}
-
-func newestConditionTime(root *unstructured.Unstructured) string {
-	newest := ""
-	for _, c := range conditions(root) {
-		if c.lastTransitionTime > newest {
-			newest = c.lastTransitionTime
-		}
-	}
-	return newest
 }
 
 func stringData(data map[string]any, key string) string {
