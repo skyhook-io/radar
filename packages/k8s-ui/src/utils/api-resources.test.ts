@@ -6,6 +6,8 @@ describe('canonicalResourceGroup', () => {
     expect(builtinGroupForKind('Service')).toBe('')
     expect(builtinGroupForKind('jobs')).toBe('batch')
     expect(builtinGroupForKind('PodDisruptionBudget')).toBe('policy')
+    expect(builtinGroupForKind('ValidatingAdmissionPolicy')).toBe('admissionregistration.k8s.io')
+    expect(builtinGroupForKind('validatingadmissionpolicybindings')).toBe('admissionregistration.k8s.io')
     expect(canonicalResourceGroup('Deployment', undefined)).toBe('apps')
     expect(canonicalResourceGroup('Job', '')).toBe('batch')
     expect(canonicalResourceGroup('ResourceClaim', undefined)).toBe('resource.k8s.io')
@@ -94,6 +96,14 @@ describe('formatGroupName', () => {
 })
 
 describe('categorizeResources', () => {
+  it('places native admission policies and bindings in Configuration', () => {
+    const configuration = categorizeResources([]).find(category => category.name === 'Configuration')
+    expect(configuration?.resources.map(resource => resource.kind)).toEqual(expect.arrayContaining([
+      'ValidatingAdmissionPolicy',
+      'ValidatingAdmissionPolicyBinding',
+    ]))
+  })
+
   it('does not merge unmapped CRDs into matching core categories', () => {
     const categories = categorizeResources([
       { group: 'networking.io', version: 'v1', kind: 'WidgetRoute', name: 'widgetroutes', namespaced: true, isCrd: true, verbs: ['list'] },

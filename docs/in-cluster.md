@@ -430,6 +430,7 @@ Some features require additional permissions. Most are disabled by default for s
 | Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Webhooks view | `rbac.viewWebhooks: true` | `false` | Show admission webhook configurations. Off by default because they expose the cluster's admission-control posture; auto-enabled when auth or cloud mode enforces each user's own RBAC |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | `false` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings. Off by default because they expose admission-control coverage and gaps; auto-enabled when auth or cloud mode enforces each user's own RBAC |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | `false` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Enable only for a trusted no-auth audience; authenticated users need this permission on their own Kubernetes identity |
 | Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
 
@@ -644,6 +645,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.helm` | Enable Helm write operations | `false` |
 | `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.viewWebhooks` | Show admission webhook configurations | `false` |
+| `rbac.viewAdmissionPolicies` | Show native validating admission policies and bindings | `false` |
 | `rbac.viewNodeRuntime` | Inspect kubelet metrics and effective configuration for upgrade impact | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | `get/list/watch` on every API group and resource, including core Secrets; overrides per-group flags | `false` |

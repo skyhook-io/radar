@@ -2444,6 +2444,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -2670,6 +2680,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -2971,6 +2991,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -3068,6 +3098,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3220,6 +3260,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4086,6 +4136,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -4198,6 +4258,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4360,6 +4430,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {

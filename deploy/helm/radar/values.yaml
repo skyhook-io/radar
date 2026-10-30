@@ -119,6 +119,14 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
+  # Allow reading native ValidatingAdmissionPolicy and
+  # ValidatingAdmissionPolicyBinding resources so the resource browser can show
+  # their declared rules and binding relationships. Auto-enabled when auth is on
+  # (auth.mode != none) or in cloud mode, where every read is re-checked against
+  # the requesting user's own permissions. For no-auth installs this stays
+  # opt-in because policies expose admission-control coverage and gaps.
+  viewAdmissionPolicies: false
+
   # Allow the no-auth in-cluster Radar identity to read kubelet metrics and
   # effective configuration through nodes/proxy for upgrade-impact checks.
   # This exposes node-level runtime and configuration details to anyone who

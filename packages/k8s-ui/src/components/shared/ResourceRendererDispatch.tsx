@@ -163,6 +163,8 @@ import {
   RoleRenderer,
   RoleBindingRenderer,
   WebhookConfigRenderer,
+  ValidatingAdmissionPolicyRenderer,
+  ValidatingAdmissionPolicyBindingRenderer,
   EventRenderer,
   EndpointSliceRenderer,
   GenericRenderer,
@@ -451,6 +453,14 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  ValidatingAdmissionPolicyRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  ValidatingAdmissionPolicyBindingRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
 }
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
@@ -509,6 +519,7 @@ const KNOWN_KINDS = new Set([
   'virtualservices', 'destinationrules', 'serviceentries',
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
+  'validatingadmissionpolicies', 'validatingadmissionpolicybindings',
   'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases', 'limitranges',
   'knativeservices', 'knativeconfigurations', 'knativerevisions', 'knativeroutes',
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
@@ -725,6 +736,7 @@ export function ResourceRendererDispatch({
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
     || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
+    || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
@@ -760,6 +772,8 @@ export function ResourceRendererDispatch({
     || (kind === 'admissionchecks' && isKueueQueueResource(data))
     || (kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion))
     || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
+    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
+      && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -816,6 +830,8 @@ export function ResourceRendererDispatch({
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
+  const ValidatingAdmissionPolicyComp = rendererOverrides?.ValidatingAdmissionPolicyRenderer ?? ValidatingAdmissionPolicyRenderer
+  const ValidatingAdmissionPolicyBindingComp = rendererOverrides?.ValidatingAdmissionPolicyBindingRenderer ?? ValidatingAdmissionPolicyBindingRenderer
   const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
   const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
   const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
@@ -1008,6 +1024,8 @@ export function ResourceRendererDispatch({
         {kind === 'authorizationpolicies' && <IstioAuthorizationPolicyRenderer data={data} />}
         {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating />}
         {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} />}
+        {kind === 'validatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
+        {kind === 'validatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'ingressclasses' && <IngressClassRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
         {kind === 'runtimeclasses' && <RuntimeClassRenderer data={data} />}

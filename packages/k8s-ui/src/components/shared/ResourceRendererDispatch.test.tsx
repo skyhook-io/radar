@@ -36,6 +36,40 @@ describe('ResourceRendererDispatch', () => {
     expect(html).not.toContain('VerticalPodAutoscaler')
   })
 
+  describe('ValidatingAdmissionPolicy dispatch', () => {
+    it('uses dedicated renderers only for the exact native API group', () => {
+      const nativePolicy = renderKind('validatingadmissionpolicies', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicy',
+        metadata: { name: 'native', generation: 1 },
+        spec: { validations: [{ expression: 'true', message: 'native validation' }] },
+      })
+      expect(nativePolicy).toContain('Failure Policy')
+      expect(nativePolicy).toContain('native validation')
+
+      const nativeBinding = renderKind('validatingadmissionpolicybindings', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicyBinding',
+        metadata: { name: 'native-binding' },
+        spec: { policyName: 'native', validationActions: ['Warn'] },
+      })
+      expect(nativeBinding).toContain('Validation Actions')
+      expect(nativeBinding).toContain('effective scope')
+
+      for (const kind of ['validatingadmissionpolicies', 'validatingadmissionpolicybindings']) {
+        const foreign = renderKind(kind, {
+          apiVersion: 'policies.example.io/v1',
+          kind: 'ForeignPolicy',
+          metadata: { name: 'foreign' },
+          spec: { collisionProbe: COLLISION_PROBE },
+        })
+        expect(foreign).toContain(COLLISION_PROBE)
+        expect(foreign).not.toContain('Failure Policy')
+        expect(foreign).not.toContain('Validation Actions')
+      }
+    })
+  })
+
   it('does not block manual replica scaling for VPA-only relationships', () => {
     const html = renderWithScalers([
       { kind: 'VerticalPodAutoscaler', namespace: 'prod', name: 'api-vpa' },

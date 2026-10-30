@@ -15,6 +15,8 @@ func TestIsClusterOnlyKind(t *testing.T) {
 		"runtimeclasses", "runtimeclass",
 		"mutatingwebhookconfigurations", "mutatingwebhookconfiguration",
 		"validatingwebhookconfigurations", "validatingwebhookconfiguration",
+		"validatingadmissionpolicies", "validatingadmissionpolicy",
+		"validatingadmissionpolicybindings", "validatingadmissionpolicybinding",
 		"customresourcedefinitions", "customresourcedefinition", "crd",
 	}
 	for _, k := range clusterOnly {
@@ -54,6 +56,8 @@ func TestClusterOnlyKindGVR(t *testing.T) {
 		{"clusterroles", "rbac.authorization.k8s.io", "clusterroles", true},
 		{"volumeattachments", "storage.k8s.io", "volumeattachments", true},
 		{"crd", "apiextensions.k8s.io", "customresourcedefinitions", true},
+		{"validatingadmissionpolicies", "admissionregistration.k8s.io", "validatingadmissionpolicies", true},
+		{"ValidatingAdmissionPolicyBinding", "admissionregistration.k8s.io", "validatingadmissionpolicybindings", true},
 		{"NODES", "", "nodes", true}, // case-insensitive
 		{"pods", "", "", false},
 		{"unknown-kind", "", "", false},
@@ -125,6 +129,9 @@ func TestClassifyKindScope_StaticCatalogue(t *testing.T) {
 	}
 	if clusterScoped, _, _ := ClassifyKindScope("GlobalNetworkPolicy", "example.com"); clusterScoped {
 		t.Error("GlobalNetworkPolicy with an unrelated group must not resolve to Calico")
+	}
+	if clusterScoped, _, _ := ClassifyKindScope("ValidatingAdmissionPolicy", "example.com"); clusterScoped {
+		t.Error("ValidatingAdmissionPolicy with an unrelated group must not resolve to the native API")
 	}
 }
 

@@ -52,6 +52,13 @@ entries:
     decision: existing
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "admissionregistration.k8s.io"
+    resources: ["validatingadmissionpolicies","validatingadmissionpolicybindings"]
+    scope: Cluster
+    collection: ""
+    decision: withhold
+    reason: "Admission policy declarations expose enforcement coverage and gaps; this renderer adds no default Cloud caller grant, so existing tier and user RBAC remain authoritative."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
   - group: "amd.com"
     resources: ["deviceconfigs"]
     scope: Namespaced
