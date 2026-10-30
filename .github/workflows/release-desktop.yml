@@ -252,7 +252,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev imagemagick
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
@@ -302,12 +302,16 @@ jobs:
           nfpm package --config deploy/linux/nfpm.yaml --packager deb --target "radar-desktop_${TAG}_linux_amd64.deb"
           nfpm package --config deploy/linux/nfpm.yaml --packager rpm --target "radar-desktop_${TAG}_linux_amd64.rpm"
 
+      - name: Build AppImage
+        run: scripts/build-appimage.sh build/bin/radar-desktop "${GITHUB_REF_NAME}"
+
       - name: Generate checksums
         run: |
           VERSION="${GITHUB_REF_NAME}"
           sha256sum "radar-desktop_${VERSION}_linux_amd64.tar.gz" >> checksums-linux.txt
           sha256sum "radar-desktop_${VERSION}_linux_amd64.deb" >> checksums-linux.txt
           sha256sum "radar-desktop_${VERSION}_linux_amd64.rpm" >> checksums-linux.txt
+          sha256sum "radar-desktop_${VERSION}_linux_amd64.AppImage" >> checksums-linux.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -317,6 +321,7 @@ jobs:
             radar-desktop_*.tar.gz
             radar-desktop_*.deb
             radar-desktop_*.rpm
+            radar-desktop_*.AppImage
             checksums-linux.txt
           retention-days: 1
 
@@ -328,7 +333,7 @@ jobs:
             echo ""
             if ls radar-desktop_*.tar.gz 1>/dev/null 2>&1; then
               echo "**Status:** Success"
-              ls -lh radar-desktop_*.tar.gz radar-desktop_*.deb radar-desktop_*.rpm 2>/dev/null | awk '{print "- `" $NF "` (" $5 ")"}'
+              ls -lh radar-desktop_*.tar.gz radar-desktop_*.deb radar-desktop_*.rpm radar-desktop_*.AppImage 2>/dev/null | awk '{print "- `" $NF "` (" $5 ")"}'
             else
               echo "**Status:** Failed"
             fi

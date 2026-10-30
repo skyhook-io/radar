@@ -167,6 +167,10 @@ func main() {
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
+	resolvedKubeconfig = desktopenv.ResolveLaunchPath(resolvedKubeconfig)
+	for i, dir := range resolvedKubeconfigDirs {
+		resolvedKubeconfigDirs[i] = desktopenv.ResolveLaunchPath(dir)
+	}
 
 	// The device flow and consent page must identify this build and target the
 	// same control plane the CLI would — Desktop starts the same shared server.
@@ -203,7 +207,7 @@ func main() {
 		DisableExec:               *disableExec,
 		PodShellDefault:           *podShellDefault,
 		TimelineStorage:           *timelineStorage,
-		TimelineDBPath:            *timelineDBPath,
+		TimelineDBPath:            desktopenv.ResolveLaunchPath(*timelineDBPath),
 		TimelinePostgresDSN:       os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
 		TimelineRetention:         *timelineRetention,
 		TimelineMaxSizeBytes:      timelineMaxSizeBytes,

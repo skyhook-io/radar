@@ -191,6 +191,32 @@ func TestCodexExecutionProfiles(t *testing.T) {
 	}
 }
 
+func TestCodexFullLocalUsesAppImageLaunchDir(t *testing.T) {
+	launch := t.TempDir()
+	t.Setenv("APPIMAGE", "/opt/Radar.AppImage")
+	t.Setenv("OWD", launch)
+	a := &codexAgent{bin: "codex"}
+	ctx := context.Background()
+
+	my, cleanup, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", profile: ExecutionProfileFullLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if my.Dir != launch {
+		t.Errorf("full-local in an AppImage: Dir = %q, want the launch directory %q", my.Dir, launch)
+	}
+
+	iso, cleanup2, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", profile: ExecutionProfileSafeguarded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup2()
+	if iso.Dir == "" || iso.Dir == launch {
+		t.Errorf("safeguarded in an AppImage must keep its empty temp cwd; got %q", iso.Dir)
+	}
+}
+
 // TestResolveAgentCodex pins binary-name routing to the Codex backend.
 func TestResolveAgentCodex(t *testing.T) {
 	cases := map[string]string{

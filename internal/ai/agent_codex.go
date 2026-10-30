@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
@@ -103,8 +104,11 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 		cleanup = func() { _ = os.RemoveAll(dir) }
 		cmd.Dir = dir
 		cmd.Env = codexEnv()
+	} else if dir := desktopenv.LaunchDir(); dir != "" {
+		// Inside an AppImage Radar's own cwd is the read-only image.
+		cmd.Dir = dir
 	}
-	// Full-local: inherit radar's cwd + full env so the user's auth/config/MCPs work.
+	// Full-local: inherit radar's launch directory + full env so the user's auth/config/MCPs work.
 
 	return cmd, cleanup, nil
 }
