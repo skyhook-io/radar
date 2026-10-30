@@ -57,7 +57,7 @@ export function SyncCountdown({ interval, lastSyncTime, suspended, compact = fal
     return (
       <div className={clsx('flex items-center gap-1.5 text-theme-text-tertiary', compact ? 'text-xs' : 'text-sm')}>
         <Clock className={compact ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
-        <span>{interval}</span>
+        <span>Every {interval}</span>
       </div>
     )
   }

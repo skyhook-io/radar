@@ -24,9 +24,17 @@ Open the **GitOps** tab in the sidebar. Argo + Flux rows mix in the same table o
 - **Modes**: Applications / Sources / Projects / Alerts
 - **Default sort**: smart-tiered by urgency — Failed > Terminating > Degraded > Missing > OutOfSync > Suspended > Progressing > Synced
 
+The **Activity** column and cards name the event beside its age: a Flux apply attempt, a Helm deployment, an Argo sync attempt or deployment, or an ApplicationSet status change. When no event date is available, they show the resource's creation date with a **Created** label. An old deployment date does not make a healthy application stale.
+
 ## Per-app detail page
 
 Click any row to open a detail page with three top-level tabs.
+
+The revision and its controller's activity time are separate facts. Flux Kustomizations show **Last apply attempt** from their recorded apply history, including failed attempts. A source, dependency or build failure before apply may not add a history entry. Flux HelmReleases show **Last deployed** for the currently deployed chart, even if a newer upgrade failed. Argo Applications show **Last checked**, when Argo compared the application with Git. These dates are not Git commit ages. Missing dates are left out, including when an older Radar cannot supply the required history.
+
+Flux resource drawers show the configured reconciliation interval or **Paused**. They do not calculate a next-run countdown from the last reconciliation request: that request does not establish the controller's schedule. Argo's drawer also omits a countdown because its configured reconciliation interval is not available in the Application status.
+
+In the Resources table, **Last Updated** uses the recorded Flux apply or Helm deployment time when available. Otherwise it keeps the last Ready status change; the cell tooltip names that fallback. A status change is not an apply or deployment time.
 
 <p align="center">
   <img src="screenshots/gitops-detail-drift.png" alt="GitOps detail page with stuck-drift-loop diagnosis" width="800">

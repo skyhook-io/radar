@@ -2,6 +2,7 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
+import { getFluxDeployedRelease, getFluxLastApplyAttempt } from '../../../utils/flux-history'
 import {
   getGitRepositoryUrl,
   getGitRepositoryRef,
@@ -167,13 +168,15 @@ export function KustomizationCell({ resource, column }: { resource: any; column:
       )
     }
     case 'lastUpdated': {
-      // Kustomization uses history[0].lastReconciled or conditions[Ready].lastTransitionTime
-      const lastReconcile = resource.status?.history?.[0]?.lastReconciled ||
+      const lastApply = getFluxLastApplyAttempt(resource)
+      const lastUpdated = lastApply ||
         resource.status?.conditions?.find((c: any) => c.type === 'Ready')?.lastTransitionTime
       return (
-        <span className="text-sm text-theme-text-secondary">
-          {lastReconcile ? formatAge(lastReconcile) : '-'}
-        </span>
+        <Tooltip content={lastApply ? 'Last apply attempt recorded by Flux, successful or not' : 'Last Ready status change, not an apply time'}>
+          <span className="text-sm text-theme-text-secondary">
+            {lastUpdated ? formatAge(lastUpdated) : '-'}
+          </span>
+        </Tooltip>
       )
     }
     default:
@@ -193,7 +196,10 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
     }
     case 'version': {
       const version = getFluxHelmReleaseVersion(resource)
-      return <span className="text-sm text-theme-text-secondary">{version}</span>
+      const requested = resource.spec?.chart?.spec?.version
+      const source = resource.spec?.chartRef
+      const detail = requested ? `Requested constraint: ${requested}` : source ? `Source: ${source.kind}/${source.name}` : 'Currently deployed chart version'
+      return <Tooltip content={detail}><span className="text-sm text-theme-text-secondary">{version}</span></Tooltip>
     }
     case 'status': {
       const status = getFluxHelmReleaseStatus(resource)
@@ -223,13 +229,15 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
       )
     }
     case 'lastUpdated': {
-      // HelmRelease uses history[0].lastDeployed or conditions[Ready].lastTransitionTime
-      const lastReconcile = resource.status?.history?.[0]?.lastDeployed ||
+      const lastDeployed = getFluxDeployedRelease(resource)?.lastDeployed
+      const lastUpdated = lastDeployed ||
         resource.status?.conditions?.find((c: any) => c.type === 'Ready')?.lastTransitionTime
       return (
-        <span className="text-sm text-theme-text-secondary">
-          {lastReconcile ? formatAge(lastReconcile) : '-'}
-        </span>
+        <Tooltip content={lastDeployed ? 'Deployment time of the currently deployed release' : 'Last Ready status change, not a deployment time'}>
+          <span className="text-sm text-theme-text-secondary">
+            {lastUpdated ? formatAge(lastUpdated) : '-'}
+          </span>
+        </Tooltip>
       )
     }
     default:
