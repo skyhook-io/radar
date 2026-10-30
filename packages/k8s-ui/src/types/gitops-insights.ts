@@ -84,8 +84,8 @@ export interface GitOpsInsightSummary {
   // controller's verdicts are not in the Application object and any
   // per-resource health shown is Radar's own read.
   resourceHealthMode?: GitOpsHealthMode
-  // The Application deploys to another cluster; Radar derives nothing about
-  // its resources from here.
+  // The current destination or recorded Argo comparison is elsewhere;
+  // Radar derives nothing from same-named local resources.
   remoteDestination?: boolean
   // Per-resource health came from Argo CD's API server: the verdicts shown
   // are Argo's even though the Application object doesn't carry them.

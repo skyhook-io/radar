@@ -73,8 +73,8 @@ type Summary struct {
 	// verdicts are not in the CR and per-resource health below, if any, is
 	// Radar's own read — the UI says so.
 	ResourceHealthMode string `json:"resourceHealthMode,omitempty"`
-	// RemoteDestination: the Application or Flux object deploys to another
-	// cluster. Radar derives nothing about its resources from here.
+	// RemoteDestination: the current destination or recorded Argo comparison
+	// is elsewhere. Radar derives nothing from same-named local resources.
 	RemoteDestination bool `json:"remoteDestination,omitempty"`
 	// ResourceHealthFromAPI: per-resource health came from the controller's
 	// API server, so in appTree mode the verdicts shown are still Argo's.
@@ -574,7 +574,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 			parsed := diagnose.ParseArgoOperationError(msg)
 			action := fallback(parsed.Action, "Open Activity for operation details.")
-			if !gitops.IsInClusterDestination(root) {
+			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
 				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed); remoteAction != "" {
 					action = remoteAction
@@ -720,7 +720,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// or a per-resource Issue is. A warning-tier per-resource finding
 		// doesn't count as explained either, but it already names a resource;
 		// stacking an events lead about the same app on top of it is noise.
-		if !degradedResourcesExplained(out) && !hasResourceFinding(out) && gitops.IsInClusterDestination(root) {
+		if !degradedResourcesExplained(out) && !hasResourceFinding(out) && gitops.IsInClusterDestination(root) && !gitops.ArgoAppliesElsewhere(root) {
 			if health, _, _ := unstructured.NestedString(root.Object, "status", "health", "status"); health == "Degraded" {
 				if iss := degradedResourceFromEvents(root, resolver); iss != nil {
 					out = append(out, *iss)
@@ -752,7 +752,11 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			degraded = unexplainedFluxDegraded(resourceTree, out)
 		}
 		if degraded > 0 {
-			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
+			message := fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded))
+			if len(resourceTree.Warnings) > 0 {
+				message += " among the resources shown"
+			}
+			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: message, Action: "Use the graph or Resources tab to inspect affected resources."})
 		}
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure

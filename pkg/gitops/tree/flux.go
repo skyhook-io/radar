@@ -136,3 +136,9 @@ func stringMapFromAny(in map[string]any) map[string]string {
 	}
 	return out
 }
+
+const limitedHelmProjectionWarning = "Some Helm resources may be missing: label lookup uses the available topology within the readable namespaces."
+
+func (b *Builder) limitedHelmProjection() bool {
+	return b.topo == nil || len(b.topo.Warnings) > 0 || b.allowedNamespaces != nil
+}

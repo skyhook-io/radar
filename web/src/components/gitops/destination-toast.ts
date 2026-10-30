@@ -32,8 +32,8 @@ export function destinationToast(resource: string, dest: DestinationCluster): De
     }
   }
   return {
-    message: `${resource} is on another cluster`,
-    detail: "Radar couldn't tell which cluster, so it can't open it from here.",
+    message: `${resource} can't be opened from this cluster`,
+    detail: "Radar couldn't tell which cluster holds the recorded resource, so it can't open it from here.",
   }
 }
 

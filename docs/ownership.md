@@ -32,6 +32,8 @@ and scope; it never proves that no external controller or writer exists.
 
 The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager".
 
+The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, with a namespace-scoped private view and separate per-kind output checks. It can traverse cached hidden intermediates without emitting their identity or metadata. Display topology supplies presentation, observed spec links, and label-based roots for HelmReleases without inventory. Owner-reference truth comes from the ownership view.
+
 ## Layers
 
 - **`pkg/ownership`: the contract.** A `Source` opens a `ReadSession` over the current caches. A session does no I/O
@@ -55,7 +57,8 @@ The four `managedBy` fields answer different questions; read `manager` for "whic
   (`ReadableDependents` for typed kinds, `ReadableIndexed` for dynamic ones).
 - **`pkg/ownership/cachesource`: the cache source.** One traversal (`dynamicIndexed`) reads either index for custom
   resources. It reads a resource watched at several versions from one version, pins the namespaces a version is watched
-  in at the session's first look, and turns every unread kind or namespace into a gap.
+  in at the session's first look, and turns every unread kind or namespace into a gap. Dependent searches reuse the
+  session's unwatched-kind gaps; watched stores are still read each time, so a loading store can become available.
 
 ## What manages an object
 
