@@ -15,6 +15,38 @@ Dashboard/vitals/MCP share exclusive Ready / NotReady / Cordoned / Removing buck
 
 NotReady retains its identity. Pressure/network issues have separate identities and condition-specific pod attribution. Removal delayed uses `termination_stuck`, timed from removal onset.
 
+## Certificate reports
+
+RKE2 and K3s node certificate warnings appear on the Node with the original
+monitor report, reported validity dates and last-report time. A fresh report
+warns in Issues under 30 days to expiry and becomes critical under 7 days or
+when it reports an invalid certificate. A validity report that disagrees with
+Radar's clock warns about the reported clock/validity problem.
+
+Reports older than two hours stay as neutral context with current status
+unverified. Expiry of the Kubernetes Event does not remove the retained
+timeline report, and an old expiry date does not turn a stale report into a
+new urgent Issue. A later `CertificateExpirationOK` supersedes an earlier
+warning as a reported outcome. Silence or a CA-only warning does not establish
+leaf renewal.
+
+Fresh live reports are usable when Event collection covers `default`, including
+immediately after Radar starts. For retained reports, the existing timeline's
+retention, restart gaps and collection limits apply.
+Reports dated in the future or before the current Node's creation are ignored.
+Missing reports do not establish certificate health. Radar interprets
+`CertificateExpirationWarning`; the native monitor checks certificate bundles,
+which can include CA certificates. A restart can renew eligible node certificates;
+CAs need separate rotation. The separate `CACertificateExpirationWarning` is not
+evaluated here. Node report visibility follows the Node's
+cluster-scoped read permission. Node Ready and removal health remain separate.
+
+The resource Issues endpoint's `coverage=1` response can include
+`node_certificate_report`. REST AI detail and MCP `get_resource` include the
+same assessment as `nodeCertificateReport` with context enabled; MCP also
+includes it with `include=issues`. Its `uid` binds the response to the current
+Node view; a native name-valued Event UID does not prove a Node incarnation.
+
 ## Drain evidence
 
 UI/REST/MCP share a read-only current pod/PDB estimate. MCP `get_resource include=drain-plan` returns at most 100 pods with total/truncation, complete summary counts and explicit options. Read errors and incomplete budget checks are visible.
