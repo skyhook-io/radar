@@ -3,6 +3,7 @@ import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import { type AdminNoteContext, type BlockedExit, composeAdminNote, composeFailureNote, needsAdminHandoff, trimRefusal } from './cloudConnectHandoff'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
+import { parseContextName } from '@skyhook-io/k8s-ui/utils/context-name'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Tooltip } from './ui/Tooltip'
 import {
@@ -10,6 +11,7 @@ import {
   cancelCloudInstall,
   type CloudInstallBlocked,
   type CloudInstallRecoveryGuidance,
+  type CloudInstallStage,
   type CloudInstallStatus,
   dismissCloudInstall,
   startCloudInstall,
@@ -43,14 +45,7 @@ export function CloudConnectFlow({
 
   switch (status.state) {
     case 'preparing':
-      return (
-        <div className="px-8 py-10 flex flex-col items-center gap-3 text-center">
-          <Loader2 className="w-5 h-5 animate-spin text-emerald-600 dark:text-emerald-400" />
-          <p className="text-[13px] text-theme-text-secondary">
-            Checking this cluster and preparing the install. This can take a moment on a slow link.
-          </p>
-        </div>
-      )
+      return <PreparingCard step={status.prepareStep} context={where?.context} />
     case 'ready':
       return <PlanCard status={status} onStatus={onStatus} onExit={onExit} />
     case 'starting':
@@ -694,10 +689,63 @@ function ApprovalCard({ status, onStatus }: { status: CloudInstallStatus; onStat
   )
 }
 
+type StepState = 'done' | 'active' | 'todo'
+
+function StepList({ steps }: { steps: Array<{ label: string; state: StepState }> }) {
+  return (
+    <ul className="space-y-2.5">
+      {steps.map((step) => (
+        <li key={step.label} className="flex items-center gap-2.5 text-[12.5px]">
+          {step.state === 'done' ? (
+            <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          ) : step.state === 'active' ? (
+            <Loader2 className="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <span className="w-4 h-4 grid place-items-center">
+              <span className="w-1.5 h-1.5 rounded-full bg-theme-border" />
+            </span>
+          )}
+          <span className={step.state === 'todo' ? 'text-theme-text-tertiary' : 'text-theme-text-secondary'}>
+            {step.label}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+const PREPARE_STEPS: Array<{ stage: CloudInstallStage; label: string }> = [
+  { stage: 'inspect', label: 'Looking for an existing Radar install' },
+  { stage: 'prepare', label: 'Preparing the Radar Helm chart' },
+  { stage: 'preflight', label: 'Checking your permissions with a dry run' },
+]
+
+// Before the first status poll answers (or from a server that does not
+// report steps) the first check is the one shown as running.
+export function PreparingCard({ step, context }: { step?: CloudInstallStage; context?: string }) {
+  const current = Math.max(0, PREPARE_STEPS.findIndex((s) => s.stage === step))
+  return (
+    <div className="px-8 pt-6 pb-5">
+      <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3.5 break-words" title={context}>
+        Checking {context ? parseContextName(context).clusterName : 'this cluster'}
+      </h4>
+      <StepList
+        steps={PREPARE_STEPS.map((s, i) => ({
+          label: s.label,
+          state: i < current ? 'done' : i === current ? 'active' : 'todo',
+        }))}
+      />
+      <p className="mt-4 text-[11px] text-theme-text-tertiary">
+        Nothing is installed in this step. You’ll see the plan before anything changes.
+      </p>
+    </div>
+  )
+}
+
 function ProgressCard({ status, onStatus }: { status: CloudInstallStatus; onStatus: (st: CloudInstallStatus) => void }) {
   const provisioning = status.state === 'provisioning'
   const cancel = useCancelButton(status, onStatus)
-  const steps: Array<{ label: string; state: 'done' | 'active' | 'todo' }> = [
+  const steps: Array<{ label: string; state: StepState }> = [
     { label: 'Approved in browser', state: 'done' },
     { label: `Installing Radar (namespace ${status.plan?.namespace ?? 'radar'})`, state: provisioning ? 'active' : 'done' },
     { label: 'Waiting for Radar to connect to Cloud', state: provisioning ? 'todo' : 'active' },
@@ -707,24 +755,7 @@ function ProgressCard({ status, onStatus }: { status: CloudInstallStatus; onStat
       <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3.5">
         Connecting {status.clusterName}
       </h4>
-      <ul className="space-y-2.5">
-        {steps.map((step) => (
-          <li key={step.label} className="flex items-center gap-2.5 text-[12.5px]">
-            {step.state === 'done' ? (
-              <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            ) : step.state === 'active' ? (
-              <Loader2 className="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400" />
-            ) : (
-              <span className="w-4 h-4 grid place-items-center">
-                <span className="w-1.5 h-1.5 rounded-full bg-theme-border" />
-              </span>
-            )}
-            <span className={step.state === 'todo' ? 'text-theme-text-tertiary' : 'text-theme-text-secondary'}>
-              {step.label}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <StepList steps={steps} />
       <div className="mt-4">
         {provisioning ? (
           <p className="text-[11px] text-theme-text-tertiary">
