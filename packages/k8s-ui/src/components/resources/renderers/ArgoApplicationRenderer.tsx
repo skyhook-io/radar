@@ -1,7 +1,7 @@
 import { GitBranch, FolderTree, Settings, Target, XCircle, History, ListChecks, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts } from '../../ui/drawer-components'
-import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
+import { GitOpsStatusBadge, ManagedResourcesList } from '../../gitops'
 import {
   argoStatusToGitOpsStatus,
   parseArgoResources,
@@ -11,6 +11,7 @@ import {
 import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 import { buildRepoBrowseUrl, buildPathBrowseUrl } from '../../../utils/git-provider-urls'
 import { TimeValue } from '../../ui/ScheduleValue'
+import { Tooltip } from '../../ui/Tooltip'
 import { formatRelativeAgeTime } from '../../../utils/format'
 
 const REPO_LINK_CLASS = 'text-blue-400 hover:text-blue-300 hover:underline break-all'
@@ -191,14 +192,6 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
             )}
           </div>
 
-          {/* Sync countdown (only if automated sync is enabled) */}
-          {syncPolicy.automated && (
-            <SyncCountdown
-              interval="5m" // ArgoCD default
-              lastSyncTime={status.reconciledAt}
-              suspended={gitOpsStatus.suspended}
-            />
-          )}
         </div>
       </Section>
 
@@ -429,7 +422,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               <Property label="Current Revision" value={status.sync.revision} />
             )}
             {status.reconciledAt && (
-              <Property label="Last Reconciled" value={<TimeValue timestamp={status.reconciledAt} />} />
+              <Property label={<Tooltip content="When Argo last checked the application against Git, not when this revision was deployed"><span>Last checked</span></Tooltip>} value={<TimeValue timestamp={status.reconciledAt} />} />
             )}
           </PropertyList>
         </Section>

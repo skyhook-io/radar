@@ -48,7 +48,6 @@ export function GitRepositoryRenderer({ data }: GitRepositoryRendererProps) {
           {spec.interval && (
             <SyncCountdown
               interval={spec.interval}
-              lastSyncTime={status.lastHandledReconcileAt}
               suspended={gitOpsStatus.suspended}
             />
           )}
@@ -101,12 +100,6 @@ export function GitRepositoryRenderer({ data }: GitRepositoryRendererProps) {
         <Section title="Additional Info" defaultExpanded={false}>
           <PropertyList>
             <Property label="Observed Generation" value={status.observedGeneration} />
-            {status.lastHandledReconcileAt && (
-              <Property
-                label="Last Reconciled"
-                value={<TimeValue timestamp={status.lastHandledReconcileAt} />}
-              />
-            )}
           </PropertyList>
         </Section>
       )}
