@@ -36,6 +36,7 @@ import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRe
 import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBackupRenderer'
 import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
+import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
 
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
@@ -49,6 +50,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
+  { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
   cnpgResourceHost,
 ]
 

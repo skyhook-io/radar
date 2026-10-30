@@ -29,6 +29,7 @@ import { MetricsChart } from '../../ui/MetricsChart'
 import { Badge } from '../../ui/Badge'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
+import { SecretsStoreMountsSection, type SecretsStoreMountsSectionProps } from './SecretsStoreRenderers'
 import { formatRelativeAgeTime } from '../../../utils/format'
 
 function parseValidDate(dateStr: string): Date | null {
@@ -118,6 +119,10 @@ interface PodRendererProps {
   /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
    *  is pending or unreadable, which leaves the contextual link unrendered. */
   namespaceLimitRangeNames?: string[] | null
+  /** Host-read Secrets Store CSI facts for this Pod's namespace. Undefined
+   *  omits the section; the section also renders nothing for a Pod with no
+   *  Secrets Store CSI volumes. */
+  secretsStore?: Omit<SecretsStoreMountsSectionProps, 'pod' | 'onNavigate'>
 }
 
 // ── Env vars section — extracted to use hooks (useState for reveal) ──────────
@@ -306,6 +311,7 @@ export function PodRenderer({
   policyLoading,
   policyError,
   namespaceLimitRangeNames,
+  secretsStore,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
@@ -875,6 +881,10 @@ export function PodRenderer({
           resolvedEnvFrom={resolvedEnvFrom}
           upgrade={environmentUpgrade}
         />
+      )}
+
+      {secretsStore && (
+        <SecretsStoreMountsSection pod={data} {...secretsStore} onNavigate={onNavigate} />
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}

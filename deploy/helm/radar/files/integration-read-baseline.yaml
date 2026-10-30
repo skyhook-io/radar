@@ -17,6 +17,20 @@ entries:
     decision: withhold
     reason: "Canary webhooks and MetricTemplate provider headers can contain inline credentials. Native visibility adds no caller grants."
     source: "https://github.com/fluxcd/flagger/tree/c781cdc199d44cf84e21e90aedd8ff14c1df450e/pkg/apis/flagger/v1beta1"
+  - group: "secrets-store.csi.x-k8s.io"
+    resources: ["secretproviderclasses"]
+    scope: Namespaced
+    collection: "secretsStoreCsi"
+    decision: withhold
+    reason: "spec.parameters is free-form, provider-defined configuration; the driver does not constrain what a provider accepts there. Native visibility adds no caller grants."
+    source: "https://github.com/kubernetes-sigs/secrets-store-csi-driver/tree/v1.6.1/apis/v1"
+  - group: "secrets-store.csi.x-k8s.io"
+    resources: ["secretproviderclasspodstatuses"]
+    scope: Namespaced
+    collection: "secretsStoreCsi"
+    decision: grant
+    reason: "Mount state only: Pod and class names, node, target path and provider object IDs/versions. No secret values or provider parameters."
+    source: "https://github.com/kubernetes-sigs/secrets-store-csi-driver/tree/v1.6.1/apis/v1"
   - group: "scheduling.k8s.io"
     resources: ["priorityclasses"]
     scope: Cluster
