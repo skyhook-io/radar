@@ -1546,6 +1546,8 @@ type ContextInfo struct {
 	// extracted from --profile arg or AWS_PROFILE env var. Set only for
 	// EKS-style exec plugins (aws, aws-iam-authenticator).
 	AWSProfile string `json:"awsProfile,omitempty"`
+	// Slug is the deterministic URL-safe route slug for multi-cluster sessions.
+	Slug string `json:"slug,omitempty"`
 }
 
 func extractAWSProfile(ai *clientcmdapi.AuthInfo) string {

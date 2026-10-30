@@ -339,7 +339,21 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                         type="button"
                         key={item.id}
                         data-highlighted={idx === highlightedIndex}
-                        onClick={() => select(item)}
+                        onClick={(e) => {
+                          if ((e.metaKey || e.ctrlKey) && item.href && !item.disabled) {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            window.open(item.href, '_blank', 'noopener,noreferrer')
+                            return
+                          }
+                          select(item)
+                        }}
+                        onAuxClick={(e) => {
+                          if (e.button === 1 && item.href && !item.disabled) {
+                            e.preventDefault()
+                            window.open(item.href, '_blank', 'noopener,noreferrer')
+                          }
+                        }}
                         onMouseEnter={() => setHighlightedIndex(idx)}
                         disabled={isCurrent || item.disabled}
                         title={item.title}

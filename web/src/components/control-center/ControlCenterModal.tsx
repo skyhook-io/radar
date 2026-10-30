@@ -192,9 +192,7 @@ export function ControlCenterModal({ open, onClose }: ControlCenterModalProps) {
 
           {sessions.map(s => {
             const isReleasing = releasingContext === (s.slug || s.context)
-            const targetUrl = s.isPrimary
-              ? (parentBase ? `${parentBase}/` : '/')
-              : (parentBase ? `${parentBase}/c/${s.slug}/` : `/c/${s.slug}/`)
+            const targetUrl = parentBase ? `${parentBase}/c/${s.slug}/` : `/c/${s.slug}/`
 
             return (
               <div

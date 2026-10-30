@@ -583,7 +583,10 @@ func main() {
 	// Open browser — server is confirmed ready to accept connections
 	if !cfg.NoBrowser {
 		targetURL := "http://" + srv.ActualAddr() + cfg.BasePath
-		if cfg.BasePath != "" {
+		if srv.ClusterSessionsEnabled() && srv.ClusterSupervisor() != nil {
+			primarySlug := srv.ClusterSupervisor().SlugForContext(k8s.GetContextName())
+			targetURL += "/c/" + primarySlug + "/"
+		} else if cfg.BasePath != "" {
 			targetURL += "/"
 		}
 		if len(cfg.Namespaces) > 0 {

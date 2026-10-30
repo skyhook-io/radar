@@ -4,6 +4,7 @@ import {
   type ClusterSwitcherItem,
 } from '@skyhook-io/k8s-ui'
 import { useContexts, useClusterInfo, useCapabilities } from '../api/client'
+import { getBasename } from '../api/config'
 import type { ContextInfo } from '../types'
 import { useContextSwitchFlow } from './useContextSwitchFlow'
 import { parseContextForSwitcher, visibleContextQualifier, type ParsedContextName } from '../utils/context-name'
@@ -55,6 +56,13 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
     }
   }, [contexts])
 
+  const parentBase = useMemo(() => {
+    return getBasename().replace(/\/c\/[^/]+$/, '')
+  }, [])
+
+  const currentCtx = contexts?.find(c => c.isCurrent)
+  const currentId = currentCtx?.name
+
   // Map parsed contexts → generic ClusterSwitcher items, sorted GKE/EKS/AKS/Other → account → name.
   const items = useMemo<ClusterSwitcherItem[]>(() => {
     const order: Record<string, number> = { GKE: 0, EKS: 1, AKS: 2 }
@@ -74,6 +82,13 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         : hasMultipleAccounts
           ? 'Other'
           : undefined
+      const isCurrent = p.context.name === currentId
+      const href = capabilities?.clusterSessions && p.context.slug
+        ? (parentBase ? `${parentBase}/c/${p.context.slug}/` : `/c/${p.context.slug}/`)
+        : undefined
+      const title = capabilities?.clusterSessions && p.context.slug && !isCurrent
+        ? 'Switch cluster (Cmd/Ctrl+click to open in new tab)'
+        : undefined
       return {
         id: p.context.name,
         name: p.raw,
@@ -82,11 +97,17 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         badge: p.region || undefined,
         sourceLabel: hasMultipleSources ? p.context.source : undefined,
         group: { key: groupKey, label: groupLabel },
+        href,
+        title,
       }
     })
-  }, [parsedById, hasMultipleAccounts, hasMultipleSources])
+  }, [parsedById, hasMultipleAccounts, hasMultipleSources, capabilities?.clusterSessions, parentBase, currentId])
 
   const handleSelect = (item: ClusterSwitcherItem) => {
+    if (capabilities?.clusterSessions && item.href) {
+      window.location.href = item.href
+      return
+    }
     const parsed = parsedById.get(item.id)
     if (!parsed) return
     switchFlow.requestSwitch(parsed.context)
@@ -105,8 +126,6 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
     )
   }
 
-  const currentCtx = contexts?.find(c => c.isCurrent)
-  const currentId = currentCtx?.name
   // Keep the trigger name parseable and render any collision qualifier as a
   // separate suffix so cloud-provider metadata remains intact.
   // Fall back to clusterInfo.context for the very-early window before
@@ -132,7 +151,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         items={items}
         onSelect={handleSelect}
         loading={switchFlow.isPending}
-        disabled={contextsLoading || !capabilities || capabilities.configManagement === 'operator'}
+        disabled={contextsLoading || !capabilities || (!capabilities.clusterSessions && capabilities.configManagement === 'operator')}
         searchable={items.length > 1}
         showGroupHeaders={hasMultipleAccounts}
         errorSlot={

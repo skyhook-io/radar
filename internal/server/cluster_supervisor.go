@@ -23,6 +23,7 @@ import (
 
 // WorkerLaunchConfig defines operator restrictions and configuration inherited by child workers.
 type WorkerLaunchConfig struct {
+	ParentBasePath       string
 	KubeconfigPath       string
 	KubeconfigDirs       []string
 	DisableExec          bool
@@ -326,10 +327,15 @@ func (cs *ClusterSupervisor) GetOrCreateWorker(ctx context.Context, identifier s
 	cs.workers[slug] = worker
 	cs.mu.Unlock()
 
+	basePath := fmt.Sprintf("/c/%s", slug)
+	if cs.launchConfig != nil && cs.launchConfig.ParentBasePath != "" {
+		basePath = cs.launchConfig.ParentBasePath + basePath
+	}
+
 	args := []string{
 		fmt.Sprintf("--port=%d", port),
 		fmt.Sprintf("--context=%s", contextName),
-		fmt.Sprintf("--base-path=/c/%s", slug),
+		fmt.Sprintf("--base-path=%s", basePath),
 		"--no-browser",
 		"--worker",
 	}
@@ -415,7 +421,7 @@ func (cs *ClusterSupervisor) GetOrCreateWorker(ctx context.Context, identifier s
 	}()
 
 	// Wait for worker readiness (up to 6s)
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/c/%s/api/connection", port, slug)
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d%s/api/connection", port, basePath)
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

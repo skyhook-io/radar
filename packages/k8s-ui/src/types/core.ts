@@ -539,6 +539,8 @@ export interface ContextInfo {
   /** AWS profile extracted from the exec plugin's --profile arg or AWS_PROFILE
    *  env var. Present only for EKS contexts that pin a profile. */
   awsProfile?: string
+  /** Deterministic URL-safe slug for multi-cluster session routing. */
+  slug?: string
 }
 
 // Namespace

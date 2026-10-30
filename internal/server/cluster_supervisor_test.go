@@ -217,6 +217,8 @@ func TestPrimaryRedirectSecurity(t *testing.T) {
 	}
 	defer close(cs.stopCh)
 
+	primarySlug := cs.SlugForContext("primary-cluster")
+
 	s := &Server{
 		clusterSupervisor: cs,
 		basePath:          "",
@@ -237,19 +239,19 @@ func TestPrimaryRedirectSecurity(t *testing.T) {
 	}{
 		{
 			url:          "/c/primary-cluster/",
-			wantLocation: "/",
+			wantLocation: "/c/" + primarySlug + "/",
 		},
 		{
 			url:          "/c/primary-cluster/resources/pods",
-			wantLocation: "/resources/pods",
+			wantLocation: "/c/" + primarySlug + "/resources/pods",
 		},
 		{
 			url:          "/c/primary-cluster//evil.example.com",
-			wantLocation: "/evil.example.com",
+			wantLocation: "/c/" + primarySlug + "/evil.example.com",
 		},
 		{
 			url:          "/c/primary-cluster/\\evil.example.com",
-			wantLocation: "/evil.example.com",
+			wantLocation: "/c/" + primarySlug + "/evil.example.com",
 		},
 	}
 
@@ -258,12 +260,59 @@ func TestPrimaryRedirectSecurity(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 
-		if w.Code != http.StatusFound {
-			t.Errorf("url %q: expected 302 Found, got %d", tc.url, w.Code)
+		if w.Code != http.StatusMovedPermanently {
+			t.Errorf("url %q: expected 301 Moved Permanently, got %d", tc.url, w.Code)
 		}
 		loc := w.Header().Get("Location")
 		if loc != tc.wantLocation {
 			t.Errorf("url %q: Location = %q, want %q", tc.url, loc, tc.wantLocation)
 		}
+	}
+}
+
+func TestPrimarySessionDirectServing(t *testing.T) {
+	cs := &ClusterSupervisor{
+		workers:       make(map[string]*WorkerSession),
+		slugToContext: make(map[string]string),
+		contextToSlug: make(map[string]string),
+		primaryCtx:    "primary-cluster",
+		stopCh:        make(chan struct{}),
+	}
+	defer close(cs.stopCh)
+
+	primarySlug := cs.SlugForContext("primary-cluster")
+
+	// Create test in-memory router with /api/connection route
+	appRouter := chi.NewRouter()
+	appRouter.Get("/api/connection", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"state":"connected"}`))
+	})
+
+	s := &Server{
+		clusterSupervisor: cs,
+		router:            appRouter,
+		basePath:          "",
+	}
+
+	// Ensure connected state so requireConnected passes
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		State:   k8s.StateConnected,
+		Context: "primary-cluster",
+	})
+
+	r := chi.NewRouter()
+	r.HandleFunc("/c/{context}/*", s.handleClusterSessionProxy)
+
+	req := httptest.NewRequest(http.MethodGet, "/c/"+primarySlug+"/api/connection", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK when requesting API under primary slug, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"state":"connected"`) {
+		t.Fatalf("expected API response to contain state:connected, got: %s", w.Body.String())
 	}
 }

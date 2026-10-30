@@ -211,6 +211,16 @@ func (s *Server) IsWorker() bool {
 	return s.isWorker
 }
 
+// ClusterSessionsEnabled reports whether multi-cluster session supervisor or worker mode is active.
+func (s *Server) ClusterSessionsEnabled() bool {
+	return s.clusterSupervisor != nil
+}
+
+// ClusterSupervisor returns the supervisor managing cluster worker sessions, if active.
+func (s *Server) ClusterSupervisor() *ClusterSupervisor {
+	return s.clusterSupervisor
+}
+
 // Config holds server configuration
 type Config struct {
 	Worker                    bool                // True when running as a child cluster worker process
@@ -341,9 +351,12 @@ func New(cfg Config) *Server {
 		launchCfg := cfg.WorkerLaunchConfig
 		if launchCfg == nil {
 			launchCfg = &WorkerLaunchConfig{
+				ParentBasePath: cfg.BasePath,
 				KubeconfigPath: cfg.KubeconfigPath,
 				KubeconfigDirs: cfg.KubeconfigDirs,
 			}
+		} else if launchCfg.ParentBasePath == "" {
+			launchCfg.ParentBasePath = cfg.BasePath
 		}
 		s.clusterSupervisor = NewClusterSupervisor(k8s.GetContextName(), launchCfg)
 	}
@@ -1086,14 +1099,20 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	if s.clusterSupervisor != nil {
 		r.Get("/c/{context}", s.handleClusterSessionRedirect)
 		r.HandleFunc("/c/{context}/*", s.handleClusterSessionProxy)
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			slug := s.clusterSupervisor.SlugForContext(s.clusterSupervisor.primaryCtx)
+			http.Redirect(w, r, s.basePath+"/c/"+slug+"/"+querySuffix(r), http.StatusFound)
+		})
 	}
 
 	// Static files (frontend) - index.html fallback for client-side routes.
-	if s.staticFS != nil {
-		r.Handle("/*", frontendHandler(http.FS(s.staticFS), s.basePath))
-	} else if s.devMode {
-		// In dev mode, serve from web/dist
-		r.Handle("/*", frontendHandler(http.Dir("web/dist"), s.basePath))
+	fsys := s.frontendFileSystem()
+	if fsys != nil {
+		if s.clusterSupervisor != nil {
+			r.Handle("/*", s.clusterRootHandler(fsys))
+		} else {
+			r.Handle("/*", frontendHandler(fsys, s.basePath))
+		}
 	}
 }
 
@@ -1156,6 +1175,39 @@ func NormalizeBasePath(raw string) (string, error) {
 		return "", nil
 	}
 	return clean, nil
+}
+
+func (s *Server) frontendFileSystem() http.FileSystem {
+	if s.staticFS != nil {
+		return http.FS(s.staticFS)
+	}
+	if s.devMode {
+		return http.Dir("web/dist")
+	}
+	return nil
+}
+
+func (s *Server) clusterRootHandler(fsys http.FileSystem) http.Handler {
+	fileServer := http.FileServer(fsys)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path != "/" && path != "/index.html" {
+			if f, err := fsys.Open(path); err == nil {
+				stat, statErr := f.Stat()
+				_ = f.Close()
+				if statErr == nil && !stat.IsDir() {
+					fileServer.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		slug := s.clusterSupervisor.SlugForContext(s.clusterSupervisor.primaryCtx)
+		cleanPath := pathpkg.Clean("/" + strings.TrimLeft(path, "/\\"))
+		if cleanPath == "/" || cleanPath == "." {
+			cleanPath = "/"
+		}
+		http.Redirect(w, r, s.basePath+"/c/"+slug+cleanPath+querySuffix(r), http.StatusFound)
+	})
 }
 
 // frontendHandler serves static files, falling back to index.html for client-side routing
@@ -1523,7 +1575,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPEnabled = s.mcpEnabled()
 	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.MCPExecTools = s.mcpHandler != nil && s.mcpExecTools
-	caps.ClusterSessions = s.clusterSupervisor != nil
+	caps.ClusterSessions = s.clusterSupervisor != nil || s.isWorker
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
@@ -4900,6 +4952,16 @@ func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.clusterSupervisor != nil {
+		for i := range contexts {
+			contexts[i].Slug = s.clusterSupervisor.SlugForContext(contexts[i].Name)
+		}
+	} else if s.isWorker {
+		for i := range contexts {
+			contexts[i].Slug = ContextSlug(contexts[i].Name)
+		}
+	}
+
 	s.writeJSON(w, contexts)
 }
 
@@ -5043,21 +5105,85 @@ func (s *Server) handleClusterSessionProxy(w http.ResponseWriter, r *http.Reques
 	}
 
 	if s.clusterSupervisor.IsPrimary(ctxParam) {
-		prefix := s.basePath + "/c/" + ctxParam
+		primarySlug := s.clusterSupervisor.SlugForContext(s.clusterSupervisor.primaryCtx)
+		prefix := "/c/" + ctxParam
+		if strings.HasPrefix(r.URL.Path, s.basePath+"/c/"+ctxParam) {
+			prefix = s.basePath + "/c/" + ctxParam
+		}
 		remainder := strings.TrimPrefix(r.URL.Path, prefix)
-		cleanTarget := pathpkg.Clean("/" + strings.TrimLeft(remainder, "/\\"))
-		if !strings.HasPrefix(cleanTarget, "/") || strings.HasPrefix(cleanTarget, "//") || strings.HasPrefix(cleanTarget, "/\\") {
-			cleanTarget = "/"
+		if ctxParam != primarySlug {
+			cleanRemainder := pathpkg.Clean("/" + strings.TrimLeft(remainder, "/\\"))
+			if !strings.HasPrefix(cleanRemainder, "/") || strings.HasPrefix(cleanRemainder, "//") || strings.HasPrefix(cleanRemainder, "/\\") {
+				cleanRemainder = "/"
+			}
+			target := s.basePath + "/c/" + primarySlug + cleanRemainder
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+			return
 		}
-		target := s.basePath + cleanTarget
-		if r.URL.RawQuery != "" {
-			target += "?" + r.URL.RawQuery
-		}
-		http.Redirect(w, r, target, http.StatusFound)
+		s.servePrimarySession(w, r, primarySlug)
 		return
 	}
 
 	s.clusterSupervisor.ServeHTTP(w, r, ctxParam)
+}
+
+func (s *Server) servePrimarySession(w http.ResponseWriter, r *http.Request, primarySlug string) {
+	prefix := "/c/" + primarySlug
+	if strings.HasPrefix(r.URL.Path, s.basePath+"/c/"+primarySlug) {
+		prefix = s.basePath + "/c/" + primarySlug
+	}
+	remainder := strings.TrimPrefix(r.URL.Path, prefix)
+	if !strings.HasPrefix(remainder, "/") {
+		remainder = "/" + remainder
+	}
+
+	// 1. Backend API / system routes
+	if remainder == "/api" || strings.HasPrefix(remainder, "/api/") ||
+		remainder == "/auth" || strings.HasPrefix(remainder, "/auth/") ||
+		remainder == "/debug" || strings.HasPrefix(remainder, "/debug/") ||
+		remainder == "/mcp" || strings.HasPrefix(remainder, "/mcp/") {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = s.basePath + remainder
+		if r.URL.RawPath != "" {
+			rawPrefix := prefix
+			if strings.HasPrefix(r.URL.RawPath, rawPrefix) {
+				r2.URL.RawPath = s.basePath + strings.TrimPrefix(r.URL.RawPath, rawPrefix)
+			} else {
+				r2.URL.RawPath = ""
+			}
+		}
+		rctx := chi.NewRouteContext()
+		r2 = r2.WithContext(context.WithValue(r2.Context(), chi.RouteCtxKey, rctx))
+		s.router.ServeHTTP(w, r2)
+		return
+	}
+
+	// 2. Static files
+	fsys := s.frontendFileSystem()
+	if fsys == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if remainder != "/" && remainder != "/index.html" {
+		cleanRemainder := pathpkg.Clean("/" + strings.TrimLeft(remainder, "/\\"))
+		if f, err := fsys.Open(cleanRemainder); err == nil {
+			stat, statErr := f.Stat()
+			_ = f.Close()
+			if statErr == nil && !stat.IsDir() {
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = cleanRemainder
+				http.FileServer(fsys).ServeHTTP(w, r2)
+				return
+			}
+		}
+	}
+
+	// 3. Fallback to index.html configured for this cluster session
+	serveFrontendIndex(w, r, fsys, s.basePath+"/c/"+primarySlug)
 }
 
 // Connection status handlers (for graceful startup)
