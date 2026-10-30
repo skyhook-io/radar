@@ -276,6 +276,23 @@ type IncidentParent struct {
 	FactType   string     `json:"fact_type,omitempty"` // node_blast_radius | pvc_blast_radius | apiservice_hpa | secret_not_ready
 }
 
+// RunOrigin says what created a run: a batch Job or an Argo Workflow, the
+// kinds whose every run is a new object with its own name and so its own
+// issue ID. It is read from the run's own metadata (its controller owner
+// reference, Argo's labels and workflowTemplateRef, metadata.generateName),
+// never parsed from the name, so a consumer can tell runs of one CronJob,
+// CronWorkflow or template apart from unrelated Jobs that happen to share a
+// name prefix. Nil when the run records no creator and no generateName.
+type RunOrigin struct {
+	// Creator is the object the run was created from: a CronJob or other
+	// controller owner, a CronWorkflow, a WorkflowTemplate or a
+	// ClusterWorkflowTemplate. Zero when the run names none.
+	Creator Ref `json:"creator,omitzero"`
+	// GenerateName is the run's metadata.generateName, set when it was created
+	// with a generated name (argo submit, kubectl create with generateName).
+	GenerateName string `json:"generate_name,omitempty"`
+}
+
 type IssueRef struct {
 	Ref      Ref      `json:"ref"`
 	Reason   string   `json:"reason,omitempty"`
@@ -588,6 +605,9 @@ type Issue struct {
 	Fingerprint          string         `json:"-"`
 	RestartCount         int32          `json:"restart_count,omitempty"`
 	LastTerminatedReason string         `json:"last_terminated_reason,omitempty"`
+	// RunOrigin is set when the issue's subject (Owner, else the resource) is
+	// a batch Job or an Argo Workflow; see RunOrigin.
+	RunOrigin *RunOrigin `json:"run_origin,omitempty"`
 	// RestartLoop is set on a crashloop or oom_killed issue whose container
 	// Radar classifies as in an active restart loop. It is the evidence for the loop, taken
 	// from one container so every field describes the same termination.

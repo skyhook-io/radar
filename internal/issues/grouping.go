@@ -244,6 +244,9 @@ func foldGroup(members []Issue) Issue {
 		OnsetUnknown:         rep.OnsetUnknown,
 		ResourceCreatedAt:    rep.ResourceCreatedAt,
 		LastSeen:             rep.LastSeen,
+		// Every member shares the subject, so the representative's origin is
+		// the group's.
+		RunOrigin: rep.RunOrigin,
 		// Per-issue context carries from the representative, like Reason/Message.
 		// The per-resource RelatedIssues path enriches the flat rows first,
 		// so without this the regroup would drop the representative's causal

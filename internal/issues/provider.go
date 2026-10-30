@@ -440,6 +440,40 @@ func (p *CacheProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext 
 	return deploymentChangeContext(p.cache, i.Namespace, i.Name)
 }
 
+// RunOrigin reads a run subject's origin from the caches only: the typed Job
+// cache, or the Workflow informer when one is already watching. It never
+// starts an informer or calls the API.
+func (p *CacheProvider) RunOrigin(subject Ref) *issuesapi.RunOrigin {
+	if p == nil || subject.Namespace == "" || subject.Name == "" {
+		return nil
+	}
+	switch {
+	case subject.Group == "batch" && subject.Kind == "Job":
+		if p.cache == nil || p.cache.Jobs() == nil {
+			return nil
+		}
+		job, err := p.cache.Jobs().Jobs(subject.Namespace).Get(subject.Name)
+		if err != nil {
+			return nil
+		}
+		return jobRunOrigin(job)
+	case subject.Group == argoGroup && subject.Kind == "Workflow":
+		if p.dynamic == nil || p.discovery == nil {
+			return nil
+		}
+		gvr, ok := p.discovery.GetGVRWithGroup("Workflow", argoGroup)
+		if !ok {
+			return nil
+		}
+		u, err := p.dynamic.GetWatched(gvr, subject.Namespace, subject.Name)
+		if err != nil {
+			return nil
+		}
+		return workflowRunOrigin(u)
+	}
+	return nil
+}
+
 // ClusterContextForIssues surfaces cross-namespace cluster context (today: the
 // CoreDNS DNS hint) alongside a namespace-scoped issue query. canReadCoreDNS
 // gates kube-system disclosure by the concrete resource being read. A nil
