@@ -359,9 +359,18 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 	groups := map[string]*routeGroup{}
 	var order []string
 
+	// Controllers do not always prune status.parents when a parentRef is removed
+	// from the spec, so an obsolete entry can keep reporting a failure for a
+	// listener the route no longer targets. Only evaluate current parents.
+	specRefs, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+	gen := u.GetGeneration()
+
 	for _, parent := range parents {
 		pm, ok := parent.(map[string]any)
 		if !ok {
+			continue
+		}
+		if len(specRefs) > 0 && !routeParentInSpec(pm, specRefs, u.GetNamespace()) {
 			continue
 		}
 		gwLabel, gwKey, section := gatewayParentRef(pm)
@@ -380,6 +389,11 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 			}
 			reason, _ := cm["reason"].(string)
 			if conditions.IsInProgressForIssues(reason) {
+				continue
+			}
+			// The controller has not reconciled the current spec for this parent
+			// yet, so the condition describes an earlier generation.
+			if observed, ok, _ := unstructured.NestedInt64(cm, "observedGeneration"); ok && gen > 0 && observed > 0 && observed < gen {
 				continue
 			}
 			msg, _ := cm["message"].(string)
@@ -568,6 +582,52 @@ func gatewayParentRef(parent map[string]any) (gwLabel, gwKey, section string) {
 	}
 	gwLabel = kind + " " + displayName
 	return gwLabel, gwKey, section
+}
+
+// routeParentInSpec reports whether a status.parents entry still corresponds to
+// one of the route's spec.parentRefs. Group, kind and namespace take their Gateway
+// API defaults when omitted. A spec ref without sectionName/port matches any
+// listener of that parent, since controllers may report it per listener.
+func routeParentInSpec(parent map[string]any, specRefs []any, routeNamespace string) bool {
+	ref, _ := parent["parentRef"].(map[string]any)
+	if len(ref) == 0 {
+		return true
+	}
+	norm := func(r map[string]any) (key, section, port string) {
+		group, _ := r["group"].(string)
+		kind, _ := r["kind"].(string)
+		namespace, _ := r["namespace"].(string)
+		name, _ := r["name"].(string)
+		section, _ = r["sectionName"].(string)
+		if p, ok := r["port"]; ok {
+			port = toString(p)
+		}
+		if group == "" {
+			group = "gateway.networking.k8s.io"
+		}
+		if kind == "" {
+			kind = "Gateway"
+		}
+		if namespace == "" {
+			namespace = routeNamespace
+		}
+		return strings.Join([]string{group, kind, namespace, name}, "/"), section, port
+	}
+	key, section, port := norm(ref)
+	for _, s := range specRefs {
+		sm, ok := s.(map[string]any)
+		if !ok {
+			continue
+		}
+		specKey, specSection, specPort := norm(sm)
+		if specKey != key {
+			continue
+		}
+		if (specSection == "" || specSection == section) && (specPort == "" || specPort == port) {
+			return true
+		}
+	}
+	return false
 }
 
 func toString(v any) string {
