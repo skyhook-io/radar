@@ -97,6 +97,19 @@ export function argoResumeSettings(app: any, serverStartsPruneOff: boolean | und
   return { prune: !serverStartsPruneOff, selfHeal: true }
 }
 
+// isArgoHydrated: spec.sourceHydrator sets the Application's source, taking
+// precedence over spec.source and spec.sources. Radar leaves its source to the
+// controller, so a sync of it pins no compared revision.
+export function isArgoHydrated(app: any): boolean {
+  return app?.spec?.sourceHydrator != null
+}
+
+// isArgoMultiSource: the Application syncs several sources, so a single
+// revision override doesn't apply. Leftover spec.sources beside a hydrator don't count.
+export function isArgoMultiSource(app: any): boolean {
+  return !isArgoHydrated(app) && Array.isArray(app?.spec?.sources) && app.spec.sources.length > 0
+}
+
 // argoApplicationSyncOptions returns spec.syncPolicy.syncOptions: the options
 // Argo CD applies to every sync of the Application unless a sync names its own.
 export function argoApplicationSyncOptions(app: any): string[] {

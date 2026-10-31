@@ -197,10 +197,11 @@ it.each([
     { repoURL: 'https://example.com/app', targetRevision: 'main' },
     { repoURL: 'https://example.com/values', targetRevision: 'v1' },
   ]
+  await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
   await renderView(path)
   await click(button('Open sync'))
   expect(document.body.textContent).not.toContain('Revision (optional)')
-  expect(document.body.textContent).toContain("Syncs each source's last compared revision when the source settings still match.")
+  expect(document.body.textContent).toContain('Syncs each source at the revision Argo last compared.')
   await click(button('Sync now'))
   expect(requests).toHaveLength(1)
   expect(requests[0].body).not.toHaveProperty('revision')
@@ -211,11 +212,25 @@ it.each([
   '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
 ])('shows the compared revision in the sync dialog from %s', async (path) => {
   app.status.sync.revision = 'abcdef0123456789abcdef0123456789abcdef01'
+  await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
   await renderView(path)
   await click(button('Open sync'))
-  expect(document.body.textContent).toContain('Leave empty to sync the last compared revision (abcdef0) when its source settings still match.')
+  expect(document.body.textContent).toContain('Leave empty for the revision Argo last compared (abcdef0).')
   await click(button('Sync now'))
   expect(requests[0].body).not.toHaveProperty('revision')
+})
+
+// An older Radar resolves an omitted revision when the sync runs.
+it.each([
+  '/gitops',
+  '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
+])('promises no compared revision to an older Radar from %s', async (path) => {
+  app.status.sync.revision = 'abcdef0123456789abcdef0123456789abcdef01'
+  await advertise({ argoRollbackSync: true })
+  await renderView(path)
+  await click(button('Open sync'))
+  expect(document.body.textContent).toContain('Leave empty for the target revision, resolved when the sync runs.')
+  expect(document.body.textContent).not.toContain('last compared')
 })
 
 const STALE_OPTIONS_NOTICE = "The Application's sync options changed while this dialog was open. This sync uses the options shown here. Cancel and reopen to load the latest."
@@ -276,5 +291,5 @@ it('refreshes auto-sync status in the table sync dialog', async () => {
   expect(revision.disabled).toBe(false)
   await replaceTableApplication(APP_OPTIONS, true)
   expect(revision.disabled).toBe(true)
-  expect(document.body.textContent).toContain('Disable auto-sync to deploy another revision')
+  expect(document.body.textContent).toContain('Turn off auto-sync to deploy another revision')
 })

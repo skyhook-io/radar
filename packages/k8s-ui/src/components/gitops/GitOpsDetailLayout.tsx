@@ -12,7 +12,7 @@ import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation,
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
 function argoResumeDescription(suspended: boolean, settings: ArgoActionHandlers['resumeSettings']): string {
-  if (suspended) return 'Turn auto-sync back on with the settings it had before'
+  if (suspended) return 'Turn auto-sync back on with its current or saved settings.'
   if (!settings) return 'Turn on automated sync, so Argo applies new commits from Git.'
   return `Argo applies new commits${settings.selfHeal ? ' and reverts live edits (self-heal)' : ''}. Resources removed from Git are ${settings.prune ? 'deleted (prune on)' : 'kept (prune off)'}.`
 }

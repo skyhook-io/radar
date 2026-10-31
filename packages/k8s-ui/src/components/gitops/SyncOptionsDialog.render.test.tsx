@@ -57,11 +57,24 @@ it('starts with prune off and submits nothing for the options, so the Applicatio
 })
 
 it('hides the revision for multi-source Applications and explains comparison pinning', async () => {
-  await render({ multiSource: true })
+  await render({ multiSource: true, pinsComparedRevision: true })
   expect(document.body.textContent).not.toContain('Revision (optional)')
-  expect(document.body.textContent).toContain("Syncs each source's last compared revision when the source settings still match.")
+  expect(document.body.textContent).toContain('Syncs each source at the revision Argo last compared.')
   await click(button('Sync now'))
   expect(confirmed[0].revision).toBeUndefined()
+})
+
+// A Radar without argoSyncInheritance resolves the target when the sync runs,
+// so the dialog must not promise the compared revision.
+it('promises no compared revision when the serving Radar does not pin it', async () => {
+  await render({ comparedRevision: 'abcdef0123456789abcdef0123456789abcdef01' })
+  expect(document.body.textContent).toContain('Leave empty for the target revision, resolved when the sync runs.')
+  expect(document.body.textContent).not.toContain('last compared')
+  await render({ multiSource: true })
+  expect(document.body.textContent).toContain("Syncs each source's target revision, resolved when the sync runs.")
+  await render({ resource: { kind: 'Deployment', group: 'apps', namespace: 'guestbook', name: 'web' } })
+  expect(document.body.textContent).toContain('Uses the target revision, resolved when the sync runs.')
+  expect(document.body.textContent).not.toContain('last compared')
 })
 
 it('omits an entered revision if the Application becomes multi-source while open', async () => {
@@ -77,9 +90,8 @@ it('omits an entered revision if the Application becomes multi-source while open
 })
 
 it('explains selective sync hooks, dependencies and namespace management without denying wave ordering', async () => {
-  await render({ resource: { kind: 'Deployment', group: 'apps', namespace: 'guestbook', name: 'web' } })
-  expect(document.body.textContent).toContain('Syncs only the selected resources, without hooks. Dependencies outside the selection are not synced. Application namespace creation options still apply.')
-  expect(document.body.textContent).toContain('Syncs the last compared revision when its source settings still match.')
+  await render({ resource: { kind: 'Deployment', group: 'apps', namespace: 'guestbook', name: 'web' }, pinsComparedRevision: true })
+  expect(document.body.textContent).toContain("Syncs only this resource, without hooks. Resources it depends on aren't synced; namespace creation still applies. Uses the revision Argo last compared.")
   expect(document.body.textContent).not.toContain('Only this resource will be applied')
   expect(document.body.textContent).not.toContain('bypasses hooks and normal sync-wave ordering')
 })
@@ -262,7 +274,7 @@ it('allows revision previews with auto-sync enabled and omits the override for a
   await render({ autoSyncEnabled: true })
   const revision = document.querySelector('input:not([type="checkbox"])') as HTMLInputElement
   expect(revision.disabled).toBe(true)
-  expect(document.body.textContent).toContain('Disable auto-sync to deploy another revision; dry runs can preview one.')
+  expect(document.body.textContent).toContain('Turn off auto-sync to deploy another revision; a dry run can preview one.')
   await click(toggle('Dry run'))
   expect(revision.disabled).toBe(false)
   await act(async () => {
@@ -273,6 +285,8 @@ it('allows revision previews with auto-sync enabled and omits the override for a
   expect(confirmed[0]).toMatchObject({ revision: 'old-sha', dryRun: true })
   await click(toggle('Dry run'))
   expect(revision.disabled).toBe(true)
+  // The override no longer applies, so it isn't left on screen while the sync deploys something else.
+  expect(revision.value).toBe('')
   await click(button('Sync now'))
   expect(confirmed[1].revision).toBeUndefined()
 })
@@ -286,6 +300,7 @@ it('omits a previously entered revision when auto-sync becomes enabled while ope
   })
   await render({ autoSyncEnabled: true })
   expect(revision.disabled).toBe(true)
+  expect(revision.value).toBe('')
   await click(button('Sync now'))
   expect(confirmed[0].revision).toBeUndefined()
 })
@@ -295,20 +310,22 @@ it.each([
   { comparedRevision: 'chart-version-1.2.3', label: ' (chart-version-1.2.3)' },
   { comparedRevision: undefined, label: '' },
 ])('explains empty revision pinning with comparison $comparedRevision', async ({ comparedRevision, label }) => {
-  await render({ comparedRevision })
-  expect(document.body.textContent).toContain(`Leave empty to sync the last compared revision${label} when its source settings still match.`)
+  await render({ comparedRevision, pinsComparedRevision: true })
+  expect(document.body.textContent).toContain(`Leave empty for the revision Argo last compared${label}.`)
   await click(button('Sync now'))
   expect(confirmed[0].revision).toBeUndefined()
 })
 
-it('distinguishes a selective validation target from its compared sync target', async () => {
+// The backend pins the validation dry-run like the sync, so one target is named.
+it('names one compared target for selective validation and sync', async () => {
   await render({
     resource: { kind: 'Deployment', group: 'apps', namespace: 'guestbook', name: 'web' },
     comparedRevision: 'abcdef0123456789abcdef0123456789abcdef01',
+    pinsComparedRevision: true,
     onValidate: (opts) => validated.push(opts),
   })
-  expect(document.body.textContent).toContain('Syncs the last compared revision (abcdef0) when its source settings still match.')
-  expect(document.body.textContent).toContain('The dry run checks the latest revision, which can differ from the one synced.')
+  expect(document.body.textContent).toContain('Uses the revision Argo last compared (abcdef0).')
+  expect(document.body.textContent).not.toContain('latest revision')
   await click(button('Dry-run'))
   await click(button('Sync resource'))
   expect(validated[0].revision).toBeUndefined()

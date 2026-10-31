@@ -16,6 +16,8 @@ import {
   RollbackDialog,
   SyncOptionsDialog,
   argoApplicationSyncOptions,
+  isArgoHydrated,
+  isArgoMultiSource,
   buildFluxSourceUrlMap,
   buildTreeFacets,
   describeGitOpsTerminating,
@@ -145,6 +147,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
+  const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
 
   const [syncDialogRowId, setSyncDialogRowId] = useState<string | null>(null)
   const [pendingActions, setPendingActions] = useState<Map<string, Set<GitOpsRowAction>>>(new Map())
@@ -365,8 +368,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
       <SyncOptionsDialog
         open={!!syncDialogRow}
         appLabel={syncDialogRow ? `${syncDialogRow.namespace}/${syncDialogRow.name}` : ''}
-        multiSource={Array.isArray(syncDialogRow?.raw?.spec?.sources) && syncDialogRow.raw.spec.sources.length > 0}
+        multiSource={isArgoMultiSource(syncDialogRow?.raw)}
         comparedRevision={syncDialogRow?.raw?.status?.sync?.revision}
+        pinsComparedRevision={argoInheritanceSupport === 'supported' && !isArgoHydrated(syncDialogRow?.raw)}
         applicationSyncOptions={argoApplicationSyncOptions(syncDialogRow?.raw)}
         autoSyncEnabled={!!syncDialogRow && isArgoAutoSyncEnabled(syncDialogRow.raw)}
         pending={argoSync.isPending}
@@ -925,7 +929,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
           <SyncOptionsDialog
             open={!!syncDialogTarget}
             appLabel={`${namespace}/${name}`}
-            multiSource={Array.isArray(resourceQ.data?.spec?.sources) && resourceQ.data.spec.sources.length > 0}
+            multiSource={isArgoMultiSource(resourceQ.data)}
+            pinsComparedRevision={argoInheritanceSupport === 'supported' && !isArgoHydrated(resourceQ.data)}
             resource={syncDialogTarget?.scope === 'resource' ? syncDialogTarget.resource : undefined}
             comparedRevision={resourceQ.data?.status?.sync?.revision}
             applicationSyncOptions={appSyncOptions}

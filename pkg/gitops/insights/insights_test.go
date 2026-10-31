@@ -2194,8 +2194,8 @@ func TestBuildIssuesArgoSyncWindowBlockedOperation(t *testing.T) {
 				if issues[0].Severity != SeverityWarning || !strings.Contains(issues[0].Message, "sync window") {
 					t.Fatalf("blocked issue = %+v, want a warning naming the sync window", issues[0])
 				}
-				if tc.phase == "Running" && !strings.Contains(issues[0].Action, "Changing the Application's source settings does not update a sync already waiting; terminate it and sync again after such edits.") {
-					t.Fatalf("blocked action = %q, want guidance to resubmit after source edits", issues[0].Action)
+				if tc.phase == "Running" && !strings.Contains(issues[0].Action, "terminate the operation to drop it") {
+					t.Fatalf("blocked action = %q, want guidance to terminate the held operation", issues[0].Action)
 				}
 			}
 		})

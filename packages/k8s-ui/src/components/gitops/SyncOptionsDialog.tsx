@@ -45,6 +45,9 @@ export interface SyncOptionsDialogProps {
   appLabel: string
   multiSource?: boolean
   comparedRevision?: string
+  // The serving Radar pins an omitted revision to the last compared one
+  // (argoSyncInheritance). Otherwise the target is resolved when the sync runs.
+  pinsComparedRevision?: boolean
   resource?: GitOpsInsightRef
   // The Application's spec.syncPolicy.syncOptions. Without it the toggles
   // are disabled and the submitted syncOptions are omitted.
@@ -70,7 +73,7 @@ export interface ResourceValidationResult {
   }
 }
 
-export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, resource, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const titleId = useId()
   const syncOptionsUnknown = applicationSyncOptions === undefined
   const liveAppOptions = applicationSyncOptions ?? EMPTY_OPTIONS
@@ -97,6 +100,9 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
   const busy = !!pending || !!validationPending
   const optionsDisabled = busy || !!operationInProgress
   const revisionDisabled = !!autoSyncEnabled && !dryRun
+  const targetLabel = pinsComparedRevision
+    ? `the revision Argo last compared${comparedRevisionLabel ? ` (${comparedRevisionLabel})` : ''}`
+    : 'the target revision, resolved when the sync runs'
 
   function startFromApplicationOptions(options: string[]) {
     setAppOptions(options)
@@ -118,6 +124,12 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, resource])
+
+  // A revision that no longer applies is cleared rather than left on screen
+  // while the sync deploys something else.
+  useEffect(() => {
+    if (revisionDisabled || multiSource) setRevision('')
+  }, [revisionDisabled, multiSource])
 
   // The Application's options changed while the dialog is open and the user
   // hasn't edited one: start from the new ones, and drop a dry-run result
@@ -154,12 +166,12 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
   }
 
   return (
-    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={busy ? () => {} : onCancel} className="w-[480px]" closable={!busy}>
-      <div className="border-b border-theme-border px-4 py-3">
+    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={busy ? () => {} : onCancel} className="flex max-h-[calc(100vh-2rem)] w-[480px] flex-col" closable={!busy}>
+      <div className="shrink-0 border-b border-theme-border px-4 py-3">
         <h2 id={titleId} className="text-sm font-semibold text-theme-text-primary">{resource ? 'Sync resource' : 'Sync application'}</h2>
         <p className="mt-0.5 break-all text-xs text-theme-text-tertiary">{appLabel}</p>
       </div>
-      <div className="space-y-4 px-4 py-4 text-sm">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm">
         {resource && (
           <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
             <div className="flex items-start gap-2">
@@ -169,19 +181,11 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
                   {resource.kind} / {resource.namespace ? `${resource.namespace}/` : ''}{resource.name}
                 </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-theme-text-secondary">
-                  Syncs only the selected resources, without hooks. Dependencies outside the selection are not synced. Application namespace creation options still apply.
+                  Syncs only this resource, without hooks. Resources it depends on aren't synced; namespace creation still applies. Uses {multiSource && pinsComparedRevision ? 'the revisions Argo last compared' : targetLabel}.
                 </p>
-                <p className="mt-1 text-[11px] leading-relaxed text-theme-text-secondary">
-                  Syncs the last compared revision{!multiSource && comparedRevisionLabel ? ` (${comparedRevisionLabel})` : ''} when its source settings still match.
-                </p>
-                {richResourceValidation && (
-                  <p className="mt-1 text-[11px] leading-relaxed text-theme-text-secondary">
-                    The dry run checks the latest revision, which can differ from the one synced.
-                  </p>
-                )}
                 {autoSyncEnabled && (
-                  <p className="mt-2 border-t border-amber-500/20 pt-2 text-[11px] leading-relaxed text-theme-text-secondary">
-                    Auto-sync is enabled. Argo can reconcile this Application independently while the dry-run runs; a dry-run does not pause automation.
+                  <p className="mt-1 text-[11px] leading-relaxed text-theme-text-secondary">
+                    Auto-sync stays on during the dry run, so Argo can still sync the Application meanwhile.
                   </p>
                 )}
               </div>
@@ -194,20 +198,19 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
             <Input
               value={revision}
               onChange={(e) => setRevision(e.target.value)}
-              placeholder="Last compared revision"
+              placeholder={pinsComparedRevision ? 'Last compared revision' : 'Target revision'}
               disabled={optionsDisabled || revisionDisabled}
               className="mt-1 w-full rounded-md border border-theme-border bg-theme-base px-2 py-1.5 font-mono text-xs text-theme-text-primary outline-none placeholder:text-theme-text-tertiary focus:border-sky-500"
             />
             <span className="mt-0.5 block text-[11px] text-theme-text-tertiary">
-              Branch, tag, or commit SHA. Leave empty to sync the last compared revision{comparedRevisionLabel ? ` (${comparedRevisionLabel})` : ''} when its source settings still match.
+              {revisionDisabled
+                ? `Auto-sync is on, so this sync uses ${targetLabel}. Turn off auto-sync to deploy another revision; a dry run can preview one.`
+                : `Branch, tag, or commit SHA. Leave empty for ${targetLabel}.`}
             </span>
-            {autoSyncEnabled && <span className="mt-0.5 block text-[11px] text-theme-text-tertiary">
-              Auto-sync is enabled. Disable auto-sync to deploy another revision; dry runs can preview one.
-            </span>}
           </label>
         )}
         {!resource && multiSource && (
-          <p className="text-xs text-theme-text-tertiary">Syncs each source's last compared revision when the source settings still match.</p>
+          <p className="text-xs text-theme-text-tertiary">{pinsComparedRevision ? 'Syncs each source at the revision Argo last compared.' : "Syncs each source's target revision, resolved when the sync runs."}</p>
         )}
 
         {/* Common (Prune / Dry run) sit above a divider; Advanced toggles

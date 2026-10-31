@@ -1844,8 +1844,9 @@ func TestArgoSyncOperationPinsComparedRevisions(t *testing.T) {
 		{name: "explicit branch", spec: single, comparison: singleComparison, opts: ArgoSyncOptions{Revision: "main"}, wantRevision: "main"},
 		{name: "explicit commit", spec: single, comparison: singleComparison, opts: ArgoSyncOptions{Revision: "requested-sha"}, wantRevision: "requested-sha"},
 		{name: "user dry-run", spec: single, comparison: singleComparison, opts: ArgoSyncOptions{DryRun: &dryRun}, wantRevision: "compared-sha"},
-		{name: "single validation dry-run", spec: single, comparison: singleComparison, opts: ArgoSyncOptions{DryRun: &dryRun}, validationID: "validation"},
-		{name: "plural validation dry-run", spec: multi, comparison: multiComparison, opts: ArgoSyncOptions{DryRun: &dryRun}, validationID: "validation"},
+		// Validation checks what the following sync deploys.
+		{name: "single validation dry-run", spec: single, comparison: singleComparison, opts: ArgoSyncOptions{DryRun: &dryRun}, validationID: "validation", wantRevision: "compared-sha"},
+		{name: "plural validation dry-run", spec: multi, comparison: multiComparison, opts: ArgoSyncOptions{DryRun: &dryRun}, validationID: "validation", wantRevisions: []string{"app-sha", "values-sha"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1935,6 +1936,7 @@ func TestArgoOperationsAttributeInitiator(t *testing.T) {
 		{name: "authenticated user", ctx: alice, want: "alice@example.com"},
 		{name: "cloud email", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "user_01ABC", Groups: []string{"radar:member", "radar:idp:radar:email:other@example.com", "radar:email:alice@example.com"}}), want: "alice@example.com"},
 		{name: "cloud without email", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "user_01ABC", Groups: []string{"radar:member"}}), want: "user_01ABC"},
+		{name: "user-token Cloud email", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "kube-user", Groups: []string{"system:authenticated"}, HubGroups: []string{"radar:member", "radar:email:alice@example.com"}}), want: "alice@example.com"},
 		{name: "empty email group", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "user_01ABC", Groups: []string{"radar:email:"}}), want: "user_01ABC"},
 		{name: "no per-user auth", ctx: context.Background(), want: "radar"},
 		{name: "user without a name", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{}), want: "radar"},
@@ -2450,5 +2452,54 @@ func TestArgoAppliedCurrentComparison(t *testing.T) {
 				t.Fatalf("matches = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// Argo CD prefers spec.sourceHydrator over a spec.source or spec.sources left
+// beside it, so a sync must not copy those: it would deploy a source Argo
+// ignores. The controller resolves the hydrated source when the sync runs.
+func TestArgoSyncOperationLeavesHydratedSourceToController(t *testing.T) {
+	hydrator := map[string]any{
+		"drySource":  map[string]any{"repoURL": "https://example.com/repo", "path": "app", "targetRevision": "main"},
+		"syncSource": map[string]any{"targetBranch": "environments/prod", "path": "rendered"},
+	}
+	leftover := map[string]any{"repoURL": "https://example.com/old", "path": "old", "targetRevision": "main"}
+	for name, spec := range map[string]map[string]any{
+		"hydrator only":           {"sourceHydrator": hydrator},
+		"leftover scalar source":  {"sourceHydrator": hydrator, "source": leftover},
+		"leftover plural sources": {"sourceHydrator": hydrator, "sources": []any{leftover}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			app := argoAppForTest("argocd", "demo", nil)
+			if err := unstructured.SetNestedMap(app.Object, spec, "spec"); err != nil {
+				t.Fatal(err)
+			}
+			comparedTo := map[string]any{"source": leftover, "sources": []any{leftover}}
+			if err := unstructured.SetNestedMap(app.Object, map[string]any{"revision": "old-sha", "revisions": []any{"old-sha"}, "comparedTo": comparedTo}, "status", "sync"); err != nil {
+				t.Fatal(err)
+			}
+			client := newFakeArgo(app)
+			if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{}); err != nil {
+				t.Fatalf("SyncArgoApp: %v", err)
+			}
+			sync := nestedMap(captureLastPatch(t, client), "operation", "sync")
+			for _, key := range []string{"source", "sources", "revisions"} {
+				if _, ok := sync[key]; ok {
+					t.Fatalf("sync.%s = %v, want it left to the controller", key, sync[key])
+				}
+			}
+			if sync["revision"] != "" {
+				t.Fatalf("sync.revision = %v, want none", sync["revision"])
+			}
+		})
+	}
+
+	// Leftover spec.sources do not make a hydrated Application multi-source.
+	app := argoAppForTest("argocd", "demo", nil)
+	if err := unstructured.SetNestedMap(app.Object, map[string]any{"sourceHydrator": hydrator, "sources": []any{leftover}}, "spec"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SyncArgoApp(context.Background(), newFakeArgo(app), "argocd", "demo", ArgoSyncOptions{Revision: "environments/prod"}); err != nil {
+		t.Fatalf("revision on a hydrated Application with leftover sources: %v", err)
 	}
 }

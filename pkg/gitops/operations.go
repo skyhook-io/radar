@@ -347,7 +347,13 @@ type ArgoRollbackOptions struct {
 // the Kubernetes audit log records the identity that made the write.
 func argoInitiator(ctx context.Context) string {
 	if user := pkgauth.UserFromContext(ctx); user != nil {
-		for _, group := range user.Groups {
+		// In user-token mode the Cloud groups are kept apart from the
+		// Kubernetes ones, as CloudRoleFromContext reads them.
+		groups := user.Groups
+		if user.HubGroups != nil {
+			groups = user.HubGroups
+		}
+		for _, group := range groups {
 			if email, ok := strings.CutPrefix(group, "radar:email:"); ok && email != "" {
 				return email
 			}
@@ -357,6 +363,13 @@ func argoInitiator(ctx context.Context) string {
 		}
 	}
 	return argoDefaultInitiator
+}
+
+// argoHydrated reports whether spec.sourceHydrator sets the Application's
+// source, which Argo CD prefers over spec.source and spec.sources.
+func argoHydrated(app *unstructured.Unstructured) bool {
+	_, found, _ := unstructured.NestedMap(app.Object, "spec", "sourceHydrator")
+	return found
 }
 
 func argoOperationInfo(validationID string) []any {
@@ -450,12 +463,13 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 		if argoOperationInProgress(app) {
 			return nil, fmt.Errorf("sync operation already in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
 		}
-		if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 && opts.Revision != "" {
+		hydrated := argoHydrated(app)
+		if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 && !hydrated && opts.Revision != "" {
 			return nil, fmt.Errorf("cannot override revision for multi-source Application %s/%s; omit revision to use each source's targetRevision: %w", namespace, name, ErrInvalidRevision)
 		}
 		if opts.Revision != "" && !dryRun && ArgoAutoSyncEnabled(app) {
 			targetRevision, _, _ := unstructured.NestedString(app.Object, "spec", "source", "targetRevision")
-			if _, hydrated, _ := unstructured.NestedMap(app.Object, "spec", "sourceHydrator"); hydrated {
+			if hydrated {
 				targetRevision, _, _ = unstructured.NestedString(app.Object, "spec", "sourceHydrator", "syncSource", "targetBranch")
 				if targetRevision == "" {
 					return nil, fmt.Errorf("cannot sync %s/%s to %s: %w and the hydrated sync target branch is not configured; omit revision or disable auto-sync first", namespace, name, opts.Revision, ErrAutoSyncEnabled)
@@ -501,8 +515,10 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 // repo-server to resolve the revision to a commit or chart version at request
 // time, Radar has no repo-server to ask. An omitted revision uses the last
 // compared revision(s) only when the compared sources match this snapshot;
-// otherwise the controller resolves the target when the sync runs. Explicit
-// branch names remain floating, including across retries.
+// otherwise the controller resolves the target when the sync runs, as it
+// does for a hydrated Application. Radar's validation dry-run pins the same
+// way, so it checks what the following sync deploys. Explicit branch names
+// remain floating, including across retries.
 //
 // The Application's spec.syncPolicy.retry is copied too, except for Radar's
 // own validation dry-run, whose result would otherwise wait out the backoff.
@@ -556,9 +572,13 @@ func argoSyncOperation(ctx context.Context, app *unstructured.Unstructured, opts
 		}
 		sync["resources"] = resources
 	}
-	if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 {
+	if argoHydrated(app) {
+		// The hydrator's sync source takes precedence over any spec.source(s)
+		// left beside it, so copying those would deploy a source Argo ignores.
+		// The controller resolves the hydrated source when the sync runs.
+	} else if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 {
 		sync["sources"] = sources
-		if opts.Revision == "" && validationID == "" {
+		if opts.Revision == "" {
 			comparedSources, _, _ := unstructured.NestedSlice(app.Object, "status", "sync", "comparedTo", "sources")
 			revisions, _, _ := unstructured.NestedStringSlice(app.Object, "status", "sync", "revisions")
 			if len(revisions) == len(sources) && reflect.DeepEqual(sources, comparedSources) {
@@ -567,7 +587,7 @@ func argoSyncOperation(ctx context.Context, app *unstructured.Unstructured, opts
 		}
 	} else if source, _, _ := unstructured.NestedMap(app.Object, "spec", "source"); len(source) > 0 {
 		sync["source"] = source
-		if opts.Revision == "" && validationID == "" {
+		if opts.Revision == "" {
 			comparedSource, _, _ := unstructured.NestedMap(app.Object, "status", "sync", "comparedTo", "source")
 			if reflect.DeepEqual(source, comparedSource) {
 				sync["revision"], _, _ = unstructured.NestedString(app.Object, "status", "sync", "revision")
