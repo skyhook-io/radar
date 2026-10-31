@@ -87,7 +87,6 @@ describe('TopologyPreview', () => {
     const card = container.firstElementChild as HTMLElement
     expect(card.tagName).toBe('BUTTON')
     expect(container.textContent).toContain('2 resources')
-    expect(container.textContent).not.toContain('Too many')
     expect(namespaceRows()).toHaveLength(0)
   })
 
@@ -111,7 +110,6 @@ describe('TopologyPreview', () => {
     expect(namespaceRows().map(r => r.textContent)).toEqual(['auth', 'payments', 'c', 'd'])
     // The dot is aria-hidden, so severity rides on the accessible name.
     expect(namespaceRows().slice(0, 2).map(r => r.getAttribute('aria-label'))).toEqual(['auth, critical issues', 'payments, issues'])
-    expect(container.textContent).toContain('Start from:')
     expect(container.textContent).toContain('88 namespaces')
     expect(container.textContent).not.toMatch(/critical|issue/)
     // The drawing stays, as on the graph card.
@@ -129,7 +127,7 @@ describe('TopologyPreview', () => {
     expect(container.textContent).not.toMatch(/\d+ namespaces/)
   })
 
-  it('opens the clicked namespace in Topology, and Open Topology still opens the view', () => {
+  it('opens the clicked namespace in Topology, and the rest of the card opens the view unfiltered', () => {
     const onOpenNamespace = vi.fn()
     const onNavigate = vi.fn()
     render(props({ onOpenNamespace, onNavigate, issues: { issues: [issue('payments', 'warning')], loading: false } }))
@@ -137,24 +135,23 @@ describe('TopologyPreview', () => {
     expect(onOpenNamespace).toHaveBeenCalledWith('payments')
     expect(onNavigate).not.toHaveBeenCalled()
 
-    const open = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Open Topology')!
+    const open = container.querySelector('button[aria-label="Open Topology"]') as HTMLButtonElement
     act(() => open.click())
     expect(onNavigate).toHaveBeenCalledTimes(1)
+    expect(onOpenNamespace).toHaveBeenCalledTimes(1)
   })
 
-  it('offers the namespace picker when no namespace has issues', () => {
+  it('shows just the drawing when no namespace has issues, and the card still opens Topology', () => {
     const onNavigate = vi.fn()
     render(props({ onNavigate, issues: { issues: [issue(undefined, 'warning', 'node-1')], loading: false } }))
     expect(namespaceRows()).toHaveLength(0)
-    expect(container.textContent).not.toContain('Start from')
-    const choose = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Choose a namespace')!
-    act(() => choose.click())
+    expect(container.querySelector('svg[aria-hidden="true"] marker#arr')).not.toBeNull()
+    act(() => (container.querySelector('button[aria-label="Open Topology"]') as HTMLButtonElement).click())
     expect(onNavigate).toHaveBeenCalledTimes(1)
   })
 
-  it('shows placeholders, not the picker fallback, while issues load', () => {
+  it('shows placeholders while issues load', () => {
     render(props({ issues: { issues: [], loading: true } }))
     expect(container.querySelector('[aria-label="Loading namespaces"]')).not.toBeNull()
-    expect(container.textContent).not.toContain('Choose a namespace')
   })
 })

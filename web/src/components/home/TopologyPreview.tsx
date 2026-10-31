@@ -303,8 +303,16 @@ export function TopologyPreview({ topology, namespaceSelected, onNavigate, issue
 function NamespaceStartCard({ issues, onNavigate, onOpenNamespace, namespaceCount }: Pick<TopologyPreviewProps, 'issues' | 'onNavigate' | 'onOpenNamespace' | 'namespaceCount'>) {
   const ranked = useMemo(() => rankNamespacesByIssues(issues.issues), [issues.issues])
 
+  // The whole card opens Topology like the graph card does. A button can't
+  // hold the namespace buttons, so a full-card button sits underneath them.
   return (
-    <div className="h-[260px] rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden flex flex-col">
+    <div className="group relative h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 overflow-hidden flex flex-col">
+      <button
+        type="button"
+        onClick={onNavigate}
+        aria-label="Open Topology"
+        className="absolute inset-0 rounded-xl"
+      />
       <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
         <div className="flex items-center gap-2">
           <Network className="w-4 h-4 text-theme-text-tertiary" />
@@ -315,21 +323,19 @@ function NamespaceStartCard({ issues, onNavigate, onOpenNamespace, namespaceCoun
         ) : null}
       </div>
 
-      <div className="flex-1 flex items-stretch min-h-0 px-3 py-1.5 gap-2">
+      <div className="pointer-events-none flex-1 flex items-stretch min-h-0 px-3 py-1.5 gap-2">
+        {(issues.loading || ranked.length > 0) && (
         <div className="flex flex-col justify-center min-w-[136px] w-[38%] shrink-0">
-          <p className="px-2 pb-1 text-[11px] leading-snug text-theme-text-tertiary">
-            Too many to graph at once.{(issues.loading || ranked.length > 0) && ' Start from:'}
-          </p>
           {issues.loading ? (
             <div className="flex flex-col gap-1.5 px-2 pt-1" aria-label="Loading namespaces">
               {Array.from({ length: 3 }, (_, i) => (
                 <span key={i} className="h-4 rounded bg-theme-text-tertiary/15 animate-pulse" />
               ))}
             </div>
-          ) : ranked.length > 0 ? (
+          ) : (
             <ul className="flex flex-col">
               {ranked.map(ns => (
-                <li key={ns.name}>
+                <li key={ns.name} className="pointer-events-auto relative">
                   <Tooltip content={`Open ${ns.name} in Topology. Sets the namespace for all of Radar.`} wrapperClassName="block w-full">
                   <button
                     type="button"
@@ -344,32 +350,19 @@ function NamespaceStartCard({ issues, onNavigate, onOpenNamespace, namespaceCoun
                 </li>
               ))}
             </ul>
-          ) : (
-            <div className="px-2 pt-1">
-              <button
-                type="button"
-                onClick={onNavigate}
-                className="btn-brand-muted text-xs px-3 py-1.5 rounded-md"
-              >
-                Choose a namespace
-              </button>
-            </div>
           )}
         </div>
+        )}
 
         <div className="flex-1 flex items-center min-w-0 opacity-85">
           <TopologySchematic />
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={onNavigate}
-        className="group px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-      >
+      <div className="pointer-events-none px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary group-hover:text-theme-text-primary transition-colors">
         Open Topology
         <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-      </button>
+      </div>
     </div>
   )
 }
