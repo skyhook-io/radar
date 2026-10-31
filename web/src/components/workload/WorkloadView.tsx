@@ -143,6 +143,20 @@ const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
   metrics: 'panel:metrics',
   timeline: 'panel:events',
 }
+
+// The drawer mounts hidden WorkloadView layers (expand on hover, crossfades),
+// and a layer that turns active re-shows a tab already open. One opening of a
+// tab on a resource counts once.
+const PANEL_REPEAT_WINDOW_MS = 5000
+let lastPanelView: { key: string; at: number } | null = null
+
+function recordPanelView(panel: string, resourceKey: string) {
+  const key = `${resourceKey}\u0000${panel}`
+  const now = Date.now()
+  if (lastPanelView && lastPanelView.key === key && now - lastPanelView.at < PANEL_REPEAT_WINDOW_MS) return
+  lastPanelView = { key, at: now }
+  recordUsageEvent({ type: 'view', name: panel })
+}
 const BATCH_EXECUTION_KINDS = new Set([
   'Job',
   'CronJob',
@@ -536,10 +550,11 @@ export function WorkloadView({
           ? 'reachability' // the network tab was renamed Reachability
           : (rawTab as TabType) || 'overview'
 
+  const layerActive = rest.active !== false
   useEffect(() => {
     const panel = PANEL_USAGE_VIEWS[migratedTab]
-    if (panel) recordUsageEvent({ type: 'view', name: panel })
-  }, [migratedTab])
+    if (panel && layerActive) recordPanelView(panel, `${apiKind}/${namespace}/${name}`)
+  }, [migratedTab, layerActive, apiKind, namespace, name])
 
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {

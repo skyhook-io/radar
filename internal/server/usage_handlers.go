@@ -284,6 +284,7 @@ func gitopsReadable() bool {
 var (
 	usageRecording     = usagedata.Recording
 	recordUsageRequest = usagedata.RecordRequest
+	clusterConnected   = k8s.IsConnected
 )
 
 // usageMiddleware counts API requests by their route pattern once the
@@ -306,11 +307,14 @@ func (s *Server) usageMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		recordUsageRequest(usagedata.APIRequest{
-			Method:       r.Method,
-			Pattern:      strings.TrimPrefix(pattern, s.basePath),
-			Status:       ww.Status(),
-			Automatic:    r.Header.Get(requestOriginHeader) == "auto",
-			NotConnected: uw.notConnected,
+			Method:    r.Method,
+			Pattern:   strings.TrimPrefix(pattern, s.basePath),
+			Status:    ww.Status(),
+			Automatic: r.Header.Get(requestOriginHeader) == "auto",
+			// Handlers mark their own "not connected yet" answers, but many
+			// routes answer 503 on a missing client without marking it. While
+			// the cluster isn't connected, every 503 is that.
+			NotConnected: uw.notConnected || (ww.Status() == http.StatusServiceUnavailable && !clusterConnected()),
 			Kind:         rc.URLParam("kind"),
 			Group:        r.URL.Query().Get("group"),
 		})

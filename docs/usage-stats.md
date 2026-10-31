@@ -30,9 +30,12 @@ Once a day, and only if Radar was used:
 - Yes or no: whether an AI agent can run investigations, and whether Radar can
   read Argo CD or Flux. Which traffic source is in use, from a fixed list.
 - How often each view, action and MCP tool was used, how often the command
-  palette and search were opened, which requests failed, and which screens
-  crashed. Actions are named by Radar's own route, never by what they acted
-  on, for example `POST /api/helm/releases/{namespace}/{name}/rollback`.
+  palette and search were opened, which buttons on an issue were used (such as
+  Investigate), which requests failed, and which screens crashed. Actions are
+  named by Radar's own route, never by what they acted on, for example
+  `POST /api/helm/releases/{namespace}/{name}/rollback`. A failed request
+  carries its status code when it is a common one, such as `403` or `503`, and
+  otherwise only `4xx` or `5xx`.
   Deletes and restarts also name the kind when it is built into Kubernetes,
   such as `pods`. Your own resource types are never named.
 - How often connecting to a cluster failed, by the kind of failure, such as
