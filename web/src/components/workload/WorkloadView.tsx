@@ -359,6 +359,7 @@ function useActionsBarProps(
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
+  const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
 
   const {
     data: cascadePreview,
@@ -476,6 +477,8 @@ function useActionsBarProps(
     onArgoResume: (params: Parameters<typeof argoResumeMutation.mutate>[0]) =>
       argoResumeMutation.mutate(params),
     isArgoResuming: argoResumeMutation.isPending,
+    argoResumeUpgrade,
+    argoResumeBlockedReason,
     canNodeWrite,
     onCordonNode: (params: Parameters<typeof cordonMutation.mutate>[0]) =>
       cordonMutation.mutate(params),

@@ -30,6 +30,8 @@ import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
+import { isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff } from '../resources/resource-utils-argo'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
@@ -138,6 +140,10 @@ interface ResourceActionsBarProps {
   isArgoSuspending?: boolean
   onArgoResume?: (params: { namespace: string; name: string }) => void
   isArgoResuming?: boolean
+  // Set when the connected Radar is too old to turn auto-sync back on for an
+  // Application with automated.enabled: false; Enable Auto-Sync renders disabled.
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 
   // Node debug shell
   onOpenNodeTerminal?: (params: { nodeName: string }) => void
@@ -188,7 +194,7 @@ export function ResourceActionsBar({
   onArgoSync, isArgoSyncing,
   onArgoRefresh, isArgoRefreshing,
   onArgoSuspend, isArgoSuspending,
-  onArgoResume, isArgoResuming,
+  onArgoResume, isArgoResuming, argoResumeUpgrade, argoResumeBlockedReason,
   onOpenNodeTerminal,
   canNodeWrite,
   onCordonNode, isCordoningNode,
@@ -566,6 +572,8 @@ export function ResourceActionsBar({
           isSuspending={isArgoSuspending}
           onResume={onArgoResume}
           isResuming={isArgoResuming}
+          resumeUpgrade={argoResumeUpgrade}
+          resumeBlockedReason={argoResumeBlockedReason}
         />
       )}
 
@@ -903,16 +911,22 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
 // ARGO ACTIONS
 // ============================================================================
 
-function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming }: {
+function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
   disabledReasons?: Record<string, string | undefined>
   resource: SelectedResource; data: any
   onSync?: (params: { namespace: string; name: string }) => void; isSyncing?: boolean
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
   onResume?: (params: { namespace: string; name: string }) => void; isResuming?: boolean
+  resumeUpgrade?: RadarUpgradeRequirement | null
+  resumeBlockedReason?: string
 }) {
   const descriptionId = useId()
-  const hasAutomatedSync = !!data?.spec?.syncPolicy?.automated
+  const autoSyncEnabled = isArgoAutoSyncEnabled(data)
+  // A newer Radar is needed before any role grant can help, so its reason comes first.
+  const resumeReason = (isArgoAutoSyncSwitchedOff(data)
+    ? resumeBlockedReason || (resumeUpgrade ? radarUpgradeNoteText(resumeUpgrade) : undefined)
+    : undefined) || disabledReasons?.resume
 
   return (
     <>
@@ -955,7 +969,7 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
         </Tooltip>
       )}
 
-      {hasAutomatedSync ? (
+      {autoSyncEnabled ? (
         onSuspend && (
           <Tooltip preserveWords content={disabledReasons?.suspend} disabled={!disabledReasons?.suspend}>
             {disabledReasons?.suspend && <span id={`${descriptionId}-suspend`} className="sr-only">{disabledReasons.suspend}</span>}
@@ -976,16 +990,16 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
         )
       ) : (
         onResume && (
-          <Tooltip preserveWords content={disabledReasons?.resume} disabled={!disabledReasons?.resume}>
-            {disabledReasons?.resume && <span id={`${descriptionId}-resume`} className="sr-only">{disabledReasons.resume}</span>}
+          <Tooltip preserveWords content={resumeReason} disabled={!resumeReason}>
+            {resumeReason && <span id={`${descriptionId}-resume`} className="sr-only">{resumeReason}</span>}
             <button
-              onClick={() => !disabledReasons?.resume && onResume({
+              onClick={() => !resumeReason && onResume({
                 namespace: resource.namespace,
                 name: resource.name,
               })}
               disabled={isResuming}
-              aria-disabled={isResuming || !!disabledReasons?.resume}
-              aria-describedby={disabledReasons?.resume ? `${descriptionId}-resume` : undefined}
+              aria-disabled={isResuming || !!resumeReason}
+              aria-describedby={resumeReason ? `${descriptionId}-resume` : undefined}
               className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Play className="w-3.5 h-3.5" />

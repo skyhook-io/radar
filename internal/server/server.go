@@ -1501,6 +1501,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,
 		GitOpsActionCapabilities: true,
+		ArgoRollbackSync:         true,
 		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,

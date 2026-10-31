@@ -8,7 +8,9 @@ import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
 import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
+import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
 const ARGO_ACTION_LABELS: Record<string, string> = {
   sync: 'sync',
@@ -86,11 +88,16 @@ export interface ArgoActionHandlers {
   terminating: boolean
   suspending: boolean
   resuming: boolean
-  // autoSyncEnabled: caller derives from spec.syncPolicy.automated.
+  // autoSyncEnabled: caller derives via isArgoAutoSyncEnabled.
   autoSyncEnabled: boolean
   // isRunning: caller derives from status.operationState.phase === 'Running'.
   isRunning: boolean
   operationInProgress?: boolean
+  // Set when the connected Radar is too old to turn this app's auto-sync back
+  // on (isArgoAutoSyncSwitchedOff): Enable auto-sync renders disabled, with
+  // the upgrade note under the actions.
+  resumeUpgrade?: RadarUpgradeRequirement | null
+  resumeBlockedReason?: string
 }
 
 export interface FluxActionHandlers {
@@ -330,6 +337,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
 
   const effectiveSuspended = status?.suspended ?? false
   const argoOperationInProgress = argo?.operationInProgress ?? argo?.isRunning ?? false
+  const resumeUpgrade = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeUpgrade ?? null : null
+  const resumeBlockedReason = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeBlockedReason : undefined
   // graphFullscreen hides everything chrome-side; the body region expands.
   // Mirrors the OSS GitOpsDetailView shell behavior so the visual chrome
   // class set carries through.
@@ -481,9 +490,14 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                         description="Re-enable automatic syncing of Git changes to the cluster."
                         icon={Play}
                         loading={argo.resuming}
-                        onClick={argo.onResume}
-                        disabled={terminating || !!props.actionDisabledReasons?.['resume']}
-                        disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
+                        onClick={() => !resumeBlockedReason && !resumeUpgrade && argo.onResume()}
+                        disabled={terminating || !!resumeUpgrade || !!resumeBlockedReason || !!props.actionDisabledReasons?.['resume']}
+                        // A newer Radar is needed before any role grant can help, so its reason comes first.
+                        disabledReason={terminating
+                          ? terminatingActionTooltip
+                          : resumeBlockedReason || (resumeUpgrade
+                            ? radarUpgradeNoteText(resumeUpgrade)
+                            : props.actionDisabledReasons?.['resume'])}
                       />
                     )}
                   </>
@@ -535,32 +549,34 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   </>
                 )}
               </div>
-                {denialReasons.length > 0 && (
-                  <div className="flex flex-col items-end text-[11px] text-theme-text-tertiary">
-                    <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary">
-                      {allActionsRestricted ? 'Read-only for your role' : 'Some actions restricted for your role'} · <span className="underline decoration-dotted underline-offset-2">Why?</span>
-                      <CollapseChevron open={permissionsOpen} />
-                    </button>
-                    <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
-                      <div className="mt-1 w-[min(36rem,calc(100vw-2rem))] space-y-2 rounded border border-theme-border bg-theme-surface p-3 text-left text-xs text-theme-text-secondary">
-                        {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
-                        {props.isCloudDeployment && isArgoApp && <p>Radar Cloud owners: the Argo CD write grant is off by default because it delegates the Argo CD controller's deployment authority. To turn it on, see Chart RBAC settings, then apply it with <code>helm upgrade</code>; one-click upgrades update only the image.</p>}
-                        <p>{props.isCloudDeployment && isArgoApp ? 'For other roles, an admin can grant access with' : 'An admin can grant access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
-                        {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
-                          {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</span>)}</li>)}
-                          {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
-                        </ul>}
-                        <div className="flex flex-wrap gap-3">
-                          <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
-                          {props.isCloudDeployment && isArgoApp && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#cloud-owner-integration-writes" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
-                        </div>
+              {resumeBlockedReason && <p className="max-w-md text-[11px] text-theme-text-tertiary">{resumeBlockedReason}</p>}
+              {resumeUpgrade && <RadarUpgradeNote requirement={resumeUpgrade} className="max-w-md" />}
+              {denialReasons.length > 0 && (
+                <div className="flex flex-col items-end text-[11px] text-theme-text-tertiary">
+                  <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary">
+                    {allActionsRestricted ? 'Read-only for your role' : 'Some actions restricted for your role'} · <span className="underline decoration-dotted underline-offset-2">Why?</span>
+                    <CollapseChevron open={permissionsOpen} />
+                  </button>
+                  <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
+                    <div className="mt-1 w-[min(36rem,calc(100vw-2rem))] space-y-2 rounded border border-theme-border bg-theme-surface p-3 text-left text-xs text-theme-text-secondary">
+                      {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
+                      {props.isCloudDeployment && isArgoApp && <p>Radar Cloud owners: the Argo CD write grant is off by default because it delegates the Argo CD controller's deployment authority. To turn it on, see Chart RBAC settings, then apply it with <code>helm upgrade</code>; one-click upgrades update only the image.</p>}
+                      <p>{props.isCloudDeployment && isArgoApp ? 'For other roles, an admin can grant access with' : 'An admin can grant access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
+                      {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
+                        {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</span>)}</li>)}
+                        {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
+                      </ul>}
+                      <div className="flex flex-wrap gap-3">
+                        <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
+                        {props.isCloudDeployment && isArgoApp && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#cloud-owner-integration-writes" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
                       </div>
-                    </Collapse>
-                  </div>
-                )}
-                {props.permissionCheckUnavailable && (
-                  <p className="text-[11px] text-theme-text-tertiary">Couldn't check your permissions. You can still try.</p>
-                )}
+                    </div>
+                  </Collapse>
+                </div>
+              )}
+              {props.permissionCheckUnavailable && (
+                <p className="text-[11px] text-theme-text-tertiary">Couldn't check your permissions. You can still try.</p>
+              )}
             </div>
           </div>
           {props.actionPermissions?.['sync-with-source']?.unsupported && props.actionDisabledReasons?.['sync-with-source'] && (

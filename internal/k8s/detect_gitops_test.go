@@ -409,8 +409,8 @@ func TestDetectArgoAppProblems_StuckDriftLoop(t *testing.T) {
 			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 			"status": map[string]any{
 				"health":         map[string]any{"status": "Healthy"},
-				"sync":           map[string]any{"status": "OutOfSync"},
-				"operationState": map[string]any{"phase": phase},
+				"sync":           map[string]any{"status": "OutOfSync", "revision": "current", "comparedTo": map[string]any{"source": map[string]any{"path": "app"}}},
+				"operationState": map[string]any{"phase": phase, "syncResult": map[string]any{"revision": "current", "source": map[string]any{"path": "app"}}},
 				"reconciledAt":   reconciledAt,
 			},
 		}}
@@ -695,6 +695,31 @@ func TestDetectArgoAppProblems_ManualDriftGate(t *testing.T) {
 		}
 	})
 
+	t.Run("successful rollback past the gate keeps its identity with recovery guidance", func(t *testing.T) {
+		tr := newArgoDriftTracker()
+		app := mkManual("rollback", "OutOfSync")
+		_ = unstructured.SetNestedMap(app.Object, map[string]any{
+			"phase": "Succeeded",
+			"operation": map[string]any{
+				"info": []any{map[string]any{"name": "radarhq.io/rollback", "value": "true"}},
+				"sync": map[string]any{"revision": "rev-old"},
+			},
+			"syncResult": map[string]any{"revision": "rev-old"},
+		}, "status", "operationState")
+		detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base)
+		got := detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base.Add(25*time.Hour))
+		d, ok := findDetectionReason(got, "OutOfSyncManual")
+		if !ok || d.Severity != "warning" || !d.OnsetAt.Equal(base) || d.DurationSeconds != int64((25*time.Hour).Seconds()) {
+			t.Fatalf("rollback must retain the manual-drift warning identity and timing: %+v", got)
+		}
+		if d.Message != "Last rollback deployed rev-old; the live state differs from the desired state and auto-sync is off." {
+			t.Errorf("message = %q", d.Message)
+		}
+		if d.Action != "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source first, or keep auto-sync off. Review Changes for later edits." {
+			t.Errorf("action = %q", d.Action)
+		}
+	})
+
 	t.Run("returning to Synced resets the clock", func(t *testing.T) {
 		tr := newArgoDriftTracker()
 		detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base)
@@ -904,6 +929,85 @@ func TestDetectArgoAppProblems_RemoteDestinationOffersNoLocalRemediation(t *test
 	}
 }
 
+func TestDetectArgoAppRollbackRevisionMismatch(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, syncStatus := range []string{"Synced", "OutOfSync", "Unknown"} {
+		for _, automated := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/auto=%v", syncStatus, automated), func(t *testing.T) {
+				app := argoApp("demo", "argocd", "Healthy", syncStatus, "Succeeded", automated, nil)
+				_ = unstructured.SetNestedMap(app.Object, map[string]any{
+					"phase": "Succeeded", "finishedAt": now.Add(-time.Minute).Format(time.RFC3339),
+					"operation":  map[string]any{"info": []any{map[string]any{"name": "radarhq.io/rollback", "value": "true"}}, "sync": map[string]any{"revisions": []any{"old-a", "old-b"}}},
+					"syncResult": map[string]any{"revision": "new"},
+				}, "status", "operationState")
+				tracker := newArgoDriftTracker()
+				detail := gitopsinsights.Build(app, nil, nil)
+				got := detectArgoAppProblems([]*unstructured.Unstructured{app}, tracker, now)
+				d, ok := findDetectionReason(got, "RollbackRevisionMismatch")
+				if !ok || d.Severity != "warning" {
+					t.Fatalf("missing mismatch warning: %+v", got)
+				}
+				if d.Message != detail.Issues[0].Message || d.Cause != detail.Issues[0].Cause || d.Action != detail.Issues[0].Action {
+					t.Fatalf("detail and cluster differ: %+v / %+v", detail.Issues, got)
+				}
+				degraded := app.DeepCopy()
+				_ = unstructured.SetNestedField(degraded.Object, "Degraded", "status", "health", "status")
+				combined := detectArgoAppProblems([]*unstructured.Unstructured{degraded}, tracker, now)
+				if !hasDetectionReason(combined, "RollbackRevisionMismatch") || !hasDetectionReason(combined, "HealthDegraded") {
+					t.Fatalf("rollback outcome hid current health: %+v", combined)
+				}
+				unverified := app.DeepCopy()
+				unstructured.RemoveNestedField(unverified.Object, "status", "operationState", "syncResult")
+				missing := detectArgoAppProblems([]*unstructured.Unstructured{unverified}, tracker, now)
+				if warning, ok := findDetectionReason(missing, "RollbackRevisionMismatch"); !ok || !strings.Contains(warning.Message, "Couldn't verify the rollback target") {
+					t.Fatalf("missing verification warning: %+v", missing)
+				}
+				later := detectArgoAppProblems([]*unstructured.Unstructured{app}, tracker, now.Add(time.Hour))
+				laterMismatch, ok := findDetectionReason(later, "RollbackRevisionMismatch")
+				if !ok || laterMismatch.Message != d.Message || !laterMismatch.OnsetAt.Equal(d.OnsetAt) {
+					t.Fatalf("outcome identity changed: %+v / %+v", got, later)
+				}
+				unstructured.RemoveNestedField(app.Object, "status", "operationState", "operation", "info")
+				if replaced := detectArgoAppProblems([]*unstructured.Unstructured{app}, tracker, now); hasDetectionReason(replaced, "RollbackRevisionMismatch") {
+					t.Fatalf("later operation retained mismatch: %+v", replaced)
+				}
+			})
+		}
+	}
+}
+
+func TestDetectArgoAppDriftLoopRequiresCurrentComparison(t *testing.T) {
+	now := time.Now()
+	for _, difference := range []string{"revision", "source", "none"} {
+		t.Run(difference, func(t *testing.T) {
+			app := argoApp("demo", "argocd", "Healthy", "OutOfSync", "Succeeded", true, nil)
+			app.SetUID("demo")
+			_ = unstructured.SetNestedField(app.Object, true, "spec", "syncPolicy", "automated", "selfHeal")
+			_ = unstructured.SetNestedField(app.Object, now.Format(time.RFC3339), "status", "reconciledAt")
+			_ = unstructured.SetNestedMap(app.Object, map[string]any{"revision": "current", "source": map[string]any{"path": "app"}}, "status", "operationState", "syncResult")
+			_ = unstructured.SetNestedField(app.Object, "current", "status", "sync", "revision")
+			_ = unstructured.SetNestedMap(app.Object, map[string]any{"source": map[string]any{"path": "app"}}, "status", "sync", "comparedTo")
+			if difference == "revision" {
+				_ = unstructured.SetNestedField(app.Object, "old", "status", "operationState", "syncResult", "revision")
+			}
+			if difference == "source" {
+				_ = unstructured.SetNestedField(app.Object, "old", "status", "operationState", "syncResult", "source", "path")
+			}
+			result, _, _ := unstructured.NestedMap(app.Object, "status", "operationState", "syncResult")
+			_ = unstructured.SetNestedMap(app.Object, map[string]any{"sync": result, "info": []any{map[string]any{"name": "radarhq.io/rollback", "value": "true"}}}, "status", "operationState", "operation")
+			tracker := newArgoDriftTracker()
+			tracker.observe(app.GetUID(), true, now.Add(-10*time.Minute))
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, tracker, now)
+			want := "OutOfSync"
+			if difference == "none" {
+				want = "StuckDriftLoop"
+			}
+			if len(got) != 1 || got[0].Reason != want {
+				t.Fatalf("want %s, got %+v", want, got)
+			}
+		})
+	}
+}
 func TestDetectArgoAppProblems_EmptyAutoSyncCondition(t *testing.T) {
 	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	message := "Skipping sync attempt to [abc123]: auto-sync will wipe out all resources"
@@ -1268,5 +1372,36 @@ func TestDetectArgoAppProblems_EmptyGuardWithFailedComparisonKeepsHazardInAction
 	d, ok := findDetectionReason(detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now()), "AutoSyncBlockedEmpty")
 	if !ok || !strings.Contains(d.Hazard, "latest comparison reported an error") || !strings.Contains(d.Action, d.Hazard) {
 		t.Fatalf("complete action lost the failed-comparison hazard: %+v", d)
+	}
+}
+
+// A rollback explains which revision is deployed; it does not make a later
+// sync safe. With both present the hazard carries the advice and the message
+// keeps the rollback context.
+func TestDetectArgoAppProblems_RollbackKeepsSyncHazard(t *testing.T) {
+	base := time.Now()
+	app := argoApp("billing", "argocd", "Healthy", "OutOfSync", "Succeeded", false, nil)
+	app.SetUID("rollback-with-hazard")
+	_ = unstructured.SetNestedMap(app.Object, map[string]any{
+		"phase": "Succeeded",
+		"operation": map[string]any{
+			"info": []any{map[string]any{"name": "radarhq.io/rollback", "value": "true"}},
+			"sync": map[string]any{"revision": "rev-old"},
+		},
+		"syncResult": map[string]any{"revision": "rev-old"},
+	}, "status", "operationState")
+	_ = unstructured.SetNestedSlice(app.Object, []any{map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"}}, "status", "conditions")
+	tr := newArgoDriftTracker()
+	detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base)
+	d, ok := findDetectionReason(detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base.Add(25*time.Hour)), "OutOfSyncManual")
+	if !ok {
+		t.Fatal("missing OutOfSyncManual")
+	}
+	hazard := argoSyncHazardAction(app)
+	if hazard == "" || d.Hazard != hazard || d.Action != hazard {
+		t.Errorf("hazard must carry the advice: hazard=%q action=%q want %q", d.Hazard, d.Action, hazard)
+	}
+	if !strings.HasPrefix(d.Message, "Last rollback deployed rev-old") {
+		t.Errorf("message lost the rollback context: %q", d.Message)
 	}
 }

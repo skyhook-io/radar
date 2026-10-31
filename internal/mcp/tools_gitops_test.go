@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,8 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	ktesting "k8s.io/client-go/testing"
-
-	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 func TestHandleManageGitOpsPreservesProducerNoChange(t *testing.T) {
@@ -176,4 +176,91 @@ func TestManageGitOpsMiddleSourceDenialNamesRequestedObjects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleManageGitOpsRollback(t *testing.T) {
+	gvr := schema.GroupVersionResource{
+		Group: "argoproj.io", Version: "v1alpha1", Resource: "applications",
+	}
+	setup := func(t *testing.T, syncPolicy map[string]any) {
+		t.Helper()
+		spec := map[string]any{"project": "default"}
+		if syncPolicy != nil {
+			spec["syncPolicy"] = syncPolicy
+		}
+		app := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Application",
+			"metadata":   map[string]any{"name": "demo", "namespace": "argocd"},
+			"spec":       spec,
+			"status": map[string]any{"history": []any{map[string]any{
+				"id":       int64(0),
+				"revision": "abc123",
+				"source":   map[string]any{"repoURL": "https://example.com/repo", "path": "app"},
+			}}},
+		}}
+		setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{
+			Group: "argoproj.io", Version: "v1alpha1", Kind: "Application",
+			Name: "applications", Namespaced: true, Verbs: []string{"get", "patch"},
+		}, app)
+	}
+	historyID := func(id int64) *int64 { return &id }
+
+	t.Run("history_id 0 starts a sync to the first entry", func(t *testing.T) {
+		setup(t, nil)
+		result, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{
+			Action: "rollback", Tool: "argocd", Namespace: "argocd", Name: "demo", HistoryID: historyID(0),
+		})
+		if err != nil {
+			t.Fatalf("handleManageGitOps: %v", err)
+		}
+		want := "Rollback to history #0 initiated for ArgoCD Application argocd/demo. Auto-sync is off. Later changes can still cause drift. Syncing or using manage_gitops with tool=argocd and action=resume deploys current Git and can undo the rollback."
+		if got := decodeToolResult(t, result)["message"]; got != want {
+			t.Fatalf("message = %q, want %q", got, want)
+		}
+		app, err := k8s.GetDynamicClient().Resource(gvr).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get app: %v", err)
+		}
+		if revision, _, _ := unstructured.NestedString(app.Object, "operation", "sync", "revision"); revision != "abc123" {
+			t.Fatalf("operation.sync.revision = %q, want abc123; operation=%v", revision, app.Object["operation"])
+		}
+	})
+
+	t.Run("dry-run only promises a preview", func(t *testing.T) {
+		setup(t, nil)
+		dryRun := true
+		result, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{
+			Action: "rollback", Tool: "argocd", Namespace: "argocd", Name: "demo", HistoryID: historyID(0), DryRun: &dryRun,
+		})
+		if err != nil {
+			t.Fatalf("handleManageGitOps: %v", err)
+		}
+		want := "Rollback dry-run to history #0 initiated for ArgoCD Application argocd/demo — preview only; no changes will be applied"
+		if got := decodeToolResult(t, result)["message"]; got != want {
+			t.Fatalf("message = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("missing history_id is rejected", func(t *testing.T) {
+		setup(t, nil)
+		if _, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{
+			Action: "rollback", Tool: "argocd", Namespace: "argocd", Name: "demo",
+		}); err == nil {
+			t.Fatal("expected an error without history_id")
+		}
+	})
+
+	t.Run("auto-sync enabled is refused", func(t *testing.T) {
+		setup(t, map[string]any{"automated": map[string]any{"prune": true}})
+		_, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{
+			Action: "rollback", Tool: "argocd", Namespace: "argocd", Name: "demo", HistoryID: historyID(0),
+		})
+		if !errors.Is(err, gitops.ErrAutoSyncEnabled) {
+			t.Fatalf("expected ErrAutoSyncEnabled, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "(MCP: manage_gitops with tool=argocd and action=suspend)") {
+			t.Fatalf("error lacks the suspend action: %v", err)
+		}
+	})
 }
