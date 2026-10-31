@@ -179,14 +179,13 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	topoByID := map[string]topology.Node{}
 	for _, n := range b.topoNodes() {
 		// A display PodGroup stands in for Pods that ownership finds one by
-		// one. Index each Pod's own details, and keep the aggregate out of the
-		// graph so its edge isn't read as a resource relation.
+		// one: each Pod resolves to the group, which the tree shows in their
+		// place. The group's own edge is not a resource relation.
 		if pods, ok := n.Data["pods"].([]map[string]any); ok && n.Kind == topology.KindPodGroup {
 			for _, pod := range pods {
 				name, _ := pod["name"].(string)
 				namespace, _ := pod["namespace"].(string)
-				status, _ := pod["status"].(string)
-				topoByRef[refKey(ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})] = topology.Node{Kind: topology.KindPod, Name: name, Status: topology.HealthStatus(status), Data: pod}
+				topoByRef[refKey(ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})] = n
 			}
 			continue
 		}

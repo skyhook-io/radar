@@ -355,9 +355,9 @@ func TestGeneratedTreeKeepsPodsWithReplicaSetHistory(t *testing.T) {
 	}
 }
 
-// Topology draws a large Pod set as one display PodGroup with per-Pod details.
-// Owner references find each Pod; its health must come from those details.
-func TestGeneratedTreeReadsPodsFromDisplayPodGroup(t *testing.T) {
+// Topology draws a large Pod set as one display PodGroup. Owner references
+// find each Pod; the tree shows the group in their place, as topology does.
+func TestGeneratedTreeShowsDisplayPodGroupForGroupedPods(t *testing.T) {
 	app := operatorApplication()
 	dep := ownedObject("apps", "Deployment", "monitoring", "web", nil, false)
 	rs := ownedObject("apps", "ReplicaSet", "monitoring", "web-1", &dep, true)
@@ -392,27 +392,28 @@ func TestGeneratedTreeReadsPodsFromDisplayPodGroup(t *testing.T) {
 	if len(got.Warnings) != 0 {
 		t.Fatalf("display group reported as an incomplete read: %v", got.Warnings)
 	}
-	pods := 0
+	groups := 0
 	for _, node := range got.Nodes {
 		switch node.Ref.Kind {
-		case "PodGroup":
-			t.Fatalf("display group emitted beside its Pods: %+v", node)
 		case "Pod":
-			pods++
-			want := "Healthy"
-			if node.Ref.Name == "web-1-0" {
-				want = "Degraded"
+			t.Fatalf("grouped Pod emitted individually: %+v", node.Ref)
+		case "PodGroup":
+			groups++
+			if node.Health != "Degraded" || node.Data["podCount"] != 6 {
+				t.Fatalf("group lost its aggregate: health=%q data=%v", node.Health, node.Data)
 			}
-			if node.Health != want || node.HealthSource != HealthSourceRadar {
-				t.Fatalf("%s health = %q (%q), want %q from the group's details", node.Ref.Name, node.Health, node.HealthSource, want)
+			want := edgeKey(nodeID(ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "monitoring", Name: "web-1"}), node.ID)
+			found := false
+			for _, e := range got.Edges {
+				found = found || edgeKey(e.Source, e.Target) == want
 			}
-			if len(node.Info) == 0 || node.Info[0].Value != "Running" {
-				t.Fatalf("%s lost its phase: %+v", node.Ref.Name, node.Info)
+			if !found {
+				t.Fatalf("group not under its ReplicaSet: %+v", got.Edges)
 			}
 		}
 	}
-	if pods != 6 {
-		t.Fatalf("pods = %d, want 6", pods)
+	if groups != 1 {
+		t.Fatalf("groups = %d, want 1", groups)
 	}
 }
 

@@ -55,7 +55,12 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	}
 	attach := func(parent ResourceRef, child ownership.Observation) {
 		ref := ResourceRef{Group: child.Ref.Group, Kind: child.Ref.Kind, Namespace: child.Ref.Namespace, Name: child.Ref.Name, UID: string(child.UID)}
-		id := nodeID(ref)
+		shownRef := ref
+		live, shown := findTopoNode(topoByRef, ref)
+		if shown && live.Kind == topology.KindPodGroup {
+			shownRef = refFromTopologyNode(live)
+		}
+		id := nodeID(shownRef)
 		_, retained := nodes[id]
 		if !takeStep() {
 			// The child has already been validated. Preserve its edge when both
@@ -73,7 +78,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 				return
 			}
 			if !retained {
-				live, shown := findTopoNode(topoByRef, ref)
 				// Keep topology's inactive-ReplicaSet display policy, while still
 				// searching it for current dependents such as terminating Pods.
 				if b.topo != nil && ref.Group == "apps" && ref.Kind == "ReplicaSet" && !shown {
@@ -82,7 +86,7 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 				}
 				node := syntheticNode(ref, RoleGenerated, tool, "", "", "")
 				if shown {
-					node = nodeFromTopology(live, ref, RoleGenerated, tool, "", "", "")
+					node = nodeFromTopology(live, shownRef, RoleGenerated, tool, "", "", "")
 				}
 				nodes[id] = node
 			}
