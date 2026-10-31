@@ -33,18 +33,35 @@ type Report struct {
 	MCPTools   map[string]int `json:"mcpTools"`
 	UIEvents   map[string]int `json:"uiEvents"`
 	Errors     map[string]int `json:"errors"`
-	Clusters   ClusterSummary `json:"clusters"`
+	// ActionKinds counts deletes and restarts by built-in kind, such as
+	// "delete:pods"; custom resource kinds are never named.
+	ActionKinds map[string]int `json:"actionKinds"`
+	// ConnectionFailures counts failed connections to a cluster by
+	// k8s.ClassifyError type.
+	ConnectionFailures map[string]int `json:"connectionFailures"`
+	Clusters           ClusterSummary `json:"clusters"`
 }
 
 // Setup is how this Radar is configured. Every field is a value from a
 // fixed vocabulary Radar defines, never something the user typed.
 type Setup struct {
-	AuthMode        string   `json:"authMode"`
-	TimelineStorage string   `json:"timelineStorage"`
-	MCPEnabled      bool     `json:"mcpEnabled"`
-	Prometheus      string   `json:"prometheus"`
-	CostSource      string   `json:"costSource"`
-	Browsers        []string `json:"browsers"`
+	AuthMode        string `json:"authMode"`
+	TimelineStorage string `json:"timelineStorage"`
+	MCPEnabled      bool   `json:"mcpEnabled"`
+	// Prometheus is "none", "discovered" (found in the cluster) or "manual"
+	// (a URL is configured). Schema 3 sent "connected" for manual and "none"
+	// for everything else.
+	Prometheus string   `json:"prometheus"`
+	CostSource string   `json:"costSource"`
+	Browsers   []string `json:"browsers"`
+	// AIConfigured is whether an AI agent can run investigations.
+	AIConfigured bool `json:"aiConfigured"`
+	// TrafficSource is the traffic source in use (hubble, caretta, istio,
+	// beyla) or "none".
+	TrafficSource string `json:"trafficSource"`
+	// GitOpsReadable is whether the cluster serves Argo CD or Flux resources
+	// and Radar can read them.
+	GitOpsReadable bool `json:"gitopsReadable"`
 }
 
 // Engagement is how much the UI was used that day.
@@ -116,6 +133,10 @@ type pending struct {
 	Sessions      int                     `json:"sessions,omitempty"`
 	ActiveMinutes int                     `json:"activeMinutes,omitempty"`
 	Clusters      map[string]ClusterShape `json:"clusters,omitempty"`
+	// Not use on their own: an action kind always comes with its action, and
+	// a connection can fail with nobody looking.
+	ActionKinds        map[string]int `json:"actionKinds,omitempty"`
+	ConnectionFailures map[string]int `json:"connectionFailures,omitempty"`
 }
 
 // empty means nobody used Radar in the period; cluster shape alone is not use.
@@ -134,6 +155,8 @@ func (p pending) clone() pending {
 	out.UIEvents = copyCounts(p.UIEvents)
 	out.Errors = copyCounts(p.Errors)
 	out.Browsers = copyCounts(p.Browsers)
+	out.ActionKinds = copyCounts(p.ActionKinds)
+	out.ConnectionFailures = copyCounts(p.ConnectionFailures)
 	if p.Clusters != nil {
 		out.Clusters = make(map[string]ClusterShape, len(p.Clusters))
 		for k, v := range p.Clusters {
@@ -151,6 +174,8 @@ func (p *pending) mergeFrom(o pending) {
 	p.UIEvents = addCounts(p.UIEvents, o.UIEvents)
 	p.Errors = addCounts(p.Errors, o.Errors)
 	p.Browsers = addCounts(p.Browsers, o.Browsers)
+	p.ActionKinds = addCounts(p.ActionKinds, o.ActionKinds)
+	p.ConnectionFailures = addCounts(p.ConnectionFailures, o.ConnectionFailures)
 	p.Sessions += o.Sessions
 	p.ActiveMinutes += o.ActiveMinutes
 	for k, v := range o.Clusters {
@@ -229,21 +254,23 @@ func (c *Collector) buildReport(p pending) Report {
 	})
 
 	return Report{
-		Schema:        schemaVersion,
-		Version:       ver,
-		OS:            runtime.GOOS,
-		Arch:          runtime.GOARCH,
-		InstallMethod: version.InstallMethodName(),
-		Mode:          c.opts.Mode(),
-		PeriodStart:   start.UTC().Format("2006-01-02"),
-		PeriodEnd:     end.UTC().Format("2006-01-02"),
-		Setup:         setup,
-		Engagement:    Engagement{Sessions: p.Sessions, ActiveMinutes: Bucket(p.ActiveMinutes)},
-		Views:         copyCounts(p.Views),
-		Actions:       copyCounts(p.Actions),
-		MCPTools:      copyCounts(p.MCPTools),
-		UIEvents:      copyCounts(p.UIEvents),
-		Errors:        copyCounts(p.Errors),
+		Schema:             schemaVersion,
+		Version:            ver,
+		OS:                 runtime.GOOS,
+		Arch:               runtime.GOARCH,
+		InstallMethod:      version.InstallMethodName(),
+		Mode:               c.opts.Mode(),
+		PeriodStart:        start.UTC().Format("2006-01-02"),
+		PeriodEnd:          end.UTC().Format("2006-01-02"),
+		Setup:              setup,
+		Engagement:         Engagement{Sessions: p.Sessions, ActiveMinutes: Bucket(p.ActiveMinutes)},
+		Views:              copyCounts(p.Views),
+		Actions:            copyCounts(p.Actions),
+		MCPTools:           copyCounts(p.MCPTools),
+		UIEvents:           copyCounts(p.UIEvents),
+		Errors:             copyCounts(p.Errors),
+		ActionKinds:        copyCounts(p.ActionKinds),
+		ConnectionFailures: copyCounts(p.ConnectionFailures),
 		Clusters: ClusterSummary{
 			Contexts: Bucket(c.opts.Contexts()),
 			Used:     len(shapes),

@@ -66,6 +66,7 @@ func (s *Server) requireConnectedForAction(w http.ResponseWriter) bool {
 	if k8s.IsConnected() {
 		return true
 	}
+	markClusterNotConnected(w)
 	writeActionUnavailable(w, "Not connected to cluster")
 	return false
 }

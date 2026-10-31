@@ -24,12 +24,19 @@ Once a day, and only if Radar was used:
 
 - Radar's version, OS, architecture, install method, and whether it runs
   locally or in a cluster.
-- Radar's setup: auth mode, timeline storage, whether MCP and Prometheus are
-  on, cost source, and browser family.
+- Radar's setup: auth mode, timeline storage, whether MCP is on, whether
+  Prometheus was found in the cluster or set by hand, cost source, and browser
+  family.
+- Yes or no: whether an AI agent can run investigations, and whether Radar can
+  read Argo CD or Flux. Which traffic source is in use, from a fixed list.
 - How often each view, action and MCP tool was used, how often the command
   palette and search were opened, which requests failed, and which screens
   crashed. Actions are named by Radar's own route, never by what they acted
   on, for example `POST /api/helm/releases/{namespace}/{name}/rollback`.
+  Deletes and restarts also name the kind when it is built into Kubernetes,
+  such as `pods`. Your own resource types are never named.
+- How often connecting to a cluster failed, by the kind of failure, such as
+  `auth`, `network` or `tls`.
 - Sessions, and active time as a range.
 - How many kubeconfig contexts you have, as a range, and for each cluster used:
   Kubernetes minor version, platform, node count as a range, and known
