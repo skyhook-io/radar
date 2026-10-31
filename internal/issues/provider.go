@@ -44,6 +44,7 @@ type CacheProvider struct {
 	webhookRefsOnce    sync.Once
 	webhookRefs        []k8s.AdmissionWebhookServiceReference
 	podTemplateSources podTemplateSources
+	detectScope        *k8s.DetectScope
 }
 
 // NewCacheProvider returns a Provider over the live radar caches, or
@@ -54,9 +55,10 @@ func NewCacheProvider() *CacheProvider {
 		return nil
 	}
 	return &CacheProvider{
-		cache:     cache,
-		dynamic:   k8s.GetDynamicResourceCache(),
-		discovery: k8s.GetResourceDiscovery(),
+		cache:       cache,
+		dynamic:     k8s.GetDynamicResourceCache(),
+		discovery:   k8s.GetResourceDiscovery(),
+		detectScope: k8s.NewDetectScope(),
 	}
 }
 
@@ -69,14 +71,24 @@ func (p *CacheProvider) CacheIdentity() (*k8s.ResourceCache, *k8s.DynamicResourc
 
 func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
 	if len(namespaces) == 0 {
-		return k8s.DetectProblems(p.cache, "")
+		return k8s.DetectProblemsInScope(p.cache, "", p.detectScope)
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
-	scope := k8s.NewDetectScope()
+	scope := p.detectScope
+	if scope == nil {
+		scope = k8s.NewDetectScope()
+	}
 	for _, ns := range namespaces {
 		perNs = append(perNs, k8s.DetectProblemsInScope(p.cache, ns, scope))
 	}
 	return flattenNamespacedProblems(perNs)
+}
+
+func (p *CacheProvider) NodeCertificateReport(name string) *k8s.NodeCertificateReport {
+	if p.cache != k8s.GetResourceCache() {
+		return nil
+	}
+	return k8s.NodeCertificateReportFor(p.cache, p.detectScope, name)
 }
 
 func (p *CacheProvider) DetectDynamicTerminatingProblems(namespaces []string, canList func(group, resource, namespace string) bool) []k8s.Detection {
