@@ -86,15 +86,15 @@ func TestFlaggerSummaryPreservesReportedZeroAndStrategy(t *testing.T) {
 				"status": map[string]any{"phase": "Failed", "canaryWeight": int64(0), "iterations": int64(0), "failedChecks": int64(0)},
 			}}
 			got := summarizeUnstructured(u)
-			if got.Strategy != tc.strategy || got.Canary == nil || got.Canary.ReportedFailedChecks == nil || *got.Canary.ReportedFailedChecks != 0 {
+			if got.Strategy != tc.strategy || got.FlaggerCanary == nil || got.FlaggerCanary.ReportedFailedChecks == nil || *got.FlaggerCanary.ReportedFailedChecks != 0 {
 				t.Fatalf("bad snapshot: %+v", got)
 			}
-			if (got.Canary.ReportedWeightPercent != nil) != tc.weighted || (got.Canary.ReportedIterations != nil) == tc.weighted {
-				t.Fatalf("strategy-inappropriate counters: %+v", got.Canary)
+			if (got.FlaggerCanary.ReportedWeightPercent != nil) != tc.weighted || (got.FlaggerCanary.ReportedIterations != nil) == tc.weighted {
+				t.Fatalf("strategy-inappropriate counters: %+v", got.FlaggerCanary)
 			}
 			delete(u.Object, "status")
-			if absent := summarizeUnstructured(u); absent.Canary != nil {
-				t.Fatalf("unreported counters became zero: %+v", absent.Canary)
+			if absent := summarizeUnstructured(u); absent.FlaggerCanary != nil {
+				t.Fatalf("unreported counters became zero: %+v", absent.FlaggerCanary)
 			}
 		})
 	}
@@ -107,15 +107,15 @@ func TestInstrumentationSummaryOnlyNamesBoundedRecordedLanguages(t *testing.T) {
 	}
 	u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "opentelemetry.io/v1alpha1", "kind": "Instrumentation", "status": map[string]any{"upgradeBlockedVersions": blocked}}}
 	got := summarizeUnstructured(u)
-	if got.Instrumentation == nil || got.Instrumentation.BlockedUpgradeLanguageCount != 21 || len(got.Instrumentation.BlockedUpgradeLanguages) != 10 || !got.Instrumentation.BlockedUpgradeLanguagesTruncated {
-		t.Fatalf("bad language summary: %+v", got.Instrumentation)
+	if got.OpenTelemetryInstrumentation == nil || got.OpenTelemetryInstrumentation.RecordedUpgradeBlocks.Count != 21 || len(got.OpenTelemetryInstrumentation.RecordedUpgradeBlocks.Names) != 10 || !got.OpenTelemetryInstrumentation.RecordedUpgradeBlocks.NamesTruncated {
+		t.Fatalf("bad language summary: %+v", got.OpenTelemetryInstrumentation)
 	}
 	raw, _ := json.Marshal(got)
 	if strings.Contains(string(raw), "private-") {
 		t.Fatalf("status values leaked: %s", raw)
 	}
 	u.SetAPIVersion("other.example/v1")
-	if summarizeUnstructured(u).Instrumentation != nil {
+	if summarizeUnstructured(u).OpenTelemetryInstrumentation != nil {
 		t.Fatal("foreign API group received instrumentation facts")
 	}
 }
@@ -127,11 +127,11 @@ func TestOperatorSummaryDispatchAndSnapshots(t *testing.T) {
 		"status": map[string]any{"scale": map[string]any{"statusReplicas": "1/2"}},
 	}}
 	got := summarizeUnstructured(collector)
-	if got.Collector == nil || got.Collector.ReportedPodReadiness != "1/2" || got.Ready != "" {
+	if got.OpenTelemetryCollector == nil || got.OpenTelemetryCollector.ReportedPodReadiness != "1/2" || got.Ready != "" {
 		t.Fatalf("operator snapshot became runtime readiness: %+v", got)
 	}
 	collector.SetAPIVersion("other.example/v1")
-	if summarizeUnstructured(collector).Collector != nil {
+	if summarizeUnstructured(collector).OpenTelemetryCollector != nil {
 		t.Fatal("foreign Collector received native facts")
 	}
 	canary := &unstructured.Unstructured{Object: map[string]any{
@@ -140,11 +140,69 @@ func TestOperatorSummaryDispatchAndSnapshots(t *testing.T) {
 		"status": map[string]any{"iterations": int64(2)},
 	}}
 	got = summarizeUnstructured(canary)
-	if got.Strategy != "Blue/green" || got.Canary == nil || got.Canary.ReportedIterations == nil || *got.Canary.ReportedIterations != 2 {
+	if got.Strategy != "Blue/green" || got.FlaggerCanary == nil || got.FlaggerCanary.ReportedIterations == nil || *got.FlaggerCanary.ReportedIterations != 2 {
 		t.Fatalf("deprecated native analysis was ignored: %+v", got)
 	}
 	canary.SetAPIVersion("other.example/v1")
-	if summarizeUnstructured(canary).Canary != nil {
+	if summarizeUnstructured(canary).FlaggerCanary != nil {
 		t.Fatal("foreign Canary received native facts")
+	}
+}
+
+func TestNativeOperatorSummaryJSONContract(t *testing.T) {
+	for _, tc := range []struct {
+		name, version, kind, key, want string
+		spec, status                   map[string]any
+	}{
+		{
+			name: "known empty pipelines", version: "opentelemetry.io/v1beta1", kind: "OpenTelemetryCollector", key: "openTelemetryCollector",
+			spec: map[string]any{"config": map[string]any{}},
+			want: `{"declaredPipelines":{"count":0}}`,
+		},
+		{
+			name: "unavailable pipelines", version: "opentelemetry.io/v1beta1", kind: "OpenTelemetryCollector", key: "openTelemetryCollector",
+			status: map[string]any{"scale": map[string]any{"statusReplicas": "3/3"}},
+			want:   `{"reportedPodReadiness":"3/3"}`,
+		},
+		{
+			name: "reported zero", version: "flagger.app/v1beta1", kind: "Canary", key: "flaggerCanary",
+			status: map[string]any{"failedChecks": int64(0), "canaryWeight": int64(0)},
+			want:   `{"reportedWeightPercent":0,"reportedFailedChecks":0}`,
+		},
+		{
+			name: "recorded upgrade blocks", version: "opentelemetry.io/v1alpha1", kind: "Instrumentation", key: "openTelemetryInstrumentation",
+			status: map[string]any{"upgradeBlockedVersions": map[string]any{"python": "private-version", "java": "private-reason"}},
+			want:   `{"recordedUpgradeBlocks":{"count":2,"names":["java","python"]}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": tc.version, "kind": tc.kind}}
+			if tc.spec != nil {
+				u.Object["spec"] = tc.spec
+			}
+			if tc.status != nil {
+				u.Object["status"] = tc.status
+			}
+			summary, err := Minify(u, LevelSummary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(summary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if string(fields[tc.key]) != tc.want {
+				t.Fatalf("%s = %s; want %s", tc.key, fields[tc.key], tc.want)
+			}
+			for _, old := range []string{"collector", "canary", "instrumentation"} {
+				if _, exists := fields[old]; exists {
+					t.Fatalf("ambiguous native field %q in %s", old, raw)
+				}
+			}
+		})
 	}
 }

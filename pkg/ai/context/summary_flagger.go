@@ -34,7 +34,7 @@ func summarizeFlaggerCanary(u *unstructured.Unstructured) *ResourceSummary {
 			s.Strategy += " with mirroring"
 		}
 	}
-	counters := &CanarySummary{}
+	counters := &FlaggerCanarySummary{}
 	if weight, found, _ := unstructured.NestedInt64(u.Object, "status", "canaryWeight"); found && iterations <= 0 {
 		counters.ReportedWeightPercent = &weight
 	}
@@ -45,7 +45,7 @@ func summarizeFlaggerCanary(u *unstructured.Unstructured) *ResourceSummary {
 		counters.ReportedIterations = &iteration
 	}
 	if counters.ReportedWeightPercent != nil || counters.ReportedFailedChecks != nil || counters.ReportedIterations != nil {
-		s.Canary = counters
+		s.FlaggerCanary = counters
 	}
 	if v.Reason == "Failed" {
 		s.Issue = "Last reported rollout failed; inspect Canary events for the cause"

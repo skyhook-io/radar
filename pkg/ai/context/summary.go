@@ -25,14 +25,18 @@ import (
 
 // ResourceSummary is the typed output for Summary-level minification.
 // Typed struct ensures no extra fields can leak.
+// Common fields carry kind-specific display facts. Native projections stay in
+// typed, provider-qualified blocks; new integrations must not redefine another
+// provider's counters, lookup outcomes or omission rules.
 type ResourceSummary struct {
 	Kind      string `json:"kind"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
-	// Status is the display state, including intentional lifecycle states;
-	// Ready preserves the observed readiness separately.
+	// Status is the display state, including intentional lifecycle states.
 	Status string `json:"status,omitempty"`
-	Ready  string `json:"ready,omitempty"`
+	// Ready is kind-specific display text, often from controller-reported status,
+	// not a normalized readiness measure or proof of current runtime health.
+	Ready string `json:"ready,omitempty"`
 	// Issue is the diagnostic hint — a reason worth looking at. It is
 	// deliberately NOT the same concept as Status and is allowed to be broader:
 	// it surfaces recent history too, so a pod that OOMKilled and recovered
@@ -54,10 +58,10 @@ type ResourceSummary struct {
 	// Pruned when empty.
 	Finalizers []string `json:"finalizers,omitempty"`
 
-	CrossplanePause resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
-	Collector       *CollectorSummary                    `json:"collector,omitempty"`
-	Canary          *CanarySummary                       `json:"canary,omitempty"`
-	Instrumentation *InstrumentationSummary              `json:"instrumentation,omitempty"`
+	CrossplanePause              resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
+	OpenTelemetryCollector       *OpenTelemetryCollectorSummary       `json:"openTelemetryCollector,omitempty"`
+	FlaggerCanary                *FlaggerCanarySummary                `json:"flaggerCanary,omitempty"`
+	OpenTelemetryInstrumentation *OpenTelemetryInstrumentationSummary `json:"openTelemetryInstrumentation,omitempty"`
 
 	// Type-specific fields (only populated when relevant)
 	Image     string   `json:"image,omitempty"`
@@ -77,27 +81,28 @@ type ResourceSummary struct {
 	LastTerminatedReason string `json:"lastTerminatedReason,omitempty"`
 	// LastRestartedAge is how long ago that termination happened, mirroring
 	// kubectl's "2 (5m ago)" RESTARTS column. Empty when nothing restarted.
-	LastRestartedAge string   `json:"lastRestartedAge,omitempty"`
-	Node             string   `json:"node,omitempty"`
-	Strategy         string   `json:"strategy,omitempty"`
-	Completions      string   `json:"completions,omitempty"`
-	Duration         string   `json:"duration,omitempty"`
-	Suspended        *bool    `json:"suspended,omitempty"`
-	Unschedulable    *bool    `json:"unschedulable,omitempty"`
-	Active           int      `json:"active,omitempty"`
-	Target           string   `json:"target,omitempty"`
-	MinReplicas      *int32   `json:"minReplicas,omitempty"`
-	MaxReplicas      int32    `json:"maxReplicas,omitempty"`
-	Current          int32    `json:"current,omitempty"`
-	Desired          int32    `json:"desired,omitempty"`
-	Roles            []string `json:"roles,omitempty"`
-	Version          string   `json:"version,omitempty"`
-	Pressures        []string `json:"pressures,omitempty"`
-	Keys             []string `json:"keys,omitempty"`
-	StorageClass     string   `json:"storageClass,omitempty"`
-	Capacity         string   `json:"capacity,omitempty"`
-	AccessModes      []string `json:"accessModes,omitempty"`
-	Owner            string   `json:"owner,omitempty"`
+	LastRestartedAge string `json:"lastRestartedAge,omitempty"`
+	Node             string `json:"node,omitempty"`
+	// Strategy is kind-specific display text, not a cross-provider enum.
+	Strategy      string   `json:"strategy,omitempty"`
+	Completions   string   `json:"completions,omitempty"`
+	Duration      string   `json:"duration,omitempty"`
+	Suspended     *bool    `json:"suspended,omitempty"`
+	Unschedulable *bool    `json:"unschedulable,omitempty"`
+	Active        int      `json:"active,omitempty"`
+	Target        string   `json:"target,omitempty"`
+	MinReplicas   *int32   `json:"minReplicas,omitempty"`
+	MaxReplicas   int32    `json:"maxReplicas,omitempty"`
+	Current       int32    `json:"current,omitempty"`
+	Desired       int32    `json:"desired,omitempty"`
+	Roles         []string `json:"roles,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	Pressures     []string `json:"pressures,omitempty"`
+	Keys          []string `json:"keys,omitempty"`
+	StorageClass  string   `json:"storageClass,omitempty"`
+	Capacity      string   `json:"capacity,omitempty"`
+	AccessModes   []string `json:"accessModes,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
 
 	// SummaryContext is the per-row enrichment attached by AI-facing list
 	// surfaces (REST /api/ai/resources/{kind}, MCP list_resources, search

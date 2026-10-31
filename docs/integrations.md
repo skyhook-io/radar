@@ -32,12 +32,14 @@ collector relationships from endpoint strings.
 
 **REST and MCP:** existing resource list/get tools gain concise native summaries.
 Collector summaries include reconciliation state, mode, version and image.
-The optional `collector.reportedPodReadiness` is the operator's Pod-count snapshot,
-not current readiness. `collector.declaredPipelines` gives the declared count and
+The optional `openTelemetryCollector.reportedPodReadiness` is the operator's Pod-count snapshot,
+not current readiness; read failures or a switch to sidecar mode can retain an
+earlier value. `openTelemetryCollector.declaredPipelines` gives the declared count and
 up to five sorted names, with truncation reported. That block is omitted when
 configuration cannot be previewed; omission does not mean zero pipelines. Alpha
 YAML previews are limited to 64 KiB. Instrumentation summaries name up to ten
-languages with recorded upgrade blocks and report the total and truncation,
+languages under `openTelemetryInstrumentation.recordedUpgradeBlocks`, using the
+same `{count,names,namesTruncated}` preview as declared pipelines,
 without copying arbitrary status messages. These are additive summary fields;
 no new MCP tool is introduced. Existing generic ownership remains;
 no endpoint-derived topology edges, telemetry queries, or new Issues source are added.

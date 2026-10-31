@@ -26,7 +26,7 @@ func summarizeOpenTelemetryCollector(u *unstructured.Unstructured) *ResourceSumm
 	reported, _, _ := unstructured.NestedString(u.Object, "status", "scale", "statusReplicas")
 	pipelines := collectorPipelineSummary(u)
 	if reported != "" || pipelines != nil {
-		s.Collector = &CollectorSummary{ReportedPodReadiness: reported, DeclaredPipelines: pipelines}
+		s.OpenTelemetryCollector = &OpenTelemetryCollectorSummary{ReportedPodReadiness: reported, DeclaredPipelines: pipelines}
 	}
 	return s
 }
@@ -40,22 +40,12 @@ func summarizeOpenTelemetryInstrumentation(u *unstructured.Unstructured) *Resour
 		for language := range blocked {
 			names = append(names, language)
 		}
-		sort.Strings(names)
-		s.Instrumentation = &InstrumentationSummary{BlockedUpgradeLanguageCount: len(names)}
-		if len(names) > 10 {
-			names = names[:10]
-			s.Instrumentation.BlockedUpgradeLanguagesTruncated = true
-		}
-		for _, name := range names {
-			short := summaryName(name)
-			s.Instrumentation.BlockedUpgradeLanguages = append(s.Instrumentation.BlockedUpgradeLanguages, short)
-			s.Instrumentation.BlockedUpgradeLanguagesTruncated = s.Instrumentation.BlockedUpgradeLanguagesTruncated || short != name
-		}
+		s.OpenTelemetryInstrumentation = &OpenTelemetryInstrumentationSummary{RecordedUpgradeBlocks: previewNames(names, 10)}
 	}
 	return s
 }
 
-func collectorPipelineSummary(u *unstructured.Unstructured) *PipelineSummary {
+func collectorPipelineSummary(u *unstructured.Unstructured) *NamePreview {
 	config, found, _ := unstructured.NestedFieldNoCopy(u.Object, "spec", "config")
 	if !found || config == nil {
 		return nil
@@ -96,10 +86,15 @@ func collectorPipelineSummary(u *unstructured.Unstructured) *PipelineSummary {
 	for name := range pipelines {
 		names = append(names, name)
 	}
+	out := previewNames(names, 5)
+	return &out
+}
+
+func previewNames(names []string, limit int) NamePreview {
 	sort.Strings(names)
-	out := &PipelineSummary{Count: len(names)}
-	if len(names) > 5 {
-		names = names[:5]
+	out := NamePreview{Count: len(names)}
+	if len(names) > limit {
+		names = names[:limit]
 		out.NamesTruncated = true
 	}
 	for _, name := range names {
