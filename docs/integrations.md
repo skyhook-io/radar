@@ -98,7 +98,7 @@ rollouts remain visible; ordinary waiting/progress and `Promoted=False` remain q
 No new workflow actions, topology edge types, traffic queries or MCP tools are added.
 
 Compact REST/MCP summaries also identify the configured strategy and carry the
-reported counters under `canary`: weight percentage for weighted analysis, iteration
+reported counters under `flaggerCanary`: weight percentage for weighted analysis, iteration
 for iteration-based analysis, and failed checks when reported. A reported zero
 is retained; an absent counter means unreported, not zero. These counters are
 controller snapshots, with the same freshness limits as the recorded phase.
