@@ -44,18 +44,30 @@ type Builder func(obj runtime.Object, u *unstructured.Unstructured, group, kind,
 // It starts on the first row; core listing/searching uses the original context.
 const Budget = 3 * time.Second
 
+var enrichmentBudget = Budget
+
 // WithBudget returns a non-nil builder that starts preparation on the first row.
 // build gets a context bounded by ctx and Budget, under the shared preparation
 // gate. Failed preparation retains cheap fields with omissions for unknowns.
 // Call cleanup when finished; builder and cleanup must be used sequentially.
 func WithBudget(ctx context.Context, build func(context.Context) Builder) (Builder, context.CancelFunc) {
+	return withBudget(ctx, build, true)
+}
+
+// WithStatusBudget bounds health/issue enrichment without qualifying navigation
+// fields the caller did not request.
+func WithStatusBudget(ctx context.Context, build func(context.Context) Builder) (Builder, context.CancelFunc) {
+	return withBudget(ctx, build, false)
+}
+
+func withBudget(ctx context.Context, build func(context.Context) Builder, navigation bool) (Builder, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(ctx)
 	stopBudget := func() {}
 	var builder Builder
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		if builder == nil {
 			var budgetCtx context.Context
-			budgetCtx, stopBudget = context.WithTimeout(ctx, Budget)
+			budgetCtx, stopBudget = context.WithTimeout(ctx, enrichmentBudget)
 			builder = WithinContext(budgetCtx, preparationGate, func() Builder { return build(budgetCtx) })
 			if builder == nil {
 				reason := resourcecontext.OmittedUnavailable
@@ -66,9 +78,13 @@ func WithBudget(ctx context.Context, build func(context.Context) Builder) (Build
 					if obj == nil && u != nil {
 						obj = u
 					}
-					omitted := []resourcecontext.OmittedField{{Field: "managedBy", Reason: reason}, {Field: "issueCount", Reason: reason}}
+					var omitted []resourcecontext.OmittedField
+					if navigation {
+						omitted = append(omitted, resourcecontext.OmittedField{Field: "managedBy", Reason: reason})
+					}
+					omitted = append(omitted, resourcecontext.OmittedField{Field: "issueCount", Reason: reason})
 					var scanned *resourcecontext.ScannedRef
-					if group == aicontext.TrivyGroup {
+					if navigation && group == aicontext.TrivyGroup {
 						if u != nil {
 							_, scanned = trivyScanTarget(nil, u, nil)
 						}
@@ -146,6 +162,16 @@ type IndexedTopology struct {
 // canRead gates Trivy scan targets. A nil owners skips other ownership enrichment
 // without an omission note; production callers supply a caller-scoped session.
 func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
+	return builderFromIndexes(ctx, topologySource, namespacedIdx, clusterIdx, canRead, owners, true)
+}
+
+// StatusBuilderFromIndexes uses already-authorized issue counts and cached health;
+// it performs no ownership, topology or live scan-target reads.
+func StatusBuilderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx IssueIndex) Builder {
+	return builderFromIndexes(ctx, nil, namespacedIdx, clusterIdx, nil, nil, false)
+}
+
+func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership, navigation bool) Builder {
 	var topo *topology.Topology
 	var relIdx *topology.RelationshipsIndex
 	var resourceProvider topology.ResourceProvider
@@ -174,14 +200,21 @@ func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 		return rel
 	}
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
-		var managedBy *resourcecontext.ManagedByRef
-		var scanned *resourcecontext.ScannedRef
-		var omitted []resourcecontext.OmittedField
-		residualUnavailable := false
 		var source runtime.Object = obj
 		if source == nil && u != nil {
 			source = u
 		}
+		idx := namespacedIdx
+		if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {
+			idx = clusterIdx
+		}
+		if !navigation {
+			return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{IssueCount: idx.Count(group, kind, namespace, name)})
+		}
+		var managedBy *resourcecontext.ManagedByRef
+		var scanned *resourcecontext.ScannedRef
+		var omitted []resourcecontext.OmittedField
+		residualUnavailable := false
 		if ctx.Err() != nil {
 			omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedBudgetExceeded}}
 			if group == aicontext.TrivyGroup {
@@ -231,10 +264,6 @@ func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 			if managedBy == nil && !hasManagedOmission {
 				omitted = append(omitted, resourcecontext.OmittedField{Field: "managedBy", Reason: resourcecontext.OmittedBudgetExceeded})
 			}
-		}
-		idx := namespacedIdx
-		if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {
-			idx = clusterIdx
 		}
 		return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{
 			ManagedBy: managedBy, IssueCount: idx.Count(group, kind, namespace, name), Scanned: scanned, Omitted: omitted,
@@ -359,6 +388,15 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) IssueIndex {
 		mark(f.Group, f.Kind, f.Namespace, f.Name, f.ID)
 		if f.Owner.Kind != "" {
 			mark(f.Owner.Group, f.Owner.Kind, f.Owner.Namespace, f.Owner.Name, f.ID)
+		}
+		// A finding about another subject (a NetworkPolicy, an expired TLS
+		// Secret) also counts on each resource it affects, as the related-issues
+		// lookup shows it there. Compose already removed the refs the caller
+		// can't read; without an authorizer it didn't, so count none.
+		if filters.CanReadRelated != nil {
+			for _, ref := range f.AffectedRefs {
+				mark(ref.Group, ref.Kind, ref.Namespace, ref.Name, f.ID)
+			}
 		}
 	}
 	idx := make(IssueIndex, len(seen))

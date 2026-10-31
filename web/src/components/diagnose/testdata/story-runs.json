@@ -1,0 +1,474 @@
+{
+ "run-7885e0cdb0": {
+  "target": {
+   "kind": "Deployment",
+   "group": "apps",
+   "namespace": "gl-crash-config",
+   "name": "api"
+  },
+  "timeline": [
+   {
+    "kind": "tool",
+    "id": "toolu_012SNGDR1ZQ9i3A4yU78gZMp",
+    "tool": "diagnose",
+    "status": "done",
+    "summary": "{\"kind\":\"deployment\",\"namespace\":\"gl-crash-config\",\"name\":\"api\",\"group\":\"apps\"}",
+    "result": "{\"resource\":{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"deployment.kubernetes.io/revision\":\"1\"},\"creationTimestamp\":\"2026-10-17T23:14:04Z\",\"generation\":1,\"name\":\"api\",\"namespace\":\"gl-crash-config\"},\"spec\":{\"progressDeadlineSeconds\":600,\"replicas\":1,\"revisionHistoryLimit\":10,\"selector\":{\"matchLabels\":{\"app\":\"api\"}},\"strategy\":{\"rollingUpdate\":{\"maxSurge\":\"25%\",\"maxUnavailable\":\"25%\"},\"type\":\"RollingUpdate\"},\"template\":{\"metadata\":{\"labels\":{\"app\":\"api\"}},\"spec\":{\"containers\":[{\"command\":[\"sh\",\"-c\",\"echo starting api on $DB_HOST:$DB_PORT; case \\\"$DB_PORT\\\" in ''|*[!0-9]*) echo \\\"FATAL: DB_PORT=$DB_PORT is not a valid port number\\\"; exit 1;; esac; sleep 3600\"],\"envFrom\":[{\"configMapRef\":{\"name\":\"app-config\"}}],\"image\":\"public.ecr.aws/docker/library/busybox:1.36\",\"name\":\"api\",\"resources\":{}}],\"restartPolicy\":\"Always\",\"securityContext\":{},\"terminationGracePeriodSeconds\":30}}},\"status\":{\"conditions\":[{\"lastTransitionTime\":\"2026-10-18T20:22:25Z\",\"lastUpdateTime\":\"2026-10-18T20:22:25Z\",\"message\":\"ReplicaSet \\\"api-7c6f9c7bb9\\\" has successfully progressed.\",\"reason\":\"NewReplicaSetAvailable\",\"status\":\"True\",\"type\":\"Progressing\"},{\"lastTransitionTime\":\"2026-10-27T11:35:53Z\",\"lastUpdateTime\":\"2026-10-27T11:35:53Z\",\"message\":\"Deployment does not have minimum availability.\",\"reason\":\"MinimumReplicasUnavailable\",\"status\":\"False\",\"type\":\"Available\"}],\"replicas\":1,\"unavailableReplicas\":1,\"updatedReplicas\":1}},\"resourceContext\":{\"tier\":\"diagnostic\",\"manager\":{\"state\":\"none\"},\"uses\":{\"configMaps\":[{\"kind\":\"ConfigMap\",\"namespace\":\"gl-crash-config\",\"name\":\"app-config\"}]},\"statusSummary\":{\"conditions\":[{\"type\":\"Progressing\",\"status\":\"True\",\"reason\":\"NewReplicaSetAvailable\",\"message\":\"ReplicaSet \\\"api-7c6f9c7bb9\\\" has successfully progressed.\",\"lastTransitionTime\":\"2026-10-18T20:22:25Z\"},{\"type\":\"Available\",\"status\":\"False\",\"reason\":\"MinimumReplicasUnavailable\",\"message\":\"Deployment does not have minimum availability.\",\"lastTransitionTime\":\"2026-10-27T11:35:53Z\"}]},\"workloadSummary\":{\"replicas\":{\"desired\":1,\"updated\":1,\"unavailable\":1}},\"issueSummary\":{\"count\":1,\"highestSeverity\":\"critical\",\"topReason\":\"CrashLoopBackOff\",\"bySource\":{\"problem\":1}},\"auditSummary\":{\"count\":12,\"highestSeverity\":\"high\",\"topFinding\":\"privilegeEscalation\"}},\"logsCurrent\":[{\"pod\":\"api-7c6f9c7bb9-p9czp\",\"container\":\"api\",\"logs\":{\"lines\":[\"2026-10-27T23:43:41.855680577Z FATAL: DB_PORT=abc is not a valid port number\"],\"totalLines\":2,\"matchedLines\":1,\"fallback\":false}}],\"logsPrevious\":[{\"pod\":\"api-7c6f9c7bb9-p9czp\",\"container\":\"api\",\"logs\":{\"lines\":[\"2026-10-27T23:43:41.855680577Z FATAL: DB_PORT=abc is not a valid port number\"],\"totalLines\":2,\"matchedLines\":1,\"fallback\":false}}],\"crashCause\":[{\"pods\":[\"api-7c6f9c7bb9-p9czp\"],\"container\":\"api\",\"state\":\"down\",\"reason\":\"Error\",\"exitCode\":1,\"logLine\":\"2026-10-27T23:43:41.855680577Z FATAL: DB_PORT=abc is not a valid port number\",\"logSource\":\"previous\",\"logLineSelection\":\"fatal_pattern\"}],\"events\":[{\"reason\":\"BackOff\",\"message\":\"Back-off restarting failed container api in pod api-7c6f9c7bb9-p9czp_gl-crash-config(d28cf324-bc2c-43ad-b8bb-a142ab4b08fd)\",\"type\":\"Warning\",\"count\":66481,\"lastTimestamp\":\"2026-10-28T01:44:07+02:00\"}],\"eventsTotalGroups\":1,\"logCoverage\":{\"resolvedPods\":1,\"selectedPods\":1,\"shownLines\":2,\"totalLines\":2,\"shownPods\":1,\"totalPods\":1},\"relatedIssues\":[{\"severity\":\"critical\",\"source\":\"problem\",\"category\":\"crashloop\",\"category_group\":\"runtime\",\"id\":\"d591db04e0afebb9\",\"grouping_scope\":\"workload\",\"kind\":\"Deployment\",\"group\":\"apps\",\"namespace\":\"gl-crash-config\",\"name\":\"api\",\"reason\":\"CrashLoopBackOff\",\"message\":\"container \\\"api\\\" is in a restart loop: 2825 restarts, last exit code 1 (Error)\",\"cause\":\"container \\\"api\\\" keeps restarting after exit code 1.\",\"action\":\"Inspect previous container logs for this container and verify the pod command, args, config, and dependencies.\",\"onset_unknown\":true,\"resource_created_at\":\"2026-10-17T23:14:04Z\",\"last_seen\":\"2026-10-27T23:45:41.605371Z\",\"count\":1,\"restart_count\":2825,\"last_terminated_reason\":\"Error\",\"restart_loop\":{\"container\":\"api\",\"restart_count\":2825,\"last_exit_code\":1,\"last_reason\":\"Error\",\"last_finished_at\":\"2026-10-27T23:43:41Z\",\"last_started_at\":\"2026-10-27T23:43:41Z\",\"looping_pods\":1,\"workload_pods\":1,\"severity_reason\":\"critical: the container runs under 10 minutes between restarts, so it is mostly down, and 1 of 1 pods are looping\"},\"affected\":{\"pods\":1},\"members\":[{\"kind\":\"Pod\",\"namespace\":\"gl-crash-config\",\"name\":\"api-7c6f9c7bb9-p9czp\"}],\"diagnostic_context\":{\"role\":\"rollup\",\"facts\":[{\"type\":\"restart_cause\",\"message\":\"Restart loop evidence: container=api, restartCount=2825, lastExitCode=1 (Error) at 2026-10-27T23:43:41Z after running 0s, loopingPods=1/1. Severity critical: the container runs under 10 minutes between restarts, so it is mostly down, and 1 of 1 pods are looping.\"},{\"type\":\"owner_rollup\",\"message\":\"Grouped from 1 affected resource(s) under this Deployment.\",\"refs\":[{\"kind\":\"Pod\",\"namespace\":\"gl-crash-config\",\"name\":\"api-7c6f9c7bb9-p9czp\"}]}]}}],\"pods\":1,\"podNames\":[\"api-7c6f9c7bb9-p9czp\"],\"warnings\":[\"Condition `Available=False` for ~12h9m (resource age: 10d).\"],\"metrics\":{\"window\":{\"start\":\"2026-10-27T22:45:41Z\",\"end\":\"2026-10-27T23:45:41Z\",\"step\":\"1m5s\"},\"pods\":1,\"series\":[{\"category\":\"cpu\",\"unit\":\"cores\",\"query\":\"sum(rate(container_cpu_usage_seconds_total{namespace='gl-crash-config',pod=~'^(api-7c6f9c7bb9-p9czp)$'}[5m]))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141141,\"value\":0.00005474},{\"timestamp\":1793141206,\"value\":0},{\"timestamp\":1793141271,\"value\":0.00006194},{\"timestamp\":1793141336,\"value\":0.00006402},{\"timestamp\":1793141401,\"value\":0.00005943},{\"timestamp\":1793141466,\"value\":0.00006333},{\"timestamp\":1793141531,\"value\":0.00006172},{\"timestamp\":1793141596,\"value\":0.0000702},{\"timestamp\":1793141661,\"value\":0.00006359},{\"timestamp\":1793141726,\"value\":0.00006531},{\"timestamp\":1793141791,\"value\":0.00006771},{\"timestamp\":1793141856,\"value\":0},{\"timestamp\":1793141921,\"value\":0.00005994},{\"timestamp\":1793141986,\"value\":0.00006089},{\"timestamp\":1793142051,\"value\":0.00006255},{\"timestamp\":1793142116,\"value\":0.00006173},{\"timestamp\":1793142181,\"value\":0},{\"timestamp\":1793142246,\"value\":0.00006073},{\"timestamp\":1793142311,\"value\":0.00006114},{\"timestamp\":1793142376,\"value\":0.00006612},{\"timestamp\":1793142441,\"value\":0.00005704},{\"timestamp\":1793142506,\"value\":0.00006558},{\"timestamp\":1793142571,\"value\":0.00006225},{\"timestamp\":1793142636,\"value\":0.00006407},{\"timestamp\":1793142701,\"value\":0.00006283},{\"timestamp\":1793142766,\"value\":0},{\"timestamp\":1793142831,\"value\":0.00006308},{\"timestamp\":1793142896,\"value\":0.00005889},{\"timestamp\":1793142961,\"value\":0.00005826},{\"timestamp\":1793143026,\"value\":0.00006501},{\"timestamp\":1793143091,\"value\":0.00005794},{\"timestamp\":1793143156,\"value\":0.00006238},{\"timestamp\":1793143221,\"value\":0.00006485},{\"timestamp\":1793143286,\"value\":0.00006503},{\"timestamp\":1793143351,\"value\":0.00006054},{\"timestamp\":1793143416,\"value\":0.00006188},{\"timestamp\":1793143481,\"value\":0.00006269},{\"timestamp\":1793143546,\"value\":0.0000651},{\"timestamp\":1793143611,\"value\":0.00006607},{\"timestamp\":1793143676,\"value\":0},{\"timestamp\":1793143741,\"value\":0.00006162},{\"timestamp\":1793143806,\"value\":0.00006038},{\"timestamp\":1793143871,\"value\":0.00006847},{\"timestamp\":1793143936,\"value\":0.00005828},{\"timestamp\":1793144001,\"value\":0},{\"timestamp\":1793144066,\"value\":0.00006448},{\"timestamp\":1793144131,\"value\":0.00006387},{\"timestamp\":1793144196,\"value\":0.0000651},{\"timestamp\":1793144261,\"value\":0.00006212},{\"timestamp\":1793144326,\"value\":0},{\"timestamp\":1793144391,\"value\":0.00006006},{\"timestamp\":1793144456,\"value\":0.00005752},{\"timestamp\":1793144521,\"value\":0.00005486},{\"timestamp\":1793144586,\"value\":0.00005897},{\"timestamp\":1793144651,\"value\":0.00006472},{\"timestamp\":1793144716,\"value\":0.00006446}]}]},{\"category\":\"memory\",\"unit\":\"bytes\",\"query\":\"sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace='gl-crash-config',pod=~'^(api-7c6f9c7bb9-p9czp)$'}))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141141,\"value\":348200},{\"timestamp\":1793142441,\"value\":348200},{\"timestamp\":1793142506,\"value\":360400},{\"timestamp\":1793142571,\"value\":348200},{\"timestamp\":1793143026,\"value\":348200},{\"timestamp\":1793143091,\"value\":360400},{\"timestamp\":1793143156,\"value\":348200},{\"timestamp\":1793143351,\"value\":348200},{\"timestamp\":1793143416,\"value\":360400},{\"timestamp\":1793143481,\"value\":348200},{\"timestamp\":1793143676,\"value\":348200},{\"timestamp\":1793143741,\"value\":356400},{\"timestamp\":1793143806,\"value\":348200},{\"timestamp\":1793144586,\"value\":348200},{\"timestamp\":1793144651,\"value\":360400},{\"timestamp\":1793144716,\"value\":348200}]}]},{\"category\":\"restarts\",\"unit\":\"count\",\"query\":\"sum(round(increase(kube_pod_container_status_restarts_total{namespace='gl-crash-config',pod=~'^(api-7c6f9c7bb9-p9czp)$'}[1h])))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141141,\"value\":11},{\"timestamp\":1793141206,\"value\":11},{\"timestamp\":1793141271,\"value\":12},{\"timestamp\":1793141401,\"value\":12},{\"timestamp\":1793141466,\"value\":11},{\"timestamp\":1793141531,\"value\":11},{\"timestamp\":1793141596,\"value\":12},{\"timestamp\":1793141726,\"value\":12},{\"timestamp\":1793141791,\"value\":11},{\"timestamp\":1793141856,\"value\":11},{\"timestamp\":1793141921,\"value\":12},{\"timestamp\":1793142051,\"value\":12},{\"timestamp\":1793142116,\"value\":11},{\"timestamp\":1793142181,\"value\":12},{\"timestamp\":1793142376,\"value\":12},{\"timestamp\":1793142441,\"value\":11},{\"timestamp\":1793142506,\"value\":12},{\"timestamp\":1793142636,\"value\":12},{\"timestamp\":1793142701,\"value\":11},{\"timestamp\":1793142766,\"value\":11},{\"timestamp\":1793142831,\"value\":12},{\"timestamp\":1793142961,\"value\":12},{\"timestamp\":1793143026,\"value\":11},{\"timestamp\":1793143091,\"value\":12},{\"timestamp\":1793143221,\"value\":12},{\"timestamp\":1793143286,\"value\":11},{\"timestamp\":1793143351,\"value\":11},{\"timestamp\":1793143416,\"value\":12},{\"timestamp\":1793143611,\"value\":12},{\"timestamp\":1793143676,\"value\":11},{\"timestamp\":1793143741,\"value\":12},{\"timestamp\":1793143871,\"value\":12},{\"timestamp\":1793143936,\"value\":11},{\"timestamp\":1793144001,\"value\":11},{\"timestamp\":1793144066,\"value\":12},{\"timestamp\":1793144196,\"value\":12},{\"timestamp\":1793144261,\"value\":11},{\"timestamp\":1793144326,\"value\":11},{\"timestamp\":1793144391,\"value\":12},{\"timestamp\":1793144456,\"value\":12},{\"timestamp\":1793144521,\"value\":11},{\"timestamp\":1793144586,\"value\":11},{\"timestamp\":1793144651,\"value\":12},{\"timestamp\":1793144716,\"value\":12}]}]}]}}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_h2jevyyaeoivvvboooyl3umhb6_ubfbqdamealh7z5eefugty7cz4"
+   },
+   {
+    "kind": "tool",
+    "id": "toolu_017jZ99hXEjrZw3Ap5np9jxg",
+    "tool": "get_resource",
+    "status": "done",
+    "summary": "{\"kind\":\"configmap\",\"namespace\":\"gl-crash-config\",\"name\":\"app-config\",\"include\":\"changes\"}",
+    "result": "{\"recentChanges\":[],\"recentChangesCoverageLimited\":false,\"recentChangesSaturated\":false,\"resource\":{\"apiVersion\":\"v1\",\"data\":{\"DB_HOST\":\"db.internal\",\"DB_PORT\":\"abc\"},\"kind\":\"ConfigMap\",\"metadata\":{\"creationTimestamp\":\"2026-10-17T23:14:04Z\",\"name\":\"app-config\",\"namespace\":\"gl-crash-config\"}},\"resourceContext\":{\"tier\":\"basic\",\"manager\":{\"state\":\"none\"},\"referencedBy\":{\"total\":3,\"items\":[{\"kind\":\"Deployment\",\"group\":\"apps\",\"namespace\":\"gl-crash-config\",\"name\":\"api\",\"paths\":[\"spec.template.spec.containers[].envFrom[].configMapRef.name\"]},{\"kind\":\"Pod\",\"namespace\":\"gl-crash-config\",\"name\":\"api-7c6f9c7bb9-p9czp\",\"paths\":[\"spec.containers[].envFrom[].configMapRef.name\"]},{\"kind\":\"ReplicaSet\",\"group\":\"apps\",\"namespace\":\"gl-crash-config\",\"name\":\"api-7c6f9c7bb9\",\"paths\":[\"spec.template.spec.containers[].envFrom[].configMapRef.name\"]}]}}}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_h2jevyyaeoivvvboooyl3umhb6_dboqdkwdhs4r7gz55szru6qxjf"
+   },
+   {
+    "kind": "tool",
+    "id": "toolu_01RSCbV6HycAzumV6CkpFxvV",
+    "tool": "get_changes",
+    "status": "done",
+    "summary": "{\"namespace\":\"gl-crash-config\",\"since\":\"14d\"}",
+    "result": "{\"changes\":[],\"narrowHint\":\"Radar's change history is complete only from 2026-10-27T23:42:32Z; changes before then may be missing, so an empty or short result does not establish that nothing changed. For older changes to one object, check it directly (get_resource, its ReplicaSet revisions).\",\"clusterScopedChanges\":{\"kinds\":[\"MutatingWebhookConfiguration\",\"ValidatingWebhookConfiguration\"],\"window_seconds\":1209600,\"changes\":[],\"incomplete\":\"Radar has recorded changes only since 2026-10-27T23:42:31Z; earlier changes in the window are unknown. Radar has watched MutatingWebhookConfigurations only since 2026-10-27T23:42:37Z; earlier changes in the window are unknown. Radar has watched ValidatingWebhookConfigurations only since 2026-10-27T23:42:37Z; earlier changes in the window are unknown.\"},\"historyCoverage\":{\"incomplete\":true,\"complete_since\":\"2026-10-27T23:42:32Z\",\"reasons\":[\"observation_started_late\"]}}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_h2jevyyaeoivvvboooyl3umhb6_6bpll4bdui3f2e2khirbjwo32d"
+   },
+   {
+    "kind": "tool",
+    "id": "toolu_01EpEtfjdLYPiMoBmSXbnHAE",
+    "tool": "query_prometheus",
+    "status": "done",
+    "summary": "{\"query\":\"sum(kube_pod_container_status_restarts_total{namespace=\\\"gl-crash-config\\\",pod=~\\\"^(api-7c6f9c7bb9-p9czp)$\\\",container=\\\"api\\\"})\",\"type\":\"range\",\"since\":\"7d\",\"step\":\"1h\"}",
+    "result": "{\"query\":\"sum(kube_pod_container_status_restarts_total{namespace=\\\"gl-crash-config\\\",pod=~\\\"^(api-7c6f9c7bb9-p9czp)$\\\",container=\\\"api\\\"})\",\"type\":\"range\",\"start\":\"2026-10-20T23:45:54Z\",\"end\":\"2026-10-27T23:45:54Z\",\"step\":\"1h0m0s\",\"resultType\":\"matrix\",\"seriesCount\":1,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1792781154,\"value\":1641},{\"timestamp\":1792784754,\"value\":1652},{\"timestamp\":1792788354,\"value\":1664},{\"timestamp\":1792791954,\"value\":1676},{\"timestamp\":1792795554,\"value\":1687},{\"timestamp\":1792799154,\"value\":1699},{\"timestamp\":1792802754,\"value\":1711},{\"timestamp\":1792806354,\"value\":1723},{\"timestamp\":1792809954,\"value\":1734},{\"timestamp\":1792813554,\"value\":1746},{\"timestamp\":1792817154,\"value\":1758},{\"timestamp\":1792820754,\"value\":1770},{\"timestamp\":1792824354,\"value\":1781},{\"timestamp\":1792827954,\"value\":1793},{\"timestamp\":1792831554,\"value\":1805},{\"timestamp\":1792835154,\"value\":1816},{\"timestamp\":1792838754,\"value\":1828},{\"timestamp\":1792842354,\"value\":1840},{\"timestamp\":1792845954,\"value\":1852},{\"timestamp\":1792849554,\"value\":1863},{\"timestamp\":1792853154,\"value\":1875},{\"timestamp\":1792856754,\"value\":1887},{\"timestamp\":1792860354,\"value\":1899},{\"timestamp\":1792863954,\"value\":1910},{\"timestamp\":1792867554,\"value\":1922},{\"timestamp\":1792871154,\"value\":1934},{\"timestamp\":1792874754,\"value\":1945},{\"timestamp\":1792878354,\"value\":1957},{\"timestamp\":1792881954,\"value\":1969},{\"timestamp\":1792885554,\"value\":1981},{\"timestamp\":1792889154,\"value\":1992},{\"timestamp\":1792892754,\"value\":2004},{\"timestamp\":1792896354,\"value\":2016},{\"timestamp\":1792899954,\"value\":2027},{\"timestamp\":1792903554,\"value\":2039},{\"timestamp\":1792907154,\"value\":2051},{\"timestamp\":1792910754,\"value\":2063},{\"timestamp\":1792914354,\"value\":2074},{\"timestamp\":1792917954,\"value\":2086},{\"timestamp\":1792921554,\"value\":2098},{\"timestamp\":1792925154,\"value\":2110},{\"timestamp\":1792928754,\"value\":2121},{\"timestamp\":1792932354,\"value\":2133},{\"timestamp\":1792935954,\"value\":2145},{\"timestamp\":1792939554,\"value\":2156},{\"timestamp\":1792943154,\"value\":2168},{\"timestamp\":1792946754,\"value\":2180},{\"timestamp\":1792950354,\"value\":2192},{\"timestamp\":1792953954,\"value\":2203},{\"timestamp\":1792957554,\"value\":2215},{\"timestamp\":1792961154,\"value\":2227},{\"timestamp\":1792964754,\"value\":2239},{\"timestamp\":1792968354,\"value\":2250},{\"timestamp\":1792971954,\"value\":2262},{\"timestamp\":1792975554,\"value\":2274},{\"timestamp\":1792979154,\"value\":2286},{\"timestamp\":1792982754,\"value\":2297},{\"timestamp\":1792986354,\"value\":2309},{\"timestamp\":1792989954,\"value\":2321},{\"timestamp\":1792993554,\"value\":2333},{\"timestamp\":1792997154,\"value\":2344},{\"timestamp\":1793000754,\"value\":2356},{\"timestamp\":1793004354,\"value\":2368},{\"timestamp\":1793007954,\"value\":2379},{\"timestamp\":1793011554,\"value\":2391},{\"timestamp\":1793015154,\"value\":2403},{\"timestamp\":1793018754,\"value\":2415},{\"timestamp\":1793022354,\"value\":2426},{\"timestamp\":1793025954,\"value\":2438},{\"timestamp\":1793029554,\"value\":2450},{\"timestamp\":1793033154,\"value\":2462},{\"timestamp\":1793036754,\"value\":2473},{\"timestamp\":1793040354,\"value\":2485},{\"timestamp\":1793043954,\"value\":2497},{\"timestamp\":1793047554,\"value\":2509},{\"timestamp\":1793051154,\"value\":2520},{\"timestamp\":1793054754,\"value\":2532},{\"timestamp\":1793058354,\"value\":2544},{\"timestamp\":1793061954,\"value\":2556},{\"timestamp\":1793065554,\"value\":2567},{\"timestamp\":1793069154,\"value\":2579},{\"timestamp\":1793072754,\"value\":2591},{\"timestamp\":1793076354,\"value\":2602},{\"timestamp\":1793079954,\"value\":2614},{\"timestamp\":1793083554,\"value\":2626},{\"timestamp\":1793087154,\"value\":2637},{\"timestamp\":1793090754,\"value\":2649},{\"timestamp\":1793094354,\"value\":2661},{\"timestamp\":1793097954,\"value\":2673},{\"timestamp\":1793101554,\"value\":2684},{\"timestamp\":1793105154,\"value\":2696},{\"timestamp\":1793108754,\"value\":2708},{\"timestamp\":1793112354,\"value\":2720},{\"timestamp\":1793115954,\"value\":2731},{\"timestamp\":1793119554,\"value\":2743},{\"timestamp\":1793123154,\"value\":2755},{\"timestamp\":1793126754,\"value\":2766},{\"timestamp\":1793130354,\"value\":2778},{\"timestamp\":1793133954,\"value\":2790},{\"timestamp\":1793137554,\"value\":2802},{\"timestamp\":1793141154,\"value\":2813},{\"timestamp\":1793144754,\"value\":2825}]}],\"selectors\":[{\"metric\":\"kube_pod_container_status_restarts_total\",\"matchers\":[{\"label\":\"namespace\",\"op\":\"=\",\"value\":\"gl-crash-config\"},{\"label\":\"pod\",\"op\":\"=~\",\"value\":\"^(api-7c6f9c7bb9-p9czp)$\"},{\"label\":\"container\",\"op\":\"=\",\"value\":\"api\"}]}]}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_h2jevyyaeoivvvboooyl3umhb6_g5cv6csuccahxsjmxz4jytbnyx"
+   }
+  ],
+  "diagnosis": {
+   "evidence": [
+    {
+     "status": "linked",
+     "ref": "ev_h2jevyyaeoivvvboooyl3umhb6_ubfbqdamealh7z5eefugty7cz4",
+     "role": "cause",
+     "claim": "The container's own validation rejects DB_PORT=abc and exits 1.",
+     "gap": "current and previous log streams only, not every earlier restart",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "gl-crash-config",
+      "name": "api-7c6f9c7bb9-p9czp",
+      "container": "api",
+      "stream": "previous",
+      "observation": "logs"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_h2jevyyaeoivvvboooyl3umhb6_dboqdkwdhs4r7gz55szru6qxjf",
+     "role": "cause",
+     "claim": "The live ConfigMap holds DB_PORT: \"abc\", and api is its only consumer.",
+     "gap": "live value only, not what the correct port should be or its past values",
+     "subject": {
+      "group": "",
+      "kind": "ConfigMap",
+      "namespace": "gl-crash-config",
+      "name": "app-config",
+      "observation": "resource"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_h2jevyyaeoivvvboooyl3umhb6_g5cv6csuccahxsjmxz4jytbnyx",
+     "role": "symptom",
+     "claim": "Restarts climb steadily at about 12 per hour across the whole 7-day window.",
+     "gap": "nothing before 2026-10-20",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "gl-crash-config",
+      "name": "api-7c6f9c7bb9-p9czp",
+      "container": "api",
+      "observation": "metrics"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_h2jevyyaeoivvvboooyl3umhb6_ubfbqdamealh7z5eefugty7cz4",
+     "role": "rules_out",
+     "claim": "Exit reason is Error with code 1 and memory stays around 350 KB, not OOMKilled.",
+     "gap": "the last termination and the last hour of memory only",
+     "subject": {
+      "group": "apps",
+      "kind": "Deployment",
+      "namespace": "gl-crash-config",
+      "name": "api",
+      "observation": "metrics:memory"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_h2jevyyaeoivvvboooyl3umhb6_6bpll4bdui3f2e2khirbjwo32d",
+     "role": "context",
+     "claim": "No tracked changes in the namespace, but history is complete only from 2026-10-27T23:42Z.",
+     "gap": "edits before 2026-10-27T23:42Z",
+     "subject": {
+      "group": "",
+      "kind": "ConfigMap",
+      "namespace": "gl-crash-config",
+      "name": "app-config",
+      "observation": "changes"
+     }
+    }
+   ],
+   "report": "**Why api is down:** the database port is set to `abc` instead of a number, so the app quits within a second of starting, every time.\n\nThe container's startup script prints the database address and then checks that `DB_PORT` is a number. The single pod's log shows that check failing:\n\n[[radar:evidence=0]]\n\n`DB_PORT` comes from the ConfigMap `app-config` (a small key/value config object the Deployment loads as environment variables), and its live value is literally `abc`:\n\n[[radar:evidence=1]]\n\nOther causes don't fit. The image runs fine: the script gets far enough to print its own error. Memory is tiny and the exit is a plain error code 1, not an out-of-memory kill. The restart count rises at a flat rate of about 12 an hour for the whole 7-day metrics window. That points to a value that has been wrong for at least that long, not something that broke recently:\n\n[[radar:evidence=2|compact]]\n\nRadar's change history only reaches back to late on 2026-10-27, so I can't tell whether `abc` was there since 2026-10-17, when the ConfigMap and Deployment were created together, or was edited in later. That doesn't change the fix.\n\n**The fix:** put the real numeric port into `app-config`, then restart the Deployment. Environment variables from a ConfigMap are read only when the container starts, so the edit alone won't take effect. I haven't recommended a one-click fix because nothing I read shows the correct port. If the database is Postgres, 5432 is a plausible guess, but confirm it first. Also correct the source this ConfigMap is deployed from, or the next deploy will bring `abc` back.",
+   "ruledOut": [
+    {
+     "hypothesis": "The container is being OOM-killed or starved of resources",
+     "evidenceIndex": 3
+    }
+   ]
+  }
+ },
+ "run-01f749634a": {
+  "target": {
+   "kind": "Deployment",
+   "group": "apps",
+   "namespace": "gl-herring",
+   "name": "batch-worker"
+  },
+  "timeline": [
+   {
+    "kind": "tool",
+    "id": "toolu_01T73Fk2fAvvw7FcLBL4uy4H",
+    "tool": "diagnose",
+    "status": "done",
+    "summary": "{\"kind\":\"deployment\",\"namespace\":\"gl-herring\",\"name\":\"batch-worker\",\"group\":\"apps\"}",
+    "result": "{\"resource\":{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"deployment.kubernetes.io/revision\":\"1\"},\"creationTimestamp\":\"2026-10-17T23:14:08Z\",\"generation\":1,\"name\":\"batch-worker\",\"namespace\":\"gl-herring\"},\"spec\":{\"progressDeadlineSeconds\":600,\"replicas\":1,\"revisionHistoryLimit\":10,\"selector\":{\"matchLabels\":{\"app\":\"batch-worker\"}},\"strategy\":{\"rollingUpdate\":{\"maxSurge\":\"25%\",\"maxUnavailable\":\"25%\"},\"type\":\"RollingUpdate\"},\"template\":{\"metadata\":{\"labels\":{\"app\":\"batch-worker\"}},\"spec\":{\"containers\":[{\"command\":[\"sh\",\"-c\",\"echo 'ERROR: queue credentials rejected'; exit 1\"],\"image\":\"public.ecr.aws/docker/library/busybox:1.36\",\"name\":\"worker\",\"resources\":{}}],\"restartPolicy\":\"Always\",\"securityContext\":{},\"terminationGracePeriodSeconds\":30}}},\"status\":{\"conditions\":[{\"lastTransitionTime\":\"2026-10-18T00:26:14Z\",\"lastUpdateTime\":\"2026-10-18T00:26:14Z\",\"message\":\"ReplicaSet \\\"batch-worker-74b5656749\\\" has successfully progressed.\",\"reason\":\"NewReplicaSetAvailable\",\"status\":\"True\",\"type\":\"Progressing\"},{\"lastTransitionTime\":\"2026-10-27T22:09:38Z\",\"lastUpdateTime\":\"2026-10-27T22:09:38Z\",\"message\":\"Deployment does not have minimum availability.\",\"reason\":\"MinimumReplicasUnavailable\",\"status\":\"False\",\"type\":\"Available\"}],\"replicas\":1,\"unavailableReplicas\":1,\"updatedReplicas\":1}},\"resourceContext\":{\"tier\":\"diagnostic\",\"manager\":{\"state\":\"none\"},\"statusSummary\":{\"conditions\":[{\"type\":\"Progressing\",\"status\":\"True\",\"reason\":\"NewReplicaSetAvailable\",\"message\":\"ReplicaSet \\\"batch-worker-74b5656749\\\" has successfully progressed.\",\"lastTransitionTime\":\"2026-10-18T00:26:14Z\"},{\"type\":\"Available\",\"status\":\"False\",\"reason\":\"MinimumReplicasUnavailable\",\"message\":\"Deployment does not have minimum availability.\",\"lastTransitionTime\":\"2026-10-27T22:09:38Z\"}]},\"workloadSummary\":{\"replicas\":{\"desired\":1,\"updated\":1,\"unavailable\":1}},\"issueSummary\":{\"count\":1,\"highestSeverity\":\"critical\",\"topReason\":\"CrashLoopBackOff\",\"bySource\":{\"problem\":1}},\"auditSummary\":{\"count\":12,\"highestSeverity\":\"high\",\"topFinding\":\"privilegeEscalation\"}},\"logsCurrent\":[{\"pod\":\"batch-worker-74b5656749-phx2t\",\"container\":\"worker\",\"logs\":{\"lines\":[\"2026-10-27T23:46:48.896074086Z ERROR: queue credentials rejected\"],\"totalLines\":1,\"matchedLines\":1,\"fallback\":false}}],\"logsPrevious\":[{\"pod\":\"batch-worker-74b5656749-phx2t\",\"container\":\"worker\",\"logs\":{\"lines\":[\"2026-10-27T23:46:48.896074086Z ERROR: queue credentials rejected\"],\"totalLines\":1,\"matchedLines\":1,\"fallback\":false}}],\"crashCause\":[{\"pods\":[\"batch-worker-74b5656749-phx2t\"],\"container\":\"worker\",\"state\":\"down\",\"reason\":\"Error\",\"exitCode\":1,\"logLine\":\"2026-10-27T23:46:48.896074086Z ERROR: queue credentials rejected\",\"logSource\":\"previous\",\"logLineSelection\":\"last_matched_line\"}],\"events\":[{\"reason\":\"BackOff\",\"message\":\"Back-off restarting failed container worker in pod batch-worker-74b5656749-phx2t_gl-herring(446c6055-d2f1-4484-b622-b08ae6af10a1)\",\"type\":\"Warning\",\"count\":66486,\"lastTimestamp\":\"2026-10-28T01:44:20+02:00\"}],\"eventsTotalGroups\":1,\"logCoverage\":{\"resolvedPods\":1,\"selectedPods\":1,\"shownLines\":2,\"totalLines\":2,\"shownPods\":1,\"totalPods\":1},\"relatedIssues\":[{\"severity\":\"critical\",\"source\":\"problem\",\"category\":\"crashloop\",\"category_group\":\"runtime\",\"id\":\"1caf581ecf8e8e7b\",\"grouping_scope\":\"workload\",\"kind\":\"Deployment\",\"group\":\"apps\",\"namespace\":\"gl-herring\",\"name\":\"batch-worker\",\"reason\":\"CrashLoopBackOff\",\"message\":\"container \\\"worker\\\" is in a restart loop: 2824 restarts, last exit code 1 (Error)\",\"cause\":\"container \\\"worker\\\" keeps restarting after exit code 1.\",\"action\":\"Inspect previous container logs for this container and verify the pod command, args, config, and dependencies.\",\"onset_unknown\":true,\"resource_created_at\":\"2026-10-17T23:14:08Z\",\"last_seen\":\"2026-10-27T23:48:06.001167Z\",\"count\":1,\"restart_count\":2824,\"last_terminated_reason\":\"Error\",\"restart_loop\":{\"container\":\"worker\",\"restart_count\":2824,\"last_exit_code\":1,\"last_reason\":\"Error\",\"last_finished_at\":\"2026-10-27T23:46:48Z\",\"last_started_at\":\"2026-10-27T23:46:48Z\",\"looping_pods\":1,\"workload_pods\":1,\"severity_reason\":\"critical: the container runs under 10 minutes between restarts, so it is mostly down, and 1 of 1 pods are looping\"},\"affected\":{\"pods\":1},\"members\":[{\"kind\":\"Pod\",\"namespace\":\"gl-herring\",\"name\":\"batch-worker-74b5656749-phx2t\"}],\"diagnostic_context\":{\"role\":\"rollup\",\"facts\":[{\"type\":\"restart_cause\",\"message\":\"Restart loop evidence: container=worker, restartCount=2824, lastExitCode=1 (Error) at 2026-10-27T23:46:48Z after running 0s, loopingPods=1/1. Severity critical: the container runs under 10 minutes between restarts, so it is mostly down, and 1 of 1 pods are looping.\"},{\"type\":\"owner_rollup\",\"message\":\"Grouped from 1 affected resource(s) under this Deployment.\",\"refs\":[{\"kind\":\"Pod\",\"namespace\":\"gl-herring\",\"name\":\"batch-worker-74b5656749-phx2t\"}]}]}}],\"pods\":1,\"podNames\":[\"batch-worker-74b5656749-phx2t\"],\"warnings\":[\"Condition `Available=False` for ~1h38m (resource age: 10d).\"],\"metrics\":{\"window\":{\"start\":\"2026-10-27T22:48:06Z\",\"end\":\"2026-10-27T23:48:06Z\",\"step\":\"1m5s\"},\"pods\":1,\"series\":[{\"category\":\"cpu\",\"unit\":\"cores\",\"query\":\"sum(rate(container_cpu_usage_seconds_total{namespace='gl-herring',pod=~'^(batch-worker-74b5656749-phx2t)$'}[5m]))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141286,\"value\":0.00006475},{\"timestamp\":1793141351,\"value\":0.00006464},{\"timestamp\":1793141416,\"value\":0},{\"timestamp\":1793141481,\"value\":0.00006096},{\"timestamp\":1793141546,\"value\":0.00005933},{\"timestamp\":1793141611,\"value\":0.00005727},{\"timestamp\":1793141676,\"value\":0.00005767},{\"timestamp\":1793141741,\"value\":0},{\"timestamp\":1793141806,\"value\":0.00006019},{\"timestamp\":1793141871,\"value\":0.00006003},{\"timestamp\":1793141936,\"value\":0.00006431},{\"timestamp\":1793142001,\"value\":0.00006075},{\"timestamp\":1793142066,\"value\":0},{\"timestamp\":1793142131,\"value\":0.00006767},{\"timestamp\":1793142196,\"value\":0.00005656},{\"timestamp\":1793142261,\"value\":0.0000641},{\"timestamp\":1793142326,\"value\":0.00006132},{\"timestamp\":1793142391,\"value\":0.00006014},{\"timestamp\":1793142456,\"value\":0.00005836},{\"timestamp\":1793142521,\"value\":0.00005995},{\"timestamp\":1793142586,\"value\":0.00006185},{\"timestamp\":1793142651,\"value\":0},{\"timestamp\":1793142716,\"value\":0.00005723},{\"timestamp\":1793142781,\"value\":0.00005929},{\"timestamp\":1793142846,\"value\":0.00005657},{\"timestamp\":1793142911,\"value\":0.00006135},{\"timestamp\":1793142976,\"value\":0.00005679},{\"timestamp\":1793143041,\"value\":0.00006053},{\"timestamp\":1793143106,\"value\":0.00006051},{\"timestamp\":1793143171,\"value\":0.0000609},{\"timestamp\":1793143236,\"value\":0.00005678},{\"timestamp\":1793143301,\"value\":0.00005913},{\"timestamp\":1793143366,\"value\":0.00006654},{\"timestamp\":1793143431,\"value\":0.00006292},{\"timestamp\":1793143496,\"value\":0.00006824},{\"timestamp\":1793143561,\"value\":0.00006392},{\"timestamp\":1793143626,\"value\":0.00005812},{\"timestamp\":1793143691,\"value\":0.00005491},{\"timestamp\":1793143756,\"value\":0.00005868},{\"timestamp\":1793143821,\"value\":0.00006271},{\"timestamp\":1793143886,\"value\":0},{\"timestamp\":1793143951,\"value\":0.00005724},{\"timestamp\":1793144016,\"value\":0.00005813},{\"timestamp\":1793144081,\"value\":0.00005837},{\"timestamp\":1793144146,\"value\":0.00005758},{\"timestamp\":1793144211,\"value\":0.00005841},{\"timestamp\":1793144276,\"value\":0.00006295},{\"timestamp\":1793144341,\"value\":0.00006042},{\"timestamp\":1793144406,\"value\":0.00006348},{\"timestamp\":1793144471,\"value\":0},{\"timestamp\":1793144536,\"value\":0.00006421},{\"timestamp\":1793144601,\"value\":0.00006402},{\"timestamp\":1793144666,\"value\":0.00006128},{\"timestamp\":1793144731,\"value\":0.00006204},{\"timestamp\":1793144796,\"value\":0.00006552},{\"timestamp\":1793144861,\"value\":0.00006043}]}]},{\"category\":\"memory\",\"unit\":\"bytes\",\"query\":\"sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace='gl-herring',pod=~'^(batch-worker-74b5656749-phx2t)$'}))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141286,\"value\":335900},{\"timestamp\":1793142911,\"value\":335900},{\"timestamp\":1793142976,\"value\":417800},{\"timestamp\":1793143041,\"value\":335900},{\"timestamp\":1793143236,\"value\":335900},{\"timestamp\":1793143301,\"value\":348200},{\"timestamp\":1793143366,\"value\":335900},{\"timestamp\":1793144146,\"value\":335900},{\"timestamp\":1793144211,\"value\":348200},{\"timestamp\":1793144276,\"value\":335900},{\"timestamp\":1793144471,\"value\":335900},{\"timestamp\":1793144536,\"value\":348200},{\"timestamp\":1793144601,\"value\":335900},{\"timestamp\":1793144796,\"value\":335900},{\"timestamp\":1793144861,\"value\":348200}]}]},{\"category\":\"restarts\",\"unit\":\"count\",\"query\":\"sum(round(increase(kube_pod_container_status_restarts_total{namespace='gl-herring',pod=~'^(batch-worker-74b5656749-phx2t)$'}[1h])))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141286,\"value\":12},{\"timestamp\":1793141351,\"value\":11},{\"timestamp\":1793141416,\"value\":11},{\"timestamp\":1793141481,\"value\":12},{\"timestamp\":1793141611,\"value\":12},{\"timestamp\":1793141676,\"value\":11},{\"timestamp\":1793141741,\"value\":11},{\"timestamp\":1793141806,\"value\":12},{\"timestamp\":1793141936,\"value\":12},{\"timestamp\":1793142001,\"value\":11},{\"timestamp\":1793142066,\"value\":11},{\"timestamp\":1793142131,\"value\":12},{\"timestamp\":1793142261,\"value\":12},{\"timestamp\":1793142326,\"value\":11},{\"timestamp\":1793142391,\"value\":12},{\"timestamp\":1793142521,\"value\":12},{\"timestamp\":1793142586,\"value\":11},{\"timestamp\":1793142651,\"value\":11},{\"timestamp\":1793142716,\"value\":12},{\"timestamp\":1793142846,\"value\":12},{\"timestamp\":1793142911,\"value\":11},{\"timestamp\":1793142976,\"value\":11},{\"timestamp\":1793143041,\"value\":12},{\"timestamp\":1793143106,\"value\":12},{\"timestamp\":1793143171,\"value\":11},{\"timestamp\":1793143301,\"value\":11},{\"timestamp\":1793143366,\"value\":12},{\"timestamp\":1793143431,\"value\":12},{\"timestamp\":1793143496,\"value\":11},{\"timestamp\":1793143561,\"value\":11},{\"timestamp\":1793143626,\"value\":12},{\"timestamp\":1793143756,\"value\":12},{\"timestamp\":1793143821,\"value\":11},{\"timestamp\":1793143886,\"value\":11},{\"timestamp\":1793143951,\"value\":12},{\"timestamp\":1793144081,\"value\":12},{\"timestamp\":1793144146,\"value\":11},{\"timestamp\":1793144211,\"value\":11},{\"timestamp\":1793144276,\"value\":12},{\"timestamp\":1793144341,\"value\":12},{\"timestamp\":1793144406,\"value\":11},{\"timestamp\":1793144471,\"value\":11},{\"timestamp\":1793144536,\"value\":12},{\"timestamp\":1793144666,\"value\":12},{\"timestamp\":1793144731,\"value\":11},{\"timestamp\":1793144796,\"value\":11},{\"timestamp\":1793144861,\"value\":12}]}]}]}}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_4ydxyz5ewerd5y63sllzozaigy_i44ydfo6l4vbuj7hxeoo5sjum7"
+   },
+   {
+    "kind": "tool",
+    "id": "toolu_01245xmuumnhT7mJtVwGMemM",
+    "tool": "query_prometheus",
+    "status": "done",
+    "summary": "{\"query\":\"sum(kube_pod_container_status_restarts_total{namespace=\\\"gl-herring\\\",pod=~\\\"^(batch-worker-74b5656749-phx2t)$\\\",container=\\\"worker\\\"})\",\"type\":\"range\",\"since\":\"11d\",\"step\":\"6h\"}",
+    "result": "{\"query\":\"sum(kube_pod_container_status_restarts_total{namespace=\\\"gl-herring\\\",pod=~\\\"^(batch-worker-74b5656749-phx2t)$\\\",container=\\\"worker\\\"})\",\"type\":\"range\",\"start\":\"2026-10-16T23:48:15Z\",\"end\":\"2026-10-27T23:48:15Z\",\"step\":\"6h0m0s\",\"resultType\":\"matrix\",\"seriesCount\":1,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1792799295,\"value\":1698},{\"timestamp\":1792820895,\"value\":1768},{\"timestamp\":1792842495,\"value\":1839},{\"timestamp\":1792864095,\"value\":1909},{\"timestamp\":1792885695,\"value\":1979},{\"timestamp\":1792907295,\"value\":2050},{\"timestamp\":1792928895,\"value\":2120},{\"timestamp\":1792950495,\"value\":2191},{\"timestamp\":1792972095,\"value\":2261},{\"timestamp\":1792993695,\"value\":2331},{\"timestamp\":1793015295,\"value\":2402},{\"timestamp\":1793036895,\"value\":2472},{\"timestamp\":1793058495,\"value\":2542},{\"timestamp\":1793080095,\"value\":2612},{\"timestamp\":1793101695,\"value\":2683},{\"timestamp\":1793123295,\"value\":2753},{\"timestamp\":1793144895,\"value\":2824}]}],\"selectors\":[{\"metric\":\"kube_pod_container_status_restarts_total\",\"matchers\":[{\"label\":\"namespace\",\"op\":\"=\",\"value\":\"gl-herring\"},{\"label\":\"pod\",\"op\":\"=~\",\"value\":\"^(batch-worker-74b5656749-phx2t)$\"},{\"label\":\"container\",\"op\":\"=\",\"value\":\"worker\"}]}]}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_4ydxyz5ewerd5y63sllzozaigy_vpoejkzoriu33q7uzzvrwaqynj"
+   }
+  ],
+  "diagnosis": {
+   "evidence": [
+    {
+     "status": "linked",
+     "ref": "ev_4ydxyz5ewerd5y63sllzozaigy_i44ydfo6l4vbuj7hxeoo5sjum7",
+     "role": "cause",
+     "claim": "The container command unconditionally echoes the error and runs `exit 1`; no env, Secret or ConfigMap is referenced; generation 1 means the spec was never edited.",
+     "gap": "live spec only, not what command the authors intended",
+     "subject": {
+      "group": "apps",
+      "kind": "Deployment",
+      "namespace": "gl-herring",
+      "name": "batch-worker",
+      "observation": "resource"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_4ydxyz5ewerd5y63sllzozaigy_i44ydfo6l4vbuj7hxeoo5sjum7",
+     "role": "symptom",
+     "claim": "The last terminated run printed 'ERROR: queue credentials rejected' and exited with code 1 after 0s.",
+     "gap": "one restart's output, not every restart",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "gl-herring",
+      "name": "batch-worker-74b5656749-phx2t",
+      "container": "worker",
+      "stream": "previous",
+      "observation": "logs"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_4ydxyz5ewerd5y63sllzozaigy_vpoejkzoriu33q7uzzvrwaqynj",
+     "role": "context",
+     "claim": "Restarts climb at a steady ~70 per 6 hours from 1698 to 2824.",
+     "gap": "data from 2026-10-23 onward only, not since creation",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "gl-herring",
+      "name": "batch-worker-74b5656749-phx2t",
+      "container": "worker",
+      "observation": "metrics"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_4ydxyz5ewerd5y63sllzozaigy_i44ydfo6l4vbuj7hxeoo5sjum7",
+     "role": "rules_out",
+     "claim": "Exit reason is Error with code 1 and memory sits near 0.3 MB, so this is not an OOM kill or a resource limit.",
+     "gap": "last hour of metrics only",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "gl-herring",
+      "name": "batch-worker-74b5656749-phx2t",
+      "container": "worker",
+      "observation": "metrics:memory"
+     }
+    }
+   ],
+   "report": "The error message points the wrong way. \"Queue credentials rejected\" sounds like an authentication failure, but no queue is involved. The Deployment's container is a plain busybox image whose command is a one-line shell script: print that sentence, then `exit 1`. Nothing in it connects to anything, and it references no Secret, ConfigMap or environment variable that could hold credentials.\n\n[[radar:evidence=0]]\n\nEvery start therefore ends the same way. The last run lived 0 seconds, logged the hard-coded line and exited with code 1.\n\n[[radar:evidence=1|compact]]\n\n`generation: 1` shows the spec has not been edited since the Deployment was created on 2026-10-17, so no recent change broke it. Prometheus shows a steady ~12 restarts per hour from 2026-10-23 onward, the earliest data it holds. At that rate the 1698 restarts already counted on 2026-10-23 work out to roughly six days of crashing, consistent with a crash loop dating from creation. That is an extrapolation, though; the metrics do not cover those first days.\n\n[[radar:evidence=2|compact]]\n\nRotating credentials or adding memory will not help. The fix is to replace the placeholder command with the real worker image and entrypoint. I couldn't find what those should be: Radar sees no Helm, Argo CD or Flux owner, so the owner of the source manifest has to supply them. Until then, scaling to zero stops the restart churn without losing any work. The privilege-escalation and token-mounting audit findings are worth fixing later but have nothing to do with this crash.",
+   "ruledOut": [
+    {
+     "hypothesis": "Real queue credentials were rotated or are invalid",
+     "evidenceIndex": 0
+    },
+    {
+     "hypothesis": "A recent spec or config edit broke the worker",
+     "evidenceIndex": 0
+    },
+    {
+     "hypothesis": "Container is OOM-killed or starved by resource limits",
+     "evidenceIndex": 3
+    }
+   ]
+  }
+ },
+ "run-8b924c437a": {
+  "target": {
+   "kind": "Deployment",
+   "group": "apps",
+   "namespace": "gl-missing-cm",
+   "name": "checkout"
+  },
+  "timeline": [
+   {
+    "kind": "tool",
+    "id": "toolu_01A8v6M6FQ7H4tzkcxfLLeA6",
+    "tool": "diagnose",
+    "status": "done",
+    "summary": "{\"kind\":\"deployment\",\"namespace\":\"gl-missing-cm\",\"name\":\"checkout\",\"group\":\"apps\"}",
+    "result": "{\"resource\":{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"deployment.kubernetes.io/revision\":\"1\"},\"creationTimestamp\":\"2026-10-17T23:14:03Z\",\"generation\":1,\"name\":\"checkout\",\"namespace\":\"gl-missing-cm\"},\"spec\":{\"progressDeadlineSeconds\":600,\"replicas\":1,\"revisionHistoryLimit\":10,\"selector\":{\"matchLabels\":{\"app\":\"checkout\"}},\"strategy\":{\"rollingUpdate\":{\"maxSurge\":\"25%\",\"maxUnavailable\":\"25%\"},\"type\":\"RollingUpdate\"},\"template\":{\"metadata\":{\"labels\":{\"app\":\"checkout\"}},\"spec\":{\"containers\":[{\"command\":[\"sh\",\"-c\",\"sleep 3600\"],\"envFrom\":[{\"configMapRef\":{\"name\":\"checkout-settings\"}}],\"image\":\"public.ecr.aws/docker/library/busybox:1.36\",\"name\":\"app\",\"resources\":{}}],\"restartPolicy\":\"Always\",\"securityContext\":{},\"terminationGracePeriodSeconds\":30}}},\"status\":{\"conditions\":[{\"lastTransitionTime\":\"2026-10-17T23:14:03Z\",\"lastUpdateTime\":\"2026-10-17T23:14:03Z\",\"message\":\"Deployment does not have minimum availability.\",\"reason\":\"MinimumReplicasUnavailable\",\"status\":\"False\",\"type\":\"Available\"},{\"lastTransitionTime\":\"2026-10-17T23:24:04Z\",\"lastUpdateTime\":\"2026-10-17T23:24:04Z\",\"message\":\"ReplicaSet \\\"checkout-694f5ffb7b\\\" has timed out progressing.\",\"reason\":\"ProgressDeadlineExceeded\",\"status\":\"False\",\"type\":\"Progressing\"}],\"replicas\":1,\"unavailableReplicas\":1,\"updatedReplicas\":1}},\"resourceContext\":{\"tier\":\"diagnostic\",\"manager\":{\"state\":\"none\"},\"uses\":{\"configMaps\":[{\"kind\":\"ConfigMap\",\"namespace\":\"gl-missing-cm\",\"name\":\"checkout-settings\"}]},\"statusSummary\":{\"conditions\":[{\"type\":\"Available\",\"status\":\"False\",\"reason\":\"MinimumReplicasUnavailable\",\"message\":\"Deployment does not have minimum availability.\",\"lastTransitionTime\":\"2026-10-17T23:14:03Z\"},{\"type\":\"Progressing\",\"status\":\"False\",\"reason\":\"ProgressDeadlineExceeded\",\"message\":\"ReplicaSet \\\"checkout-694f5ffb7b\\\" has timed out progressing.\",\"lastTransitionTime\":\"2026-10-17T23:24:04Z\"}]},\"workloadSummary\":{\"replicas\":{\"desired\":1,\"updated\":1,\"unavailable\":1}},\"issueSummary\":{\"count\":1,\"highestSeverity\":\"critical\",\"topReason\":\"Missing ConfigMap\",\"bySource\":{\"missing_ref\":1}},\"auditSummary\":{\"count\":12,\"highestSeverity\":\"high\",\"topFinding\":\"privilegeEscalation\"}},\"logsCurrent\":[{\"pod\":\"checkout-694f5ffb7b-dnmql\",\"container\":\"app\",\"logs\":{\"lines\":null,\"totalLines\":0,\"matchedLines\":0,\"fallback\":false},\"error\":\"failed to get logs: container \\\"app\\\" in pod \\\"checkout-694f5ffb7b-dnmql\\\" is waiting to start: CreateContainerConfigError\"}],\"logsPrevious\":[{\"pod\":\"checkout-694f5ffb7b-dnmql\",\"container\":\"app\",\"logs\":{\"lines\":null,\"totalLines\":0,\"matchedLines\":0,\"fallback\":false},\"error\":\"failed to get logs: previous terminated container \\\"app\\\" in pod \\\"checkout-694f5ffb7b-dnmql\\\" not found\"}],\"events\":[{\"reason\":\"Failed\",\"message\":\"Error: configmap \\\"checkout-settings\\\" not found\",\"type\":\"Warning\",\"count\":66566,\"lastTimestamp\":\"2026-10-28T01:44:06+02:00\"}],\"eventsTotalGroups\":1,\"logCoverage\":{\"resolvedPods\":1,\"selectedPods\":1,\"shownLines\":0,\"totalLines\":0,\"shownPods\":0,\"totalPods\":0},\"expectedPreviousLogAbsences\":[{\"pod\":\"checkout-694f5ffb7b-dnmql\",\"container\":\"app\"}],\"relatedIssues\":[{\"severity\":\"critical\",\"source\":\"missing_ref\",\"category\":\"missing_config_ref\",\"category_group\":\"configuration\",\"id\":\"16dc471cf396fd5b\",\"grouping_scope\":\"workload\",\"kind\":\"Deployment\",\"group\":\"apps\",\"namespace\":\"gl-missing-cm\",\"name\":\"checkout\",\"reason\":\"Missing ConfigMap\",\"message\":\"container \\\"app\\\" envFrom references ConfigMap \\\"checkout-settings\\\" which does not exist\",\"cause\":\"This prevents the container from starting.\",\"action\":\"Restore the required configuration in namespace \\\"gl-missing-cm\\\", or update the pod template to reference an existing ConfigMap, mark the reference optional, or remove it if obsolete.\",\"onset_unknown\":true,\"resource_created_at\":\"2026-10-17T23:14:03Z\",\"last_seen\":\"2026-10-27T23:48:10.528372Z\",\"count\":1,\"affected\":{\"pods\":1},\"members\":[{\"kind\":\"Pod\",\"namespace\":\"gl-missing-cm\",\"name\":\"checkout-694f5ffb7b-dnmql\"}],\"diagnostic_context\":{\"role\":\"candidate\",\"facts\":[{\"type\":\"explicit_reference\",\"message\":\"Detected from an explicit reference to an object that does not exist or cannot be resolved.\"},{\"type\":\"owner_rollup\",\"message\":\"Grouped from 1 affected resource(s) under this Deployment.\",\"refs\":[{\"kind\":\"Pod\",\"namespace\":\"gl-missing-cm\",\"name\":\"checkout-694f5ffb7b-dnmql\"}]}]},\"issue_timing\":\"started_at_resource_creation\",\"issue_timing_basis\":\"owner_condition\"}],\"pods\":1,\"podNames\":[\"checkout-694f5ffb7b-dnmql\"],\"warnings\":[\"Condition `Available=False` for ~10d \u2014 since about when this resource was created (resource age: 10d).\"],\"metrics\":{\"window\":{\"start\":\"2026-10-27T22:48:10Z\",\"end\":\"2026-10-27T23:48:10Z\",\"step\":\"1m5s\"},\"pods\":1,\"series\":[{\"category\":\"cpu\",\"unit\":\"cores\",\"query\":\"sum(rate(container_cpu_usage_seconds_total{namespace='gl-missing-cm',pod=~'^(checkout-694f5ffb7b-dnmql)$'}[5m]))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141290,\"value\":0},{\"timestamp\":1793144865,\"value\":0}]}]},{\"category\":\"memory\",\"unit\":\"bytes\",\"query\":\"sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace='gl-missing-cm',pod=~'^(checkout-694f5ffb7b-dnmql)$'}))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141290,\"value\":233500},{\"timestamp\":1793144865,\"value\":233500}]}]},{\"category\":\"restarts\",\"unit\":\"count\",\"query\":\"sum(round(increase(kube_pod_container_status_restarts_total{namespace='gl-missing-cm',pod=~'^(checkout-694f5ffb7b-dnmql)$'}[1h])))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793141290,\"value\":0},{\"timestamp\":1793144865,\"value\":0}]}]}]}}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_hjwongu65q35ro2m6lfen6iaiw_wwkul5lygis6i2rt7wixdt7rys"
+   },
+   {
+    "kind": "tool",
+    "id": "toolu_01LjynphghtchyTnDqH7gKdb",
+    "tool": "list_resources",
+    "status": "done",
+    "summary": "{\"kind\":\"configmaps\",\"namespace\":\"gl-missing-cm\"}",
+    "result": "{\"summary\":\"Complete: 3 configmaps in namespace \\\"gl-missing-cm\\\".\",\"coverage\":{\"status\":\"complete\",\"scope\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":1,\"names\":[\"gl-missing-cm\"]}},\"read\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":1,\"names\":[\"gl-missing-cm\"]}},\"gaps\":[]},\"items\":[{\"kind\":\"ConfigMap\",\"name\":\"kube-root-ca.crt\",\"namespace\":\"gl-missing-cm\",\"age\":\"10d\",\"keys\":[\"ca.crt\"]},{\"kind\":\"ConfigMap\",\"name\":\"istio-ca-root-cert\",\"namespace\":\"gl-missing-cm\",\"age\":\"10d\",\"keys\":[\"root-cert.pem\"]},{\"kind\":\"ConfigMap\",\"name\":\"istio-ca-crl\",\"namespace\":\"gl-missing-cm\",\"age\":\"10d\",\"keys\":[\"ca-crl.pem\"]}]}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_hjwongu65q35ro2m6lfen6iaiw_onemxrzd64v6fznk2qbv4l76ta"
+   },
+   {
+    "kind": "tool",
+    "id": "toolu_017YKFiUKBykQgqZER7rLXuc",
+    "tool": "get_changes",
+    "status": "done",
+    "summary": "{\"namespace\":\"gl-missing-cm\",\"since\":\"14d\"}",
+    "result": "{\"changes\":[],\"narrowHint\":\"Radar's change history is complete only from 2026-10-27T23:42:32Z; changes before then may be missing, so an empty or short result does not establish that nothing changed. For older changes to one object, check it directly (get_resource, its ReplicaSet revisions).\",\"clusterScopedChanges\":{\"kinds\":[\"MutatingWebhookConfiguration\",\"ValidatingWebhookConfiguration\"],\"window_seconds\":1209600,\"changes\":[],\"incomplete\":\"Radar has recorded changes only since 2026-10-27T23:42:31Z; earlier changes in the window are unknown. Radar has watched MutatingWebhookConfigurations only since 2026-10-27T23:42:37Z; earlier changes in the window are unknown. Radar has watched ValidatingWebhookConfigurations only since 2026-10-27T23:42:37Z; earlier changes in the window are unknown.\"},\"historyCoverage\":{\"incomplete\":true,\"complete_since\":\"2026-10-27T23:42:32Z\",\"reasons\":[\"observation_started_late\"]}}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_hjwongu65q35ro2m6lfen6iaiw_6dvtlavzcp2jzkz454urflvmdk"
+   }
+  ],
+  "diagnosis": {
+   "evidence": [
+    {
+     "status": "linked",
+     "ref": "ev_hjwongu65q35ro2m6lfen6iaiw_wwkul5lygis6i2rt7wixdt7rys",
+     "role": "cause",
+     "claim": "Kubelet repeatedly fails to start the container because ConfigMap checkout-settings is not found.",
+     "gap": "does not show what keys the ConfigMap should hold",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "gl-missing-cm",
+      "name": "checkout-694f5ffb7b-dnmql",
+      "observation": "events"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_hjwongu65q35ro2m6lfen6iaiw_wwkul5lygis6i2rt7wixdt7rys",
+     "role": "symptom",
+     "claim": "Pod template has a required envFrom reference to checkout-settings; the Deployment has been unavailable since creation and is still at revision 1.",
+     "gap": "live spec only, not the source manifest",
+     "subject": {
+      "group": "apps",
+      "kind": "Deployment",
+      "namespace": "gl-missing-cm",
+      "name": "checkout",
+      "observation": "resource"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_hjwongu65q35ro2m6lfen6iaiw_onemxrzd64v6fznk2qbv4l76ta",
+     "role": "cause",
+     "claim": "Namespace holds only system/Istio CA ConfigMaps; no checkout-settings or similarly named ConfigMap exists.",
+     "gap": "this namespace at this moment only, not past state",
+     "subject": {
+      "group": "",
+      "kind": "ConfigMap",
+      "namespace": "gl-missing-cm",
+      "name": "",
+      "observation": "resource"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_hjwongu65q35ro2m6lfen6iaiw_6dvtlavzcp2jzkz454urflvmdk",
+     "role": "context",
+     "claim": "No tracked changes in the namespace, but history is only complete from 2026-10-27T23:42Z.",
+     "gap": "says nothing about changes before 2026-10-27T23:42Z",
+     "subject": {
+      "group": "",
+      "kind": "ConfigMap",
+      "namespace": "gl-missing-cm",
+      "name": "",
+      "observation": "changes"
+     }
+    }
+   ],
+   "report": "Kubernetes can't start the checkout container, and it has failed this way since the Deployment was created on 2026-10-17. The pod template pulls all its environment variables from a ConfigMap named `checkout-settings`, and that reference is required, not optional. That ConfigMap does not exist. Before starting the container, the kubelet (the node agent that runs pods) tries to read it, fails, and parks the pod in `CreateContainerConfigError`. It has retried 66,566 times.\n\n[[radar:evidence=0]]\n\nThe Deployment is still at its first revision with an unedited spec, and it has been unavailable since the minute it was created. So this isn't a recent break. The pod has not started since creation. The only ConfigMaps in the namespace are the automatically injected Kubernetes and Istio CA certificates, so there is nothing misspelled or renamed to point at.\n\n[[radar:evidence=2]]\n\nRadar's change history only goes back to 2026-10-27, so it can't show whether `checkout-settings` was ever applied and then removed. That doesn't change the fix.\n\nWhy I haven't picked a one-click fix: creating an empty ConfigMap or marking the reference optional would let the pod start, but possibly without the settings checkout actually needs. Nothing I could read shows what keys belong in it. Get the real contents from wherever the app's manifests live, create the ConfigMap (step 2), and the stuck pod will start on its next retry without a restart. Use the optional-reference patch only if the app owner confirms the settings aren't needed.\n\nThe privilege-escalation and token-automount audit findings are general security hygiene and have nothing to do with this outage.",
+   "ruledOut": [
+    {
+     "hypothesis": "Image pull, scheduling or resource failure",
+     "evidenceIndex": 0
+    },
+    {
+     "hypothesis": "ConfigMap was deleted after the workload had been running healthily",
+     "evidenceIndex": 1
+    },
+    {
+     "hypothesis": "A ConfigMap exists under a near-identical (typo) name",
+     "evidenceIndex": 2
+    }
+   ]
+  }
+ },
+ "run-40c65bb5ed": {
+  "target": {
+   "kind": "Deployment",
+   "group": "apps",
+   "namespace": "boutique",
+   "name": "adservice"
+  },
+  "timeline": [
+   {
+    "kind": "tool",
+    "id": "toolu_01T2N7hCcNXY8vXs3ufxmtFf",
+    "tool": "diagnose",
+    "status": "done",
+    "summary": "{\"kind\":\"deployment\",\"namespace\":\"boutique\",\"name\":\"adservice\",\"group\":\"apps\"}",
+    "result": "{\"resource\":{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"deployment.kubernetes.io/revision\":\"4\"},\"creationTimestamp\":\"2026-10-09T22:51:46Z\",\"generation\":4,\"labels\":{\"app\":\"adservice\"},\"name\":\"adservice\",\"namespace\":\"boutique\"},\"spec\":{\"progressDeadlineSeconds\":600,\"replicas\":1,\"revisionHistoryLimit\":10,\"selector\":{\"matchLabels\":{\"app\":\"adservice\"}},\"strategy\":{\"rollingUpdate\":{\"maxSurge\":\"25%\",\"maxUnavailable\":\"25%\"},\"type\":\"RollingUpdate\"},\"template\":{\"metadata\":{\"labels\":{\"app\":\"adservice\"}},\"spec\":{\"affinity\":{\"nodeAffinity\":{\"preferredDuringSchedulingIgnoredDuringExecution\":[{\"preference\":{\"matchExpressions\":[{\"key\":\"eks.amazonaws.com/nodegroup\",\"operator\":\"NotIn\",\"values\":[\"system-pool\"]}]},\"weight\":100}]}},\"containers\":[{\"env\":[{\"name\":\"PORT\",\"value\":\"9555\"}],\"image\":\"us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/adservice:v0.10.7\",\"livenessProbe\":{\"failureThreshold\":3,\"grpc\":{\"port\":9555,\"service\":\"\"},\"initialDelaySeconds\":20,\"periodSeconds\":15,\"successThreshold\":1,\"timeoutSeconds\":1},\"name\":\"server\",\"ports\":[{\"containerPort\":9555,\"protocol\":\"TCP\"}],\"readinessProbe\":{\"failureThreshold\":3,\"grpc\":{\"port\":9555,\"service\":\"\"},\"initialDelaySeconds\":20,\"periodSeconds\":15,\"successThreshold\":1,\"timeoutSeconds\":1},\"resources\":{\"limits\":{\"cpu\":\"300m\",\"memory\":\"300Mi\"},\"requests\":{\"cpu\":\"200m\",\"memory\":\"180Mi\"}},\"securityContext\":{\"allowPrivilegeEscalation\":false,\"capabilities\":{\"drop\":[\"ALL\"]},\"privileged\":false,\"readOnlyRootFilesystem\":true}}],\"nodeSelector\":{\"kubernetes.io/arch\":\"amd64\"},\"restartPolicy\":\"Always\",\"securityContext\":{\"fsGroup\":1000,\"runAsGroup\":1000,\"runAsNonRoot\":true,\"runAsUser\":1000},\"serviceAccount\":\"adservice\",\"serviceAccountName\":\"adservice\",\"terminationGracePeriodSeconds\":5}}},\"status\":{\"availableReplicas\":1,\"conditions\":[{\"lastTransitionTime\":\"2026-10-09T22:51:46Z\",\"lastUpdateTime\":\"2026-10-09T23:13:03Z\",\"message\":\"ReplicaSet \\\"adservice-79fc76c97\\\" has successfully progressed.\",\"reason\":\"NewReplicaSetAvailable\",\"status\":\"True\",\"type\":\"Progressing\"},{\"lastTransitionTime\":\"2026-10-23T23:30:49Z\",\"lastUpdateTime\":\"2026-10-23T23:30:49Z\",\"message\":\"Deployment has minimum availability.\",\"reason\":\"MinimumReplicasAvailable\",\"status\":\"True\",\"type\":\"Available\"}],\"readyReplicas\":1,\"replicas\":1,\"updatedReplicas\":1}},\"resourceContext\":{\"tier\":\"diagnostic\",\"manager\":{\"state\":\"none\"},\"exposes\":[{\"kind\":\"Service\",\"namespace\":\"boutique\",\"name\":\"adservice\"}],\"exposedBy\":[{\"kind\":\"Service\",\"namespace\":\"boutique\",\"name\":\"adservice\"}],\"uses\":{\"serviceAccount\":{\"kind\":\"ServiceAccount\",\"namespace\":\"boutique\",\"name\":\"adservice\"}},\"statusSummary\":{\"conditions\":[{\"type\":\"Progressing\",\"status\":\"True\",\"reason\":\"NewReplicaSetAvailable\",\"message\":\"ReplicaSet \\\"adservice-79fc76c97\\\" has successfully progressed.\",\"lastTransitionTime\":\"2026-10-09T22:51:46Z\"},{\"type\":\"Available\",\"status\":\"True\",\"reason\":\"MinimumReplicasAvailable\",\"message\":\"Deployment has minimum availability.\",\"lastTransitionTime\":\"2026-10-23T23:30:49Z\"}]},\"workloadSummary\":{\"replicas\":{\"desired\":1,\"ready\":1,\"available\":1,\"updated\":1}},\"auditSummary\":{\"count\":3,\"highestSeverity\":\"medium\",\"topFinding\":\"automountServiceAccountToken\"}},\"logsCurrent\":[{\"pod\":\"adservice-79fc76c97-wbldf\",\"container\":\"server\",\"logs\":{\"lines\":[\"2026-10-28T02:15:56.739188840Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153756,\\\"nanoOfSecond\\\":738936609},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[accessories])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:15:56.738Z\\\"}\",\"2026-10-28T02:15:58.720021502Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153758,\\\"nanoOfSecond\\\":719739399},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[clothing, tops])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:15:58.719Z\\\"}\",\"2026-10-28T02:15:59.022329678Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153759,\\\"nanoOfSecond\\\":21971052},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[accessories])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:15:59.021Z\\\"}\",\"2026-10-28T02:16:00.517068262Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153760,\\\"nanoOfSecond\\\":516563229},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[kitchen])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:00.516Z\\\"}\",\"2026-10-28T02:16:00.640677388Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153760,\\\"nanoOfSecond\\\":640359663},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[footwear])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:00.640Z\\\"}\",\"2026-10-28T02:16:01.955405471Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153761,\\\"nanoOfSecond\\\":955151130},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[decor, home])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:01.955Z\\\"}\",\"2026-10-28T02:16:02.061916404Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153762,\\\"nanoOfSecond\\\":61661223},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[footwear])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:02.061Z\\\"}\",\"2026-10-28T02:16:02.709997826Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153762,\\\"nanoOfSecond\\\":709738604},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[decor, home])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:02.709Z\\\"}\",\"2026-10-28T02:16:03.152672769Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153763,\\\"nanoOfSecond\\\":152406046},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[hair, beauty])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:03.152Z\\\"}\",\"2026-10-28T02:16:03.305707086Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153763,\\\"nanoOfSecond\\\":305414473},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:03.305Z\\\"}\",\"2026-10-28T02:16:03.560903080Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153763,\\\"nanoOfSecond\\\":560644489},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[footwear])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:03.560Z\\\"}\",\"2026-10-28T02:16:03.639948158Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153763,\\\"nanoOfSecond\\\":639523859},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:03.639Z\\\"}\",\"2026-10-28T02:16:04.610250379Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153764,\\\"nanoOfSecond\\\":610006058},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[accessories])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:04.610Z\\\"}\",\"2026-10-28T02:16:05.861296239Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153765,\\\"nanoOfSecond\\\":861000746},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:05.861Z\\\"}\",\"2026-10-28T02:16:06.621586471Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153766,\\\"nanoOfSecond\\\":621276007},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[clothing, tops])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:06.621Z\\\"}\",\"2026-10-28T02:16:07.043131436Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153767,\\\"nanoOfSecond\\\":42897216},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[clothing, tops])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:07.042Z\\\"}\",\"2026-10-28T02:16:07.556121012Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153767,\\\"nanoOfSecond\\\":555867510},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[kitchen])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:07.555Z\\\"}\",\"2026-10-28T02:16:09.286458893Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153769,\\\"nanoOfSecond\\\":286187670},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[kitchen])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:09.286Z\\\"}\",\"2026-10-28T02:16:09.894356274Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153769,\\\"nanoOfSecond\\\":894078741},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[decor, home])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:09.894Z\\\"}\",\"2026-10-28T02:16:10.651140977Z {\\\"instant\\\":{\\\"epochSecond\\\":1793153770,\\\"nanoOfSecond\\\":650872465},\\\"thread\\\":\\\"grpc-default-executor-1421\\\",\\\"level\\\":\\\"INFO\\\",\\\"loggerName\\\":\\\"hipstershop.AdService\\\",\\\"message\\\":\\\"received ad request (context_words=[footwear])\\\",\\\"endOfBatch\\\":false,\\\"loggerFqcn\\\":\\\"org.apache.logging.log4j.spi.AbstractLogger\\\",\\\"threadId\\\":1442,\\\"threadPriority\\\":5,\\\"logging.googleapis.com/trace\\\":\\\"${ctx:traceId}\\\",\\\"logging.googleapis.com/spanId\\\":\\\"${ctx:spanId}\\\",\\\"logging.googleapis.com/traceSampled\\\":\\\"${ctx:traceSampled}\\\",\\\"time\\\":\\\"2026-10-28T02:16:10.650Z\\\"}\"],\"totalLines\":100,\"matchedLines\":0,\"fallback\":true}}],\"logsPrevious\":[{\"pod\":\"adservice-79fc76c97-wbldf\",\"container\":\"server\",\"logs\":{\"lines\":null,\"totalLines\":0,\"matchedLines\":0,\"fallback\":false},\"error\":\"failed to get logs: previous terminated container \\\"server\\\" in pod \\\"adservice-79fc76c97-wbldf\\\" not found\"}],\"logCoverage\":{\"resolvedPods\":1,\"selectedPods\":1,\"shownLines\":20,\"totalLines\":20,\"shownPods\":1,\"totalPods\":1},\"expectedPreviousLogAbsences\":[{\"pod\":\"adservice-79fc76c97-wbldf\",\"container\":\"server\"}],\"pods\":1,\"podNames\":[\"adservice-79fc76c97-wbldf\"],\"metrics\":{\"window\":{\"start\":\"2026-10-28T01:16:11Z\",\"end\":\"2026-10-28T02:16:11Z\",\"step\":\"1m5s\"},\"pods\":1,\"series\":[{\"category\":\"cpu\",\"unit\":\"cores\",\"query\":\"sum(rate(container_cpu_usage_seconds_total{container!='',namespace='boutique',pod=~'^(adservice-79fc76c97-wbldf)$'}[5m]))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793150171,\"value\":0.001185},{\"timestamp\":1793150236,\"value\":0.001207},{\"timestamp\":1793150301,\"value\":0.001184},{\"timestamp\":1793150366,\"value\":0.001177},{\"timestamp\":1793150431,\"value\":0.001183},{\"timestamp\":1793150496,\"value\":0.001168},{\"timestamp\":1793150561,\"value\":0.001191},{\"timestamp\":1793150626,\"value\":0.001209},{\"timestamp\":1793150691,\"value\":0.001193},{\"timestamp\":1793150756,\"value\":0.001242},{\"timestamp\":1793150821,\"value\":0.001216},{\"timestamp\":1793150886,\"value\":0.001201},{\"timestamp\":1793150951,\"value\":0.001223},{\"timestamp\":1793151016,\"value\":0.001218},{\"timestamp\":1793151081,\"value\":0.001174},{\"timestamp\":1793151146,\"value\":0.001174},{\"timestamp\":1793151211,\"value\":0.001175},{\"timestamp\":1793151276,\"value\":0.001155},{\"timestamp\":1793151341,\"value\":0.0012},{\"timestamp\":1793151406,\"value\":0.001204},{\"timestamp\":1793151471,\"value\":0.001186},{\"timestamp\":1793151536,\"value\":0.00119},{\"timestamp\":1793151601,\"value\":0.001156},{\"timestamp\":1793151666,\"value\":0.001153},{\"timestamp\":1793151731,\"value\":0.001185},{\"timestamp\":1793151796,\"value\":0.001212},{\"timestamp\":1793151861,\"value\":0.001143},{\"timestamp\":1793151926,\"value\":0.001218},{\"timestamp\":1793151991,\"value\":0.001182},{\"timestamp\":1793152056,\"value\":0.001182},{\"timestamp\":1793152121,\"value\":0.00117},{\"timestamp\":1793152186,\"value\":0.001184},{\"timestamp\":1793152251,\"value\":0.001106},{\"timestamp\":1793152316,\"value\":0.001185},{\"timestamp\":1793152381,\"value\":0.001204},{\"timestamp\":1793152446,\"value\":0.001197},{\"timestamp\":1793152511,\"value\":0.001203},{\"timestamp\":1793152576,\"value\":0.001215},{\"timestamp\":1793152641,\"value\":0.001201},{\"timestamp\":1793152706,\"value\":0.001212},{\"timestamp\":1793152771,\"value\":0.001202},{\"timestamp\":1793152836,\"value\":0.001196},{\"timestamp\":1793152901,\"value\":0.001208},{\"timestamp\":1793152966,\"value\":0.00118},{\"timestamp\":1793153031,\"value\":0.001183},{\"timestamp\":1793153096,\"value\":0.001215},{\"timestamp\":1793153161,\"value\":0.001218},{\"timestamp\":1793153226,\"value\":0.001236},{\"timestamp\":1793153291,\"value\":0.001224},{\"timestamp\":1793153356,\"value\":0.001121},{\"timestamp\":1793153421,\"value\":0.001198},{\"timestamp\":1793153486,\"value\":0.001185},{\"timestamp\":1793153551,\"value\":0.001172},{\"timestamp\":1793153616,\"value\":0.001175},{\"timestamp\":1793153681,\"value\":0.001158},{\"timestamp\":1793153746,\"value\":0.001185}]}]},{\"category\":\"memory\",\"unit\":\"bytes\",\"query\":\"sum(max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='boutique',pod=~'^(adservice-79fc76c97-wbldf)$'}))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793150171,\"value\":106000000},{\"timestamp\":1793153746,\"value\":106000000}]}]},{\"category\":\"restarts\",\"unit\":\"count\",\"query\":\"sum(round(increase(kube_pod_container_status_restarts_total{namespace='boutique',pod=~'^(adservice-79fc76c97-wbldf)$'}[1h])))\",\"observedSamples\":56,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1793150171,\"value\":0},{\"timestamp\":1793153746,\"value\":0}]}]}]}}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_67ew52w4pix7deoeyysxtkinja_35wymfeqrceixdfld262ucjrpx"
+   },
+   {
+    "kind": "tool",
+    "id": "toolu_017CHBNWLqxUiJEoMRSeRDZY",
+    "tool": "query_prometheus",
+    "status": "done",
+    "summary": "{\"query\":\"sum(kube_pod_container_status_restarts_total{namespace=\\\"boutique\\\",pod=~\\\"^(adservice-79fc76c97-wbldf)$\\\"})\",\"type\":\"range\",\"since\":\"7d\",\"step\":\"1h\"}",
+    "result": "{\"query\":\"sum(kube_pod_container_status_restarts_total{namespace=\\\"boutique\\\",pod=~\\\"^(adservice-79fc76c97-wbldf)$\\\"})\",\"type\":\"range\",\"start\":\"2026-10-21T02:16:21Z\",\"end\":\"2026-10-28T02:16:21Z\",\"step\":\"1h0m0s\",\"resultType\":\"matrix\",\"seriesCount\":1,\"series\":[{\"labels\":{},\"dataPoints\":[{\"timestamp\":1792800981,\"value\":0},{\"timestamp\":1792804581,\"value\":0},{\"timestamp\":1792808181,\"value\":0},{\"timestamp\":1792811781,\"value\":0},{\"timestamp\":1792815381,\"value\":0},{\"timestamp\":1792818981,\"value\":0},{\"timestamp\":1792822581,\"value\":0},{\"timestamp\":1792826181,\"value\":0},{\"timestamp\":1792829781,\"value\":0},{\"timestamp\":1792833381,\"value\":0},{\"timestamp\":1792836981,\"value\":0},{\"timestamp\":1792840581,\"value\":0},{\"timestamp\":1792844181,\"value\":0},{\"timestamp\":1792847781,\"value\":0},{\"timestamp\":1792851381,\"value\":0},{\"timestamp\":1792854981,\"value\":0},{\"timestamp\":1792858581,\"value\":0},{\"timestamp\":1792862181,\"value\":0},{\"timestamp\":1792865781,\"value\":0},{\"timestamp\":1792869381,\"value\":0},{\"timestamp\":1792872981,\"value\":0},{\"timestamp\":1792876581,\"value\":0},{\"timestamp\":1792880181,\"value\":0},{\"timestamp\":1792883781,\"value\":0},{\"timestamp\":1792887381,\"value\":0},{\"timestamp\":1792890981,\"value\":0},{\"timestamp\":1792894581,\"value\":0},{\"timestamp\":1792898181,\"value\":0},{\"timestamp\":1792901781,\"value\":0},{\"timestamp\":1792905381,\"value\":0},{\"timestamp\":1792908981,\"value\":0},{\"timestamp\":1792912581,\"value\":0},{\"timestamp\":1792916181,\"value\":0},{\"timestamp\":1792919781,\"value\":0},{\"timestamp\":1792923381,\"value\":0},{\"timestamp\":1792926981,\"value\":0},{\"timestamp\":1792930581,\"value\":0},{\"timestamp\":1792934181,\"value\":0},{\"timestamp\":1792937781,\"value\":0},{\"timestamp\":1792941381,\"value\":0},{\"timestamp\":1792944981,\"value\":0},{\"timestamp\":1792948581,\"value\":0},{\"timestamp\":1792952181,\"value\":0},{\"timestamp\":1792955781,\"value\":0},{\"timestamp\":1792959381,\"value\":0},{\"timestamp\":1792962981,\"value\":0},{\"timestamp\":1792966581,\"value\":0},{\"timestamp\":1792970181,\"value\":0},{\"timestamp\":1792973781,\"value\":0},{\"timestamp\":1792977381,\"value\":0},{\"timestamp\":1792980981,\"value\":0},{\"timestamp\":1792984581,\"value\":0},{\"timestamp\":1792988181,\"value\":0},{\"timestamp\":1792991781,\"value\":0},{\"timestamp\":1792995381,\"value\":0},{\"timestamp\":1792998981,\"value\":0},{\"timestamp\":1793002581,\"value\":0},{\"timestamp\":1793006181,\"value\":0},{\"timestamp\":1793009781,\"value\":0},{\"timestamp\":1793013381,\"value\":0},{\"timestamp\":1793016981,\"value\":0},{\"timestamp\":1793020581,\"value\":0},{\"timestamp\":1793024181,\"value\":0},{\"timestamp\":1793027781,\"value\":0},{\"timestamp\":1793031381,\"value\":0},{\"timestamp\":1793034981,\"value\":0},{\"timestamp\":1793038581,\"value\":0},{\"timestamp\":1793042181,\"value\":0},{\"timestamp\":1793045781,\"value\":0},{\"timestamp\":1793049381,\"value\":0},{\"timestamp\":1793052981,\"value\":0},{\"timestamp\":1793056581,\"value\":0},{\"timestamp\":1793060181,\"value\":0},{\"timestamp\":1793063781,\"value\":0},{\"timestamp\":1793067381,\"value\":0},{\"timestamp\":1793070981,\"value\":0},{\"timestamp\":1793074581,\"value\":0},{\"timestamp\":1793078181,\"value\":0},{\"timestamp\":1793081781,\"value\":0},{\"timestamp\":1793085381,\"value\":0},{\"timestamp\":1793088981,\"value\":0},{\"timestamp\":1793092581,\"value\":0},{\"timestamp\":1793096181,\"value\":0},{\"timestamp\":1793099781,\"value\":0},{\"timestamp\":1793103381,\"value\":0},{\"timestamp\":1793106981,\"value\":0},{\"timestamp\":1793110581,\"value\":0},{\"timestamp\":1793114181,\"value\":0},{\"timestamp\":1793117781,\"value\":0},{\"timestamp\":1793121381,\"value\":0},{\"timestamp\":1793124981,\"value\":0},{\"timestamp\":1793128581,\"value\":0},{\"timestamp\":1793132181,\"value\":0},{\"timestamp\":1793135781,\"value\":0},{\"timestamp\":1793139381,\"value\":0},{\"timestamp\":1793142981,\"value\":0},{\"timestamp\":1793146581,\"value\":0},{\"timestamp\":1793150181,\"value\":0},{\"timestamp\":1793153781,\"value\":0}]}],\"selectors\":[{\"metric\":\"kube_pod_container_status_restarts_total\",\"matchers\":[{\"label\":\"namespace\",\"op\":\"=\",\"value\":\"boutique\"},{\"label\":\"pod\",\"op\":\"=~\",\"value\":\"^(adservice-79fc76c97-wbldf)$\"}]}]}",
+    "isError": false,
+    "radarEvidence": true,
+    "evidenceRef": "ev_67ew52w4pix7deoeyysxtkinja_ccp3nfaxe4bfz2dluhf2twalzd"
+   }
+  ],
+  "diagnosis": {
+   "evidence": [
+    {
+     "status": "linked",
+     "ref": "ev_67ew52w4pix7deoeyysxtkinja_35wymfeqrceixdfld262ucjrpx",
+     "role": "context",
+     "claim": "1/1 replicas ready and available; Available=True since 2026-10-23T23:30:49Z.",
+     "gap": "current pod only, not caller-side errors",
+     "subject": {
+      "group": "apps",
+      "kind": "Deployment",
+      "namespace": "boutique",
+      "name": "adservice",
+      "observation": "resource"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_67ew52w4pix7deoeyysxtkinja_35wymfeqrceixdfld262ucjrpx",
+     "role": "context",
+     "claim": "Recent logs are routine INFO ad-request lines with no errors.",
+     "gap": "last 20 lines only, not older history",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "boutique",
+      "name": "adservice-79fc76c97-wbldf",
+      "container": "server",
+      "stream": "current",
+      "observation": "logs"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_67ew52w4pix7deoeyysxtkinja_ccp3nfaxe4bfz2dluhf2twalzd",
+     "role": "rules_out",
+     "claim": "Restart counter is 0 at every hourly sample across 7 days.",
+     "gap": "hourly samples from 2026-10-21 onward only",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "boutique",
+      "name": "adservice-79fc76c97-wbldf",
+      "observation": "metrics"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_67ew52w4pix7deoeyysxtkinja_35wymfeqrceixdfld262ucjrpx",
+     "role": "rules_out",
+     "claim": "Memory flat near 106 MB under a 300Mi limit; CPU ~1m under a 300m limit.",
+     "gap": "last hour only",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "boutique",
+      "name": "adservice-79fc76c97-wbldf",
+      "observation": "metrics:memory"
+     }
+    }
+   ],
+   "report": "adservice is healthy. Radar's green status matches what the cluster shows. The deployment has its one replica ready and available, and Kubernetes has reported it available continuously since 2026-10-23 23:30 UTC.\n\n[[radar:evidence=0|compact]]\n\nThe pod is doing its job. Its most recent log lines are routine \"received ad request\" entries from seconds before this check, with no errors or stack traces. It is nowhere near its limits: memory sits flat at about 106 MB under a 300 MiB cap, and CPU is close to idle.\n\n[[radar:evidence=2]]\n\nThe pod has not restarted at any point in the last seven days, and Kubernetes holds no earlier crashed container for it. So there is no hidden crash loop or out-of-memory kill behind the green status.\n\nThe two audit findings are configuration hygiene, not live faults. One is that the pod gets a Kubernetes API token it probably doesn't need. The other is that the deployment was applied by hand rather than from Git or Helm. Neither affects the service today.\n\nThese checks would not catch errors seen only by the callers, such as the frontend timing out on ad requests. If someone reports missing ads, look at the frontend's logs next.",
+   "ruledOut": [
+    {
+     "hypothesis": "Crash loop or OOM-kill restarts",
+     "evidenceIndex": 2
+    },
+    {
+     "hypothesis": "Container pressing against its memory/CPU limits",
+     "evidenceIndex": 3
+    }
+   ]
+  }
+ }
+}

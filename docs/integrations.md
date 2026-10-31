@@ -506,7 +506,7 @@ Target links use the API group in `targetRef.apiVersion`. Built-in targets witho
 
 ### Cluster Audit checks
 
-Traefik ships no admission webhook or linter, so a typo'd reference is accepted silently and the route or middleware just doesn't do what you wrote. Radar's Cluster Audit catches the common dangling-reference cases as **Reliability** checks:
+Traefik ships no admission webhook or linter, so a typo'd reference is accepted, and Traefik then does not load any router that needs it: the route serves nothing (a 404 unless another router matches) and the error shows only in Traefik's log and dashboard. When a running Traefik loads the IngressRoute, `issues` reports it as a live failure on the IngressRoute (see [MCP](mcp.md)). Radar's Cluster Audit catches the common dangling-reference cases as **Reliability** checks:
 
 | Check | What it catches |
 |-------|-----------------|
@@ -765,7 +765,7 @@ permits the reference or has produced an artifact.
 **Diagnosis**:
 - **Per-resource field diff** computed from each resource's `kubectl.kubernetes.io/last-applied-configuration` annotation vs live spec — works for any Argo client-side-applied resource without calling the Argo API
 - **Recent events** surfaced inline per managed resource (5 most recent, namespace-RBAC-filtered)
-- **Stuck-drift-loop detector** — flags `sync=OutOfSync ∧ opPhase=Succeeded ∧ auto-sync on ∧ reconciledAt<30min` with the likely cause (mutating webhook, sibling controller, schema migration)
+- **Stuck-drift-loop detector** — flags `sync=OutOfSync ∧ opPhase=Succeeded ∧ applied sources/revisions match the desired comparison ∧ auto-sync on ∧ reconciledAt<30min` with the likely cause (mutating webhook, sibling controller, schema migration)
 - **Manual-drift detector** — calls out OutOfSync apps with auto-sync disabled
 - **Argo Application conditions** extracted to issues (ComparisonError, OrphanedResourceWarning, etc.) with type-aware severity and per-condition action text
 - **Operation-failure parser** recognizes 11 patterns: annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.

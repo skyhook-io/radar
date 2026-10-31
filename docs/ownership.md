@@ -138,7 +138,9 @@ failed enrichment, qualified when live scan state could not be checked.
 
 Each REST AI list/search or MCP list/search request gets a three-second optional-enrichment budget, including authorization and queue waits.
 Health and prepared issue counts survive expiry. Saturation or failed preparation can omit issue counts, including in
-Omnibar results; `omitted` distinguishes unknown counts from zero. Lists share one caller-scoped ownership session.
+Omnibar results; `omitted` distinguishes unknown counts from zero. Omnibar requests `context=status` on REST search:
+cached health and authorized issue counts, without ownership, relationship-graph or live scan-target lookups. Unrequested
+navigation fields have no omission note. The default `context=summary` and MCP search retain navigation. Lists share one caller-scoped ownership session.
 Execution and caching details live in [summarycontext](../internal/summarycontext/summarycontext.go),
 [AgentOwnership](../internal/k8s/ownership.go) and [cachesource](../pkg/ownership/cachesource/).
 
@@ -146,7 +148,10 @@ Execution and caching details live in [summarycontext](../internal/summarycontex
 
 - A **gap** is a kind (and namespace) the read couldn't cover, with a `pkg/readreason` code. A whole-kind state is one
   gap however many namespaces a search names.
-- `DependentCandidatesRead.Complete()`: no gaps, among the kinds the garbage collector acts on.
+- `DependentCandidatesRead.Complete()`: no gaps, among the kinds the garbage collector acts on. Its `Gaps` slice is
+  read-only, may be shared across searches, and is never changed by later session reads; clone it before modifying it.
+  The cache source prepares each scope when first searched and shares equal coverage arrays, but still reads watched
+  stores and their readiness on each search.
 - `RecordingManagersRead.Complete()`: no gaps, no unreadable and no remote managers, among the three manager kinds.
   An object with no recorders may still be managed by something Radar doesn't read.
 - Answers can be stale, never confidently wrong: a store answers as fresh as its informer, and a manager's list as fresh

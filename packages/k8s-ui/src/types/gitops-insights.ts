@@ -56,6 +56,9 @@ export interface GitOpsInsightSummary {
   source?: string
   targetRevision?: string
   lastRevision?: string
+  // Revision(s) deployed by the latest successful marked rollback, set only while
+  // effective auto-sync is off. Absence does not mean no rollback happened.
+  rollbackRevision?: string
   lastReconcile?: string
   partialReason?: string
   // Human-readable sync mode for the chip in the status strip.
@@ -124,6 +127,14 @@ export interface GitOpsIssue {
   rawMessage?: string
   refs?: GitOpsInsightRef[]
   action?: string
+  /** Optional presentation split; action always retains the complete guidance. */
+  actionPrimary?: string
+  actionSecondaryTitle?: string
+  actionSecondary?: string[]
+  // Set when syncing would prune every managed
+  // resource or take resources over from another Application. Shown as a
+  // warning ahead of a failed operation's cause; resource rows defer sync advice to it.
+  hazard?: string
   // Plain-English root cause when the message matched a recognized error
   // pattern. Empty for unrecognized messages — UI falls back to the raw message.
   cause?: string
@@ -234,6 +245,12 @@ export interface GitOpsHistoryItem {
   rawMessage?: string
   source?: string
   initiatedBy?: string
+  // Whether an Argo CD history entry has an ID and recorded source(s), independently
+  // of auto-sync, lifecycle, in-flight operations and RBAC. Absent where not
+  // applicable (current-operation and Flux rows), or not supplied by Radar.
+  rollbackable?: boolean
+  // Compatibility warning: the current Application or history entry uses plural sources.
+  rollbackMultiSourceWarning?: boolean
 }
 
 export interface GitOpsCapabilities {

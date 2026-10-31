@@ -56,7 +56,7 @@ const GuidanceSignals = `READING RADAR'S SIGNALS
 - An issues row naming a mechanism and an action is the leading hypothesis; start from its incident_parent if any. Confirm it with a targeted read; don't re-derive it. If it points at another resource, follow it. Conclude only when the evidence names the resource, explains the mechanism and accounts for the symptom; keep other findings separate.
 - Use changes attached to issues; get_changes when absent or for another window or scope. Reuse logs from diagnose; fetch more only for a specific gap.
 - issue_timing started_after_resource_was_healthy: a healthy window preceded the failure; look for what changed. started_at_resource_creation means the resource, or its owner workload, started failing during creation or first reconciliation. Compare resource_created_at with the incident window. Timing alone doesn't prove cause. Prefer timing_summary when present.
-- issues is live state; get_cluster_audit is configuration posture.
+- issues is live state; get_cluster_audit is posture, partly live.
 - After a fix, wait_for its rollout within a time limit, then recheck issues. Sleep only for time that must pass (a rate window, a scrape interval). Check the symptom only if they don't cover it.
 `
 

@@ -72,7 +72,7 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 
 	auditOnly := TaskPrompt(Target{Kind: "Pod", Namespace: "prod", Name: "api-7"},
 		&HealthSignal{Health: "healthy", AuditCount: 1, AuditSeverity: "high", TopFinding: "runAsRoot"}, Options{})
-	for _, want := range []string{"static posture finding", "highest severity high", "not evidence of an active outage", "Verify quickly"} {
+	for _, want := range []string{"posture finding", "highest severity high", "mostly latent risk", "check them before dismissing", "Verify quickly"} {
 		if !strings.Contains(auditOnly, want) {
 			t.Errorf("audit-only prompt missing %q:\n%s", want, auditOnly)
 		}
@@ -84,8 +84,8 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 	}, Options{})
 	for _, want := range []string{
 		"highest severity critical: CrashLoopBackOff",
-		"static posture finding; highest severity high: runAsRoot",
-		"not evidence of an active outage",
+		"posture finding; highest severity high: runAsRoot",
+		"mostly latent risk",
 		"Find the specific root cause",
 	} {
 		if !strings.Contains(coexisting, want) {

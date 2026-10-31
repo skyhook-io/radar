@@ -10,6 +10,8 @@ import { storyPlainText } from "./investigationStory";
 export interface AssessmentCopyRadar {
   /** Reads Radar could not complete, as shown in Still open. */
   limits?: readonly string[];
+  /** Sampling caps and history bounds, as folded beneath Still open. */
+  routineLimits?: readonly string[];
   /** Adverse Radar cards the agent explained, as shown in Still open. */
   signals?: readonly string[];
   /** Adverse Radar cards nothing explains, as shown above a healthy verdict. */
@@ -17,6 +19,9 @@ export interface AssessmentCopyRadar {
   /** Where and when: the header line a reader in a channel needs first. */
   context?: {
     target: string;
+    /** The engineer's question on a run that names a resource; a run opened
+     *  by the question alone already has it as its target. */
+    asked?: string;
     cluster?: string;
     startedAt?: string;
     agent?: string;
@@ -58,6 +63,8 @@ export function assessmentCopyText(
         .filter(Boolean)
         .join(" · "),
     );
+    const asked = radar.context.asked?.replace(/\s+/g, " ").trim();
+    if (asked) parts.push(`Asked: “${asked}”`);
   }
   if (diagnosis.summary) {
     const certainty = diagnosis.healthy
@@ -143,6 +150,15 @@ export function assessmentCopyText(
       );
     } else parts.push(["Next steps:", ...steps].join("\n"));
   }
+  // Routine limits travel with the paste, after what a reader acts on.
+  const routine = (radar.routineLimits ?? []).filter((item) => item.trim());
+  if (routine.length > 0)
+    parts.push(
+      [
+        "Radar's coverage (routine limits):",
+        ...routine.map((item) => `- ${item}`),
+      ].join("\n"),
+    );
   if (radar.context)
     parts.push(
       "Full analysis and every captured result: open the investigation in Radar.",

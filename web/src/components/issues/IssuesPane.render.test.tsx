@@ -84,7 +84,7 @@ describe('Issues page when Radar could not read Helm releases', () => {
     const html = text(render('/issues'))
     expect(html).toContain('No issues found')
     expect(html).toContain(line)
-    expect(html).not.toContain('Nothing broken right now')
+    expect(html).not.toContain('No issues detected')
     expect(html.split(line).length - 1).toBe(1)
   })
 
@@ -103,7 +103,7 @@ describe('Issues page when Radar could not read Helm releases', () => {
     expect(html).toContain(line)
     expect(html).toContain('Check again')
     expect(html).not.toContain('Failed to load issues')
-    expect(html).not.toContain('Nothing broken right now')
+    expect(html).not.toContain('No issues detected')
     if (hasRows) expect(html).toContain('The selected Pod keeps crashing')
   })
 
@@ -112,7 +112,7 @@ describe('Issues page when Radar could not read Helm releases', () => {
     state.fleet.error = new Error('Refresh unavailable')
     const html = text(render('/issues'))
     expect(html).toContain('No issues in the last successful result')
-    expect(html).not.toContain('Nothing broken right now')
+    expect(html).not.toContain('No issues detected')
     expect(html).not.toContain('Failed to load issues')
   })
 
@@ -122,13 +122,13 @@ describe('Issues page when Radar could not read Helm releases', () => {
     expect(html).toContain('No issues found')
     expect(html).toContain("Some issue checks couldn't run, so issues may be missing.")
     expect(html).not.toContain('some-new-source')
-    expect(html).not.toContain('Nothing broken right now')
+    expect(html).not.toContain('No issues detected')
   })
 
   it('keeps the all-clear for a Radar that read Helm or predates the field', () => {
     state.fleet.data = { issues: [], total: 0, total_matched: 0 }
     const html = text(render('/issues'))
-    expect(html).toContain('Nothing broken right now')
+    expect(html).toContain('No issues detected')
     expect(html).not.toContain('couldn')
   })
 })

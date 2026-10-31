@@ -18,11 +18,12 @@ const (
 	clusterLabel          = "cnpg.io/cluster"
 	defaultLogContainer   = "postgres"
 	defaultLogTailLines   = 200
-	logDiscoveryInterval  = 5 * time.Second
 	logsEmptyMessage      = "No readable logs from this cluster's instances in this snapshot. Refresh after the instances start."
 	logsIntervalEmpty     = "No log lines in this interval from the runs Kubernetes still keeps (the current and previous run of each instance container)."
 	logsNoInstanceMessage = "This cluster has no instance Pods yet."
 )
+
+var logDiscoveryInterval = 5 * time.Second
 
 // clusterInstancePods returns the Cluster's instance Pods under the same
 // label-and-controller-UID rule the workspace uses, sorted by name.

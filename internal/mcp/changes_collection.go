@@ -57,10 +57,10 @@ func changesKindCollection(ctx context.Context, kind, namespace string, since ti
 	var out changesCollection
 	started := currentReadCache()
 	kind = meaningfulchanges.CanonicalKind(kind)
-	ids := customKindIdentities(kind)
+	ids := kindIdentities(kind)
 	if len(ids) == 0 {
 		refreshDiscoveryForKind(strings.ToLower(kind), "")
-		ids = customKindIdentities(kind)
+		ids = kindIdentities(kind)
 	}
 	// Native Helm history is listed as HelmRelease too, and Radar reads it
 	// from release records, not a watch.
@@ -140,10 +140,10 @@ func changesKindCollection(ctx context.Context, kind, namespace string, since ti
 	return out, nil
 }
 
-// customKindIdentities returns every resource discovery serves under kind,
+// kindIdentities returns every resource discovery serves under kind,
 // matched by Kind or plural name. Changes are filtered by Kind alone, so all
 // of them can appear in one answer.
-func customKindIdentities(kind string) []k8score.APIResource {
+func kindIdentities(kind string) []k8score.APIResource {
 	discovery := k8s.GetResourceDiscovery()
 	if discovery == nil {
 		return nil
@@ -251,3 +251,33 @@ func collectionSinceSentence(resource, name, group string, since time.Duration) 
 // collectionStartSlack is how long after Radar starts its startup watches
 // may take to begin.
 const collectionStartSlack = time.Minute
+
+// readableClusterScopedGroups returns the API groups of kind's cluster-scoped
+// resources the caller may list.
+func readableClusterScopedGroups(ctx context.Context, kind string) []string {
+	kind = meaningfulchanges.CanonicalKind(kind)
+	var ids []k8score.APIResource
+	// Built-in cluster-scoped kinds resolve without discovery, whose typed
+	// informers keep recording while it fails.
+	if group, resource, ok := k8s.ClusterOnlyKindGVR(kind); ok {
+		ids = append(ids, k8score.APIResource{Group: group, Name: resource})
+	}
+	ids = append(ids, kindIdentities(kind)...)
+	// Change rows name a kind and group, not a resource, so a group counts
+	// only when the caller may list every resource of that kind in it.
+	allowed := map[string]bool{}
+	var groups []string
+	for _, id := range ids {
+		if id.Namespaced {
+			continue
+		}
+		granted, _ := canReadInNamespaceDecision(ctx, id.Group, id.Name, "", "list")
+		if seen, ok := allowed[id.Group]; ok {
+			allowed[id.Group] = seen && granted
+			continue
+		}
+		allowed[id.Group] = granted
+		groups = append(groups, id.Group)
+	}
+	return slices.DeleteFunc(groups, func(g string) bool { return !allowed[g] })
+}

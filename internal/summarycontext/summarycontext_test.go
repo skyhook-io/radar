@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 )
 
@@ -132,6 +133,54 @@ func TestBuildIssueIndex_GroupAware(t *testing.T) {
 	}
 	if got := idx.Count("serving.knative.dev", "Service", "prod", "api"); got != 1 {
 		t.Errorf("Knative Service count = %d, want 1 (two same-category rows fold to one grouped issue)", got)
+	}
+}
+
+// An issue about another subject counts on each resource it affects that the
+// caller can read, as the related-issues lookup shows it there.
+func TestBuildIssueIndex_CountsAffectedResources(t *testing.T) {
+	p := &fakeIssuesProvider{problems: []k8s.Detection{{
+		Kind: "Secret", Namespace: "shop", Name: "shop-tls", Severity: "critical", Reason: k8s.TLSCertificateExpiredReason,
+		AffectedRefs: []issuesapi.Ref{
+			{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "shop", Name: "web"},
+			{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "shop", Name: "api"},
+		},
+	}}}
+	readAll := func(issues.Ref) bool { return true }
+	idx := BuildIssueIndex(p, issues.Filters{CanReadRelated: readAll})
+	for _, name := range []string{"web", "api"} {
+		if got := idx.Count("networking.k8s.io", "Ingress", "shop", name); got != 1 {
+			t.Errorf("Ingress %s count = %d, want 1", name, got)
+		}
+	}
+	if got := idx.Count("", "Secret", "shop", "shop-tls"); got != 1 {
+		t.Errorf("Secret count = %d, want 1", got)
+	}
+	notAPI := func(ref issues.Ref) bool { return ref.Name != "api" }
+	idx = BuildIssueIndex(p, issues.Filters{CanReadRelated: notAPI})
+	if got := idx.Count("networking.k8s.io", "Ingress", "shop", "api"); got != 0 {
+		t.Errorf("unreadable Ingress count = %d, want 0", got)
+	}
+	noSecrets := func(ref issues.Ref) bool { return ref.Kind != "Secret" }
+	idx = BuildIssueIndex(p, issues.Filters{CanReadRelated: readAll, CanReadSubject: noSecrets})
+	if got := idx.Count("networking.k8s.io", "Ingress", "shop", "web"); got != 0 {
+		t.Errorf("Ingress count without Secret access = %d, want 0", got)
+	}
+	if got := BuildIssueIndex(p, issues.Filters{}).Count("networking.k8s.io", "Ingress", "shop", "web"); got != 0 {
+		t.Errorf("Ingress count without an authorizer = %d, want 0", got)
+	}
+}
+
+// A NetworkPolicy that isolates a Service counts on that Service too.
+func TestBuildIssueIndex_CountsNetworkPolicyOnIsolatedService(t *testing.T) {
+	p := &fakeIssuesProvider{problems: []k8s.Detection{{
+		Kind: "NetworkPolicy", Group: "networking.k8s.io", Namespace: "shop", Name: "deny-all",
+		Severity: "warning", Reason: k8s.NetworkPolicyDenyAllIngressReason,
+		AffectedRefs: []issuesapi.Ref{{Kind: "Service", Namespace: "shop", Name: "recommendation"}},
+	}}}
+	idx := BuildIssueIndex(p, issues.Filters{CanReadRelated: func(issues.Ref) bool { return true }})
+	if got := idx.Count("", "Service", "shop", "recommendation"); got != 1 {
+		t.Errorf("isolated Service count = %d, want 1", got)
 	}
 }
 

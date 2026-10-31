@@ -579,6 +579,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			r.Get("/health", s.handleHealth)
 			r.Get("/agents", s.handleListAgents)
+			r.Get("/agents/signin", s.handleAgentSignin)
 			// AI investigations as durable server-side jobs (start/list/turn/stop).
 			r.Post("/diagnose/runs", s.handleDiagnoseStart)
 			r.Get("/diagnose/runs", s.handleDiagnoseList)
@@ -1442,11 +1443,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
+	var info *version.UpdateInfo
 	if deploymentMode() == k8s.DeploymentModeCloud {
-		s.writeJSON(w, version.CheckForUpdateRelease(r.Context()))
-		return
+		info = version.CheckForUpdateRelease(r.Context())
+	} else {
+		info = version.CheckForUpdate(r.Context())
 	}
-	s.writeJSON(w, version.CheckForUpdate(r.Context()))
+	s.writeJSON(w, version.WithProductHuntLaunch(info))
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
@@ -1496,6 +1499,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		ServiceEndpointSlices:    true,
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,
+		ArgoRollbackSync:         true,
+		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,
 	}

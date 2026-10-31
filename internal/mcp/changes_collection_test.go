@@ -157,21 +157,80 @@ func TestGetChangesCollectionNeedsListOnTheKind(t *testing.T) {
 	}
 }
 
-// get_changes reads history only in a restricted caller's namespaces, which
-// never hold a cluster-scoped kind's changes: complete coverage would vouch
-// for that empty answer.
-func TestGetChangesClusterScopedKindForNamespaceRestrictedCaller(t *testing.T) {
+// A caller limited to some namespaces gets a cluster-scoped kind's changes
+// when it may list that kind and names no namespace; otherwise not.
+func TestGetChangesClusterScopedKindForNamespaceLimitedCaller(t *testing.T) {
 	setupWidgets(t, widgetFixture{extra: []k8s.APIResource{{Group: "example.test", Version: "v1", Kind: "Gadget", Name: "gadgets", Namespaced: false, Verbs: []string{"get", "list", "watch"}}}})
 	t.Cleanup(func() { getPermCache().Invalidate() })
-	ctx := withRestrictedUser(t, "bob", []string{"alpha"})
-	grantClusterRead(t, "bob", "example.test/gadgets")
-
-	response, _ := getChangesForTest(t, ctx, getChangesInput{Kind: "Gadget"})
-	if response.Coverage != nil || !strings.Contains(response.NarrowHint, "reads history only in the namespaces you can see") {
-		t.Fatalf("coverage=%+v narrowHint=%q, want no coverage and the limitation stated", response.Coverage, response.NarrowHint)
+	for _, e := range []struct{ id, namespace, kind, apiVersion string }{
+		{"gadget", "", "Gadget", "example.test/v1"},
+		{"widget", "beta", "Widget", "example.test/v1"},
+	} {
+		if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+			ID: e.id, Timestamp: time.Now().Add(-time.Minute), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+			Kind: e.kind, APIVersion: e.apiVersion, Namespace: e.namespace, Name: "g", EventType: timeline.EventTypeAdd,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if response, _ = getChangesForTest(t, context.Background(), getChangesInput{Kind: "Gadget"}); response.Coverage == nil {
-		t.Fatal("auth off: a cluster-scoped kind keeps its coverage")
+	gadgets := func(r getChangesResponseMCP) int {
+		n := 0
+		for _, c := range r.Changes {
+			if c.Kind == "Gadget" {
+				n++
+			}
+		}
+		for _, run := range r.Created {
+			n += run.Count
+		}
+		return n
+	}
+
+	bob := withRestrictedUser(t, "bob", []string{"alpha"})
+	grantClusterRead(t, "bob", "example.test/gadgets")
+	response, _ := getChangesForTest(t, bob, getChangesInput{Kind: "Gadget"})
+	if gadgets(response) != 1 || response.Coverage == nil || strings.Contains(response.NarrowHint, "not listed here") {
+		t.Fatalf("allowed to list gadgets: changes=%+v coverage=%+v narrowHint=%q", response.Changes, response.Coverage, response.NarrowHint)
+	}
+	// Unfiltered feeds stay within the caller's namespaces.
+	if response, _ = getChangesForTest(t, bob, getChangesInput{}); gadgets(response) != 0 {
+		t.Fatalf("unfiltered: changes=%+v, want no cluster-scoped rows", response.Changes)
+	}
+
+	// No visible namespace at all still reads the kind's cluster scope.
+	carol := withRestrictedUser(t, "carol", []string{})
+	grantClusterRead(t, "carol", "example.test/gadgets")
+	if response, _ = getChangesForTest(t, carol, getChangesInput{Kind: "Gadget"}); gadgets(response) != 1 {
+		t.Fatalf("no namespaces: changes=%+v, want the gadget change", response.Changes)
+	}
+
+	// Built-in cluster-scoped kinds resolve without discovery, which this
+	// fixture doesn't serve Node from.
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+		ID: "node", Timestamp: time.Now().Add(-time.Minute), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Node", APIVersion: "v1", Name: "n1", EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.unschedulable", OldValue: false, NewValue: true}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	grantClusterRead(t, "bob", "/nodes")
+	if response, _ = getChangesForTest(t, bob, getChangesInput{Kind: "Node"}); len(response.Changes) != 1 {
+		t.Fatalf("built-in Node: changes=%+v, want the cordon", response.Changes)
+	}
+
+	// A second resource of the same kind and group the caller may not list
+	// withholds the group: change rows can't tell the two apart.
+	k8s.GetResourceDiscovery().AddAPIResource(k8s.APIResource{Group: "example.test", Version: "v1", Kind: "Gadget", Name: "gadgetsets", Namespaced: false, Verbs: []string{"get", "list", "watch"}})
+	getPermCache().Get("bob", nil).SetCanI("list", "example.test", "gadgetsets", "", false)
+	if response, _ = getChangesForTest(t, bob, getChangesInput{Kind: "Gadget"}); gadgets(response) != 0 {
+		t.Fatalf("one of two same-kind resources denied: changes=%+v, want none", response.Changes)
+	}
+
+	dave := withRestrictedUser(t, "dave", []string{"alpha"})
+	getPermCache().Get("dave", nil).SetCanI("list", "example.test", "gadgets", "", false)
+	response, _ = getChangesForTest(t, dave, getChangesInput{Kind: "Gadget"})
+	if gadgets(response) != 0 || response.Coverage != nil {
+		t.Fatalf("not allowed to list gadgets: changes=%+v coverage=%+v", response.Changes, response.Coverage)
 	}
 }
 

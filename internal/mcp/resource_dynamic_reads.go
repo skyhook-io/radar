@@ -41,9 +41,11 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		if r.readAll || clusterScoped {
 			idxNamespaces = nil
 		}
-		if builder := newResourceSummaryContextBuilder(ctx, idxNamespaces); builder != nil {
-			summarycontext.AttachToUnstructuredList(allItems, r.items, builder)
-		}
+		builder, cancel := summarycontext.WithBudget(ctx, func(ctx context.Context) summarycontext.Builder {
+			return newResourceSummaryContextBuilder(ctx, idxNamespaces)
+		})
+		defer cancel()
+		summarycontext.AttachToUnstructuredList(allItems, r.items, builder)
 	}
 
 	if !r.current() {

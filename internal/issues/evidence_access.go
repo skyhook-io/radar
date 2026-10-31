@@ -53,6 +53,8 @@ func ForEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnfiltered b
 func degradeIssue(issue Issue) Issue {
 	d := issue.Degraded
 	issue.Message, issue.RawMessage, issue.Cause, issue.Action = d.Message, d.Message, d.Cause, d.Action
+	issue.ActionPrimary, issue.ActionSecondaryTitle, issue.ActionSecondary = "", "", nil
+	issue.Hazard = ""
 	issue.FirstSeen, issue.OnsetUnknown, issue.OnsetCoverage = time.Time{}, true, nil
 	issue.IssueTiming, issue.IssueTimingBasis = "", ""
 	issue.RequiredReads, issue.Degraded = nil, nil

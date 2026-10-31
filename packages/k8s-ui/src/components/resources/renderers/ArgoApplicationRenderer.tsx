@@ -1,6 +1,7 @@
 import { GitBranch, FolderTree, Settings, Target, XCircle, History, ListChecks, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts } from '../../ui/drawer-components'
+import { isArgoAutoSyncEnabled } from '../resource-utils-argo'
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import {
   argoStatusToGitOpsStatus,
@@ -157,6 +158,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
   const isMultiSource = Array.isArray(spec.sources) && spec.sources.length > 0
   const destination = spec.destination || {}
   const syncPolicy = spec.syncPolicy || {}
+  const autoSyncEnabled = isArgoAutoSyncEnabled(data)
   const operationState = status.operationState
 
   // Check if sync is in progress
@@ -192,7 +194,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
           </div>
 
           {/* Sync countdown (only if automated sync is enabled) */}
-          {syncPolicy.automated && (
+          {autoSyncEnabled && (
             <SyncCountdown
               interval="5m" // ArgoCD default
               lastSyncTime={status.reconciledAt}
@@ -241,14 +243,14 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               <span
                 className={clsx(
                   'badge',
-                  syncPolicy.automated ? 'status-green' : BADGE_INACTIVE
+                  autoSyncEnabled ? 'status-green' : BADGE_INACTIVE
                 )}
               >
-                {syncPolicy.automated ? 'Enabled' : 'Disabled'}
+                {autoSyncEnabled ? 'Enabled' : 'Disabled'}
               </span>
             }
           />
-          {syncPolicy.automated && (
+          {autoSyncEnabled && (
             <>
               <Property
                 label="Self Heal"
@@ -374,10 +376,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
 
       {/* Managed Resources */}
       {managedResources.length > 0 && (
-        <ManagedResourcesList
-          resources={managedResources}
-          title={`Managed Resources (${managedResources.length})`}
-        />
+        <ManagedResourcesList resources={managedResources} />
       )}
 
       {/* Revision History */}

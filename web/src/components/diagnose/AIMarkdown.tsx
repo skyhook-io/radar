@@ -68,7 +68,7 @@ export function tidyFences(md: string): string {
 
 // Diagnosis output is dense with inline `code`; the shared chip's brand tint is
 // too loud at that density, so neutralize it (border/bg only) for this surface.
-const SOFT_INLINE_CODE =
+export const SOFT_INLINE_CODE =
   "[&_.inline-code]:border-theme-border/60 [&_.inline-code]:bg-theme-base [&_.inline-code]:font-normal";
 
 // Markdown for agent-generated text — normalizes flaky fences + softens code.

@@ -4,7 +4,8 @@ export default defineConfig({
   testDir: './e2e',
   testMatch: 'settings-connections.spec.ts',
   timeout: 30000,
-  workers: 1,
+  fullyParallel: true,
+  workers: 2,
   use: { baseURL: 'http://127.0.0.1:19381', headless: true },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
   webServer: {

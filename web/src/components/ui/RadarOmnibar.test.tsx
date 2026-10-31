@@ -7,6 +7,7 @@ import type { SearchCoverageEntry } from './searchCoverageNote'
 import { coverageOf } from './searchCoverage.fixtures'
 
 vi.mock('../../api/usage-data', () => ({ recordUsageEvent: vi.fn() }))
+vi.mock('../diagnose/DiagnoseContext', () => ({ useDiagnose: () => ({ available: false, questions: false, openQuestion: vi.fn() }) }))
 vi.mock('../../hooks/useRecentResources', () => ({ loadRecentResources: () => [], recordRecentResource: vi.fn() }))
 vi.mock('../../api/apiResources', async (importOriginal) => ({ ...(await importOriginal<object>()), useAPIResources: () => ({ data: [] }) }))
 vi.mock('./command-items', async (importOriginal) => ({ ...(await importOriginal<object>()), useCommandItems: () => [] }))
@@ -31,6 +32,7 @@ const failed: SearchCoverageEntry[] = [{ kind: 'SpStall', group: 'stall.sp-live.
 
 beforeEach(() => {
   vi.useFakeTimers()
+  Element.prototype.scrollIntoView = vi.fn()
   caps.data = undefined
   searches = 0
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
@@ -76,6 +78,23 @@ const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAs
 const page = () => document.body.textContent ?? ''
 
 describe('RadarOmnibar while results load', () => {
+  it('requests status context and accepts a full summary from an older Radar', async () => {
+    unsearched = []
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
+      hits: [{ kind: 'Pod', namespace: 'shop', name: 'legacy-pod', score: 1, summaryContext: {
+        health: 'unhealthy', issueCount: 2, managedBy: { kind: 'Deployment', name: 'legacy-owner' },
+      } }],
+      total: 1, searched: 1, total_matched: 1, coverage: coverageOf([]),
+    }), { status: 200 }))
+    await typeQuery('legacy-pod')
+
+    const request = new URL(String(vi.mocked(fetch).mock.calls[0][0]), 'http://localhost')
+    expect(request.searchParams.get('context')).toBe('status')
+    expect(page()).toContain('legacy-pod')
+    expect(page()).toContain('2 issues')
+    expect(page()).not.toContain('legacy-owner')
+  })
+
   it('re-queries a loading search and ends on the failure once Radar gives up on the kind', async () => {
     unsearched = pending
     await typeQuery('sp-live')

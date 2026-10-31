@@ -132,6 +132,8 @@ var workloadReadTargets = map[string]workloadReadTarget{
 	"rollouts":     {group: "argoproj.io", resource: "rollouts"},
 }
 
+var workloadLogDiscoveryInterval = 5 * time.Second
+
 // handleWorkloadPods returns the list of pods for a workload
 func (s *Server) handleWorkloadPods(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
@@ -514,8 +516,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	// Start initial streams
 	startPodStreams(pods)
 
-	// Pod discovery ticker (every 5 seconds)
-	discoveryTicker := time.NewTicker(5 * time.Second)
+	discoveryTicker := time.NewTicker(workloadLogDiscoveryInterval)
 	defer discoveryTicker.Stop()
 
 	// Track known pods for detecting changes

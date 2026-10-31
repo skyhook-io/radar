@@ -66,7 +66,7 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 // The cluster-wide index is skipped when scanNamespaces is already nil
 // (cluster-wide user) — both indexes would be identical, so one pass
 // suffices.
-func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces []string) summarycontext.Builder {
+func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces []string, statusOnly bool) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
@@ -75,6 +75,9 @@ func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces 
 	clusterIdx := namespacedIdx
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
+	}
+	if statusOnly {
+		return summarycontext.StatusBuilderFromIndexes(r.Context(), namespacedIdx, clusterIdx)
 	}
 	return summarycontext.BuilderFromIndexes(r.Context(), func() summarycontext.IndexedTopology {
 		return summarycontext.WithinContext(r.Context(), summaryTopologyGate, func() summarycontext.IndexedTopology {

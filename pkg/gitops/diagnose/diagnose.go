@@ -15,12 +15,14 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 )
 
-// ParsedFailure carries fields extracted from an Argo operationState.message.
+// ParsedFailure carries facts extracted from Argo operation messages or
+// Application condition messages.
 // Unparsed parts of the original message remain available to the caller as the
 // raw error — the parser only adds structure, never replaces or hides text.
 //
@@ -28,11 +30,20 @@ import (
 // than a typed struct so this package stays vocabulary-neutral; the caller
 // maps RemediationKind onto its own remediation type.
 type ParsedFailure struct {
-	Cause        string // plain-English root cause; empty if unrecognized
-	AffectedKind string
-	AffectedName string
-	RetryCount   int
-	Stuck        bool
+	Reason string // stable diagnosis name; empty when no specific diagnosis matches
+	// Summary is a meaning-first headline for a diagnosis whose controller
+	// message leads with noise (a revision SHA). Callers that show it keep the
+	// original message as the raw error.
+	Summary              string
+	Action               string // complete operator guidance; empty when the caller should use its default next step
+	ActionPrimary        string
+	ActionSecondaryTitle string
+	ActionSecondary      []string
+	Cause                string // plain-English root cause; empty if unrecognized
+	AffectedKind         string
+	AffectedName         string
+	RetryCount           int
+	Stuck                bool
 	// RemediationKind is non-empty only for patterns with an unambiguous,
 	// safe one-click fix. Today the sole value is RemediationCreateNamespace
 	// ("create-namespace"), which must equal the insights/issues remediation
@@ -111,15 +122,27 @@ var argoErrorPatterns = []struct {
 }
 
 // ParseArgoOperationError extracts structured facts from an Argo
-// status.operationState.message. Returns a zero ParsedFailure for an empty or
-// unrecognized message (the caller still surfaces the raw text).
+// operation or Application condition message. Returns a zero ParsedFailure
+// for an empty or unrecognized message (the caller still surfaces the raw text).
 func ParseArgoOperationError(msg string) ParsedFailure {
 	if msg == "" {
 		return ParsedFailure{}
 	}
 	out := ParsedFailure{}
+	if strings.Contains(msg, "auto-sync will wipe out all resources") {
+		out.Reason = ReasonAutoSyncBlockedEmpty
+		out.Summary = "Auto-sync blocked: the render includes none of the managed resources"
+		out.Cause = "Argo CD blocked auto-sync because the render includes none of the resources this Application manages."
+		out.ActionPrimary = "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options. Check the source path, targetRevision, Helm values, and Kustomize or directory include/exclude settings first."
+		out.ActionSecondaryTitle = "If removing all managed resources is intended"
+		out.ActionSecondary = []string{
+			"If this Application should go away: remove it from the ApplicationSet generator if generated; while the generator still emits it, the ApplicationSet recreates it. Check whether the generated Application survives; its ApplicationSet sync policy may keep it. If it survives, delete it explicitly with the intended cascade choice. For a plain Application, delete the Application. Cleanup follows the cascade/resources finalizer choice and Delete=false / Delete=confirm, not Prune options.",
+			"If it should render empty: set syncPolicy.automated.allowEmpty: true in the Application or its ApplicationSet template. This turns off the empty-render guard for all future syncs.",
+		}
+		out.Action = out.ActionPrimary + " " + strings.Join(out.ActionSecondary, " ")
+	}
 	for _, p := range argoErrorPatterns {
-		if p.match.MatchString(msg) {
+		if out.Cause == "" && p.match.MatchString(msg) {
 			out.Cause = p.cause
 			break
 		}
@@ -215,14 +238,137 @@ func isHTTPVerb(s string) bool {
 	}
 }
 
+// ReasonAutoSyncBlockedEmpty names Argo's empty-render auto-sync guard.
+const ReasonAutoSyncBlockedEmpty = "AutoSyncBlockedEmpty"
+
+// argoSharedResourceRE matches Argo's SharedResourceWarning message:
+// "<Kind>/<name> is part of applications <this app> and <other app>".
+var argoSharedResourceRE = regexp.MustCompile(`^\S+ is part of applications \S+ and (\S+)$`)
+
+// argoSharedResourceTrackers returns the other Applications named by Argo
+// SharedResourceWarning messages, sorted and deduplicated. Messages in another
+// shape contribute nothing.
+func argoSharedResourceTrackers(messages []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, msg := range messages {
+		m := argoSharedResourceRE.FindStringSubmatch(strings.TrimSpace(msg))
+		if len(m) != 2 || seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		out = append(out, m[1])
+	}
+	sort.Strings(out)
+	return out
+}
+
+func applicationList(names []string) string {
+	const maxNamed = 3
+	shown := names
+	if len(shown) > maxNamed {
+		shown = shown[:maxNamed]
+	}
+	list := strings.Join(shown, ", ")
+	if len(names) > maxNamed {
+		list += fmt.Sprintf(" and %d more", len(names)-maxNamed)
+	}
+	if len(names) == 1 {
+		return "Application " + list
+	}
+	return "Applications " + list
+}
+
+// ArgoConditionGuidance preserves the complete action and separates the shared-resource move steps.
+// appName is the Application as the argocd CLI addresses it; empty omits the command.
+func ArgoConditionGuidance(condType, appName string, messages []string) ParsedFailure {
+	switch condType {
+	case "SharedResourceWarning":
+		owner := "the Application that tracks it now"
+		if owners := argoSharedResourceTrackers(messages); len(owners) > 0 {
+			owner = applicationList(owners)
+		}
+		return sharedResourceAdvice(owner)
+	case "OrphanedResourceWarning":
+		if appName != "" {
+			return ParsedFailure{Action: orphanedResourceAction(fmt.Sprintf("run \"argocd app resources %s --orphaned\" or ", appName))}
+		}
+	}
+	return ParsedFailure{Action: ActionForCondition(condType)}
+}
+
+// ArgoSyncHazardAction replaces "review the diff, then sync" advice when a sync
+// would do more than reconcile drift: prune every managed resource, or take
+// resources over from another Application. Empty when neither applies. When
+// the latest comparison reported an error, the resource list does not establish
+// the current render, so the advice asks for a successful comparison first.
+func ArgoSyncHazardAction(prunesEverything, comparisonFailed bool, sharedResourceMessages []string) string {
+	if prunesEverything && comparisonFailed {
+		return "Argo CD's last reported resource list marks every listed resource for pruning, and its latest comparison reported an error. Fix the comparison error and refresh before syncing: if the render still includes none of them, a sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options."
+	}
+	if prunesEverything {
+		return "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options. Check the source path, targetRevision, Helm values, and Kustomize or directory include/exclude settings first."
+	}
+	if len(sharedResourceMessages) == 0 {
+		return ""
+	}
+	owner := "another Application"
+	if owners := argoSharedResourceTrackers(sharedResourceMessages); len(owners) > 0 {
+		owner = applicationList(owners)
+	}
+	return "Resolve shared ownership before syncing: some resources are also tracked by " + owner + ". A successful sync can take over their tracking unless it uses FailOnSharedResource=true. While " + owner + " still declares them, its next successful sync can take tracking back. If they should stay with " + owner + ", remove them from this Application's source before syncing."
+}
+
+// Pause the current tracker so it cannot take tracking back before its source
+// drops the resource and then prune it. Stopping an operation cannot undo a
+// deletion already submitted, and a template edit may not update a live child.
+func sharedResourceAdvice(owner string) ParsedFailure {
+	out := ParsedFailure{
+		ActionPrimary:        "To leave it with " + owner + ", remove it from this Application's source.",
+		ActionSecondaryTitle: "To move it to this Application",
+		ActionSecondary: []string{
+			"Check this Application's sync options for FailOnSharedResource=true. If set, the sync will refuse the takeover. Stop unless taking it over is intended and allowed.",
+			"Note the resource's live UID.",
+			"Note whether " + owner + " has auto-sync on, and turn it off if so. Do not sync it manually during the move.",
+			"For an ApplicationSet or parent-managed Application, disable auto-sync in the template or Git so it stays off.",
+			"For a generated child, confirm its live auto-sync is off. Its ApplicationSet sync policy may prevent a template change from reaching it.",
+			"Finish or terminate any running or retrying operation on " + owner + ", and confirm none is left. Turning off auto-sync does not stop it.",
+			"Check that " + owner + " and the resource are not being deleted. If deletion has started, stop the move and recover.",
+			"Sync this Application.",
+			"Confirm the live resource's tracking metadata names this Application.",
+			"Confirm its UID is unchanged and it is not being deleted. If it is deleting, was deleted, or was replaced, stop the move and recover.",
+			"Remove it from the source of " + owner + ".",
+			"Restore " + owner + "'s previous auto-sync setting.",
+		},
+	}
+	out.Action = out.ActionPrimary + " " + out.ActionSecondaryTitle + ": " + strings.Join(out.ActionSecondary, " ")
+	return out
+}
+
+func orphanedResourceAction(cliHint string) string {
+	return "Resources exist in the destination namespace that Argo CD doesn't associate with any Application, and it reports only how many. To see which, " + cliHint + "open the Application in the Argo CD UI and show orphaned resources. Add them to an Application if they should be managed, or configure spec.orphanedResources.ignore on the AppProject; spec.orphanedResources.warn controls whether warnings are emitted."
+}
+
+// IsArgoFailedAttemptCondition matches a condition message starting exactly with
+// "Failed sync attempt to " or "Failed last sync attempt to " when operationMessage
+// is nonblank. It does not compare message bodies or revisions: the caller must
+// establish that the condition belongs to the current failed operation.
+func IsArgoFailedAttemptCondition(message, operationMessage string) bool {
+	return strings.TrimSpace(operationMessage) != "" &&
+		(strings.HasPrefix(message, "Failed sync attempt to ") || strings.HasPrefix(message, "Failed last sync attempt to "))
+}
+
 // SeverityForConditionType maps an Argo Application status.conditions[].type to
 // a neutral severity token ("critical"|"warning"|"info"). Follows Argo's own
 // convention: types ending in "Error" are critical, "Warning" types are
-// warning, everything else is info. `recognized` is false for the info default
+// warning except RepeatedResourceWarning (an override can be intentional).
+// Everything else is info. `recognized` is false for the info default
 // so callers can elide unknown/empty condition types when they carry no
 // message.
 func SeverityForConditionType(condType string) (token string, recognized bool) {
 	switch {
+	case condType == "RepeatedResourceWarning":
+		return "info", true
 	case strings.HasSuffix(condType, "Error"):
 		return "critical", true
 	case strings.HasSuffix(condType, "Warning"):
@@ -243,13 +389,13 @@ func ActionForCondition(condType string) string {
 	case "SyncError":
 		return "The last sync reported an error. Open the application's sync operation details for the failure, then retry."
 	case "OrphanedResourceWarning":
-		return "Resources exist in the destination namespace that aren't part of any application. Add to an app or label them as ignored."
+		return orphanedResourceAction("")
 	case "RepeatedResourceWarning":
-		return "The same resource is declared by multiple Argo Applications. Remove the duplicate declaration."
+		return "The same resource is rendered more than once by this Application's sources. Argo keeps the last rendered occurrence. Review the rendered manifests and source order, and remove the duplicate if the override is unintended."
 	case "ExcludedResourceWarning":
 		return "A managed resource is excluded by the Argo controller's resource.exclusions. Adjust controller config or remove the resource."
 	case "SharedResourceWarning":
-		return "This resource is also tracked by another Application. Move it to a single owner."
+		return sharedResourceAdvice("the Application that tracks it now").Action
 	default:
 		return ""
 	}

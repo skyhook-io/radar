@@ -144,8 +144,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
 			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
-			"audit findings are static posture and remediation priority, not evidence " +
-			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
+			"audit findings are posture and remediation priority, mostly latent risk though " +
+			"some (expired certificates, dangling references) can be live failures; " +
+			"auditSummary.highestSeverity uses the Checks ladder " +
 			"(critical|high|medium|low; current built-ins are high|medium), separate " +
 			"from issueSummary's live-operational critical|warning; manager: none is not " +
 			"unmanaged; disagree: check both). This is the drill-down " +
@@ -301,7 +302,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_cluster_audit",
 		Description: "Use when the agent's decision is 'is this cluster well-configured / " +
-			"compliant?' — STATIC CONFIG POSTURE, not live operational state. Returns " +
+			"compliant?' — STATIC CONFIG POSTURE. Returns " +
 			"best-practice findings: Security (runAsRoot, privileged containers, dangerous " +
 			"capabilities, hostPath/hostNetwork, secret-in-ConfigMap), Reliability (single " +
 			"replicas, missing PDB, missing TopologySpread, podHARisk, Service/Ingress " +
@@ -309,9 +310,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets, " +
 			"stale PVCs/PVs). " +
 			"Each finding has remediation guidance. " +
-			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
-			"(badly configured but working), a crashing pod can have zero (cleanly " +
-			"configured but failing). Finding severity and the explicit critical/high/medium/low " +
+			"Findings are mostly latent risk, but some (expired certificates, dangling " +
+			"references) can be live failures; check them before dismissing. A crashing pod " +
+			"can have zero findings. Finding severity and the explicit critical/high/medium/low " +
 			"summary counts are posture remediation priority; current built-in checks emit high " +
 			"or medium. They are not the live-issue severity scale. For 'what's broken right now?' " +
 			"use the issues tool. " +
@@ -420,7 +421,10 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Name: "issues",
 		Description: "Use for 'what's broken right now?': live state, not posture. Returns " +
 			"grouped critical/warning failures in workloads, Jobs/CronJobs, HPAs, " +
-			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions. " +
+			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions, " +
+			"expired, not-yet-valid or <24h-to-expiry TLS certs live Ingresses/Gateways serve (kind=Secret). " +
+			"Not covered: later expiry and other config posture (get_cluster_audit); an empty " +
+			"result doesn't rule out failures outside these detectors. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
 			"`unchecked_sources`: issues may be missing; don't assume healthy. " +
 			"`kinds`/`namespaces` scope the gap. `kind_sync_pending`: loading; retry shortly. " +
@@ -455,7 +459,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"unknown. `correlated_changes` covers tracked edits on the issue subject, its " +
 			"directly referenced ConfigMaps/Secrets, and a rejecting quota/LimitRange/webhook; " +
 			"`correlated_changes_incomplete`: older ones were not read. " +
-			"Use get_events for raw events, get_cluster_audit for posture, diagnose for workloads " +
+			"Use get_events for raw events, diagnose for workloads " +
 			"or GitOps, get_resource for other kinds, and get_neighborhood across resources. " +
 			"`group=" + issues.NativeHelmGroup + "` routes to get_helm_release; " +
 			"`group=helm.toolkit.fluxcd.io` routes to diagnose. Scope app triage to a namespace; omit it " +
@@ -726,7 +730,7 @@ type getResourceInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues, drain-plan. Comma-separated. drain-plan is Node-only: a read-only current pod/PDB estimate with explicit options, up to 100 pods and total/truncated indicators; not controller eviction history. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is mostly latent risk, though some findings (expired certificates, dangling references) can be live failures. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
 type topologyInput struct {
@@ -1609,13 +1613,20 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		requested = []string{input.Namespace}
 	}
 	allowed := filterNamespacesForUser(ctx, requested)
-	// History is read only in the caller's namespaces, so a cluster-scoped
-	// kind's changes don't come back here; its coverage would vouch for an
-	// empty answer it doesn't describe.
-	if collection.clusterScoped != "" && allowed != nil {
+	// A caller limited to some namespaces reads history only there, and
+	// cluster-scoped rows are in none of them. For a named kind and no
+	// namespace, the kind's cluster-scoped groups the caller may list are
+	// read separately, limited to those groups before the store's bound.
+	var clusterGroups []string
+	if input.Kind != "" && input.Namespace == "" && allowed != nil {
+		clusterGroups = readableClusterScopedGroups(ctx, input.Kind)
+	}
+	// Without that read, coverage would vouch for an empty answer it
+	// doesn't describe.
+	if collection.clusterScoped != "" && allowed != nil && len(clusterGroups) == 0 {
 		collection = changesCollection{hints: []string{fmt.Sprintf("Changes to %s are cluster-scoped, and get_changes reads history only in the namespaces you can see, so they are not listed here.", collection.clusterScoped)}}
 	}
-	if allowed != nil && len(allowed) == 0 {
+	if allowed != nil && len(allowed) == 0 && len(clusterGroups) == 0 {
 		if input.Kind != "" && currentReadCache() != started {
 			return nil, nil, errConnectionChanged()
 		}
@@ -1645,9 +1656,29 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		query.Kinds = []string{input.Kind}
 	}
 
-	recentResult, err := meaningfulchanges.Recent(ctx, query)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+	var recentResult meaningfulchanges.RecentResult
+	if allowed == nil || len(allowed) > 0 {
+		var err error
+		if recentResult, err = meaningfulchanges.Recent(ctx, query); err != nil {
+			return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+		}
+	}
+	if len(clusterGroups) > 0 {
+		clusterQuery := query
+		clusterQuery.Namespaces = []string{""}
+		clusterQuery.Groups = clusterGroups
+		clusterResult, err := meaningfulchanges.Recent(ctx, clusterQuery)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+		}
+		recentResult.Changes = append(recentResult.Changes, clusterResult.Changes...)
+		recentResult.OutputCapped = recentResult.OutputCapped || clusterResult.OutputCapped
+		recentResult.FetchSaturated = recentResult.FetchSaturated || clusterResult.FetchSaturated
+		// A namespace created after Radar started clears the namespaced
+		// read's history gap; cluster scope has no such namespace.
+		if clusterResult.History.Incomplete {
+			recentResult.History = clusterResult.History
+		}
 	}
 	changes := recentResult.Changes
 	var sourcesErrored []string
@@ -1714,7 +1745,8 @@ type getChangesResponseMCP struct {
 	SourcesErrored []string                   `json:"sourcesErrored,omitempty"`
 	// ClusterScopedChanges is set for a namespace query: changes to
 	// cluster-scoped admission configuration that applies, or may apply, to
-	// the namespace. Changes above never include cluster-scoped objects.
+	// the namespace. For such a query, Changes above never include
+	// cluster-scoped objects.
 	ClusterScopedChanges *issuesapi.ClusterScopedChanges `json:"clusterScopedChanges,omitempty"`
 	// HistoryCoverage is set when the window starts before the history Radar
 	// holds, including when no change was returned.

@@ -57,6 +57,7 @@ func TestClassify(t *testing.T) {
 		{"init container stalled", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "InitContainerStalled"}, issuesapi.CategoryInitContainerFailed},
 
 		// problem / GitOps reconcilers (DetectGitOpsProblems → SourceProblem)
+		{"argo empty auto-sync guard", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "AutoSyncBlockedEmpty"}, issuesapi.CategoryGitOpsSyncFailed},
 		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, issuesapi.CategoryGitOpsHealthDegraded},
 		{"argo app missing", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthMissing"}, issuesapi.CategoryGitOpsHealthDegraded},
 		{"argo app outofsync", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OutOfSync"}, issuesapi.CategoryGitOpsOutOfSync},
@@ -64,6 +65,7 @@ func TestClassify(t *testing.T) {
 		{"argo controller stalled is gitops_stale", classifyInput{Source: SourceProblem, Kind: "StatefulSet", APIGroup: "apps", Reason: "GitOpsControllerStalled"}, issuesapi.CategoryGitOpsStale},
 		{"argo comparisons stale rollup is gitops_stale", classifyInput{Source: SourceProblem, Kind: "StatefulSet", APIGroup: "apps", Reason: "GitOpsComparisonsStale"}, issuesapi.CategoryGitOpsStale},
 		{"argo comparison stale per-app is gitops_stale", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "ComparisonStale"}, issuesapi.CategoryGitOpsStale},
+		{"argo rollback mismatch", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "RollbackRevisionMismatch"}, issuesapi.CategoryGitOpsOperationFailed},
 		{"argo operation failed", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OperationFailed"}, issuesapi.CategoryGitOpsOperationFailed},
 		{"argo comparison error is render", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "ComparisonError"}, issuesapi.CategoryGitOpsRenderFailed},
 		{"argo invalid spec", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "InvalidSpecError"}, issuesapi.CategoryGitOpsSpecInvalid},
@@ -129,6 +131,8 @@ func TestClassify(t *testing.T) {
 		{"ingress alb action invalid", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Invalid ALB action annotation"}, issuesapi.CategoryIngressBackendMissing},
 		{"ingress class missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing IngressClass"}, issuesapi.CategoryIngressClassMissing},
 		{"gateway backend missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway backend Service"}, issuesapi.CategoryGatewayRouteInvalid},
+		{"traefik router service missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingServiceReason}, issuesapi.CategoryIngressBackendMissing},
+		{"traefik router middleware missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingMiddlewareReason}, issuesapi.CategoryIngressBackendMissing},
 		{"gateway reference grant missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway ReferenceGrant"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"ingress tls secret is config", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing TLS Secret"}, issuesapi.CategoryMissingConfigRef},
 		{"webhook backend down", classifyInput{Source: SourceMissingRef, Kind: "ValidatingWebhookConfiguration", APIGroup: "admissionregistration.k8s.io", Reason: k8s.MissingWebhookBackendReason}, issuesapi.CategoryWebhookBackendDown},
@@ -176,5 +180,15 @@ func TestClassify(t *testing.T) {
 				t.Errorf("category %q has no categoryGroup rollup (→ issuesapi.GroupUnknown)", tc.want)
 			}
 		})
+	}
+}
+
+func TestArgoResourceWarningsCategory(t *testing.T) {
+	for _, source := range []Source{SourceCondition, SourceProblem} {
+		for _, reason := range []string{"SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning"} {
+			if got := Classify(classifyInput{Source: source, APIGroup: "argoproj.io", Kind: "Application", Reason: reason}); got != issuesapi.CategoryGitOpsResourceWarning {
+				t.Errorf("%s/%s: %s", source, reason, got)
+			}
+		}
 	}
 }
