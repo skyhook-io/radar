@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { pluralize } from '@skyhook-io/k8s-ui'
-import { useSwitchContext, fetchSessionCounts, type SessionCounts } from '../api/client'
+import { useSwitchContext, fetchSessionCounts, SwitchContextError, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from './ui/Toast'
 import { useDock } from './dock'
@@ -11,6 +11,12 @@ import { parseContextForSwitcher } from '../utils/context-name'
 function shouldSuppressSwitchErrorToast(error: unknown): boolean {
   const message = error instanceof Error ? error.message : ''
   return message.includes('cluster connection failed:')
+}
+
+// A switch the server refused before leaving the current cluster, because the
+// new one didn't answer. Those show the full connection error screen.
+function refusedBeforeLeaving(error: unknown): error is SwitchContextError & { errorType: string } {
+  return error instanceof SwitchContextError && !!error.errorType
 }
 
 interface PendingSwitch {
@@ -24,7 +30,7 @@ interface PendingSwitch {
 // live. Callers render `confirmDialog`.
 export function useContextSwitchFlow() {
   const switchContext = useSwitchContext()
-  const { startSwitch, endSwitch, setOpenAfterSwitch } = useContextSwitch()
+  const { startSwitch, endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
   const { showError } = useToast()
   const { tabs } = useDock()
   const [pending, setPending] = useState<PendingSwitch | null>(null)
@@ -48,7 +54,9 @@ export function useContextSwitchFlow() {
       endSwitch()
       // Backend may not transition to StateDisconnected on client-side errors
       // (network, timeout) — without this toast the user gets no feedback.
-      if (!shouldSuppressSwitchErrorToast(error)) {
+      if (refusedBeforeLeaving(error)) {
+        setFailedSwitch({ context: context.name, error: error.message, errorType: error.errorType })
+      } else if (!shouldSuppressSwitchErrorToast(error)) {
         const message = error instanceof Error ? error.message : 'Unknown error'
         showError('Failed to switch context', message)
       }
@@ -142,6 +150,10 @@ export function useContextSwitchFlow() {
     requestSwitch,
     isPending: switchContext.isPending,
     error: switchContext.isError ? switchContext.error : null,
+    // The picker's inline line is for failures that don't get the full screen.
+    errorText: switchContext.isError && switchContext.error && !refusedBeforeLeaving(switchContext.error)
+      ? switchContext.error.message
+      : null,
     confirmDialog,
   }
 }

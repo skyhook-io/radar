@@ -46,7 +46,7 @@ import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
-import { ConnectionErrorView } from './components/ConnectionErrorView'
+import { DisconnectedView, FailedSwitchView } from './components/SwitchAwareConnectionError'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
@@ -1042,7 +1042,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
   const { connection, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
@@ -1055,7 +1055,19 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // empty drawer over a not-yet-loaded view. Gating both on the SAME readiness so
   // a drawer only ever sits over a real content surface.
   const contentReady = !isSwitching && !authMePending &&
-    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
+    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && !failedSwitch
+
+  // The last context that was connected, so a screen about a cluster that
+  // won't connect can offer a way back to it.
+  const [lastConnectedContext, setLastConnectedContext] = useState<string | null>(null)
+  useEffect(() => {
+    if (connection.state === 'connected' && connection.context) setLastConnectedContext(connection.context)
+  }, [connection.state, connection.context])
+  // A refused switch is about the cluster that was still connected; if that
+  // connection drops, its own error screen takes over.
+  useEffect(() => {
+    if (failedSwitch && connection.state === 'disconnected') setFailedSwitch(null)
+  }, [failedSwitch, connection.state, setFailedSwitch])
 
   // Progressive shell during the initial informer sync: once the server
   // publishes per-kind sync progress, render the app instead of the splash.
@@ -2009,11 +2021,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Connection error view - show when disconnected */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'disconnected' && (
-        <ConnectionErrorView
+        <DisconnectedView
           connection={connection}
           onRetry={retryConnection}
           isRetrying={isRetrying}
+          lastConnectedContext={lastConnectedContext}
         />
+      )}
+
+      {/* A switch refused before leaving the current cluster: the error screen
+          for the cluster that didn't answer, over the still-connected app. */}
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && failedSwitch && (
+        <FailedSwitchView currentContext={connection.context} />
       )}
 
       {/* Connecting view — shown during initial connection or retry.

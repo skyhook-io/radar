@@ -1,4 +1,4 @@
-import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare } from 'lucide-react'
+import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare, ArrowLeft } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
@@ -16,6 +16,12 @@ interface ConnectionErrorViewProps {
   connection: ConnectionState
   onRetry: () => void
   isRetrying: boolean
+  // A one-click way back to the cluster the person was using.
+  back?: { label: string; onBack: () => void; disabled?: boolean }
+  // 'switch': a switch Radar refused before leaving the current cluster.
+  // Nothing re-checks that cluster in the background, so the note saying so
+  // is left out.
+  variant?: 'connection' | 'switch'
 }
 
 interface CommandHint {
@@ -167,13 +173,15 @@ export function getAuthRejectedHints(context: string, awsProfile?: string): Auth
   }
 }
 
-function getAuthPluginStuckHints(): AuthHints {
+function getAuthPluginStuckHints(backgroundRecovery = true): AuthHints {
   return {
     title: 'Credential Plugin Stopped Responding',
     hints: [
       'The credential command configured by this kubeconfig did not return before the deadline.',
       'Check that your cloud-provider CLI and its identity-provider or network dependencies are responsive.',
-      'Radar will keep checking in the background and reconnect when the credential command recovers.',
+      backgroundRecovery
+        ? 'Radar will keep checking in the background and reconnect when the credential command recovers.'
+        : 'Once the credential command responds, use Retry Connection.',
     ],
   }
 }
@@ -334,7 +342,7 @@ export function CopyableCommand({ command, onRunInTerminal }: { command: string;
   )
 }
 
-export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string, awsProfile?: string): AuthHints | null {
+export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string, awsProfile?: string, backgroundRecovery = true): AuthHints | null {
   const parsedContext = originalContext || context
   switch (errorType) {
     case 'auth':
@@ -342,7 +350,7 @@ export function selectConnectionHints(errorType: string | undefined, context: st
     case 'auth-rejected':
       return getAuthRejectedHints(parsedContext, awsProfile)
     case 'auth-plugin-stuck':
-      return getAuthPluginStuckHints()
+      return getAuthPluginStuckHints(backgroundRecovery)
     case 'timeout':
       return getTimeoutHints(parsedContext, awsProfile)
     default:
@@ -350,7 +358,7 @@ export function selectConnectionHints(errorType: string | undefined, context: st
   }
 }
 
-export function ConnectionErrorView({ connection, onRetry, isRetrying }: ConnectionErrorViewProps) {
+export function ConnectionErrorView({ connection, onRetry, isRetrying, back, variant = 'connection' }: ConnectionErrorViewProps) {
   // For auth errors, generate context-aware hints with a specific re-auth command
   const isAuth = connection.errorType === 'auth'
   const isAuthRejected = connection.errorType === 'auth-rejected'
@@ -360,7 +368,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const matchedContext = contexts?.find((context) => context.name === connection.context)
   const originalContext = matchedContext?.originalName
   const awsProfile = contextsLoading ? undefined : matchedContext?.awsProfile
-  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile)
+  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile, variant === 'connection')
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
@@ -378,7 +386,9 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
 
   const handleAuthInTerminal = () => {
     if (!commandInfo?.authCommand) return
-    const cmd = authMe?.authEnabled === false
+    // The follow-up retry reconnects the current context, so it only belongs on
+    // the screen for a lost connection, not on one for a refused switch.
+    const cmd = authMe?.authEnabled === false && variant === 'connection'
       ? `${commandInfo.authCommand.command} && ${retryCmd}`
       : commandInfo.authCommand.command
     openLocalTerminal({
@@ -475,11 +485,11 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             )}
           </div>
 
-          <div className="flex items-center gap-5">
+          <div className="flex flex-wrap items-center justify-center gap-3">
             <button
               onClick={onRetry}
               disabled={isRetrying}
-              className="inline-flex items-center gap-2 px-4 py-2 btn-brand rounded-lg"
+              className="inline-flex items-center gap-2 px-4 py-2 btn-brand rounded-lg whitespace-nowrap"
             >
               {isRetrying ? (
                 <>
@@ -494,10 +504,21 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               )}
             </button>
 
+            {back && (
+              <button
+                onClick={back.onBack}
+                disabled={back.disabled}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-theme-border bg-theme-surface text-theme-text-primary hover:bg-theme-hover disabled:opacity-50 whitespace-nowrap"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back to {back.label}
+              </button>
+            )}
+
             {connection.context && <ContextSwitcher triggerName="Switch context" />}
           </div>
 
-          {isAuthError && (
+          {isAuthError && variant === 'connection' && (
             <p className="mt-4 text-xs text-theme-text-tertiary">
               {isAuthRejected
                 ? 'Radar re-checks in the background — access changes are picked up automatically. Use Retry Connection to check immediately.'
