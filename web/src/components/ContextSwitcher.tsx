@@ -136,8 +136,8 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         searchable={items.length > 1}
         showGroupHeaders={hasMultipleAccounts}
         errorSlot={
-          switchFlow.error ? (
-            <span className="text-xs text-red-400">{switchFlow.error.message}</span>
+          switchFlow.errorText ? (
+            <span className="text-xs text-red-400">{switchFlow.errorText}</span>
           ) : undefined
         }
       />
