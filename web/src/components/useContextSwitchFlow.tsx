@@ -1,16 +1,26 @@
 import { useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { pluralize } from '@skyhook-io/k8s-ui'
-import { useSwitchContext, fetchSessionCounts, type SessionCounts } from '../api/client'
+import { useSwitchContext, fetchSessionCounts, SwitchContextError, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from './ui/Toast'
 import { useDock } from './dock'
 import type { ContextInfo, SelectedResource } from '../types'
 import { parseContextForSwitcher } from '../utils/context-name'
+import { contextSwitchErrorText } from './contextSwitchErrors'
 
 function shouldSuppressSwitchErrorToast(error: unknown): boolean {
   const message = error instanceof Error ? error.message : ''
   return message.includes('cluster connection failed:')
+}
+
+// The plain sentence for a switch the server refused before leaving the
+// current cluster; the raw message for anything else.
+function switchErrorText(error: Error, cluster: string): string {
+  if (error instanceof SwitchContextError && error.errorType) {
+    return contextSwitchErrorText(error.errorType, cluster)
+  }
+  return error.message
 }
 
 interface PendingSwitch {
@@ -28,6 +38,7 @@ export function useContextSwitchFlow() {
   const { showError } = useToast()
   const { tabs } = useDock()
   const [pending, setPending] = useState<PendingSwitch | null>(null)
+  const [targetCluster, setTargetCluster] = useState('')
   const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
 
   const performSwitch = async ({ context, openAfter }: PendingSwitch) => {
@@ -40,6 +51,7 @@ export function useContextSwitchFlow() {
       clusterName: parsed.clusterName,
     })
     setOpenAfterSwitch(openAfter ? { context: context.name, resource: openAfter } : null)
+    setTargetCluster(parsed.clusterName)
     try {
       await switchContext.mutateAsync({ name: context.name })
     } catch (error) {
@@ -49,7 +61,7 @@ export function useContextSwitchFlow() {
       // Backend may not transition to StateDisconnected on client-side errors
       // (network, timeout) — without this toast the user gets no feedback.
       if (!shouldSuppressSwitchErrorToast(error)) {
-        const message = error instanceof Error ? error.message : 'Unknown error'
+        const message = error instanceof Error ? switchErrorText(error, parsed.clusterName) : 'Unknown error'
         showError('Failed to switch context', message)
       }
     }
@@ -142,6 +154,7 @@ export function useContextSwitchFlow() {
     requestSwitch,
     isPending: switchContext.isPending,
     error: switchContext.isError ? switchContext.error : null,
+    errorText: switchContext.isError && switchContext.error ? switchErrorText(switchContext.error, targetCluster) : null,
     confirmDialog,
   }
 }

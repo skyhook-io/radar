@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -1786,18 +1788,107 @@ func validateContextSwitchTarget(name string) error {
 	return nil
 }
 
-// SwitchContext switches the K8s client to use a different context
-// This reinitializes all clients (k8sClient, discoveryClient, dynamicClient)
-func SwitchContext(name string) error {
-	if IsInCluster() {
-		return fmt.Errorf("cannot switch context when running in-cluster")
-	}
+// preparedContext is a context loaded from its kubeconfig source with its
+// clients already built, so the clients Radar checks before leaving the
+// current cluster are exactly the ones it installs.
+type preparedContext struct {
+	name           string
+	sourceFile     string
+	inFileName     string
+	rawConfig      clientcmdapi.Config
+	kubeContext    *clientcmdapi.Context
+	config         *rest.Config
+	clients        *sharedKubernetesClients
+	usesExec       bool
+	execCmds       []string
+	emptyAuthInfos []string
+	totalContexts  int
+	fingerprint    string
+}
 
+// loadContextSource resolves a context name to the one kubeconfig file that
+// owns it and loads it. In isolated-load mode every other file is ignored, so
+// colliding user/cluster names in sibling files can't pollute this context's
+// credentials (issue #519).
+func loadContextSource(name string) (*clientcmd.ClientConfigLoadingRules, string, clientcmd.ClientConfig, clientcmdapi.Config, *clientcmdapi.Context, error) {
 	// Snapshot registry-related globals under the lock. MergeAndSwitchContext
-	// can mutate all three concurrently, so reads have to be atomic as a set.
+	// can mutate them concurrently, so reads have to be atomic as a set.
 	clientMu.RLock()
 	registry := contextRegistry
 	singlePath := kubeconfigPath
+	clientMu.RUnlock()
+
+	var loadingRules *clientcmd.ClientConfigLoadingRules
+	var overrideContextName string
+	if registry != nil {
+		entry, ok := registry[name]
+		if !ok {
+			return nil, "", nil, clientcmdapi.Config{}, nil, fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+		}
+		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile}
+		overrideContextName = entry.InFileName
+	} else {
+		if singlePath == "" {
+			return nil, "", nil, clientcmdapi.Config{}, nil, fmt.Errorf("kubeconfig path not set")
+		}
+		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: singlePath}
+		overrideContextName = name
+	}
+	if err := validateKubeconfigFileType(loadingRules.ExplicitPath); err != nil {
+		if errors.Is(err, errKubeconfigNotRegular) {
+			return nil, "", nil, clientcmdapi.Config{}, nil, fmt.Errorf("kubeconfig source for context %q is unavailable: %w", name, errKubeconfigNotRegular)
+		}
+		return nil, "", nil, clientcmdapi.Config{}, nil, fmt.Errorf("kubeconfig source for context %q is unavailable: %s", name, kubeconfigDiagnosticError(err))
+	}
+
+	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: overrideContextName}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+	rawConfig, err := kubeConfig.RawConfig()
+	if err != nil {
+		log.Printf("[k8s] Failed to load kubeconfig for context %q: %v", name, err)
+		return nil, "", nil, clientcmdapi.Config{}, nil, fmt.Errorf("failed to load kubeconfig for context %q: %s", name, kubeconfigDiagnosticError(err))
+	}
+	kubeContext, ok := rawConfig.Contexts[overrideContextName]
+	if !ok {
+		return nil, "", nil, clientcmdapi.Config{}, nil, fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+	}
+	return loadingRules, overrideContextName, kubeConfig, rawConfig, kubeContext, nil
+}
+
+// contextSourceFingerprint identifies what a context resolves to: its source
+// file, the cluster entry and the credentials. A kubeconfig edit or a CAPI
+// merge that repoints the name changes it.
+func contextSourceFingerprint(sourceFile, inFileName string, rawConfig clientcmdapi.Config, kubeContext *clientcmdapi.Context) string {
+	encoded, _ := json.Marshal(struct {
+		Source   string
+		Name     string
+		Context  *clientcmdapi.Context
+		Cluster  *clientcmdapi.Cluster
+		AuthInfo *clientcmdapi.AuthInfo
+	}{sourceFile, inFileName, kubeContext, rawConfig.Clusters[kubeContext.Cluster], rawConfig.AuthInfos[kubeContext.AuthInfo]})
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+// currentContextSourceFingerprint re-reads the context's source without
+// building clients, to confirm a prepared context is still what the name
+// resolves to.
+func currentContextSourceFingerprint(name string) (string, error) {
+	loadingRules, inFileName, _, rawConfig, kubeContext, err := loadContextSource(name)
+	if err != nil {
+		return "", err
+	}
+	return contextSourceFingerprint(loadingRules.ExplicitPath, inFileName, rawConfig, kubeContext), nil
+}
+
+// prepareContext loads a context and builds its clients without touching the
+// active connection.
+func prepareContext(name string) (*preparedContext, error) {
+	if IsInCluster() {
+		return nil, fmt.Errorf("cannot switch context when running in-cluster")
+	}
+	clientMu.RLock()
+	registry := contextRegistry
 	pathsSnapshot := append([]string(nil), kubeconfigPaths...)
 	configsSnapshot := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
 	for k, v := range perFileConfigs {
@@ -1805,56 +1896,15 @@ func SwitchContext(name string) error {
 	}
 	clientMu.RUnlock()
 
-	var loadingRules *clientcmd.ClientConfigLoadingRules
-	var overrideContextName string
-
-	if registry != nil {
-		// Isolated-load mode: resolve the qualified name to the source file
-		// and load only that file. Every other file is ignored here, so
-		// colliding user/cluster names in sibling files can't pollute this
-		// context's credentials (issue #519).
-		entry, ok := registry[name]
-		if !ok {
-			return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
-		}
-		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile}
-		overrideContextName = entry.InFileName
-	} else {
-		kubeconfig := singlePath
-		if kubeconfig == "" {
-			return fmt.Errorf("kubeconfig path not set")
-		}
-		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
-		overrideContextName = name
-	}
-	if err := validateKubeconfigFileType(loadingRules.ExplicitPath); err != nil {
-		if errors.Is(err, errKubeconfigNotRegular) {
-			return fmt.Errorf("kubeconfig source for context %q is unavailable: %w", name, errKubeconfigNotRegular)
-		}
-		return fmt.Errorf("kubeconfig source for context %q is unavailable: %s", name, kubeconfigDiagnosticError(err))
-	}
-
-	// Build config with the new context
-	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: overrideContextName}
-	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
-
-	// Verify the context exists
-	rawConfig, err := kubeConfig.RawConfig()
+	loadingRules, inFileName, kubeConfig, rawConfig, kubeContext, err := loadContextSource(name)
 	if err != nil {
-		log.Printf("[k8s] Failed to load kubeconfig for context %q: %v", name, err)
-		return fmt.Errorf("failed to load kubeconfig for context %q: %s", name, kubeconfigDiagnosticError(err))
+		return nil, err
 	}
 
-	ctx, ok := rawConfig.Contexts[overrideContextName]
-	if !ok {
-		return fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
-	}
-
-	// Build the REST config for the new context
 	config, err := kubeConfig.ClientConfig()
 	if err != nil {
 		log.Printf("[k8s] Failed to build client config for context %q: %v", name, err)
-		return fmt.Errorf("%w for %q: %s", errKubeconfigClientSetupFailed, name, kubeconfigDiagnosticError(err))
+		return nil, fmt.Errorf("%w for %q: %s", errKubeconfigClientSetupFailed, name, kubeconfigDiagnosticError(err))
 	}
 
 	// Apply the same QPS/Burst settings as initial client creation.
@@ -1865,12 +1915,11 @@ func SwitchContext(name string) error {
 
 	clients, err := newSharedKubernetesClients(config)
 	if err != nil {
-		return fmt.Errorf("%w for %q: %w", errKubeconfigClientSetupFailed, name, err)
+		return nil, fmt.Errorf("%w for %q: %w", errKubeconfigClientSetupFailed, name, err)
 	}
 
-	// Update global variables atomically
 	usesExec := false
-	if ai, ok := rawConfig.AuthInfos[ctx.AuthInfo]; ok && ai.Exec != nil {
+	if ai, ok := rawConfig.AuthInfos[kubeContext.AuthInfo]; ok && ai.Exec != nil {
 		usesExec = true
 	}
 	// Re-collect exec plugin commands. In isolated-load mode rawConfig only
@@ -1885,29 +1934,57 @@ func SwitchContext(name string) error {
 		execCmds, emptyAIs = collectExecPluginCommands(&rawConfig)
 		totalContexts = len(rawConfig.Contexts)
 	}
-	if len(emptyAIs) > 0 {
-		recordEmptyCommandWarning("context-switch", emptyAIs)
+
+	return &preparedContext{
+		name:           name,
+		sourceFile:     loadingRules.ExplicitPath,
+		inFileName:     inFileName,
+		rawConfig:      rawConfig,
+		kubeContext:    kubeContext,
+		config:         config,
+		clients:        clients,
+		usesExec:       usesExec,
+		execCmds:       execCmds,
+		emptyAuthInfos: emptyAIs,
+		totalContexts:  totalContexts,
+		fingerprint:    contextSourceFingerprint(loadingRules.ExplicitPath, inFileName, rawConfig, kubeContext),
+	}, nil
+}
+
+// installPreparedContext makes a prepared context the active one.
+func installPreparedContext(p *preparedContext) {
+	if len(p.emptyAuthInfos) > 0 {
+		recordEmptyCommandWarning("context-switch", p.emptyAuthInfos)
 	}
 
 	clientMu.Lock()
-	newContextBinding := sourceSafetyBindingLocked(loadingRules.ExplicitPath, overrideContextName)
-	k8sConfig = config
-	k8sClient = clients.clientset
-	discoveryClient = clients.discovery
-	dynamicClient = clients.dynamic
-	activeClientGeneration = clients.generation
-	contextName = name
+	newContextBinding := sourceSafetyBindingLocked(p.sourceFile, p.inFileName)
+	k8sConfig = p.config
+	k8sClient = p.clients.clientset
+	discoveryClient = p.clients.discovery
+	dynamicClient = p.clients.dynamic
+	activeClientGeneration = p.clients.generation
+	contextName = p.name
 	contextBinding = newContextBinding
-	activeSourceFile = loadingRules.ExplicitPath
-	activeSourceName = overrideContextName
-	activeSourceConfig = rawConfig.DeepCopy()
-	clusterName = ctx.Cluster
-	contextNamespace = ctx.Namespace
-	contextUsesExec = usesExec
-	totalContextCount = totalContexts
-	execPluginCommands = execCmds
+	activeSourceFile = p.sourceFile
+	activeSourceName = p.inFileName
+	activeSourceConfig = p.rawConfig.DeepCopy()
+	clusterName = p.kubeContext.Cluster
+	contextNamespace = p.kubeContext.Namespace
+	contextUsesExec = p.usesExec
+	totalContextCount = p.totalContexts
+	execPluginCommands = p.execCmds
 	clientMu.Unlock()
+}
 
+// SwitchContext switches the K8s client to use a different context
+// This reinitializes all clients (k8sClient, discoveryClient, dynamicClient)
+func SwitchContext(name string) error {
+	p, err := prepareContext(name)
+	if err != nil {
+		return err
+	}
+	installPreparedContext(p)
 	return nil
 }
 

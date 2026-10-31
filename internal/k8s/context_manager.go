@@ -320,7 +320,12 @@ func TestClusterConnection(ctx context.Context) error {
 	if config == nil {
 		return fmt.Errorf("K8s config not initialized")
 	}
+	return testConnection(ctx, config, UsesExecAuth())
+}
 
+// testConnection runs TestClusterConnection's probe against any config, so a
+// context can be checked before it becomes the active one.
+func testConnection(ctx context.Context, config *rest.Config, usesExec bool) error {
 	// Create a copy of the config with a short timeout
 	// rest.CopyConfig properly copies all fields including TLS settings
 	testConfig := rest.CopyConfig(config)
@@ -348,7 +353,7 @@ func TestClusterConnection(ctx context.Context) error {
 		}
 		return nil
 	case <-ctx.Done():
-		if !UsesExecAuth() {
+		if !usesExec {
 			return fmt.Errorf("cluster unreachable: %w", ctx.Err())
 		}
 		return fmt.Errorf("auth plugin timeout: %w", ctx.Err())
@@ -356,7 +361,11 @@ func TestClusterConnection(ctx context.Context) error {
 }
 
 func connectionTestOperationTimeout() time.Duration {
-	if UsesExecAuth() {
+	return connectionTestTimeoutFor(UsesExecAuth())
+}
+
+func connectionTestTimeoutFor(usesExec bool) time.Duration {
+	if usesExec {
 		return execAuthConnectionProbeHTTPTimeout + connectionProbeTimeoutHeadroom
 	}
 	return ConnectionTestTimeout
@@ -395,7 +404,64 @@ var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
 var ErrReconnectSuperseded = errors.New("reconnect superseded by a newer operation")
 
 func PerformContextSwitch(newContext string) error {
-	return performContextSwitch(newContext, 0, false)
+	return performContextSwitch(newContext, 0, false, nil)
+}
+
+// ContextProbeError is a failed reachability check of the context Radar was
+// about to switch to. The switch was refused before any teardown, so the
+// current cluster is untouched.
+type ContextProbeError struct {
+	Context string
+	Err     error
+}
+
+func (e *ContextProbeError) Error() string {
+	return fmt.Sprintf("cannot connect to %q: %v", e.Context, e.Err)
+}
+
+func (e *ContextProbeError) Unwrap() error { return e.Err }
+
+// checkedSwitch carries a context that was prepared and found reachable
+// before the switch took contextOpMu.
+type checkedSwitch struct {
+	ctx      context.Context
+	prepared *preparedContext
+}
+
+// PerformCheckedContextSwitch is the switch a person asks for. While the
+// current cluster is connected, it first checks that the new context answers,
+// and refuses the switch before tearing anything down when it does not. The
+// check runs outside contextOpMu and under ctx, so a slow or abandoned check
+// never holds up another operation. Disconnected sessions switch as before:
+// there is no working cluster to protect.
+func PerformCheckedContextSwitch(ctx context.Context, newContext string) error {
+	if !shouldCheckBeforeSwitch(newContext) {
+		return performContextSwitch(newContext, 0, false, nil)
+	}
+	observedOperationGen := currentOperationGen()
+	prepared, err := prepareContext(newContext)
+	if err != nil {
+		// A context that can't even be loaded is refused by the switch's own
+		// preflight, with its existing wording.
+		return performContextSwitch(newContext, 0, false, nil)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, connectionTestTimeoutFor(prepared.usesExec))
+	probeErr := testConnection(probeCtx, prepared.config, prepared.usesExec)
+	cancel()
+	if probeErr != nil {
+		log.Printf("[ops] Context switch to %q refused before teardown: %v", newContext, probeErr)
+		errorlog.Record("context-switch", "warning",
+			"target=%q unreachable, switch refused before teardown: %v", newContext, probeErr)
+		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, &ContextProbeError{Context: newContext, Err: probeErr})
+	}
+	return performContextSwitch(newContext, observedOperationGen, true, &checkedSwitch{ctx: ctx, prepared: prepared})
+}
+
+func shouldCheckBeforeSwitch(newContext string) bool {
+	if IsInCluster() || newContext == GetContextName() {
+		return false
+	}
+	return GetConnectionStatus().State == StateConnected
 }
 
 // RetryCurrentConnection reconnects the active context. In-cluster mode has no
@@ -437,7 +503,7 @@ func RetryCurrentConnection() error {
 // which closes the TOCTOU a check-then-switch caller would have: a user
 // switch that started mid-probe bumps the generation before this can.
 func PerformContextSwitchIfOperationCurrent(newContext string, observedOperationGen uint64) error {
-	return performContextSwitch(newContext, observedOperationGen, true)
+	return performContextSwitch(newContext, observedOperationGen, true, nil)
 }
 
 // reinitializeCurrentContextIfOperationCurrent restores subsystems after an
@@ -495,7 +561,7 @@ func reinitializeCurrentContextIfOperationCurrent(
 	return nil
 }
 
-func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool) error {
+func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool, checked *checkedSwitch) error {
 	switchStart := time.Now()
 	log.Printf("[ops] Context switch START → %q", newContext)
 
@@ -547,6 +613,20 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		return fmt.Errorf("%w: --namespace-scope requires --namespace, a namespace on context %q, or a saved namespace pick", ErrContextSwitchPreflight, newContext)
 	}
 
+	// A checked switch probed its target before taking the lock. Don't act on
+	// it if the person gave up waiting, or if the name now resolves to
+	// something else: a CAPI merge or a kubeconfig edit doesn't bump the
+	// operation generation.
+	if checked != nil {
+		if checked.ctx.Err() != nil {
+			return fmt.Errorf("%w: switch to %q was cancelled", ErrContextSwitchPreflight, newContext)
+		}
+		fingerprint, err := currentContextSourceFingerprint(newContext)
+		if err != nil || fingerprint != checked.prepared.fingerprint {
+			return fmt.Errorf("%w: the kubeconfig for %q changed while Radar was checking it, try again", ErrContextSwitchPreflight, newContext)
+		}
+	}
+
 	// Fire before-switch callbacks while the OLD context is still active, so
 	// teardown (e.g. cancelling in-flight AI investigations) can't leak onto the
 	// cluster we're about to connect to. After the preflight above — a failed
@@ -579,7 +659,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	reportProgress("Connecting to cluster...")
 	t = time.Now()
 	log.Printf("Switching K8s client to context %q...", newContext)
-	if err := SwitchContext(newContext); err != nil {
+	if checked != nil {
+		installPreparedContext(checked.prepared)
+	} else if err := SwitchContext(newContext); err != nil {
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v since switch start)", err, elapsed)
 		errorlog.Record("context-switch", "error",
@@ -599,22 +681,25 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 
-	// Step 3: Test connectivity before proceeding with initialization.
+	// Step 3: Test connectivity before proceeding with initialization. A
+	// checked switch already probed the same client config before teardown.
 	// Contexts are derived from the operation context so they're canceled
 	// if another context switch starts while this one is in progress.
-	reportProgress("Testing cluster connectivity...")
-	t = time.Now()
-	log.Println("Testing cluster connectivity...")
-	connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
-	defer connCancel()
-	if err := TestClusterConnection(connCtx); err != nil {
-		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
-		log.Printf("[ops] Context switch FAILED at connectivity test: %v (%v since switch start)", err, elapsed)
-		errorlog.Record("context-switch", "error",
-			"stage=TestClusterConnection target=%q elapsed=%v: %v", newContext, elapsed, err)
-		return fmt.Errorf("cluster connection failed: %w", err)
+	if checked == nil {
+		reportProgress("Testing cluster connectivity...")
+		t = time.Now()
+		log.Println("Testing cluster connectivity...")
+		connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
+		defer connCancel()
+		if err := TestClusterConnection(connCtx); err != nil {
+			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
+			log.Printf("[ops] Context switch FAILED at connectivity test: %v (%v since switch start)", err, elapsed)
+			errorlog.Record("context-switch", "error",
+				"stage=TestClusterConnection target=%q elapsed=%v: %v", newContext, elapsed, err)
+			return fmt.Errorf("cluster connection failed: %w", err)
+		}
+		log.Printf("[ops] Cluster connectivity verified (%v)", time.Since(t))
 	}
-	log.Printf("[ops] Cluster connectivity verified (%v)", time.Since(t))
 
 	// Step 4: Initialize all subsystems (same function as initial boot).
 	// Teardown above is non-blocking, so old informers may still be draining.
