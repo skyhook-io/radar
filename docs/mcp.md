@@ -31,8 +31,9 @@ drains started by other users or MCP clients.
 
 `get_resource` for a Node can include `nodeCertificateReport` with default
 context or `include=issues`. It contains the RKE2/K3s monitor's original report,
-last-report time and reported validity dates. Fresh urgent reports also appear
-in `issues`; stale or incomplete observations remain unverified context.
+last-report time and reported validity dates. Native warning reports also appear
+in `issues`; stale or incomplete warnings remain visible with current status
+unverified. Fresh parsed urgency can raise a warning to critical.
 No report does not establish certificate health. See [Node certificate reports](nodes.md#certificate-reports)
 for thresholds, recovery and history limits.
 
