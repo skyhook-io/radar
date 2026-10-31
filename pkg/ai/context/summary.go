@@ -58,9 +58,11 @@ type ResourceSummary struct {
 	// Pruned when empty.
 	Finalizers []string `json:"finalizers,omitempty"`
 
-	CrossplanePause              resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
-	OpenTelemetryCollector       *OpenTelemetryCollectorSummary       `json:"openTelemetryCollector,omitempty"`
-	FlaggerCanary                *FlaggerCanarySummary                `json:"flaggerCanary,omitempty"`
+	CrossplanePause        resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
+	OpenTelemetryCollector *OpenTelemetryCollectorSummary       `json:"openTelemetryCollector,omitempty"`
+	FlaggerCanary          *FlaggerCanarySummary                `json:"flaggerCanary,omitempty"`
+	// OpenTelemetryInstrumentation is absent without a readable non-empty
+	// recorded upgrade-block map; absence does not prove no blocks exist.
 	OpenTelemetryInstrumentation *OpenTelemetryInstrumentationSummary `json:"openTelemetryInstrumentation,omitempty"`
 
 	// Type-specific fields (only populated when relevant)
