@@ -496,7 +496,7 @@ In shared OSS installations (in-cluster or authentication-enabled), context swit
 
 Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps pointing wherever it pointed before.
 
-While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, you stay on your current cluster and the context selector says why, for example that the cluster can't be reached over your network.
+While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once. If a switch fails after Radar has already left the previous cluster, the same button switches back to it.
 
 ### Expired credentials
 
