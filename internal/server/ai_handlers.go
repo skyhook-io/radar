@@ -492,7 +492,7 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 	}
 	if node, ok := obj.(*corev1.Node); ok && s.canRead(r, "", "nodes", "", "list") {
 		if provider := issues.NewCacheProvider(); provider != nil {
-			if report := provider.NodeCertificateReport(node.Name); report != nil {
+			if report := provider.NodeCertificateReport(node.Name); report != nil && report.UID == string(node.UID) {
 				response["nodeCertificateReport"] = report
 			}
 		}

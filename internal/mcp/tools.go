@@ -1191,6 +1191,12 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		gvk := rawObj.GetObjectKind().GroupVersionKind()
 		issueSummary, issueRows, nodeCertificateReport = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
 	}
+	if nodeCertificateReport != nil {
+		node, ok := rawObj.(*corev1.Node)
+		if !ok || nodeCertificateReport.UID != string(node.UID) {
+			nodeCertificateReport = nil
+		}
+	}
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
 	if !skipContext {

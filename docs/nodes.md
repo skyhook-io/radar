@@ -18,17 +18,23 @@ NotReady retains its identity. Pressure/network issues have separate identities 
 ## Certificate reports
 
 RKE2 and K3s node certificate warnings appear on the Node with the original
-monitor report, reported validity dates and last-report time. A fresh report
-warns in Issues under 30 days to expiry and becomes critical under 7 days or
-when it reports an invalid certificate. A validity report that disagrees with
-Radar's clock warns about the reported clock/validity problem.
+monitor report, reported validity dates and last-report time. A fresh warning
+appears in Issues as soon as the native monitor reports it, including inside
+its renewal window. Radar does not impose a separate 30-day warning cutoff.
+Fresh reports become critical under 7 days to expiry or when they report an
+invalid certificate. Unknown validity dates remain a warning with the original
+report. A validity report that disagrees with Radar's clock shows the reported
+clock/validity problem; expiry inside 7 days remains critical even when the
+monitor's expired state disagrees with Radar's clock.
 
-Reports older than two hours stay as neutral context with current status
-unverified. Expiry of the Kubernetes Event does not remove the retained
-timeline report, and an old expiry date does not turn a stale report into a
-new urgent Issue. A later `CertificateExpirationOK` supersedes an earlier
-warning as a reported outcome. Silence or a CA-only warning does not establish
-leaf renewal.
+Reports older than two hours or spanning a history gap remain visible as
+warning Issues with current status unverified. Their last-report time and
+original text stay available; a stale report does not claim a current failure
+or become critical as its old expiry date passes. Expiry of the Kubernetes
+Event does not remove the retained timeline report. A later
+`CertificateExpirationOK` supersedes an earlier warning as a reported outcome.
+Silence or a CA-only warning does not establish leaf renewal. The warning can
+be shown only while its report remains in the existing timeline retention.
 
 Fresh live reports are usable when Event collection covers `default`, including
 immediately after Radar starts. For retained reports, the existing timeline's

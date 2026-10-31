@@ -21,7 +21,6 @@ const (
 	nodeCertificateWarningReason  = "CertificateExpirationWarning"
 	nodeCertificateOKReason       = "CertificateExpirationOK"
 	nodeCertificateFreshness      = 2 * time.Hour
-	nodeCertificateWarningWindow  = 30 * 24 * time.Hour
 	nodeCertificateCriticalWindow = 7 * 24 * time.Hour
 )
 
@@ -227,18 +226,18 @@ func assessNodeCertificates(nodes []*corev1.Node, live []*corev1.Event, history 
 		}
 		report.ValidityUnknown = report.ExpiresAt.IsZero() && report.NotBefore.IsZero()
 		result.reports[node.Name] = report
-		if report.State != "reported" {
-			continue
-		}
 		severity, message := nodeCertificateUrgency(report, reportedExpired, now)
-		if severity == "" {
-			continue
+		cause := "The node's certificate monitor reported certificates needing attention."
+		action := fmt.Sprintf("Check this node's clock and the reported certificates. Follow %s certificate guidance: a rolling restart can renew eligible node certificates using existing keys, one node at a time. CA certificates require separate CA rotation.", nodeCertificateProgram(node))
+		if report.State == "unverified" {
+			cause = "An earlier certificate warning is retained, but the current certificate state is unverified. A later monitor result may be missing."
+			action = "Verify the current certificates and node clock. Review the original report and timeline for a later monitor result before restarting or rotating certificates."
 		}
 		result.detections = append(result.detections, Detection{
 			Kind: "Node", Name: node.Name, Reason: NodeCertificateIssueReason, Severity: severity,
 			Fingerprint: "node:certificate-expiry", Message: message, RawMessage: row.Message, MessageSource: issuesapi.MessageSourceRadar,
-			Cause:             "The node's certificate monitor reported a certificate validity problem that can affect authentication.",
-			Action:            fmt.Sprintf("Check this node's clock and the reported certificates. Follow %s certificate guidance: a rolling restart can renew eligible node certificates using existing keys, one node at a time. CA certificates require separate CA rotation.", nodeCertificateProgram(node)),
+			Cause:             cause,
+			Action:            action,
 			ResourceCreatedAt: node.CreationTimestamp.Time, OnsetUnknown: true,
 		})
 	}
@@ -247,7 +246,17 @@ func assessNodeCertificates(nodes []*corev1.Node, live []*corev1.Event, history 
 
 func nodeCertificateUrgency(report NodeCertificateReport, reportedExpired bool, now time.Time) (string, string) {
 	stamp := report.LastReportedAt.UTC().Format(time.RFC3339)
+	if report.State == "unverified" {
+		return "warning", fmt.Sprintf("Node certificate warning needs verification (last reported %s)", stamp)
+	}
+	clockMessage := ""
+	if reportedExpired && report.ExpiresAt.After(now) {
+		clockMessage = fmt.Sprintf("Node monitor reported an expired certificate, but its expiry date %s is in the future on Radar's clock (last reported %s)", report.ExpiresAt.UTC().Format(time.RFC3339), stamp)
+	}
 	if !report.ExpiresAt.IsZero() && report.ExpiresAt.Sub(now) < nodeCertificateCriticalWindow {
+		if clockMessage != "" {
+			return "critical", clockMessage
+		}
 		return "critical", fmt.Sprintf("Node monitor reported certificate expiry on %s (last reported %s)", report.ExpiresAt.UTC().Format(time.RFC3339), stamp)
 	}
 	if !report.NotBefore.IsZero() {
@@ -256,11 +265,11 @@ func nodeCertificateUrgency(report NodeCertificateReport, reportedExpired bool, 
 		}
 		return "warning", fmt.Sprintf("Node monitor reported a certificate validity or clock problem (last reported %s)", stamp)
 	}
-	if reportedExpired && report.ExpiresAt.After(now) {
-		return "warning", fmt.Sprintf("Node monitor reported an expired certificate, but its expiry date is in the future on Radar's clock (last reported %s)", stamp)
+	if clockMessage != "" {
+		return "warning", clockMessage
 	}
-	if report.ExpiresAt.IsZero() || report.ExpiresAt.Sub(now) >= nodeCertificateWarningWindow {
-		return "", ""
+	if report.ExpiresAt.IsZero() {
+		return "warning", fmt.Sprintf("Node monitor reported certificates needing attention (last reported %s)", stamp)
 	}
 	return "warning", fmt.Sprintf("Node monitor reported certificate expiry on %s (last reported %s)", report.ExpiresAt.UTC().Format(time.RFC3339), stamp)
 }

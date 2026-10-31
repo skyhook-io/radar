@@ -43,14 +43,14 @@ func TestNodeCertificateUrgencyAndObservation(t *testing.T) {
 		wantSeverity string
 		wantState    string
 	}{
-		{"renewal-window", 99 * 24 * time.Hour, time.Minute, false, "", "reported"},
-		{"thirty-day-boundary", 30 * 24 * time.Hour, time.Minute, false, "", "reported"},
+		{"renewal-window", 99 * 24 * time.Hour, time.Minute, false, "warning", "reported"},
+		{"thirty-day-boundary", 30 * 24 * time.Hour, time.Minute, false, "warning", "reported"},
 		{"warning", 29 * 24 * time.Hour, time.Minute, false, "warning", "reported"},
 		{"seven-day-boundary", 7 * 24 * time.Hour, time.Minute, false, "warning", "reported"},
 		{"critical", 6 * 24 * time.Hour, time.Minute, false, "critical", "reported"},
 		{"expired", -time.Hour, time.Minute, false, "critical", "reported"},
-		{"stale", -time.Hour, 3 * time.Hour, false, "", "unverified"},
-		{"collection-unavailable", 6 * 24 * time.Hour, time.Minute, true, "", "unverified"},
+		{"stale", -time.Hour, 3 * time.Hour, false, "warning", "unverified"},
+		{"collection-unavailable", 6 * 24 * time.Hour, time.Minute, true, "warning", "unverified"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node := certificateTestNode(now)
@@ -62,17 +62,14 @@ func TestNodeCertificateUrgencyAndObservation(t *testing.T) {
 			if report.State != tc.wantState || report.UID != string(node.UID) || report.EventID != string(event.UID) || report.Message != event.Message {
 				t.Fatalf("wrong report: %+v", report)
 			}
-			if tc.wantSeverity == "" {
-				if len(got.detections) != 0 {
-					t.Fatalf("unexpected issue: %+v", got.detections)
-				}
-				return
-			}
 			if len(got.detections) != 1 || got.detections[0].Severity != tc.wantSeverity || got.detections[0].Name != node.Name || got.detections[0].Reason != NodeCertificateIssueReason {
 				t.Fatalf("wrong issue: %+v", got.detections)
 			}
 			if !got.detections[0].OnsetUnknown || got.detections[0].RawMessage != event.Message || !strings.Contains(got.detections[0].Message, "last reported") {
 				t.Fatalf("report provenance lost: %+v", got.detections[0])
+			}
+			if tc.wantState == "unverified" && (!strings.Contains(got.detections[0].Message, "needs verification") || !strings.Contains(got.detections[0].Cause, "current certificate state is unverified")) {
+				t.Fatalf("unverified Issue asserted a current certificate failure: %+v", got.detections[0])
 			}
 		})
 	}
@@ -89,8 +86,8 @@ func TestNodeCertificateReportLifecycle(t *testing.T) {
 		t.Fatalf("native Event deletion lost retained warning: %+v", got)
 	}
 	got = assessNodeCertificates([]*corev1.Node{node}, nil, history, true, now.Add(3*time.Hour))
-	if len(got.detections) != 0 || got.reports[node.Name].State != "unverified" {
-		t.Fatalf("stale report not retained neutrally: %+v", got)
+	if len(got.detections) != 1 || got.detections[0].Severity != "warning" || got.reports[node.Name].State != "unverified" {
+		t.Fatalf("silence hid the unresolved warning or asserted current expiry: %+v", got)
 	}
 
 	ca := *warning
@@ -124,8 +121,8 @@ func TestNodeCertificateReportLifecycle(t *testing.T) {
 	old := certificateTestEvent(node, now.Add(-time.Minute), now.Add(99*24*time.Hour))
 	history.rows = []timeline.TimelineEvent{timeline.NewK8sEventTimelineEvent(old, nil)}
 	got = assessNodeCertificates([]*corev1.Node{node}, nil, history, true, now.Add(98*24*time.Hour))
-	if len(got.detections) != 0 || got.reports[node.Name].State != "unverified" {
-		t.Fatalf("old report aged into urgency: %+v", got)
+	if len(got.detections) != 1 || got.detections[0].Severity != "warning" || !strings.Contains(got.detections[0].Message, "needs verification") || got.reports[node.Name].State != "unverified" {
+		t.Fatalf("old report disappeared or aged into a current expiry claim: %+v", got)
 	}
 }
 
@@ -140,8 +137,8 @@ func TestNodeCertificateLiveReportDoesNotDependOnHistoricalCoverage(t *testing.T
 		}
 		history.unavailable = true
 		got = assessNodeCertificates([]*corev1.Node{node}, []*corev1.Event{event}, history, false, now)
-		if len(got.detections) != 0 || got.reports[node.Name].State != "unverified" {
-			t.Fatalf("incomplete live source claimed current relevance: %+v", got)
+		if len(got.detections) != 1 || got.detections[0].Severity != "warning" || got.reports[node.Name].State != "unverified" {
+			t.Fatalf("incomplete live source lost the warning or claimed current urgency: %+v", got)
 		}
 	}
 }
@@ -175,8 +172,8 @@ func TestNodeCertificateCollectionNeedsDefaultNamespaceOnly(t *testing.T) {
 				if len(got.detections) != 1 || got.reports[node.Name].State != "reported" {
 					t.Fatalf("default-only Events hid a fresh live report: %+v", got)
 				}
-			} else if len(got.detections) != 0 || got.reports[node.Name].State != "unverified" {
-				t.Fatalf("an uncovered default namespace claimed current relevance: %+v", got)
+			} else if len(got.detections) != 1 || got.detections[0].Severity != "warning" || got.reports[node.Name].State != "unverified" {
+				t.Fatalf("an uncovered default namespace lost the warning or claimed current urgency: %+v", got)
 			}
 		})
 	}
@@ -216,8 +213,8 @@ func TestNodeCertificateReportIdentityAndGaps(t *testing.T) {
 	history.incompleteBefore = now.Add(-30 * time.Second)
 	history.rows = []timeline.TimelineEvent{timeline.NewK8sEventTimelineEvent(event, nil)}
 	got := assessNodeCertificates([]*corev1.Node{node}, nil, history, true, now)
-	if len(got.detections) != 0 || !got.reports[node.Name].HistoryIncomplete {
-		t.Fatalf("history gap asserted current failure: %+v", got)
+	if len(got.detections) != 1 || got.detections[0].Severity != "warning" || got.reports[node.Name].State != "unverified" || !got.reports[node.Name].HistoryIncomplete {
+		t.Fatalf("history gap hid the unresolved warning or asserted current failure: %+v", got)
 	}
 }
 
@@ -228,10 +225,11 @@ func TestNodeCertificateMessageParsing(t *testing.T) {
 		name, message, severity string
 		unknown                 bool
 	}{
-		{"malformed", "certificate CN=client expired at not-a-date", "", true},
+		{"malformed", "certificate CN=client expired at not-a-date", "warning", true},
 		{"not-yet-valid", "certificate CN=client is not valid before " + now.Add(time.Hour).Format(time.RFC3339), "critical", false},
 		{"clock-disagreement", "certificate CN=client is not valid before " + now.Add(-time.Hour).Format(time.RFC3339), "warning", false},
 		{"expired-clock-disagreement", "certificate CN=client expired at " + now.Add(99*24*time.Hour).Format(time.RFC3339), "warning", false},
+		{"expired-clock-disagreement-near", "certificate CN=client expired at " + now.Add(5*24*time.Hour).Format(time.RFC3339), "critical", false},
 		{"clock-and-expiry", "certificate CN=a is not valid before " + now.Add(-time.Hour).Format(time.RFC3339) + ", certificate CN=b expired at " + now.Add(-time.Hour).Format(time.RFC3339), "critical", false},
 		{"mixed", "[certificate CN=a will expire within 120 days at " + now.Add(99*24*time.Hour).Format(time.RFC3339) + ", certificate CN=b expired at " + now.Add(-time.Hour).Format(time.RFC3339) + "]", "critical", false},
 		{"newlines", "certificate CN=b expired at " + now.Add(-time.Hour).Format(time.RFC3339) + "\ncertificate CN=a will expire within 120 days at " + now.Add(99*24*time.Hour).Format(time.RFC3339), "critical", false},
@@ -244,14 +242,11 @@ func TestNodeCertificateMessageParsing(t *testing.T) {
 			if got.reports[node.Name].ValidityUnknown != tc.unknown {
 				t.Fatalf("wrong parse coverage: %+v", got)
 			}
-			if tc.severity == "" {
-				if len(got.detections) != 0 {
-					t.Fatalf("fabricated urgency: %+v", got)
-				}
-				return
-			}
 			if len(got.detections) != 1 || got.detections[0].Severity != tc.severity {
 				t.Fatalf("wrong severity: %+v", got)
+			}
+			if strings.HasPrefix(tc.name, "expired-clock-disagreement") && !strings.Contains(got.detections[0].Message, "future on Radar's clock") {
+				t.Fatalf("clock disagreement was hidden by urgency: %+v", got.detections[0])
 			}
 			if tc.name == "ca-in-node-bundle" && !strings.Contains(got.detections[0].Action, "CA certificates require separate CA rotation") {
 				t.Fatalf("CA bundle report promised restart-based CA renewal: %+v", got.detections[0])
@@ -318,7 +313,7 @@ func TestNodeCertificateHistoryUsesSharedStore(t *testing.T) {
 	t.Cleanup(func() { timeline.GetMetrics().Reset() })
 	history = readNodeCertificateHistory([]*corev1.Node{node})
 	got = assessNodeCertificates([]*corev1.Node{node}, nil, history, true, time.Now())
-	if len(got.detections) != 0 || got.reports[node.Name].State != "unverified" || !got.reports[node.Name].HistoryIncomplete {
-		t.Fatalf("known lost recovery resurrected the warning: %+v", got)
+	if len(got.detections) != 1 || got.detections[0].Severity != "warning" || got.reports[node.Name].State != "unverified" || !got.reports[node.Name].HistoryIncomplete {
+		t.Fatalf("known lost recovery hid uncertainty or asserted current urgency: %+v", got)
 	}
 }

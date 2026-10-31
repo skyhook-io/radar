@@ -136,7 +136,7 @@ var categoryDescription = map[Category]string{
 	CategoryHPALimitedOrFailed: "A HorizontalPodAutoscaler can't scale — missing metrics, pinned at max replicas, or scaling errors.",
 	// Security
 	CategoryRBACForbidden:        "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
-	CategoryCertificateNotReady:  "A certificate isn't usable or soon won't be: cert-manager issuance is failing or pending, a CloudNativePG certificate is expiring or expired, a live Ingress or Gateway uses an invalid or nearly expired TLS Secret, or an RKE2/K3s node monitor recently reported an urgent certificate validity problem.",
+	CategoryCertificateNotReady:  "A certificate needs attention: cert-manager issuance is failing or pending, a CloudNativePG certificate is expiring or expired, a live Ingress or Gateway uses an invalid or nearly expired TLS Secret, or an RKE2/K3s node monitor reported a certificate warning. Retained node warnings with stale or incomplete evidence have unverified current status.",
 	CategoryPodSecurityViolation: "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
 	// Control plane
 	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer hasn't been released, often because its controller is down, missing, or failing its cleanup.",

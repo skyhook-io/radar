@@ -10,6 +10,7 @@ export function NodeCertificateDetails({ evidence, onViewTimeline, includeOrigin
       <p className="text-sm text-theme-text-secondary">Last reported: <TimeValue timestamp={evidence.last_reported_at} />.</p>
       {evidence.expires_at && <p className="text-sm text-theme-text-secondary">Reported expiry: <TimeValue timestamp={evidence.expires_at} />.</p>}
       {evidence.not_before && <p className="text-sm text-theme-text-secondary">Reported valid from: <TimeValue timestamp={evidence.not_before} />.</p>}
+      {evidence.state === 'unverified' && <p className="text-sm text-theme-text-secondary">The current certificate state is unverified; this is the last retained report.</p>}
       {evidence.history_incomplete && <p className="text-sm text-theme-text-secondary">Some history is unavailable; a later report may be missing.</p>}
       {evidence.validity_unknown && <p className="text-sm text-theme-text-secondary">Radar could not read the validity dates from this report.</p>}
       {includeOriginalReport && <Disclosure summary="Original report" summaryClassName="text-xs text-theme-text-secondary">
@@ -21,7 +22,7 @@ export function NodeCertificateDetails({ evidence, onViewTimeline, includeOrigin
 }
 
 export function nodeCertificateContextVisible(evidence: NodeCertificateReport | undefined, hasIssue: boolean): boolean {
-  return Boolean(evidence && evidence.reason !== 'CertificateExpirationOK' && evidence.state !== 'ok' && (evidence.state !== 'reported' || !hasIssue))
+  return Boolean(evidence && evidence.reason !== 'CertificateExpirationOK' && evidence.state !== 'ok' && !hasIssue)
 }
 
 export function NodeCertificateContext({ evidence, hasIssue, onViewTimeline }: { evidence?: NodeCertificateReport; hasIssue: boolean; onViewTimeline: () => void }) {
