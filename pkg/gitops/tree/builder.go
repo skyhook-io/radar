@@ -177,15 +177,16 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	topoByRef := map[string]topology.Node{}
 	topoByID := map[string]topology.Node{}
+	// A display PodGroup stands in for Pods that ownership finds one by one:
+	// a generated Pod shows as its group, as in topology. The group's own edge
+	// is not a resource relation, and a declared Pod keeps its own identity.
+	podGroups := map[string]topology.Node{}
 	for _, n := range b.topoNodes() {
-		// A display PodGroup stands in for Pods that ownership finds one by
-		// one: each Pod resolves to the group, which the tree shows in their
-		// place. The group's own edge is not a resource relation.
 		if pods, ok := n.Data["pods"].([]map[string]any); ok && n.Kind == topology.KindPodGroup {
 			for _, pod := range pods {
 				name, _ := pod["name"].(string)
 				namespace, _ := pod["namespace"].(string)
-				topoByRef[refKey(ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})] = n
+				podGroups[refKey(ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})] = n
 			}
 			continue
 		}
@@ -354,7 +355,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		if len(traversalRoots) == 0 {
 			traversalRoots = append(traversalRoots, rootRef)
 		}
-		generatedWarnings, omittedByReadCheck = b.addGenerated(ctx, view, traversalRoots, nodes, edges, tool, topoByRef, topoByID, omittedByReadCheck)
+		generatedWarnings, omittedByReadCheck = b.addGenerated(ctx, view, traversalRoots, nodes, edges, tool, topoByRef, topoByID, podGroups, omittedByReadCheck)
 	}
 
 	hasParent := map[string]bool{}

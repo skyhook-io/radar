@@ -33,7 +33,7 @@ func identity(ref ResourceRef) resourceid.Ref {
 	return resourceid.NewRef(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 }
 
-func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots []ResourceRef, nodes map[string]Node, edges map[string]Edge, tool Tool, topoByRef map[string]topology.Node, topoByID map[string]topology.Node, omitted bool) ([]string, bool) {
+func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots []ResourceRef, nodes map[string]Node, edges map[string]Edge, tool Tool, topoByRef, topoByID, podGroups map[string]topology.Node, omitted bool) ([]string, bool) {
 	index := topology.IndexByResource(b.topo)
 	queue := append([]ResourceRef(nil), roots...)
 	slices.SortFunc(queue, func(a, b ResourceRef) int { return strings.Compare(identity(a).String(), identity(b).String()) })
@@ -57,8 +57,8 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		ref := ResourceRef{Group: child.Ref.Group, Kind: child.Ref.Kind, Namespace: child.Ref.Namespace, Name: child.Ref.Name, UID: string(child.UID)}
 		shownRef := ref
 		live, shown := findTopoNode(topoByRef, ref)
-		if shown && live.Kind == topology.KindPodGroup {
-			shownRef = refFromTopologyNode(live)
+		if group, grouped := podGroups[refKey(ref)]; grouped {
+			live, shown, shownRef = group, true, refFromTopologyNode(group)
 		}
 		id := nodeID(shownRef)
 		_, retained := nodes[id]

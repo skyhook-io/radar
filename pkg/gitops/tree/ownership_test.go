@@ -417,6 +417,43 @@ func TestGeneratedTreeShowsDisplayPodGroupForGroupedPods(t *testing.T) {
 	}
 }
 
+// A declared Pod is its own resource even when topology draws it in a group:
+// the group's verdict must not replace the Pod's.
+func TestDeclaredPodsInDisplayPodGroupKeepTheirIdentity(t *testing.T) {
+	app := operatorApplication()
+	var inventory []any
+	var objects []ownershiptest.Object
+	var details []map[string]any
+	for i := range 6 {
+		pod := ownedObject("", "Pod", "monitoring", fmt.Sprintf("bare-%d", i), nil, false)
+		objects = append(objects, pod)
+		inventory = append(inventory, map[string]any{"kind": "Pod", "namespace": "monitoring", "name": pod.Ref.Name})
+		details = append(details, map[string]any{"name": pod.Ref.Name, "namespace": "monitoring", "status": string(topology.StatusUnhealthy)})
+	}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "podgroup-monitoring-bare", Kind: topology.KindPodGroup, Name: "bare", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "monitoring", "podCount": 6, "pods": details}}}}
+	unstructured.SetNestedSlice(app.Object, inventory, "status", "resources")
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	got, _, err := NewBuilder(getter, topo).WithOwnership(ownershipSession(t, objects...)).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pods := 0
+	for _, node := range got.Nodes {
+		if node.Ref.Kind == "PodGroup" {
+			t.Fatalf("declared Pods replaced by their display group: %+v", node)
+		}
+		if node.Ref.Kind == "Pod" {
+			pods++
+			if node.Health == "Degraded" {
+				t.Fatalf("%s took the group's verdict", node.Ref.Name)
+			}
+		}
+	}
+	if pods != 6 {
+		t.Fatalf("pods = %d, want 6", pods)
+	}
+}
+
 func TestGeneratedTreeExpandsMoreThanOneThousandDeclaredRoots(t *testing.T) {
 	app := operatorApplication()
 	var inventory []any
@@ -620,7 +657,7 @@ func TestGeneratedTreeKeepsValidatedRetainedEdgeAtFrontier(t *testing.T) {
 	nodes := map[string]Node{nodeID(parent): {Ref: parent}, nodeID(child): {Ref: child, Dependency: true}}
 	edges := map[string]Edge{}
 	b := NewBuilder(nil, nil)
-	warnings, _ := b.addGenerated(context.Background(), ownership.NewView(session, traversalScope{}), []ResourceRef{parent}, nodes, edges, ToolArgoCD, nil, nil, false)
+	warnings, _ := b.addGenerated(context.Background(), ownership.NewView(session, traversalScope{}), []ResourceRef{parent}, nodes, edges, ToolArgoCD, nil, nil, nil, false)
 	if len(warnings) == 0 || nodes[nodeID(child)].Dependency || edges[edgeKey(nodeID(parent), nodeID(child))].Type != EdgeOwns {
 		t.Fatalf("lost retained edge: warnings=%v child=%+v edge=%+v", warnings, nodes[nodeID(child)], edges[edgeKey(nodeID(parent), nodeID(child))])
 	}
