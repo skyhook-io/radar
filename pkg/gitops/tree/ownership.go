@@ -46,7 +46,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	// An inactive ReplicaSet maps to its owner, which stands in as the parent
 	// of Pods it still has, such as terminating ones, as in topology.
 	hiddenRevisions := map[resourceid.Ref]ResourceRef{}
-	graphIncomplete := false
 	takeStep := func() bool {
 		if steps >= maxExpansionSteps {
 			truncated = true
@@ -168,9 +167,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		if !ok {
 			continue
 		}
-		if b.canEmit(ref) && len(b.topo.Warnings) > 0 {
-			graphIncomplete = true
-		}
 		_, outgoing := index.EdgesFor(live.ID)
 		for _, edge := range outgoing {
 			if ctx.Err() != nil {
@@ -231,9 +227,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	}
 	if limitedClaims {
 		warnings = append(warnings, limitedHelmProjectionWarning)
-	}
-	if graphIncomplete {
-		warnings = append(warnings, "Some graph data could not be loaded; additional generated relationships may be missing.")
 	}
 	return warnings, omitted
 }

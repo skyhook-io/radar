@@ -139,8 +139,9 @@ func stringMapFromAny(in map[string]any) map[string]string {
 
 const limitedHelmProjectionWarning = "Some Helm resources may be missing: their label lookup couldn't read the full graph."
 
-// Namespaces the caller can't read hold nothing the tree could show them, so
-// a scoped lookup alone is not a limitation.
+// Topology reads Radar's caches, so its warnings name kinds Radar doesn't
+// collect, which bound every search, and namespaces the caller can't read
+// hold nothing the tree could show. Only a missing graph limits the lookup.
 func (b *Builder) limitedHelmProjection() bool {
-	return b.topo == nil || len(b.topo.Warnings) > 0
+	return b.topo == nil
 }

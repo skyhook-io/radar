@@ -717,16 +717,17 @@ func TestGeneratedTreeAttachesHiddenRevisionPodsToTheirWorkload(t *testing.T) {
 	}
 }
 
-func TestGeneratedTreeDisclosesFailedGraphUsedForSpecCandidates(t *testing.T) {
+// A restricted Radar identity leaves kinds out of topology on every request;
+// that bounds what Radar collects and is no notice on a healthy application.
+func TestGeneratedTreeIgnoresTopologyCollectionWarnings(t *testing.T) {
 	prom := ownedObject("monitoring.coreos.com", "Prometheus", "monitoring", "main", nil, false)
-	topo := &topology.Topology{Nodes: []topology.Node{{ID: "prom", Kind: "Prometheus", Name: "main", Data: map[string]any{"namespace": "monitoring", "apiVersion": prom.APIVersion}}}, Warnings: []string{"private list failure"}}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "prom", Kind: "Prometheus", Name: "main", Data: map[string]any{"namespace": "monitoring", "apiVersion": prom.APIVersion}}}, Warnings: []string{"Failed to list Ingresses: ingresses not available (RBAC not granted)"}}
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): operatorApplication()}}
 	got, _, err := NewBuilder(getter, topo).WithOwnership(ownershipSession(t, prom)).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
 	if err != nil {
 		t.Fatal(err)
 	}
-	warnings := strings.Join(got.Warnings, " ")
-	if !strings.Contains(warnings, "graph data could not be loaded") || strings.Contains(warnings, "private") {
+	if len(got.Warnings) != 0 {
 		t.Fatalf("warnings=%v", got.Warnings)
 	}
 }

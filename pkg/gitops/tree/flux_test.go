@@ -164,7 +164,7 @@ func TestHelmProjectionDisclosesUnavailableTopology(t *testing.T) {
 	}{
 		{name: "complete", topo: &topology.Topology{}},
 		{name: "absent", want: true},
-		{name: "failed", topo: &topology.Topology{Warnings: []string{"private API failure details"}}, want: true},
+		{name: "uncollected kind", topo: &topology.Topology{Warnings: []string{"ingresses not available (RBAC not granted)"}}},
 		{name: "scoped", topo: &topology.Topology{}, namespaces: []string{"team"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestHelmProjectionDisclosesUnavailableTopology(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if slices.Contains(got.Warnings, limitedHelmProjectionWarning) != tc.want || slices.Contains(got.Warnings, "private API failure details") {
+			if slices.Contains(got.Warnings, limitedHelmProjectionWarning) != tc.want || slices.Contains(got.Warnings, "ingresses not available (RBAC not granted)") {
 				t.Fatalf("warnings=%v", got.Warnings)
 			}
 		})
