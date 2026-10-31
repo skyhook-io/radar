@@ -1852,18 +1852,23 @@ func loadContextSource(name string) (*clientcmd.ClientConfigLoadingRules, string
 	return loadingRules, overrideContextName, kubeConfig, rawConfig, kubeContext, nil
 }
 
+// refreshedAuthProviderKeys are the auth-provider config fields client-go's
+// OIDC, GCP and Azure providers rewrite in the kubeconfig when they refresh.
+var refreshedAuthProviderKeys = []string{"id-token", "refresh-token", "access-token", "expiry", "expires-in", "expires-on"}
+
 // contextSourceFingerprint identifies what a context resolves to: its source
 // file, the cluster entry and how it authenticates. A kubeconfig edit or a
-// CAPI merge that repoints the name changes it. Tokens an auth provider
-// refreshes and writes back during a request are left out, or a successful
-// check would look like a concurrent edit.
+// CAPI merge that repoints the name changes it. Only the token fields an auth
+// provider refreshes and writes back during a request are left out, or a
+// successful check would look like a concurrent edit.
 func contextSourceFingerprint(sourceFile, inFileName string, rawConfig clientcmdapi.Config, kubeContext *clientcmdapi.Context) string {
 	var authInfo *clientcmdapi.AuthInfo
 	if ai, ok := rawConfig.AuthInfos[kubeContext.AuthInfo]; ok && ai != nil {
 		authInfo = ai.DeepCopy()
-		authInfo.Token = ""
 		if authInfo.AuthProvider != nil {
-			authInfo.AuthProvider.Config = nil
+			for _, key := range refreshedAuthProviderKeys {
+				delete(authInfo.AuthProvider.Config, key)
+			}
 		}
 	}
 	encoded, _ := json.Marshal(struct {
