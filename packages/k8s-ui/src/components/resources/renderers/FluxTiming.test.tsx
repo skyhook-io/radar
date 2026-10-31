@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { KustomizationRenderer } from './KustomizationRenderer'
 import { FluxHelmReleaseRenderer } from './FluxHelmReleaseRenderer'
@@ -20,6 +20,8 @@ const helm = {
 }
 
 describe('Flux drawer and resource timing', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-30T21:00:00Z')) })
+  afterEach(() => vi.useRealTimers())
   it('never labels a request marker as reconciliation time in any Flux drawer', () => {
     const html = [
       renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization' }} />),
@@ -29,7 +31,9 @@ describe('Flux drawer and resource timing', () => {
       renderToString(<HelmRepositoryRenderer data={base} />),
     ].join('')
     expect(html).not.toContain('Last Reconciled')
-    expect(html).not.toContain(marker)
+    expect(html.match(/Last handled manual request/g)).toHaveLength(5)
+    expect(html.match(/2026-10-07T09:00:00Z/g)).toHaveLength(5)
+    expect(html).not.toContain('23d ago')
     expect(html).toContain('10m')
   })
 
@@ -38,6 +42,10 @@ describe('Flux drawer and resource timing', () => {
     const current = drawer.slice(drawer.indexOf('Current Release'), drawer.indexOf('History ('))
     expect(current).toContain('1.2.0')
     expect(current).not.toContain('1.3.0')
+    const history = drawer.slice(drawer.indexOf('History ('), drawer.indexOf('Revision Info')).replace(/<!-- -->/g, '')
+    expect(history).toContain('Attempt started')
+    expect(history).toContain('1m ago')
+    expect(history).toContain('3d ago')
     expect(renderToString(<FluxHelmReleaseCell resource={helm} column="revision" />)).toContain('#4')
     expect(renderToString(<FluxHelmReleaseCell resource={helm} column="version" />)).toContain('1.2.0')
     expect(renderToString(<FluxHelmReleaseCell resource={{ ...helm, status: {} }} column="version" />)).not.toContain('*')
@@ -49,6 +57,7 @@ describe('Flux drawer and resource timing', () => {
     expect(html).toContain('History (1 revision)')
     expect(html).toContain('1.3.0')
     expect(html).not.toContain('Current Release')
+    expect(html.replace(/<!-- -->/g, '')).toContain('1m ago')
     const history = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('History (1 revision)'))
     expect(history).toContain('aria-expanded="true"')
     const deployed = renderToString(<FluxHelmReleaseRenderer data={helm} />)
@@ -63,5 +72,20 @@ describe('Flux drawer and resource timing', () => {
     expect(html).not.toContain('Every 5m')
     expect(html).toContain('Last checked')
     expect(html).not.toContain('Last Reconciled')
+  })
+
+  it('keeps a non-date request token even when no other revision details exist', () => {
+    const data = { ...base, status: { lastHandledReconcileAt: 'request-abc' } }
+    const html = [
+      renderToString(<KustomizationRenderer data={data} />),
+      renderToString(<FluxHelmReleaseRenderer data={data} />),
+      renderToString(<GitRepositoryRenderer data={data} />),
+      renderToString(<OCIRepositoryRenderer data={data} />),
+      renderToString(<HelmRepositoryRenderer data={data} />),
+    ].join('')
+    expect(html.match(/request-abc/g)).toHaveLength(5)
+    expect(html).not.toContain('Invalid Date')
+    const invalidHistory = renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { history: [{ ...helm.status.history[0], lastDeployed: 'invalid' }] } }} />)
+    expect(invalidHistory).not.toContain('Attempt started')
   })
 })

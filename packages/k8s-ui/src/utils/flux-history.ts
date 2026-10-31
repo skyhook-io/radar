@@ -31,16 +31,36 @@ function timestamp(value: unknown): FluxTimestamp | undefined {
   return { value, milliseconds, submillisecond: Number((match[1] ?? '').padEnd(9, '0').slice(3)) }
 }
 
-// Flux history may omit failures before apply, and firstReconciled can span
-// several source revisions that produced the same manifests.
-export function getFluxLastApplyAttempt(resource: unknown): string | undefined {
+function latestTimestamp(entries: unknown[], field: 'lastReconciled' | 'lastTransitionTime'): string | undefined {
   let latest: FluxTimestamp | undefined
-  for (const entry of history(resource, 'kustomize.toolkit.fluxcd.io', 'Kustomization')) {
-    const candidate = object(entry) ? timestamp(entry.lastReconciled) : undefined
+  for (const entry of entries) {
+    const candidate = object(entry) ? timestamp(entry[field]) : undefined
     if (candidate && (!latest || candidate.milliseconds > latest.milliseconds
       || (candidate.milliseconds === latest.milliseconds && candidate.submillisecond > latest.submillisecond))) latest = candidate
   }
   return latest?.value
+}
+
+// Flux history may omit failures before apply, and firstReconciled can span
+// several source revisions that produced the same manifests.
+export function getFluxLastApplyAttempt(resource: unknown): string | undefined {
+  return latestTimestamp(history(resource, 'kustomize.toolkit.fluxcd.io', 'Kustomization'), 'lastReconciled')
+}
+
+export function getFluxLastStatusChange(resource: unknown): string | undefined {
+  const status = fluxStatus(resource, 'kustomize.toolkit.fluxcd.io', 'Kustomization')
+    ?? fluxStatus(resource, 'helm.toolkit.fluxcd.io', 'HelmRelease')
+  return latestTimestamp(Array.isArray(status?.conditions) ? status.conditions : [], 'lastTransitionTime')
+}
+
+export function getFluxHandledRequestToken(status: unknown): string | undefined {
+  if (!object(status) || typeof status.lastHandledReconcileAt !== 'string'
+    || !status.lastHandledReconcileAt.trim()) return undefined
+  return status.lastHandledReconcileAt
+}
+
+export function getFluxReleaseAttemptTime(snapshot: unknown): string | undefined {
+  return object(snapshot) ? timestamp(snapshot.lastDeployed)?.value : undefined
 }
 
 export interface FluxDeployedRelease {

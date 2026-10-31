@@ -26,7 +26,11 @@ describe('GitOps landing timing', () => {
 
   it('does not turn conditions into an apply date on an older controller', () => {
     const row = normalizeFluxKustomization({ apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', metadata: { name: 'old' }, status: { conditions: [{ type: 'Ready', status: 'True', lastTransitionTime: '2026-10-30T20:59:00Z' }] } })
-    expect(row.lastSync).toBe('')
+    expect(row.lastSync).toBe('2026-10-30T20:59:00Z')
+    expect(row.lastSyncLabel).toBe('Status changed')
+    const html = renderToString(<GitOpsTableView rows={[row]} counts={{ 'kustomize.toolkit.fluxcd.io/Kustomization': 1 }} onRowClick={() => {}} />)
+    expect(html).toContain('Status changed')
+    expect(html).not.toContain('Apply attempt')
   })
 
   it('does not pair an unknown deployed chart date with a legacy or attempted revision', () => {
@@ -36,5 +40,18 @@ describe('GitOps landing timing', () => {
     } })
     expect(row.targetRevision).toBe('1.1.0')
     expect(row.lastSync).toBe('')
+  })
+
+  it('uses status change for Helm only when a paired deployment date is unavailable', () => {
+    const resource = { apiVersion: 'helm.toolkit.fluxcd.io/v2beta1', kind: 'HelmRelease', metadata: { name: 'old' }, status: {
+      lastAppliedRevision: '1.2.0', lastHandledReconcileAt: 'manual-token',
+      conditions: [{ type: 'Ready', status: 'False', lastTransitionTime: '2026-10-30T20:59:00Z' }],
+    } }
+    const row = normalizeFluxHelmRelease(resource)
+    expect(row.targetRevision).toBe('1.2.0')
+    expect(row.lastSync).toBe('2026-10-30T20:59:00Z')
+    expect(row.lastSyncLabel).toBe('Status changed')
+    const noDate = normalizeFluxHelmRelease({ ...resource, status: { ...resource.status, conditions: [{ lastTransitionTime: 'invalid' }] } })
+    expect(noDate.lastSync).toBe('')
   })
 })
