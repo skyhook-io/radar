@@ -21,7 +21,7 @@ export function NodeCertificateDetails({ evidence, onViewTimeline, includeOrigin
 }
 
 export function nodeCertificateContextVisible(evidence: NodeCertificateReport | undefined, hasIssue: boolean): boolean {
-  return Boolean(evidence && evidence.state !== 'ok' && (evidence.state !== 'reported' || !hasIssue))
+  return Boolean(evidence && evidence.reason !== 'CertificateExpirationOK' && evidence.state !== 'ok' && (evidence.state !== 'reported' || !hasIssue))
 }
 
 export function NodeCertificateContext({ evidence, hasIssue, onViewTimeline }: { evidence?: NodeCertificateReport; hasIssue: boolean; onViewTimeline: () => void }) {

@@ -22,6 +22,7 @@ describe('Node certificate reports', () => {
   it('does not duplicate an urgent Issue or claim current health after an OK report', () => {
     expect(renderToStaticMarkup(<NodeCertificateContext evidence={report} hasIssue onViewTimeline={() => {}} />)).toBe('')
     expect(renderToStaticMarkup(<NodeCertificateContext evidence={{ ...report, state: 'ok' }} hasIssue={false} onViewTimeline={() => {}} />)).toBe('')
+    expect(renderToStaticMarkup(<NodeCertificateContext evidence={{ ...report, state: 'unverified', reason: 'CertificateExpirationOK', history_incomplete: true }} hasIssue={false} onViewTimeline={() => {}} />)).toBe('')
     const details = renderToStaticMarkup(<NodeCertificateDetails evidence={report} onViewTimeline={() => {}} includeOriginalReport={false} />)
     expect(details).toContain('Reported expiry')
     expect(details).not.toContain(report.message)
