@@ -72,7 +72,7 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ reconcile: reason }}
       actionPermissions={{ reconcile: { allowed: false, denied: [kustomizationPatch] } }}
     />)
-    expect(html).toContain('Actions restricted for your role')
+    expect(html).toContain('Read-only for your role')
     expect(html).not.toContain('cloud.defaultRbac.integrationWrite')
     expect(html).not.toContain('Chart RBAC settings')
     expect(html).not.toContain('helm upgrade')
@@ -101,7 +101,7 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ refresh: reason, sync: 'sync reason', suspend: 'suspend reason' }}
       actionPermissions={{ refresh: argoDenial, sync: both, suspend: both }} />)
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    expect(doc.body.textContent).toContain('Actions restricted for your role')
+    expect(doc.body.textContent).toContain('Read-only for your role')
     expect(doc.body.textContent).not.toContain('Some actions restricted')
     expect(doc.body.textContent).toContain("Your role can't sync, refresh or change auto-sync for this Application.")
     expect(doc.body.textContent).not.toContain('Radar reads it with its own access')
@@ -171,7 +171,6 @@ describe('GitOps permission gates on rendered controls', () => {
     const doc = new DOMParser().parseFromString(html, 'text/html')
     const note = [...doc.querySelectorAll('p')].find(p => p.textContent === "Couldn't check your permissions. You can still try.")!
     expect(note).toBeDefined()
-    expect(note.className).toContain('text-theme-text-secondary')
     expect(note.closest('[inert], [hidden], [aria-hidden="true"]')).toBeNull()
     expect(actionButton(html, 'Sync…')).not.toContain('disabled=""')
     expect(html).not.toContain('restricted for your role')
@@ -185,7 +184,7 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ reconcile: reason, suspend: reason }}
       actionPermissions={{ reconcile: { allowed: false, denied: [denied] }, suspend: { allowed: false, denied: [denied] } }}
     />)
-    expect(html).toContain('Actions restricted for your role')
+    expect(html).toContain('Read-only for your role')
     expect(html).toContain(`${kind}.source.toolkit.fluxcd.io`)
     expect(actionButton(html, 'Reconcile')).toContain('disabled=""')
     expect(actionButton(html, 'Suspend')).toContain('disabled=""')

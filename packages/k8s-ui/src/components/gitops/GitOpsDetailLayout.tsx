@@ -404,32 +404,6 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   </span>
                 )}
               </div>
-              {denialReasons.length > 0 && (
-                <div className="mt-2 text-xs text-theme-text-secondary">
-                  <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-primary">
-                    {allActionsRestricted ? 'Actions restricted for your role' : 'Some actions restricted for your role'} · <span className="text-accent-text">Why?</span>
-                    <CollapseChevron open={permissionsOpen} />
-                  </button>
-                  <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
-                    <div className="mt-2 max-w-xl space-y-2 rounded border border-theme-border bg-theme-surface p-3">
-                      {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
-                      {props.isCloudDeployment && isArgoApp && <p>Radar Cloud owners: the Argo CD write grant is off by default because it delegates the Argo CD controller's deployment authority. To turn it on, see Chart RBAC settings, then apply it with <code>helm upgrade</code>; one-click upgrades update only the image.</p>}
-                      <p>{props.isCloudDeployment && isArgoApp ? 'For other roles, an admin can grant access with' : 'An admin can grant access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
-                      {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
-                        {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</span>)}</li>)}
-                        {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
-                      </ul>}
-                      <div className="flex flex-wrap gap-3">
-                        <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
-                        {props.isCloudDeployment && isArgoApp && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#cloud-owner-integration-writes" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
-                      </div>
-                    </div>
-                  </Collapse>
-                </div>
-              )}
-              {props.permissionCheckUnavailable && (
-                <p className="mt-2 text-xs text-theme-text-secondary">Couldn't check your permissions. You can still try.</p>
-              )}
               {/* Spec/config row */}
               {detail && (
                 <div className="mt-2 flex flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
@@ -442,123 +416,151 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                 </div>
               )}
             </div>
-            {/* Action buttons */}
-            <div className="flex flex-wrap items-center gap-2">
-              {isArgoApp && argo && (
-                <>
-                  <ActionButton
-                    label="Sync…"
-                    description="Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision)."
-                    icon={ArrowDownUp}
-                    loading={argo.syncing}
-                    onClick={argo.onSyncRequested}
-                    disabled={effectiveSuspended || terminating || argoOperationInProgress || !!props.actionDisabledReasons?.['sync']}
-                    disabledReason={terminating
-                      ? terminatingActionTooltip
-                      : argoOperationInProgress
-                        ? 'Wait for the current Argo operation to finish.'
-                        : props.actionDisabledReasons?.['sync']}
-                    primary
-                  />
-                  <ActionButton
-                    label="Refresh"
-                    description="Re-check Git for new commits and recompute sync status. Doesn't apply anything."
-                    icon={RefreshCw}
-                    loading={argo.refreshing && argo.refreshingKind === 'normal'}
-                    disabled={!!props.actionDisabledReasons?.['refresh']}
-                    disabledReason={props.actionDisabledReasons?.['refresh']}
-                    onClick={() => argo.onRefresh('normal')}
-                  />
-                  <ActionButton
-                    label="Hard refresh"
-                    description="Like Refresh, but also bypasses Argo's manifest cache (re-renders Helm/Kustomize)."
-                    icon={Zap}
-                    loading={argo.refreshing && argo.refreshingKind === 'hard'}
-                    disabled={!!props.actionDisabledReasons?.['refresh']}
-                    disabledReason={props.actionDisabledReasons?.['refresh']}
-                    onClick={() => argo.onRefresh('hard')}
-                  />
-                  {argo.isRunning && (
+            {/* Action buttons, with the reason some are disabled right beneath them */}
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {isArgoApp && argo && (
+                  <>
                     <ActionButton
-                      label="Terminate"
-                      description="Cancel the in-progress sync operation."
-                      icon={XCircle}
-                      loading={argo.terminating}
-                      disabled={!!props.actionDisabledReasons?.['terminate']}
-                      disabledReason={props.actionDisabledReasons?.['terminate']}
-                      onClick={argo.onTerminate}
-                      danger
+                      label="Sync…"
+                      description="Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision)."
+                      icon={ArrowDownUp}
+                      loading={argo.syncing}
+                      onClick={argo.onSyncRequested}
+                      disabled={effectiveSuspended || terminating || argoOperationInProgress || !!props.actionDisabledReasons?.['sync']}
+                      disabledReason={terminating
+                        ? terminatingActionTooltip
+                        : argoOperationInProgress
+                          ? 'Wait for the current Argo operation to finish.'
+                          : props.actionDisabledReasons?.['sync']}
+                      primary
                     />
-                  )}
-                  {argo.autoSyncEnabled ? (
                     <ActionButton
-                      label="Disable auto-sync"
-                      description="Stop Argo from automatically syncing Git changes. Manual Sync still works."
-                      icon={Pause}
-                      loading={argo.suspending}
-                      onClick={argo.onSuspend}
-                      disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
-                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
+                      label="Refresh"
+                      description="Re-check Git for new commits and recompute sync status. Doesn't apply anything."
+                      icon={RefreshCw}
+                      loading={argo.refreshing && argo.refreshingKind === 'normal'}
+                      disabled={!!props.actionDisabledReasons?.['refresh']}
+                      disabledReason={props.actionDisabledReasons?.['refresh']}
+                      onClick={() => argo.onRefresh('normal')}
                     />
-                  ) : (
                     <ActionButton
-                      label="Enable auto-sync"
-                      description="Re-enable automatic syncing of Git changes to the cluster."
-                      icon={Play}
-                      loading={argo.resuming}
-                      onClick={argo.onResume}
-                      disabled={terminating || !!props.actionDisabledReasons?.['resume']}
-                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
+                      label="Hard refresh"
+                      description="Like Refresh, but also bypasses Argo's manifest cache (re-renders Helm/Kustomize)."
+                      icon={Zap}
+                      loading={argo.refreshing && argo.refreshingKind === 'hard'}
+                      disabled={!!props.actionDisabledReasons?.['refresh']}
+                      disabledReason={props.actionDisabledReasons?.['refresh']}
+                      onClick={() => argo.onRefresh('hard')}
                     />
-                  )}
-                </>
-              )}
-              {isFlux && flux && (
-                <>
-                  <ActionButton
-                    label="Reconcile"
-                    description="Tell Flux to reconcile this resource now: re-read its source, re-apply the manifests, update status. Skips waiting for the regular reconciliation interval."
-                    icon={RefreshCw}
-                    loading={flux.reconciling}
-                    onClick={flux.onReconcile}
-                    disabled={effectiveSuspended || terminating || !!props.actionDisabledReasons?.['reconcile']}
-                    disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['reconcile']}
-                    primary
-                  />
-                  {isFluxWorkload && (
+                    {argo.isRunning && (
+                      <ActionButton
+                        label="Terminate"
+                        description="Cancel the in-progress sync operation."
+                        icon={XCircle}
+                        loading={argo.terminating}
+                        disabled={!!props.actionDisabledReasons?.['terminate']}
+                        disabledReason={props.actionDisabledReasons?.['terminate']}
+                        onClick={argo.onTerminate}
+                        danger
+                      />
+                    )}
+                    {argo.autoSyncEnabled ? (
+                      <ActionButton
+                        label="Disable auto-sync"
+                        description="Stop Argo from automatically syncing Git changes. Manual Sync still works."
+                        icon={Pause}
+                        loading={argo.suspending}
+                        onClick={argo.onSuspend}
+                        disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
+                        disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
+                      />
+                    ) : (
+                      <ActionButton
+                        label="Enable auto-sync"
+                        description="Re-enable automatic syncing of Git changes to the cluster."
+                        icon={Play}
+                        loading={argo.resuming}
+                        onClick={argo.onResume}
+                        disabled={terminating || !!props.actionDisabledReasons?.['resume']}
+                        disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
+                      />
+                    )}
+                  </>
+                )}
+                {isFlux && flux && (
+                  <>
                     <ActionButton
-                      label="Sync with source"
-                      description="Reconcile the upstream source CR (GitRepository/HelmRepository) first — re-fetching from Git or Helm — then reconcile this resource against the refreshed source."
-                      icon={GitCommit}
-                      loading={flux.syncingWithSource}
-                      onClick={flux.onSyncWithSource}
-                      disabled={terminating || !!props.actionDisabledReasons?.['sync-with-source']}
-                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['sync-with-source']}
+                      label="Reconcile"
+                      description="Tell Flux to reconcile this resource now: re-read its source, re-apply the manifests, update status. Skips waiting for the regular reconciliation interval."
+                      icon={RefreshCw}
+                      loading={flux.reconciling}
+                      onClick={flux.onReconcile}
+                      disabled={effectiveSuspended || terminating || !!props.actionDisabledReasons?.['reconcile']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['reconcile']}
+                      primary
                     />
-                  )}
-                  {effectiveSuspended ? (
-                    <ActionButton
-                      label="Resume"
-                      description="Resume Flux reconciliation. Flux will start applying changes from the source again on its normal interval."
-                      icon={Play}
-                      loading={flux.resuming}
-                      onClick={flux.onResume}
-                      disabled={terminating || !!props.actionDisabledReasons?.['resume']}
-                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
-                    />
-                  ) : (
-                    <ActionButton
-                      label="Suspend"
-                      description="Pause Flux reconciliation. The resource stays exactly as-is — new commits in the source won't be applied until you resume."
-                      icon={Pause}
-                      loading={flux.suspending}
-                      onClick={flux.onSuspend}
-                      disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
-                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
-                    />
-                  )}
-                </>
-              )}
+                    {isFluxWorkload && (
+                      <ActionButton
+                        label="Sync with source"
+                        description="Reconcile the upstream source CR (GitRepository/HelmRepository) first — re-fetching from Git or Helm — then reconcile this resource against the refreshed source."
+                        icon={GitCommit}
+                        loading={flux.syncingWithSource}
+                        onClick={flux.onSyncWithSource}
+                        disabled={terminating || !!props.actionDisabledReasons?.['sync-with-source']}
+                        disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['sync-with-source']}
+                      />
+                    )}
+                    {effectiveSuspended ? (
+                      <ActionButton
+                        label="Resume"
+                        description="Resume Flux reconciliation. Flux will start applying changes from the source again on its normal interval."
+                        icon={Play}
+                        loading={flux.resuming}
+                        onClick={flux.onResume}
+                        disabled={terminating || !!props.actionDisabledReasons?.['resume']}
+                        disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
+                      />
+                    ) : (
+                      <ActionButton
+                        label="Suspend"
+                        description="Pause Flux reconciliation. The resource stays exactly as-is — new commits in the source won't be applied until you resume."
+                        icon={Pause}
+                        loading={flux.suspending}
+                        onClick={flux.onSuspend}
+                        disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
+                        disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+                {denialReasons.length > 0 && (
+                  <div className="flex flex-col items-end text-[11px] text-theme-text-tertiary">
+                    <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary">
+                      {allActionsRestricted ? 'Read-only for your role' : 'Some actions restricted for your role'} · <span className="underline decoration-dotted underline-offset-2">Why?</span>
+                      <CollapseChevron open={permissionsOpen} />
+                    </button>
+                    <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
+                      <div className="mt-1 w-[min(36rem,calc(100vw-2rem))] space-y-2 rounded border border-theme-border bg-theme-surface p-3 text-left text-xs text-theme-text-secondary">
+                        {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
+                        {props.isCloudDeployment && isArgoApp && <p>Radar Cloud owners: the Argo CD write grant is off by default because it delegates the Argo CD controller's deployment authority. To turn it on, see Chart RBAC settings, then apply it with <code>helm upgrade</code>; one-click upgrades update only the image.</p>}
+                        <p>{props.isCloudDeployment && isArgoApp ? 'For other roles, an admin can grant access with' : 'An admin can grant access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
+                        {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
+                          {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</span>)}</li>)}
+                          {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
+                        </ul>}
+                        <div className="flex flex-wrap gap-3">
+                          <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
+                          {props.isCloudDeployment && isArgoApp && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#cloud-owner-integration-writes" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
+                        </div>
+                      </div>
+                    </Collapse>
+                  </div>
+                )}
+                {props.permissionCheckUnavailable && (
+                  <p className="text-[11px] text-theme-text-tertiary">Couldn't check your permissions. You can still try.</p>
+                )}
             </div>
           </div>
           {props.actionPermissions?.['sync-with-source']?.unsupported && props.actionDisabledReasons?.['sync-with-source'] && (
