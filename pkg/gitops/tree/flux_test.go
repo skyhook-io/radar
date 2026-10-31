@@ -155,7 +155,7 @@ func TestFluxHelmReleaseManaged_SortsForStableOutput(t *testing.T) {
 	}
 }
 
-func TestHelmProjectionDisclosesScopeAndUnavailableTopology(t *testing.T) {
+func TestHelmProjectionDisclosesUnavailableTopology(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		topo       *topology.Topology
@@ -165,7 +165,7 @@ func TestHelmProjectionDisclosesScopeAndUnavailableTopology(t *testing.T) {
 		{name: "complete", topo: &topology.Topology{}},
 		{name: "absent", want: true},
 		{name: "failed", topo: &topology.Topology{Warnings: []string{"private API failure details"}}, want: true},
-		{name: "scoped", topo: &topology.Topology{}, namespaces: []string{"team"}, want: true},
+		{name: "scoped", topo: &topology.Topology{}, namespaces: []string{"team"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hr := helmRelease("team", "app")

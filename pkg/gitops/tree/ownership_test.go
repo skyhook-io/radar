@@ -296,6 +296,7 @@ func TestGeneratedTreeDistinguishesCollectionScopeFromReadFailures(t *testing.T)
 		{name: "absent"},
 		{name: "uncollected", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Lease", Group: "coordination.k8s.io"}, Namespace: "monitoring", Reason: readreason.RadarKindNotCollected}}},
 		{name: "namespace scope", present: true, gaps: []ownership.Gap{{Kind: prom.Ref.GroupKind(), Namespace: "monitoring", Reason: readreason.RadarNamespaceNotCollected}}},
+		{name: "radar forbidden", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Widget", Group: "example.com"}, Namespace: "monitoring", Reason: readreason.RadarForbidden}}},
 		{name: "partial discovery", present: true, gaps: []ownership.Gap{{Reason: readreason.KindUnknown}}, warn: true},
 		{name: "loading", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "monitoring", Reason: readreason.KindSyncPending}}, warn: true},
 		{name: "read failure", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "monitoring", Reason: readreason.ReadError}}, warn: true},
@@ -692,7 +693,7 @@ func TestGeneratedTreeReportsPartialDiscovery(t *testing.T) {
 	}
 }
 
-func TestGeneratedTreeExplainsHiddenRevisionParent(t *testing.T) {
+func TestGeneratedTreeAttachesHiddenRevisionPodsToTheirWorkload(t *testing.T) {
 	dep := ownedObject("apps", "Deployment", "monitoring", "main", nil, false)
 	rs := ownedObject("apps", "ReplicaSet", "monitoring", "old", &dep, true)
 	pod := ownedObject("", "Pod", "monitoring", "remaining", &rs, true)
@@ -703,13 +704,16 @@ func TestGeneratedTreeExplainsHiddenRevisionParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Summary.Generated != 1 || !strings.Contains(strings.Join(got.Warnings, " "), "inactive ReplicaSet parents") {
-		t.Fatalf("hidden parent not explained: %+v", got)
+	if got.Summary.Generated != 1 || len(got.Warnings) != 0 {
+		t.Fatalf("routine rollout state raised a notice: %+v", got)
 	}
+	want := edgeKey(nodeID(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "monitoring", Name: "main"}), nodeID(ResourceRef{Kind: "Pod", Namespace: "monitoring", Name: "remaining"}))
+	found := false
 	for _, edge := range got.Edges {
-		if strings.Contains(edge.Target, "/Pod/") {
-			t.Fatalf("invented parent edge: %+v", edge)
-		}
+		found = found || edgeKey(edge.Source, edge.Target) == want
+	}
+	if !found {
+		t.Fatalf("Pod not under its Deployment: %+v", got.Edges)
 	}
 }
 

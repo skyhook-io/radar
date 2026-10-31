@@ -43,8 +43,10 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		queued[identity(ref)] = true
 	}
 	steps, incomplete, truncated, inventoryUnavailable, remoteMembers, limitedClaims := 0, false, false, false, false, false
-	hiddenRevisions := map[resourceid.Ref]bool{}
-	revisionParentsHidden, graphIncomplete := false, false
+	// An inactive ReplicaSet maps to its owner, which stands in as the parent
+	// of Pods it still has, such as terminating ones, as in topology.
+	hiddenRevisions := map[resourceid.Ref]ResourceRef{}
+	graphIncomplete := false
 	takeStep := func() bool {
 		if steps >= maxExpansionSteps {
 			truncated = true
@@ -81,7 +83,7 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 				// Keep topology's inactive-ReplicaSet display policy, while still
 				// searching it for current dependents such as terminating Pods.
 				if b.topo != nil && ref.Group == "apps" && ref.Kind == "ReplicaSet" && !shown {
-					hiddenRevisions[child.Ref] = true
+					hiddenRevisions[child.Ref] = parent
 					return
 				}
 				node := syntheticNode(ref, RoleGenerated, tool, "", "", "")
@@ -94,8 +96,8 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		node := nodes[id]
 		node.Dependency = false
 		nodes[id] = node
-		if hiddenRevisions[identity(parent)] {
-			revisionParentsHidden = true
+		if owner, hidden := hiddenRevisions[identity(parent)]; hidden {
+			parent = owner
 		}
 		parentID := nodeID(parent)
 		if _, visible := nodes[parentID]; visible && parentID != id {
@@ -230,9 +232,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	if limitedClaims {
 		warnings = append(warnings, limitedHelmProjectionWarning)
 	}
-	if revisionParentsHidden {
-		warnings = append(warnings, "Some resources appear without their inactive ReplicaSet parents.")
-	}
 	if graphIncomplete {
 		warnings = append(warnings, "Some graph data could not be loaded; additional generated relationships may be missing.")
 	}
@@ -243,9 +242,10 @@ func ownershipReadFailed(subject ownership.Subject) bool {
 	return subject.Read.State == ownership.Unavailable && hasOwnershipReadFailure([]ownership.Gap{subject.Read.Gap})
 }
 
-// Uncollected kinds define the search scope; failed discovery does not.
+// Kinds Radar doesn't collect, including those its identity may not list,
+// define the search scope; failed discovery and reads do not.
 func hasOwnershipReadFailure(gaps []ownership.Gap) bool {
 	return slices.ContainsFunc(gaps, func(g ownership.Gap) bool {
-		return g.Reason != readreason.RadarKindNotCollected && g.Reason != readreason.RadarNamespaceNotCollected
+		return g.Reason != readreason.RadarKindNotCollected && g.Reason != readreason.RadarNamespaceNotCollected && g.Reason != readreason.RadarForbidden
 	})
 }
