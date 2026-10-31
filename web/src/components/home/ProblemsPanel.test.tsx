@@ -5,7 +5,7 @@ import { ProblemsPanel } from './HomeView'
 import { uncheckedSourceLines } from '../issues/uncheckedSources'
 import type { IssuesResponse } from '../../api/client'
 
-vi.mock('../diagnose/LocalDiagnoseAction', () => ({ IssueDiagnoseButton: () => null }))
+vi.mock('../diagnose/LocalDiagnoseAction', () => ({ IssueDiagnoseButton: () => null, useIssueDiagnoseShown: () => true }))
 
 const line = "Helm releases couldn't be checked, so failed or stuck releases may be missing."
 const generic = "Some issue checks couldn't run, so issues may be missing."

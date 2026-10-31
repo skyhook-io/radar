@@ -104,6 +104,35 @@ export const TRANSITION_PANEL =
 export const TRANSITION_MENU =
   `transition-[translate,scale,opacity] ${TW_EASE} motion-reduce:transition-none`
 
+/** Hover intent for row actions revealed on hover: a pointer sweeping down a
+ *  long list passes each row in well under this, so actions don't ripple in
+ *  behind it. Entrance only; leaving a row hides its action at once. */
+export const HOVER_INTENT_DELAY = 60
+
+/** Hover-revealed row action, the resting half: the row content the action
+ *  replaces (an age, a chip) lifts 3px and fades on the exit clock. Needs a
+ *  `group` ancestor; keyboard reveal keys on :focus-visible inside the group,
+ *  so a row left focused by a mouse click doesn't keep its action up. Classes are
+ *  spelled out so Tailwind's scanner sees them: the durations are
+ *  DURATION_MENU_IN / DURATION_MENU_OUT and the delay HOVER_INTENT_DELAY. */
+export const HOVER_REVEAL_REST =
+  `transition-[opacity,translate] duration-140 ${TW_EASE} motion-reduce:transition-none group-hover:opacity-0 group-hover:-translate-y-[3px] group-hover:duration-100 group-hover:delay-60 group-has-[:focus-visible]:opacity-0 group-has-[:focus-visible]:-translate-y-[3px] group-has-[:focus-visible]:duration-100 group-has-[:focus-visible]:delay-60`
+
+/** Hover-revealed row action, the action half: rises 3px into place on the
+ *  entrance clock after the hover-intent delay, drops out on the exit clock.
+ *  Never a hit target itself, so its padding and any backdrop leave clicks to
+ *  the row underneath; put HOVER_REVEAL_HIT on the control inside it. Pair
+ *  with HOVER_REVEAL_REST in one group. */
+export const HOVER_REVEAL_ACTION =
+  `transition-[opacity,translate] duration-100 ${TW_EASE} motion-reduce:transition-none pointer-events-none opacity-0 translate-y-[3px] group-hover:opacity-100 group-hover:translate-y-0 group-hover:duration-140 group-hover:delay-60 group-has-[:focus-visible]:opacity-100 group-has-[:focus-visible]:translate-y-0 group-has-[:focus-visible]:duration-140 group-has-[:focus-visible]:delay-60`
+
+/** Hover-revealed row action, the control inside it: takes clicks only while
+ *  shown. pointer-events transitions as a discrete property on the same
+ *  clock, so it flips partway through the entrance rather than at hover start
+ *  and a click during the intent delay lands on the row. */
+export const HOVER_REVEAL_HIT =
+  `transition-[pointer-events] transition-discrete duration-100 ${TW_EASE} motion-reduce:transition-none pointer-events-none group-hover:pointer-events-auto group-hover:duration-140 group-hover:delay-60 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:duration-140 group-has-[:focus-visible]:delay-60`
+
 export type OverlayKind = 'menu' | 'dialog' | 'sheet' | 'drawer'
 
 const OVERLAY_DURATIONS: Record<OverlayKind, { in: number; out: number }> = {

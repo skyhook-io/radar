@@ -35,7 +35,8 @@ import { UncheckedSourceHelp } from '../issues/UncheckedSourceHelp'
 import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
-import { IssueDiagnoseButton } from '../diagnose/LocalDiagnoseAction'
+import { IssueDiagnoseButton, useIssueDiagnoseShown } from '../diagnose/LocalDiagnoseAction'
+import { HOVER_REVEAL_ACTION, HOVER_REVEAL_HIT, HOVER_REVEAL_REST } from '../../utils/animation'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -302,15 +303,25 @@ function BandItem({ children }: { children: ReactNode }) {
 // ============================================================================
 
 // The row's Investigate action is a sibling of the row button (a button can't
-// nest in a button). With a pointer it floats over the row's right edge, shown
-// on hover or keyboard focus; hidden it takes no clicks, and it appears without
-// a fade so a click never lands on a still-invisible button. On touch there is
-// no hover, so it sits in the row's flow below the text instead of covering it.
+// nest in a button), laid over the right end of line 1. With a pointer, hover
+// or keyboard focus swaps the age and timing chip there for the action; its
+// left edge fades into the hover tint so a long name it overlays isn't
+// hard-clipped. On touch there is no hover, so it sits in the row's flow below
+// the text, always shown.
 const ISSUE_ROW_ACTION_CLASS = clsx(
-  'absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-theme-surface shadow-theme-sm empty:hidden',
-  'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto',
-  '[@media(hover:none)]:static [@media(hover:none)]:translate-y-0 [@media(hover:none)]:flex [@media(hover:none)]:justify-end [@media(hover:none)]:bg-transparent [@media(hover:none)]:shadow-none [@media(hover:none)]:px-3 [@media(hover:none)]:pb-1.5 [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto',
+  'absolute right-3 top-1.5 flex items-center pl-4',
+  'bg-[linear-gradient(to_right,transparent,var(--color-theme-hover)_1rem)]',
+  HOVER_REVEAL_ACTION,
+  '[@media(hover:none)]:static [@media(hover:none)]:justify-end [@media(hover:none)]:bg-none [@media(hover:none)]:px-3 [@media(hover:none)]:pb-1.5 [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0',
 )
+const ISSUE_ROW_ACTION_HIT_CLASS = clsx(HOVER_REVEAL_HIT, 'flex [@media(hover:none)]:pointer-events-auto')
+// Without hover the action isn't in line 1, so nothing there swaps out (the
+// keyboard-focus half of the reveal would otherwise still hide it).
+const ISSUE_ROW_META_TOUCH_CLASS = '[@media(hover:none)]:opacity-100! [@media(hover:none)]:translate-none!'
+// Line 1 is as tall as its tallest badge (the timing chip outgrows the kind
+// badge). Invisible zero-width copies of those badges give the overlaid action
+// the same height, so it centers on line 1 whichever badges the row has.
+const ISSUE_ROW_STRUT = 'invisible w-0 overflow-hidden px-0 border-x-0 [@media(hover:none)]:hidden'
 
 interface ProblemsPanelProps {
   issues: Issue[]
@@ -344,6 +355,7 @@ export function ProblemsPanel({
   onResourceClick,
 }: ProblemsPanelProps) {
   const unchecked = uncheckedLines.length > 0
+  const canInvestigate = useIssueDiagnoseShown()
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
   const hasIssues = issueCount > 0
   const hasHardError = !!error && !hasData
@@ -451,7 +463,7 @@ export function ProblemsPanel({
                     <div key={issue.id} className="group relative">
                       <button
                         type="button"
-                        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-theme-hover focus-visible:bg-theme-hover transition-colors text-left"
+                        className="w-full flex items-center gap-2 px-3 py-1.5 group-hover:bg-theme-hover group-has-[:focus-visible]:bg-theme-hover transition-colors text-left"
                         onClick={() => onResourceClick({
                           kind: ref.kind,
                           namespace: ref.namespace ?? '',
@@ -465,7 +477,7 @@ export function ProblemsPanel({
                             <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                             <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
                             {(age || timing) && (
-                              <span className="ml-auto flex shrink-0 items-center gap-1">
+                              <span className={clsx('ml-auto flex shrink-0 items-center gap-1', canInvestigate && [HOVER_REVEAL_REST, ISSUE_ROW_META_TOUCH_CLASS])}>
                                 {age && (
                                   <Tooltip content={issueFirstSeenTitle(issue)} delay={100}>
                                     <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
@@ -493,9 +505,15 @@ export function ProblemsPanel({
                           )}
                         </div>
                       </button>
-                      <div className={ISSUE_ROW_ACTION_CLASS}>
-                        <IssueDiagnoseButton kind={ref.kind} group={ref.group} namespace={ref.namespace ?? ''} name={ref.name} />
-                      </div>
+                      {canInvestigate && (
+                        <div className={ISSUE_ROW_ACTION_CLASS}>
+                          <span aria-hidden className={clsx(ISSUE_ROW_STRUT, 'text-[10px] py-0.5')}>{'\u200b'}</span>
+                          {timing && <span aria-hidden className={clsx(ISSUE_ROW_STRUT, 'badge-sm text-[10px]')}>{'\u200b'}</span>}
+                          <span className={ISSUE_ROW_ACTION_HIT_CLASS}>
+                            <IssueDiagnoseButton size="compact" kind={ref.kind} group={ref.group} namespace={ref.namespace ?? ''} name={ref.name} />
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
