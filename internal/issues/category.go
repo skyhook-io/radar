@@ -287,6 +287,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 
 	case "Node":
 		switch in.Reason {
+		case k8s.NodeCertificateIssueReason:
+			return issuesapi.CategoryCertificateNotReady
 		case "NotReady", "MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable":
 			return issuesapi.CategoryNodeNotReady
 		}

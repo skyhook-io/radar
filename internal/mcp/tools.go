@@ -1186,9 +1186,16 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 
 	var issueSummary *resourcecontext.IssueSummary
 	var issueRows []issues.Issue
+	var nodeCertificateReport *k8s.NodeCertificateReport
 	if !skipContext || includes["issues"] {
 		gvk := rawObj.GetObjectKind().GroupVersionKind()
-		issueSummary, issueRows = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+		issueSummary, issueRows, nodeCertificateReport = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+	}
+	if nodeCertificateReport != nil {
+		node, ok := rawObj.(*corev1.Node)
+		if !ok || nodeCertificateReport.UID != string(node.UID) {
+			nodeCertificateReport = nil
+		}
 	}
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
@@ -1253,11 +1260,14 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	//     or template-divergence warning upgrades this to {resource, warnings})
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
-	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges {
+	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges && nodeCertificateReport == nil {
 		return toJSONResult(resourceData)
 	}
 
 	result := map[string]any{"resource": resourceData}
+	if nodeCertificateReport != nil {
+		result["nodeCertificateReport"] = nodeCertificateReport
+	}
 	if includes["issues"] {
 		attachRelatedIssueDetails(result, issueRows)
 	}

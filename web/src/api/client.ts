@@ -873,11 +873,25 @@ export interface CronJobSchedulingEvidence {
 }
 
 export interface SubjectIssuesResponse {
+	node_certificate_report?: NodeCertificateReport;
   scheduling_report?: CronJobSchedulingEvidence;
   issues: Issue[];
   coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
   withheld?: { issues: number };
   visibility?: { state?: string; impact?: string };
+}
+
+export interface NodeCertificateReport {
+  uid: string;
+  event_id?: string;
+  state: 'reported' | 'unverified' | 'ok';
+  reason: string;
+  message: string;
+  last_reported_at: string;
+  expires_at?: string;
+  not_before?: string;
+  history_incomplete?: boolean;
+  validity_unknown?: boolean;
 }
 
 export function useSubjectIssues(

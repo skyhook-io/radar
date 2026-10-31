@@ -968,6 +968,9 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 
 	// Node problems (cluster-scoped, not filtered by namespace)
 	if nodeLister := cache.Nodes(); nodeLister != nil {
+		if namespace == "" {
+			problems = append(problems, nodeCertificateReports(cache, scope, now).detections...)
+		}
 		nodes, _ := nodeLister.List(labels.Everything())
 		for _, np := range DetectNodeProblems(nodes) {
 			ageDur := time.Duration(0)
