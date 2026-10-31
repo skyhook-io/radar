@@ -279,6 +279,26 @@ func CurrentConfig() (string, map[string]string) {
 	return globalClient.manualURL, copyHeaders(globalClient.headers)
 }
 
+// ConnectionSource says how Prometheus is reached: "manual" when a URL is
+// configured, "discovered" when discovery found one in the cluster, otherwise
+// "none".
+func ConnectionSource() string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if globalClient == nil {
+		return "none"
+	}
+	globalClient.mu.RLock()
+	defer globalClient.mu.RUnlock()
+	switch {
+	case globalClient.manualURL != "":
+		return "manual"
+	case globalClient.baseURL != "":
+		return "discovered"
+	}
+	return "none"
+}
+
 // configureLocked is the single writer for manualURL + headers. manualURL is
 // read under c.mu (discover, Reinitialize), so the write takes c.mu; callers
 // hold clientMu (read) across the whole write so a concurrent Reinitialize

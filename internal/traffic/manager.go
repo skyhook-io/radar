@@ -633,6 +633,20 @@ func (m *Manager) SetActiveSource(name string) error {
 	return nil
 }
 
+// ActiveSourceNameIfIdle is GetActiveSourceName without waiting. Detection
+// holds the manager lock while it probes every source in turn; ok is false
+// while it does.
+func (m *Manager) ActiveSourceNameIfIdle() (name string, ok bool) {
+	if !m.mu.TryRLock() {
+		return "", false
+	}
+	defer m.mu.RUnlock()
+	if m.activeSource == nil {
+		return "", true
+	}
+	return m.activeSource.Name(), true
+}
+
 // GetActiveSourceName returns the name of the active source
 func (m *Manager) GetActiveSourceName() string {
 	m.mu.RLock()
