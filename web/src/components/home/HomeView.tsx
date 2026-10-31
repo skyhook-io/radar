@@ -355,6 +355,9 @@ export function ProblemsPanel({
   onResourceClick,
 }: ProblemsPanelProps) {
   const unchecked = uncheckedLines.length > 0
+  // While rows swap their age and chip for Investigate, those two lose their
+  // tooltips: hovering them is what swaps them out, and the tooltip would open
+  // over the action under a pointer that hasn't moved since.
   const canInvestigate = useIssueDiagnoseShown()
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
   const hasIssues = issueCount > 0
@@ -479,12 +482,12 @@ export function ProblemsPanel({
                             {(age || timing) && (
                               <span className={clsx('ml-auto flex shrink-0 items-center gap-1', canInvestigate && [HOVER_REVEAL_REST, ISSUE_ROW_META_TOUCH_CLASS])}>
                                 {age && (
-                                  <Tooltip content={issueFirstSeenTitle(issue)} delay={100}>
+                                  <Tooltip content={issueFirstSeenTitle(issue)} delay={100} disabled={canInvestigate}>
                                     <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
                                   </Tooltip>
                                 )}
                                 {timing && (
-                                  <Tooltip content={timing.tooltip} delay={100}>
+                                  <Tooltip content={timing.tooltip} delay={100} disabled={canInvestigate}>
                                     <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
                                   </Tooltip>
                                 )}
