@@ -215,11 +215,23 @@ func TestContextSourceFingerprintIgnoresRefreshedCredentials(t *testing.T) {
 	cfg.Contexts["ctx"] = &clientcmdapi.Context{Cluster: "c", AuthInfo: "u"}
 	before := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"])
 
-	cfg.AuthInfos["u"].Token = "new"
 	cfg.AuthInfos["u"].AuthProvider.Config["id-token"] = "new"
+	cfg.AuthInfos["u"].AuthProvider.Config["refresh-token"] = "new"
 	if after := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"]); after != before {
 		t.Fatal("a refreshed token changed the fingerprint")
 	}
+
+	cfg.AuthInfos["u"].AuthProvider.Config["idp-issuer-url"] = "https://other.invalid"
+	if after := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"]); after == before {
+		t.Fatal("a different OIDC issuer did not change the fingerprint")
+	}
+	delete(cfg.AuthInfos["u"].AuthProvider.Config, "idp-issuer-url")
+
+	cfg.AuthInfos["u"].Token = "rotated"
+	if after := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"]); after == before {
+		t.Fatal("a rotated static token did not change the fingerprint")
+	}
+	cfg.AuthInfos["u"].Token = "old"
 
 	cfg.AuthInfos["u"].AuthProvider.Name = "other"
 	if after := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"]); after == before {
