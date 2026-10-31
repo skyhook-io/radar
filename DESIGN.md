@@ -238,7 +238,7 @@ One curve, a handful of durations, and a primitive per surface. All timing lives
 | Dialog / command palette | `DialogPortal`, or the same recipe with `'dialog'` | 220ms in / 160ms out |
 | Bottom sheet | recipe with `'sheet'` | 280ms in / 220ms out |
 | Side drawer | `TRANSITION_DRAWER`; backdrop uses `'drawer'` | 300ms both ways |
-| Hover-revealed row action (row content that swaps for an action on hover / keyboard focus) | `HOVER_REVEAL_REST` on what it replaces, `HOVER_REVEAL_ACTION` on the overlay that brings the action in, `HOVER_REVEAL_HIT` on the control inside it, all in one `group` | 140ms in after `HOVER_INTENT_DELAY` 60ms / 100ms out with no delay, 3px of travel; only the control takes clicks, and only while shown |
+| Hover-revealed row action (row content that swaps for an action on hover / keyboard focus) | `HOVER_REVEAL_REST` on what it replaces, `HOVER_REVEAL_ACTION` on the overlay that brings the action in, `HOVER_REVEAL_HIT` on the control inside it, all in one `group` | `DURATION_HOVER_REVEAL_IN` 200ms after `HOVER_INTENT_DELAY` 60ms / `DURATION_HOVER_REVEAL_OUT` 120ms with no delay, 3px of travel. Slower than the menu clock to match Radar's 150–200ms hover effects; the delay stops actions rippling in as the pointer sweeps a long list. Only the control takes clicks, and only while shown |
 | Dock height, drawer↔fullscreen morph | `DURATION_DOCK`, `DURATION_DRAWER_MORPH` | Deliberately their own clocks — direct manipulation, not a reveal |
 
 The curve everywhere is `CSS_EASE` = `cubic-bezier(0.32, 0.72, 0, 1)` (fast out of the gate, gentle settle: the click reads as the cause of the motion and content is legible early).
