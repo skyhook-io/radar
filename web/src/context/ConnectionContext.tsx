@@ -137,6 +137,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // Attempts in the current outage; only a successful connect resets it, so a
   // manual retry's brief 'connecting' doesn't restart the count.
   const autoRetryAttemptsRef = useRef(0)
+  const autoRetryContextRef = useRef('')
   const lastWakeRetryAtRef = useRef(0)
   const manualRetryPendingRef = useRef(false)
   // Fed by the status poll only (SSE frames don't carry the field, and must
@@ -339,8 +340,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [retryMutation.isPending])
 
   useEffect(() => {
-    if (connection.state === 'connected') {
+    // An outage belongs to one context: switching to another starts its own
+    // count and backoff, and so does connecting.
+    if (connection.state === 'connected' || autoRetryContextRef.current !== connection.context) {
       autoRetryAttemptsRef.current = 0
+      autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
+      autoRetryContextRef.current = connection.context
     }
     if (connection.state !== 'disconnected' || !shouldAutoRetryConnection(connection.errorType)) {
       autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
@@ -424,8 +429,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
     // Returning to the window or regaining the network retries now, silently.
     // focus and visibilitychange often fire together, so one wake per moment.
-    const wake = () => {
-      if (stopped || document.visibilityState === 'hidden') return
+    // The network coming back counts even in a background window.
+    const wake = (event: Event) => {
+      if (stopped) return
+      if (event.type !== 'online' && document.visibilityState === 'hidden') return
       const now = Date.now()
       if (now - lastWakeRetryAtRef.current < WAKE_RETRY_DEDUPE_MS) return
       lastWakeRetryAtRef.current = now
@@ -451,7 +458,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('online', wake)
       document.removeEventListener('visibilitychange', wake)
     }
-  }, [connection.errorType, connection.state, queryClient])
+  }, [connection.context, connection.errorType, connection.state, queryClient])
 
   const retry = useCallback(() => {
     if (retryMutation.isPending || autoRetryInFlightRef.current) return

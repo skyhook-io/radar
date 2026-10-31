@@ -18,7 +18,7 @@ afterEach(() => {
 })
 
 async function renderWith(connected: boolean) {
-  const fetchMock = vi.fn(async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }))
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }))
   vi.stubGlobal('fetch', fetchMock)
   const container = document.createElement('div')
   const root = createRoot(container)
