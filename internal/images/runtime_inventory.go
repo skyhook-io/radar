@@ -451,7 +451,7 @@ var (
 // attempt spends the call's lookup budget.
 func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credential, budget *atomic.Int32) configResult {
 	registry := w.ref.Context().RegistryStr()
-	res := configResult{status: StatusNotChecked, err: "per-call lookup limit reached; narrow by namespace or runtime"}
+	res := configResult{status: StatusNotChecked, err: "per-call lookup limit reached; narrow by namespace"}
 	for _, c := range creds {
 		if budget.Add(-1) < 0 {
 			return configResult{status: StatusNotChecked, err: "per-call lookup limit reached before all available credentials were tried"}

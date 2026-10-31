@@ -32,6 +32,7 @@ import type { InvestigationHealthSignal } from "./investigationState";
 import { Badge } from "@skyhook-io/k8s-ui";
 import { diagnosisHasStoryShape, storyPlainText } from "./investigationStory";
 import { useDisclosureReveal } from "./useDisclosureReveal";
+import { verdictParts } from "./verdictText";
 import { FollowupAnswer } from "./ActivityTurn";
 import { ApplyOutcomeCard } from "./ApplyDialog";
 import {
@@ -40,7 +41,12 @@ import {
   STEP_KIND_LABEL,
   assessmentCopyText,
 } from "./assessmentCopy";
-import { AIMarkdown, CopyButton, tidyFences } from "./AIMarkdown";
+import {
+  AIMarkdown,
+  CopyButton,
+  SOFT_INLINE_CODE,
+  tidyFences,
+} from "./AIMarkdown";
 import { prettyTool } from "./toolCallLabel";
 
 export function ResultCard({
@@ -278,6 +284,25 @@ const HEALTHY_DEFINITION: Record<
  * whenever the agent listed anything, and says so when it listed nothing,
  * because a persuasive story needs its caveats above the fold, not inside it.
  */
+// A verdict is one sentence of prose with the odd `code` span. Rendering it
+// as full markdown would turn a leading "1." or "#" into a list or heading, so
+// only code spans are rendered, with their contents exactly as written.
+export function VerdictText({ text }: { text: string }) {
+  return (
+    <>
+      {verdictParts(text).map((part, index) =>
+        part.code ? (
+          <code key={index} className="inline-code">
+            {part.text}
+          </code>
+        ) : (
+          part.text
+        ),
+      )}
+    </>
+  );
+}
+
 function AssessmentHeadline({
   diagnosis,
   tone,
@@ -315,8 +340,11 @@ function AssessmentHeadline({
   return (
     <div data-assessment-headline className="space-y-2">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[15px] font-semibold leading-snug text-theme-text-primary [overflow-wrap:anywhere] [text-wrap:balance]">
-          {summary}
+        {/* The answer is the largest text in the assessment, above its label. */}
+        <p
+          className={`text-lg font-semibold leading-snug text-theme-text-primary [overflow-wrap:anywhere] [text-wrap:pretty] ${SOFT_INLINE_CODE}`}
+        >
+          <VerdictText text={summary} />
         </p>
         <CopyButton
           text={assessmentCopyText(diagnosis, {

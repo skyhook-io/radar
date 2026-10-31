@@ -170,7 +170,7 @@ export function IssueDiagnoseButton({
 
 // The tooltip every AI entry point shows while investigations aren't runnable.
 // It gives the same reason as the setup notice the button opens.
-function notReadyTooltip(d: {
+export function notReadyTooltip(d: {
   cliOverride: boolean;
   setupState: DiagnoseSetup;
 }): string {

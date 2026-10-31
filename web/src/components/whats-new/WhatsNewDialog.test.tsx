@@ -300,11 +300,11 @@ describe('WhatsNew', () => {
     expect(seenPosts).toEqual([])
   })
 
-  it.each(['', '=v1.18', '=1.18', '=v1.18.0'])('previews v1.18 on a Git development build with ?whats-new%s', async suffix => {
+  it.each(['', '=v1.19', '=1.19', '=v1.19.0'])('previews v1.19 on a Git development build with ?whats-new%s', async suffix => {
     setCatalog(...SHIPPED)
-    serverState = { currentVersion: 'v1.17.0-113-gb49561b78', storage: 'server', seenVersion: 'v1.17.0', priorInstall: true }
+    serverState = { currentVersion: 'v1.18.0-113-gb49561b78', storage: 'server', seenVersion: 'v1.18.0', priorInstall: true }
     await render(`/resources/pods?whats-new${suffix}`)
-    expect(dialog()?.textContent).toContain("What's new in Radar v1.18")
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.19")
     expect(dialog()?.textContent).toContain(SHIPPED[0].highlights[0].title)
     await clickGotIt()
     expect(seenPosts).toEqual([])
