@@ -106,6 +106,16 @@ func TestNodeCertificateReportLifecycle(t *testing.T) {
 	if len(got.detections) != 0 || got.reports[node.Name].State != "ok" {
 		t.Fatalf("later OK failed to supersede warning: %+v", got)
 	}
+	staleOK := assessNodeCertificates([]*corev1.Node{node}, nil, history, true, now.Add(3*time.Hour))
+	if len(staleOK.detections) != 0 || staleOK.reports[node.Name].State != "unverified" || staleOK.reports[node.Name].Reason != nodeCertificateOKReason {
+		t.Fatalf("old OK claimed current health or revived a warning: %+v", staleOK)
+	}
+	gappedHistory := history
+	gappedHistory.incompleteBefore = now
+	gappedOK := assessNodeCertificates([]*corev1.Node{node}, nil, gappedHistory, true, now)
+	if len(gappedOK.detections) != 0 || gappedOK.reports[node.Name].State != "unverified" || !gappedOK.reports[node.Name].HistoryIncomplete {
+		t.Fatalf("unobserved OK gap claimed current health: %+v", gappedOK)
+	}
 	warning.LastTimestamp = metav1.NewTime(now.Add(-time.Minute))
 	if got := assessNodeCertificates([]*corev1.Node{node}, []*corev1.Event{warning}, history, true, now); len(got.detections) != 1 {
 		t.Fatal("new warning after OK did not reopen")
@@ -290,7 +300,9 @@ func TestNodeCertificateHistoryUsesSharedStore(t *testing.T) {
 	other := row
 	other.ID = "other-cluster-event"
 	other.ClusterContext = "other-cluster"
-	if err := timeline.GetStore().AppendBatch(t.Context(), []timeline.TimelineEvent{row, other}); err != nil {
+	noise := row
+	noise.ID, noise.Reason, noise.EventType = "normal-node-noise", "NodeReady", timeline.EventTypeNormal
+	if err := timeline.GetStore().AppendBatch(t.Context(), []timeline.TimelineEvent{row, other, noise}); err != nil {
 		t.Fatal(err)
 	}
 	history := readNodeCertificateHistory([]*corev1.Node{node})

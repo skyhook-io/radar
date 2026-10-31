@@ -83,6 +83,7 @@ func readNodeCertificateHistory(nodes []*corev1.Node) nodeCertificateHistory {
 	opts := timeline.QueryOptions{
 		Kinds: []string{"Node"}, APIGroups: []string{""}, ClusterContext: ActiveClusterContext(),
 		Sources: []timeline.EventSource{timeline.SourceK8sEvent}, IncludeK8sEvents: true, IncludeManaged: true, Limit: limit,
+		Reasons: []string{nodeCertificateWarningReason, nodeCertificateOKReason},
 	}
 	for _, node := range nodes {
 		opts.Names = append(opts.Names, node.Name)
@@ -195,8 +196,17 @@ func assessNodeCertificates(nodes []*corev1.Node, live []*corev1.Event, history 
 			continue
 		}
 		report := NodeCertificateReport{UID: string(node.UID), EventID: row.ID, State: "reported", Reason: row.Reason, Message: row.Message, LastReportedAt: row.Timestamp}
+		// A complete live cache contains newer monitor outcomes too. History gaps
+		// matter when the native Event has gone and retained rows are all we have.
+		fromLive := liveComplete && liveReports[row.ID].Equal(row.Timestamp)
+		report.HistoryIncomplete = !fromLive && (history.unavailable || !row.Timestamp.After(history.incompleteBefore))
+		if report.HistoryIncomplete || now.Sub(row.Timestamp) > nodeCertificateFreshness {
+			report.State = "unverified"
+		}
 		if row.Reason == nodeCertificateOKReason {
-			report.State = "ok"
+			if report.State == "reported" {
+				report.State = "ok"
+			}
 			result.reports[node.Name] = report
 			continue
 		}
@@ -216,13 +226,6 @@ func assessNodeCertificates(nodes []*corev1.Node, live []*corev1.Event, history 
 			}
 		}
 		report.ValidityUnknown = report.ExpiresAt.IsZero() && report.NotBefore.IsZero()
-		// A complete live cache contains newer monitor outcomes too. History gaps
-		// matter when the native Event has gone and retained rows are all we have.
-		fromLive := liveComplete && liveReports[row.ID].Equal(row.Timestamp)
-		report.HistoryIncomplete = !fromLive && (history.unavailable || !row.Timestamp.After(history.incompleteBefore))
-		if report.HistoryIncomplete || now.Sub(row.Timestamp) > nodeCertificateFreshness {
-			report.State = "unverified"
-		}
 		result.reports[node.Name] = report
 		if report.State != "reported" {
 			continue
