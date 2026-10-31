@@ -65,6 +65,7 @@ func TestClassify(t *testing.T) {
 		{"argo controller stalled is gitops_stale", classifyInput{Source: SourceProblem, Kind: "StatefulSet", APIGroup: "apps", Reason: "GitOpsControllerStalled"}, issuesapi.CategoryGitOpsStale},
 		{"argo comparisons stale rollup is gitops_stale", classifyInput{Source: SourceProblem, Kind: "StatefulSet", APIGroup: "apps", Reason: "GitOpsComparisonsStale"}, issuesapi.CategoryGitOpsStale},
 		{"argo comparison stale per-app is gitops_stale", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "ComparisonStale"}, issuesapi.CategoryGitOpsStale},
+		{"argo rollback mismatch", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "RollbackRevisionMismatch"}, issuesapi.CategoryGitOpsOperationFailed},
 		{"argo operation failed", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OperationFailed"}, issuesapi.CategoryGitOpsOperationFailed},
 		{"argo comparison error is render", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "ComparisonError"}, issuesapi.CategoryGitOpsRenderFailed},
 		{"argo invalid spec", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "InvalidSpecError"}, issuesapi.CategoryGitOpsSpecInvalid},

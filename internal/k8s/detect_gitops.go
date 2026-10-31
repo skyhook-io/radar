@@ -11,6 +11,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
+	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -206,6 +207,7 @@ func gitopsProblem(now time.Time, kind, group, ns, name, severity, reason, messa
 // Failed operations with a message suppress only their parallel failed-attempt
 // condition. Independent errors and resource warnings retain their own rows;
 // Degraded health retains Argo's health message alongside error conditions.
+// The latest rollback outcome is independent of the current health/drift row.
 func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDriftTracker, now time.Time) []Detection {
 	var out []Detection
 	for _, app := range apps {
@@ -225,7 +227,9 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			return fallback
 		}
 
-		automated := argoIsAutomated(app)
+		// An automated app is expected to self-heal, so OutOfSync/Missing is a
+		// real failure rather than an operator who hasn't synced a manual app yet.
+		automated := gitops.ArgoAutoSyncEnabled(app)
 		outOfSync := strings.EqualFold(sync, "OutOfSync")
 		// Track drift continuity for every app before any gate short-circuits the
 		// loop, so a suspended-then-resumed or mid-degraded app that stays
@@ -279,6 +283,15 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			if hazard != "" {
 				d.Action += " " + hazard
 				d.Hazard = hazard
+			}
+			out = append(out, d)
+		}
+		if mismatch := gitopsinsights.DetectArgoRollbackRevisionMismatch(app); mismatch != nil {
+			d := gitopsProblem(now, "Application", argoGroup, ns, name, "warning", mismatch.Reason, mismatch.Message, createdAt)
+			d.Fingerprint = "argo:rollback-revision-mismatch"
+			d.Cause, d.Action = mismatch.Cause, mismatch.Action
+			if transitionAt, ok := argoOperationIssueTime(app, now); ok {
+				setDetectionOnset(&d, now, transitionAt)
 			}
 			out = append(out, d)
 		}
@@ -376,6 +389,10 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", timeutil.FormatAgeShort(manualDriftFor)), createdAt)
 			setDetectionOnset(&dd, now, outOfSyncAt)
 			dd.Action = "Review the drift in Changes, then Sync the application (or enable auto-sync) if the drift is unintended."
+			if revision, _ := gitops.ArgoSuccessfulRollback(app); revision != "" {
+				dd.Message = "Last rollback deployed " + revision + "; the live state differs from the desired state and auto-sync is off."
+				dd.Action = "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source first, or keep auto-sync off. Review Changes for later edits."
+			}
 			if hazard := argoSyncHazardAction(app); hazard != "" {
 				dd.Action = hazard
 				dd.Hazard = hazard
@@ -564,7 +581,7 @@ func durationFromTimestamp(now time.Time, ts string) (time.Duration, bool) {
 // shouldn't-happen guard, not a swallowed error.
 func isArgoStuckDriftLoop(app *unstructured.Unstructured, now time.Time) bool {
 	phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
-	if !strings.EqualFold(phase, "Succeeded") {
+	if !strings.EqualFold(phase, "Succeeded") || !gitops.ArgoAppliedCurrentComparison(app) {
 		return false
 	}
 	reconciledAt, _, _ := unstructured.NestedString(app.Object, "status", "reconciledAt")
@@ -579,23 +596,6 @@ func isArgoStuckDriftLoop(app *unstructured.Unstructured, now time.Time) bool {
 	// slow-converging resource to settle, short enough that "stale for an hour"
 	// (a different problem — controller down) doesn't trip the stuck signal.
 	return now.Sub(t) <= 30*time.Minute
-}
-
-// argoIsAutomated reports whether spec.syncPolicy.automated is present — i.e. the
-// app is expected to self-heal, so OutOfSync/Missing is a real failure rather
-// than an operator who simply hasn't synced a manual app yet.
-func argoIsAutomated(app *unstructured.Unstructured) bool {
-	automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
-	if !found {
-		return false
-	}
-	// Newer Argo CD can disable auto-sync without removing the block, via
-	// spec.syncPolicy.automated.enabled: false — treat that as manual so an
-	// intentionally-unsynced app isn't flagged for OutOfSync/Missing.
-	if enabled, ok, _ := unstructured.NestedBool(automated, "enabled"); ok && !enabled {
-		return false
-	}
-	return true
 }
 
 // argoErrorCondition returns the first status.conditions entry whose type names

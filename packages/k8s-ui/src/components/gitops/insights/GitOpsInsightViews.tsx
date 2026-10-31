@@ -9,6 +9,8 @@ import { radarHealthNote } from '../health-provenance'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
+import { RadarUpgradeNote, radarUpgradeNoteText } from '../../ui/RadarUpgradeNote'
+import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
 import { SearchBox } from '../../ui/SearchBox'
 import { FilterPill, type FilterPillTone } from '../../ui/FilterPill'
 import { Collapse, CollapseChevron } from '../../ui/Collapse'
@@ -22,6 +24,7 @@ import {
   entryTone,
   gitopsToSeverity,
   healthStatusRank,
+  historyRollbackBlockedReason,
   isArgoResourceSyncEligible,
   messageToPhase,
   missingResourceMessage,
@@ -604,6 +607,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
   const [expanded, setExpanded] = useState(false)
   if (issues.length === 0) return null
   const headline = issues[0]!
+  const rollbackOutcome = headline.reason === 'RolledBack' || headline.reason === 'RollbackRevisionMismatch'
   const remaining = issues.length - 1
   const tone = severityTone(headline.severity)
   const headlineRef = headline.refs?.[0]
@@ -631,7 +635,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
         <div className="flex w-full items-center gap-2">
           {tone.icon}
           <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
-          <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
+          <span className={clsx('min-w-0 flex-1 text-theme-text-secondary', rollbackOutcome ? 'whitespace-normal break-words' : 'truncate')}>{headline.message}</span>
           {/* Inline count when there are more issues behind the headline.
               Lightweight text — pairs with the chevron as a single disclosure
               unit instead of a separator-bordered count button. */}
@@ -902,6 +906,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
   // to a muted placeholder and explain the cause once. Health stays — it's a
   // live signal that's still knowable and still worth reading.
   const syncUnavailable = isArgoRoot && (insight.summary.sync ?? '').toLowerCase() === 'unknown'
+  const rolledBack = !!insight.summary.rollbackRevision
   const toggleFacet = (facet: ResourceStatusFacet) => {
     setStatusFilters((prev) => {
       const next = new Set(prev)
@@ -1123,9 +1128,9 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
                 const rowKey = refKey(change.ref)
                 const focused = focusKey === rowKey
                 const explanation = change.missing
-                  ? missingResourceMessage(change.sync, { hazard: syncHazard })
+                  ? missingResourceMessage(change.sync, { hazard: syncHazard, rolledBack })
                   : !change.syncError && !change.message
-                    ? explainChangeStatus(change.sync, change.health, insight.summary, { hazard: syncHazard })
+                    ? explainChangeStatus(change.sync, change.health, insight.summary, { hazard: syncHazard, rolledBack })
                     : ''
                 const hasInlineDetail = !!(
                   (change.drift && change.drift.entries.length > 0) ||
@@ -1317,6 +1322,7 @@ function explainChangeStatus(
   if (sync === 'OutOfSync') {
     if (parentFailed) return 'Sync failed for this resource — see the operation error above for the cause.'
     if (inFlight) return 'Live state differs from Git. A sync is in progress — wait for it to finish.'
+    if (context?.rolledBack) return 'Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.'
     if (isAuto) return 'Live state differs from Git. Auto-sync should reconcile this within a few minutes; click Sync to force it.'
     return 'Live state differs from Git. Click Sync to apply the desired state.'
   }
@@ -1636,12 +1642,17 @@ interface GitOpsActivityInsightViewProps {
   // with the target entry. The consumer is responsible for the confirmation
   // dialog + the actual mutation.
   onRollback?: (item: GitOpsHistoryItem) => void
+  // Set when the connected Radar is too old to roll back: every Rollback
+  // renders disabled, with the upgrade note above the history.
+  rollbackUpgrade?: RadarUpgradeRequirement | null
+  rollbackBlockedReason?: string
 }
 
-export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOpsActivityInsightViewProps) {
+export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <PaneLoader label="Loading GitOps activity…" className="h-full" />
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
+  const upgrade = canRollback ? rollbackUpgrade ?? null : null
   // Auto-sync makes rollback futile — the controller would re-sync to HEAD
   // immediately. Argo's own Web UI disables the button in this state. Detect
   // by autoSyncMode prefix so "Auto · prune", "Auto · self-heal", etc. all match.
@@ -1655,12 +1666,18 @@ export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOps
         <SectionHeader
           icon={Clock3}
           title="History"
-          hint={canRollback ? 'Each revision can be rolled back to.' : undefined}
+          hint={canRollback && !upgrade && !rollbackBlockedReason ? 'Each revision can be rolled back to.' : undefined}
         />
+        {upgrade && <RadarUpgradeNote requirement={upgrade} className="border-b border-theme-border px-4 py-2.5" />}
+        {canRollback && rollbackBlockedReason && <p className="border-b border-theme-border px-4 py-2.5 text-xs text-theme-text-secondary">{rollbackBlockedReason}</p>}
         <HistoryRows
           items={insight.history ?? []}
           canRollback={canRollback}
-          rollbackBlockedReason={autoSyncBlocksRollback ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.' : undefined}
+          rollbackBlockedReason={rollbackBlockedReason || (upgrade
+            ? radarUpgradeNoteText(upgrade)
+            : autoSyncBlocksRollback
+              ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.'
+              : undefined)}
           onRollback={onRollback}
         />
       </section>
@@ -1700,6 +1717,7 @@ function HistoryRows({
         // the in-flight current operation row has no ID and rolling "back"
         // to it is meaningless.
         const showRollback = canRollback && !!item.id && !!onRollback
+        const blockedReason = historyRollbackBlockedReason(item, rollbackBlockedReason)
         return (
           // `group` enables the Rollback button's hover-reveal; baseline
           // opacity-40 keeps it touch-discoverable.
@@ -1720,22 +1738,22 @@ function HistoryRows({
                 )}
                 {showRollback && (
                   <Tooltip
-                    content={rollbackBlockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
+                    content={blockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
                     delay={200}
                     wrapperClassName="ml-auto"
                   >
                     {/* Two visually distinct states:
                         - Enabled: low-emphasis baseline (opacity-40), brightens on row hover
-                        - Disabled (auto-sync on): full opacity but desaturated, cursor-not-allowed,
+                        - Disabled (auto-sync on, or an entry with no source): full opacity but desaturated, cursor-not-allowed,
                           no hover affordance — reads unambiguously as "not actionable, here's why" */}
                     <button
                       type="button"
-                      onClick={() => !rollbackBlockedReason && onRollback?.(item)}
-                      disabled={!!rollbackBlockedReason}
-                      aria-disabled={!!rollbackBlockedReason}
+                      onClick={() => !blockedReason && onRollback?.(item)}
+                      disabled={!!blockedReason}
+                      aria-disabled={!!blockedReason}
                       className={clsx(
                         'rounded border px-1.5 py-0.5 text-[10px] transition-opacity',
-                        rollbackBlockedReason
+                        blockedReason
                           ? 'cursor-not-allowed border-theme-border bg-theme-base text-theme-text-tertiary'
                           : 'border-theme-border bg-theme-elevated text-theme-text-secondary opacity-40 hover:bg-theme-hover hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100'
                       )}
