@@ -21,6 +21,9 @@ func remembersLastContext(cfg AppConfig) bool {
 // the last session ended on, or an empty ref to keep the kubeconfig's
 // current-context.
 func startupContextPreference(cfg AppConfig) (k8s.ContextRef, error) {
+	if cfg.Context != "" {
+		return k8s.ContextRef{Name: cfg.Context, Explicit: true}, nil
+	}
 	if !remembersLastContext(cfg) {
 		return k8s.ContextRef{}, nil
 	}

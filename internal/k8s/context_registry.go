@@ -234,6 +234,18 @@ func pickInitialContext(
 	if qName, entry, ok := matchPreferred(registry, fileConfigs, preferred); ok {
 		return qName, entry, true
 	}
+	// Name-only match pass: allow name-only resolution only when the preference
+	// was explicitly requested (via CLI or worker arguments with Explicit: true).
+	// Persisted Desktop preferences (Explicit: false) must never resolve to an
+	// arbitrary other file by name.
+	if preferred.Explicit && preferred.Name != "" {
+		if entry, ok := registry[preferred.Name]; ok {
+			cfg := fileConfigs[entry.SourceFile]
+			if cfg != nil && clientcmd.ConfirmUsable(*cfg, entry.InFileName) == nil {
+				return preferred.Name, entry, true
+			}
+		}
+	}
 	reportContextPreferenceMiss(preferred)
 
 	// First pass: honor CurrentContext in file order.

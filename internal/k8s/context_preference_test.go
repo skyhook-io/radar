@@ -119,3 +119,21 @@ func TestPickInitialContextIgnoresANameOnlyReference(t *testing.T) {
 		t.Errorf("qName = %q, want the current-context fallback %q", qName, "from-first")
 	}
 }
+
+func TestPickInitialContextHonorsExplicitName(t *testing.T) {
+	dir := t.TempDir()
+	f1 := writeKubeconfig(t, dir, "first.yaml", "from-first", []kubeEntry{
+		{ctxName: "from-first", userName: "u1", clusterName: "c1"},
+		{ctxName: "other", userName: "u2", clusterName: "c2"},
+	})
+
+	paths := []string{f1}
+	registry, fileConfigs := buildContextRegistry(paths)
+	qName, _, ok := pickInitialContext(paths, registry, fileConfigs, ContextRef{Name: "other", Explicit: true})
+	if !ok {
+		t.Fatal("pickInitialContext() found no context")
+	}
+	if qName != "other" {
+		t.Errorf("qName = %q, want explicit requested context %q", qName, "other")
+	}
+}

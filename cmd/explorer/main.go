@@ -87,6 +87,8 @@ func main() {
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
 	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
 	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing additional kubeconfig files")
+	contextFlag := flag.String("context", "", "Kubernetes context to use (default: current-context)")
+	workerFlag := flag.Bool("worker", false, "Run as an internal cluster worker process (internal use)")
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
@@ -414,6 +416,10 @@ func main() {
 	cfg := app.AppConfig{
 		Kubeconfig:                  resolvedKubeconfig,
 		KubeconfigDirs:              resolvedKubeconfigDirs,
+		Context:                     *contextFlag,
+		Worker:                      *workerFlag,
+		WorkerSupervisorSupported:   true,
+		NoVersionCheck:              *noVersionCheck,
 		Namespace:                   resolvedNamespace,
 		Namespaces:                  resolvedNamespaces,
 		Port:                        *port,
@@ -577,7 +583,10 @@ func main() {
 	// Open browser — server is confirmed ready to accept connections
 	if !cfg.NoBrowser {
 		targetURL := "http://" + srv.ActualAddr() + cfg.BasePath
-		if cfg.BasePath != "" {
+		if srv.ClusterSessionsEnabled() && srv.ClusterSupervisor() != nil {
+			primarySlug := srv.ClusterSupervisor().SlugForContext(k8s.GetContextName())
+			targetURL += "/c/" + primarySlug + "/"
+		} else if cfg.BasePath != "" {
 			targetURL += "/"
 		}
 		if len(cfg.Namespaces) > 0 {
@@ -696,8 +705,10 @@ func startServer(srv *server.Server, startupStart time.Time) (context.Context, c
 	<-ready
 	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
 
-	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
+	// Write port file so MCP clients can discover the running server (primary instance only)
+	if !srv.IsWorker() {
+		app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
+	}
 
 	return rootCtx, rootCancel
 }

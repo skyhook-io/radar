@@ -201,10 +201,33 @@ type Server struct {
 	aiHistoryDB         string
 	// aiChecked is set after the first refreshAIEngine, at startup.
 	aiChecked bool
+	// clusterSupervisor manages child workers for multi-cluster sessions.
+	clusterSupervisor *ClusterSupervisor
+	isWorker          bool
+}
+
+// IsWorker reports whether this server is running as a supervised cluster worker subprocess.
+func (s *Server) IsWorker() bool {
+	return s.isWorker
+}
+
+// ClusterSessionsEnabled reports whether multi-cluster session supervisor or worker mode is active.
+func (s *Server) ClusterSessionsEnabled() bool {
+	return s.clusterSupervisor != nil
+}
+
+// ClusterSupervisor returns the supervisor managing cluster worker sessions, if active.
+func (s *Server) ClusterSupervisor() *ClusterSupervisor {
+	return s.clusterSupervisor
 }
 
 // Config holds server configuration
 type Config struct {
+	Worker                    bool                // True when running as a child cluster worker process
+	WorkerSupervisorSupported bool                // True when the entrypoint supports spawning worker processes
+	WorkerLaunchConfig        *WorkerLaunchConfig // Configuration passed down to worker subprocesses
+	KubeconfigPath            string              // Path to kubeconfig
+	KubeconfigDirs            []string            // Additional kubeconfig directories
 	Port                    int
 	PortFallback            bool // Port is a preference: when it's taken, bind an OS-assigned port instead of failing
 	ListenAddress           string
@@ -323,17 +346,35 @@ func New(cfg Config) *Server {
 	s.aiHistoryDB = cfg.AIHistoryDB
 	s.refreshAIEngine(context.Background())
 
+	s.isWorker = cfg.Worker
+	if cfg.WorkerSupervisorSupported && !cfg.Worker && !k8s.IsInCluster() && !cfg.AuthConfig.Enabled() && cloud.IsLoopbackHostname(cfg.ListenAddress) {
+		launchCfg := cfg.WorkerLaunchConfig
+		if launchCfg == nil {
+			launchCfg = &WorkerLaunchConfig{
+				ParentBasePath: cfg.BasePath,
+				KubeconfigPath: cfg.KubeconfigPath,
+				KubeconfigDirs: cfg.KubeconfigDirs,
+			}
+		} else if launchCfg.ParentBasePath == "" {
+			launchCfg.ParentBasePath = cfg.BasePath
+		}
+		s.clusterSupervisor = NewClusterSupervisor(k8s.GetContextName(), launchCfg)
+	}
+
 	// Register a single context-switch callback so every PerformContextSwitch
 	// path (REST switch, CAPI connect, periodic re-auth, …) gets per-user
 	// state cleared automatically. Fires inside step 5 of the swap, strictly
 	// before PerformContextSwitch returns. Mirrors the MCP package's pattern
 	// for mcpPermCache.
-	k8s.OnContextSwitch(func(_ string) {
+	k8s.OnContextSwitch(func(newCtx string) {
 		s.finalizePostContextSwitch()
 		// Alongside the subsystem resets in PerformContextSwitch (prometheus,
 		// traffic, helm): the Argo CD connection references the previous
 		// cluster's endpoint/port-forward.
 		argocd.Reset()
+		if s.clusterSupervisor != nil {
+			s.clusterSupervisor.SetPrimaryContext(newCtx)
+		}
 	})
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
 	// cluster, so an in-flight agent (especially an apply) can't write to it.
@@ -954,6 +995,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/whats-new", s.handleGetWhatsNew)
 			r.Post("/whats-new/seen", s.handleMarkWhatsNewSeen)
 
+			// Control Center multi-cluster session routes
+			r.Get("/control-center/sessions", s.handleControlCenterSessions)
+			r.Post("/control-center/sessions/{name}/release", s.handleControlCenterReleaseSession)
+			r.Post("/control-center/release-all", s.handleControlCenterReleaseAll)
+
 			// Self-upgrade: Hub calls this over the yamux tunnel to patch this
 			// Deployment's image. Cloud-owner-gated; uses the SA client (not user
 			// impersonation).
@@ -1049,12 +1095,24 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Get("/.well-known/oauth-protected-resource", http.NotFound)
 	r.Get("/.well-known/oauth-authorization-server", http.NotFound)
 
+	// Multi-cluster session proxy (/c/{context}/*)
+	if s.clusterSupervisor != nil {
+		r.Get("/c/{context}", s.handleClusterSessionRedirect)
+		r.HandleFunc("/c/{context}/*", s.handleClusterSessionProxy)
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			slug := s.clusterSupervisor.SlugForContext(s.clusterSupervisor.primaryCtx)
+			http.Redirect(w, r, s.basePath+"/c/"+slug+"/"+querySuffix(r), http.StatusFound)
+		})
+	}
+
 	// Static files (frontend) - index.html fallback for client-side routes.
-	if s.staticFS != nil {
-		r.Handle("/*", frontendHandler(http.FS(s.staticFS), s.basePath))
-	} else if s.devMode {
-		// In dev mode, serve from web/dist
-		r.Handle("/*", frontendHandler(http.Dir("web/dist"), s.basePath))
+	fsys := s.frontendFileSystem()
+	if fsys != nil {
+		if s.clusterSupervisor != nil {
+			r.Handle("/*", s.clusterRootHandler(fsys))
+		} else {
+			r.Handle("/*", frontendHandler(fsys, s.basePath))
+		}
 	}
 }
 
@@ -1117,6 +1175,39 @@ func NormalizeBasePath(raw string) (string, error) {
 		return "", nil
 	}
 	return clean, nil
+}
+
+func (s *Server) frontendFileSystem() http.FileSystem {
+	if s.staticFS != nil {
+		return http.FS(s.staticFS)
+	}
+	if s.devMode {
+		return http.Dir("web/dist")
+	}
+	return nil
+}
+
+func (s *Server) clusterRootHandler(fsys http.FileSystem) http.Handler {
+	fileServer := http.FileServer(fsys)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path != "/" && path != "/index.html" {
+			if f, err := fsys.Open(path); err == nil {
+				stat, statErr := f.Stat()
+				_ = f.Close()
+				if statErr == nil && !stat.IsDir() {
+					fileServer.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		slug := s.clusterSupervisor.SlugForContext(s.clusterSupervisor.primaryCtx)
+		cleanPath := pathpkg.Clean("/" + strings.TrimLeft(path, "/\\"))
+		if cleanPath == "/" || cleanPath == "." {
+			cleanPath = "/"
+		}
+		http.Redirect(w, r, s.basePath+"/c/"+slug+cleanPath+querySuffix(r), http.StatusFound)
+	})
 }
 
 // frontendHandler serves static files, falling back to index.html for client-side routing
@@ -1374,6 +1465,9 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	if s.clusterSupervisor != nil {
+		s.clusterSupervisor.Shutdown()
+	}
 	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if runs := s.aiRunManager(); runs != nil {
@@ -1481,6 +1575,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPEnabled = s.mcpEnabled()
 	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.MCPExecTools = s.mcpHandler != nil && s.mcpExecTools
+	caps.ClusterSessions = s.clusterSupervisor != nil || s.isWorker
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
@@ -4857,6 +4952,16 @@ func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.clusterSupervisor != nil {
+		for i := range contexts {
+			contexts[i].Slug = s.clusterSupervisor.SlugForContext(contexts[i].Name)
+		}
+	} else if s.isWorker {
+		for i := range contexts {
+			contexts[i].Slug = ContextSlug(contexts[i].Name)
+		}
+	}
+
 	s.writeJSON(w, contexts)
 }
 
@@ -4877,6 +4982,12 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name = decodedName
+
+	// Worker mode must never switch contexts
+	if s.isWorker {
+		s.writeError(w, http.StatusBadRequest, "context switching is not permitted in a cluster worker session")
+		return
+	}
 
 	// Check if we're in-cluster mode
 	if k8s.IsInCluster() {
@@ -4916,6 +5027,163 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, info)
+}
+
+// Control Center multi-cluster session handlers
+
+func (s *Server) handleControlCenterSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
+		return
+	}
+	sessions := s.clusterSupervisor.GetSessions()
+	s.writeJSON(w, sessions)
+}
+
+func (s *Server) handleControlCenterReleaseSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
+		return
+	}
+	name := chi.URLParam(r, "name")
+	decoded, err := url.PathUnescape(name)
+	if err == nil && decoded != "" {
+		name = decoded
+	}
+	ok := s.clusterSupervisor.ReleaseWorker(name)
+	s.writeJSON(w, map[string]any{
+		"released": ok,
+		"context":  name,
+	})
+}
+
+func (s *Server) handleControlCenterReleaseAll(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "control center supervisor not active")
+		return
+	}
+	count := s.clusterSupervisor.ReleaseAll()
+	s.writeJSON(w, map[string]any{
+		"releasedCount": count,
+	})
+}
+
+func (s *Server) handleClusterSessionRedirect(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "cluster multi-session supervisor is disabled")
+		return
+	}
+	ctxParam := chi.URLParam(r, "context")
+	slug := s.clusterSupervisor.SlugForContext(ctxParam)
+	http.Redirect(w, r, s.basePath+"/c/"+slug+"/", http.StatusFound)
+}
+
+func (s *Server) handleClusterSessionProxy(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	if s.clusterSupervisor == nil {
+		s.writeError(w, http.StatusNotFound, "cluster multi-session supervisor is disabled")
+		return
+	}
+	ctxParam := chi.URLParam(r, "context")
+	decoded, err := url.PathUnescape(ctxParam)
+	if err == nil && decoded != "" {
+		ctxParam = decoded
+	}
+
+	if s.clusterSupervisor.IsPrimary(ctxParam) {
+		primarySlug := s.clusterSupervisor.SlugForContext(s.clusterSupervisor.primaryCtx)
+		prefix := "/c/" + ctxParam
+		if strings.HasPrefix(r.URL.Path, s.basePath+"/c/"+ctxParam) {
+			prefix = s.basePath + "/c/" + ctxParam
+		}
+		remainder := strings.TrimPrefix(r.URL.Path, prefix)
+		if ctxParam != primarySlug {
+			cleanRemainder := pathpkg.Clean("/" + strings.TrimLeft(remainder, "/\\"))
+			if !strings.HasPrefix(cleanRemainder, "/") || strings.HasPrefix(cleanRemainder, "//") || strings.HasPrefix(cleanRemainder, "/\\") {
+				cleanRemainder = "/"
+			}
+			target := s.basePath + "/c/" + primarySlug + cleanRemainder
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+			return
+		}
+		s.servePrimarySession(w, r, primarySlug)
+		return
+	}
+
+	s.clusterSupervisor.ServeHTTP(w, r, ctxParam)
+}
+
+func (s *Server) servePrimarySession(w http.ResponseWriter, r *http.Request, primarySlug string) {
+	prefix := "/c/" + primarySlug
+	if strings.HasPrefix(r.URL.Path, s.basePath+"/c/"+primarySlug) {
+		prefix = s.basePath + "/c/" + primarySlug
+	}
+	remainder := strings.TrimPrefix(r.URL.Path, prefix)
+	if !strings.HasPrefix(remainder, "/") {
+		remainder = "/" + remainder
+	}
+
+	// 1. Backend API / system routes
+	if remainder == "/api" || strings.HasPrefix(remainder, "/api/") ||
+		remainder == "/auth" || strings.HasPrefix(remainder, "/auth/") ||
+		remainder == "/debug" || strings.HasPrefix(remainder, "/debug/") ||
+		remainder == "/mcp" || strings.HasPrefix(remainder, "/mcp/") {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = s.basePath + remainder
+		if r.URL.RawPath != "" {
+			rawPrefix := prefix
+			if strings.HasPrefix(r.URL.RawPath, rawPrefix) {
+				r2.URL.RawPath = s.basePath + strings.TrimPrefix(r.URL.RawPath, rawPrefix)
+			} else {
+				r2.URL.RawPath = ""
+			}
+		}
+		rctx := chi.NewRouteContext()
+		r2 = r2.WithContext(context.WithValue(r2.Context(), chi.RouteCtxKey, rctx))
+		s.router.ServeHTTP(w, r2)
+		return
+	}
+
+	// 2. Static files
+	fsys := s.frontendFileSystem()
+	if fsys == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if remainder != "/" && remainder != "/index.html" {
+		cleanRemainder := pathpkg.Clean("/" + strings.TrimLeft(remainder, "/\\"))
+		if f, err := fsys.Open(cleanRemainder); err == nil {
+			stat, statErr := f.Stat()
+			_ = f.Close()
+			if statErr == nil && !stat.IsDir() {
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = cleanRemainder
+				http.FileServer(fsys).ServeHTTP(w, r2)
+				return
+			}
+		}
+	}
+
+	// 3. Fallback to index.html configured for this cluster session
+	serveFrontendIndex(w, r, fsys, s.basePath+"/c/"+primarySlug)
 }
 
 // Connection status handlers (for graceful startup)

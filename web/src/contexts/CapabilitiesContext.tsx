@@ -44,12 +44,14 @@ const restrictedCapabilities: Capabilities = {
   },
   mcpEnabled: false,
   mcpExecTools: false,
+  clusterSessions: false,
   deployment: { mode: 'local' },
 }
 
 const CapabilitiesContext = createContext<Capabilities>({
   ...defaultCapabilities,
   localTerminal: false,
+  clusterSessions: false,
 })
 
 export function CapabilitiesProvider({ children }: { children: ReactNode }) {

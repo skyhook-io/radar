@@ -62,16 +62,17 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useContexts, useAuthMe, useAudit, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
-import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
+import { routePath, apiUrl, getApiBase, getBasename, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import type { ClusterLoadState } from './types/clusterLoadState'
 import { useClusterLoadState } from './hooks/useClusterLoadState'
-import { Network, Sun, Moon, Star, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
+import { Network, Sun, Moon, Star, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw, Layers } from 'lucide-react'
+import { ControlCenterModal } from './components/control-center/ControlCenterModal'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -630,6 +631,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Settings dialog state
   const [showSettings, setShowSettings] = useState(false)
+  const [showControlCenter, setShowControlCenter] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('overview')
   const openSettings = useCallback((section: SettingsSectionId = 'overview') => {
     setSettingsSection(section)
@@ -895,6 +897,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { toggleTheme } = useTheme()
 
   const switchContext = useSwitchContext()
+  const { data: contexts } = useContexts()
 
   // Refs for dropdown components to trigger them via shortcuts
   const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
@@ -1934,7 +1937,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               params.delete('tab')
               navigate({ pathname: `/resources/${kind}`, search: params.toString() })
             }}
-            onSwitchContext={(name) => switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })}
+            onSwitchContext={(name) => {
+              if (capabilities?.clusterSessions) {
+                const parentBase = getBasename().replace(/\/c\/[^/]+$/, '')
+                const targetCtx = contexts?.find(c => c.name === name)
+                const slug = targetCtx?.slug
+                if (slug) {
+                  window.location.href = parentBase ? `${parentBase}/c/${slug}/` : `/c/${slug}/`
+                  return
+                }
+              }
+              switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })
+            }}
             onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
@@ -1953,6 +1967,20 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <GlobalDiagnoseButton />
 
           <CloudFunnelButton />
+
+          {/* Cluster Control Center */}
+          {capabilities.clusterSessions && (
+            <Tooltip content="Cluster Control Center (Sessions & Memory)" position="bottom">
+              <button
+                onClick={() => setShowControlCenter(true)}
+                aria-label="Cluster Control Center"
+                className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors flex items-center gap-1.5 text-xs font-medium"
+              >
+                <Layers className="w-4 h-4 text-theme-text-primary" />
+                <span className="hidden @min-[1200px]:inline">Sessions</span>
+              </button>
+            </Tooltip>
+          )}
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
@@ -2601,6 +2629,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         initialSection={settingsSection}
         onClose={() => setShowSettings(false)}
         onNavigateToResource={navigateToResourceList}
+      />
+
+      {/* Cluster Control Center dialog */}
+      <ControlCenterModal
+        open={showControlCenter}
+        onClose={() => setShowControlCenter(false)}
       />
 
       {/* Debug overlay — dev mode, standalone only. Embedded hosts (Radar Hub)

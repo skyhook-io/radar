@@ -212,6 +212,10 @@ func isExemptPath(path string) bool {
 			return true
 		}
 	}
+	// Cluster worker routes (/c/...) must never bypass authentication when auth is enabled.
+	if strings.HasPrefix(path, "/c/") {
+		return false
+	}
 	// Static assets don't require auth. /debug/* (pprof) is excluded so
 	// process diagnostics remain authenticated whenever profiling is enabled.
 	// /metrics stays open: operational counters only, scraped by Prometheus.

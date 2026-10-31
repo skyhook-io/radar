@@ -129,6 +129,7 @@ export interface Capabilities {
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
   mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
+  clusterSessions?: boolean // Multi-cluster session supervisor is active
   // Karpenter discovery and NodePool read state. Optional on the wire for the
   // same newer-frontend/older-backend reason as `deployment` below — consumers
   // must treat absence as "unknown" and fall back to discovery signals.
@@ -538,6 +539,8 @@ export interface ContextInfo {
   /** AWS profile extracted from the exec plugin's --profile arg or AWS_PROFILE
    *  env var. Present only for EKS contexts that pin a profile. */
   awsProfile?: string
+  /** Deterministic URL-safe slug for multi-cluster session routing. */
+  slug?: string
 }
 
 // Namespace
