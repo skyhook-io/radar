@@ -12,6 +12,7 @@ let container: HTMLDivElement
 let retries: number
 let latest: ReturnType<typeof useConnection> | null
 let focused: boolean
+let pollContext: string
 
 function Probe() {
   latest = useConnection()
@@ -33,6 +34,7 @@ beforeEach(async () => {
   retries = 0
   latest = null
   focused = false
+  pollContext = 'prod'
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused)
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
     const url = new URL(String(input), 'http://localhost')
@@ -43,7 +45,7 @@ beforeEach(async () => {
     if (url.pathname === '/api/connection') {
       return jsonResponse(200, {
         state: 'disconnected',
-        context: 'prod',
+        context: pollContext,
         error: 'cluster unreachable',
         errorType: 'network',
         disconnectedAt: '2026-10-30T14:02:00Z',
@@ -121,6 +123,33 @@ describe('ConnectionProvider auto-retry', () => {
       window.dispatchEvent(new Event('online'))
     })
     await advance(10)
+    expect(retries).toBe(before + 1)
+  })
+})
+
+describe('ConnectionProvider auto-retry across contexts and background windows', () => {
+  it('retries at once when the network comes back, even in a hidden window', async () => {
+    await advance(FIVE_ATTEMPTS_MS)
+    const before = retries
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await advance(10)
+    expect(retries).toBe(before + 1)
+    visibility.mockRestore()
+  })
+  it('starts a fresh count and backoff for another context', async () => {
+    await advance(FIVE_ATTEMPTS_MS)
+    expect(retries).toBe(5)
+    // The next status poll reports a different context that is also down.
+    pollContext = 'staging'
+    await advance(30_000)
+    await advance(100)
+    expect(latest?.connection.context).toBe('staging')
+    const before = retries
+    // A fresh outage retries after the initial 10s, not the unattended 5 minutes.
+    await advance(10_500)
     expect(retries).toBe(before + 1)
   })
 })
