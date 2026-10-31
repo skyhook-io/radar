@@ -370,6 +370,7 @@ func (b *SSEBroadcaster) registerConnectionStateCallback() {
 				"error":           status.Error,
 				"errorType":       status.ErrorType,
 				"progressMessage": status.ProgressMsg,
+				"disconnectedAt":  status.DisconnectedAt,
 			},
 		})
 
@@ -1378,6 +1379,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
+		"disconnectedAt":  status.DisconnectedAt,
 	})
 	if err == nil {
 		fmt.Fprintf(w, "event: connection_state\ndata: %s\n\n", connData)

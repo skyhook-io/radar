@@ -4,6 +4,7 @@ import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
+import { useClusterConnected } from '../context/clusterConnected'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
@@ -710,9 +711,12 @@ export function useDashboard(
 export function useAudit(namespaces: string[] = []) {
   const params =
     namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
+  // Mounted app-wide, so without this it keeps polling a cluster that is down.
+  const connected = useClusterConnected();
   return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
     queryFn: () => fetchJSON(`/audit${params}`),
+    enabled: connected,
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
     placeholderData: (prev) => prev,
@@ -2079,11 +2083,14 @@ export function useRuntimeStats(enabled: boolean = true) {
 
 // Capabilities (RBAC-based feature flags)
 export function useCapabilities() {
+  const connected = useClusterConnected();
   return useQuery<Capabilities>({
     queryKey: ["capabilities"],
     queryFn: () => fetchJSON("/capabilities"),
     staleTime: 60000, // 1 minute - cached on backend too
-    refetchInterval: 60000, // Re-check periodically so transient failures self-correct
+    // Re-check periodically so transient failures self-correct, but not while
+    // the cluster is down: reconnecting refreshes every query anyway.
+    refetchInterval: connected ? 60000 : false,
   });
 }
 
