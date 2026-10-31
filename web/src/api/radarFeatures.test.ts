@@ -15,6 +15,11 @@ import {
 } from './radarFeatures'
 
 describe('radarFeatureSupport', () => {
+  it('requires explicit Event content support even when the older search endpoint is available', () => {
+    expect(radarFeatureSupport('searchEventContent', { features: { searchCoverage: true } }, 'v99.0.0')).toBe('unsupported')
+    expect(radarFeatureSupport('searchEventContent', { features: { searchEventContent: true } }, 'v1.0.0')).toBe('supported')
+    expect(radarFeatureSupport('searchEventContent', undefined, 'dev')).toBe('unknown')
+  })
   it('trusts the advertised flag over the version', () => {
     expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, 'v1.7.2')).toBe('supported')
     expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, undefined)).toBe('supported')

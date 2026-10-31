@@ -168,6 +168,7 @@ type FeatureCapabilities struct {
 	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
 	SearchCoverage        bool `json:"searchCoverage"`
 	ApplicationEvidence   bool `json:"applicationEvidence"`
+	SearchEventContent    bool `json:"searchEventContent"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`

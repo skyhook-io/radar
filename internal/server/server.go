@@ -1494,6 +1494,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		ApplicationEvidence:      true,
 		ResourceReadCoverage:     true,
 		SearchCoverage:           true,
+		SearchEventContent:       true,
 		YAMLReview:               true,
 		YAMLSchemas:              true,
 		WorkloadImages:           true,

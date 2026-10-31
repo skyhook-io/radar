@@ -171,6 +171,7 @@ export interface FeatureCapabilities {
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
+  searchEventContent?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
