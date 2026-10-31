@@ -350,6 +350,19 @@ describe("assessmentCopyText", () => {
     expect(text).toContain("2 more steps in Radar.");
   });
 
+  it("says what was asked about the resource, right under where", () => {
+    const text = assessmentCopyText(storyDiagnosis, {
+      context: {
+        target: "Deployment shop/api",
+        asked: "users saw errors\n yesterday",
+      },
+    });
+    expect(text.split("\n\n").slice(0, 2)).toEqual([
+      "**Deployment shop/api**",
+      "Asked: “users saw errors yesterday”",
+    ]);
+  });
+
   it("puts the healthy word on the headline and the flags before Still open", () => {
     const text = assessmentCopyText(
       {

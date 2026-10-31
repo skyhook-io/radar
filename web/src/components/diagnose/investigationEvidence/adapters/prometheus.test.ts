@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   investigationEvidenceSubjectRef,
   metricsScope,
+  metricsSelectedPod,
   projectInvestigationEvidence,
   type InvestigationEvidenceTarget,
 } from "../index";
@@ -1638,5 +1639,44 @@ describe("query_prometheus evidence", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].observations).toHaveLength(2);
     expect(groups[0].observations[1].changedFromPrevious).toBe(true);
+  });
+});
+
+describe("metricsSelectedPod", () => {
+  const selector = (...matchers: [string, string, string][]) => ({
+    metric: "kube_pod_container_status_restarts_total",
+    matchers: matchers.map(([label, op, value]) => ({ label, op, value })),
+  });
+  it("names the one Pod every selector selects exactly", () => {
+    expect(
+      metricsSelectedPod([
+        selector(["namespace", "=", "shop"], ["pod", "=~", "^(api-0)$"]),
+        selector(["namespace", "=", "shop"], ["pod", "=", "api-0"]),
+      ]),
+    ).toBe("api-0");
+  });
+  it("names no Pod for a set, a pattern, disagreeing selectors or a selector without one", () => {
+    expect(
+      metricsSelectedPod([selector(["pod", "=~", "^(api-0|api-1)$"])]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([selector(["pod", "=~", "api-.*"])]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([selector(["pod", "!=", "api-0"])]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([
+        selector(["pod", "=", "api-0"]),
+        selector(["pod", "=", "api-1"]),
+      ]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([
+        selector(["pod", "=", "api-0"]),
+        selector(["namespace", "=", "shop"]),
+      ]),
+    ).toBeUndefined();
+    expect(metricsSelectedPod([])).toBeUndefined();
   });
 });

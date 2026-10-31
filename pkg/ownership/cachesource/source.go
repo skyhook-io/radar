@@ -77,16 +77,29 @@ type session struct {
 	// watched holds the versions each dynamically watched resource is watched
 	// at, as of the session's first dynamic read.
 	watched map[schema.GroupResource][]schema.GroupVersionResource
+	serving map[resourceid.GroupKind][]schema.GroupVersionResource
 	// byNamespace holds the namespaces each resource version is watched in
 	// when it is watched namespace by namespace (nil otherwise).
 	byNamespace map[schema.GroupVersionResource][]string
 	// unwatched holds why each resource with no watched version is unread
 	// ("" for a watched one).
-	unwatched        map[schema.GroupResource]readreason.Code
+	unwatched           map[schema.GroupResource]readreason.Code
+	dependentKinds      []ownership.CatalogKind
+	preparedNamespaced  bool
+	preparedCluster     bool
+	unwatchedNamespaced []ownership.Gap
+	unwatchedCluster    []ownership.Gap
+	unwatchedAll        []ownership.Gap
+	lastGapMode         uint8
+	lastExtraGaps       []ownership.Gap
+	lastCombinedGaps    []ownership.Gap
+
 	membershipStates map[resourceid.Ref]membershipStateObservation
 	// recordingManagersRead, set only by tests, runs after RecordingManagers reads a manager
 	// kind, with the keys it read together.
 	recordingManagersRead func(kind resourceid.GroupKind, keys []string)
+
+	observationViews map[resourceid.GroupKind]*k8score.DynamicObservationView
 }
 
 // TypedCache returns the typed cache s reads from, when this package began s.
@@ -203,7 +216,12 @@ func unansweredReason(obs observer, versions []schema.GroupVersionResource, name
 // servingVersions returns the versions the session reads kind's resource at,
 // most stable first: the watched versions the catalog serves. With none
 // watched it is the most stable served version, whose observation says why.
+// The result is shared within the session and must not be modified.
 func (s *session) servingVersions(kind ownership.CatalogKind) []schema.GroupVersionResource {
+	if versions, ok := s.serving[kind.GroupKind]; ok {
+		return versions
+	}
+
 	gr := schema.GroupResource{Group: kind.Group, Resource: kind.Resource}
 	if s.watched == nil {
 		s.watched = map[schema.GroupResource][]schema.GroupVersionResource{}
@@ -221,6 +239,11 @@ func (s *session) servingVersions(kind ownership.CatalogKind) []schema.GroupVers
 	if len(versions) == 0 {
 		versions = []schema.GroupVersionResource{{Group: kind.Group, Version: mostStable(kind.Versions), Resource: kind.Resource}}
 	}
+	if s.serving == nil {
+		s.serving = map[resourceid.GroupKind][]schema.GroupVersionResource{}
+	}
+	s.serving[kind.GroupKind] = versions
+
 	return versions
 }
 

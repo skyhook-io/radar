@@ -1,5 +1,6 @@
 import { StoryExcerpt } from "./StoryExcerpt";
 import { storyExcerpt } from "./investigationEvidence/excerpt";
+import { metricsReading } from "./investigationEvidence/bodies/metrics";
 import {
   type InvestigationCaseItem,
   investigationCaseObservationKey,
@@ -61,6 +62,7 @@ export function EvidenceCard({
   spanFullRow = false,
   prominence = "primary",
   compact = false,
+  storyPreview = false,
   placedInStory = false,
   gapRoles,
   noteMode = "full",
@@ -87,6 +89,11 @@ export function EvidenceCard({
    * card. A story log card keeps its cited lines: they are the card.
    */
   compact?: boolean;
+  /**
+   * The card sits in the story's collapsed preview, which bounds its height;
+   * a compact card outside it still shows a placed chart.
+   */
+  storyPreview?: boolean;
   /** This card also appears inside the story above. */
   placedInStory?: boolean;
   /** Roles whose "does not cover" line is shown; undefined shows every gap. */
@@ -109,6 +116,7 @@ export function EvidenceCard({
     metricsMarkersBySource,
     caseByGroup,
     excludedByItem,
+    storyReveal,
   } = useContext(EvidenceNavigationContext);
   const open = expandedGroupIds?.has(group.id) ?? false;
   const setOpen = useCallback(
@@ -176,6 +184,7 @@ export function EvidenceCard({
     evidenceDisplaySnapshot(citedObservation) !==
       evidenceDisplaySnapshot(observation);
   const bodyId = `${domId}-body`;
+  const chartId = `${domId}-chart`;
   const hasEvidenceDetails = evidenceHasDetails(
     observation.data,
     observation.summary,
@@ -183,6 +192,7 @@ export function EvidenceCard({
   const excerpt = storyCard
     ? storyExcerpt(observation, cardItems, {
         compact,
+        preview: storyPreview,
         scopeNamespace: listingScopeNamespace(observation.source),
       })
     : undefined;
@@ -201,7 +211,37 @@ export function EvidenceCard({
   const storyLogRest = excerpt?.kind === "lines" ? excerpt.rest : [];
   const hasExpandableBody =
     (hasEvidenceDetails && !inlineLogs && !inlineMetrics) || meaningfulHistory;
-  const canExpand = !compact && (hasExpandableBody || storyLogRest.length > 0);
+  const bodyExpandable =
+    !compact && (hasExpandableBody || storyLogRest.length > 0);
+  // A placed chart folds behind the card's chevron, compact or not, starting
+  // as the excerpt says until the reader toggles it. Its fold is the card's
+  // own: the body behind it (earlier reads) opens and closes with the chart,
+  // and the same result's card under Captured results keeps its own state.
+  // Keyed by the result so a different chart in this slot starts as its own
+  // excerpt says rather than as the reader left the last one.
+  const [chartChoice, setChartChoice] = useState<{
+    sourceId: string;
+    open: boolean;
+  }>();
+  const chooseChart = (open: boolean) =>
+    setChartChoice({ sourceId: observation.source.id, open });
+  const chartOpen =
+    excerpt?.kind === "chart"
+      ? chartChoice?.sourceId === observation.source.id
+        ? chartChoice.open
+        : !excerpt.folded
+      : false;
+  const canExpand = inlineMetrics || bodyExpandable;
+  const expanded = inlineMetrics ? chartOpen : open;
+  const chartReading =
+    inlineMetrics && !chartOpen && observation.data.type === "metrics"
+      ? metricsReading(observation.data)
+      : undefined;
+  const toggle = (opening: boolean) => {
+    if (inlineMetrics) chooseChart(opening);
+    else setOpen(opening);
+    revealAfterToggle(opening);
+  };
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -216,9 +256,17 @@ export function EvidenceCard({
     if (
       revealHistory ||
       (destination && elementRef.current?.contains(destination))
-    )
+    ) {
       setOpen(true);
+      chooseChart(true);
+    }
+    // chooseChart is rebuilt per render from the observation on screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealHistory, revealSourceId, revealRequestId, elementRef, setOpen]);
+  useLayoutEffect(() => {
+    if (storyReveal?.domId === domId) chooseChart(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storyReveal?.requestId]);
   const wide = spanFullRow || evidenceTypePrefersFullRow(observation.data.type);
   const resourceRef = investigationEvidenceSubjectRef(observation.data);
   const resourceIdentity = resourceRef
@@ -268,11 +316,19 @@ export function EvidenceCard({
           <span
             className={clsx(
               "mt-0.5 block text-xs leading-relaxed text-theme-text-secondary",
-              !open && !inlineSecretKeys && "line-clamp-2",
+              !expanded && !inlineSecretKeys && "line-clamp-2",
               "[overflow-wrap:anywhere]",
             )}
           >
             {displaySummary}
+          </span>
+        ) : null}
+        {chartReading ? (
+          <span
+            data-chart-reading
+            className="mt-0.5 block font-mono text-xs tabular-nums text-theme-text-secondary"
+          >
+            {chartReading}
           </span>
         ) : null}
         {supersededRead ? (
@@ -299,7 +355,7 @@ export function EvidenceCard({
         ) : null}
       </span>
       {canExpand ? (
-        <CollapseChevron open={open} className="h-4 w-4 self-center" />
+        <CollapseChevron open={expanded} className="h-4 w-4 self-center" />
       ) : null}
     </>
   );
@@ -338,13 +394,9 @@ export function EvidenceCard({
         {canExpand ? (
           <button
             type="button"
-            aria-expanded={open}
-            aria-controls={bodyId}
-            onClick={() => {
-              const opening = !open;
-              setOpen(opening);
-              revealAfterToggle(opening);
-            }}
+            aria-expanded={expanded}
+            aria-controls={inlineMetrics ? chartId : bodyId}
+            onClick={() => toggle(!expanded)}
             className={clsx(
               "flex min-w-0 flex-1 items-start text-left hover:bg-theme-hover/60",
               prominence === "primary"
@@ -419,8 +471,9 @@ export function EvidenceCard({
               excerpt={excerpt}
               data={observation.data}
               prominence={prominence}
-              open={open}
+              open={expanded}
               canExpand={canExpand}
+              chartId={chartId}
               changeCoverage={metricsMarkersBySource?.get(
                 observation.source.id,
               )}
@@ -450,9 +503,9 @@ export function EvidenceCard({
           ))}
         </div>
       ) : null}
-      {canExpand && hasExpandableBody ? (
+      {bodyExpandable && hasExpandableBody ? (
         <div id={bodyId}>
-          <Collapse open={open}>
+          <Collapse open={expanded}>
             <div
               className={clsx(
                 "space-y-3 border-t border-theme-border/60",

@@ -148,7 +148,10 @@ Execution and caching details live in [summarycontext](../internal/summarycontex
 
 - A **gap** is a kind (and namespace) the read couldn't cover, with a `pkg/readreason` code. A whole-kind state is one
   gap however many namespaces a search names.
-- `DependentCandidatesRead.Complete()`: no gaps, among the kinds the garbage collector acts on.
+- `DependentCandidatesRead.Complete()`: no gaps, among the kinds the garbage collector acts on. Its `Gaps` slice is
+  read-only, may be shared across searches, and is never changed by later session reads; clone it before modifying it.
+  The cache source prepares each scope when first searched and shares equal coverage arrays, but still reads watched
+  stores and their readiness on each search.
 - `RecordingManagersRead.Complete()`: no gaps, no unreadable and no remote managers, among the three manager kinds.
   An object with no recorders may still be managed by something Radar doesn't read.
 - Answers can be stale, never confidently wrong: a store answers as fresh as its informer, and a manager's list as fresh

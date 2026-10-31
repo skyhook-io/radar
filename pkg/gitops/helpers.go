@@ -83,6 +83,88 @@ func argoDestination(app *unstructured.Unstructured) (name, server string) {
 	return strings.TrimSpace(name), strings.TrimSpace(server)
 }
 
+// ArgoSyncPrunesEverything reports whether the last reported status.resources
+// list is nonempty and every entry has requiresPruning set. It does not account
+// for resource Prune=false/confirm options or a stale list, and does not prove
+// that a pruning sync will delete every resource. Sync status is independent:
+// IgnoreExtraneous resources can leave such an Application Synced.
+func ArgoSyncPrunesEverything(app *unstructured.Unstructured) bool {
+	if app == nil {
+		return false
+	}
+	resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
+	if len(resources) == 0 {
+		return false
+	}
+	for _, r := range resources {
+		m, ok := r.(map[string]any)
+		if !ok {
+			return false
+		}
+		if prune, _ := m["requiresPruning"].(bool); !prune {
+			return false
+		}
+	}
+	return true
+}
+
+// ArgoEmptyRenderGuardHolds applies the test Argo's auto-sync makes before it
+// refuses with "auto-sync will wipe out all resources": auto-sync is on with
+// prune and without allowEmpty, the app is OutOfSync, and a sync would prune
+// everything. That condition is not re-evaluated while a sync window blocks
+// auto-sync, so it can outlive the empty render or a policy change; callers
+// confirm it against this instead of trusting its presence.
+func ArgoEmptyRenderGuardHolds(app *unstructured.Unstructured) bool {
+	if app == nil {
+		return false
+	}
+	automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	if !found {
+		return false
+	}
+	if enabled, ok, _ := unstructured.NestedBool(automated, "enabled"); ok && !enabled {
+		return false
+	}
+	if prune, _, _ := unstructured.NestedBool(automated, "prune"); !prune {
+		return false
+	}
+	if allowEmpty, _, _ := unstructured.NestedBool(automated, "allowEmpty"); allowEmpty {
+		return false
+	}
+	sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
+	return strings.EqualFold(sync, "OutOfSync") && ArgoSyncPrunesEverything(app)
+}
+
+// ArgoConditionMessages returns the messages of an Argo Application's
+// status.conditions entries of one type, in controller order.
+func ArgoConditionMessages(app *unstructured.Unstructured, condType string) []string {
+	if app == nil {
+		return nil
+	}
+	conditions, _, _ := unstructured.NestedSlice(app.Object, "status", "conditions")
+	var out []string
+	for _, c := range conditions {
+		m, ok := c.(map[string]any)
+		if !ok || StringValue(m["type"]) != condType {
+			continue
+		}
+		out = append(out, StringValue(m["message"]))
+	}
+	return out
+}
+
+// ArgoCLIName is how the argocd CLI addresses an Application: namespace/name,
+// which resolves both control-plane and any-namespace Applications.
+func ArgoCLIName(app *unstructured.Unstructured) string {
+	if app == nil || app.GetName() == "" {
+		return ""
+	}
+	if app.GetNamespace() == "" {
+		return app.GetName()
+	}
+	return app.GetNamespace() + "/" + app.GetName()
+}
+
 // ArgoAppliesElsewhere reports whether an Application's list, whether Radar
 // can read it or not, describes a destination Argo CD names and that isn't
 // this cluster. An Application naming no destination isn't known to apply

@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, Network, RefreshCcw, Scale, ScrollText, Search, SlidersHorizontal, Undo2 } from 'lucide-react'
+import { BellOff, Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -48,6 +48,65 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.19.0',
+    highlights: [
+      {
+        id: 'investigate-a-question',
+        icon: MessageCircleQuestionMark,
+        title: 'Start an AI investigation from a question',
+        description: 'Describe what you see, like "checkout is slow", with or without a resource, and choose where to start and how far back to look.',
+        leadDescription: "When Radar runs locally, investigations no longer need a resource to start. On the Investigations page, describe what you are seeing, choose the namespaces to start in and how far back to look, and optionally pin a resource by typing @. Or type a symptom into the Omnibar to open the composer with your words. Findings now lead with the verdict and show more of the metrics charts the agent cited inline, and Radar's routine read limits no longer crowd out the open questions.",
+        importance: 9,
+      },
+      {
+        id: 'mcp-delete-exec-tools',
+        icon: Bot,
+        title: 'New MCP tools: delete and exec',
+        description: "delete_resource previews a deletion's likely impact and requires confirmation before deleting. Opt-in exec_pod runs one command in a container.",
+        importance: 7,
+      },
+      {
+        id: 'read-coverage',
+        icon: ScanSearch,
+        title: "Answers say what Radar couldn't see",
+        description: "Resource tables, search and MCP tools say when an answer is partial and why, so neither you nor an agent reads a gap as absence.",
+        importance: 6,
+      },
+      {
+        id: 'issues-new-checks',
+        icon: ShieldAlert,
+        title: 'New issue checks',
+        description: 'Issues now flag expired TLS certificates in use, dropped Traefik routes, Pods stuck on readiness gates, blocked Argo CD auto-sync and failed canaries.',
+        importance: 6,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'issues-fewer-false-alarms',
+        icon: BellOff,
+        title: 'Fewer false alarms',
+        description: 'Issues stop flagging completed Pods, in-budget Deployment rollout dips, expected pause and deletion conditions, and recovered Cluster API Machines.',
+        importance: 6,
+      },
+      {
+        id: 'custom-resource-changes',
+        icon: GitCompareArrows,
+        title: 'Custom-resource history names changed fields',
+        description: 'Change history names the custom-resource fields that changed, with values when safe to show. get_changes for a kind also returns creates and deletes.',
+        importance: 5,
+      },
+    ],
+    improvements: [
+      'The Delete dialog previews owned objects, GitOps cleanup and storage at risk',
+      'Phone layouts for Home, Issues, Resources, Topology, Helm and Capacity',
+      'Native views for OpenTelemetry Operator collectors and Flagger canaries',
+      'Related Resources and Managed By tell owners apart from GitOps managers',
+      'Investigations check Claude Code and Codex sign-in, and let you stop a run when all slots are busy',
+      'The install script verifies checksums; Helm installs check repository checksums when published',
+      'Windows desktop updates work again; --no-version-check turns off automatic checks',
+    ],
+  },
   {
     version: 'v1.18.0',
     highlights: [

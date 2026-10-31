@@ -179,6 +179,7 @@ type FeatureCapabilities struct {
 	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
 	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
+	AgentSigninCheck      bool `json:"agentSigninCheck"`      // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an

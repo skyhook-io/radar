@@ -17,6 +17,7 @@ import {
   Megaphone,
   PanelLeftClose,
   PanelLeftOpen,
+  Rocket,
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { MainView } from "../../types";
@@ -100,6 +101,8 @@ interface PrimaryNavRailProps {
   accountSlot?: ReactNode;
   // Present only when release notes exist for this version; unread adds a dot.
   whatsNew?: { unread: boolean; onOpen: () => void };
+  // Present during the Product Hunt launch: the launch card opens from it.
+  productHunt?: { onOpen: () => void; id: string; badge: string };
 }
 
 export function PrimaryNavRail({
@@ -111,6 +114,7 @@ export function PrimaryNavRail({
   onOpenSettings,
   accountSlot,
   whatsNew,
+  productHunt,
 }: PrimaryNavRailProps) {
   return (
     <aside
@@ -161,6 +165,17 @@ export function PrimaryNavRail({
           accountSlot self-nulls without auth, so no-auth OSS shows only Settings. */}
       <nav className="flex flex-col gap-0.5 px-2 pt-1 border-t border-theme-border/50">
         {accountSlot}
+        {productHunt && (
+          <RailActionRow
+            icon={Rocket}
+            label="Product Hunt"
+            pinned={pinned}
+            onClick={productHunt.onOpen}
+            iconClassName="text-emerald-600 dark:text-emerald-400"
+            id={productHunt.id}
+            badge={productHunt.badge}
+          />
+        )}
         {whatsNew && (
           <RailActionRow
             icon={Megaphone}
@@ -351,17 +366,25 @@ export function RailActionRow({
   pinned,
   onClick,
   unread = false,
+  iconClassName,
+  id,
+  badge,
 }: {
   icon: ComponentType<{ className?: string }>;
   label: string;
   pinned: boolean;
   onClick: () => void;
   unread?: boolean;
+  iconClassName?: string;
+  id?: string;
+  // A small tilted tag on the corner, for an item that's only here for now.
+  badge?: string;
 }) {
   return (
     <div className={clsx("group/item relative", !pinned && "w-10")}>
       <button
         type="button"
+        id={id}
         onClick={onClick}
         className={clsx(
           "relative flex h-9 w-full items-center rounded-md text-sm font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors",
@@ -370,8 +393,8 @@ export function RailActionRow({
       >
         <span className="relative flex w-10 shrink-0 items-center justify-center">
           <Icon className={clsx(
-            "w-[18px] h-[18px] group-hover/item:text-theme-text-secondary",
-            unread ? "text-accent" : "text-theme-text-tertiary",
+            "w-[18px] h-[18px]",
+            iconClassName ?? clsx("group-hover/item:text-theme-text-secondary", unread ? "text-accent" : "text-theme-text-tertiary"),
           )} />
           {unread && (
             <span aria-hidden className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-accent ring-2 ring-theme-sidebar" />
@@ -379,9 +402,18 @@ export function RailActionRow({
         </span>
         <span className={clsx("pr-3 truncate", !pinned && "opacity-0", unread && "text-theme-text-primary")}>
           {label}
+          {badge && <span className="sr-only"> ({badge})</span>}
           {unread && <span className="sr-only"> (unread)</span>}
         </span>
       </button>
+      {badge && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -top-1 -right-1 rotate-12 rounded-sm bg-emerald-500 px-1 text-[8px] font-bold uppercase leading-3 tracking-wide text-white shadow-sm dark:text-emerald-950"
+        >
+          {badge}
+        </span>
+      )}
       {!pinned && (
         <span
           aria-hidden

@@ -1741,3 +1741,23 @@ describe("assessment provenance disclosure", () => {
     ).toBe("");
   });
 });
+
+describe("TurnView opening question", () => {
+  const opening: Turn = {
+    timeline: [],
+    diagnosis: null,
+    error: null,
+    status: "running",
+  };
+
+  it("shows the question a run opened with as the engineer's message", () => {
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={opening}
+        openingQuestion={"checkout 502s\nsince lunch"}
+      />,
+    );
+    expect(html).toContain("checkout 502s\nsince lunch");
+    expect(html).toContain("whitespace-pre-wrap");
+  });
+});

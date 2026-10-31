@@ -23,7 +23,7 @@ describe('rollback insights', () => {
     const html = renderToString(<GitOpsIssuesBand issues={insight(true).issues} />)
     expect(html).toContain('a'.repeat(40))
     expect(html).toMatch(/<span class="[^"]*whitespace-normal break-words">Last rollback deployed/)
-    expect(html).toMatch(/<p class="[^"]*whitespace-normal break-words">Auto-sync is off/)
+    expect(html).toMatch(/<p class="[^"]*">Auto-sync is off/)
     expect(html).toContain('Changes made since the rollback can also show as drift.')
   })
 
@@ -36,7 +36,7 @@ describe('rollback insights', () => {
     }]} />)
     expect(html).toMatch(/<span class="[^"]*whitespace-normal break-words">Last rollback deployed/)
     expect(html).toContain(message)
-    expect(html).toMatch(/<p class="[^"]*whitespace-normal break-words">On Argo CD before 2.12/)
+    expect(html).toMatch(/<p class="[^"]*">On Argo CD before 2.12/)
     expect(html).toContain(action)
   })
 

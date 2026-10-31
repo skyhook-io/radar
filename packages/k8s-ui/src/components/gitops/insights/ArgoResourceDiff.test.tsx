@@ -113,6 +113,38 @@ describe('GitOpsChangesView expanded Argo row', () => {
     expect(html).not.toContain('Sync the application to create it')
   })
 
+  test.each([
+    ['ManualDrift', 'The render includes none of the resources this Application manages.', 'Manual'],
+    ['AutoSyncBlockedEmpty', 'A pruning sync could delete every listed resource.', 'Auto · prune'],
+    ['SharedResourceWarning', 'Resolve shared ownership before syncing.', 'Manual'],
+    ['SelfHealDisabled', 'Resolve shared ownership before syncing.', 'Auto'],
+    ['Failed', 'Fix the comparison error and refresh before syncing.', 'Manual'],
+  ])('defers resource sync/create advice to the %s hazard', (reason, hazard, autoSyncMode) => {
+    const data = insight(false)
+    data.summary.autoSyncMode = autoSyncMode
+    data.issues = [{ severity: 'warning', scope: 'operation', reason, message: 'Sync warning', hazard }]
+    data.changes = [
+      { ...change, drift: undefined },
+      { ...change, ref: { ...change.ref, name: 'missing' }, missing: true, hasLive: false, health: 'Missing', drift: undefined },
+      { ...change, ref: { ...change.ref, name: 'health-missing' }, sync: 'Unknown', health: 'Missing', drift: undefined },
+    ]
+    const html = renderToStaticMarkup(<GitOpsChangesView insight={data} />)
+    expect(count(html, 'See the sync warning above before syncing this Application.')).toBe(3)
+    expect(html).not.toContain('Click Sync')
+    expect(html).not.toContain('click Sync to force it')
+    expect(html).not.toContain('Auto-sync should reconcile')
+    expect(html).not.toContain('Sync the application to create it')
+    expect(html).not.toContain('Sync to create it')
+  })
+
+  test('keeps ordinary sync advice when there is no hazard', () => {
+    const data = insight(false)
+    data.summary.autoSyncMode = 'Manual'
+    const html = renderToStaticMarkup(<GitOpsChangesView insight={data} />)
+    expect(html).toContain('Click Sync to apply the desired state.')
+    expect(html).not.toContain('See the sync warning above')
+  })
+
   test("hands the last-applied list to the Argo diff instead of rendering it alongside", () => {
     let passed: GitOpsDrift | undefined
     const html = renderToStaticMarkup(

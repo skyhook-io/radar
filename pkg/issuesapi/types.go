@@ -88,6 +88,7 @@ const (
 	CategoryNodeProvisioningFail     Category = "node_provisioning_failed"
 	CategoryCrossplaneReconcile      Category = "crossplane_reconcile_failed"
 	CategoryOperatorConditionFail    Category = "operator_condition_failed"
+	CategoryGitOpsResourceWarning    Category = "gitops_resource_warning"
 	CategoryGitOpsSyncFailed         Category = "gitops_sync_failed"
 	// Specific GitOps failure modes — split out from the gitops_sync_failed
 	// catch-all so the Issues page + MCP can distinguish "couldn't render from
@@ -169,6 +170,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryCrossplaneReconcile:      GroupControlPlane,
 	CategoryOperatorConditionFail:    GroupControlPlane,
 	CategoryGitOpsSyncFailed:         GroupControlPlane,
+	CategoryGitOpsResourceWarning:    GroupControlPlane,
 	CategoryGitOpsRenderFailed:       GroupControlPlane,
 	CategoryGitOpsSpecInvalid:        GroupControlPlane,
 	CategoryGitOpsOperationFailed:    GroupControlPlane,
@@ -543,10 +545,20 @@ type Issue struct {
 	// enough evidence. All optional — empty for issues without a parser.
 	// RemediationKind names a structured one-click fix (e.g. "create-namespace");
 	// RemediationTarget is the resource it acts on.
-	Cause             string `json:"cause,omitempty"`
-	Action            string `json:"action,omitempty"`
-	RemediationKind   string `json:"remediation_kind,omitempty"`
-	RemediationTarget string `json:"remediation_target,omitempty"`
+	Cause  string `json:"cause,omitempty"`
+	Action string `json:"action,omitempty"`
+	// Hazard warns what the suggested or most obvious action could destroy or
+	// take over, such as a GitOps sync that would prune every managed
+	// resource. Consumers show it even when they replace Cause or Action with
+	// their own guidance. Action also contains it. Absence means no warning
+	// was supplied, not that the action is safe; older producers omit it.
+	Hazard string `json:"hazard,omitempty"`
+	// Presentation fields split optional guidance; Action remains complete for all consumers.
+	ActionPrimary        string   `json:"action_primary,omitempty"`
+	ActionSecondaryTitle string   `json:"action_secondary_title,omitempty"`
+	ActionSecondary      []string `json:"action_secondary,omitempty"`
+	RemediationKind      string   `json:"remediation_kind,omitempty"`
+	RemediationTarget    string   `json:"remediation_target,omitempty"`
 	// ConditionalCleanup is a cleanup that applies only under its stated
 	// condition; it is never part of Action.
 	ConditionalCleanup *ConditionalCleanup `json:"conditional_cleanup,omitempty"`

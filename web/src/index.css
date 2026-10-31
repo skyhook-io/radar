@@ -419,6 +419,91 @@ body {
   }
 }
 
+/* Product Hunt launch card: a green light travels around the border and spills
+   a soft glow outward, brightening and fading on a cycle longer than the lap so
+   the brightest point lands somewhere new each time; the rocket drifts gently
+   while the card is open. --launch-angle is registered so the conic gradient
+   itself rotates; browsers without @property show the light standing still. */
+@property --launch-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes launch-border-spin {
+  to {
+    --launch-angle: 360deg;
+  }
+}
+@keyframes launch-border-fade {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.launch-border {
+  /* A deeper green on light surfaces, where the paler one washes out. */
+  --launch-glow: 5, 150, 105;
+}
+.dark .launch-border {
+  --launch-glow: 52, 211, 153;
+}
+.launch-border::before,
+.launch-border::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--launch-angle),
+    transparent 0deg,
+    rgba(var(--launch-glow), 0) 30deg,
+    rgba(var(--launch-glow), 0.95) 80deg,
+    rgba(var(--launch-glow), 0) 130deg,
+    transparent 360deg
+  );
+  animation:
+    launch-border-spin 5s linear infinite,
+    launch-border-fade 6.85s ease-in-out infinite;
+}
+/* The ring: the gradient masked down to a 1.5px border on top of the card. */
+.launch-border::before {
+  inset: -1px;
+  padding: 1.5px;
+  z-index: 1;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+/* The glow: the same gradient blurred behind the card, so light spills outward. */
+.launch-border::after {
+  inset: -4px;
+  z-index: -1;
+  filter: blur(12px);
+}
+@keyframes launch-rocket {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate(1.5px, -2.5px) rotate(-6deg);
+  }
+}
+.animate-launch-rocket {
+  animation: launch-rocket 3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .launch-border::before,
+  .launch-border::after,
+  .animate-launch-rocket {
+    animation: none;
+  }
+}
+
 /* Gentle colorize when syntax-highlighted code swaps in over plain text — opacity
    only (no transform → no layout shift) and floored at 0.5 so it never blanks. */
 @keyframes code-colorize {

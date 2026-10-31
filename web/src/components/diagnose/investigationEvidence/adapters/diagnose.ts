@@ -762,6 +762,11 @@ export function adaptDiagnose(
       name: resource.metadata.name,
     },
     bundleRelevance,
+    Array.isArray(value.podNames) &&
+      value.podNames.every(nonEmptyString) &&
+      value.podNamesTruncated !== true
+      ? (value.podNames as string[])
+      : undefined,
   );
   if (value.recentChangesSaturated === true) {
     builder.limit(
@@ -837,6 +842,8 @@ function addDiagnoseMetrics(
   raw: unknown,
   subject: DiagnosisResourceRef,
   relevance: InvestigationEvidenceRelevance,
+  // The bundle's pod list comes from the same pod set its charts sum.
+  podNames: string[] | undefined,
 ): void {
   if (raw === undefined) return;
   const value = record(raw);
@@ -907,6 +914,7 @@ function addDiagnoseMetrics(
       truncated: false,
       subject,
       pods: value.pods,
+      ...(podNames ? { podNames } : {}),
       partial,
     };
     builder.observe(

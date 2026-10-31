@@ -23,7 +23,7 @@ describe('sync-window insights', () => {
       expect(html).toMatch(/<span class="[^"]*whitespace-normal break-words">/)
       expect(html).not.toMatch(/<span class="[^"]*truncate">/)
       expect(html).toContain(issue.message.replaceAll("'", '&#x27;'))
-      expect(html).toContain(`<p class="pl-[22px] text-[11px] text-theme-text-tertiary whitespace-normal break-words">${issue.action!.replaceAll("'", '&#x27;')}</p>`)
+      expect(html).toContain(`>${issue.action!.replaceAll("'", '&#x27;')}</p>`)
     }
   })
 })

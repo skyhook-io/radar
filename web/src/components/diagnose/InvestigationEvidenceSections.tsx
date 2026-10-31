@@ -121,10 +121,12 @@ export function EmptyCollection({
   collecting,
   hasEarlierEvidence,
   onViewActivity,
+  withoutTarget = false,
 }: {
   collecting: boolean;
   hasEarlierEvidence: boolean;
   onViewActivity: () => void;
+  withoutTarget?: boolean;
 }) {
   return (
     <div className="rounded-lg border border-dashed border-theme-border px-4 py-5 text-center">
@@ -148,7 +150,9 @@ export function EmptyCollection({
           ? "The Activity pane remains the live record while the agent investigates."
           : hasEarlierEvidence
             ? "Earlier observations remain below. This does not prove that those conditions resolved."
-            : "Investigation details are still available in Activity. This does not mean the resource is healthy."}
+            : withoutTarget
+              ? "Investigation details are still available in Activity. This does not mean nothing is wrong."
+              : "Investigation details are still available in Activity. This does not mean the resource is healthy."}
       </p>
       <button
         type="button"
