@@ -52,6 +52,10 @@ func usageTestRouter(s *Server) http.Handler {
 			}
 			w.WriteHeader(http.StatusOK)
 		})
+		// A route that answers 503 on a missing client without marking it.
+		r.Get("/pods/{namespace}/{name}/logs", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "cluster client not available", http.StatusServiceUnavailable)
+		})
 		r.Get("/events/stream", func(w http.ResponseWriter, r *http.Request) {
 			if _, ok := w.(http.Flusher); !ok {
 				http.Error(w, "no flusher", http.StatusInternalServerError)
@@ -196,5 +200,34 @@ func TestUsageSetupVocabulary(t *testing.T) {
 	}
 	if setup.AIConfigured {
 		t.Errorf("aiConfigured = true with no AI engine")
+	}
+}
+
+// An unmarked 503 is "not connected" only while the cluster isn't connected;
+// once connected, a 503 is a real failure and still counts.
+func TestUsageMiddlewareTreatsDisconnected503AsNotConnected(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		connected bool
+		want      bool
+	}{
+		{"disconnected", false, true},
+		{"connected", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := captureUsage(t)
+			prev := clusterConnected
+			clusterConnected = func() bool { return tc.connected }
+			t.Cleanup(func() { clusterConnected = prev })
+
+			w := httptest.NewRecorder()
+			usageTestRouter(&Server{}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/pods/shop/web-0/logs", nil))
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503", w.Code)
+			}
+			if len(*got) != 1 || (*got)[0].NotConnected != tc.want {
+				t.Fatalf("recorded %+v, want NotConnected=%v", *got, tc.want)
+			}
+		})
 	}
 }
