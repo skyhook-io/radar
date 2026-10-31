@@ -19,6 +19,9 @@ export interface AssessmentCopyRadar {
   /** Where and when: the header line a reader in a channel needs first. */
   context?: {
     target: string;
+    /** The engineer's question on a run that names a resource; a run opened
+     *  by the question alone already has it as its target. */
+    asked?: string;
     cluster?: string;
     startedAt?: string;
     agent?: string;
@@ -60,6 +63,8 @@ export function assessmentCopyText(
         .filter(Boolean)
         .join(" · "),
     );
+    const asked = radar.context.asked?.replace(/\s+/g, " ").trim();
+    if (asked) parts.push(`Asked: “${asked}”`);
   }
   if (diagnosis.summary) {
     const certainty = diagnosis.healthy

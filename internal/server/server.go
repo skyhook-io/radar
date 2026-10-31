@@ -579,6 +579,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			r.Get("/health", s.handleHealth)
 			r.Get("/agents", s.handleListAgents)
+			r.Get("/agents/signin", s.handleAgentSignin)
 			// AI investigations as durable server-side jobs (start/list/turn/stop).
 			r.Post("/diagnose/runs", s.handleDiagnoseStart)
 			r.Get("/diagnose/runs", s.handleDiagnoseList)
@@ -1499,6 +1500,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,
 		ArgoRollbackSync:         true,
+		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,
 	}

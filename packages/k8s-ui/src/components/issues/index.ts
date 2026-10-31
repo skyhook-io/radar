@@ -15,6 +15,7 @@ export {
   memberRef,
   issueSortAnchor,
   compareIssueSortAnchors,
+  compareIssues,
 } from './types';
 export type { Issue, IssueConditionalCleanup, IssueFinalizerRemoval, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField, IssueRunningPreviousValue, IssueWithheld } from './types';
 export {
