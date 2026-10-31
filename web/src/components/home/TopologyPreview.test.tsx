@@ -27,7 +27,7 @@ const props = (overrides: Partial<Props>): Props => ({
   topology: largeTopology,
   namespaceSelected: false,
   onNavigate: vi.fn(),
-  issues: { issues: [], truncated: false, incomplete: false, loading: false },
+  issues: { issues: [], loading: false },
   onOpenNamespace: vi.fn(),
   ...overrides,
 })
@@ -83,53 +83,56 @@ describe('rankNamespacesByIssues', () => {
 
 describe('TopologyPreview', () => {
   it('keeps the graph preview when the cluster is small enough to graph', () => {
-    render(props({ topology: smallTopology, issues: { issues: [issue('default', 'critical')], truncated: false, incomplete: false, loading: false } }))
+    render(props({ topology: smallTopology, issues: { issues: [issue('default', 'critical')], loading: false } }))
     const card = container.firstElementChild as HTMLElement
     expect(card.tagName).toBe('BUTTON')
     expect(container.textContent).toContain('2 resources')
-    expect(container.textContent).not.toContain('Too large')
+    expect(container.textContent).not.toContain('Too many')
     expect(namespaceRows()).toHaveLength(0)
   })
 
   it('keeps the graph preview while a picked namespace reaches the server', () => {
-    render(props({ namespaceSelected: true, issues: { issues: [issue('default', 'critical')], truncated: false, incomplete: false, loading: false } }))
+    render(props({ namespaceSelected: true, issues: { issues: [issue('default', 'critical')], loading: false } }))
     expect((container.firstElementChild as HTMLElement).tagName).toBe('BUTTON')
     expect(namespaceRows()).toHaveLength(0)
   })
 
-  it('lists the namespaces with the most issues on a large cluster', () => {
+  it('lists namespace names ranked by issues on a large cluster, without counts', () => {
     render(props({
+      namespaceCount: 88,
       issues: {
-        issues: [issue('payments', 'warning', 'a'), issue('payments', 'warning', 'b'), issue('auth', 'critical')],
-        truncated: false,
-        incomplete: false,
+        issues: [
+          issue('payments', 'warning', 'a'), issue('payments', 'warning', 'b'), issue('auth', 'critical'),
+          issue('c', 'warning'), issue('d', 'warning'), issue('e', 'warning'),
+        ],
         loading: false,
       },
     }))
-    const rows = namespaceRows()
-    expect(rows.map(r => r.textContent)).toEqual([
-      'auth1 critical · 1 issue',
-      'payments2 issues',
-    ])
+    expect(namespaceRows().map(r => r.textContent)).toEqual(['auth', 'payments', 'c', 'd'])
+    // The dot is aria-hidden, so severity rides on the accessible name.
+    expect(namespaceRows().slice(0, 2).map(r => r.getAttribute('aria-label'))).toEqual(['auth, critical issues', 'payments, issues'])
+    expect(container.textContent).toContain('Start from:')
+    expect(container.textContent).toContain('88 namespaces')
+    expect(container.textContent).not.toMatch(/critical|issue/)
+    // The drawing stays, as on the graph card.
+    expect(container.querySelector('svg[aria-hidden="true"] marker#arr')).not.toBeNull()
   })
 
-  it('marks counts as lower bounds when the issue list was cut short', () => {
-    render(props({ issues: { issues: [issue('payments', 'critical')], truncated: true, incomplete: false, loading: false } }))
-    expect(namespaceRows()[0].textContent).toBe('payments≥1 critical · ≥1 issue')
-    expect(container.textContent).toContain('Namespaces from the 1 most severe issues:')
-    expect(container.textContent).not.toContain('most issues')
+  it('names a single visible namespace in the singular', () => {
+    render(props({ namespaceCount: 1, issues: { issues: [issue('payments', 'warning')], loading: false } }))
+    expect(container.textContent).toContain('1 namespace')
+    expect(container.textContent).not.toContain('1 namespaces')
   })
 
-  it('qualifies counts when some issue sources went unchecked', () => {
-    render(props({ issues: { issues: [issue('payments', 'warning')], truncated: false, incomplete: true, loading: false } }))
-    expect(namespaceRows()[0].textContent).toBe('payments≥1 issue')
-    expect(container.textContent).toContain('Namespaces with the most issues Radar could check:')
+  it('leaves the namespace count out when it is not known', () => {
+    render(props({ issues: { issues: [issue('payments', 'warning')], loading: false } }))
+    expect(container.textContent).not.toMatch(/\d+ namespaces/)
   })
 
   it('opens the clicked namespace in Topology, and Open Topology still opens the view', () => {
     const onOpenNamespace = vi.fn()
     const onNavigate = vi.fn()
-    render(props({ onOpenNamespace, onNavigate, issues: { issues: [issue('payments', 'warning')], truncated: false, incomplete: false, loading: false } }))
+    render(props({ onOpenNamespace, onNavigate, issues: { issues: [issue('payments', 'warning')], loading: false } }))
     act(() => namespaceRows()[0].click())
     expect(onOpenNamespace).toHaveBeenCalledWith('payments')
     expect(onNavigate).not.toHaveBeenCalled()
@@ -141,16 +144,16 @@ describe('TopologyPreview', () => {
 
   it('offers the namespace picker when no namespace has issues', () => {
     const onNavigate = vi.fn()
-    render(props({ onNavigate, issues: { issues: [issue(undefined, 'warning', 'node-1')], truncated: false, incomplete: false, loading: false } }))
+    render(props({ onNavigate, issues: { issues: [issue(undefined, 'warning', 'node-1')], loading: false } }))
     expect(namespaceRows()).toHaveLength(0)
-    expect(container.textContent).not.toContain('most issues')
+    expect(container.textContent).not.toContain('Start from')
     const choose = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Choose a namespace')!
     act(() => choose.click())
     expect(onNavigate).toHaveBeenCalledTimes(1)
   })
 
   it('shows placeholders, not the picker fallback, while issues load', () => {
-    render(props({ issues: { issues: [], truncated: false, incomplete: false, loading: true } }))
+    render(props({ issues: { issues: [], loading: true } }))
     expect(container.querySelector('[aria-label="Loading namespaces"]')).not.toBeNull()
     expect(container.textContent).not.toContain('Choose a namespace')
   })
