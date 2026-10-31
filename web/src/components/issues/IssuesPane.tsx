@@ -25,6 +25,7 @@ import {
 import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
+import { recordUsageEvent } from "../../api/usage-data";
 import { uncheckedSourceLines } from "./uncheckedSources";
 import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
 
@@ -235,13 +236,15 @@ export function IssuesPane({
       return next;
     });
 
-  const onResourceClick = (ref: IssueResourceRef) =>
+  const onResourceClick = (ref: IssueResourceRef) => {
+    recordUsageEvent({ type: "ui", name: "issue_action:open" });
     onNavigateToResource({
       kind: ref.kind,
       namespace: ref.namespace ?? "",
       name: ref.name,
       group: ref.group ?? "",
     });
+  };
 
   if (!subject && isLoading) {
     return <PaneLoader label="Loading issues…" className="flex-1" />;
@@ -424,7 +427,10 @@ export function IssuesPane({
                 {capacityHref && (
                   <button
                     type="button"
-                    onClick={() => navigate(capacityHref)}
+                    onClick={() => {
+                      recordUsageEvent({ type: "ui", name: "issue_action:capacity" });
+                      navigate(capacityHref);
+                    }}
                     className="rounded-md border border-theme-border px-2 py-1 text-xs font-medium text-accent-text transition-colors hover:bg-theme-hover"
                   >
                     View in Capacity →
@@ -435,6 +441,7 @@ export function IssuesPane({
                   group={issue.group}
                   namespace={issue.namespace ?? ""}
                   name={issue.name}
+                  onActivate={() => recordUsageEvent({ type: "ui", name: "issue_action:investigate" })}
                 />
               </div>
             );

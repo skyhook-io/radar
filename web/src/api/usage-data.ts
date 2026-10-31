@@ -1,7 +1,7 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJSON } from './client'
-import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode } from './config'
+import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, setAutomaticRequestMarking } from './config'
 
 export type UsageDataState = 'undecided' | 'on' | 'off'
 export type UsageDataSource = 'default' | 'user' | 'env' | 'deployment'
@@ -26,9 +26,13 @@ export interface UsageReport {
     authMode: string
     timelineStorage: string
     mcpEnabled: boolean
+    // 'none' | 'discovered' | 'manual'
     prometheus: string
     costSource: string
     browsers: string[]
+    aiConfigured: boolean
+    trafficSource: string
+    gitopsReadable: boolean
   }
   engagement: { sessions: number; activeMinutes: string }
   views: Record<string, number>
@@ -36,6 +40,8 @@ export interface UsageReport {
   mcpTools: Record<string, number>
   uiEvents: Record<string, number>
   errors: Record<string, number>
+  actionKinds: Record<string, number>
+  connectionFailures: Record<string, number>
   clusters: { contexts: string; used: number; shapes: ClusterShape[] }
 }
 
@@ -118,13 +124,16 @@ let recording = false
 
 function setUsageRecording(on: boolean) {
   recording = on
+  setAutomaticRequestMarking(on)
 }
 
 type UsageEvent =
   | { type: 'view'; name: string }
   | { type: 'ui'; name: string }
   | { type: 'session' }
-  | { type: 'active'; minutes: number }
+  // `view` is the screen in use; the server counts it only when the report
+  // period has no views yet.
+  | { type: 'active'; minutes: number; view?: string }
 
 // Fire and forget; the server drops anything outside its allow-list.
 export function recordUsageEvent(event: UsageEvent): void {
@@ -140,10 +149,21 @@ export function recordUsageEvent(event: UsageEvent): void {
 
 const ACTIVE_TICK_MINUTES = 5
 
-// Counts views, one session per page load, and visible time in five-minute
-// ticks. Nothing is sent unless usage data is on.
+// Real use: a window left open on a second screen sees none of these.
+const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'scroll'] as const
+
+// Counts views, one session per page load, and time in use in five-minute
+// ticks: a tick counts only if the page is visible and someone used it during
+// that tick. A counted tick names the view on screen, so a window left open
+// across report periods still reports what it was used for. Nothing is sent
+// unless usage data is on.
 export function useUsageRecording(view: string, status: UsageDataStatus | undefined) {
   const on = isRecording(status)
+  const viewRef = useRef(view)
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
+
   useEffect(() => {
     setUsageRecording(on)
   }, [on])
@@ -155,11 +175,21 @@ export function useUsageRecording(view: string, status: UsageDataStatus | undefi
   useEffect(() => {
     if (!on) return
     recordUsageEvent({ type: 'session' })
+    let usedThisTick = false
+    const markUsed = () => {
+      usedThisTick = true
+    }
+    // Capture, because scroll doesn't bubble and views may stop propagation.
+    const listenerOptions = { capture: true, passive: true }
+    for (const type of INPUT_EVENTS) window.addEventListener(type, markUsed, listenerOptions)
     const tick = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        recordUsageEvent({ type: 'active', minutes: ACTIVE_TICK_MINUTES })
-      }
+      const used = usedThisTick && document.visibilityState === 'visible'
+      usedThisTick = false
+      if (used) recordUsageEvent({ type: 'active', minutes: ACTIVE_TICK_MINUTES, view: viewRef.current })
     }, ACTIVE_TICK_MINUTES * 60_000)
-    return () => window.clearInterval(tick)
+    return () => {
+      window.clearInterval(tick)
+      for (const type of INPUT_EVENTS) window.removeEventListener(type, markUsed, listenerOptions)
+    }
   }, [on])
 }

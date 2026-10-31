@@ -400,12 +400,14 @@ export function IssueDiagnoseButton({
   namespace,
   name,
   size = "default",
+  onActivate,
 }: {
   kind: string;
   group?: string;
   namespace: string;
   name: string;
   size?: "default" | "compact";
+  onActivate?: () => void;
 }) {
   const d = useDiagnose();
   const shown = useIssueDiagnoseShown();
@@ -438,6 +440,7 @@ export function IssueDiagnoseButton({
       <button
         onClick={(e) => {
           e.stopPropagation();
+          onActivate?.();
           if (last) setHistoryOpen((o) => !o);
           else investigate();
         }}
