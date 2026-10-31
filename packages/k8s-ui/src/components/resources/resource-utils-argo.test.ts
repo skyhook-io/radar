@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { argoResumeSettings, getArgoApplicationStatus, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress } from './resource-utils-argo'
+import { argoComparedRevisionCurrent, argoResumeSettings, getArgoApplicationStatus, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress } from './resource-utils-argo'
 
 describe('getArgoApplicationStatus', () => {
   // A Suspended Argo app is intentionally paused — neutral (sky), matching the
@@ -100,5 +100,32 @@ describe('argoResumeSettings', () => {
     ['an unknown Radar', undefined, null],
   ])('without a block, follows %s', (_label, serverStartsPruneOff, expected) => {
     expect(argoResumeSettings(app({}), serverStartsPruneOff)).toEqual(expected)
+  })
+})
+
+// Mirrors the backend's pin rule (pkg/gitops argoSyncOperation), so the sync
+// dialog names the compared revision only when a sync will use it.
+describe('argoComparedRevisionCurrent', () => {
+  const source = { repoURL: 'https://example.com/repo', path: 'app', targetRevision: 'main' }
+  const values = { repoURL: 'https://example.com/values', ref: 'values', targetRevision: 'main' }
+  const single = (sync: any, spec: any = { source }) => ({ spec, status: { sync } })
+
+  it('is current when the comparison was for the same source, whatever its key order', () => {
+    expect(argoComparedRevisionCurrent(single({ revision: 'sha', comparedTo: { source: { targetRevision: 'main', path: 'app', repoURL: 'https://example.com/repo' } } }))).toBe(true)
+  })
+  it('is not current after the source changed, or without a compared revision', () => {
+    expect(argoComparedRevisionCurrent(single({ revision: 'sha', comparedTo: { source: { ...source, targetRevision: 'release' } } }))).toBe(false)
+    expect(argoComparedRevisionCurrent(single({ comparedTo: { source } }))).toBe(false)
+    expect(argoComparedRevisionCurrent(single(undefined))).toBe(false)
+  })
+  it('needs every source compared, one revision each, for a multi-source Application', () => {
+    const spec = { sources: [source, values] }
+    expect(argoComparedRevisionCurrent(single({ revisions: ['a', 'b'], comparedTo: { sources: [source, values] } }, spec))).toBe(true)
+    expect(argoComparedRevisionCurrent(single({ revisions: ['a'], comparedTo: { sources: [source, values] } }, spec))).toBe(false)
+    expect(argoComparedRevisionCurrent(single({ revisions: ['a', 'b'], comparedTo: { sources: [values, source] } }, spec))).toBe(false)
+  })
+  it('is never current for a hydrated Application', () => {
+    const spec = { sourceHydrator: { drySource: source, syncSource: { targetBranch: 'env/prod', path: 'out' } }, source }
+    expect(argoComparedRevisionCurrent(single({ revision: 'sha', comparedTo: { source } }, spec))).toBe(false)
   })
 })

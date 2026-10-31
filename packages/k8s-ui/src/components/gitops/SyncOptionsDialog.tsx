@@ -45,8 +45,10 @@ export interface SyncOptionsDialogProps {
   appLabel: string
   multiSource?: boolean
   comparedRevision?: string
-  // The serving Radar pins an omitted revision to the last compared one
-  // (argoSyncInheritance). Otherwise the target is resolved when the sync runs.
+  // An omitted revision will use the last compared one: the serving Radar
+  // pins (argoSyncInheritance) and the comparison matches the current
+  // source(s) (argoComparedRevisionCurrent). Otherwise the target is resolved
+  // when the sync runs.
   pinsComparedRevision?: boolean
   resource?: GitOpsInsightRef
   // The Application's spec.syncPolicy.syncOptions. Without it the toggles

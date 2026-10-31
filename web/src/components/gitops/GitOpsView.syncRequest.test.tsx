@@ -17,8 +17,8 @@ const app = {
   apiVersion: 'argoproj.io/v1alpha1',
   kind: 'Application',
   metadata: { name: 'guestbook', namespace: 'argocd' },
-  spec: { project: 'default', source: {}, sources: undefined as Array<{ repoURL: string; targetRevision: string }> | undefined, destination: {}, syncPolicy: { syncOptions: APP_OPTIONS } },
-  status: { sync: { status: 'OutOfSync', revision: undefined as string | undefined }, health: { status: 'Healthy' } },
+  spec: { project: 'default', source: {} as Record<string, unknown>, sources: undefined as Array<{ repoURL: string; targetRevision: string }> | undefined, destination: {}, syncPolicy: { syncOptions: APP_OPTIONS } },
+  status: { sync: { status: 'OutOfSync', revision: undefined as string | undefined, revisions: undefined as string[] | undefined, comparedTo: undefined as Record<string, unknown> | undefined }, health: { status: 'Healthy' } },
 }
 const insight = {
   summary: { tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'guestbook', autoSyncMode: 'Manual' },
@@ -99,8 +99,11 @@ afterEach(async () => {
   client.clear()
   host.remove()
   document.body.innerHTML = ''
+  app.spec.source = {}
   app.spec.sources = undefined
   app.status.sync.revision = undefined
+  app.status.sync.revisions = undefined
+  app.status.sync.comparedTo = undefined
   vi.unstubAllGlobals()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 })
@@ -197,6 +200,8 @@ it.each([
     { repoURL: 'https://example.com/app', targetRevision: 'main' },
     { repoURL: 'https://example.com/values', targetRevision: 'v1' },
   ]
+  app.status.sync.revisions = ['app-sha', 'values-sha']
+  app.status.sync.comparedTo = { sources: app.spec.sources }
   await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
   await renderView(path)
   await click(button('Open sync'))
@@ -211,13 +216,26 @@ it.each([
   '/gitops',
   '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
 ])('shows the compared revision in the sync dialog from %s', async (path) => {
+  app.spec.source = { repoURL: 'https://example.com/app', targetRevision: 'main' }
   app.status.sync.revision = 'abcdef0123456789abcdef0123456789abcdef01'
+  app.status.sync.comparedTo = { source: { targetRevision: 'main', repoURL: 'https://example.com/app' } }
   await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
   await renderView(path)
   await click(button('Open sync'))
   expect(document.body.textContent).toContain('Leave empty for the revision Argo last compared (abcdef0).')
   await click(button('Sync now'))
   expect(requests[0].body).not.toHaveProperty('revision')
+})
+
+// A comparison made for an earlier source won't be pinned, so it isn't promised.
+it('promises no compared revision when the source changed since the comparison', async () => {
+  app.spec.source = { repoURL: 'https://example.com/app', targetRevision: 'release' }
+  app.status.sync.revision = 'abcdef0123456789abcdef0123456789abcdef01'
+  app.status.sync.comparedTo = { source: { repoURL: 'https://example.com/app', targetRevision: 'main' } }
+  await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
+  await renderView('/gitops')
+  await click(button('Open sync'))
+  expect(document.body.textContent).toContain('Leave empty for the target revision, resolved when the sync runs.')
 })
 
 // An older Radar resolves an omitted revision when the sync runs.

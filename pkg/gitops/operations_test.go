@@ -2456,9 +2456,9 @@ func TestArgoAppliedCurrentComparison(t *testing.T) {
 }
 
 // Argo CD prefers spec.sourceHydrator over a spec.source or spec.sources left
-// beside it, so a sync must not copy those: it would deploy a source Argo
-// ignores. The controller resolves the hydrated source when the sync runs.
-func TestArgoSyncOperationLeavesHydratedSourceToController(t *testing.T) {
+// beside it. A sync names the hydrated sync source: with no operation source
+// the controller would copy leftover spec.sources and sync those instead.
+func TestArgoSyncOperationUsesHydratedSyncSource(t *testing.T) {
 	hydrator := map[string]any{
 		"drySource":  map[string]any{"repoURL": "https://example.com/repo", "path": "app", "targetRevision": "main"},
 		"syncSource": map[string]any{"targetBranch": "environments/prod", "path": "rendered"},
@@ -2483,9 +2483,13 @@ func TestArgoSyncOperationLeavesHydratedSourceToController(t *testing.T) {
 				t.Fatalf("SyncArgoApp: %v", err)
 			}
 			sync := nestedMap(captureLastPatch(t, client), "operation", "sync")
-			for _, key := range []string{"source", "sources", "revisions"} {
+			want := map[string]any{"repoURL": "https://example.com/repo", "path": "rendered", "targetRevision": "environments/prod"}
+			if !reflect.DeepEqual(sync["source"], want) {
+				t.Fatalf("sync.source = %v, want the hydrated sync source %v", sync["source"], want)
+			}
+			for _, key := range []string{"sources", "revisions"} {
 				if _, ok := sync[key]; ok {
-					t.Fatalf("sync.%s = %v, want it left to the controller", key, sync[key])
+					t.Fatalf("sync.%s = %v, want none: the controller would sync leftover sources", key, sync[key])
 				}
 			}
 			if sync["revision"] != "" {
@@ -2494,8 +2498,22 @@ func TestArgoSyncOperationLeavesHydratedSourceToController(t *testing.T) {
 		})
 	}
 
-	// Leftover spec.sources do not make a hydrated Application multi-source.
+	// An explicit sync repository wins over the dry one, as in GetSyncSource.
+	explicit := map[string]any{
+		"drySource":  map[string]any{"repoURL": "https://example.com/dry", "path": "app"},
+		"syncSource": map[string]any{"repoURL": "https://example.com/rendered", "targetBranch": "env/prod", "path": "out"},
+	}
 	app := argoAppForTest("argocd", "demo", nil)
+	if err := unstructured.SetNestedMap(app.Object, map[string]any{"sourceHydrator": explicit}, "spec"); err != nil {
+		t.Fatal(err)
+	}
+	got := nestedMap(argoSyncOperation(context.Background(), app, ArgoSyncOptions{}, ""), "sync")["source"]
+	if want := map[string]any{"repoURL": "https://example.com/rendered", "path": "out", "targetRevision": "env/prod"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sync.source = %v, want %v", got, want)
+	}
+
+	// Leftover spec.sources do not make a hydrated Application multi-source.
+	app = argoAppForTest("argocd", "demo", nil)
 	if err := unstructured.SetNestedMap(app.Object, map[string]any{"sourceHydrator": hydrator, "sources": []any{leftover}}, "spec"); err != nil {
 		t.Fatal(err)
 	}

@@ -98,9 +98,8 @@ export function argoResumeSettings(app: any, serverStartsPruneOff: boolean | und
 }
 
 // isArgoHydrated: spec.sourceHydrator sets the Application's source, taking
-// precedence over spec.source and spec.sources. Radar leaves its source to the
-// controller, so a sync of it pins no compared revision.
-export function isArgoHydrated(app: any): boolean {
+// precedence over spec.source and spec.sources.
+function isArgoHydrated(app: any): boolean {
   return app?.spec?.sourceHydrator != null
 }
 
@@ -108,6 +107,32 @@ export function isArgoHydrated(app: any): boolean {
 // revision override doesn't apply. Leftover spec.sources beside a hydrator don't count.
 export function isArgoMultiSource(app: any): boolean {
   return !isArgoHydrated(app) && Array.isArray(app?.spec?.sources) && app.spec.sources.length > 0
+}
+
+// argoComparedRevisionCurrent mirrors the rule a Radar advertising
+// argoSyncInheritance applies to a sync without a revision: it uses the last
+// compared revision(s) only when the comparison was for the Application's
+// current source(s), one revision per source. Hydrated Applications are
+// never pinned.
+export function argoComparedRevisionCurrent(app: any): boolean {
+  if (isArgoHydrated(app)) return false
+  const sync = app?.status?.sync
+  if (isArgoMultiSource(app)) {
+    const sources = app.spec.sources
+    return Array.isArray(sync?.revisions) && sync.revisions.length === sources.length && jsonEqual(sources, sync?.comparedTo?.sources)
+  }
+  const source = app?.spec?.source
+  return !!source && Object.keys(source).length > 0 && !!sync?.revision && jsonEqual(source, sync?.comparedTo?.source)
+}
+
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((item, i) => jsonEqual(item, b[i]))
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(b)) {
+    const aKeys = Object.keys(a)
+    return aKeys.length === Object.keys(b).length && aKeys.every((key) => jsonEqual((a as any)[key], (b as any)[key]))
+  }
+  return false
 }
 
 // argoApplicationSyncOptions returns spec.syncPolicy.syncOptions: the options

@@ -16,7 +16,7 @@ import {
   RollbackDialog,
   SyncOptionsDialog,
   argoApplicationSyncOptions,
-  isArgoHydrated,
+  argoComparedRevisionCurrent,
   isArgoMultiSource,
   buildFluxSourceUrlMap,
   buildTreeFacets,
@@ -370,7 +370,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         appLabel={syncDialogRow ? `${syncDialogRow.namespace}/${syncDialogRow.name}` : ''}
         multiSource={isArgoMultiSource(syncDialogRow?.raw)}
         comparedRevision={syncDialogRow?.raw?.status?.sync?.revision}
-        pinsComparedRevision={argoInheritanceSupport === 'supported' && !isArgoHydrated(syncDialogRow?.raw)}
+        pinsComparedRevision={argoInheritanceSupport === 'supported' && argoComparedRevisionCurrent(syncDialogRow?.raw)}
         applicationSyncOptions={argoApplicationSyncOptions(syncDialogRow?.raw)}
         autoSyncEnabled={!!syncDialogRow && isArgoAutoSyncEnabled(syncDialogRow.raw)}
         pending={argoSync.isPending}
@@ -930,7 +930,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             open={!!syncDialogTarget}
             appLabel={`${namespace}/${name}`}
             multiSource={isArgoMultiSource(resourceQ.data)}
-            pinsComparedRevision={argoInheritanceSupport === 'supported' && !isArgoHydrated(resourceQ.data)}
+            pinsComparedRevision={argoInheritanceSupport === 'supported' && argoComparedRevisionCurrent(resourceQ.data)}
             resource={syncDialogTarget?.scope === 'resource' ? syncDialogTarget.resource : undefined}
             comparedRevision={resourceQ.data?.status?.sync?.revision}
             applicationSyncOptions={appSyncOptions}

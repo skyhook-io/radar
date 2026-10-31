@@ -372,6 +372,28 @@ func argoHydrated(app *unstructured.Unstructured) bool {
 	return found
 }
 
+// argoHydratedSyncSource is the source a hydrated Application syncs from, as
+// Argo CD's SourceHydrator.GetSyncSource builds it: the sync repository (the
+// dry one when unset), the sync path and the target branch.
+func argoHydratedSyncSource(app *unstructured.Unstructured) (map[string]any, bool) {
+	if !argoHydrated(app) {
+		return nil, false
+	}
+	repoURL, _, _ := unstructured.NestedString(app.Object, "spec", "sourceHydrator", "syncSource", "repoURL")
+	if repoURL == "" {
+		repoURL, _, _ = unstructured.NestedString(app.Object, "spec", "sourceHydrator", "drySource", "repoURL")
+	}
+	path, _, _ := unstructured.NestedString(app.Object, "spec", "sourceHydrator", "syncSource", "path")
+	branch, _, _ := unstructured.NestedString(app.Object, "spec", "sourceHydrator", "syncSource", "targetBranch")
+	source := map[string]any{}
+	for key, value := range map[string]string{"repoURL": repoURL, "path": path, "targetRevision": branch} {
+		if value != "" {
+			source[key] = value
+		}
+	}
+	return source, true
+}
+
 func argoOperationInfo(validationID string) []any {
 	info := []any{map[string]any{"name": ArgoInitiatedViaInfo, "value": ArgoInitiatedViaRadar}}
 	if validationID != "" {
@@ -572,10 +594,13 @@ func argoSyncOperation(ctx context.Context, app *unstructured.Unstructured, opts
 		}
 		sync["resources"] = resources
 	}
-	if argoHydrated(app) {
+	if hydrated, ok := argoHydratedSyncSource(app); ok {
 		// The hydrator's sync source takes precedence over any spec.source(s)
-		// left beside it, so copying those would deploy a source Argo ignores.
-		// The controller resolves the hydrated source when the sync runs.
+		// left beside it. Naming it is also what keeps the controller off a
+		// leftover spec.sources: with no operation source it copies those and
+		// syncs them as a multi-source Application. Its branch is resolved
+		// when the sync runs.
+		sync["source"] = hydrated
 	} else if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 {
 		sync["sources"] = sources
 		if opts.Revision == "" {
