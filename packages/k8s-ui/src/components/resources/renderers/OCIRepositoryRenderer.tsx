@@ -4,6 +4,7 @@ import { formatBytes } from '../../../utils/format'
 import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
+import { getFluxHandledRequestToken } from '../../../utils/flux-history'
 
 interface OCIRepositoryRendererProps {
   data: any
@@ -11,6 +12,7 @@ interface OCIRepositoryRendererProps {
 
 export function OCIRepositoryRenderer({ data }: OCIRepositoryRendererProps) {
   const status = data.status || {}
+  const handledRequest = getFluxHandledRequestToken(status)
   const spec = data.spec || {}
   const conditions = (status.conditions || []) as FluxCondition[]
   const artifact = status.artifact || {}
@@ -95,10 +97,11 @@ export function OCIRepositoryRenderer({ data }: OCIRepositoryRendererProps) {
       )}
 
       {/* Additional Info */}
-      {status.observedGeneration !== undefined && (
+      {(status.observedGeneration !== undefined || handledRequest) && (
         <Section title="Additional Info" defaultExpanded={false}>
           <PropertyList>
             <Property label="Observed Generation" value={status.observedGeneration} />
+            <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>
         </Section>
       )}

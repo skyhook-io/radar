@@ -40,7 +40,7 @@ import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
-import { getFluxDeployedRelease, getFluxHelmChartVersion, getFluxLastApplyAttempt } from '../../utils/flux-history'
+import { getFluxDeployedRelease, getFluxHelmChartVersion, getFluxLastApplyAttempt, getFluxLastStatusChange } from '../../utils/flux-history'
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
 import { FilterRailPanel } from '../shared/FilterRailPanel'
 
@@ -2116,6 +2116,7 @@ export function normalizeArgoApplicationSet(resource: any): GitOpsRow {
 
 export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsResourceStatus('kustomizations', resource)
+  const lastApplyAttempt = getFluxLastApplyAttempt(resource)
   const sourceName = resource.spec?.sourceRef?.name ?? ''
   const sourceKind = resource.spec?.sourceRef?.kind ?? ''
   const repository = fluxSourceUrls?.get(`${sourceKind}/${resource.metadata?.namespace ?? ''}/${sourceName}`) ?? sourceName
@@ -2142,8 +2143,8 @@ export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<s
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: getFluxLastApplyAttempt(resource) ?? '',
-    lastSyncLabel: 'Apply attempt',
+    lastSync: lastApplyAttempt ?? getFluxLastStatusChange(resource) ?? '',
+    lastSyncLabel: lastApplyAttempt ? 'Apply attempt' : 'Status changed',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
@@ -2156,6 +2157,7 @@ export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<s
 export function normalizeFluxHelmRelease(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsResourceStatus('helmreleases', resource)
   const deployedRelease = getFluxDeployedRelease(resource)
+  const lastDeployed = deployedRelease?.chartVersion ? deployedRelease.lastDeployed : undefined
   const chartSpec = resource.spec?.chart?.spec ?? {}
   const sourceName = chartSpec.sourceRef?.name ?? ''
   const sourceKind = chartSpec.sourceRef?.kind ?? ''
@@ -2183,8 +2185,8 @@ export function normalizeFluxHelmRelease(resource: any, fluxSourceUrls?: Map<str
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: deployedRelease?.chartVersion ? deployedRelease.lastDeployed ?? '' : '',
-    lastSyncLabel: 'Deployed',
+    lastSync: lastDeployed ?? getFluxLastStatusChange(resource) ?? '',
+    lastSyncLabel: lastDeployed ? 'Deployed' : 'Status changed',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),

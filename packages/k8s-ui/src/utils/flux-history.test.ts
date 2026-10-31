@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getFluxDeployedRelease, getFluxHelmChartVersion, getFluxLastApplyAttempt } from './flux-history'
+import { getFluxDeployedRelease, getFluxHandledRequestToken, getFluxHelmChartVersion, getFluxLastApplyAttempt, getFluxLastStatusChange, getFluxReleaseAttemptTime } from './flux-history'
 
 const kustomization = (history?: unknown[]) => ({
   apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization',
@@ -38,5 +38,27 @@ describe('Flux history', () => {
     const older = { apiVersion: 'helm.toolkit.fluxcd.io/v2beta1', kind: 'HelmRelease', status: { lastAppliedRevision: '1.2.0', lastAttemptedRevision: '1.3.0' } }
     expect(getFluxHelmChartVersion(older)).toBe('1.2.0')
     expect(getFluxDeployedRelease(older)).toBeUndefined()
+  })
+
+  it('selects a real status transition without treating it as an apply or manual request time', () => {
+    const resource = { ...kustomization(), status: { conditions: [
+      { type: 'Ready', lastTransitionTime: '2026-10-30T12:00:00.123456788Z' },
+      { type: 'Reconciling', lastTransitionTime: '2026-10-30T14:00:00.123456789+02:00' },
+      { type: 'Stalled', lastTransitionTime: 'invalid' },
+    ] } }
+    expect(getFluxLastStatusChange(resource)).toBe('2026-10-30T14:00:00.123456789+02:00')
+    expect(getFluxLastApplyAttempt(resource)).toBeUndefined()
+    expect(getFluxLastStatusChange({ ...resource, apiVersion: 'example.io/v1' })).toBeUndefined()
+    expect(getFluxLastStatusChange({ ...helm([]), status: { conditions: [{ lastTransitionTime: '0001-01-01T00:00:00Z' }] } })).toBeUndefined()
+  })
+
+  it('preserves arbitrary request tokens and validates attempt dates independently of outcome', () => {
+    expect(getFluxHandledRequestToken({ lastHandledReconcileAt: 'request-abc' })).toBe('request-abc')
+    expect(getFluxHandledRequestToken({ lastHandledReconcileAt: '2026-10-07T09:00:00Z' })).toBe('2026-10-07T09:00:00Z')
+    expect(getFluxHandledRequestToken({ lastHandledReconcileAt: 123 })).toBeUndefined()
+    expect(getFluxHandledRequestToken({ lastHandledReconcileAt: '' })).toBeUndefined()
+    expect(getFluxReleaseAttemptTime({ status: 'failed', lastDeployed: '2026-10-30T20:59:00Z' })).toBe('2026-10-30T20:59:00Z')
+    expect(getFluxReleaseAttemptTime({ lastDeployed: '2026-02-30T00:00:00Z' })).toBeUndefined()
+    expect(getFluxReleaseAttemptTime({ lastDeployed: '0001-01-01T00:00:00Z' })).toBeUndefined()
   })
 })
