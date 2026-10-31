@@ -202,3 +202,27 @@ func TestContextSourceFingerprintFollowsServerAndCredentials(t *testing.T) {
 		t.Fatalf("remove: %v", err)
 	}
 }
+
+// An auth provider that refreshes a token during the check writes it back to
+// the kubeconfig; that must not read as the context changing.
+func TestContextSourceFingerprintIgnoresRefreshedCredentials(t *testing.T) {
+	cfg := clientcmdapi.NewConfig()
+	cfg.Clusters["c"] = &clientcmdapi.Cluster{Server: "https://one.invalid"}
+	cfg.AuthInfos["u"] = &clientcmdapi.AuthInfo{
+		Token:        "old",
+		AuthProvider: &clientcmdapi.AuthProviderConfig{Name: "oidc", Config: map[string]string{"id-token": "old"}},
+	}
+	cfg.Contexts["ctx"] = &clientcmdapi.Context{Cluster: "c", AuthInfo: "u"}
+	before := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"])
+
+	cfg.AuthInfos["u"].Token = "new"
+	cfg.AuthInfos["u"].AuthProvider.Config["id-token"] = "new"
+	if after := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"]); after != before {
+		t.Fatal("a refreshed token changed the fingerprint")
+	}
+
+	cfg.AuthInfos["u"].AuthProvider.Name = "other"
+	if after := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"]); after == before {
+		t.Fatal("a different auth provider did not change the fingerprint")
+	}
+}

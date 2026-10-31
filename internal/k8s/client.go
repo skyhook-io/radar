@@ -1792,18 +1792,15 @@ func validateContextSwitchTarget(name string) error {
 // clients already built, so the clients Radar checks before leaving the
 // current cluster are exactly the ones it installs.
 type preparedContext struct {
-	name           string
-	sourceFile     string
-	inFileName     string
-	rawConfig      clientcmdapi.Config
-	kubeContext    *clientcmdapi.Context
-	config         *rest.Config
-	clients        *sharedKubernetesClients
-	usesExec       bool
-	execCmds       []string
-	emptyAuthInfos []string
-	totalContexts  int
-	fingerprint    string
+	name        string
+	sourceFile  string
+	inFileName  string
+	rawConfig   clientcmdapi.Config
+	kubeContext *clientcmdapi.Context
+	config      *rest.Config
+	clients     *sharedKubernetesClients
+	usesExec    bool
+	fingerprint string
 }
 
 // loadContextSource resolves a context name to the one kubeconfig file that
@@ -1856,16 +1853,26 @@ func loadContextSource(name string) (*clientcmd.ClientConfigLoadingRules, string
 }
 
 // contextSourceFingerprint identifies what a context resolves to: its source
-// file, the cluster entry and the credentials. A kubeconfig edit or a CAPI
-// merge that repoints the name changes it.
+// file, the cluster entry and how it authenticates. A kubeconfig edit or a
+// CAPI merge that repoints the name changes it. Tokens an auth provider
+// refreshes and writes back during a request are left out, or a successful
+// check would look like a concurrent edit.
 func contextSourceFingerprint(sourceFile, inFileName string, rawConfig clientcmdapi.Config, kubeContext *clientcmdapi.Context) string {
+	var authInfo *clientcmdapi.AuthInfo
+	if ai, ok := rawConfig.AuthInfos[kubeContext.AuthInfo]; ok && ai != nil {
+		authInfo = ai.DeepCopy()
+		authInfo.Token = ""
+		if authInfo.AuthProvider != nil {
+			authInfo.AuthProvider.Config = nil
+		}
+	}
 	encoded, _ := json.Marshal(struct {
 		Source   string
 		Name     string
 		Context  *clientcmdapi.Context
 		Cluster  *clientcmdapi.Cluster
 		AuthInfo *clientcmdapi.AuthInfo
-	}{sourceFile, inFileName, kubeContext, rawConfig.Clusters[kubeContext.Cluster], rawConfig.AuthInfos[kubeContext.AuthInfo]})
+	}{sourceFile, inFileName, kubeContext, rawConfig.Clusters[kubeContext.Cluster], authInfo})
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
 }
@@ -1887,15 +1894,6 @@ func prepareContext(name string) (*preparedContext, error) {
 	if IsInCluster() {
 		return nil, fmt.Errorf("cannot switch context when running in-cluster")
 	}
-	clientMu.RLock()
-	registry := contextRegistry
-	pathsSnapshot := append([]string(nil), kubeconfigPaths...)
-	configsSnapshot := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
-	for k, v := range perFileConfigs {
-		configsSnapshot[k] = v
-	}
-	clientMu.RUnlock()
-
 	loadingRules, inFileName, kubeConfig, rawConfig, kubeContext, err := loadContextSource(name)
 	if err != nil {
 		return nil, err
@@ -1922,6 +1920,34 @@ func prepareContext(name string) (*preparedContext, error) {
 	if ai, ok := rawConfig.AuthInfos[kubeContext.AuthInfo]; ok && ai.Exec != nil {
 		usesExec = true
 	}
+
+	return &preparedContext{
+		name:        name,
+		sourceFile:  loadingRules.ExplicitPath,
+		inFileName:  inFileName,
+		rawConfig:   rawConfig,
+		kubeContext: kubeContext,
+		config:      config,
+		clients:     clients,
+		usesExec:    usesExec,
+		fingerprint: contextSourceFingerprint(loadingRules.ExplicitPath, inFileName, rawConfig, kubeContext),
+	}, nil
+}
+
+// installPreparedContext makes a prepared context the active one. The
+// registry-wide diagnostics (context count, exec plugins) are read now rather
+// than when the context was prepared: a checked switch spends seconds probing,
+// and the registry may have been reconciled meanwhile.
+func installPreparedContext(p *preparedContext) {
+	clientMu.RLock()
+	registry := contextRegistry
+	pathsSnapshot := append([]string(nil), kubeconfigPaths...)
+	configsSnapshot := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
+	for k, v := range perFileConfigs {
+		configsSnapshot[k] = v
+	}
+	clientMu.RUnlock()
+
 	// Re-collect exec plugin commands. In isolated-load mode rawConfig only
 	// reflects the one chosen file, so we walk the full registry to keep
 	// the diagnostic honest about which plugins span the whole configuration.
@@ -1931,30 +1957,11 @@ func prepareContext(name string) (*preparedContext, error) {
 		execCmds, emptyAIs = aggregateExecPluginCommands(pathsSnapshot, configsSnapshot)
 		totalContexts = len(registry)
 	} else {
-		execCmds, emptyAIs = collectExecPluginCommands(&rawConfig)
-		totalContexts = len(rawConfig.Contexts)
+		execCmds, emptyAIs = collectExecPluginCommands(&p.rawConfig)
+		totalContexts = len(p.rawConfig.Contexts)
 	}
-
-	return &preparedContext{
-		name:           name,
-		sourceFile:     loadingRules.ExplicitPath,
-		inFileName:     inFileName,
-		rawConfig:      rawConfig,
-		kubeContext:    kubeContext,
-		config:         config,
-		clients:        clients,
-		usesExec:       usesExec,
-		execCmds:       execCmds,
-		emptyAuthInfos: emptyAIs,
-		totalContexts:  totalContexts,
-		fingerprint:    contextSourceFingerprint(loadingRules.ExplicitPath, inFileName, rawConfig, kubeContext),
-	}, nil
-}
-
-// installPreparedContext makes a prepared context the active one.
-func installPreparedContext(p *preparedContext) {
-	if len(p.emptyAuthInfos) > 0 {
-		recordEmptyCommandWarning("context-switch", p.emptyAuthInfos)
+	if len(emptyAIs) > 0 {
+		recordEmptyCommandWarning("context-switch", emptyAIs)
 	}
 
 	clientMu.Lock()
@@ -1972,8 +1979,8 @@ func installPreparedContext(p *preparedContext) {
 	clusterName = p.kubeContext.Cluster
 	contextNamespace = p.kubeContext.Namespace
 	contextUsesExec = p.usesExec
-	totalContextCount = p.totalContexts
-	execPluginCommands = p.execCmds
+	totalContextCount = totalContexts
+	execPluginCommands = execCmds
 	clientMu.Unlock()
 }
 

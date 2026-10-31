@@ -5137,17 +5137,16 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := k8s.PerformCheckedContextSwitch(r.Context(), qualifiedName); err != nil {
+	// CAPI connects keep the unchecked switch: the merged source is shared by
+	// reconnects to the same workload cluster, and probing outside the switch
+	// lock would let one request discard a source another just refreshed.
+	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
 		discarded := k8s.DiscardFailedMergedContext(mergedPath, created)
 		if discarded {
 			log.Printf("[capi] Discarded inactive kubeconfig after failed switch to %q", qualifiedName)
 		}
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
-			s.writeSwitchPreflightError(w, "failed to switch context: ", err)
-			return
-		}
-		if errors.Is(err, k8s.ErrReconnectSuperseded) {
-			s.writeError(w, http.StatusConflict, "failed to switch context: "+err.Error())
+			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
 			return
 		}
 		statusContext := qualifiedName
