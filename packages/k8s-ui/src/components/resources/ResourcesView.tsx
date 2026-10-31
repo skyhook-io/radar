@@ -1791,7 +1791,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Applied git revision' },
     { key: 'inventory', label: 'Resources', width: 'w-24', tooltip: 'Number of managed resources' },
-    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since the last recorded reconciliation attempt; falls back to the last Ready transition. Neither guarantees success.' },
+    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since the last recorded apply attempt; falls back to the last Ready transition. Neither guarantees success.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmreleases: [
@@ -1802,7 +1802,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'message', label: 'Message', width: 'w-64', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
     { key: 'revision', label: 'Rev', width: 'w-16', tooltip: 'Helm release revision number' },
-    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
+    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Deployment time of the currently deployed release, or the last Ready status change when that time is unavailable.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   alerts: [

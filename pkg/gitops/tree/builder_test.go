@@ -865,7 +865,7 @@ func TestRemoteFluxInventoryOverlapDoesNotEnrichFromLocalSource(t *testing.T) {
 
 func TestHelmReleaseRootKeepsInstalledChartOverTopologyRevision(t *testing.T) {
 	hr := helmRelease("team", "app")
-	hr.Object["status"] = map[string]any{"lastAttemptedRevision": "6.15.0", "history": []any{map[string]any{"chartVersion": "6.15.0", "status": "deployed"}}}
+	hr.Object["status"] = map[string]any{"lastAttemptedRevision": "6.16.0", "history": []any{map[string]any{"version": int64(2), "chartVersion": "6.16.0", "status": "failed"}, map[string]any{"version": int64(1), "chartVersion": "6.15.0", "status": "deployed"}}}
 	topo := &topology.Topology{Nodes: []topology.Node{{ID: "helmrelease/team/app", Kind: "HelmRelease", Name: "app", Data: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "namespace": "team", "revision": 0}}}}
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}): hr}}
 	tree, _, err := NewBuilder(getter, topo).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")

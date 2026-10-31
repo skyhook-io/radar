@@ -40,6 +40,7 @@ import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
+import { getFluxDeployedRelease, getFluxHelmChartVersion, getFluxLastApplyAttempt, getFluxLastStatusChange } from '../../utils/flux-history'
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
 import { FilterRailPanel } from '../shared/FilterRailPanel'
 
@@ -169,6 +170,7 @@ export interface GitOpsRow {
   destinationNamespace: string
   createdAt: string
   lastSync: string
+  lastSyncLabel?: 'Apply attempt' | 'Deployed' | 'Sync attempt' | 'Status changed'
   autoSync: boolean
   terminating: boolean
   terminationStartedAt?: string
@@ -1102,7 +1104,7 @@ const SORT_OPTIONS: [SortKey, string][] = [
   ['urgency', 'Priority'],
   ['health', 'Health'],
   ['sync', 'Sync'],
-  ['lastSync', 'Last sync'],
+  ['lastSync', 'Activity'],
   ['project', 'Project'],
   ['name', 'Name'],
 ]
@@ -1315,7 +1317,7 @@ function GitOpsTable({
           <SortableTh label="Health" sortKey="health" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[9%]" />
           <th className={clsx(TH_CLASS, showDestination ? 'w-[20%]' : 'w-[28%]')}>Source</th>
           {showDestination && <th className={clsx(TH_CLASS, 'w-[14%]')}>Destination</th>}
-          <SortableTh label="Last Sync" sortKey="lastSync" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[10%]" />
+          <SortableTh label="Activity" sortKey="lastSync" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[10%]" />
           {showActions && (
             <th className={clsx(TH_CLASS, 'w-[6%] text-right')}>
               <span className="sr-only">Actions</span>
@@ -1402,7 +1404,7 @@ function GitOpsTable({
               <TableCell>
                 {row.terminating
                   ? <span className="text-orange-400/80">{pendingFor(row.terminationStartedAt)}</span>
-                  : row.lastSync ? formatRelativeAgeTime(row.lastSync, '') : row.createdAt ? `Created ${formatRelativeAgeTime(row.createdAt, '')}` : ''}
+                  : <ActivityTime row={row} />}
               </TableCell>
               {showActions && onRowAction && (
                 <td
@@ -1594,8 +1596,7 @@ function GitOpsTile({
 }) {
   const source = compactRepoSource(row.repository || row.chart, row.path || row.chart)
   const revision = row.targetRevision || ''
-  const lastSyncRaw = row.lastSync || row.createdAt
-  const recencyClass = recencyTone(lastSyncRaw)
+  const activity = activityText(row)
   const dest = row.destination ? compactClusterURL(row.destination) : ''
   const ns = destinationNamespaceLabel(row)
   const tileClass = clsx(
@@ -1633,7 +1634,7 @@ function GitOpsTile({
           {row.terminating ? (
             <div className="font-medium text-orange-400/80">{pendingFor(row.terminationStartedAt)}</div>
           ) : (
-            lastSyncRaw && <div className={clsx('font-medium', recencyClass)}>{formatRelativeAgeTime(lastSyncRaw, '')}</div>
+            activity && <div className="font-medium text-theme-text-secondary">{activity}</div>
           )}
         </div>
         {(dest || ns || row.project) && (
@@ -1932,14 +1933,19 @@ function countLabels(rows: GitOpsRow[]) {
     .slice(0, 30)
 }
 
-function recencyTone(value: string): string {
-  if (!value) return 'text-theme-text-tertiary'
-  const time = Date.parse(value)
-  if (!Number.isFinite(time)) return 'text-theme-text-tertiary'
-  const diffMs = Date.now() - time
-  if (diffMs < 10 * 60_000) return 'text-emerald-600 dark:text-emerald-400'
-  if (diffMs > 7 * 24 * 60 * 60_000) return 'text-amber-600 dark:text-amber-400'
-  return 'text-theme-text-secondary'
+function activityText(row: GitOpsRow): string {
+  if (row.lastSync) return `${row.lastSyncLabel ? `${row.lastSyncLabel} ` : ''}${formatRelativeAgeTime(row.lastSync, '')}`
+  return row.createdAt ? `Created ${formatRelativeAgeTime(row.createdAt, '')}` : ''
+}
+
+function ActivityTime({ row }: { row: GitOpsRow }) {
+  const timestamp = row.lastSync || row.createdAt
+  const label = row.lastSync ? row.lastSyncLabel : 'Created'
+  if (!timestamp) return null
+  return <div className="min-w-0">
+    <span className="block whitespace-nowrap">{formatRelativeAgeTime(timestamp, '')}</span>
+    {label && <span className="block truncate text-xs text-theme-text-tertiary">{label}</span>}
+  </div>
 }
 
 function shortRevision(rev: string): string {
@@ -2007,6 +2013,7 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
     destinationNamespace: resource.spec?.destination?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: argoLastSync ?? '',
+    lastSyncLabel: resource.status?.operationState?.finishedAt ? 'Sync attempt' : 'Deployed',
     autoSync: Boolean(resource.spec?.syncPolicy?.automated),
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
@@ -2094,6 +2101,7 @@ export function normalizeArgoApplicationSet(resource: any): GitOpsRow {
     // Left empty the Last Sync column falls back to the creation timestamp,
     // which dates the object rather than any activity on it.
     lastSync: status?.lastSyncTime ?? '',
+    lastSyncLabel: 'Status changed',
     // An ApplicationSet has no sync policy of its own; the template's policy
     // belongs to the Applications it generates. Automation counts and the
     // sync-policy filter skip this kind rather than read this field.
@@ -2108,6 +2116,7 @@ export function normalizeArgoApplicationSet(resource: any): GitOpsRow {
 
 export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsResourceStatus('kustomizations', resource)
+  const lastApplyAttempt = getFluxLastApplyAttempt(resource)
   const sourceName = resource.spec?.sourceRef?.name ?? ''
   const sourceKind = resource.spec?.sourceRef?.kind ?? ''
   const repository = fluxSourceUrls?.get(`${sourceKind}/${resource.metadata?.namespace ?? ''}/${sourceName}`) ?? sourceName
@@ -2134,7 +2143,8 @@ export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<s
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: newestConditionTime(resource),
+    lastSync: lastApplyAttempt ?? getFluxLastStatusChange(resource) ?? '',
+    lastSyncLabel: lastApplyAttempt ? 'Apply attempt' : 'Status changed',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
@@ -2146,6 +2156,8 @@ export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<s
 
 export function normalizeFluxHelmRelease(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsResourceStatus('helmreleases', resource)
+  const deployedRelease = getFluxDeployedRelease(resource)
+  const lastDeployed = deployedRelease?.chartVersion ? deployedRelease.lastDeployed : undefined
   const chartSpec = resource.spec?.chart?.spec ?? {}
   const sourceName = chartSpec.sourceRef?.name ?? ''
   const sourceKind = chartSpec.sourceRef?.kind ?? ''
@@ -2167,13 +2179,14 @@ export function normalizeFluxHelmRelease(resource: any, fluxSourceUrls?: Map<str
     reconcilingSince: status?.reconcilingSince,
     suspended: status?.suspended ?? resource.spec?.suspend === true,
     repository,
-    targetRevision: chartSpec.version ?? resource.status?.lastAttemptedRevision ?? '',
+    targetRevision: getFluxHelmChartVersion(resource) || resource.status?.lastAttemptedRevision || '',
     path: '',
     chart: chartSpec.chart ?? '',
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: newestConditionTime(resource),
+    lastSync: lastDeployed ?? getFluxLastStatusChange(resource) ?? '',
+    lastSyncLabel: lastDeployed ? 'Deployed' : 'Status changed',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
@@ -2206,12 +2219,4 @@ function isTerminating(resource: any): boolean {
 
 function terminationStartedAt(resource: any): string | undefined {
   return resource?.metadata?.deletionTimestamp || undefined
-}
-
-function newestConditionTime(resource: any): string {
-  const times = (resource.status?.conditions ?? [])
-    .map((condition: any) => condition.lastTransitionTime)
-    .filter(Boolean)
-    .sort()
-  return times[times.length - 1] ?? ''
 }

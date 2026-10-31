@@ -96,7 +96,7 @@ func TestHelmReleaseRevisionIsTheInstalledChart(t *testing.T) {
 	// attempted chart version against nothing flagged every healthy release.
 	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease", "status": map[string]any{
 		"lastAttemptedRevision": "6.15.0",
-		"history":               []any{map[string]any{"chartVersion": "6.15.0", "status": "deployed"}, map[string]any{"chartVersion": "6.14.0", "status": "superseded"}},
+		"history":               []any{map[string]any{"version": int64(2), "chartVersion": "6.15.0", "status": "deployed"}, map[string]any{"version": int64(1), "chartVersion": "6.14.0", "status": "superseded"}},
 	}}}
 	node := enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj)
 	if node.Data["revision"] != "6.15.0" || node.Data["attemptedRevision"] != "6.15.0" {
@@ -105,7 +105,7 @@ func TestHelmReleaseRevisionIsTheInstalledChart(t *testing.T) {
 	// A failed upgrade to 6.16.0 leaves 6.15.0 installed.
 	obj.Object["status"] = map[string]any{
 		"lastAttemptedRevision": "6.16.0",
-		"history":               []any{map[string]any{"chartVersion": "6.16.0", "status": "failed"}, map[string]any{"chartVersion": "6.15.0", "status": "deployed"}},
+		"history":               []any{map[string]any{"version": int64(3), "chartVersion": "6.16.0", "status": "failed"}, map[string]any{"version": int64(2), "chartVersion": "6.15.0", "status": "deployed"}},
 	}
 	node = enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj)
 	if node.Data["revision"] != "6.15.0" || node.Data["attemptedRevision"] != "6.16.0" {

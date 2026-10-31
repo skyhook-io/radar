@@ -4,6 +4,7 @@ import { formatBytes } from '../../../utils/format'
 import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
+import { getFluxHandledRequestToken } from '../../../utils/flux-history'
 
 interface GitRepositoryRendererProps {
   data: any
@@ -14,6 +15,7 @@ export function GitRepositoryRenderer({ data }: GitRepositoryRendererProps) {
   const spec = data.spec || {}
   const conditions = (status.conditions || []) as FluxCondition[]
   const artifact = status.artifact || {}
+  const handledRequest = getFluxHandledRequestToken(status)
 
   // Convert to unified GitOps status
   const gitOpsStatus = fluxConditionsToGitOpsStatus(conditions, spec.suspend === true, {
@@ -48,7 +50,6 @@ export function GitRepositoryRenderer({ data }: GitRepositoryRendererProps) {
           {spec.interval && (
             <SyncCountdown
               interval={spec.interval}
-              lastSyncTime={status.lastHandledReconcileAt}
               suspended={gitOpsStatus.suspended}
             />
           )}
@@ -97,16 +98,11 @@ export function GitRepositoryRenderer({ data }: GitRepositoryRendererProps) {
       )}
 
       {/* Additional Status Info */}
-      {status.observedGeneration !== undefined && (
+      {(status.observedGeneration !== undefined || handledRequest) && (
         <Section title="Additional Info" defaultExpanded={false}>
           <PropertyList>
             <Property label="Observed Generation" value={status.observedGeneration} />
-            {status.lastHandledReconcileAt && (
-              <Property
-                label="Last Reconciled"
-                value={<TimeValue timestamp={status.lastHandledReconcileAt} />}
-              />
-            )}
+            <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>
         </Section>
       )}

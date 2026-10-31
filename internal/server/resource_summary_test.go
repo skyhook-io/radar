@@ -335,10 +335,16 @@ func TestSummaryStripArgoApplicationSparse(t *testing.T) {
 
 func TestSummaryStripFluxKustomization(t *testing.T) {
 	fixture := fluxKustomizationFixture()
+	if err := unstructured.SetNestedSlice(fixture.Object, []any{map[string]any{"lastReconciled": "2026-10-30T12:00:00Z", "lastReconciledStatus": "ReconciliationSucceeded"}}, "status", "history"); err != nil {
+		t.Fatal(err)
+	}
 
 	stripped, snapshot := stripViaList(t, fixture)
 
 	assertPathsPreserved(t, snapshot, stripped, [][]string{
+		{"apiVersion"},
+		{"kind"},
+		{"status", "history"},
 		{"metadata", "name"},
 		{"metadata", "namespace"},
 		{"metadata", "labels"},
@@ -360,10 +366,16 @@ func TestSummaryStripFluxKustomization(t *testing.T) {
 
 func TestSummaryStripFluxHelmRelease(t *testing.T) {
 	fixture := fluxHelmReleaseFixture()
+	if err := unstructured.SetNestedSlice(fixture.Object, []any{map[string]any{"version": int64(4), "chartVersion": "1.2.0", "status": "deployed", "lastDeployed": "2026-10-27T12:00:00Z"}}, "status", "history"); err != nil {
+		t.Fatal(err)
+	}
 
 	stripped, snapshot := stripViaList(t, fixture)
 
 	assertPathsPreserved(t, snapshot, stripped, [][]string{
+		{"apiVersion"},
+		{"kind"},
+		{"status", "history"},
 		{"metadata", "name"},
 		{"metadata", "namespace"},
 		{"metadata", "labels"},
