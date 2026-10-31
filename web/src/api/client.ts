@@ -830,7 +830,8 @@ export function useResourceAudit(
 // ?namespaces= for a cheap, bounded Compose.
 // rootObservation is an opaque root UID/resourceVersion token: changes schedule
 // a refresh at most every 10s, without creating a query key per version. Omit it
-// to retain only the visible-tab timer and stale-view/focus refreshes.
+// to retain the 60s visible-tab fallback and stale-view/focus refreshes.
+// Disabled hooks and cluster-scoped subjects do not poll for namespaced Issues.
 export function useResourceIssues(
   kind: string,
   group: string | undefined,
