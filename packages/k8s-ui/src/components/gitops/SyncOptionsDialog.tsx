@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldChe
 import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
+import { SEVERITY_TEXT } from '../../utils/badge-colors'
 import type { GitOpsInsightRef } from '../../types/gitops-insights'
 
 // =============================================================================
@@ -149,6 +150,14 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
     ? { replace: false, serverSideApply: false }
     : { replace, serverSideApply, applicationSyncOptions: appOptions, sendUnchanged: appOptions.join('\n') !== liveAppOptionsKey }
 
+  // Replace and Force can take workloads down, so a real sync using either says
+  // so beside the button and in its label: Argo CD's own panel asks for a
+  // confirmation on each. Replace counts when inherited from the Application.
+  const disruptive = !dryRun || richResourceValidation
+    ? [replace && 'replace', force && 'force'].filter((mode): mode is string => !!mode)
+    : []
+  const syncLabel = resource ? 'Sync resource' : 'Sync now'
+
   function submit() {
     onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision: multiSource || revisionDisabled ? '' : revision, prune, dryRun: richResourceValidation ? false : dryRun, force, applyOnly, ...optionEdits }))
   }
@@ -246,6 +255,15 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
             </div>
           )}
         </fieldset>
+        {disruptive.length > 0 && (
+          <p className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.warning}`}>
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              {replace && 'Replace deletes and recreates resources instead of updating them, which can cause downtime. '}
+              {force && 'Force removes resources immediately, skipping graceful deletion, which can lose data.'}
+            </span>
+          </p>
+        )}
         {richResourceValidation && (validationPending || validationResult || validationError) && (
           <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} />
         )}
@@ -277,7 +295,7 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
             </button>
           </Tooltip>
         )}
-        <PrimaryButton onClick={submit} disabled={optionsDisabled} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun && !richResourceValidation ? 'Run dry-run' : resource ? 'Sync resource' : 'Sync now'} />
+        <PrimaryButton onClick={submit} disabled={optionsDisabled} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun && !richResourceValidation ? 'Run dry-run' : disruptive.length > 0 ? `${syncLabel === 'Sync now' ? 'Sync' : syncLabel} with ${disruptive.join(' and ')}` : syncLabel} warning={disruptive.length > 0} />
       </div>
     </DialogPortal>
   )
@@ -409,13 +427,13 @@ function Toggle({ label, checked, onChange, disabled, hint }: { label: string; c
   )
 }
 
-function PrimaryButton({ onClick, disabled, icon: Icon, loading, label }: { onClick: () => void; disabled?: boolean; icon: ComponentType<{ className?: string }>; loading?: boolean; label: string }) {
+function PrimaryButton({ onClick, disabled, icon: Icon, loading, label, warning }: { onClick: () => void; disabled?: boolean; icon: ComponentType<{ className?: string }>; loading?: boolean; label: string; warning?: boolean }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="btn-brand inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
+      className={`${warning ? 'bg-amber-600 text-theme-text-primary hover:bg-amber-700' : 'btn-brand'} inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50`}
     >
       <Icon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
       {label}

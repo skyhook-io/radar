@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SyncOptionsDialog, type ArgoSyncOpts } from './SyncOptionsDialog'
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -40,7 +40,12 @@ async function render(props: Partial<Parameters<typeof SyncOptionsDialog>[0]> = 
   ))
 }
 
-const button = (label: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
+// A sync using Replace or Force is labelled "Sync with replace" etc.; tests
+// about other behavior find it by its plain label.
+const button = (label: string) => [...document.querySelectorAll('button')].find((b) => {
+  const text = b.textContent?.trim() ?? ''
+  return text === label || text.startsWith(`${label === 'Sync now' ? 'Sync' : label} with `)
+})!
 const toggle = (label: string) => [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith(label))!.querySelector('input')!
 const click = async (el: HTMLElement) => { await act(async () => el.click()) }
 
@@ -330,4 +335,40 @@ it('names one compared target for selective validation and sync', async () => {
   await click(button('Sync resource'))
   expect(validated[0].revision).toBeUndefined()
   expect(confirmed[0].revision).toBeUndefined()
+})
+
+// Argo CD's sync panel confirms Replace and Force. Here a real sync using
+// either names it on the button, with one line saying what it can do.
+describe('disruptive sync modes', () => {
+  const primary = () => document.querySelector('button.bg-amber-600, button.btn-brand:last-child')?.textContent?.trim()
+
+  it('says nothing extra for an ordinary sync', async () => {
+    await render()
+    expect(document.body.textContent).not.toContain('can cause downtime')
+    expect(button('Sync now').textContent?.trim()).toBe('Sync now')
+  })
+
+  it('names Replace inherited from the Application before the sync', async () => {
+    await render({ applicationSyncOptions: ['Replace=true'] })
+    expect(document.body.textContent).toContain('Replace deletes and recreates resources instead of updating them, which can cause downtime.')
+    expect(primary()).toBe('Sync with replace')
+  })
+
+  it('names Force and both modes together, and drops the warning for a dry run', async () => {
+    await render()
+    await click(toggle('Force'))
+    expect(document.body.textContent).toContain('Force removes resources immediately, skipping graceful deletion, which can lose data.')
+    expect(primary()).toBe('Sync with force')
+    await click(toggle('Replace'))
+    expect(primary()).toBe('Sync with replace and force')
+    await click(toggle('Dry run'))
+    expect(document.body.textContent).not.toContain('can lose data')
+    expect(primary()).toBe('Run dry-run')
+  })
+
+  it('labels a selective sync the same way', async () => {
+    await render({ resource: { kind: 'Deployment', group: 'apps', namespace: 'guestbook', name: 'web' } })
+    await click(toggle('Force'))
+    expect(primary()).toBe('Sync resource with force')
+  })
 })

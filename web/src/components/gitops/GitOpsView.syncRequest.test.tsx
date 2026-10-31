@@ -120,7 +120,11 @@ async function renderView(path: string) {
 }
 
 const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) }) }
-const button = (label: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!
+// A sync using Replace or Force is labelled "Sync with replace" etc.
+const button = (label: string) => [...document.querySelectorAll('button')].find((b) => {
+  const text = b.textContent?.trim() ?? ''
+  return text === label || text.startsWith(`${label === 'Sync now' ? 'Sync' : label} with `)
+})!
 const toggle = (label: string) => [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith(label))!.querySelector('input')!
 const click = async (el: HTMLElement) => { await act(async () => el.click()); await settle() }
 const advertise = async (features: Record<string, boolean>) => {
