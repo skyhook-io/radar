@@ -165,6 +165,7 @@ type FeatureCapabilities struct {
 	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
 	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
 	SearchCoverage        bool `json:"searchCoverage"`
+	SearchEventContent    bool `json:"searchEventContent"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`

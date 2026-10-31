@@ -5,6 +5,7 @@ import type { SearchMatchedField } from '../../api/client'
 // reports keep their findings under `report`, not a spec.
 export function contentMatchLabel(matched: SearchMatchedField[] | undefined): string {
   if (!matched?.length || !matched.every((m) => m.site.startsWith('content:'))) return ''
+  if (matched.every((m) => /^content:(reason|message|type|involvedObject|related)(\.|$)/.test(m.site))) return 'in event'
   return matched.every((m) => m.site.startsWith('content:report.')) ? 'in findings' : 'in spec'
 }
 

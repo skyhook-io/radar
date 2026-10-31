@@ -1486,6 +1486,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Features = k8s.FeatureCapabilities{
 		ResourceReadCoverage:     true,
 		SearchCoverage:           true,
+		SearchEventContent:       true,
 		YAMLReview:               true,
 		YAMLSchemas:              true,
 		WorkloadImages:           true,

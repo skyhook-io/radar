@@ -985,6 +985,17 @@ of typed kinds are skipped, so `kind:Event` does not duplicate core Events throu
 `events.k8s.io`. Third-party CRDs named Event are searched normally; only built-in
 Events are excluded from broad searches.
 
+Use `kind:Event CertificateExpirationWarning` to find an Event by its reason,
+or `kind:Event <text>` to search its message and the resource it concerns.
+Matches include the field and an excerpt. Alternate Event APIs use the same
+core Event inventory, so these searches also cover reports created through
+`events.k8s.io` without returning duplicates.
+In the app, an empty broad search offers **Search Events**, which keeps the
+query and namespace and adds the Event kind filter. The search syntax help
+also lists `kind:Event`.
+The app checks `features.searchEventContent` before offering Event text search;
+when connected to an older server it shows an update hint and keeps name search.
+
 REST `GET /api/search` accepts `namespaces` (comma-separated) or `namespace`
 (single); the plural parameter takes precedence. These are explicit namespace
 names, combined as a union with any `ns:` terms in `q`. Hidden, missing and
