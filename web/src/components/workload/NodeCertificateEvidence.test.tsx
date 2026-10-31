@@ -10,7 +10,7 @@ const report: NodeCertificateReport = {
 }
 
 describe('Node certificate reports', () => {
-  it('shows a dated renewal report without inventing an operational issue', () => {
+  it('keeps the original report available when no matching Issue is shown', () => {
     const html = renderToStaticMarkup(<NodeCertificateContext evidence={report} hasIssue={false} onViewTimeline={() => {}} />)
     expect(html).toContain('Node certificate warning reported')
     expect(html).toContain('Last reported')
@@ -19,8 +19,9 @@ describe('Node certificate reports', () => {
     expect(html).toContain('View timeline')
     expect(html).not.toContain('API is down')
   })
-  it('does not duplicate an urgent Issue or claim current health after an OK report', () => {
+  it('does not duplicate a fresh or unverified Issue or claim current health after an OK report', () => {
     expect(renderToStaticMarkup(<NodeCertificateContext evidence={report} hasIssue onViewTimeline={() => {}} />)).toBe('')
+    expect(renderToStaticMarkup(<NodeCertificateContext evidence={{ ...report, state: 'unverified' }} hasIssue onViewTimeline={() => {}} />)).toBe('')
     expect(renderToStaticMarkup(<NodeCertificateContext evidence={{ ...report, state: 'ok' }} hasIssue={false} onViewTimeline={() => {}} />)).toBe('')
     expect(renderToStaticMarkup(<NodeCertificateContext evidence={{ ...report, state: 'unverified', reason: 'CertificateExpirationOK', history_incomplete: true }} hasIssue={false} onViewTimeline={() => {}} />)).toBe('')
     const details = renderToStaticMarkup(<NodeCertificateDetails evidence={report} onViewTimeline={() => {}} includeOriginalReport={false} />)
@@ -34,6 +35,10 @@ describe('Node certificate reports', () => {
     expect(html).toContain(report.message)
     expect(html).not.toContain('renewed')
     expect(html).not.toContain('healthy')
+    const details = renderToStaticMarkup(<NodeCertificateDetails evidence={{ ...report, state: 'unverified' }} onViewTimeline={() => {}} includeOriginalReport={false} />)
+    expect(details).toContain('current certificate state is unverified')
+    expect(details).toContain('last retained report')
+    expect(details).not.toContain(report.message)
   })
   it('explains history and parsing gaps', () => {
     const html = renderToStaticMarkup(<NodeCertificateDetails evidence={{ ...report, history_incomplete: true, validity_unknown: true }} onViewTimeline={() => {}} />)

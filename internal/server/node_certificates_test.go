@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -47,8 +48,8 @@ func TestNodeCertificateResourceSurfacesAndPermissions(t *testing.T) {
 	s.permCache.Set("pg-user", nil, permissions)
 	for _, tc := range []struct {
 		name, state string
-		issues      int
-	}{{"renewal", "reported", 0}, {"urgent", "reported", 1}, {"stale", "unverified", 0}} {
+		severity    issuesapi.Severity
+	}{{"renewal", "reported", "warning"}, {"urgent", "reported", "critical"}, {"stale", "unverified", "warning"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := resourceIssuesRequest(t, s, "/api/issues/resource/Node/_/"+tc.name+"?coverage=1")
 			if w.Code != http.StatusOK {
@@ -58,10 +59,10 @@ func TestNodeCertificateResourceSurfacesAndPermissions(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
-			if response.NodeCertificateReport == nil || response.NodeCertificateReport.State != tc.state || len(response.Issues) != tc.issues {
+			if response.NodeCertificateReport == nil || response.NodeCertificateReport.State != tc.state || len(response.Issues) != 1 {
 				t.Fatalf("wrong report or Issues: %s", w.Body.String())
 			}
-			if tc.issues > 0 && (response.Issues[0].Reason != k8s.NodeCertificateIssueReason || response.Issues[0].Severity != "critical" || response.Issues[0].Category != "certificate_not_ready") {
+			if response.Issues[0].Reason != k8s.NodeCertificateIssueReason || response.Issues[0].Severity != tc.severity || response.Issues[0].Category != "certificate_not_ready" {
 				t.Fatalf("standard Issue contract lost: %+v", response.Issues)
 			}
 		})
