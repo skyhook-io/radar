@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { seriesColor, seriesFill, computeShortLabels, seriesDisplayLabels } from './colors'
-import { formatMetricValue, formatTimestamp } from './format'
+import { alignedTimeAxisTicks, datesNeedYear, formatFullTimestamp, formatMetricValue, formatTimeAxisLabels, labelWidthEm, type TimeAxisTick } from './format'
 import { layoutAnnotations } from './annotations'
-import { chartLayout, integerAxisTop, isCountUnit, yAxisValues } from './axis'
+import { chartLayout, integerAxisTop, isCountUnit, xLabelMaxWidthEm, yAxisValues } from './axis'
 import type { TimeSeries, ReferenceLine, ChartAnnotation } from './types'
 import { nearestSample } from './nearestSample'
 
@@ -152,14 +152,30 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   const xTicks = useMemo(() => {
     if (!chartData) return []
     const { minTs, maxTs } = chartData
-    return Array.from({ length: xIntervals + 1 }, (_, i) => {
-      const ts = minTs + ((maxTs - minTs) / xIntervals) * i
-      // In the compact layout the two labels sit at the plot edges and would
-      // otherwise spill past the viewBox.
-      const anchor: 'start' | 'middle' | 'end' = !(compact || layout === 'dashboard') ? 'middle' : i === 0 ? 'start' : i === xIntervals ? 'end' : 'middle'
-      return { ts, x: toX(ts), label: formatTimestamp(ts), anchor }
+    // A window longer than a day gets ticks on local midnights (and clock
+    // hours between) when at least two fit, positioned where they fall; the
+    // centred labels are nudged inside the viewBox so an end one isn't clipped.
+    const place = (ticks: TimeAxisTick[]) => ticks.map(({ ts, label }) => {
+      const halfWidth = (labelWidthEm(label) * fontSize) / 2
+      return { ts, x: Math.min(Math.max(toX(ts), halfWidth), width - halfWidth), halfWidth, label, anchor: 'middle' as const }
     })
-  }, [chartData, xIntervals, compact, layout, marginLeft, plotWidth])
+    const separated = (ticks: TimeAxisTick[]) => place(ticks).every((tick, i, all) =>
+      i === 0 || tick.x - tick.halfWidth - (all[i - 1].x + all[i - 1].halfWidth) >= fontSize)
+    const aligned = xIntervals >= 2 ? alignedTimeAxisTicks(minTs, maxTs, xIntervals + 1, separated) : null
+    if (aligned) return place(aligned)
+    // In the compact layout the two labels sit at the plot edges and would
+    // otherwise spill past the viewBox.
+    const edgeAnchored = compact || layout === 'dashboard'
+    const timestamps = Array.from({ length: xIntervals + 1 }, (_, i) => minTs + ((maxTs - minTs) / xIntervals) * i)
+    const labels = formatTimeAxisLabels(timestamps, xLabelMaxWidthEm(plotWidth, xIntervals, fontSize, edgeAnchored))
+    const multiDay = maxTs - minTs > 24 * 60 * 60
+    return timestamps.map((ts, i) => {
+      const anchor: 'start' | 'middle' | 'end' = !edgeAnchored ? 'middle' : i === 0 ? 'start' : i === xIntervals ? 'end' : 'middle'
+      const halfWidth = (labelWidthEm(labels[i]) * fontSize) / 2
+      const x = multiDay && !edgeAnchored ? Math.min(Math.max(toX(ts), halfWidth), width - halfWidth) : toX(ts)
+      return { ts, x, label: labels[i], anchor }
+    })
+  }, [chartData, xIntervals, compact, layout, marginLeft, plotWidth, fontSize, width])
 
   const paths = useMemo(() => {
     if (!chartData) return []
@@ -656,7 +672,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
         >
           <div className="bg-theme-surface border border-theme-border rounded-lg shadow-lg px-3 py-2 text-xs whitespace-nowrap">
             <div className="text-theme-text-tertiary mb-1.5 font-mono">
-              {new Date(hoverData.ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              {formatFullTimestamp(hoverData.ts, datesNeedYear(chartData.maxTs - chartData.minTs))}
             </div>
             {hoverData.nearbyAnnotations.map((placed, i) => (
               <div key={`annotation-${i}`} className="flex items-center gap-2 py-0.5">

@@ -180,6 +180,7 @@ type FeatureCapabilities struct {
 	TrafficRecords           bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
 	GitOpsWriteEvidence      bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
 	GitOpsActionCapabilities bool `json:"gitopsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
+	AgentSigninCheck         bool `json:"agentSigninCheck"`         // GET /api/agents/signin
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`

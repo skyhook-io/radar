@@ -36,9 +36,11 @@ import {
   agentLabelFor,
   openDiagnoseSettings,
   type DiagnoseView,
+  type Target,
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
+import { InvestigationCapacityRecovery } from "./InvestigationCapacityNotice";
 import { useNavCustomization } from "../../context/NavCustomization";
 import { InvestigationView } from "./InvestigationView";
 import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
@@ -49,13 +51,25 @@ import {
   statusWord,
 } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
+import { AgentSigninNotice } from "./AgentSigninNotice";
+import {
+  useAgentSignin,
+  useApproveAfterSignin,
+} from "../../hooks/useAgentSignin";
 import { ConsentCard } from "./parts";
+import type { ConsentSubject } from "./AgentControls";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { mcpEndpointUrl } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useContexts } from "../../api/client";
-import { formatInvestigationTarget } from "./target";
+import {
+  formatInvestigationTarget,
+  formatInvestigationTitle,
+  formatQuestionScope,
+  isQuestionOnly,
+  rerunOpening,
+} from "./target";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 
 function capWord(s: string): string {
@@ -194,7 +208,7 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
 // Every clause is a failure this button actually had:
 //
 //   view          Home is the fresh-entry surface, never a re-run action.
-//   run           nothing to take a resource from.
+//   run           nothing to take a resource or question from.
 //   running/stopping human starts reuse the live run. Automatic investigations
 //                 are immutable, so they retain a separate fresh human start.
 //   stale         the original session is closed after a cluster switch;
@@ -209,8 +223,7 @@ export function canRerunInvestigation(
   return (
     view === "investigation" &&
     !!run &&
-    !!run.kind &&
-    !!run.name &&
+    ((!!run.kind && !!run.name) || isQuestionOnly(run)) &&
     ((run.status !== "running" && run.status !== "stopping") ||
       run.trigger === "background") &&
     run.status !== "stale" &&
@@ -231,6 +244,25 @@ export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
 // docked and maximized modes; their intended scroll roots are inside the frame.
 export const DIAGNOSE_SURFACE_FRAME_CLASS =
   "@container/diagnose-surface absolute z-40 flex min-h-0 flex-col overflow-hidden border-l border-theme-border bg-theme-surface shadow-drawer";
+
+// The consent card names what it is about to investigate, so approving it is
+// approving that run.
+export function consentSubject(
+  target: Target | null,
+): ConsentSubject | undefined {
+  if (!target) return undefined;
+  if (isQuestionOnly(target)) {
+    return {
+      title: `“${formatInvestigationTitle(target)}”`,
+      detail: formatQuestionScope(target),
+      question: true,
+    };
+  }
+  return {
+    title: formatInvestigationTarget(target),
+    detail: target.question ? `Asked: ${target.question}` : undefined,
+  };
+}
 
 export function unavailableInvestigationMessage(embedded: boolean): string {
   return embedded
@@ -381,6 +413,28 @@ export function DiagnoseSurface({
   onBrowseIssues?: () => void;
 }) {
   const d = useDiagnose();
+  // A hosted agent runs on the host's backend, where a local CLI's sign-in
+  // says nothing.
+  const signin = useAgentSignin(
+    d.selectedAgent,
+    d.profile,
+    d.needsConsent && !d.hosted,
+  );
+  const consentActions = useApproveAfterSignin({
+    approve: d.approveConsent,
+    cancel: d.cancelConsent,
+    signin,
+    attemptKey: `${d.selectedAgent}\u0000${d.profile}\u0000${d.needsConsent}`,
+  });
+  const signinNotice =
+    signin.status?.state === "signed-out" && signin.status.signinCmd ? (
+      <AgentSigninNotice
+        agentName={d.agentLabel}
+        signinCmd={signin.status.signinCmd}
+        rechecking={signin.rechecking}
+        onRecheck={signin.recheck}
+      />
+    ) : null;
   const { data: contexts } = useContexts();
   const currentContext = contexts?.find((context) => context.isCurrent)?.name;
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -514,7 +568,8 @@ export function DiagnoseSurface({
   const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
   // Consent replaces the detail pane even if goHome retained an older run id.
   // Header identity and actions must describe what is actually visible.
-  const visibleRunDetail = d.needsConsent ? null : activeRun;
+  const visibleRunDetail =
+    d.needsConsent || d.startCapacity ? null : activeRun;
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
   const activeAgentLabel = visibleRunDetail?.agent
     ? agentLabelFor(visibleRunDetail.agent)
@@ -530,7 +585,7 @@ export function DiagnoseSurface({
     visibleRunDetail ?? defaultHeaderConfig,
   );
   const focusedTitle = visibleRunDetail
-    ? formatInvestigationTarget(visibleRunDetail)
+    ? formatInvestigationTitle(visibleRunDetail)
     : "AI investigations";
   const headerPresentation = investigationHeaderPresentation({
     view: d.view,
@@ -567,13 +622,20 @@ export function DiagnoseSurface({
           agent={d.selectedAgent}
           profile={d.profile}
           copy={consentCopy}
+          subject={consentSubject(d.pendingTarget)}
           onOpenSettings={openSettings ?? undefined}
           error={d.consentError}
-          onApprove={d.approveConsent}
-          onCancel={d.cancelConsent}
+          notice={signinNotice}
+          approveBusy={consentActions.waiting}
+          onApprove={consentActions.approve}
+          onCancel={consentActions.cancel}
         />
       </div>
     </div>
+  ) : d.startCapacity ? (
+    // Before the focused run: the start the user just asked for is what this
+    // pane is about, and a focused run's view would bury the way out.
+    <InvestigationCapacityRecovery capacity={d.startCapacity} />
   ) : activeRun ? (
     <InvestigationView
       key={activeRun.id}
@@ -613,6 +675,14 @@ export function DiagnoseSurface({
       <p className="text-sm text-theme-text-secondary">{d.startError}</p>
       <div className="flex flex-wrap items-center justify-center gap-2">
         <InvestigationRefusalAction refusal={d.startRefusal} />
+        {d.questionDraft?.text && (
+          <button
+            onClick={d.openHome}
+            className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+          >
+            Back to your question
+          </button>
+        )}
         <button
           onClick={d.dismissError}
           className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
@@ -643,10 +713,13 @@ export function DiagnoseSurface({
         agent={d.selectedAgent}
         profile={d.profile}
         copy={consentCopy}
+        subject={consentSubject(d.pendingTarget)}
         onOpenSettings={openSettings ?? undefined}
         error={d.consentError}
-        onApprove={d.approveConsent}
-        onCancel={d.cancelConsent}
+        notice={signinNotice}
+        approveBusy={consentActions.waiting}
+        onApprove={consentActions.approve}
+        onCancel={consentActions.cancel}
       />
     </div>
   ) : setupPending ? (
@@ -662,8 +735,11 @@ export function DiagnoseSurface({
   ) : (
     <InvestigationHome
       agentLabel={d.agentLabel}
+      questions={d.questions}
       onBrowseIssues={
-        d.runsLoaded && d.runs.length === 0 ? onBrowseIssues : undefined
+        d.questions || (d.runsLoaded && d.runs.length === 0)
+          ? onBrowseIssues
+          : undefined
       }
     />
   );
@@ -770,22 +846,14 @@ export function DiagnoseSurface({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {activeRun &&
+            visibleRunDetail &&
             canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
                 content="Re-run this investigation from scratch"
                 position="bottom"
               >
                 <button
-                  onClick={() =>
-                    d.openInvestigation({
-                      kind: activeRun.kind,
-                      group: activeRun.group,
-                      namespace: activeRun.namespace,
-                      name: activeRun.name,
-                      issueId: activeRun.issueId,
-                      fresh: true,
-                    })
-                  }
+                  onClick={() => d.openInvestigation(rerunOpening(activeRun))}
                   className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
                   aria-label="Re-run this investigation from scratch"
                 >
@@ -874,6 +942,10 @@ export function DiagnoseSurface({
                 if (historyOverlay) dismissHistory();
               }}
               historyDegraded={d.historyDegraded}
+              loaded={d.runsLoaded}
+              loadFailed={d.runsLoadFailed}
+              onRetry={d.refreshRuns}
+              questions={d.questions}
             />
           </aside>
         )}

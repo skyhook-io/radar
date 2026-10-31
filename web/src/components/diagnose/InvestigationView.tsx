@@ -113,10 +113,19 @@ import {
 } from "./InvestigationEvidencePane";
 import { partitionInvestigationEvidence } from "./investigationEvidencePartition";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
-import { formatInvestigationTarget } from "./target";
+import { QuestionFocus } from "./QuestionFocus";
+import { focusFromCase } from "./investigationFocus";
+import {
+  formatInvestigationTarget,
+  formatInvestigationTitle,
+  isQuestionOnly,
+  questionAskedAt,
+  rerunOpening,
+} from "./target";
 import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { diagnosisHasStoryShape } from "./investigationStory";
+import { assessmentStateLabel, verdictSentence } from "./verdictText";
 import { assessmentLimitLines } from "./investigationEvidencePresentation";
 
 const RECHECK_QUESTION =
@@ -272,6 +281,47 @@ function captureEvidenceCardLayout(container: HTMLElement) {
 
 const APPLY_WRITES: GitOpsWrite[] = [{ scope: "spec", description: "The proposed change" }];
 
+// The card that ends a finished turn in Activity says what was found, so the
+// reader learns the answer before deciding to open Findings. It carries the
+// same qualifications Findings puts beside the sentence (how sure, whether an
+// apply or newer reads have overtaken it), so it never reads more settled
+// than Findings does. A long verdict is cut at three lines; one with no
+// sentence keeps the generic description.
+function CompletionSummary({
+  label,
+  state,
+  sentence,
+}: {
+  label: string;
+  state?: { text: string; warn: boolean };
+  sentence: string;
+}) {
+  return (
+    <span className="min-w-0 flex-1">
+      <span className="block text-xs text-theme-text-tertiary">
+        {label}
+        {state ? (
+          <>
+            {" · "}
+            <span className={state.warn ? "text-warning-text" : undefined}>
+              {state.text}
+            </span>
+          </>
+        ) : null}
+      </span>
+      {sentence ? (
+        <span className="mt-0.5 line-clamp-3 text-sm font-medium leading-snug text-theme-text-primary [overflow-wrap:anywhere]">
+          {sentence}
+        </span>
+      ) : (
+        <span className="block text-xs text-theme-text-secondary">
+          Assessment, evidence and next steps
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function InvestigationView({
   run,
   agentLabel,
@@ -294,6 +344,7 @@ export function InvestigationView({
   const {
     refreshRuns,
     openInvestigation,
+    openQuestion,
     startError,
     startRefusal,
     dismissError,
@@ -303,25 +354,15 @@ export function InvestigationView({
   // the picker's: a reopened run keeps the backend it was made with.
   const runAgent = agents.find((agent) => agent.name === run.agent);
   const explanationEnabled = supportsAssessmentExplanation(runAgent);
-  const canApply = runAgent?.apply === true;
+  // A question-only run has no resource to bind a confirmed fix to.
+  const canApply = runAgent?.apply === true && !isQuestionOnly(run);
   // Read through a ref by the stream callback, which lives as long as the
   // run and would otherwise keep the value from before the agents loaded.
   const verifiesAfterApplyRef = useRef(false);
   verifiesAfterApplyRef.current = runAgent?.verification === true;
-  // Investigate again means look again, so it asks for a new session explicitly and only
-  // carries the issue forward — being handed the previous answer is the one
-  // thing someone clicking this doesn't want.
   const retryDiagnosis = useCallback(
-    () =>
-      openInvestigation({
-        kind,
-        group: run.group,
-        namespace,
-        name,
-        issueId: run.issueId,
-        fresh: true,
-      }),
-    [openInvestigation, kind, namespace, name, run.group, run.issueId],
+    () => openInvestigation(rerunOpening(run)),
+    [openInvestigation, run],
   );
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -1181,11 +1222,24 @@ export function InvestigationView({
         : undefined,
     [currentAssessment, currentAssessmentIdx, projection],
   );
+  const questionOnly = isQuestionOnly(run);
+  const questionFocus = useMemo(
+    () => (questionOnly ? focusFromCase(investigationCase) : []),
+    [questionOnly, investigationCase],
+  );
   // Findings is the newest assessment and nothing else: its own citations,
   // its own case, its own story. Earlier assessments stay complete in
   // Activity; answers that did not revise the assessment stay there too.
   const paneResolution = rootCauseEvidenceResolution;
   const storyShape = diagnosisHasStoryShape(currentAssessment?.diagnosis);
+  // A run that stopped without an assessment will never cite anything, so
+  // what it collected is all there is to show.
+  const assessmentPending = !currentAssessment?.diagnosis;
+  const showUncited =
+    assessmentPending &&
+    !busy &&
+    run.status !== "running" &&
+    run.status !== "stopping";
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
@@ -1194,9 +1248,16 @@ export function InvestigationView({
           paneResolution,
           investigationCase,
           storyShape,
+          showUncited,
         ).collectionByGroup.keys(),
       ),
-    [projection.groups, paneResolution, investigationCase, storyShape],
+    [
+      projection.groups,
+      paneResolution,
+      investigationCase,
+      storyShape,
+      showUncited,
+    ],
   );
   const evidenceStepIdsByTurn = useMemo(
     () =>
@@ -1616,7 +1677,8 @@ export function InvestigationView({
       .slice(0, 3);
     return {
       context: {
-        target: formatInvestigationTarget(run),
+        target: formatInvestigationTitle(run),
+        asked: isQuestionOnly(run) ? undefined : run.question,
         cluster: run.context,
         startedAt: run.createdAt,
         agent: agentLabel,
@@ -1861,7 +1923,9 @@ export function InvestigationView({
               ? assessmentNeedsCurrentStateVerification
                 ? "Proposed before the apply attempt. Current state has not been verified."
                 : "Proposed before the latest evidence. Reassess before applying."
-              : undefined
+              : questionOnly
+                ? "To apply a fix, investigate the resource it changes from Focused on above."
+                : undefined
           }
           onApply={
             canOfferInvestigationApply({
@@ -2117,6 +2181,11 @@ export function InvestigationView({
                           turn={turn}
                           agentLabel={agentLabel}
                           turnIndex={index}
+                          openingQuestion={
+                            index === 0 && !turn.question
+                              ? run.question
+                              : undefined
+                          }
                           evidenceStepIds={evidenceStepIdsByTurn.get(index)}
                           onViewEvidence={viewEvidenceSource}
                           sourceRevealRequest={activityRevealRequest}
@@ -2227,16 +2296,35 @@ export function InvestigationView({
                                 <Files className="h-4 w-4" />
                               )}
                             </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-xs font-semibold text-theme-text-primary">
-                                {turn.verify
-                                  ? "Verification complete"
-                                  : "Assessment ready"}
-                              </span>
-                              <span className="block text-[11px] text-theme-text-tertiary">
-                                Assessment, evidence and next steps
-                              </span>
-                            </span>
+                            <CompletionSummary
+                              label={
+                                assessmentNeedsCurrentStateVerification
+                                  ? "Assessment before apply"
+                                  : hasEvidenceCollectedAfterAssessment
+                                    ? "Earlier assessment"
+                                    : turn.verify
+                                      ? "Verification complete"
+                                      : "Assessment ready"
+                              }
+                              state={
+                                assessmentNeedsCurrentStateVerification
+                                  ? {
+                                      text: "Current state unverified",
+                                      warn: true,
+                                    }
+                                  : turn.diagnosis
+                                    ? assessmentStateLabel(
+                                        turn.diagnosis,
+                                        currentAssessmentEvidenceConflict,
+                                      )
+                                    : undefined
+                              }
+                              sentence={
+                                turn.diagnosis
+                                  ? verdictSentence(turn.diagnosis)
+                                  : ""
+                              }
+                            />
                             <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
                               View Findings
                               <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
@@ -2379,9 +2467,11 @@ export function InvestigationView({
                       className="investigation-assessment rounded-xl border p-3"
                     >
                       <div className="flex flex-wrap items-center gap-1.5">
+                        {/* A label for the block, not its headline: the
+                            verdict sentence below is what a reader looks for. */}
                         <h2
                           id={`${viewId}-assessment-heading`}
-                          className="text-lg font-semibold text-theme-text-primary"
+                          className="text-sm font-medium text-theme-text-secondary"
                         >
                           {assessmentNeedsCurrentStateVerification
                             ? "Assessment before apply"
@@ -2536,6 +2626,40 @@ export function InvestigationView({
                       ) : null}
                     </section>
 
+                    {questionOnly && investigationCase ? (
+                      <QuestionFocus
+                        focus={questionFocus}
+                        stale={stale}
+                        onOpenResource={onOpenResource}
+                        // These start a new investigation, so a run that can
+                        // no longer take follow-ups doesn't block them.
+                        disabled={investigationInteractionsBlocked({
+                          streamReady,
+                          busy,
+                          requestPending,
+                          readOnly: false,
+                          verificationPending,
+                        })}
+                        onChooseResource={() =>
+                          openQuestion({
+                            text: run.question,
+                            namespaces: run.namespaces,
+                            lookBack: run.lookBack,
+                            askedAt: questionAskedAt(run),
+                            pickResource: true,
+                          })
+                        }
+                        onInvestigate={(resource) =>
+                          openInvestigation({
+                            ...resource,
+                            question: run.question,
+                            lookBack: run.lookBack,
+                            askedAt: questionAskedAt(run),
+                          })
+                        }
+                      />
+                    ) : null}
+
                     {hasMultipleAssessments ? (
                       <button
                         type="button"
@@ -2556,6 +2680,9 @@ export function InvestigationView({
 
                   <InvestigationEvidencePane
                     projection={projection}
+                    withoutTarget={questionOnly}
+                    assessmentPending={assessmentPending}
+                    showUncited={showUncited}
                     rootCauseEvidence={paneResolution}
                     investigationCase={investigationCase}
                     story={

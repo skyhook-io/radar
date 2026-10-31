@@ -4,7 +4,7 @@ import {
   useDiagnose,
   useDiagnoseLayout,
 } from "./DiagnoseContext";
-import { runTargetKey } from "./target";
+import { canonicalKind, runTargetKey } from "./target";
 import { Tooltip } from "../ui/Tooltip";
 import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 
@@ -34,15 +34,17 @@ function DiagnoseResourceButton({
   health?: "problem" | "healthy" | "unknown";
 }) {
   const d = useDiagnose();
-  const { runningKeys } = useDiagnoseLayout();
+  const { runningRunIds } = useDiagnoseLayout();
   // Hidden only when the feature can't work here (auth/cloud/--no-mcp). When it's
   // supported but no agent is installed we KEEP the button — clicking opens the
   // setup notice so the feature is discoverable rather than silently absent.
   if (d.setupState === "off" || d.setupState === "unknown") return null;
   const ready = d.available;
   const problem = health === "problem";
-  const running =
-    ready && runningKeys.has(runTargetKey(kind, namespace, name, group ?? ""));
+  const runningRunId = ready
+    ? runningRunIds.get(runTargetKey(kind, namespace, name, group ?? ""))
+    : undefined;
+  const running = !!runningRunId;
   const tooltip = !ready
     ? notReadyTooltip(d)
     : running
@@ -53,23 +55,28 @@ function DiagnoseResourceButton({
           : `Ask ${d.agentLabel} about this resource — reads its spec, events & logs.`
         : problem
           ? `Investigate with your own ${d.agentLabel} — runs locally and reads this resource's spec, events & logs.`
-          : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
+          : d.questions
+            ? `Ask your own ${d.agentLabel} a question about this resource — runs locally, reads its spec, events & logs.`
+            : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
   // While an investigation is live, the button advertises it (and clicking focuses
   // the existing run rather than starting a new one — openInvestigation dedups).
   const showLabel = problem || running;
+  const asks = d.questions && !problem && !running;
   return (
     <Tooltip content={tooltip} position="bottom">
       <button
-        onClick={() =>
-          ready
-            ? d.openInvestigation({
-                kind,
-                group: group ?? "",
-                namespace,
-                name,
-              })
-            : d.openHome()
-        }
+        onClick={() => {
+          const target = { kind, group: group ?? "", namespace, name };
+          if (!ready) d.openHome();
+          else if (runningRunId) d.openRun(runningRunId);
+          // Asking about a resource with no live problem means saying what
+          // to ask; a problem, or a run already live, opens straight away.
+          else if (asks)
+            d.openQuestion({
+              pin: { ...target, kind: canonicalKind(kind, group ?? "") },
+            });
+          else d.openInvestigation(target);
+        }}
         aria-label={
           !ready
             ? notReadyTooltip(d)
@@ -163,7 +170,7 @@ export function IssueDiagnoseButton({
 
 // The tooltip every AI entry point shows while investigations aren't runnable.
 // It gives the same reason as the setup notice the button opens.
-function notReadyTooltip(d: {
+export function notReadyTooltip(d: {
   cliOverride: boolean;
   setupState: DiagnoseSetup;
 }): string {

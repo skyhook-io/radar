@@ -19,6 +19,9 @@ export interface AgentInfo {
   apply?: boolean;
   /** The backend re-checks the resource after an Apply. Absent means it does not. */
   verification?: boolean;
+  /** The backend opens a run from a question, with or without a resource.
+   *  Absent means it accepts only a resource. */
+  questions?: boolean;
 }
 
 export interface AgentsResponse {
@@ -239,6 +242,16 @@ export interface RunSummary {
   effort?: string;
   managedBy?: string; // GitOps/Helm owner of the target ("Argo CD"/"Flux"/"Helm"), for the Apply warning
   health?: ResourceHealthSignal;
+  /** The engineer's opening question, when the run started with one. A run
+   *  with a question and an empty name has no resource. */
+  question?: string;
+  /** Where the question said to start looking; empty means the whole cluster. */
+  namespaces?: string[];
+  /** How far before the question the problem started: 15m, 1h, 6h or 24h. */
+  lookBack?: string;
+  /** When the question was first asked, when that was before this run
+   *  started (a re-run or a narrowed run). */
+  askedAt?: string;
   status: "running" | "stopping" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;
@@ -275,15 +288,50 @@ export async function fetchAgents(
 }
 
 /**
+ * What an agent CLI's own status command says about its sign-in. "unknown"
+ * covers agents Radar doesn't check, timeouts and unrecognized answers; only
+ * "signed-out" is acted on.
+ */
+export interface AgentSigninStatus {
+  agent: string;
+  state: "signed-in" | "signed-out" | "unknown";
+  /** The command that signs the agent in; set only when signed out. */
+  signinCmd?: string;
+}
+
+// fetchAgentSignin asks the server to run the agent's status command for runs
+// with this profile (cached briefly server-side). refresh discards that cache:
+// the user's "check again".
+export async function fetchAgentSignin(
+  agent: string,
+  profile: ExecutionProfile,
+  refresh: boolean,
+  signal?: AbortSignal,
+): Promise<AgentSigninStatus> {
+  const params = new URLSearchParams({ agent, profile });
+  if (refresh) params.set("refresh", "1");
+  const res = await fetch(`${getApiBase()}/agents/signin?${params}`, {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+    signal,
+  });
+  if (!res.ok) throw new Error(`agent sign-in: ${res.status}`);
+  return res.json();
+}
+
+/**
  * Why a host refused an investigation, and what would unblock it. Hosts that
  * meter investigations send these beside the sentence to show, so an embedding
- * app can offer the matching action. Radar's own backend never sends them.
+ * app can offer the matching action. Radar's own backend sends only
+ * INVESTIGATIONS_AT_CAPACITY, with limit.
  */
 export interface DiagnoseRefusal {
   /** Machine-readable code, e.g. "ai_quota_exhausted". */
   code?: string;
   reason?: string;
   action?: string;
+  limit?: number;
+  context?: string;
 }
 
 // The sentence to show is `detail` when a host sends one, else `error`. A
@@ -306,6 +354,11 @@ async function diagnoseError(res: Response): Promise<DiagnoseError> {
     code: str(body?.code) ?? (detail && error !== detail ? error : undefined),
     reason: str(body?.reason),
     action: str(body?.action),
+    limit:
+      typeof body?.limit === "number" && body.limit > 0
+        ? body.limit
+        : undefined,
+    context: str(body?.context),
   });
 }
 
@@ -315,13 +368,44 @@ export class DiagnoseError extends Error {
   code?: string;
   reason?: string;
   action?: string;
+  /** With INVESTIGATIONS_AT_CAPACITY: how many investigations run at once,
+   * and the cluster the start was refused in. */
+  limit?: number;
+  context?: string;
   constructor(status: number, message: string, refusal?: DiagnoseRefusal) {
     super(message);
     this.status = status;
     this.code = refusal?.code;
     this.reason = refusal?.reason;
     this.action = refusal?.action;
+    this.limit = refusal?.limit;
+    this.context = refusal?.context;
   }
+}
+
+/** Code Radar sends when every investigation slot is taken. */
+export const INVESTIGATIONS_AT_CAPACITY = "investigations_at_capacity";
+
+export interface InvestigationCapacity {
+  /** How many investigations run at once. */
+  limit: number;
+  /** The cluster the start was refused in. */
+  context?: string;
+}
+
+/** Set when error is Radar refusing a start because every investigation slot
+ * is taken; otherwise null. */
+export function investigationCapacity(
+  error: unknown,
+): InvestigationCapacity | null {
+  if (
+    !(error instanceof DiagnoseError) ||
+    error.code !== INVESTIGATIONS_AT_CAPACITY ||
+    !error.limit
+  ) {
+    return null;
+  }
+  return { limit: error.limit, context: error.context };
 }
 
 /** A host's refusal of an investigation request, with what would unblock it. */
@@ -334,12 +418,14 @@ export interface InvestigationRefusal {
   action?: string;
 }
 
-/** The refusal a DiagnoseError carries, or null when the host sent none
- * (Radar's own backend never does). */
+/** The refusal a DiagnoseError carries, or null when the host sent none.
+ * Radar's own capacity code is not a host refusal: the UI recovers from it
+ * itself (see investigationCapacity). */
 export function investigationRefusal(
   error: unknown,
 ): InvestigationRefusal | null {
   if (!(error instanceof DiagnoseError)) return null;
+  if (error.code === INVESTIGATIONS_AT_CAPACITY) return null;
   if (!error.code && !error.reason && !error.action) return null;
   return {
     status: error.status,
@@ -370,6 +456,10 @@ export async function createRun(
     // otherwise hand back for this target. Inert for Radar's own backend, which
     // only ever continues an in-flight run — and that one is never bypassed.
     fresh?: boolean;
+    question?: string;
+    namespaces?: string[];
+    lookBack?: string;
+    askedAt?: string;
   },
   opts?: {
     agent?: string;

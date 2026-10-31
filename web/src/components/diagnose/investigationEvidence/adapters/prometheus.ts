@@ -338,8 +338,10 @@ export function adaptPrometheusRules(
   // every alerting rule (a name or group filter never looked at the rest), a
   // complete list, every rule evaluated, and every returned instance placed
   // in another namespace outright. An instance this projection merely fails
-  // to recognize is not evidence of absence.
+  // to recognize is not evidence of absence. A run with no resource has
+  // nothing for an alert to miss.
   if (
+    builder.target.name &&
     source.confirmedSuccess &&
     !truncated &&
     !namesTarget &&

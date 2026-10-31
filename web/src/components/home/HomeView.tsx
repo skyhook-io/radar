@@ -54,11 +54,9 @@ interface HomeViewProps {
   onNavigateToUpgradeImpact?: () => void
   onNavigateToHelmRelease?: (namespace: string, release: string) => void
   onNavigateToManagerPath?: (path: string) => void
-  // Present only when release notes exist for this version.
-  onShowWhatsNew?: () => void
 }
 
-export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath, onShowWhatsNew }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath }: HomeViewProps) {
   // The card itself decides whether the cluster has a capacity story
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
@@ -142,11 +140,12 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
-          radarVersion={versionInfo && deploymentMode !== 'cloud' ? (
+          // A local install shows its version in Settings and upgrades through
+          // the update notification; an in-cluster one is upgraded by whoever
+          // manages it, and this line is where they confirm the new version.
+          radarVersion={versionInfo && deploymentMode === 'in-cluster' ? (
             <RadarVersionLine
               version={versionInfo}
-              showUpgrade={deploymentMode === 'in-cluster'}
-              onShowWhatsNew={onShowWhatsNew}
               manager={installationManager}
               managerLoading={installationManagerLoading}
               onNavigateToHelmRelease={onNavigateToHelmRelease}
