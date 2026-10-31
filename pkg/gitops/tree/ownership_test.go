@@ -355,6 +355,67 @@ func TestGeneratedTreeKeepsPodsWithReplicaSetHistory(t *testing.T) {
 	}
 }
 
+// Topology draws a large Pod set as one display PodGroup with per-Pod details.
+// Owner references find each Pod; its health must come from those details.
+func TestGeneratedTreeReadsPodsFromDisplayPodGroup(t *testing.T) {
+	app := operatorApplication()
+	dep := ownedObject("apps", "Deployment", "monitoring", "web", nil, false)
+	rs := ownedObject("apps", "ReplicaSet", "monitoring", "web-1", &dep, true)
+	objects := []ownershiptest.Object{dep, rs}
+	var details []map[string]any
+	for i := range 6 {
+		pod := ownedObject("", "Pod", "monitoring", fmt.Sprintf("web-1-%d", i), &rs, true)
+		objects = append(objects, pod)
+		status, phase := string(topology.StatusHealthy), "Running"
+		if i == 0 {
+			status = string(topology.StatusUnhealthy)
+		}
+		details = append(details, map[string]any{"name": pod.Ref.Name, "namespace": "monitoring", "phase": phase, "restarts": int32(i), "status": status, "ownerKey": "monitoring/ReplicaSet/web-1"})
+	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "deployment/monitoring/web", Kind: topology.KindDeployment, Name: "web", Data: map[string]any{"namespace": "monitoring", "apiVersion": "apps/v1"}},
+			{ID: "replicaset/monitoring/web-1", Kind: topology.KindReplicaSet, Name: "web-1", Data: map[string]any{"namespace": "monitoring", "apiVersion": "apps/v1"}},
+			{ID: "podgroup-monitoring-web-1", Kind: topology.KindPodGroup, Name: "web-1", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "monitoring", "podCount": 6, "pods": details}},
+		},
+		Edges: []topology.Edge{
+			{ID: "d-rs", Source: "deployment/monitoring/web", Target: "replicaset/monitoring/web-1", Type: topology.EdgeManages},
+			{ID: "rs-pg", Source: "replicaset/monitoring/web-1", Target: "podgroup-monitoring-web-1", Type: topology.EdgeManages},
+		},
+	}
+	unstructured.SetNestedSlice(app.Object, []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "monitoring", "name": "web"}}, "status", "resources")
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	got, _, err := NewBuilder(getter, topo).WithOwnership(ownershipSession(t, objects...)).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Warnings) != 0 {
+		t.Fatalf("display group reported as an incomplete read: %v", got.Warnings)
+	}
+	pods := 0
+	for _, node := range got.Nodes {
+		switch node.Ref.Kind {
+		case "PodGroup":
+			t.Fatalf("display group emitted beside its Pods: %+v", node)
+		case "Pod":
+			pods++
+			want := "Healthy"
+			if node.Ref.Name == "web-1-0" {
+				want = "Degraded"
+			}
+			if node.Health != want || node.HealthSource != HealthSourceRadar {
+				t.Fatalf("%s health = %q (%q), want %q from the group's details", node.Ref.Name, node.Health, node.HealthSource, want)
+			}
+			if len(node.Info) == 0 || node.Info[0].Value != "Running" {
+				t.Fatalf("%s lost its phase: %+v", node.Ref.Name, node.Info)
+			}
+		}
+	}
+	if pods != 6 {
+		t.Fatalf("pods = %d, want 6", pods)
+	}
+}
+
 func TestGeneratedTreeExpandsMoreThanOneThousandDeclaredRoots(t *testing.T) {
 	app := operatorApplication()
 	var inventory []any

@@ -178,6 +178,18 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	topoByRef := map[string]topology.Node{}
 	topoByID := map[string]topology.Node{}
 	for _, n := range b.topoNodes() {
+		// A display PodGroup stands in for Pods that ownership finds one by
+		// one. Index each Pod's own details, and keep the aggregate out of the
+		// graph so its edge isn't read as a resource relation.
+		if pods, ok := n.Data["pods"].([]map[string]any); ok && n.Kind == topology.KindPodGroup {
+			for _, pod := range pods {
+				name, _ := pod["name"].(string)
+				namespace, _ := pod["namespace"].(string)
+				status, _ := pod["status"].(string)
+				topoByRef[refKey(ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})] = topology.Node{Kind: topology.KindPod, Name: name, Status: topology.HealthStatus(status), Data: pod}
+			}
+			continue
+		}
 		ref := refFromTopologyNode(n)
 		topoByRef[refKey(ref)] = n
 		if tuples, ok := topology.CalicoPolicyRBACTuples(&n); ok {

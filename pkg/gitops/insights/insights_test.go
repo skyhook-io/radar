@@ -2792,6 +2792,7 @@ func TestBuildIssues_RemoteComparisonOffersNoLocalRemediationOrEventCause(t *tes
 			})
 			if failed {
 				unstructured.SetNestedMap(root.Object, map[string]any{"phase": "Failed", "message": `namespaces "payments" not found`}, "status", "operationState")
+				unstructured.SetNestedSlice(root.Object, []any{map[string]any{"type": "SyncError", "message": `namespaces "payments" not found`}}, "status", "conditions")
 			}
 			resolver := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "LOCAL object failure", Count: 3}}}}
 			issues := buildIssues(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", resolver)

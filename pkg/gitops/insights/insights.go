@@ -2375,7 +2375,7 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 				rawMsg = fallback(rawMsg, msg)
 				msg = parsed.Summary
 			}
-			if !gitops.IsInClusterDestination(root) {
+			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
 				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
 				if remoteAction != "" {
