@@ -150,16 +150,16 @@ describe('Enable Auto-Sync in the resource actions bar', () => {
   }
 
   it('is disabled for an app with enabled: false on a Radar without the behavior', () => {
-    expect(bar(app({ enabled: false, prune: true }), upgrade)).toMatch(/\sdisabled=""/)
+    expect(bar(app({ enabled: false, prune: true }), upgrade)).toMatch(/\saria-disabled="true"/)
   })
 
   it('is enabled when the Radar advertises the behavior', () => {
-    expect(bar(app({ enabled: false, prune: true }), null)).not.toMatch(/\sdisabled=""/)
+    expect(bar(app({ enabled: false, prune: true }), null)).not.toMatch(/\saria-disabled="true"/)
   })
 
   // A Manual app without an automated block resumes correctly on every Radar.
   it('is enabled for a Manual app without an automated block', () => {
-    expect(bar(app(undefined), upgrade)).not.toMatch(/\sdisabled=""/)
+    expect(bar(app(undefined), upgrade)).not.toMatch(/\saria-disabled="true"/)
   })
 })
 
@@ -175,8 +175,30 @@ describe('auto-sync support pending or unavailable', () => {
     item.onClick()
     expect(onAction).not.toHaveBeenCalled()
     const bar = html(<ResourceActionsBar resource={{ kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'guestbook' }} data={raw} onArgoResume={() => {}} argoResumeBlockedReason={reason} />)
-    expect(buttonAttrs(bar, 'Enable Auto-Sync')).toMatch(/\sdisabled=""/)
+    expect(buttonAttrs(bar, 'Enable Auto-Sync')).toMatch(/\saria-disabled="true"/)
     const ordinary = buildRowActionItems(normalizeArgoApplication(app(undefined, { 'radarhq.io/suspended-prune': 'true' })), onAction, undefined, null, reason).find(i => i.key === 'resume')!
     expect(ordinary.disabled).toBe(false)
+  })
+})
+
+// A role grant cannot supply behavior an older Radar lacks, so when both gates
+// apply the upgrade reason wins; the role reason still disables on its own.
+describe('upgrade and role gates together', () => {
+  const ROLE = "Your role can't patch Argo CD Applications in argocd."
+
+  it('names the upgrade, not the role, on Enable Auto-Sync in the actions bar', () => {
+    const props = { resource: { kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'guestbook' }, onArgoResume: () => {}, gitOpsActionDisabledReasons: { resume: ROLE } }
+    const both = html(<ResourceActionsBar {...props} data={app({ enabled: false })} argoResumeUpgrade={upgrade} />)
+    expect(both).toContain(NOTE_MARKUP.replace(/<\/span>/, ''))
+    expect(both).not.toContain(ROLE.replace(/'/g, '&#x27;'))
+    const roleOnly = html(<ResourceActionsBar {...props} data={app({ enabled: false })} argoResumeUpgrade={null} />)
+    expect(buttonAttrs(roleOnly, 'Enable Auto-Sync')).toMatch(/\saria-disabled="true"/)
+    expect(roleOnly).toContain(ROLE.replace(/'/g, '&#x27;'))
+  })
+
+  it('disables Enable auto-sync on the detail page for either gate', () => {
+    const withRole = (handlers: ArgoActionHandlers) => html(<GitOpsDetailLayout {...layout(handlers).props} actionDisabledReasons={{ resume: ROLE }} />)
+    expect(enableAutoSync(withRole(argo()))).toMatch(/\sdisabled=""/)
+    expect(enableAutoSync(withRole(argo({ resumeUpgrade: upgrade })))).toMatch(/\sdisabled=""/)
   })
 })

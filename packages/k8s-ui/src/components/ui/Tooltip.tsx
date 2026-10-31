@@ -283,7 +283,7 @@ export function Tooltip({
             onMouseLeave={scheduleHideTooltip}
           >
             {preserveWords && typeof content === 'string'
-              ? content.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)
+              ? content.split(' ').map((word, index, words) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{index < words.length - 1 && ' '}</Fragment>)
               : content}
           </span>,
           document.body
