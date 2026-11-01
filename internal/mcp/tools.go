@@ -573,7 +573,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_workload_logs",
 		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +
-			"DaemonSet, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
+			"DaemonSet, Argo Rollout, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
 			"server-side filtered to errors, warnings, panics, and stack traces using " +
 			"deterministic regex patterns and deduplicated. When grep is set, it replaces " +
 			"diagnostic filtering and returns only regex matches, like `kubectl logs --timestamps | grep PATTERN`. " +
@@ -607,6 +607,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"On a Rollout, 'rollback' rewrites the pod template and so starts a NEW rollout that re-runs every " +
 			"canary step, pause, and analysis — to revert traffic now use manage_rollout abort, or follow the " +
 			"rollback with manage_rollout promote-full.",
+		InputSchema: manageWorkloadInputSchema(),
 		Annotations: writeTool,
 	}, logToolCall("manage_workload", handleManageWorkload))
 
@@ -636,10 +637,10 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_gitops",
-		Description: "Perform operations on GitOps resources (ArgoCD or FluxCD). " +
-			"For ArgoCD: actions are 'sync' (trigger deployment), 'refresh', 'terminate', 'rollback', " +
+		Description: "Perform operations on GitOps resources (Argo CD or Flux). " +
+			"For Argo CD: actions are 'sync' (trigger deployment), 'refresh', 'terminate', 'rollback', " +
 			"'suspend' (disable auto-sync), 'resume' (re-enable auto-sync). Resource kind is always Application. " +
-			"For FluxCD: actions are 'reconcile' (trigger sync), 'sync-with-source', 'suspend', 'resume'. " +
+			"For Flux: actions are 'reconcile' (trigger sync), 'sync-with-source', 'suspend', 'resume'. " +
 			"Requires 'kind' parameter (kustomization, helmrelease, gitrepository, etc.).",
 		Annotations: writeTool,
 	}, logToolCall("manage_gitops", handleManageGitOps))
@@ -735,7 +736,7 @@ type getResourceInput struct {
 
 type topologyInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for a multi-service incident map; recommended unless you need cross-namespace topology"`
-	View      string `json:"view,omitempty" jsonschema:"view mode: traffic for service routing/connectivity or resources for ownership hierarchy"`
+	View      string `json:"view,omitempty" jsonschema:"view mode: resources (default) for ownership hierarchy, or traffic for service routing/connectivity"`
 	Format    string `json:"format,omitempty" jsonschema:"output format: graph (default, full node/edge data) or summary (text description of resource chains)"`
 }
 
@@ -779,7 +780,7 @@ type issuesInput struct {
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, GitOps operation retries — distinct from restart_count), stuck (bool), issue_timing (independent timing evidence, not a root-cause verdict: 'started_at_resource_creation' or 'started_after_resource_was_healthy'; absent = unknown), issue_timing_basis ('condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen, onset_unknown, onset_coverage_unknown, resource_created_at, last_seen. Times are unix seconds. first_seen is the earliest evidence-backed active-time anchor and may be Radar's first observation: read it as 'active at least since', not exact onset. It is 0 when unknown. Require first_seen != 0 for any age filter. When the whole row must have exact timing, also require onset_coverage_unknown == 0; onset_unknown alone does not exclude partially dated groups. onset_coverage is emitted only when at least one contributing signal has unknown timing. The owner_condition, pod_creation, and spec bases need not share first_seen's anchor; never subtract resource_created_at from first_seen to infer a healthy duration. resource_created_at is resource-age context, never onset. last_seen updates each compose. For cross-cluster scoping use clusters= (not CEL). Examples: 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen != 0 && onset_coverage_unknown == 0 && first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, GitOps operation retries — distinct from restart_count), stuck (bool), issue_timing (independent timing evidence, not a root-cause verdict: 'started_at_resource_creation' or 'started_after_resource_was_healthy'; absent = unknown), issue_timing_basis ('condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen, onset_unknown, onset_coverage_unknown, resource_created_at, last_seen. Times are unix seconds. first_seen is the earliest evidence-backed active-time anchor and may be Radar's first observation: read it as 'active at least since', not exact onset. It is 0 when unknown. Require first_seen != 0 for any age filter. When the whole row must have exact timing, also require onset_coverage_unknown == 0; onset_unknown alone does not exclude partially dated groups. onset_coverage is emitted only when at least one contributing signal has unknown timing. The owner_condition, pod_creation, and spec bases need not share first_seen's anchor; never subtract resource_created_at from first_seen to infer a healthy duration. resource_created_at is resource-age context, never onset. last_seen updates each compose. Examples: 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen != 0 && onset_coverage_unknown == 0 && first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
 }
 
 // Tool handlers
