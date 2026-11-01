@@ -1502,6 +1502,8 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				}
 			}
 			cause, action = attachFailureDiagnosis(cache, pod, eventMessage)
+		} else if c.reason == "VolumeMultiAttach" && ownerKind == "Deployment" {
+			cause, action = multiAttachSharedVolumeDiagnosis(cache, pod, ownerName, eventMessage)
 		}
 		detection := Detection{
 			Kind:              "Pod",
@@ -1644,6 +1646,52 @@ func attachEventVolume(message string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// The attach-detach controller's Multi-Attach event: the volume (PV name) and,
+// when the holders share the pod's namespace, the pods already using it.
+var multiAttachEventRE = regexp.MustCompile(`Multi-Attach error for volume "([^"]+)" Volume is already used by pod\(s\) (.+)`)
+
+// multiAttachSharedVolumeDiagnosis names the root cause of a Multi-Attach
+// failure on a Deployment pod when the volume is a single-node claim the
+// Deployment's replicas share and the pod holding it is another replica of the
+// same Deployment on a different node. Returns "" otherwise: a holder from
+// another workload, or a one-replica rollout surge (which the stuck-rollout
+// row explains), is not this cause.
+func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (cause, action string) {
+	m := multiAttachEventRE.FindStringSubmatch(eventMessage)
+	if m == nil || cache == nil || cache.Deployments() == nil || cache.Pods() == nil {
+		return "", ""
+	}
+	d, err := cache.Deployments().Deployments(pod.Namespace).Get(deployment)
+	if err != nil || d == nil || schedDesiredReplicas(d.Spec.Replicas) < 2 {
+		return "", ""
+	}
+	var claim *corev1.PersistentVolumeClaim
+	for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
+		if pvc.Spec.VolumeName == m[1] {
+			claim = pvc
+			break
+		}
+	}
+	if claim == nil {
+		return "", ""
+	}
+	for _, name := range strings.Split(m[2], ",") {
+		holder, err := cache.Pods().Pods(pod.Namespace).Get(strings.TrimSpace(name))
+		if err != nil || holder == nil || holder.Spec.NodeName == "" || holder.Spec.NodeName == pod.Spec.NodeName {
+			continue
+		}
+		if _, kind, owner := podOwnerKindName(cache, holder); kind != "Deployment" || owner != d.Name {
+			continue
+		}
+		// Pod and node names stay in the message: the cause must read the same
+		// for every blocked replica so grouping keeps it.
+		return fmt.Sprintf("Deployment %s runs %d replicas that share %s PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
+				d.Name, schedDesiredReplicas(d.Spec.Replicas), singleNodeAccessMode(claim), claim.Name),
+			sharedRWOVolumeFix
+	}
+	return "", ""
 }
 
 // attachFailureDiagnosis explains an attach failure the cloud rejected

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -194,5 +195,105 @@ func TestDetectPostBindProblems_UnrelatedAttachFailureHasNoDiskCause(t *testing.
 	}
 	if !strings.Contains(p.Message, "context deadline exceeded") {
 		t.Errorf("message = %q", p.Message)
+	}
+}
+
+// sharedClaimDeployment builds a 2-replica Deployment whose pods share the
+// ReadWriteOnce claim "data" (PV "pv-data"): web-a runs on node-a and web-b is
+// stuck creating on node-b. holderOwner is the controller of web-a.
+func sharedClaimDeployment(holderOwner metav1.OwnerReference) []runtime.Object {
+	two := int32(2)
+	controller := true
+	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", Controller: &controller}
+	volumes := []corev1.Volume{{
+		Name:         "data",
+		VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}},
+	}}
+	mounts := []corev1.VolumeMount{{Name: "data", MountPath: "/data"}}
+
+	holder := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-a", Namespace: "redis", OwnerReferences: []metav1.OwnerReference{holderOwner}},
+		Spec:       corev1.PodSpec{NodeName: "node-a", Volumes: volumes, Containers: []corev1.Container{{Name: "main", VolumeMounts: mounts}}},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	stuck := postBindContainerCreatingPod("redis", "web-b", "node-b", time.Now().Add(-5*time.Minute))
+	stuck.OwnerReferences = []metav1.OwnerReference{rsOwner}
+	stuck.Spec.Volumes = volumes
+	stuck.Spec.Containers[0].VolumeMounts = mounts
+
+	return []runtime.Object{
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "redis"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &two,
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: volumes, Containers: []corev1.Container{{Name: "main", VolumeMounts: mounts}}}},
+			},
+		},
+		&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "redis", OwnerReferences: []metav1.OwnerReference{
+			{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", Controller: &controller},
+		}}},
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "redis"},
+			Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: "pv-data", AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}},
+		},
+		holder,
+		stuck,
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "multi", Namespace: "redis"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "redis", Name: "web-b"},
+			Reason:         "FailedAttachVolume",
+			Type:           corev1.EventTypeWarning,
+			Message:        `Multi-Attach error for volume "pv-data" Volume is already used by pod(s) web-a`,
+			FirstTimestamp: metav1.NewTime(time.Now().Add(-4 * time.Minute)),
+			LastTimestamp:  metav1.NewTime(time.Now().Add(-30 * time.Second)),
+		},
+	}
+}
+
+func multiAttachProblem(t *testing.T, objs []runtime.Object) Detection {
+	t.Helper()
+	if err := InitTestResourceCache(fake.NewClientset(objs...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	for _, p := range DetectPostBindProblems(GetResourceCache(), "redis") {
+		if p.Name == "web-b" && p.Reason == "VolumeMultiAttach" {
+			return p
+		}
+	}
+	t.Fatal("want a VolumeMultiAttach row for web-b")
+	return Detection{}
+}
+
+// A replica of the same Deployment holds the ReadWriteOnce claim on another
+// node: the attach failure names the shared claim as its cause.
+func TestDetectPostBindProblems_MultiAttachNamesSharedClaim(t *testing.T) {
+	defer ResetTestState()
+	controller := true
+	p := multiAttachProblem(t, sharedClaimDeployment(metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", Controller: &controller}))
+	if p.Severity != "critical" {
+		t.Errorf("severity = %q, want critical", p.Severity)
+	}
+	for _, want := range []string{"Deployment web runs 2 replicas", "ReadWriteOnce PVC data", "A replica on another node holds it"} {
+		if !strings.Contains(p.Cause, want) {
+			t.Errorf("cause missing %q: %q", want, p.Cause)
+		}
+	}
+	if !strings.Contains(p.Message, "node-b") || !strings.Contains(p.Message, "already used by pod(s) web-a") {
+		t.Errorf("message should keep the pod-specific evidence: %q", p.Message)
+	}
+	if !strings.Contains(p.Action, "ReadWriteMany") {
+		t.Errorf("action = %q", p.Action)
+	}
+}
+
+// The holder belongs to another workload, so the Deployment's replica count
+// isn't the cause and none is invented.
+func TestDetectPostBindProblems_MultiAttachForeignHolderHasNoCause(t *testing.T) {
+	defer ResetTestState()
+	controller := true
+	p := multiAttachProblem(t, sharedClaimDeployment(metav1.OwnerReference{APIVersion: "batch/v1", Kind: "Job", Name: "backup", Controller: &controller}))
+	if p.Cause != "" || p.Action != "" {
+		t.Errorf("no cause expected for a foreign holder: %q / %q", p.Cause, p.Action)
 	}
 }
