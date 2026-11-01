@@ -880,16 +880,18 @@ const evictionPressureLag = 2 * time.Minute
 // node's current pressure. The kubelet's message must name the resource behind
 // the condition — a pod evicted for memory is not explained by DiskPressure,
 // and one that exceeded its own ephemeral-storage limit by no node pressure.
-// And the eviction must not predate the episode: Evicted pods linger for days,
-// and yesterday's eviction is not a symptom of pressure that began today.
+// And the eviction must be shown to fall within the episode: Evicted pods
+// linger for days, and yesterday's eviction is not a symptom of pressure that
+// began today. An eviction with no recorded time cannot be placed in the
+// episode, so it is not linked once the episode's start is known.
 func evictionMatchesNodePressure(symptom Issue, node Issue) bool {
 	if health.ParsePodEviction(symptom.RawMessage).PressureCondition() != node.Reason {
 		return false
 	}
-	if !symptom.FirstSeen.IsZero() && !node.FirstSeen.IsZero() && symptom.FirstSeen.Before(node.FirstSeen.Add(-evictionPressureLag)) {
-		return false
+	if node.FirstSeen.IsZero() {
+		return true
 	}
-	return true
+	return !symptom.FirstSeen.IsZero() && !symptom.FirstSeen.Before(node.FirstSeen.Add(-evictionPressureLag))
 }
 
 // addEvictedFromNodeContext names the node(s) whose kubelet evicted the pods

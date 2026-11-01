@@ -32,7 +32,7 @@ type evictionDetection struct {
 func evictedPodProblem(pod *corev1.Pod, ownerKind string) evictionDetection {
 	raw := pod.Status.Message
 	ev := health.ParsePodEviction(raw)
-	out := evictionDetection{severity: "critical", raw: raw, onset: podEvictionTime(pod)}
+	out := evictionDetection{severity: "critical", raw: raw, onset: podEvictionTime(pod, ev.Kind)}
 	switch ownerKind {
 	case "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job", "CronJob", "Rollout":
 		out.severity = "high"
@@ -89,23 +89,30 @@ func evictionPressureAction(resource string) string {
 
 // podEvictionTime is when the kubelet evicted the pod: the DisruptionTarget
 // condition it sets for pressure evictions (Kubernetes 1.26+), else the newest
-// container termination, which is the kubelet killing the containers on its
-// way out (limit evictions get no DisruptionTarget). Ready=False is not used:
-// it keeps its earlier timestamp when the pod was already unready. Zero when
-// neither is recorded.
-func podEvictionTime(pod *corev1.Pod) time.Time {
+// main-container termination, which is the kubelet killing the containers on
+// its way out (limit evictions get no DisruptionTarget). Init containers are
+// skipped: a completed one finished at pod start, and would backdate the
+// eviction when the killed containers record no finish time. An admission
+// rejection happens as the pod starts, so its start (or creation) is the time.
+// Ready=False is not used: it keeps its earlier timestamp when the pod was
+// already unready. Zero when none of these is recorded.
+func podEvictionTime(pod *corev1.Pod, kind health.EvictionKind) time.Time {
 	for _, c := range pod.Status.Conditions {
 		if c.Type == corev1.DisruptionTarget && c.Status == corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
 			return c.LastTransitionTime.Time
 		}
 	}
 	var killed time.Time
-	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
-		for _, cs := range statuses {
-			if t := cs.State.Terminated; t != nil && t.FinishedAt.After(killed) {
-				killed = t.FinishedAt.Time
-			}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if t := cs.State.Terminated; t != nil && t.FinishedAt.After(killed) {
+			killed = t.FinishedAt.Time
 		}
+	}
+	if killed.IsZero() && kind == health.EvictionNodeCondition {
+		if pod.Status.StartTime != nil && !pod.Status.StartTime.IsZero() {
+			return pod.Status.StartTime.Time
+		}
+		return pod.CreationTimestamp.Time
 	}
 	return killed
 }

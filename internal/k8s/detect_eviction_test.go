@@ -6,6 +6,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/pkg/health"
 )
 
 // The shape of a real limit eviction (EKS 1.34): no DisruptionTarget, the
@@ -47,5 +49,27 @@ func TestEvictedPodProblem(t *testing.T) {
 		if sev := evictedPodProblem(pod, owner).severity; sev != "critical" {
 			t.Errorf("owner %q: severity = %q, want critical (nothing known to replace it)", owner, sev)
 		}
+	}
+}
+
+// A completed init container finished at pod start. When the killed main
+// container records no finish time, the onset is unknown, not pod start.
+func TestPodEvictionTimeIgnoresInitContainers(t *testing.T) {
+	start := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodFailed, Reason: "Evicted",
+		InitContainerStatuses: []corev1.ContainerStatus{{Name: "init", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			Reason: "Completed", ExitCode: 0, FinishedAt: metav1.NewTime(start)}}}},
+		ContainerStatuses: []corev1.ContainerStatus{{Name: "app", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			Reason: "ContainerStatusUnknown", ExitCode: 137}}}},
+	}}
+	if got := podEvictionTime(pod, health.EvictionNodePressure); !got.IsZero() {
+		t.Errorf("onset = %v, want unknown", got)
+	}
+	// An admission rejection happens as the pod starts.
+	pod.Status.ContainerStatuses = nil
+	pod.Status.StartTime = &metav1.Time{Time: start}
+	if got := podEvictionTime(pod, health.EvictionNodeCondition); !got.Equal(start) {
+		t.Errorf("admission rejection onset = %v, want pod start %v", got, start)
 	}
 }

@@ -172,11 +172,14 @@ func TestNodeBlastRadiusContext_EvictionBeforePressureEpisodeNotLinked(t *testin
 	node := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "DiskPressure", FirstSeen: pressureSince}
 	stale := Issue{ID: "stale", Kind: "Pod", Namespace: "prod", Name: "stale", Category: issuesapi.CategoryPodEvicted, RawMessage: diskEvictionMessage, FirstSeen: pressureSince.Add(-24 * time.Hour)}
 	fresh := Issue{ID: "fresh", Kind: "Pod", Namespace: "prod", Name: "fresh", Category: issuesapi.CategoryPodEvicted, RawMessage: diskEvictionMessage, FirstSeen: pressureSince.Add(-30 * time.Second)}
+	// No recorded eviction time: it cannot be placed in this episode.
+	undated := Issue{ID: "undated", Kind: "Pod", Namespace: "prod", Name: "undated", Category: issuesapi.CategoryPodEvicted, RawMessage: "The node had condition: [DiskPressure]. "}
 	p := &fakeProvider{podsOnNode: map[string][]Ref{"node-1": {
 		{Kind: "Pod", Namespace: "prod", Name: "stale"},
 		{Kind: "Pod", Namespace: "prod", Name: "fresh"},
+		{Kind: "Pod", Namespace: "prod", Name: "undated"},
 	}}}
-	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, stale, fresh}, nil, p)
+	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, stale, fresh, undated}, nil, p)
 	fact := findFact(out[0].DiagnosticContext, factNodeBlastRadius)
 	if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "fresh" {
 		t.Fatalf("blast radius = %+v, want only the eviction from this episode", fact)
