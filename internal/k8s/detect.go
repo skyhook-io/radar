@@ -122,6 +122,9 @@ type Detection struct {
 	// RestartLoop is set on a Pod crashloop row emitted because a container is
 	// in an active restart loop (see activeRestartLoop). Nil otherwise.
 	RestartLoop *issuesapi.RestartLoop
+	// EvictedFromNode is spec.nodeName of an Evicted pod: the node whose
+	// kubelet evicted it. The pod's own field, so it needs no node read.
+	EvictedFromNode string `json:"-"`
 	// AffectedRefs names resources a detection on another subject affects
 	// (the Services, workloads and Pods a NetworkPolicy isolates), so the issue
 	// also shows up on those resources. Ordered most to least important; the
@@ -617,6 +620,15 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 					cause, action = imagePullDiagnosis(reason, message)
 				}
 			}
+			var evictedFrom, messageSource string
+			var evictedAt time.Time
+			if reason == health.PodEvictedReason && health.IsEvictedPod(pod) {
+				ev := evictedPodProblem(pod, ownerKind)
+				severity, message, rawMessage, fingerprint = ev.severity, ev.message, ev.raw, ev.fingerprint
+				cause, action, evictedAt = ev.cause, ev.action, ev.onset
+				messageSource = issuesapi.MessageSourceRadar
+				evictedFrom = pod.Spec.NodeName
+			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
 			// healthy operation (started_after_resource_was_healthy).
@@ -715,6 +727,8 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				Reason:               reason,
 				Message:              message,
 				RawMessage:           rawMessage,
+				MessageSource:        messageSource,
+				EvictedFromNode:      evictedFrom,
 				Fingerprint:          fingerprint,
 				Age:                  timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
@@ -736,6 +750,9 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 			var onset time.Time
 			if reason == readinessGatesNotReadyReason {
 				onset, _ = health.PodReadinessGateFailure(pod, now)
+			}
+			if !evictedAt.IsZero() {
+				onset = evictedAt
 			}
 			setDetectionOnset(&detection, now, onset)
 			if pinLoopSeverity {
@@ -1230,12 +1247,15 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 		}
 	}
 
-	// Multi-replica Deployment sharing a ReadWriteOnce volume: only one node can
-	// attach an RWO PVC, so a Deployment wanting >1 replica can never bring up
-	// the surplus — they sit unschedulable / multi-attach-failed. A config-level
-	// root cause we can name from spec, independent of whether the symptom has
-	// fired yet. StatefulSets are exempt (volumeClaimTemplates give each replica
-	// its own PVC); DaemonSets are one-per-node by design.
+	// Multi-replica Deployment sharing a single-node volume. ReadWriteOncePod
+	// admits one pod, so the surplus replicas can't run: an active problem named
+	// from spec. ReadWriteOnce limits the volume to one NODE, not one pod —
+	// replicas on that node share it fine, and only a replica placed on another
+	// node fails (Multi-Attach). From spec alone that is a risk, not a failure,
+	// so it is info (posture, kept off the issues stream); the failure itself is
+	// the pod's VolumeMultiAttach row, whose cause names this sharing.
+	// StatefulSets are exempt (volumeClaimTemplates give each replica its own
+	// PVC); DaemonSets are one-per-node by design.
 	if depLister := cache.Deployments(); depLister != nil {
 		var deps []*appsv1.Deployment
 		if namespace != "" {
@@ -1248,19 +1268,19 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				continue
 			}
 			ageDur := now.Sub(d.CreationTimestamp.Time)
-			for _, pvcName := range sharedRWOVolumeConflicts(cache, d) {
+			for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
+				severity, reason, message := sharedRWOVolumeProblem(d, pvc)
 				problems = append(problems, Detection{
 					Kind:      "Deployment",
 					Namespace: d.Namespace,
 					Name:      d.Name,
 					Group:     "apps",
-					Severity:  "high",
-					Reason:    "ReadWriteOnce volume shared across replicas",
-					Message: fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOnce PVC %q — only one node can attach it, so the other replicas can't start. Use a ReadWriteMany volume, switch to a StatefulSet with volumeClaimTemplates (a volume per replica), or reduce to 1 replica.",
-						schedDesiredReplicas(d.Spec.Replicas), pvcName),
+					Severity:  severity,
+					Reason:    reason,
+					Message:   message,
 					// One Deployment can share multiple distinct RWO PVCs; fingerprint
 					// per PVC so each is its own row rather than collapsing into one.
-					Fingerprint:       "pvc-rwo-multireplica:" + pvcName,
+					Fingerprint:       "pvc-rwo-multireplica:" + pvc.Name,
 					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
@@ -1894,19 +1914,41 @@ func pdbBlocksEvictionsMessage(pdb *policyv1.PodDisruptionBudget) string {
 		pdb.Status.ExpectedPods)
 }
 
-// sharedRWOVolumeConflicts returns the names of PVCs the Deployment's pod
-// template MOUNTS whose bound access modes permit only single-node attach
-// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany). Pending PVCs are skipped
-// here because the binding/provisioning failure is the actionable blocker until a
-// real volume can attach.
-func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []string {
+const sharedRWOVolumeFix = "Use a ReadWriteMany volume, switch to a StatefulSet with volumeClaimTemplates (a volume per replica), or reduce to 1 replica."
+
+// Stable reason literals for the multi-replica single-node-volume row; the
+// issues category mapping keys on them.
+const (
+	SharedRWOVolumeReason  = "ReadWriteOnce volume shared across replicas"
+	SharedRWOPVolumeReason = "ReadWriteOncePod volume shared across replicas"
+)
+
+// sharedRWOVolumeProblem words the multi-replica single-node-volume row:
+// high for ReadWriteOncePod (one pod only), info for ReadWriteOnce (one node
+// only, so it fails only when replicas land on different nodes).
+func sharedRWOVolumeProblem(d *appsv1.Deployment, pvc *corev1.PersistentVolumeClaim) (severity, reason, message string) {
+	replicas := schedDesiredReplicas(d.Spec.Replicas)
+	if singleNodeAccessMode(pvc) == corev1.ReadWriteOncePod {
+		return "high", SharedRWOPVolumeReason, fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOncePod PVC %q, which only one pod at a time can use, so only one replica can run. %s",
+			replicas, pvc.Name, sharedRWOVolumeFix)
+	}
+	return "info", SharedRWOVolumeReason, fmt.Sprintf("Deployment wants %d replicas that share ReadWriteOnce PVC %q. ReadWriteOnce lets only one node mount the volume: replicas on that node can share it, but a replica scheduled onto another node fails to attach (Multi-Attach). To spread replicas across nodes, use a ReadWriteMany volume or a StatefulSet with volumeClaimTemplates (a volume per replica).",
+		replicas, pvc.Name)
+}
+
+// sharedRWOVolumeConflicts returns the PVCs the Deployment's pod template
+// MOUNTS whose bound access modes permit only single-node attach
+// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany), sorted by name. Pending
+// PVCs are skipped here because the binding/provisioning failure is the
+// actionable blocker until a real volume can attach.
+func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []*corev1.PersistentVolumeClaim {
 	pvcl := cache.PersistentVolumeClaims()
 	if pvcl == nil {
 		return nil
 	}
 	spec := d.Spec.Template.Spec
 	mounted := mountedVolumeNames(spec)
-	var out []string
+	var out []*corev1.PersistentVolumeClaim
 	for _, v := range spec.Volumes {
 		if v.PersistentVolumeClaim == nil || !mounted[v.Name] {
 			continue
@@ -1916,10 +1958,10 @@ func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []stri
 			continue
 		}
 		if pvc.Status.Phase == corev1.ClaimBound && pvcSingleNodeAccessOnly(pvc) {
-			out = append(out, pvc.Name)
+			out = append(out, pvc)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -1932,7 +1974,7 @@ func rolloutRWOVolumeDetail(cache *ResourceCache, d *appsv1.Deployment) string {
 		return ""
 	}
 	return fmt.Sprintf("This Deployment mounts ReadWriteOnce PVC %q and uses RollingUpdate; a surge pod can be blocked while the old pod still holds the volume. Use strategy: Recreate, a ReadWriteMany volume, or per-replica volumes.",
-		pvcs[0])
+		pvcs[0].Name)
 }
 
 // mountedVolumeNames is the set of pod-template volume names actually mounted by

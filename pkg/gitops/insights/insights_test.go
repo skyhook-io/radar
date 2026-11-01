@@ -2171,6 +2171,37 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 	}
 }
 
+// An operation held by a sync window stays Running with Argo's "blocked by
+// sync window" message; the issue must say so instead of "currently running",
+// and a termination requested meanwhile must say it waits for the window too.
+func TestBuildIssuesArgoSyncWindowBlockedOperation(t *testing.T) {
+	for _, tc := range []struct {
+		phase, message, wantReason string
+	}{
+		{phase: "Running", message: "Sync operation blocked by sync window", wantReason: "SyncWindowBlocked"},
+		{phase: "Terminating", message: "Sync operation blocked by sync window", wantReason: "SyncWindowBlocked"},
+		{phase: "Running", message: "waiting for completion of hook batch/Job/migrate", wantReason: "Running"},
+	} {
+		t.Run(tc.phase+"/"+tc.message, func(t *testing.T) {
+			root := argoApp(map[string]any{
+				"operationState": map[string]any{"phase": tc.phase, "message": tc.message},
+			})
+			issues := buildIssues(root, nil, "argocd", nil)
+			if len(issues) != 1 || issues[0].Reason != tc.wantReason {
+				t.Fatalf("issues = %+v, want one %s issue", issues, tc.wantReason)
+			}
+			if tc.wantReason == "SyncWindowBlocked" {
+				if issues[0].Severity != SeverityWarning || !strings.Contains(issues[0].Message, "sync window") {
+					t.Fatalf("blocked issue = %+v, want a warning naming the sync window", issues[0])
+				}
+				if tc.phase == "Running" && !strings.Contains(issues[0].Action, "terminate the operation to drop it") {
+					t.Fatalf("blocked action = %q, want guidance to terminate the held operation", issues[0].Action)
+				}
+			}
+		})
+	}
+}
+
 // prunedResources is status.resources as Argo reports it while the empty-render
 // guard holds: every managed resource requires pruning.
 func prunedResources() []any {
@@ -2779,5 +2810,49 @@ func TestBuildIssuesRollbackWithoutAppliedRevisions(t *testing.T) {
 	issues := buildIssues(root, nil, "argocd", nil)
 	if len(issues) != 1 || issues[0].Reason != "RollbackRevisionMismatch" || issues[0].Message != "Couldn't verify the rollback target old: Argo CD recorded no applied revisions." {
 		t.Fatalf("missing verification warning: %+v", issues)
+	}
+}
+
+func TestBuildIssues_RemoteComparisonOffersNoLocalRemediationOrEventCause(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			root := argoApp(map[string]any{
+				"health":    map[string]any{"status": "Degraded"},
+				"sync":      map[string]any{"comparedTo": map[string]any{"destination": map[string]any{"server": "https://remote.example"}}},
+				"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "payments", "name": "web", "status": "Synced"}},
+			})
+			if failed {
+				unstructured.SetNestedMap(root.Object, map[string]any{"phase": "Failed", "message": `namespaces "payments" not found`}, "status", "operationState")
+				unstructured.SetNestedSlice(root.Object, []any{map[string]any{"type": "SyncError", "message": `namespaces "payments" not found`}}, "status", "conditions")
+			}
+			resolver := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "LOCAL object failure", Count: 3}}}}
+			issues := buildIssues(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", resolver)
+			for _, issue := range issues {
+				if issue.Remediation != nil || issue.Reason == "PossibleCause" {
+					t.Fatalf("remote comparison used local evidence: %+v", issues)
+				}
+			}
+			if failed && len(issues) == 0 {
+				t.Fatal("lost the recorded operation failure")
+			}
+		})
+	}
+}
+
+func TestDegradedRollupQualifiesIncompleteTree(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "app", "namespace": "team"}}}
+	for _, partial := range []bool{false, true} {
+		tree := &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 2}}
+		if partial {
+			tree.Warnings = []string{"Some generated resources could not be included; the resource tree is partial."}
+		}
+		issues := buildIssues(root, tree, "fluxcd", nil)
+		want := "2 managed resources are degraded"
+		if partial {
+			want += " among the resources shown"
+		}
+		if len(issues) != 1 || issues[0].Message != want {
+			t.Fatalf("partial=%t issues=%+v", partial, issues)
+		}
 	}
 }

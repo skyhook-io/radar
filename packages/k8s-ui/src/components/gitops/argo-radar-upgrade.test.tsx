@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
-import { GitOpsDetailLayout, type ArgoActionHandlers } from './GitOpsDetailLayout'
+import { GitOpsDetailLayout, type ArgoActionHandlers, type GitOpsDetailStatus } from './GitOpsDetailLayout'
 import { buildRowActionItems, normalizeArgoApplication } from './GitOpsTableView'
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 
@@ -48,11 +48,11 @@ function argo(overrides: Partial<ArgoActionHandlers> = {}): ArgoActionHandlers {
   }
 }
 
-function layout(handlers: ArgoActionHandlers) {
+function layout(handlers: ArgoActionHandlers, status: GitOpsDetailStatus | null = null) {
   return (
     <GitOpsDetailLayout
       identity={{ kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'guestbook', toolLabel: 'ArgoCD', kindLabel: 'Application' }}
-      status={null}
+      status={status}
       terminating={false}
       terminatingChipTooltip=""
       terminatingActionTooltip=""
@@ -97,6 +97,30 @@ describe('Enable auto-sync on the GitOps detail page', () => {
 
   describe('tooltip', () => {
     afterEach(() => { vi.useRealTimers() })
+
+    it.each([
+      { name: 'saved settings', status: { sync: 'OutOfSync', health: 'Healthy', suspended: true } as GitOpsDetailStatus, settings: undefined, copy: 'Turn auto-sync back on with its current or saved settings.' },
+      { name: 'first-time enable', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: false, selfHeal: true }, copy: 'Argo applies new commits and reverts live edits (self-heal). Resources removed from Git are kept (prune off).' },
+      { name: 'a block switched off in place with prune on', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: true, selfHeal: false }, copy: 'Argo applies new commits. Resources removed from Git are deleted (prune on).' },
+      { name: 'unknown settings', status: null, settings: null, copy: 'Turn on automated sync, so Argo applies new commits from Git.' },
+    ])('explains $name', async ({ status, settings, copy }) => {
+      vi.useFakeTimers()
+      const element = document.createElement('div')
+      document.body.appendChild(element)
+      const root = createRoot(element)
+      try {
+        await act(async () => { root.render(layout(argo({ resumeSettings: settings }), status)) })
+        const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Enable auto-sync')!
+        await act(async () => {
+          button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+          vi.advanceTimersByTime(1000)
+        })
+        expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(copy)
+      } finally {
+        await act(async () => root.unmount())
+        element.remove()
+      }
+    })
 
     it('explains the disabled button with the note copy', async () => {
       vi.useFakeTimers()
@@ -160,6 +184,28 @@ describe('Enable Auto-Sync in the resource actions bar', () => {
   // A Manual app without an automated block resumes correctly on every Radar.
   it('is enabled for a Manual app without an automated block', () => {
     expect(bar(app(undefined), upgrade)).not.toMatch(/\saria-disabled="true"/)
+  })
+})
+
+describe("the drawer's one-click Sync", () => {
+  it("hands the Application's sync options to the caller", async () => {
+    const onArgoSync = vi.fn()
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const application = { ...app(undefined), spec: { project: 'default', source: {}, destination: {}, syncPolicy: { syncOptions: ['CreateNamespace=true'] } } }
+    await act(async () => root.render(
+      <ResourceActionsBar
+        resource={{ kind: 'applications', namespace: 'argocd', name: 'guestbook', group: 'argoproj.io' }}
+        data={application}
+        onArgoSync={onArgoSync}
+      />,
+    ))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync')!
+    await act(async () => sync.click())
+    expect(onArgoSync).toHaveBeenCalledWith({ namespace: 'argocd', name: 'guestbook', applicationSyncOptions: ['CreateNamespace=true'] })
+    await act(async () => root.unmount())
+    host.remove()
   })
 })
 

@@ -607,7 +607,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
   const [expanded, setExpanded] = useState(false)
   if (issues.length === 0) return null
   const headline = issues[0]!
-  const rollbackOutcome = headline.reason === 'RolledBack' || headline.reason === 'RollbackRevisionMismatch'
+  const wrapHeadline = headline.reason === 'RolledBack' || headline.reason === 'RollbackRevisionMismatch' || headline.reason === 'SyncWindowBlocked'
   const remaining = issues.length - 1
   const tone = severityTone(headline.severity)
   const headlineRef = headline.refs?.[0]
@@ -635,7 +635,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
         <div className="flex w-full items-center gap-2">
           {tone.icon}
           <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
-          <span className={clsx('min-w-0 flex-1 text-theme-text-secondary', rollbackOutcome ? 'whitespace-normal break-words' : 'truncate')}>{headline.message}</span>
+          <span className={clsx('min-w-0 flex-1 text-theme-text-secondary', wrapHeadline ? 'whitespace-normal break-words' : 'truncate')}>{headline.message}</span>
           {/* Inline count when there are more issues behind the headline.
               Lightweight text — pairs with the chevron as a single disclosure
               unit instead of a separator-bordered count button. */}

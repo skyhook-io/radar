@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -100,6 +101,10 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
 	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
 	"Rollout":                        {group: "argoproj.io", diff: chainDiffs(diffRollout, diffRolloutSpec), backstopRoot: "spec"},
+	"Role":                           {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"ClusterRole":                    {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"RoleBinding":                    {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
+	"ClusterRoleBinding":             {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and
@@ -197,6 +202,14 @@ func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
 		return typedOrUnstructured[corev1.ResourceQuota](u)
 	case "LimitRange":
 		return typedOrUnstructured[corev1.LimitRange](u)
+	case "Role":
+		return typedOrUnstructured[rbacv1.Role](u)
+	case "ClusterRole":
+		return typedOrUnstructured[rbacv1.ClusterRole](u)
+	case "RoleBinding":
+		return typedOrUnstructured[rbacv1.RoleBinding](u)
+	case "ClusterRoleBinding":
+		return typedOrUnstructured[rbacv1.ClusterRoleBinding](u)
 	default:
 		return u.DeepCopy()
 	}

@@ -52,6 +52,7 @@ const (
 	CategoryReadinessFailed   Category = "readiness_failed"
 	CategoryWorkloadDegraded  Category = "workload_degraded"
 	CategoryHighRestart       Category = "high_restart"
+	CategoryPodEvicted        Category = "pod_evicted"
 	CategoryJobFailed         Category = "job_failed"
 	CategoryCronJobFailed     Category = "cronjob_failed"
 
@@ -134,6 +135,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryReadinessFailed:          GroupRuntime,
 	CategoryWorkloadDegraded:         GroupRuntime,
 	CategoryHighRestart:              GroupRuntime,
+	CategoryPodEvicted:               GroupRuntime,
 	CategoryJobFailed:                GroupRuntime,
 	CategoryCronJobFailed:            GroupRuntime,
 	CategoryMissingConfigRef:         GroupConfiguration,

@@ -34,6 +34,24 @@ func TestGitOpsDenialPreservesExactOperation(t *testing.T) {
 	}
 }
 
+func TestArgoValidationPollDeniedIsPermissionDenied(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "demo", "namespace": "argocd"}, "spec": map[string]any{"source": map[string]any{"repoURL": "https://example.com/repo.git"}}}}
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), app)
+	gets := 0
+	client.PrependReactor("get", "applications", func(ktesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 1 {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "applications"}, "demo", errors.New(`User "alice" cannot get resource "applications"`))
+	})
+	_, err := ValidateArgoResource(context.Background(), client, "argocd", "demo", ArgoSyncResource{Kind: "Service", Name: "api"}, ArgoSyncOptions{})
+	var denied *PermissionDenied
+	if gets < 2 || !errors.As(err, &denied) || denied.Verb != "get" || denied.Resource != "applications" {
+		t.Fatalf("gets=%d denial=%+v err=%v", gets, denied, err)
+	}
+}
+
 func TestFluxSourceReadDeniedDoesNotPatch(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "demo", "namespace": "apps"}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo", "namespace": "sources"}}}}
 	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj)

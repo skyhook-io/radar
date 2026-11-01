@@ -4,6 +4,7 @@ import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
+import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
@@ -6991,9 +6992,12 @@ export function useGitOpsActionCapabilities(kind: string, group: string | undefi
   };
 }
 
-interface GitOpsMutationConfig<TVariables> {
+interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   getPath: (variables: TVariables) => string;
-  getBody?: (variables: TVariables) => unknown;
+  // Called by the hook on every render (so it may call hooks); its value is
+  // passed to getBody.
+  useRequestContext?: () => TContext;
+  getBody?: (variables: TVariables, context: TContext) => unknown;
   errorMessage: string;
   successMessage?: string;
   getSuccessMessage?: (data: GitOpsOperationResponse, variables: TVariables) => string;
@@ -7004,11 +7008,12 @@ interface GitOpsMutationConfig<TVariables> {
  * Factory function for creating GitOps mutation hooks with consistent patterns.
  * Handles fetch, error handling, meta messages, and query invalidation.
  */
-function createGitOpsMutation<TVariables>(
-  config: GitOpsMutationConfig<TVariables>,
+function createGitOpsMutation<TVariables, TContext = undefined>(
+  config: GitOpsMutationConfig<TVariables, TContext>,
 ) {
   return function useGitOpsMutation() {
     const queryClient = useQueryClient();
+    const requestContext = config.useRequestContext?.() as TContext;
     return useMutation<GitOpsOperationResponse, Error, TVariables>({
       mutationFn: async (
         variables: TVariables,
@@ -7021,7 +7026,7 @@ function createGitOpsMutation<TVariables>(
               ? { "Content-Type": "application/json" }
               : undefined,
             body: config.getBody
-              ? JSON.stringify(config.getBody(variables))
+              ? JSON.stringify(config.getBody(variables, requestContext))
               : undefined,
           },
         );
@@ -7068,8 +7073,12 @@ export type ArgoSyncVars = ArgoAppVars & {
   applyOnly?: boolean;
   // Free-form Argo SyncOption strings, e.g. "Replace=true",
   // "ServerSideApply=true", "PruneLast=true". Caller is responsible for
-  // spelling.
+  // spelling. Omitted: the Application's own spec.syncPolicy.syncOptions.
   syncOptions?: string[];
+  // The Application's spec.syncPolicy.syncOptions as the caller last read
+  // them. Not a request field: sent as syncOptions only to a Radar that would
+  // otherwise drop them (see argoSyncRequestBody).
+  applicationSyncOptions?: string[];
 };
 
 export interface ArgoResourceValidationResult {
@@ -7090,11 +7099,13 @@ export function buildArgoResourceSyncVars(
   name: string,
   resource: GitOpsInsightRef,
   opts: ArgoSyncOpts,
+  applicationSyncOptions?: string[],
 ): ArgoSyncVars {
   return {
     namespace,
     name,
     ...opts,
+    applicationSyncOptions,
     resources: [
       {
         group: resource.group,
@@ -7177,17 +7188,37 @@ export const useFluxSyncWithSource = createGitOpsMutation<FluxResourceVars>({
 // ArgoCD API hooks
 // ============================================================================
 
-export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
-  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
-  getBody: (v) => ({
+// argoSyncRequestBody is the body POSTed to .../sync. A Radar that predates
+// argoSyncInheritance prunes when prune is omitted and syncs with no options
+// when syncOptions is omitted, so prune is always sent and, for such a Radar,
+// the Application's options are sent in place of an omission.
+export function argoSyncRequestBody(
+  v: ArgoSyncVars,
+  serverInheritsOptions: boolean,
+) {
+  return {
     resources: v.resources,
     revision: v.revision,
-    prune: v.prune,
+    prune: v.prune ?? false,
     dryRun: v.dryRun,
     force: v.force,
     applyOnly: v.applyOnly,
-    syncOptions: v.syncOptions,
-  }),
+    syncOptions: argoSyncOptionsForRequest(
+      v.syncOptions,
+      v.applicationSyncOptions,
+      serverInheritsOptions,
+    ),
+  };
+}
+
+function useArgoSyncInheritance(): boolean {
+  return useRadarFeature("argoSyncInheritance").support === "supported";
+}
+
+export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
+  useRequestContext: useArgoSyncInheritance,
+  getBody: argoSyncRequestBody,
   errorMessage: "Failed to trigger sync",
   successMessage: "Sync initiated",
   getInvalidateKeys: argoInvalidateKeys,
@@ -7195,6 +7226,7 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
 
 export function useArgoResourceValidation() {
   const queryClient = useQueryClient();
+  const serverInheritsOptions = useArgoSyncInheritance();
   return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
     mutationFn: async (variables) => {
       const response = await apiFetch(
@@ -7205,7 +7237,11 @@ export function useArgoResourceValidation() {
           body: JSON.stringify({
             resources: variables.resources,
             force: variables.force,
-            syncOptions: variables.syncOptions,
+            syncOptions: argoSyncOptionsForRequest(
+              variables.syncOptions,
+              variables.applicationSyncOptions,
+              serverInheritsOptions,
+            ),
           }),
         },
       );

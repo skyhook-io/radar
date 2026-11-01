@@ -15,6 +15,9 @@ import {
   GitOpsTreeGraph,
   RollbackDialog,
   SyncOptionsDialog,
+  argoApplicationSyncOptions,
+  argoComparedRevisionCurrent,
+  isArgoMultiSource,
   buildFluxSourceUrlMap,
   buildTreeFacets,
   describeGitOpsTerminating,
@@ -26,6 +29,7 @@ import {
   isDestinationRef,
   isArgoAutoSyncEnabled,
   isArgoAutoSyncSwitchedOff,
+  argoResumeSettings,
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
@@ -146,11 +150,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
+  const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
 
-  const [syncDialogRow, setSyncDialogRow] = useState<GitOpsRow | null>(null)
-  const { disabledReasons: syncDialogDisabledReasons } = useGitOpsActionCapabilities(
-    syncDialogRow?.kindName ?? '', syncDialogRow?.group, syncDialogRow?.namespace ?? '', syncDialogRow?.name ?? '', !!syncDialogRow,
-  )
+  const [syncDialogRowId, setSyncDialogRowId] = useState<string | null>(null)
   const [pendingActions, setPendingActions] = useState<Map<string, Set<GitOpsRowAction>>>(new Map())
 
   // Mark an action as in-flight (or done) for a given row. Cloning the
@@ -247,6 +249,14 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
     refetchInterval: GITOPS_ROWS_REFRESH_INTERVAL_MS,
   })
 
+  const syncDialogRow = rowsQuery.data?.rows.find((row) => row.id === syncDialogRowId)
+  const { disabledReasons: syncDialogDisabledReasons } = useGitOpsActionCapabilities(
+    syncDialogRow?.kindName ?? '', syncDialogRow?.group, syncDialogRow?.namespace ?? '', syncDialogRow?.name ?? '', !!syncDialogRow,
+  )
+  useEffect(() => {
+    if (syncDialogRowId && !syncDialogRow) setSyncDialogRowId(null)
+  }, [syncDialogRowId, syncDialogRow])
+
   // Row mutations invalidate granular keys (['resource', …], ['gitops-tree', …])
   // that don't match the table's aggregate gitops-rows-main / counts queries,
   // so refetch those explicitly — otherwise a row keeps showing the pre-action
@@ -297,7 +307,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         // detail page uses. The mutation fires from onConfirm; clear the
         // in-flight flag here since the dialog now owns the lifecycle.
         markAction(id, action, false)
-        setSyncDialogRow(row)
+        setSyncDialogRowId(id)
         return
       case 'refresh':
         argoRefresh.mutate({ namespace, name, hard: false }, settle)
@@ -366,17 +376,22 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         open={!!syncDialogRow}
         disabledReason={syncDialogDisabledReasons.sync}
         appLabel={syncDialogRow ? `${syncDialogRow.namespace}/${syncDialogRow.name}` : ''}
+        multiSource={isArgoMultiSource(syncDialogRow?.raw)}
+        comparedRevision={syncDialogRow?.raw?.status?.sync?.revision}
+        pinsComparedRevision={argoInheritanceSupport === 'supported' && argoComparedRevisionCurrent(syncDialogRow?.raw)}
+        applicationSyncOptions={argoApplicationSyncOptions(syncDialogRow?.raw)}
+        autoSyncEnabled={!!syncDialogRow && isArgoAutoSyncEnabled(syncDialogRow.raw)}
         pending={argoSync.isPending}
-        onCancel={() => setSyncDialogRow(null)}
+        onCancel={() => setSyncDialogRowId(null)}
         onConfirm={(opts) => {
           if (!syncDialogRow || syncDialogDisabledReasons.sync) return
           const { namespace, name } = syncDialogRow
           argoSync.mutate(
-            { namespace, name, ...opts },
+            { namespace, name, ...opts, applicationSyncOptions: argoApplicationSyncOptions(syncDialogRow.raw) },
             // onSettled so the dialog closes on both success and error —
             // otherwise the error toast surfaces behind the still-open
             // modal and the user can't read it.
-            { onSuccess: refetchTableAfterMutation, onSettled: () => setSyncDialogRow(null) },
+            { onSuccess: refetchTableAfterMutation, onSettled: () => setSyncDialogRowId(null) },
           )
         }}
       />
@@ -426,6 +441,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   // The toggle button reads from this so the label flips correctly when an
   // app is in Manual mode or suspended via Radar's annotations.
   const argoAutoSyncEnabled = isArgoApp && isArgoAutoSyncEnabled(resourceQ.data)
+  const appSyncOptions = argoApplicationSyncOptions(resourceQ.data)
   // Radar-driven Argo suspension is signaled by annotations that record the
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
   // the app is in a deliberately-paused state (vs. Manual mode, which is a
@@ -480,6 +496,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const argoRollback = useArgoRollback()
   const { upgrade: argoRollbackUpgrade, blockedReason: argoRollbackBlockedReason } = useRadarFeature('argoRollback')
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
+  const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
   const applyResource = useApplyResource()
   const fluxReconcile = useFluxReconcile()
   const fluxSyncWithSource = useFluxSyncWithSource()
@@ -699,6 +716,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     isRunning,
     operationInProgress,
     resumeUpgrade: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeUpgrade : null,
+    resumeSettings: argoResumeSettings(resourceQ.data, argoInheritanceSupport === 'unknown' ? undefined : argoInheritanceSupport === 'supported'),
     resumeBlockedReason: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeBlockedReason : undefined,
   } : undefined
 
@@ -730,6 +748,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       terminatingActionTooltip={terminatingActionTooltip}
       detail={tool ? detail : undefined}
       insight={tool ? insightsQ.data ?? null : null}
+      warnings={tree?.warnings}
       insightLoading={insightsQ.isLoading}
       healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
       remoteDestinationHint={<RemoteDestinationCloudHint />}
@@ -766,7 +785,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 // failure doesn't yield a misleading "sync triggered" toast.
                 if (isArgoApp) {
                   argoSync.mutate(
-                    { namespace, name },
+                    { namespace, name, applicationSyncOptions: appSyncOptions },
                     {
                       onSuccess: () => {
                         showSuccess(`Created namespace ${nsName}`, 'Sync triggered to retry the apply.')
@@ -931,8 +950,12 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
           <SyncOptionsDialog
             open={!!syncDialogTarget}
             appLabel={`${namespace}/${name}`}
+            multiSource={isArgoMultiSource(resourceQ.data)}
+            pinsComparedRevision={argoInheritanceSupport === 'supported' && argoComparedRevisionCurrent(resourceQ.data)}
             resource={syncDialogTarget?.scope === 'resource' ? syncDialogTarget.resource : undefined}
             disabledReason={actionDisabledReasons.sync}
+            comparedRevision={resourceQ.data?.status?.sync?.revision}
+            applicationSyncOptions={appSyncOptions}
             pending={argoSync.isPending}
             autoSyncEnabled={argoAutoSyncEnabled}
             validationPending={argoResourceValidation.isPending}
@@ -944,13 +967,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             onValidationReset={() => argoResourceValidation.reset()}
             onValidate={syncDialogTarget?.scope === 'resource' ? (opts) => {
               if (actionDisabledReasons.validate) return
-              argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts))
+              argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions))
             } : undefined}
             onConfirm={(opts) => {
               if (!syncDialogTarget || actionDisabledReasons.sync) return
               const variables = syncDialogTarget.scope === 'resource'
-                ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts)
-                : { namespace, name, ...opts }
+                ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions)
+                : { namespace, name, ...opts, applicationSyncOptions: appSyncOptions }
               argoSync.mutate(variables, {
                 onSettled: closeArgoSyncDialog,
               })
@@ -1182,7 +1205,7 @@ function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
   const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
   return (
     <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary sm:flex">
-      <span><span className="text-theme-text-primary">{total}</span> resources</span>
+      <span><span className="text-theme-text-primary">{total}</span> resources shown</span>
       {dependencies > 0 && <span><span className="text-theme-text-primary">{dependencies}</span> {dependencies === 1 ? 'dependency' : 'dependencies'}</span>}
       {failingDependencies > 0 && <span className="flex items-center gap-1 font-medium text-red-600 dark:text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {failingDependencies} {failingDependencies === 1 ? 'dependency' : 'dependencies'} failing</span>}
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}
