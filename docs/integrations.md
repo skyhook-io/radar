@@ -1920,7 +1920,9 @@ Radar's local MCP tool `collect_application_evidence` reads one Pod's applicatio
 
 Collection requires Kubernetes Pod-read and port-forward permissions, a recognized image (`rabbitmq`, `nats`, or `hashicorp/vault`), and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must be enabled. Custom ports, TLS and endpoints requiring application credentials are unsupported.
 
-Collection is available only through full local MCP, outside built-in investigations and Apply. Authenticated, remote, hosted and in-cluster deployments are unsupported.
+Collection is available through full local MCP and a local resource-detail action, outside built-in investigations and Apply. Authenticated, remote, hosted and in-cluster deployments are unsupported.
+
+In local resource details, use the application evidence button to open **Collect application evidence**, select a Pod and collect explicitly. The action appears when Radar identifies a supported endpoint and verifies Pod-read and port-forward permissions. If that check times out or cannot be completed, use **Retry permission check**; it does not contact the application. Opening or refreshing a resource does not collect evidence. Results show the observation time, target and selected-Pod scope. Expand **Collection limits** for full qualifications; **Copy observation** always includes them. If discovery omits a Pod, open that Pod directly to check for supported evidence collection. Results clear when the resource or cluster changes. If a selected Pod is replaced or stops running while viewing its Service or workload, the dialog keeps the refusal and refreshes its Pod choices; select a current Pod and collect again explicitly. Replacing the Pod being viewed directly closes its dialog because the resource identity changed.
 
 Results describe the selected endpoint at collection time. Unavailable evidence does not establish health or absence of problems. See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation and result interpretation.
 
