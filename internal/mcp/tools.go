@@ -228,7 +228,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, GitOps sync/health, " +
 		"or traffic not reaching a service, route or ingress. Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout " +
 		"bundle resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
-		"related issues and recent workload/ConfigMap changes. OpenTelemetryCollector returns root reconciliation and owned-workload evidence. " +
+		"related issues and recent workload/ConfigMap changes. OpenTelemetryCollector and Flagger Canary return root reconciliation and owned-workload evidence. Canary separates its `declaredTarget`. " +
 		"Warning events are a capped sample for the observed resource and Pods; an event without a UID may belong to an earlier object of the same name. Use get_events for a broader, dedicated event read, including history. " +
 		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
