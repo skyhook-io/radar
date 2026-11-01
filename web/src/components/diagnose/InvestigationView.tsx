@@ -41,6 +41,7 @@ import {
   investigationPaneCenteredScrollTop,
   canStopInvestigation,
   canContinueInvestigation,
+  canContinueInOwnAgent,
   readOnlyNotice,
   canInvestigateFurther,
 } from "./investigationState";
@@ -88,6 +89,10 @@ import {
 } from "../../api/diagnose";
 import { useDiagnose } from "./DiagnoseContext";
 import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
+import {
+  ContinueInAgentButton,
+  useContinueInAgentCommand,
+} from "./ContinueInAgentButton";
 import {
   TurnView,
   ResultCard,
@@ -1654,6 +1659,18 @@ export function InvestigationView({
     currentAssessment?.diagnosis &&
     (currentAssessment.diagnosis.remediation?.length ?? 0) > 0,
   );
+  const continueCommand = useContinueInAgentCommand(run);
+  const showContinueInAgent =
+    !!continueCommand &&
+    canContinueInOwnAgent({
+      run,
+      busy,
+      requestPending,
+      gone,
+      streamReady,
+      verificationPending,
+      latestTurnStatus: lastTurn?.status,
+    });
   const earlierPlan =
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
@@ -2537,31 +2554,42 @@ export function InvestigationView({
                             storyShape ? undefined : assessmentSourcesNode
                           }
                           assessmentAction={
-                            hasNextSteps ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const section = nextStepsRef.current;
-                                  const scroller = evidenceScrollRef.current;
-                                  if (!section || !scroller) return;
-                                  section.focus({ preventScroll: true });
-                                  scroller.scrollTo({
-                                    top:
-                                      scroller.scrollTop +
-                                      section.getBoundingClientRect().top -
-                                      scroller.getBoundingClientRect().top -
-                                      12,
-                                    behavior: prefersReducedMotion()
-                                      ? "auto"
-                                      : "smooth",
-                                  });
-                                }}
-                                className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                              >
-                                {earlierPlan
-                                  ? "Earlier proposed steps ↓"
-                                  : nextStepLabel}
-                              </button>
+                            hasNextSteps || showContinueInAgent ? (
+                              <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                                {hasNextSteps ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const section = nextStepsRef.current;
+                                      const scroller =
+                                        evidenceScrollRef.current;
+                                      if (!section || !scroller) return;
+                                      section.focus({ preventScroll: true });
+                                      scroller.scrollTo({
+                                        top:
+                                          scroller.scrollTop +
+                                          section.getBoundingClientRect().top -
+                                          scroller.getBoundingClientRect().top -
+                                          12,
+                                        behavior: prefersReducedMotion()
+                                          ? "auto"
+                                          : "smooth",
+                                      });
+                                    }}
+                                    className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                                  >
+                                    {earlierPlan
+                                      ? "Earlier proposed steps ↓"
+                                      : nextStepLabel}
+                                  </button>
+                                ) : null}
+                                {showContinueInAgent && continueCommand ? (
+                                  <ContinueInAgentButton
+                                    run={run}
+                                    command={continueCommand}
+                                  />
+                                ) : null}
+                              </div>
                             ) : null
                           }
                           explanation={explanationFor(currentAssessment)}
