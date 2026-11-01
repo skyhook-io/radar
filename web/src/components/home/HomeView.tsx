@@ -35,6 +35,8 @@ import { UncheckedSourceHelp } from '../issues/UncheckedSourceHelp'
 import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
+import { IssueDiagnoseButton, useIssueDiagnoseShown } from '../diagnose/LocalDiagnoseAction'
+import { HOVER_REVEAL_ACTION, HOVER_REVEAL_HIT, HOVER_REVEAL_REST } from '../../utils/animation'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -299,6 +301,27 @@ function BandItem({ children }: { children: ReactNode }) {
 // Problems Panel (right sidebar, scrollable)
 // ============================================================================
 
+// The row's Investigate action is a sibling of the row button (a button can't
+// nest in a button), laid over the right end of line 1. With a pointer, hover
+// or keyboard focus swaps the age and timing chip there for the action; its
+// left edge fades into the hover tint so a long name it overlays isn't
+// hard-clipped. On touch there is no hover, so it sits in the row's flow below
+// the text, always shown.
+const ISSUE_ROW_ACTION_CLASS = clsx(
+  'absolute right-3 top-1.5 flex items-center pl-4',
+  'bg-[linear-gradient(to_right,transparent,var(--color-theme-hover)_1rem)]',
+  HOVER_REVEAL_ACTION,
+  '[@media(hover:none)]:static [@media(hover:none)]:justify-end [@media(hover:none)]:bg-none [@media(hover:none)]:px-3 [@media(hover:none)]:pb-1.5 [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0',
+)
+const ISSUE_ROW_ACTION_HIT_CLASS = clsx(HOVER_REVEAL_HIT, 'flex [@media(hover:none)]:pointer-events-auto')
+// Without hover the action isn't in line 1, so nothing there swaps out (the
+// keyboard-focus half of the reveal would otherwise still hide it).
+const ISSUE_ROW_META_TOUCH_CLASS = '[@media(hover:none)]:opacity-100! [@media(hover:none)]:translate-none!'
+// Line 1 is as tall as its tallest badge (the timing chip outgrows the kind
+// badge). Invisible zero-width copies of those badges give the overlaid action
+// the same height, so it centers on line 1 whichever badges the row has.
+const ISSUE_ROW_STRUT = 'invisible w-0 overflow-hidden px-0 border-x-0 [@media(hover:none)]:hidden'
+
 interface ProblemsPanelProps {
   issues: Issue[]
   issueCount: number
@@ -331,6 +354,10 @@ export function ProblemsPanel({
   onResourceClick,
 }: ProblemsPanelProps) {
   const unchecked = uncheckedLines.length > 0
+  // While rows swap their age and chip for Investigate, those two lose their
+  // tooltips: hovering them is what swaps them out, and the tooltip would open
+  // over the action under a pointer that hasn't moved since.
+  const canInvestigate = useIssueDiagnoseShown()
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
   const hasIssues = issueCount > 0
   const hasHardError = !!error && !hasData
@@ -435,50 +462,61 @@ export function ProblemsPanel({
                   const timing = issueTimingForDisplay(issue)
 
                   return (
-                    <button
-                      key={issue.id}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-theme-hover transition-colors text-left"
-                      onClick={() => onResourceClick({
-                        kind: ref.kind,
-                        namespace: ref.namespace ?? '',
-                        name: ref.name,
-                        group: ref.group ?? '',
-                      })}
-                    >
-                      <StatusDot tone={issue.severity === 'critical' ? 'unhealthy' : 'degraded'} className="shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
-                          <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
-                          {(age || timing) && (
-                            <span className="ml-auto flex shrink-0 items-center gap-1">
-                              {age && (
-                                <Tooltip content={issueFirstSeenTitle(issue)} delay={100}>
-                                  <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
-                                </Tooltip>
-                              )}
-                              {timing && (
-                                <Tooltip content={timing.tooltip} delay={100}>
-                                  <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
-                                </Tooltip>
-                              )}
-                            </span>
+                    <div key={issue.id} className="group relative">
+                      <button
+                        type="button"
+                        className="w-full flex items-center gap-2 px-3 py-1.5 group-hover:bg-theme-hover group-has-[:focus-visible]:bg-theme-hover transition-colors text-left"
+                        onClick={() => onResourceClick({
+                          kind: ref.kind,
+                          namespace: ref.namespace ?? '',
+                          name: ref.name,
+                          group: ref.group ?? '',
+                        })}
+                      >
+                        <StatusDot tone={issue.severity === 'critical' ? 'unhealthy' : 'degraded'} className="shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
+                            <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
+                            {(age || timing) && (
+                              <span className={clsx('ml-auto flex shrink-0 items-center gap-1', canInvestigate && [HOVER_REVEAL_REST, ISSUE_ROW_META_TOUCH_CLASS])}>
+                                {age && (
+                                  <Tooltip content={issueFirstSeenTitle(issue)} delay={100} disabled={canInvestigate}>
+                                    <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
+                                  </Tooltip>
+                                )}
+                                {timing && (
+                                  <Tooltip content={timing.tooltip} delay={100} disabled={canInvestigate}>
+                                    <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
+                                  </Tooltip>
+                                )}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className="text-[11px] text-theme-text-secondary truncate">{issueTitle(issue)}</span>
+                            <span className="text-[10px] text-theme-text-tertiary shrink-0">{groupLabel(issue.category_group)}</span>
+                            {issue.namespace && <span className="text-[10px] text-theme-text-tertiary shrink-0">{issue.namespace}</span>}
+                          </div>
+                          {(issue.reason || issue.message) && (
+                            <div className="text-[10px] text-theme-text-tertiary truncate mt-0.5">
+                              {issue.reason}
+                              {issue.reason && issue.message ? ' - ' : ''}
+                              {issue.message}
+                            </div>
                           )}
                         </div>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[11px] text-theme-text-secondary truncate">{issueTitle(issue)}</span>
-                          <span className="text-[10px] text-theme-text-tertiary shrink-0">{groupLabel(issue.category_group)}</span>
-                          {issue.namespace && <span className="text-[10px] text-theme-text-tertiary shrink-0">{issue.namespace}</span>}
+                      </button>
+                      {canInvestigate && (
+                        <div className={ISSUE_ROW_ACTION_CLASS}>
+                          <span aria-hidden className={clsx(ISSUE_ROW_STRUT, 'text-[10px] py-0.5')}>{'\u200b'}</span>
+                          {timing && <span aria-hidden className={clsx(ISSUE_ROW_STRUT, 'badge-sm text-[10px]')}>{'\u200b'}</span>}
+                          <span className={ISSUE_ROW_ACTION_HIT_CLASS}>
+                            <IssueDiagnoseButton size="compact" kind={ref.kind} group={ref.group} namespace={ref.namespace ?? ''} name={ref.name} />
+                          </span>
                         </div>
-                        {(issue.reason || issue.message) && (
-                          <div className="text-[10px] text-theme-text-tertiary truncate mt-0.5">
-                            {issue.reason}
-                            {issue.reason && issue.message ? ' - ' : ''}
-                            {issue.message}
-                          </div>
-                        )}
-                      </div>
-                    </button>
+                      )}
+                    </div>
                   )
                 })}
               </div>
