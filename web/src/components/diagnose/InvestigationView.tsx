@@ -97,8 +97,8 @@ import {
   mergeStartupSignal,
   upsertTool,
   type Turn,
-  remediationHeadline,
 } from "./parts";
+import { NextStepJump, recommendedStepHeadline } from "./NextStepJump";
 import {
   investigationActivitySourceDomId,
   investigationEvidenceStepIdsByTurn,
@@ -1658,16 +1658,9 @@ export function InvestigationView({
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
   // The jump link names the decision it leads to, not the section.
-  const nextStepLabel = (() => {
-    const dx = currentAssessment?.diagnosis;
-    if (!dx) return "Next steps ↓";
-    const index = dx.recommendedIndex ? dx.recommendedIndex - 1 : 0;
-    const text =
-      dx.steps?.[index]?.text ?? dx.remediation?.[index] ?? dx.remediation?.[0];
-    if (!text) return "Next steps ↓";
-    const headline = remediationHeadline(text);
-    return `Next: ${headline.length > 56 ? `${headline.slice(0, 56).trimEnd()}…` : headline} ↓`;
-  })();
+  const nextStepHeadline = recommendedStepHeadline(
+    currentAssessment?.diagnosis,
+  );
   // What a reader in a channel needs with the verdict: where, when, and the
   // receipts behind it, cause first, at most three.
   const assessmentCopy = useMemo(() => {
@@ -2538,8 +2531,13 @@ export function InvestigationView({
                           }
                           assessmentAction={
                             hasNextSteps ? (
-                              <button
-                                type="button"
+                              <NextStepJump
+                                label={
+                                  earlierPlan
+                                    ? "Earlier proposed steps"
+                                    : undefined
+                                }
+                                headline={nextStepHeadline}
                                 onClick={() => {
                                   const section = nextStepsRef.current;
                                   const scroller = evidenceScrollRef.current;
@@ -2556,12 +2554,7 @@ export function InvestigationView({
                                       : "smooth",
                                   });
                                 }}
-                                className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                              >
-                                {earlierPlan
-                                  ? "Earlier proposed steps ↓"
-                                  : nextStepLabel}
-                              </button>
+                              />
                             ) : null
                           }
                           explanation={explanationFor(currentAssessment)}
