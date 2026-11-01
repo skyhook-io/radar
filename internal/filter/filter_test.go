@@ -264,7 +264,11 @@ func TestCompileIssueFilter_DateComparisonUsesEpochSeconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	if ok, _ := broken.Match(map[string]any{"first_seen": before}); ok {
+	ok, err := broken.Match(map[string]any{"first_seen": before})
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if ok {
 		t.Fatal("getSeconds() now yields epoch seconds; revisit the issues filter guidance")
 	}
 }
