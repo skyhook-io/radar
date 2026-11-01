@@ -35,6 +35,11 @@ func TestParseCPUToMillis(t *testing.T) {
 		{"1000m", 1000},
 		{"500000000n", 500},
 		{"100000000n", 100},
+		{"98753u", 99},
+		{"98753000n", 99},
+		{"1.5", 1500},
+		{"2k", 2000000},
+		{"garbage", 0},
 	}
 	for _, tt := range tests {
 		got := ParseCPUToMillis(tt.input)
@@ -56,6 +61,11 @@ func TestParseMemoryToBytes(t *testing.T) {
 		{"256Mi", 256 * 1024 * 1024},
 		{"1Gi", 1024 * 1024 * 1024},
 		{"2Gi", 2 * 1024 * 1024 * 1024},
+		{"1G", 1000 * 1000 * 1000},
+		{"1500k", 1500 * 1000},
+		{"1.5Gi", 3 * 512 * 1024 * 1024},
+		{"1Ti", 1024 * 1024 * 1024 * 1024},
+		{"garbage", 0},
 	}
 	for _, tt := range tests {
 		got := ParseMemoryToBytes(tt.input)
