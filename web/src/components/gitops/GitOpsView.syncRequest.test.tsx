@@ -34,7 +34,7 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
       <button type="button" onClick={() => props.onRowAction(props.rows[0], 'sync')}>Open sync</button>
     ),
     GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => (
-      <div>
+      <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
         <button type="button" onClick={() => props.argo?.onSyncRequested()}>Open sync</button>
         {props.renderTabBody({ tab: 'changes', fullscreen: false })}
         {props.children}
@@ -357,4 +357,13 @@ it('refreshes auto-sync status in the table sync dialog', async () => {
   await replaceTableApplication(APP_OPTIONS, true)
   expect(revision.disabled).toBe(true)
   expect(document.body.textContent).toContain('Turn off auto-sync to deploy another revision')
+})
+
+it.each([
+  { label: 'starts self-heal off', features: { argoRollbackSync: true, argoSyncInheritance: true, argoEnableSelfHealOff: true }, expected: { prune: false, selfHeal: false } },
+  { label: 'still starts self-heal on', features: { argoRollbackSync: true, argoSyncInheritance: true, argoEnableSelfHealOff: false }, expected: { prune: false, selfHeal: true } },
+])('predicts what a first-time Enable auto-sync turns on for a Radar that $label', async ({ features, expected }) => {
+  await advertise(features)
+  const settings = document.querySelector('[data-resume-settings]')!.getAttribute('data-resume-settings')!
+  expect(JSON.parse(settings)).toEqual(expected)
 })

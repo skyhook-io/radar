@@ -181,6 +181,7 @@ export interface FeatureCapabilities {
   trafficRecords?: boolean
   argoRollbackSync?: boolean
   argoSyncInheritance?: boolean
+  argoEnableSelfHealOff?: boolean
   clusterScopedPlaceholder?: boolean
 }
 

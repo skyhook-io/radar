@@ -903,10 +903,10 @@ func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 			wantSelfHeal: false,
 		},
 		{
-			name:         "never suspended → prune off, as in Argo CD's UI; selfHeal on",
+			name:         "never suspended → prune and selfHeal off, as in Argo CD",
 			annotations:  map[string]any{},
 			wantPrune:    false,
-			wantSelfHeal: true,
+			wantSelfHeal: false,
 		},
 		{
 			name: "only the legacy selfHeal key → prune off",
@@ -2216,17 +2216,18 @@ func TestSetArgoAutoSyncLifecycle(t *testing.T) {
 }
 
 // "Enable Auto-Sync" on an Application Radar never suspended has no saved
-// settings to restore. It must not turn pruning on: Argo CD's own UI enables
-// auto-sync with prune off, and a block that exists keeps its own values.
-func TestSetArgoAutoSyncEnableNeverAutomatedLeavesPruneOff(t *testing.T) {
+// settings to restore. It must not turn pruning or self-heal on: Argo CD's own
+// UI and CLI enable auto-sync with both off, and a block that exists keeps its
+// own values.
+func TestSetArgoAutoSyncEnableNeverAutomatedLeavesPruneAndSelfHealOff(t *testing.T) {
 	client := newFakeArgo(appWithAutomated(nil, nil))
 	setAutoSync(t, client, true)
 	app := getTestApp(t, client)
 	if !ArgoAutoSyncEnabled(app) {
 		t.Fatalf("auto-sync still off: %#v", app.Object["spec"])
 	}
-	if automated, _ := automatedOf(app); !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": true}) {
-		t.Fatalf("enabled automated = %#v, want prune off and selfHeal on", automated)
+	if automated, _ := automatedOf(app); !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": false}) {
+		t.Fatalf("enabled automated = %#v, want prune and selfHeal off", automated)
 	}
 
 	saved := newFakeArgo(appWithAutomated(nil, map[string]any{

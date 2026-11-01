@@ -101,6 +101,7 @@ describe('Enable auto-sync on the GitOps detail page', () => {
     it.each([
       { name: 'saved settings', status: { sync: 'OutOfSync', health: 'Healthy', suspended: true } as GitOpsDetailStatus, settings: undefined, copy: 'Turn auto-sync back on with its current or saved settings.' },
       { name: 'first-time enable', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: false, selfHeal: true }, copy: 'Argo applies new commits and reverts live edits (self-heal). Resources removed from Git are kept (prune off).' },
+      { name: 'first-time enable on a Radar that starts self-heal off', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: false, selfHeal: false }, copy: 'Argo applies new commits. Resources removed from Git are kept (prune off).' },
       { name: 'a block switched off in place with prune on', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: true, selfHeal: false }, copy: 'Argo applies new commits. Resources removed from Git are deleted (prune on).' },
       { name: 'unknown settings', status: null, settings: null, copy: 'Turn on automated sync, so Argo applies new commits from Git.' },
     ])('explains $name', async ({ status, settings, copy }) => {
