@@ -243,7 +243,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'end', desc: 'range RFC3339 end time (default now)' },
       { arg: 'step', desc: 'range resolution, e.g. 30s, 5m (auto-calculated when omitted)' },
       { arg: 'max_points', desc: 'max data points per series (default 300, max 600)' },
-      { arg: 'timeout', desc: 'query timeout in seconds (default 30, max 180)' },
+      { arg: 'timeout_seconds', desc: 'query timeout in seconds (default 30, max 180)' },
     ],
   },
   {
@@ -375,7 +375,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'dry_run', desc: 'validate and preview without persisting' },
       { arg: 'namespace', desc: 'override namespace for the resource' },
       { arg: 'verify', desc: 'return post-mutation state; on dry_run return preview diff (default true)' },
-      { arg: 'force', desc: 'force SSA field ownership conflicts and take ownership from other managers (default false)' },
+      { arg: 'force_conflicts', desc: 'force SSA field ownership conflicts and take ownership from other managers (default false)' },
     ],
   },
   {
@@ -417,7 +417,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'delete_empty_dir_data', desc: 'evict pods with emptyDir volumes (default true)' },
       { arg: 'force', desc: 'evict pods not managed by a controller (default false)' },
       { arg: 'wait_for_deletion', desc: 'wait for pod deletion (default true); false returns after eviction acceptance' },
-      { arg: 'timeout', desc: 'shared eviction and deletion deadline in seconds (default 120 when waiting, 60 otherwise)' },
+      { arg: 'timeout_seconds', desc: 'shared eviction and deletion deadline in seconds (default 120 when waiting, 60 otherwise)' },
     ],
   },
   {

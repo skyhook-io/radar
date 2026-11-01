@@ -48,14 +48,14 @@ const (
 )
 
 type queryPrometheusInput struct {
-	Query     string `json:"query" jsonschema:"PromQL query to execute. For metrics with many series (>10), wrap with topk(5, ...) to bound the result. Use discover_metrics first when unsure of metric or label names."`
-	Type      string `json:"type,omitempty" jsonschema:"instant (default) for current values, or range for time series history"`
-	Since     string `json:"since,omitempty" jsonschema:"range queries: how far back to look, e.g. 30m, 1h, 24h, 7d (default 1h). Ignored for instant"`
-	Start     string `json:"start,omitempty" jsonschema:"range queries: RFC3339 start time. Overrides since when set (use with end to zoom into an incident window)"`
-	End       string `json:"end,omitempty" jsonschema:"range queries: RFC3339 end time (default now)"`
-	Step      string `json:"step,omitempty" jsonschema:"range queries: resolution like 30s, 5m. Omit to auto-calculate; the server lowers resolution when the result would exceed the point budget"`
-	MaxPoints int    `json:"max_points,omitempty" jsonschema:"range queries: max data points per series (default 300, max 600). Raise only for 1-3 series when hunting short spikes; narrow the window instead when possible"`
-	Timeout   int    `json:"timeout,omitempty" jsonschema:"query timeout in seconds (default 30, max 180). Raise only when a complex long-range query timed out at the default — prefer simplifying the query"`
+	Query          string `json:"query" jsonschema:"PromQL query to execute. For metrics with many series (>10), wrap with topk(5, ...) to bound the result. Use discover_metrics first when unsure of metric or label names."`
+	Type           string `json:"type,omitempty" jsonschema:"instant (default) for current values, or range for time series history"`
+	Since          string `json:"since,omitempty" jsonschema:"range queries: how far back to look, e.g. 30m, 1h, 24h, 7d (default 1h). Ignored for instant"`
+	Start          string `json:"start,omitempty" jsonschema:"range queries: RFC3339 start time. Overrides since when set (use with end to zoom into an incident window)"`
+	End            string `json:"end,omitempty" jsonschema:"range queries: RFC3339 end time (default now)"`
+	Step           string `json:"step,omitempty" jsonschema:"range queries: resolution like 30s, 5m. Omit to auto-calculate; the server lowers resolution when the result would exceed the point budget"`
+	MaxPoints      int    `json:"max_points,omitempty" jsonschema:"range queries: max data points per series (default 300, max 600). Raise only for 1-3 series when hunting short spikes; narrow the window instead when possible"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"query timeout in seconds (default 30, max 180). Raise only when a complex long-range query timed out at the default — prefer simplifying the query"`
 }
 
 type getPrometheusRulesInput struct {
@@ -155,7 +155,7 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, fmt.Errorf("type must be instant or range, got %q", input.Type)
 	}
 
-	timeout := resolveQueryTimeout(input.Timeout)
+	timeout := resolveQueryTimeout(input.TimeoutSeconds)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

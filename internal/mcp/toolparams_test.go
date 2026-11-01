@@ -810,3 +810,32 @@ func TestMiddlewareDeliversEnumCaseRepairToHandler(t *testing.T) {
 		}
 	}
 }
+
+// Renamed parameters keep their former names working: an agent or saved prompt
+// that learned the old name must not start failing validation.
+func TestFormerParameterNamesStillRepair(t *testing.T) {
+	registerToolsOnce(t)
+	cases := []struct{ tool, args, want string }{
+		{"manage_node", `{"action":"drain","name":"n1","timeout":300}`, `"timeout_seconds":300`},
+		{"query_prometheus", `{"query":"up","timeout":60}`, `"timeout_seconds":60`},
+		{"apply_resource", `{"yaml":"kind: ConfigMap","force":true}`, `"force_conflicts":true`},
+	}
+	for _, tc := range cases {
+		fixed, repairs, unresolved := repairToolArgs(tc.tool, json.RawMessage(tc.args))
+		if len(unresolved) > 0 || !strings.Contains(string(fixed), tc.want) {
+			t.Errorf("%s %s: got %s (repairs %v, unresolved %v), want %s", tc.tool, tc.args, fixed, repairs, unresolved, tc.want)
+		}
+	}
+	// manage_gitops keeps its own force (kubectl --force); the alias must not reach it.
+	if fixed, repairs, _ := repairToolArgs("manage_gitops", json.RawMessage(`{"action":"sync","tool":"argocd","namespace":"argocd","name":"a","force":true}`)); len(repairs) > 0 {
+		t.Errorf("manage_gitops force was rewritten: %s (%v)", fixed, repairs)
+	}
+}
+
+func TestContextNoneMatchesGetResource(t *testing.T) {
+	for in, want := range map[string]bool{"none": true, "None": true, " NONE ": true, "": false, "basic": false, "Basic": false} {
+		if got := contextNone(in); got != want {
+			t.Errorf("contextNone(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

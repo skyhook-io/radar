@@ -649,7 +649,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Description: "Create or update a Kubernetes resource from a YAML manifest. " +
 			"In 'apply' mode (default), performs a server-side apply with FieldManager=radar " +
 			"and reports field ownership conflicts instead of taking ownership by default. " +
-			"Set force=true only when you intend to take field ownership from other managers " +
+			"Set force_conflicts=true only when you intend to take field ownership from other managers " +
 			"(Helm, Flux, GitOps controllers, kubectl). " +
 			"In 'create' mode, performs a strict create that fails if the resource already exists. " +
 			"Supports multi-document YAML separated by '---'. " +
@@ -728,7 +728,7 @@ type listResourcesInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind to list for a broad sweep, e.g. pods/po, deployments/deploy, services/svc, configmaps/cm. Prefer this before get_resource when comparing many same-kind objects."`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for app-scoped triage"`
-	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare rows"`
+	Context   string `json:"context,omitempty" jsonschema:"per-row context: 'basic' (default) attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare rows"`
 }
 
 type getResourceInput struct {
@@ -778,7 +778,7 @@ type searchInput struct {
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations, report (Trivy findings; the binding matches one finding). Guard fields with has(spec.sources); check map keys with '\"app\" in labels'. Example, Deployments with zero or unreported ready replicas: 'kind == \"Deployment\" && (!has(status.readyReplicas) || status.readyReplicas == 0)'"`
-	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare hits"`
+	Context   string `json:"context,omitempty" jsonschema:"per-hit context: 'basic' (default) attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare hits"`
 }
 
 type issuesInput struct {
@@ -1032,7 +1032,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	// access set would silently zero issueCount on every row. The
 	// cluster-scoped RBAC gate above (canReadClusterScopedKind) already
 	// authorized the read, so we pass nil here to compose cluster-wide.
-	if input.Context != "none" {
+	if !contextNone(input.Context) {
 		builder, cancel := summarycontext.WithBudget(ctx, func(ctx context.Context) summarycontext.Builder {
 			return newResourceSummaryContextBuilder(ctx, listScope)
 		})
@@ -3522,7 +3522,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	// cluster-scoped hits whose problems live at namespace="". The
 	// builder routes per-hit by scope; CanReadClusterScoped above
 	// already gates which cluster-scoped kinds are reachable.
-	if input.Context != "none" {
+	if !contextNone(input.Context) {
 		builder, cancel := summarycontext.WithBudget(ctx, func(ctx context.Context) summarycontext.Builder {
 			return newSearchSummaryContextBuilder(ctx, scanNamespaces)
 		})

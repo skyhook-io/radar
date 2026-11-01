@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,7 +33,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		allItems = append(allItems, aicontext.MinifyUnstructured(item, aicontext.LevelSummary))
 	}
 
-	if contextMode != "none" {
+	if !contextNone(contextMode) {
 		// Cluster-scoped CRDs emit issues at namespace="" — passing a
 		// namespace-restricted slice would silently zero issueCount on
 		// every row. Caller has already gated cluster-scoped reads via
@@ -273,4 +274,11 @@ func readErrorCodeOf(err error) (readreason.Code, bool) {
 func isCollectorForbidden(err error) bool {
 	var re *readError
 	return errors.As(err, &re) && re.code == readreason.RadarForbidden
+}
+
+// contextNone reports whether a context argument asks for bare rows. Like
+// get_resource, it ignores case and surrounding space; any other value,
+// including "basic" and empty, attaches context.
+func contextNone(mode string) bool {
+	return strings.EqualFold(strings.TrimSpace(mode), "none")
 }

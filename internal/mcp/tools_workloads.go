@@ -743,7 +743,7 @@ type manageNodeInput struct {
 	DeleteEmptyDirData *bool  `json:"delete_empty_dir_data,omitempty" jsonschema:"evict pods with emptyDir volumes (default true, set false to skip them)"`
 	Force              bool   `json:"force,omitempty" jsonschema:"force evict pods not managed by a controller (default false)"`
 	WaitForDeletion    *bool  `json:"wait_for_deletion,omitempty" jsonschema:"default true; false returns once evictions are accepted (pods may still be terminating)"`
-	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain deadline in seconds; 0 = server default (2m when waiting)"`
+	TimeoutSeconds     int    `json:"timeout_seconds,omitempty" jsonschema:"drain deadline in seconds; 0 = server default (2m when waiting)"`
 }
 
 func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manageNodeInput) (*mcp.CallToolResult, any, error) {
@@ -789,8 +789,8 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 			WaitForDeletion: input.WaitForDeletion == nil || *input.WaitForDeletion,
 		}
 		// Timeout left at 0 lets DrainNode pick a default sized for the operation.
-		if input.Timeout > 0 {
-			opts.Timeout = time.Duration(input.Timeout) * time.Second
+		if input.TimeoutSeconds > 0 {
+			opts.Timeout = time.Duration(input.TimeoutSeconds) * time.Second
 		}
 		result, err := k8s.DrainNodeWithClient(ctx, input.Name, opts, client)
 		if err != nil {

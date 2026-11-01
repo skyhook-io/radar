@@ -161,6 +161,12 @@ var perToolAliases = map[string]map[string]string{
 	"get_pod_logs": {
 		"pod": "name",
 	},
+	// Former names, kept so callers that learned them still work. Each value
+	// means the same thing under the new name: seconds, and SSA ownership
+	// takeover (kubectl's --force-conflicts).
+	"manage_node":      {"timeout": "timeout_seconds"},
+	"query_prometheus": {"timeout": "timeout_seconds"},
+	"apply_resource":   {"force": "force_conflicts"},
 }
 
 // perToolKindShorthand handles the one shape a rename cannot: a key that
