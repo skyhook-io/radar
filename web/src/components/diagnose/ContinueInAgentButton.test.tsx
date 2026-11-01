@@ -114,6 +114,25 @@ describe("ContinueInAgentButton", () => {
     expect(html).toContain("Continue in Codex");
   });
 
+  it("warns that Claude Code's trust prompt exits on Enter", () => {
+    const html = renderToStaticMarkup(
+      <ContinueInAgentButton run={run()} command={command} />,
+    );
+    expect(html).toContain("data-continue-trust-hint");
+    expect(html).toContain("Choose Yes; Enter exits.");
+  });
+
+  it("does not show the trust hint for Codex", () => {
+    const html = renderToStaticMarkup(
+      <ContinueInAgentButton
+        run={run({ agent: "codex" })}
+        command="codex resume 'ses_1'"
+      />,
+    );
+    expect(html).not.toContain("data-continue-trust-hint");
+    expect(html).not.toContain("trust this folder");
+  });
+
   it("opens the command menu from one button when Radar has no terminal", () => {
     mockLocalTerminal = false;
     const html = renderToStaticMarkup(
@@ -123,5 +142,7 @@ describe("ContinueInAgentButton", () => {
     expect(html).toContain('aria-haspopup="menu"');
     expect(html).not.toContain("More ways to continue");
     expect(html.match(/<button/g)).toHaveLength(1);
+    // The hint for the copied command lives in the menu instead.
+    expect(html).not.toContain("data-continue-trust-hint");
   });
 });

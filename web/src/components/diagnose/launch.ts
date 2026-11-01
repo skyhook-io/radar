@@ -20,6 +20,19 @@ export function launchAgentLabel(run: RunSummary): string {
   return "Claude Code";
 }
 
+// Claude Code asks whether to trust the folder it starts in, and does not
+// remember the answer for the home directory, which is where the resume runs.
+// Its default answer exits, so a user who presses Enter loses the session.
+export function launchTrustHint(run: RunSummary): string | null {
+  if (
+    run.agent === "codex" ||
+    run.agent === "opencode" ||
+    run.agent === "cursor-agent"
+  )
+    return null;
+  return "Claude Code may ask whether to trust this folder. Choose Yes; Enter exits.";
+}
+
 // openInTerminal asks App (which owns the DockProvider) to open Radar's local
 // terminal running `command`. The AI surface is portaled above the DockProvider,
 // so it can't use the dock hook directly — it dispatches this event instead.
