@@ -45,6 +45,19 @@ func TestDiffRBACBindingSubjects(t *testing.T) {
 	}
 }
 
+// A RoleBinding ServiceAccount subject without a namespace is in the
+// binding's own namespace, so it is not an outside actor.
+func TestRBACSubjectWithoutNamespaceIsTheBindings(t *testing.T) {
+	rb := testRoleBinding(rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: "default"})
+	subjects, _, _ := rbacBindingFields(rb)
+	if want := []string{"ServiceAccount saleor/default"}; !reflect.DeepEqual(subjects, want) {
+		t.Fatalf("subjects = %v, want %v", subjects, want)
+	}
+	if outside := OutsideServiceAccountSubjects("RoleBinding", "saleor", subjects); len(outside) != 0 {
+		t.Fatalf("outside = %v, want none", outside)
+	}
+}
+
 func TestDiffRBACRoleRules(t *testing.T) {
 	oldRole := &rbacv1.ClusterRole{Rules: []rbacv1.PolicyRule{{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"get"}}}}
 	newRole := oldRole.DeepCopy()
@@ -54,8 +67,9 @@ func TestDiffRBACRoleRules(t *testing.T) {
 	if diff == nil || len(diff.Fields) != 2 {
 		t.Fatalf("diff = %+v, want rules and aggregationRule", diff)
 	}
-	if want := []string{"apps/deployments: get", "core/secrets[db]: get,list"}; !reflect.DeepEqual(diff.Fields[0].NewValue, want) {
-		t.Fatalf("rules = %v, want %v", diff.Fields[0].NewValue, want)
+	// Only the changed rules, not the whole list.
+	if want := []string{"core/secrets[db]: get,list"}; diff.Fields[0].Path != "rules (changed entries)" || len(diff.Fields[0].OldValue.([]string)) != 0 || !reflect.DeepEqual(diff.Fields[0].NewValue, want) {
+		t.Fatalf("rules = %+v, want added %v", diff.Fields[0], want)
 	}
 	if want := []string{"rbac.example.com/aggregate-to-edit=true"}; diff.Fields[1].Path != "aggregationRule" || !reflect.DeepEqual(diff.Fields[1].NewValue, want) {
 		t.Fatalf("aggregationRule = %+v", diff.Fields[1])

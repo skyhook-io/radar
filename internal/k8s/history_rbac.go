@@ -23,9 +23,12 @@ func diffRBACRole(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 	var changes []FieldChange
 	var summary []string
-	if !equalStringSlices(oldRules, newRules) {
-		changes = append(changes, FieldChange{Path: "rules", OldValue: oldRules, NewValue: newRules})
-		summary = append(summary, "rules changed")
+	// Only the rules that changed: an aggregated ClusterRole (admin, edit,
+	// view) holds dozens, and is rewritten whenever an aggregated role is
+	// installed.
+	if removed, added := stringSetDiff(oldRules, newRules), stringSetDiff(newRules, oldRules); len(removed)+len(added) > 0 {
+		changes = append(changes, FieldChange{Path: "rules (changed entries)", OldValue: removed, NewValue: added})
+		summary = append(summary, fmt.Sprintf("rules changed: %d removed, %d added", len(removed), len(added)))
 	}
 	if !equalStringSlices(oldAgg, newAgg) {
 		changes = append(changes, FieldChange{Path: "aggregationRule", OldValue: oldAgg, NewValue: newAgg})
@@ -123,21 +126,26 @@ func rbacRoleFields(obj any) (rules, aggregation []string, ok bool) {
 func rbacBindingFields(obj any) (subjects []string, roleRef string, ok bool) {
 	switch b := obj.(type) {
 	case *rbacv1.RoleBinding:
-		return RBACSubjectRefs(b.Subjects), b.RoleRef.Kind + " " + b.RoleRef.Name, true
+		return RBACSubjectRefs(b.Subjects, b.Namespace), b.RoleRef.Kind + " " + b.RoleRef.Name, true
 	case *rbacv1.ClusterRoleBinding:
-		return RBACSubjectRefs(b.Subjects), b.RoleRef.Kind + " " + b.RoleRef.Name, true
+		return RBACSubjectRefs(b.Subjects, ""), b.RoleRef.Kind + " " + b.RoleRef.Name, true
 	}
 	return nil, "", false
 }
 
 // RBACSubjectRefs renders binding subjects as "ServiceAccount ns/name",
-// "User name" or "Group name", sorted. ParseServiceAccountSubjectRef reads
-// the ServiceAccount form back.
-func RBACSubjectRefs(subjects []rbacv1.Subject) []string {
+// "User name" or "Group name", sorted. A RoleBinding's ServiceAccount subject
+// without a namespace is in the binding's own, bindingNamespace.
+// ParseServiceAccountSubjectRef reads the ServiceAccount form back.
+func RBACSubjectRefs(subjects []rbacv1.Subject, bindingNamespace string) []string {
 	out := make([]string, 0, len(subjects))
 	for _, s := range subjects {
 		if s.Kind == rbacv1.ServiceAccountKind {
-			out = append(out, s.Kind+" "+s.Namespace+"/"+s.Name)
+			namespace := s.Namespace
+			if namespace == "" {
+				namespace = bindingNamespace
+			}
+			out = append(out, s.Kind+" "+namespace+"/"+s.Name)
 			continue
 		}
 		out = append(out, s.Kind+" "+s.Name)
@@ -188,4 +196,15 @@ func sortedJoin(items []string) string {
 	sorted := slices.Clone(items)
 	sort.Strings(sorted)
 	return strings.Join(sorted, ",")
+}
+
+// stringSetDiff returns the items of a not in b, in a's order.
+func stringSetDiff(a, b []string) []string {
+	var out []string
+	for _, item := range a {
+		if !slices.Contains(b, item) {
+			out = append(out, item)
+		}
+	}
+	return out
 }

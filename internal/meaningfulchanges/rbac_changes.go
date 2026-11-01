@@ -88,7 +88,7 @@ func cachedBinding(e timeline.TimelineEvent) (subjects []string, roleRef string)
 	if cache == nil {
 		return nil, ""
 	}
-	var uid string
+	var uid, namespace string
 	var refs []rbacv1.Subject
 	var ref rbacv1.RoleRef
 	switch e.Kind {
@@ -100,7 +100,7 @@ func cachedBinding(e timeline.TimelineEvent) (subjects []string, roleRef string)
 		if err != nil {
 			return nil, ""
 		}
-		uid, refs, ref = string(b.UID), b.Subjects, b.RoleRef
+		uid, namespace, refs, ref = string(b.UID), b.Namespace, b.Subjects, b.RoleRef
 	case "ClusterRoleBinding":
 		if cache.ClusterRoleBindings() == nil {
 			return nil, ""
@@ -116,7 +116,7 @@ func cachedBinding(e timeline.TimelineEvent) (subjects []string, roleRef string)
 	if e.UID != "" && uid != e.UID {
 		return nil, ""
 	}
-	return k8s.RBACSubjectRefs(refs), ref.Kind + " " + ref.Name
+	return k8s.RBACSubjectRefs(refs, namespace), ref.Kind + " " + ref.Name
 }
 
 func namedSubjects(refs []string) string {

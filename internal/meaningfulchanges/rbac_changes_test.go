@@ -80,7 +80,7 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 		}),
 		rbacEvent("Role", "saleor", "vpa-updater", "role-1", timeline.EventTypeUpdate, now.Add(-time.Minute), &timeline.DiffInfo{
 			Summary: "rules changed",
-			Fields:  []timeline.FieldChange{{Path: "rules", OldValue: []string{"batch/cronjobs: get"}, NewValue: []string{"batch/cronjobs: get,patch"}}},
+			Fields:  []timeline.FieldChange{{Path: "rules (changed entries)", OldValue: []string{"batch/cronjobs: get"}, NewValue: []string{"batch/cronjobs: get,patch"}}},
 		}),
 		recreated(rbacEvent("RoleBinding", "saleor", "repointed", "rb-repointed", timeline.EventTypeAdd, now.Add(-90*time.Second), &timeline.DiffInfo{
 			Summary: "recreated with changes: roleRef: Role vpa-updater→ClusterRole edit",
