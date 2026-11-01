@@ -221,6 +221,9 @@ func PodProblemReason(pod *corev1.Pod, now time.Time) string {
 // with nothing to act on. The second pass restores the plain walk so a pod whose
 // containers all succeeded still reports what it did.
 func podProblemReasonRaw(pod *corev1.Pod, now time.Time) string {
+	if evictionOutranksContainers(pod) {
+		return PodEvictedReason
+	}
 	if cs := problemContainer(pod, true); cs != nil {
 		return containerStateReason(cs)
 	}
@@ -281,6 +284,20 @@ func problemContainer(pod *corev1.Pod, skipSucceeded bool) *corev1.ContainerStat
 	return nil
 }
 
+// evictionOutranksContainers reports whether an Evicted pod's own reason should
+// describe it rather than a container's termination. The kubelet kills the
+// containers on its way out, so they usually end as Error or
+// ContainerStatusUnknown with exit 137: a consequence of the eviction, not its
+// cause. An OOMKilled container still wins, because the kernel killed it before
+// the kubelet chose the pod, and that is the more specific explanation.
+func evictionOutranksContainers(pod *corev1.Pod) bool {
+	if !IsEvictedPod(pod) {
+		return false
+	}
+	cs := problemContainer(pod, true)
+	return cs == nil || containerStateReason(cs) != "OOMKilled"
+}
+
 func containerStateReason(cs *corev1.ContainerStatus) string {
 	if cs.State.Waiting != nil {
 		return cs.State.Waiting.Reason
@@ -311,6 +328,9 @@ func containerStateMessage(cs *corev1.ContainerStatus) string {
 // container's failure. A failing container with no message stays empty rather
 // than borrowing one.
 func PodProblemMessage(pod *corev1.Pod) string {
+	if evictionOutranksContainers(pod) {
+		return pod.Status.Message
+	}
 	if cs := problemContainer(pod, true); cs != nil {
 		return containerStateMessage(cs)
 	}

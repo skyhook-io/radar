@@ -85,10 +85,13 @@ type Detection struct {
 	// TerminatingRemovals maps each operator finalizer to a dry-run removal.
 	// Issue composition offers one only as a ConditionalCleanup, after finding
 	// no running copy of the finalizer's catalog controller.
-	TerminatingRemovals        map[string]issuesapi.FinalizerRemoval `json:"-"`
-	ConditionalCleanup         *issuesapi.ConditionalCleanup         `json:"-"`
-	NodeStartupCorroboration   *NodeStartupCorroboration             `json:"-"`
-	MessageBeforeCorroboration string                                `json:"-"`
+	TerminatingRemovals      map[string]issuesapi.FinalizerRemoval `json:"-"`
+	ConditionalCleanup       *issuesapi.ConditionalCleanup         `json:"-"`
+	NodeStartupCorroboration *NodeStartupCorroboration             `json:"-"`
+	// EvictedFromNode is spec.nodeName of an Evicted pod: the node whose
+	// kubelet evicted it. The pod's own field, so it needs no node read.
+	EvictedFromNode            string `json:"-"`
+	MessageBeforeCorroboration string `json:"-"`
 	Kind                       string
 	Namespace                  string
 	Name                       string
@@ -617,6 +620,15 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 					cause, action = imagePullDiagnosis(reason, message)
 				}
 			}
+			var evictedFrom, messageSource string
+			var evictedAt time.Time
+			if reason == health.PodEvictedReason && health.IsEvictedPod(pod) {
+				ev := evictedPodProblem(pod, ownerKind)
+				severity, message, rawMessage = ev.severity, ev.message, ev.raw
+				cause, action, evictedAt = ev.cause, ev.action, ev.onset
+				messageSource = issuesapi.MessageSourceRadar
+				evictedFrom = pod.Spec.NodeName
+			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
 			// healthy operation (started_after_resource_was_healthy).
@@ -715,6 +727,8 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				Reason:               reason,
 				Message:              message,
 				RawMessage:           rawMessage,
+				MessageSource:        messageSource,
+				EvictedFromNode:      evictedFrom,
 				Fingerprint:          fingerprint,
 				Age:                  timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
@@ -736,6 +750,9 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 			var onset time.Time
 			if reason == readinessGatesNotReadyReason {
 				onset, _ = health.PodReadinessGateFailure(pod, now)
+			}
+			if !evictedAt.IsZero() {
+				onset = evictedAt
 			}
 			setDetectionOnset(&detection, now, onset)
 			if pinLoopSeverity {
