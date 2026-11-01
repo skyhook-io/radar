@@ -45,10 +45,14 @@ func TestOmittedKindsNamesChangesTheDefaultFeedLeavesOut(t *testing.T) {
 	add("TidbCluster", "pingcap.com/v1alpha1", "db", "basic", timeline.EventTypeUpdate, nil, "spec.tikv.replicas")
 	add("TidbCluster", "pingcap.com/v1alpha1", "db", "basic", timeline.EventTypeUpdate, nil, "spec.pd.replicas")
 	// Not listed: Node lifecycle and status, owned or status-only custom
-	// resources, tracked custom kinds and default-feed kinds.
+	// resources, runtime-generated lifecycle churn, tracked custom kinds and
+	// default-feed kinds.
 	add("Node", "v1", "", "worker-2", timeline.EventTypeAdd, nil)
 	add("Node", "v1", "", "worker-1", timeline.EventTypeUpdate, nil, "status.conditions.Ready")
 	add("CiliumEndpoint", "cilium.io/v2", "db", "pod-a", timeline.EventTypeAdd, &timeline.OwnerInfo{Kind: "Pod", Name: "pod-a"})
+	add("CiliumIdentity", "cilium.io/v2", "", "12345", timeline.EventTypeAdd, nil)
+	add("CiliumIdentity", "cilium.io/v2", "", "12346", timeline.EventTypeDelete, nil)
+	add("CiliumIdentity", "cilium.io/v2", "", "12347", timeline.EventTypeAdd, nil)
 	add("Certificate", "cert-manager.io/v1", "db", "tls", timeline.EventTypeUpdate, nil, "status.notAfter")
 	add("Application", "argoproj.io/v1alpha1", "argocd", "shop", timeline.EventTypeUpdate, nil, "spec.source.targetRevision")
 	add("Deployment", "apps/v1", "db", "web", timeline.EventTypeUpdate, nil, "spec.replicas")
@@ -57,7 +61,9 @@ func TestOmittedKindsNamesChangesTheDefaultFeedLeavesOut(t *testing.T) {
 	if err != nil || full {
 		t.Fatalf("OmittedKinds: full=%v err=%v", full, err)
 	}
-	if want := []string{"TidbCluster", "BGPConfiguration", "Node"}; !reflect.DeepEqual(kinds, want) {
+	// Desired-state edits first: Node's one edit outranks BGPConfiguration's
+	// create.
+	if want := []string{"TidbCluster", "Node", "BGPConfiguration"}; !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("cluster-wide kinds = %v, want %v", kinds, want)
 	}
 

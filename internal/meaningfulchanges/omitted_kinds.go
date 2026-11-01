@@ -3,6 +3,7 @@ package meaningfulchanges
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -19,14 +20,29 @@ const (
 	omittedKindsNamed     = 5
 )
 
+// runtimeGeneratedKinds are custom kinds controllers create and delete as
+// routine bookkeeping without owner references, so their lifecycle says
+// nothing about an incident. Their desired-state edits still count.
+var runtimeGeneratedKinds = map[string]bool{
+	// Cilium allocates identities and endpoints as pods come and go.
+	"CiliumIdentity": true, "CiliumEndpoint": true, "CiliumEndpointSlice": true,
+	// Calico IPAM allocations.
+	"IPAMBlock": true, "IPAMHandle": true, "BlockAffinity": true,
+	// Policy engine reports and requests.
+	"PolicyReport": true, "ClusterPolicyReport": true, "EphemeralReport": true, "ClusterEphemeralReport": true, "UpdateRequest": true,
+	// Provisioned per snapshot.
+	"VolumeSnapshotContent": true,
+}
+
 // OmittedKinds returns the kinds outside the default feed that had changes in
 // the query's window and scope which a kind= query would list: desired-state
 // edits to Nodes, and desired-state edits, creates and deletes of untracked
 // custom resources. Rows owned by another object (derived custom resources
 // such as CiliumEndpoints) and status-only changes are left out, so routine
-// churn names nothing. Kinds are ordered by how many rows they had. scanFull
-// reports that the window held more rows than the scan read, so other kinds
-// may be missing. q must be a default query (no kind or name).
+// churn names nothing; so do creates and deletes of runtimeGeneratedKinds.
+// Kinds with desired-state edits come first, then by how many rows they had.
+// scanFull reports that the window held more rows than the scan read, so
+// other kinds may be missing. q must be a default query (no kind or name).
 func OmittedKinds(ctx context.Context, q Query) (kinds []string, scanFull bool, err error) {
 	store := timeline.GetStore()
 	if store == nil {
@@ -49,43 +65,61 @@ func OmittedKinds(ctx context.Context, q Query) (kinds []string, scanFull bool, 
 		scanFull = true
 		events = events[:omittedKindsScanBound]
 	}
-	counts := map[string]int{}
+	edits, lifecycle := map[string]int{}, map[string]int{}
 	for _, e := range events {
-		if !omittedFromDefaultFeed(e) {
+		category := omittedCategory(e)
+		if category == "" {
 			continue
 		}
 		change := fromEvent(e, 1)
 		if q.Allow != nil && !q.Allow(change) {
 			continue
 		}
-		counts[e.Kind]++
-	}
-	for kind := range counts {
-		kinds = append(kinds, kind)
-	}
-	sort.Slice(kinds, func(i, j int) bool {
-		if counts[kinds[i]] != counts[kinds[j]] {
-			return counts[kinds[i]] > counts[kinds[j]]
+		if category == issuesapi.ChangeCategorySpecConfig {
+			edits[e.Kind]++
+		} else {
+			lifecycle[e.Kind]++
 		}
-		return kinds[i] < kinds[j]
+	}
+	for _, counts := range []map[string]int{edits, lifecycle} {
+		for kind := range counts {
+			kinds = append(kinds, kind)
+		}
+	}
+	kinds = slices.Compact(slices.SortedFunc(slices.Values(kinds), strings.Compare))
+	// Kinds with desired-state edits first, then by how many rows they had.
+	sort.SliceStable(kinds, func(i, j int) bool {
+		a, b := kinds[i], kinds[j]
+		if (edits[a] > 0) != (edits[b] > 0) {
+			return edits[a] > 0
+		}
+		return edits[a]+lifecycle[a] > edits[b]+lifecycle[b]
 	})
 	return kinds, scanFull, nil
 }
 
-// omittedFromDefaultFeed reports whether an explicit kind= query would list
-// the row although the default feed does not.
-func omittedFromDefaultFeed(e timeline.TimelineEvent) bool {
+// omittedCategory returns the category an explicit kind= query would list the
+// row under when the default feed leaves it out and the hint counts it, or "".
+func omittedCategory(e timeline.TimelineEvent) issuesapi.ChangeCategory {
 	if e.IsManaged() {
-		return false
+		return ""
 	}
 	category, _ := classify(e)
 	switch {
-	case e.Kind == "Node" && e.Namespace == "":
-		return category == issuesapi.ChangeCategorySpecConfig
-	case isCustomResourceEvent(e) && !(TrackedKind(e.Kind) && eventGroupMatchesTracked(e.Kind, e.APIVersion)):
-		return category == issuesapi.ChangeCategorySpecConfig || category == issuesapi.ChangeCategoryLifecycle
+	case category == issuesapi.ChangeCategorySpecConfig:
+		if (e.Kind == "Node" && e.Namespace == "") || isUntrackedCustomResource(e) {
+			return category
+		}
+	case category == issuesapi.ChangeCategoryLifecycle:
+		if isUntrackedCustomResource(e) && !runtimeGeneratedKinds[e.Kind] {
+			return category
+		}
 	}
-	return false
+	return ""
+}
+
+func isUntrackedCustomResource(e timeline.TimelineEvent) bool {
+	return isCustomResourceEvent(e) && !(TrackedKind(e.Kind) && eventGroupMatchesTracked(e.Kind, e.APIVersion))
 }
 
 // OmittedKindsGuidance is the narrowHint sentence for OmittedKinds' result,
