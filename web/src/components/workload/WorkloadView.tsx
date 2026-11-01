@@ -358,6 +358,7 @@ function useActionsBarProps(
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
+  const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
 
   const {
     data: cascadePreview,
@@ -465,6 +466,7 @@ function useActionsBarProps(
     onArgoSync: (params: Parameters<typeof argoSyncMutation.mutate>[0]) =>
       argoSyncMutation.mutate(params),
     isArgoSyncing: argoSyncMutation.isPending,
+    argoSyncDialog: { pinsComparedRevision: argoInheritanceSupport === 'supported' },
     onArgoRefresh: (params: Parameters<typeof argoRefreshMutation.mutate>[0]) =>
       argoRefreshMutation.mutate(params),
     isArgoRefreshing: argoRefreshMutation.isPending,

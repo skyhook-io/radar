@@ -117,7 +117,7 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 
 | Operation | What it does |
 |---|---|
-| **Sync…** | Opens a dialog with prune / dry-run / apply-only / force / replace / server-side apply. Prune starts off. Replace and Server-side apply start from the Application's `syncPolicy.syncOptions`; changing one keeps the Application's other options, listed read-only under **Also used for this sync**. Force-only routes via `syncStrategy.hook.force` so PreSync / PostSync hooks still run; ApplyOnly uses `syncStrategy.apply` |
+| **Sync…** | Opens a dialog with prune / dry-run / apply-only / force / replace / server-side apply. Prune starts off. Replace and Server-side apply start from the Application's `syncPolicy.syncOptions`; changing one keeps the Application's other options, listed read-only under **Also used for this sync**. A resource drawer's **Sync…** opens the same dialog when its host forwards the options (`argoSyncDialog`); otherwise it syncs at once with the Application's own options, without pruning. Force-only routes via `syncStrategy.hook.force` so PreSync / PostSync hooks still run; ApplyOnly uses `syncStrategy.apply` |
 | **Refresh** | Re-fetches the source repo |
 | **Hard refresh** | Sets `RefreshType=hard` to bypass repo-cache |
 | **Terminate** | Cancels an in-flight operation |

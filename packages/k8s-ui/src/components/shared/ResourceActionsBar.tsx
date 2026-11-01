@@ -30,7 +30,8 @@ import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
-import { argoApplicationSyncOptions, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff } from '../resources/resource-utils-argo'
+import { argoApplicationSyncOptions, argoComparedRevisionCurrent, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoMultiSource, isArgoOperationInProgress } from '../resources/resource-utils-argo'
+import { SyncOptionsDialog, type ArgoSyncOpts } from '../gitops/SyncOptionsDialog'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
@@ -131,8 +132,13 @@ interface ResourceActionsBarProps {
   isFluxResuming?: boolean
 
   // Argo actions
-  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] }) => void
+  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void
   isArgoSyncing?: boolean
+  // Set when onArgoSync forwards the options in its params: Sync then opens
+  // the options dialog. Without it Sync syncs at once with the Application's
+  // own options. pinsComparedRevision: the Radar pins an omitted revision
+  // (argoSyncInheritance).
+  argoSyncDialog?: { pinsComparedRevision: boolean }
   onArgoRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void
   isArgoRefreshing?: boolean
   onArgoSuspend?: (params: { namespace: string; name: string }) => void
@@ -189,7 +195,7 @@ export function ResourceActionsBar({
   onFluxSyncWithSource, isFluxSyncing,
   onFluxSuspend, isFluxSuspending,
   onFluxResume, isFluxResuming,
-  onArgoSync, isArgoSyncing,
+  onArgoSync, isArgoSyncing, argoSyncDialog,
   onArgoRefresh, isArgoRefreshing,
   onArgoSuspend, isArgoSuspending,
   onArgoResume, isArgoResuming, argoResumeUpgrade, argoResumeBlockedReason,
@@ -562,6 +568,7 @@ export function ResourceActionsBar({
           data={data}
           onSync={onArgoSync}
           isSyncing={isArgoSyncing}
+          syncDialog={argoSyncDialog}
           onRefresh={onArgoRefresh}
           isRefreshing={isArgoRefreshing}
           onSuspend={onArgoSuspend}
@@ -889,9 +896,10 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 // ARGO ACTIONS
 // ============================================================================
 
-function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
+function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
   resource: SelectedResource; data: any
-  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] }) => void; isSyncing?: boolean
+  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void; isSyncing?: boolean
+  syncDialog?: { pinsComparedRevision: boolean }
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
   onResume?: (params: { namespace: string; name: string }) => void; isResuming?: boolean
@@ -903,23 +911,38 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
     ? resumeBlockedReason || (resumeUpgrade ? radarUpgradeNoteText(resumeUpgrade) : undefined)
     : undefined
 
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false)
+  const applicationSyncOptions = argoApplicationSyncOptions(data)
+  const sync = (opts?: ArgoSyncOpts) => onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts })
+
   return (
     <>
       {onSync && (
-        <Tooltip content="Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page." delay={150}>
+        <Tooltip content={syncDialog ? 'Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision).' : "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
           <button
-            onClick={() => onSync({
-              namespace: resource.namespace,
-              name: resource.name,
-              applicationSyncOptions: argoApplicationSyncOptions(data),
-            })}
+            onClick={() => (syncDialog ? setSyncDialogOpen(true) : sync())}
             disabled={isSyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            {isSyncing ? 'Syncing...' : 'Sync'}
+            {isSyncing ? 'Syncing...' : syncDialog ? 'Sync…' : 'Sync'}
           </button>
         </Tooltip>
+      )}
+      {onSync && syncDialog && (
+        <SyncOptionsDialog
+          open={syncDialogOpen}
+          appLabel={`${resource.namespace}/${resource.name}`}
+          multiSource={isArgoMultiSource(data)}
+          comparedRevision={data?.status?.sync?.revision}
+          pinsComparedRevision={syncDialog.pinsComparedRevision && argoComparedRevisionCurrent(data)}
+          applicationSyncOptions={applicationSyncOptions}
+          pending={isSyncing}
+          autoSyncEnabled={isArgoAutoSyncEnabled(data)}
+          operationInProgress={isArgoOperationInProgress(data)}
+          onCancel={() => setSyncDialogOpen(false)}
+          onConfirm={(opts) => { sync(opts); setSyncDialogOpen(false) }}
+        />
       )}
 
       {onRefresh && (

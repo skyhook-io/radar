@@ -235,6 +235,56 @@ describe("the drawer's one-click Sync", () => {
   })
 })
 
+describe("the drawer's Sync with an options dialog", () => {
+  const source = { repoURL: 'https://example.com/app.git', path: 'app', targetRevision: 'main' }
+  const application = { ...app(undefined), status: { sync: { revision: 'abc1234def', comparedTo: { source } } }, spec: { project: 'default', source, destination: {}, syncPolicy: { syncOptions: ['CreateNamespace=true'] } } }
+  async function open(onArgoSync: ReturnType<typeof vi.fn>) {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => root.render(
+      <ResourceActionsBar
+        resource={{ kind: 'applications', namespace: 'argocd', name: 'guestbook', group: 'argoproj.io' }}
+        data={application}
+        onArgoSync={onArgoSync}
+        argoSyncDialog={{ pinsComparedRevision: true }}
+      />,
+    ))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    await act(async () => sync.click())
+    return async () => { await act(async () => root.unmount()); host.remove() }
+  }
+  // A closed dialog's portal stays briefly for its exit animation; use the newest.
+  const dialog = () => [...document.querySelectorAll('[role="dialog"]')].at(-1)!
+  const dialogButton = (label: string) => [...dialog().querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === label)!
+
+  it('opens the dialog instead of syncing, and syncs nothing on Cancel', async () => {
+    const onArgoSync = vi.fn()
+    const close = await open(onArgoSync)
+    expect(dialog().textContent).toContain('Leave empty for the revision Argo last compared (abc1234def).')
+    expect(onArgoSync).not.toHaveBeenCalled()
+    await act(async () => dialogButton('Cancel').click())
+    expect(onArgoSync).not.toHaveBeenCalled()
+    await close()
+  })
+
+  it("syncs with the dialog's choices and the Application's options", async () => {
+    const onArgoSync = vi.fn()
+    const close = await open(onArgoSync)
+    const prune = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune.click())
+    const confirm = dialogButton('Sync now')
+    expect(confirm.disabled).toBe(false)
+    await act(async () => confirm.click())
+    expect(onArgoSync).toHaveBeenCalledTimes(1)
+    expect(onArgoSync.mock.calls[0][0]).toMatchObject({ namespace: 'argocd', name: 'guestbook', applicationSyncOptions: ['CreateNamespace=true'], prune: true, dryRun: false })
+    expect(onArgoSync.mock.calls[0][0]).not.toHaveProperty('syncOptions')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await close()
+  })
+})
+
 describe('auto-sync support pending or unavailable', () => {
   it.each(["Checking this cluster's Radar…", "Couldn't check this cluster's Radar support. Refresh to try again."])('disables each affected control with its reason: %s', reason => {
     const markup = html(layout(argo({ resumeBlockedReason: reason })))
