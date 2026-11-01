@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -93,6 +94,8 @@ func TestCNPGLogsAllContainers(t *testing.T) {
 }
 
 func TestCNPGLogsStreamCompletedContainers(t *testing.T) {
+	t.Cleanup(cnpgsvc.SetTestLogDiscoveryInterval(100 * time.Millisecond))
+
 	ns := "pglogscompleted"
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", ns, "pg-orders", nil, nil), "orders-uid"))
 	owner := metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "orders-uid", Controller: boolPtr(true)}
@@ -160,6 +163,8 @@ func TestCNPGLogsStreamCompletedContainers(t *testing.T) {
 }
 
 func TestCNPGLogsWaitingPreviousRun(t *testing.T) {
+	t.Cleanup(cnpgsvc.SetTestLogDiscoveryInterval(100 * time.Millisecond))
+
 	ns := "pglogscrash"
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", ns, "pg-orders", nil, nil), "orders-uid"))
 	owner := metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "orders-uid", Controller: boolPtr(true)}

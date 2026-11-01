@@ -102,7 +102,8 @@ export function addTopologyLimitations(
       source,
       "Topology coverage",
       warning,
-      normalized.includes("large graph") || normalized.includes("too large")
+      !partiality.requiresNamespaceFilter &&
+        (normalized.includes("large graph") || normalized.includes("too large"))
         ? "truncated"
         : "unknown",
     );
@@ -136,7 +137,9 @@ export function addTopologyLimitations(
       source,
       "Topology scale",
       scaleDetails.join(" "),
-      "truncated",
+      // A graph that was never built shows nothing, so it is an unknown; the
+      // other notes describe a graph that is shown with detail grouped.
+      partiality.requiresNamespaceFilter ? "unknown" : "truncated",
     );
   }
 

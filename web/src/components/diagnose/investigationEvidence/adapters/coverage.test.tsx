@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { deployment, groupsOf, project, tool } from "../evidenceFixtures";
+import { projectInvestigationEvidence } from "../index";
 import { RankingBody } from "../bodies/ranking";
 import { PostureBody } from "../bodies/posture";
 import { InventoryBody, namedInventoryRows } from "../bodies/inventory";
@@ -678,5 +679,50 @@ describe("metric discovery receipt", () => {
     const [group] = groupsOf(projection.groups, "receipt");
     expect(group.latest.title).toBe('Metric names matching {namespace="shop"}');
     expect(group.latest.summary).toBe("42 metrics · last hour");
+  });
+});
+
+describe("posture cards in a run with no resource", () => {
+  const audit = tool("audit", "get_cluster_audit", {
+    findings: [
+      {
+        resource: "Deployment/other/web",
+        check: "noLimits",
+        severity: "medium",
+        message: "No limits.",
+      },
+    ],
+    totalCount: 1,
+  });
+  const none = { kind: "", group: "", namespace: "", name: "" };
+
+  it("keeps every finding as a citable card and says nothing about a resource", () => {
+    const projection = projectInvestigationEvidence(
+      [{ timeline: [audit] }],
+      none,
+    );
+    const [card] = groupsOf(projection.groups, "posture");
+    expect(card.latest.relevance).toBe("broader");
+    expect(
+      card.latest.data.type === "posture" &&
+        card.latest.data.findings.map((finding) => finding.name),
+    ).toEqual(["web"]);
+    expect(
+      groupsOf(projection.groups, "receipt").map((group) => group.latest.title),
+    ).not.toContain("No posture findings on this resource");
+  });
+
+  it("files an empty scan without naming a resource", () => {
+    const empty = tool("audit", "get_cluster_audit", {
+      findings: [],
+      totalCount: 0,
+    });
+    const projection = projectInvestigationEvidence(
+      [{ timeline: [empty] }],
+      none,
+    );
+    expect(
+      groupsOf(projection.groups, "receipt").map((group) => group.latest.title),
+    ).toContain("No posture findings");
   });
 });

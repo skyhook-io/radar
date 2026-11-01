@@ -1,0 +1,302 @@
+[
+  {
+    "name": "unreported reconciliation",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {}
+    },
+    "level": "unknown",
+    "text": "Not reported"
+  },
+  {
+    "name": "Ready does not prove pod health",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "scale": {
+          "statusReplicas": "0/1"
+        }
+      }
+    },
+    "level": "neutral",
+    "text": "Reconciled"
+  },
+  {
+    "name": "unknown condition",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "Unknown"
+          }
+        ]
+      }
+    },
+    "level": "unknown",
+    "text": "Reconciliation unknown"
+  },
+  {
+    "name": "failed reconciliation",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "ReconcileError"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "text": "Reconcile failed"
+  },
+  {
+    "name": "old success",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "observedGeneration": 1,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    "level": "unknown",
+    "text": "Status stale"
+  },
+  {
+    "name": "old failure",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "observedGeneration": 1,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "unknown",
+    "text": "Status stale"
+  },
+  {
+    "name": "unmanaged retains intent",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {
+        "managementState": "unmanaged"
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Unmanaged"
+  },
+  {
+    "name": "scale snapshot without condition",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "scale": {
+          "statusReplicas": "1/1"
+        }
+      }
+    },
+    "level": "unknown",
+    "text": "Not reported"
+  },
+  {
+    "name": "sidecar reconciled not runtime readiness",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {
+        "mode": "sidecar"
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Reconciled"
+  },
+  {
+    "name": "zero replica snapshot not proof of delivery",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {
+        "replicas": 0
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "scale": {
+          "statusReplicas": "0/0"
+        }
+      }
+    },
+    "level": "neutral",
+    "text": "Reconciled"
+  },
+  {
+    "name": "instrumentation configuration not health",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1alpha1",
+      "kind": "Instrumentation",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {}
+    },
+    "level": "neutral",
+    "text": "Configured"
+  },
+  {
+    "name": "instrumentation image upgrade blocked",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1alpha1",
+      "kind": "Instrumentation",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "upgradeBlockedVersions": {
+          "java": "unsupported image"
+        }
+      }
+    },
+    "level": "neutral",
+    "text": "Upgrade blocked"
+  },
+  {
+    "name": "reconciled but status collection failed",
+    "object": {
+      "apiVersion": "opentelemetry.io/v1beta1",
+      "kind": "OpenTelemetryCollector",
+      "metadata": {
+        "name": "test",
+        "namespace": "test",
+        "generation": 2
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "StatusUpdateFailed"
+          }
+        ]
+      }
+    },
+    "level": "unknown",
+    "text": "Status unavailable"
+  }
+]

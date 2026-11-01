@@ -140,7 +140,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_cluster_audit',
-    desc: 'Best-practice and security posture findings — Security, Reliability, Efficiency — each with remediation guidance. Static config posture, independent of live operational health.',
+    desc: 'Best-practice and security posture findings — Security, Reliability, Efficiency — each with remediation guidance. Static config posture: mostly latent risk, though some findings (expired certificates, dangling references) can be live failures.',
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
       { arg: 'category', desc: 'Security, Reliability, or Efficiency' },
@@ -197,7 +197,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'issues',
-    desc: 'Ranked list of what is broken right now — failing workloads, active native Helm release failures or stuck pending operations, dangling references, scheduling blockers, and false CRD conditions. Native Helm rows use group=helm.sh.',
+    desc: 'Ranked list of what is broken right now — failing workloads, active native Helm release failures or stuck pending operations, dangling references, scheduling blockers, false CRD conditions, and expired or soon-expiring TLS certificates on live Ingresses or Gateways. Native Helm rows use group=helm.sh.',
     params: [
       { arg: 'namespace', desc: 'filter to one namespace' },
       { arg: 'severity', desc: 'comma-separated: critical, warning' },

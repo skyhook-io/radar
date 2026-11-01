@@ -128,7 +128,7 @@ var instructionClaims = []struct{ tool, says, backedBy, param string }{
 	{tool: "top_resources", says: "OOMKills: top_resources", backedBy: "OOMKills"},
 	{tool: "get_neighborhood", says: "service routing): get_neighborhood", backedBy: "service routing"},
 	{tool: "get_neighborhood", says: "The graph around one object (owners, selectors, config references", backedBy: "targetPort/selector/endpoints problems, dependency timeouts, config/secret refs, owner chains"},
-	{tool: "get_cluster_audit", says: "get_cluster_audit is configuration posture", backedBy: "STATIC CONFIG POSTURE"},
+	{tool: "get_cluster_audit", says: "get_cluster_audit is posture, partly live", backedBy: "can be live failures"},
 	{tool: "manage_workload", says: "manage_workload to restart, scale or roll back", backedBy: "'rollback'"},
 }
 
@@ -274,8 +274,8 @@ func TestExecServerInstructions(t *testing.T) {
 	if off != investigation.GeneralGuidanceFull {
 		t.Fatal("flag-off instructions changed")
 	}
-	if n := len([]rune(off)); n != 3405 {
-		t.Fatalf("exec=false instructions=%d characters, want 3405", n)
+	if n := len([]rune(off)); n != 3404 {
+		t.Fatalf("exec=false instructions=%d characters, want 3404", n)
 	}
 	TestServerInstructionsFitClientLimits(t)
 	t.Logf("exec=false instructions=%d characters", len([]rune(off)))
@@ -284,8 +284,8 @@ func TestExecServerInstructions(t *testing.T) {
 	if on != investigation.GeneralGuidanceExec || !strings.Contains(on, "each only if listed:") || !strings.Contains(on, "Pod checks: exec_pod if listed.") {
 		t.Fatal("missing conditional exec routing")
 	}
-	if n := len([]rune(on)); n != 3439 {
-		t.Fatalf("exec=true instructions=%d characters, want 3439", n)
+	if n := len([]rune(on)); n != 3438 {
+		t.Fatalf("exec=true instructions=%d characters, want 3438", n)
 	}
 	if serverInstructions(false) != investigation.GeneralGuidanceReadOnly {
 		t.Fatal("exec changed read-only instructions")

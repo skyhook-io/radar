@@ -198,3 +198,18 @@ func TestTrivyPodReportNeedsItsReplicaSetToBeReadable(t *testing.T) {
 		t.Fatalf("hidden ReplicaSet: managedBy %+v; want none", m)
 	}
 }
+
+func TestTrivyRolloutParentIsAControllerNotArgoCD(t *testing.T) {
+	controller := true
+	replicas := int32(1)
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "canary-rs", Namespace: "shop", UID: "uid-canary-rs", OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "canary", Controller: &controller}}}, Spec: appsv1.ReplicaSetSpec{Replicas: &replicas}}
+	cache, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(rs), ResourceTypes: map[string]bool{k8score.ReplicaSets: true}, DeferredTypes: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Stop()
+	managed, _ := trivyScanTarget(&k8s.ResourceCache{ResourceCache: cache}, scanReport("ReplicaSet", "canary-rs", true), nil)
+	if managed == nil || managed.Kind != "Rollout" || managed.Group != "argoproj.io" || managed.Source != "native" {
+		t.Fatalf("Rollout controller: %+v", managed)
+	}
+}

@@ -56,7 +56,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		// config/resource reference.
 		switch in.Reason {
 		case "Missing backend Service", "Missing backend Service port",
-			"Missing ALB action annotation", "Invalid ALB action annotation":
+			"Missing ALB action annotation", "Invalid ALB action annotation",
+			k8s.TraefikRouterMissingServiceReason, k8s.TraefikRouterMissingMiddlewareReason:
 			return issuesapi.CategoryIngressBackendMissing
 		case "Missing IngressClass":
 			return issuesapi.CategoryIngressClassMissing
@@ -206,6 +207,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryInvalidConfiguration
 	case k8s.NetworkPolicyDenyAllIngressReason:
 		return issuesapi.CategoryNetworkPolicyDenied
+	case k8s.TLSCertificateExpiredReason, k8s.TLSCertificateNotYetValidReason, k8s.TLSCertificateExpiringReason:
+		return issuesapi.CategoryCertificateNotReady
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":
@@ -404,8 +407,12 @@ func classifyGitOpsReason(reason string, fallback issuesapi.Category) issuesapi.
 		return issuesapi.CategoryGitOpsRenderFailed
 	case "InvalidSpecError":
 		return issuesapi.CategoryGitOpsSpecInvalid
-	case "OperationFailed", "SyncError", "StuckDriftLoop":
+	case "OperationFailed", "SyncError", "StuckDriftLoop", "RollbackRevisionMismatch":
 		return issuesapi.CategoryGitOpsOperationFailed
+	case "AutoSyncBlockedEmpty":
+		return issuesapi.CategoryGitOpsSyncFailed
+	case "SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning":
+		return issuesapi.CategoryGitOpsResourceWarning
 	case "OutOfSync", "OutOfSyncManual":
 		return issuesapi.CategoryGitOpsOutOfSync
 	case "GitOpsControllerStalled", "GitOpsComparisonsStale", "ComparisonStale":

@@ -480,11 +480,19 @@ type Relationships struct {
 	OlderRevisions []ResourceRef `json:"olderRevisions,omitempty"`
 	// Managers and Manages are management without an owner reference: GitOps
 	// member lists, class bindings, spec and status references. They never
-	// mean garbage collection. Set only with Ownership.
+	// mean garbage collection. Set only with Ownership. ApplyOwner instead
+	// fills Managers with residual spec controllers and leaves Manages empty.
 	Managers []ResourceRef `json:"managers,omitempty"`
 	Manages  []ResourceRef `json:"manages,omitempty"`
 	// Ownership says how complete the owner-reference answers are.
 	Ownership *OwnershipCoverage `json:"ownership,omitempty"`
+	// ControllerChain is the resource's controller chain as the caller
+	// reads it, for the resource contexts' top owner. Set only with
+	// Ownership; not on the wire.
+	ControllerChain *ControllerChain `json:"-"`
+	// OtherManagersIncomplete records unavailable spec-management sources;
+	// denied sources are hidden without disclosing that they exist.
+	OtherManagersIncomplete bool `json:"-"`
 	// manageSources and manageTargets are the resources this one's manages
 	// edges come from and go to, which ApplyOwnership sorts into ownership,
 	// management and display shortcuts.

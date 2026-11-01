@@ -5,6 +5,7 @@ import { YamlDiffEditor } from '../ui/YamlEditor'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
 import { pluralToKind } from '../../utils/navigation'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 import { toComparableYaml } from './normalize'
 import { SIDE_TONES, type CompareSide } from './types'
 
@@ -120,7 +121,10 @@ export function ResourceCompareView({
   bleed = false,
 }: ResourceCompareViewProps) {
   const [specOnly, setSpecOnly] = useState(false)
-  const [unified, setUnified] = useState(false)
+  const [unifiedPicked, setUnified] = useState(false)
+  // Two side-by-side panes don't fit a phone, so phones always get one column.
+  const isPhone = usePhoneLayout()
+  const unified = unifiedPicked || isPhone
   const [hideUnchanged, setHideUnchanged] = useState(true)
   const [rawMetadata, setRawMetadata] = useState(false)
 
@@ -180,7 +184,7 @@ export function ResourceCompareView({
           <ToggleButton active={rawMetadata} onClick={() => setRawMetadata(v => !v)} icon={<Sparkles className="w-3.5 h-3.5" />} label="Raw metadata" tooltip="Keep server-assigned noise (uid, resourceVersion, managedFields, last-applied)" />
           <ToggleButton active={specOnly} onClick={() => setSpecOnly(v => !v)} icon={<FileCode2 className="w-3.5 h-3.5" />} label="Spec only" tooltip="Drop status fields from both sides" />
           <ToggleButton active={hideUnchanged} onClick={() => setHideUnchanged(v => !v)} icon={<FileText className="w-3.5 h-3.5" />} label="Diff only" tooltip="Collapse unchanged regions" />
-          <ToggleButton active={unified} onClick={() => setUnified(v => !v)} icon={<Rows className="w-3.5 h-3.5" />} label="Unified" tooltip="Switch between side-by-side and single-column" />
+          {!isPhone && <ToggleButton active={unified} onClick={() => setUnified(v => !v)} icon={<Rows className="w-3.5 h-3.5" />} label="Unified" tooltip="Switch between side-by-side and single-column" />}
         </div>
 
         <div className="w-px h-5 bg-theme-border shrink-0" aria-hidden />

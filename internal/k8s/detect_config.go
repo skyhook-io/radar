@@ -730,6 +730,10 @@ func deploymentEnvServiceRefsDegraded(d *appsv1.Deployment) bool {
 	if d == nil {
 		return false
 	}
+	// Any unavailable pod counts here, including a rollout's surge pod: unlike
+	// the capacity rollup (deploymentBelowDesiredAvailable), this asks whether a
+	// confirmed mismatch could explain a failure, and a new revision failing on
+	// a bad Service port leaves the old replicas serving at full capacity.
 	if d.Status.UnavailableReplicas > 0 {
 		return true
 	}

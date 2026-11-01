@@ -100,6 +100,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   crossplane_reconcile_failed: 'Crossplane reconcile failed',
   termination_stuck: 'Stuck terminating',
   operator_condition_failed: 'Controller reports a problem',
+  gitops_resource_warning: 'GitOps resource warning',
   gitops_sync_failed: 'GitOps sync failed',
   gitops_render_failed: 'GitOps render failed',
   gitops_spec_invalid: 'GitOps spec invalid',
@@ -140,6 +141,7 @@ export function categoryLabel(category: string): string {
 // Reasons filed under a category whose label names a different operation:
 // CNPG archiving and an unanswered scheduled run sit under backup_failed.
 const REASON_TITLE: Record<string, string> = {
+  FlaggerCanaryFailed: "Canary rollout failed",
   InvalidSchedule: 'Scheduling error reported',
   UnparseableSchedule: 'Scheduling error reported',
   UnParseableCronJobSchedule: 'Scheduling error reported',

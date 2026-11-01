@@ -947,6 +947,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		certificateGVR, hasCertificates = resourceDiscovery.GetGVRWithGroup("Certificate", "cert-manager.io")
 	}
 	var certificateResources []unstructured.Unstructured
+	certBySecret := make(map[string]string)
 	if hasCertificates && dynamicCache != nil {
 		certs, certErr := dynamicCache.ListNamespaces(certificateGVR, opts.Namespaces)
 		if certErr != nil {
@@ -973,6 +974,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 			certificateResources = append(certificateResources, *cert)
+			if secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); secretName != "" {
+				certBySecret[ns+"/"+secretName] = certID
+			}
 		}
 	}
 
@@ -3906,7 +3910,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 
-			// Only include Secrets that are referenced by workloads in the same namespace
 			secretID := fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name)
 			consumers := secretConsumers[workloadRefKey{namespace: secret.Namespace, name: secret.Name}]
 
@@ -3919,7 +3922,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 
-			if len(consumers) > 0 || podSecretTargets[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] {
+			if (opts.ForRelationshipCache && certBySecret[secret.Namespace+"/"+secret.Name] != "") || len(consumers) > 0 || podSecretTargets[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] {
 				visibleSecretIDs[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] = secretID
 				nodes = append(nodes, secretNode(secret))
 			}
@@ -5146,16 +5149,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	nodes, edges, issuerWarnings := addCertificateIssuerEdges(nodes, edges, certificateResources, dynamicCache, opts)
 	warnings = append(warnings, issuerWarnings...)
-
-	// Build Certificate lookup by secretName (for IngressRoute → Certificate edges)
-	certBySecret := make(map[string]string) // "ns/secretName" → certificateID
-	for _, cert := range certificateResources {
-		ns := cert.GetNamespace()
-		secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
-		if secretName != "" {
-			certBySecret[ns+"/"+secretName] = fmt.Sprintf("certificate/%s/%s", ns, cert.GetName())
-		}
-	}
 
 	// 15d. Create Traefik edges
 	// IngressRoute/TCP/UDP → Service/TraefikService (EdgeExposes)
@@ -8350,6 +8343,20 @@ func sealedSecretHealth(resource *unstructured.Unstructured) HealthStatus {
 
 // extractGenericStatus determines health from common CRD status patterns
 func extractGenericStatus(resource *unstructured.Unstructured) HealthStatus {
+	if resource.GroupVersionKind().Group == "opentelemetry.io" {
+		switch resource.GetKind() {
+		case "OpenTelemetryCollector":
+			return healthLevelToStatus(health.OpenTelemetryCollector(resource).Level)
+		case "Instrumentation":
+			return healthLevelToStatus(health.OpenTelemetryInstrumentation(resource).Level)
+		}
+	}
+	if resource.GroupVersionKind().Group == "flagger.app" && resource.GetKind() == "Canary" {
+		return healthLevelToStatus(health.FlaggerCanary(resource).Level)
+	}
+	if resource.GroupVersionKind().Group == "flagger.app" && resource.GetKind() == "MetricTemplate" {
+		return StatusNeutral
+	}
 	status, found, _ := unstructured.NestedMap(resource.Object, "status")
 	if !found {
 		return StatusUnknown

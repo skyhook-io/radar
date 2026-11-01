@@ -176,8 +176,10 @@ export interface FeatureCapabilities {
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
   gitopsWriteEvidence?: boolean
+  agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
+  argoRollbackSync?: boolean
   clusterScopedPlaceholder?: boolean
 }
 

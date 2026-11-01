@@ -46,7 +46,7 @@ func TestRequireHelmWrite_ChecksCallerInNamespace(t *testing.T) {
 		})
 	}))
 	t.Cleanup(srv.Close)
-	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
 	if err != nil {
 		t.Fatalf("create test client: %v", err)
 	}

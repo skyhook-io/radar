@@ -209,13 +209,8 @@ func TestBuild_Pod_FullEnrichment(t *testing.T) {
 		t.Fatal("Build returned nil")
 	}
 
-	// ManagedBy: argo tracking-id annotation wins over owner reference.
-	if got, want := len(rc.ManagedBy), 1; got != want {
-		t.Fatalf("ManagedBy len: got %d want %d (%+v)", got, want, rc.ManagedBy)
-	}
-	mb := rc.ManagedBy[0]
-	if mb.Kind != "Application" || mb.Name != "storefront" || mb.Namespace != "argocd" {
-		t.Errorf("ManagedBy[0]: got %+v, want Application argocd/storefront", mb)
+	if len(rc.ManagedBy) != 0 {
+		t.Fatalf("metadata without ownership produced managedBy: %+v", rc.ManagedBy)
 	}
 
 	// Exposes: the Service routes to the pod.
@@ -298,16 +293,10 @@ func TestBuild_Deployment_OwnerRefHelmRelease(t *testing.T) {
 	if rc == nil {
 		t.Fatal("Build returned nil")
 	}
-	if got, want := len(rc.ManagedBy), 1; got != want {
-		t.Fatalf("ManagedBy len: got %d want %d", got, want)
+	if len(rc.ManagedBy) != 0 {
+		t.Fatalf("metadata without ownership produced managedBy: %+v", rc.ManagedBy)
 	}
-	mb := rc.ManagedBy[0]
-	if mb.Kind != "HelmRelease" || mb.Name != "web" || mb.Namespace != "flux-system" {
-		t.Errorf("ManagedBy[0]: got %+v want HelmRelease/flux-system/web", mb)
-	}
-	if mb.Group != "helm.toolkit.fluxcd.io" {
-		t.Errorf("ManagedBy[0].Group: got %q", mb.Group)
-	}
+
 }
 
 func TestBuild_Deployment_WorkloadSummaryAndTemplateUses(t *testing.T) {
@@ -809,13 +798,10 @@ func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
 	})
-	if got, want := len(rc.ManagedBy), 1; got != want {
-		t.Fatalf("ManagedBy len: got %d want %d", got, want)
+	if len(rc.ManagedBy) != 0 {
+		t.Fatalf("graph without ownership produced managedBy: %+v", rc.ManagedBy)
 	}
-	mb := rc.ManagedBy[0]
-	if mb.Kind != "Deployment" || mb.Name != "web" || mb.Namespace != "prod" {
-		t.Errorf("ManagedBy[0]: got %+v", mb)
-	}
+
 }
 
 func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
@@ -1098,7 +1084,7 @@ func TestBuild_PDB_OutputJSONShape(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	// Spot-check: tier basic, owner ref managedBy, runsOn node.
-	want := `"managedBy"`
+	want := `"owner"`
 	if !contains(string(b), want) {
 		t.Errorf("JSON missing %s\n%s", want, b)
 	}

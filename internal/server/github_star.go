@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/skyhook-io/radar/internal/launchday"
 	"net/http"
 	"os"
 	"os/exec"
@@ -76,6 +77,9 @@ type githubStarState struct {
 
 // shouldPromptUI uses the same backoff schedule as the CLI prompt.
 func (s *githubStarState) shouldPromptUI() bool {
+	if launchday.ProductHunt(time.Now()) {
+		return false
+	}
 	if s.StarredAt != "" {
 		return false
 	}

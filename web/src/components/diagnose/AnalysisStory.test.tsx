@@ -66,6 +66,28 @@ describe("resolveStoryPlacements", () => {
     expect(html).toContain('data-story-lost-support="unlinked"');
   });
 
+  it("names which kind of loss each unrendered citation is", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisStory
+        placements={resolveStoryPlacements(
+          "One [[radar:evidence=0]]. Two [[radar:evidence=1]]. Three [[radar:evidence=2]].",
+          resolver({ 0: "invalid", 1: "unlinked", 2: "unplaced" }),
+        )}
+        renderPlacement={() => null}
+        onReveal={vi.fn()}
+      />,
+    );
+    expect(html).toMatch(
+      /data-story-lost-support="invalid"[^>]*>.*?unknown citation/,
+    );
+    expect(html).toMatch(
+      /data-story-lost-support="unlinked"[^>]*>.*?unverified/,
+    );
+    expect(html).toMatch(
+      /data-story-lost-support="unplaced"[^>]*>.*?unclear citation/,
+    );
+  });
+
   it("places a card under the paragraph that first mentions it inline, and drops that marker from the sentence", () => {
     const story = resolveStoryPlacements(
       "Envoy boots [[radar:evidence=0]] then hangs on xDS.\n\nLater, see [[radar:evidence=0]] again.",

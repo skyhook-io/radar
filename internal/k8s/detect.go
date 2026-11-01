@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -166,11 +167,15 @@ type Detection struct {
 	// names a structured one-click fix (e.g. "create-namespace") and
 	// RemediationTarget the resource it acts on.
 	// Cross-resource diagnosis must be withheld when its source is unreadable.
-	DiagnosisSource   *corev1.ObjectReference `json:"-"`
-	Cause             string
-	Action            string
-	RemediationKind   string
-	RemediationTarget string
+	DiagnosisSource      *corev1.ObjectReference `json:"-"`
+	Cause                string
+	Action               string
+	Hazard               string
+	ActionPrimary        string
+	ActionSecondaryTitle string
+	ActionSecondary      []string
+	RemediationKind      string
+	RemediationTarget    string
 	// OperationRetryCount / Stuck describe a controller operation that keeps
 	// failing: the retry count parsed from a GitOps controller's message and
 	// whether it has crossed the "no longer transient" threshold. Named
@@ -222,6 +227,15 @@ func podOwnerKindName(cache *ResourceCache, pod *corev1.Pod) (group, kind, name 
 // Does NOT include pods (consumers handle pod problems differently).
 // namespace="" scans all namespaces.
 func DetectProblems(cache *ResourceCache, namespace string) []Detection {
+	return DetectProblemsInScope(cache, namespace, nil)
+}
+
+// DetectProblemsInScope is DetectProblems sharing cluster-wide lookups with
+// the other runs of one compose through scope.
+func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *DetectScope) []Detection {
+	if scope == nil {
+		scope = NewDetectScope()
+	}
 	var problems []Detection
 	now := time.Now()
 	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
@@ -311,7 +325,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, detection)
 			}
 
-			if d.Status.UnavailableReplicas > 0 && stuck == nil && replicaFailure == nil {
+			if deploymentBelowDesiredAvailable(d) && !deploymentRolloutDipWithinBudget(d, now) && stuck == nil && replicaFailure == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				var availCondLTT time.Time
 				for _, cond := range d.Status.Conditions {
@@ -416,12 +430,16 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			if ss.Status.ReadyReplicas < desired {
 				ageDur := now.Sub(ss.CreationTimestamp.Time)
+				severity := "critical"
+				if statefulSetRolloutWithinBudget(ss, desired) {
+					severity = "warning"
+				}
 				problems = append(problems, Detection{
 					Kind:              "StatefulSet",
 					Namespace:         ss.Namespace,
 					Name:              ss.Name,
 					Group:             "apps",
-					Severity:          "critical",
+					Severity:          severity,
 					Reason:            fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, desired),
 					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
@@ -464,12 +482,17 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			if ds.Status.NumberMisscheduled > 0 {
 				appendDSProblem(fmt.Sprintf("%d misscheduled", ds.Status.NumberMisscheduled), "high", "daemonset:misscheduled")
 			}
+			// "not scheduled" stays critical even mid-rollout: status cannot tell
+			// the moment between deleting a node's old pod and creating its
+			// replacement from a replacement that can never be created.
 			if ds.Status.DesiredNumberScheduled > ds.Status.CurrentNumberScheduled {
 				appendDSProblem(fmt.Sprintf("%d not scheduled", ds.Status.DesiredNumberScheduled-ds.Status.CurrentNumberScheduled), "critical", "daemonset:not-scheduled")
 			} else if ds.Status.NumberUnavailable > 0 {
 				severity := "critical"
 				if daemonSetUnavailableIsByDesignUnschedulable(cache, ds, podsByNamespace) {
 					severity = "high"
+				} else if daemonSetRolloutWithinBudget(ds) {
+					severity = "warning"
 				}
 				appendDSProblem(fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable), severity, "daemonset:unavailable")
 			}
@@ -761,6 +784,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 	problems = append(problems, detectNetworkPolicyDenyAllIngress(cache, namespace, podsByNamespace, now)...)
+	problems = append(problems, detectLiveTLSCertificates(cache, namespace, scope, now)...)
 
 	// HPA problems
 	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {
@@ -2033,6 +2057,59 @@ func daemonSetUnavailableIsByDesignUnschedulable(cache *ResourceCache, ds *appsv
 	return int32(len(byDesignTargets)) >= ds.Status.NumberUnavailable
 }
 
+// statefulSetRolloutWithinBudget reports whether a StatefulSet's shortfall is a
+// RollingUpdate replacing one pod at a time. Unlike a Deployment there is no
+// progress deadline to end a stuck rollout, so the caller lowers the row's
+// severity rather than hiding it. The controller takes a pod down only when
+// every other is available, and only allows more than one at a time behind a
+// feature gate Radar cannot see, so the budget is one available replica short.
+// Revisions also differ after a partitioned rollout finishes, so partitioned
+// sets keep the critical row.
+func statefulSetRolloutWithinBudget(ss *appsv1.StatefulSet, desired int32) bool {
+	strategy := ss.Spec.UpdateStrategy
+	if strategy.Type != "" && strategy.Type != appsv1.RollingUpdateStatefulSetStrategyType {
+		return false
+	}
+	if strategy.RollingUpdate != nil && strategy.RollingUpdate.Partition != nil && *strategy.RollingUpdate.Partition > 0 {
+		return false
+	}
+	return ss.Status.ObservedGeneration >= ss.Generation &&
+		ss.Status.UpdateRevision != "" && ss.Status.CurrentRevision != ss.Status.UpdateRevision &&
+		ss.Status.AvailableReplicas > 0 && desired-ss.Status.AvailableReplicas <= 1
+}
+
+// daemonSetRolloutWithinBudget reports whether a DaemonSet's unavailable nodes
+// are a RollingUpdate within its maxUnavailable budget, resolved as the
+// controller does: rounded up against the scheduled count, and 1 when neither
+// surge nor unavailability is allowed. No progress deadline ends a stuck
+// DaemonSet rollout, so the caller lowers the row's severity rather than hiding
+// it. updatedNumberScheduled counts pods before they are available, so the last
+// node's replacement turns the row critical again until it is up.
+func daemonSetRolloutWithinBudget(ds *appsv1.DaemonSet) bool {
+	if ds.Spec.UpdateStrategy.Type != appsv1.RollingUpdateDaemonSetStrategyType || ds.Spec.UpdateStrategy.RollingUpdate == nil {
+		return false
+	}
+	desired := ds.Status.DesiredNumberScheduled
+	if ds.Status.ObservedGeneration < ds.Generation || ds.Status.UpdatedNumberScheduled >= desired || ds.Status.NumberAvailable == 0 {
+		return false
+	}
+	rolling := ds.Spec.UpdateStrategy.RollingUpdate
+	maxUnavailable, err := intstr.GetScaledValueFromIntOrPercent(rolling.MaxUnavailable, int(desired), true)
+	if err != nil {
+		return false
+	}
+	maxSurge := 0
+	if rolling.MaxSurge != nil {
+		if maxSurge, err = intstr.GetScaledValueFromIntOrPercent(rolling.MaxSurge, int(desired), true); err != nil {
+			return false
+		}
+	}
+	if maxUnavailable == 0 && maxSurge == 0 {
+		maxUnavailable = 1
+	}
+	return int(ds.Status.NumberUnavailable) <= maxUnavailable
+}
+
 func daemonSetPodIsAssignedButUnavailable(pod *corev1.Pod) bool {
 	if pod == nil || pod.Spec.NodeName == "" {
 		return false
@@ -2380,6 +2457,54 @@ func failedJobCondition(job *batchv1.Job) *batchv1.JobCondition {
 		}
 	}
 	return nil
+}
+
+// deploymentBelowDesiredAvailable reports whether fewer pods are available than
+// spec.replicas asks for. status.unavailableReplicas alone is not that signal:
+// the controller computes it as the sum of every ReplicaSet's spec.replicas
+// minus available, so a RollingUpdate's surge pod counts as unavailable while
+// it starts even though every desired replica is still serving. A surge pod
+// that never comes up surfaces on its own pod row and, past
+// progressDeadlineSeconds, as a stuck rollout. Requiring both keeps a scale-up
+// the controller has not yet observed (spec raised, status still from the
+// previous generation) quiet until the controller reports the shortfall.
+func deploymentBelowDesiredAvailable(dep *appsv1.Deployment) bool {
+	return dep.Status.UnavailableReplicas > 0 && dep.Status.AvailableReplicas < schedDesiredReplicas(dep.Spec.Replicas)
+}
+
+// deploymentRolloutDipWithinBudget reports whether a shortfall below
+// spec.replicas is a RollingUpdate taking pods down within its maxUnavailable
+// budget. The controller sets Available=True exactly when available >=
+// replicas - maxUnavailable, and keeps Progressing at ReplicaSetUpdated or
+// NewReplicaSetCreated until the rollout completes; a pod lost after completion
+// leaves the reason at NewReplicaSetAvailable, so steady-state capacity loss
+// still reports. (FoundNewReplicaSet is only written when a progress deadline is
+// first enabled, not by a rollout.) The guards keep a stale condition from
+// vouching for the dip: a paused Deployment or one with no progress deadline
+// never times out, a status older than the spec judged a different target, and
+// progress last recorded longer ago than the deadline should already have timed
+// out (a timestamp further ahead of this clock than ordinary skew can't vouch
+// for anything either). Zero available is an outage even when the budget
+// allows it.
+func deploymentRolloutDipWithinBudget(dep *appsv1.Deployment, now time.Time) bool {
+	deadline := dep.Spec.ProgressDeadlineSeconds
+	if dep.Spec.Paused || deadline == nil || *deadline == math.MaxInt32 ||
+		dep.Status.ObservedGeneration < dep.Generation || dep.Status.AvailableReplicas == 0 {
+		return false
+	}
+	var available, progressing bool
+	for _, cond := range dep.Status.Conditions {
+		switch cond.Type {
+		case appsv1.DeploymentAvailable:
+			available = cond.Status == corev1.ConditionTrue
+		case appsv1.DeploymentProgressing:
+			sinceProgress := now.Sub(cond.LastUpdateTime.Time)
+			progressing = cond.Status == corev1.ConditionTrue &&
+				(cond.Reason == "ReplicaSetUpdated" || cond.Reason == "NewReplicaSetCreated") &&
+				sinceProgress >= -onsetObservationMargin && sinceProgress <= time.Duration(*deadline)*time.Second
+		}
+	}
+	return available && progressing
 }
 
 func deploymentReplicaFailure(dep *appsv1.Deployment) *appsv1.DeploymentCondition {

@@ -75,6 +75,10 @@ func ClusterScopedForNamespace(ctx context.Context, namespace string, nsLabels N
 			incomplete = append(incomplete, kind+" changes are not readable by the caller.")
 		}
 	}
+	// The investigation UI tells the startup, watch-start and eviction
+	// sentences apart from the other gaps by their exact wording
+	// (web/src/components/diagnose/investigationEvidence/adapters/changes.ts),
+	// so a change to their wording must change it there too.
 	var startup []string
 	defer func() {
 		if len(incomplete) > 0 || !quietStartup {
@@ -100,7 +104,7 @@ func ClusterScopedForNamespace(ctx context.Context, namespace string, nsLabels N
 	if timeline.HistoryEvictedThrough().After(windowStart) {
 		incomplete = append(incomplete, "Radar has evicted older change history; earlier changes in the window are unknown.")
 	}
-	q := normalizeQuery(Query{Kinds: readable, Since: since, start: windowStart})
+	q := normalizeQuery(Query{Kinds: readable, Since: since, start: windowStart, TrackedOnly: true})
 	var events []timeline.TimelineEvent
 	for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
 		got, full, err := queryCandidates(ctx, store, q, q.Kinds, eventTypes, FetchBound)
