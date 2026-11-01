@@ -154,6 +154,7 @@ describe('a Radar that advertises argoSyncInheritance', () => {
   it.each([
     { change: 'the compared revision', apply: () => { app.status.sync.revision = 'new-sha' } },
     { change: 'the source', apply: () => { app.spec.source = { repoURL: 'https://example.com/other', targetRevision: 'main' } } },
+    { change: 'the comparison', apply: () => { app.status.sync.comparedTo = { source: app.spec.source } } },
   ])('drops a dry-run pass once $change changes', async ({ apply }) => {
     await click(button('Open resource sync'))
     await click(button('Dry-run'))

@@ -434,11 +434,14 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   // app is in Manual mode or suspended via Radar's annotations.
   const argoAutoSyncEnabled = isArgoApp && isArgoAutoSyncEnabled(resourceQ.data)
   const appSyncOptions = argoApplicationSyncOptions(resourceQ.data)
-  // What a sync would deploy: the source(s) and the revision(s) Argo last
-  // compared. A dry-run result describes the value it was run against.
+  // What a sync of this Application would deploy: its source(s), and the
+  // revision(s) Argo last compared with the source(s) compared, which decide
+  // whether the sync pins them. A dry-run result describes the value it was
+  // run against.
   const deployTargetKey = JSON.stringify([
+    kind, namespace, name,
     resourceQ.data?.spec?.source, resourceQ.data?.spec?.sources, resourceQ.data?.spec?.sourceHydrator,
-    resourceQ.data?.status?.sync?.revision, resourceQ.data?.status?.sync?.revisions,
+    resourceQ.data?.status?.sync?.revision, resourceQ.data?.status?.sync?.revisions, resourceQ.data?.status?.sync?.comparedTo,
   ])
   // Radar-driven Argo suspension is signaled by annotations that record the
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
