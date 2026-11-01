@@ -35,6 +35,12 @@ import (
 // Hosts pre-compute issue, audit and policy summaries; Build never calls
 // internal services.
 type Options struct {
+	// OpenTelemetryAutoInstrumentation was computed from access-checked cache reads by the
+	// host. A connection change discards the whole observation.
+	OpenTelemetryAutoInstrumentation *OpenTelemetryAutoInstrumentationContext
+	// OpenTelemetryAutoInstrumentationUnavailable requires nil OpenTelemetryAutoInstrumentation: the
+	// host discarded the observation. Nil/false means none was supplied.
+	OpenTelemetryAutoInstrumentationUnavailable bool
 	// Children is an access-aware direct-child preview, precomputed by hosts.
 	// Apply Get checks before capping so unreadable refs cannot displace readable ones.
 	Children *ChildrenContext
@@ -44,8 +50,10 @@ type Options struct {
 	Reflections         ReflectionLookup
 	Tier                ContextTier
 
-	// AccessChecker gates Build-projected references, including Children.
-	// Hosts authorize other precomputed blocks. Nil skips Build's access checks.
+	// AccessChecker gates Build-projected references, including Children when
+	// supplied. Hosts authorize other precomputed blocks, including
+	// OpenTelemetryAutoInstrumentation and any declared but
+	// unresolved coordinates within it. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
 	// Topology supplies relationships when Relationships is nil. Without
@@ -178,6 +186,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 
 	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj), Children: opts.Children}
+	if opts.OpenTelemetryAutoInstrumentation != nil {
+		rc.AutoInstrumentation = &AutoInstrumentationContext{OpenTelemetry: opts.OpenTelemetryAutoInstrumentation}
+	}
 	omitted := newOmittedTracker()
 	// Canonical context references still require Get access, even when a
 	// host's relationship view intentionally exposes namespace-readable names.
@@ -194,6 +205,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	if opts.ChildrenUnavailable {
 		omitted.add("children", OmittedUnavailable)
+	}
+	if opts.OpenTelemetryAutoInstrumentationUnavailable {
+		omitted.add("autoInstrumentation.openTelemetry", OmittedUnavailable)
 	}
 
 	// Topology supplies networking, scaling and spec-declared relations;
