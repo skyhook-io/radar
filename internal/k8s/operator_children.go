@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -11,15 +12,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// OperatorChildren separates a bounded general child preview from runtime
-// workload selection. Unwatched unrelated CRDs do not make apps workloads
-// unknown, and hundreds of ConfigMaps cannot displace a runtime bundle.
+// OperatorChildren combines a general direct-child preview with apps-runtime
+// selection for Collector/Canary roots. Unrelated CRD gaps do not make the
+// supported apps inventory unknown; non-workloads cannot displace runtime slots.
 type OperatorChildren struct {
-	Context   *resourcecontext.ChildrenContext
-	Workloads []resourcecontext.ContextRef // first four: diagnose shows three
-	// WorkloadsComplete means all three apps workload inventories were readable
-	// and checked. Workloads itself remains a bounded sample.
-	WorkloadsComplete bool
+	Context       *resourcecontext.ChildrenContext
+	AppsWorkloads []resourcecontext.ContextRef // first four: diagnose shows three
+	// AppsWorkloadsComplete means all three apps workload inventories were readable
+	// and checked. AppsWorkloads itself remains a bounded sample.
+	AppsWorkloadsComplete bool
 	// Unavailable is a readreason code for a discarded observation; consumers
 	// project it as the generic omitted reason unavailable. Empty means usable.
 	Unavailable string
@@ -33,6 +34,8 @@ func OperatorChildrenForObject(obj runtime.Object, access func(*ownership.Catalo
 		return nil
 	}
 	gk := obj.GetObjectKind().GroupVersionKind().GroupKind()
+	// Adding a root also requires reviewing its runtime kinds: Pod-, PodSet-
+	// and ReplicaSet-based operators do not fit apps-only completeness.
 	if !(gk.Group == "opentelemetry.io" && gk.Kind == "OpenTelemetryCollector" || gk.Group == "flagger.app" && gk.Kind == "Canary") {
 		return nil
 	}
@@ -44,7 +47,7 @@ func OperatorChildrenForObject(obj runtime.Object, access func(*ownership.Catalo
 }
 
 func operatorChildrenFromSource(source ownership.Source, fetched ownership.Observation, access func(*ownership.Catalog) ownership.Access) *OperatorChildren {
-	out := &OperatorChildren{WorkloadsComplete: true}
+	out := &OperatorChildren{AppsWorkloadsComplete: true}
 	session, err := source.Begin()
 	if err != nil {
 		out.Unavailable = string(readreason.ClusterConnecting)
@@ -60,22 +63,22 @@ func operatorChildrenFromSource(source ownership.Source, fetched ownership.Obser
 	}
 	for _, kind := range []string{"Deployment", "StatefulSet", "DaemonSet"} {
 		if callerAccess.CanRead(resourceid.GroupKind{Group: "apps", Kind: kind}, fetched.Ref.Namespace) != ownership.Allowed {
-			out.WorkloadsComplete = false
+			out.AppsWorkloadsComplete = false
 		}
 		served, known := session.Catalog().Kind(resourceid.GroupKind{Group: "apps", Kind: kind})
 		if !known || !served.HasGCVerbs {
-			out.WorkloadsComplete = false
+			out.AppsWorkloadsComplete = false
 		}
 	}
 	for _, gap := range a.Gaps {
-		if gap.Kind.Kind == "" || runtimeWorkload(gap.Kind) {
-			out.WorkloadsComplete = false
+		if gap.Kind.Kind == "" || appsRuntimeKind(gap.Kind) {
+			out.AppsWorkloadsComplete = false
 		}
 	}
-	children := a.Children // View owns this slice; objects' metadata stays borrowed.
+	children := slices.Clone(a.Children) // The ownership view's answer is read-only.
 	sort.Slice(children, func(i, j int) bool {
 		a, b := children[i].Ref, children[j].Ref
-		aw, bw := runtimeWorkload(a.GroupKind()), runtimeWorkload(b.GroupKind())
+		aw, bw := appsRuntimeKind(a.GroupKind()), appsRuntimeKind(b.GroupKind())
 		if aw != bw {
 			return aw
 		}
@@ -92,8 +95,8 @@ func operatorChildrenFromSource(source ownership.Source, fetched ownership.Obser
 				break
 			}
 		}
-		if controlled && runtimeWorkload(r.GroupKind()) && len(out.Workloads) < 4 {
-			out.Workloads = append(out.Workloads, ref)
+		if controlled && appsRuntimeKind(r.GroupKind()) && len(out.AppsWorkloads) < 4 {
+			out.AppsWorkloads = append(out.AppsWorkloads, ref)
 		}
 		if len(out.Context.Items) < 25 {
 			out.Context.Items = append(out.Context.Items, ref)
@@ -108,6 +111,6 @@ func operatorChildrenFromSource(source ownership.Source, fetched ownership.Obser
 	return out
 }
 
-func runtimeWorkload(kind resourceid.GroupKind) bool {
+func appsRuntimeKind(kind resourceid.GroupKind) bool {
 	return kind.Group == "apps" && (kind.Kind == "Deployment" || kind.Kind == "StatefulSet" || kind.Kind == "DaemonSet")
 }

@@ -36,6 +36,7 @@ import (
 // internal services.
 type Options struct {
 	// Children is an access-aware direct-child preview, precomputed by hosts.
+	// Apply Get checks before capping so unreadable refs cannot displace readable ones.
 	Children *ChildrenContext
 	// ChildrenUnavailable requires nil Children: the whole host observation was
 	// discarded. With both nil/false, this host supplied no child observation.
@@ -43,8 +44,8 @@ type Options struct {
 	Reflections         ReflectionLookup
 	Tier                ContextTier
 
-	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
-	// as fully authorized — local-kubeconfig / tests).
+	// AccessChecker gates Build-projected references, including Children.
+	// Hosts authorize other precomputed blocks. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
 	// Topology supplies relationships when Relationships is nil. Without

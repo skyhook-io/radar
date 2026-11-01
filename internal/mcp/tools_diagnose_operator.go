@@ -89,7 +89,7 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 	if children == nil || children.Context == nil {
 		resp.Warnings = append(resp.Warnings, "Owned resources could not be established. Retry diagnose after caches load; an empty runtime bundle is not proof there are no workloads.")
 	} else {
-		for _, ref := range children.Workloads {
+		for _, ref := range children.AppsWorkloads {
 			if ref.Group != "apps" || ref.Kind != "Deployment" && ref.Kind != "StatefulSet" && ref.Kind != "DaemonSet" {
 				continue
 			}
@@ -106,7 +106,7 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 			}
 			resp.OwnedWorkloads = append(resp.OwnedWorkloads, entry)
 		}
-		if !children.WorkloadsComplete {
+		if !children.AppsWorkloadsComplete {
 			resp.Warnings = append(resp.Warnings, "Some workload inventories could not be checked. Follow the listed references, retry after caches load, or ask a reader with broader access before ruling out other runtime workloads.")
 		}
 	}

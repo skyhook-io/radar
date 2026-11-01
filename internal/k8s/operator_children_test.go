@@ -41,15 +41,15 @@ func TestOperatorWorkloadsAreSelectedBeforeGenericPreviewLimits(t *testing.T) {
 	if got.Unavailable != "" || got.Context == nil || len(got.Context.Items) != 25 || !got.Context.Truncated || got.Context.Complete {
 		t.Fatalf("wrong general child coverage: %+v", got)
 	}
-	if len(got.Workloads) != 4 || got.Workloads[0].Name != "runtime-0" || got.Context.Items[0].Kind != "Deployment" {
+	if len(got.AppsWorkloads) != 4 || got.AppsWorkloads[0].Name != "runtime-0" || got.Context.Items[0].Kind != "Deployment" {
 		t.Fatalf("600 configs displaced runtime: %+v", got)
 	}
-	if !got.WorkloadsComplete {
+	if !got.AppsWorkloadsComplete {
 		t.Fatal("uncollected unrelated Widget kind made runtime evidence unknown")
 	}
 	w.Collection[resourceid.GroupKind{Group: "apps", Kind: "DaemonSet"}] = ownershiptest.Collection{State: ownershiptest.Loading}
 	got = operatorChildrenFromSource(ownershiptest.Scan(w), root, func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
-	if got.WorkloadsComplete {
+	if got.AppsWorkloadsComplete {
 		t.Fatal("loading apps inventory treated as complete")
 	}
 }
@@ -58,7 +58,7 @@ func TestOperatorChildrenRefuseAReplacedRoot(t *testing.T) {
 	w, root := operatorChildrenWorld()
 	w.Objects[0].UID = "replacement"
 	got := operatorChildrenFromSource(ownershiptest.Scan(w), root, func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
-	if got.Context != nil || len(got.Workloads) > 0 || got.Unavailable == "" {
+	if got.Context != nil || len(got.AppsWorkloads) > 0 || got.Unavailable == "" {
 		t.Fatalf("old incarnation got current children: %+v", got)
 	}
 }
@@ -72,8 +72,8 @@ func TestOperatorNonControllerChildrenDoNotConsumeRuntimeSlots(t *testing.T) {
 		}
 	}
 	got := operatorChildrenFromSource(ownershiptest.Scan(w), root, func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
-	if len(got.Workloads) != 1 || got.Workloads[0].Name != "runtime-4" {
-		t.Fatalf("co-owners consumed runtime slots: %+v", got.Workloads)
+	if len(got.AppsWorkloads) != 1 || got.AppsWorkloads[0].Name != "runtime-4" {
+		t.Fatalf("co-owners consumed runtime slots: %+v", got.AppsWorkloads)
 	}
 	if len(got.Context.Items) != 25 {
 		t.Fatal("general direct-child preview lost co-owned resources")
@@ -85,7 +85,7 @@ func TestOperatorDeniedWorkloadInventoryIsNotAnEmptyRuntimeVerdict(t *testing.T)
 	got := operatorChildrenFromSource(ownershiptest.Scan(w), root, func(*ownership.Catalog) ownership.Access {
 		return liveManagerAccess{Access: ownership.Unrestricted(), denied: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}}
 	})
-	if got.WorkloadsComplete || len(got.Workloads) != 0 {
+	if got.AppsWorkloadsComplete || len(got.AppsWorkloads) != 0 {
 		t.Fatalf("denied inventory looked complete: %+v", got)
 	}
 }

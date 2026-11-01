@@ -1546,12 +1546,34 @@ Pipeline previews contain the first five sorted names; blocked-upgrade previews 
 
 ## Operator runtime context and Collector diagnosis
 
-OpenTelemetryCollector and Flagger Canary detail context carries `children`: up to 25 current **direct** child references from the ownership cache. Owner-reference UID, group, kind and namespace must resolve to the current root. Non-workload children remain followable (for example a Collector-owned TargetAllocator CR); their grandchildren are not silently treated as Collector workloads. `complete` covers the caller-readable scope, `narrowed` means that scope may exclude children, and `truncated` marks response limits. Workload references sort before other children, then by identity. Coverage concerns all child kinds and can be incomplete because unrelated CRDs are not collected. Runtime bundle selection checks the three apps workload inventories separately, before either child-preview or relationship presentation limits. An absent block with an `omitted` reason is unavailable evidence, not zero children.
+Collector and Canary detail context can include `children`: up to 25 current
+**direct owner-reference children**, including non-workload resources.
 
-MCP `diagnose(kind=OpenTelemetryCollector, group=opentelemetry.io, namespace=..., name=...)` returns root configuration/reconciliation, related Issues, current-UID Warning events, and up to three `ownedWorkloads` bundles for directly controlled apps Deployments, StatefulSets or DaemonSets. Each entry has `ref` and either `diagnosis` (the existing workload logs/events/startup/metrics bundle, with its own coverage) or a collection `error`, which does not establish unhealthy workload state. The operator root has no `pods` aggregate: read each child's membership. `ownedWorkloadsTruncated` marks bundles omitted by the three-workload cap, not access/cache gaps; the context's child-preview limits and access/cache qualifications still apply. Follow refs or diagnose a child directly for additional evidence. `container`, `tail_lines` and `since` apply independently inside each selected workload bundle; diagnose a child directly for a different per-workload selection.
+| Field | Meaning |
+|---|---|
+| `items` | Followable resource references; no grandchildren or guessed names. |
+| `complete` | Every direct child in the caller-readable scope is included. Uncollected kinds or truncation make this false. |
+| `narrowed` | Permissions may exclude children; this does not assert hidden children exist. |
+| `truncated` | The preview reached its response limit. |
 
-Ordinary workload diagnosis uses Radar's namespace-level cached-read policy for Pod membership, Warning events, related Issues and startup blockers. It does not require separate Pod/Event list grants to return that cached evidence. Protected-kind evidence filters still apply; operator ownership references require exact-kind Get, and live log/metrics reads retain their own authorization.
+An absent block is not an empty inventory. A discarded observation is reported
+through `omitted`. Child coverage is separate from runtime health and the apps
+workload inventories checked during diagnosis.
 
-Sidecar mode normally has no standalone Collector workload. Unmanaged Collectors can retain existing workloads. Zero replicas and no observed children are not by themselves failures. A successful reconciliation is separate from current workload readiness, which is separate from successful telemetry delivery. The web detail view shows up to three owned workloads' current status through existing resource endpoints; raw related resources remain available in other hosts and older servers. No relationship is inferred from generated names, labels or topology display edges.
+`diagnose(kind=OpenTelemetryCollector, group=opentelemetry.io, namespace=..., name=...)`
+returns root configuration, Issues, current-UID Warning events and up to three
+`ownedWorkloads` bundles for directly controlled Deployments, StatefulSets or
+DaemonSets. Each entry contains `ref` and either ordinary workload `diagnosis` or
+a collection `error`. `ownedWorkloadsTruncated` marks the three-bundle cap;
+inventory gaps are qualified separately. Follow child references for more evidence.
+`container`, `tail_lines` and `since` apply to each bundle; malformed `since`
+values are input errors.
 
-The child preview's `complete` applies to **all direct child kinds** within readable scope, so uncollected non-workload kinds can make it false even when all runtime workloads are known. It is not a runtime-health or workload-inventory verdict. Operator `diagnose` separately qualifies unavailable apps workload inventories. In sidecar Collector mode, no standalone owned workload is expected: the Collector runs inside annotated application Pods, whose individual diagnosis is the next step.
+Cached Pod/Event evidence follows the [namespace read policy](authentication.md#read-granularity-namespace-level).
+Operator roots and child references require exact-kind Get; live logs and metrics
+retain their own authorization.
+
+Sidecar mode runs inside application Pods: diagnose those Pods. Zero replicas,
+no observed children and successful reconciliation do not establish runtime
+health or telemetry delivery. The Collector drawer shows up to three current
+workloads; other direct children remain followable through Related Resources.
