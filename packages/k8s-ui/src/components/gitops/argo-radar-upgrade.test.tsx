@@ -236,6 +236,120 @@ describe("the drawer's one-click Sync", () => {
   })
 })
 
+describe("the drawer's Sync with an options dialog", () => {
+  const source = { repoURL: 'https://example.com/app.git', path: 'app', targetRevision: 'main' }
+  const application = { ...app(undefined), status: { sync: { revision: 'abc1234def', comparedTo: { source } } }, spec: { project: 'default', source, destination: {}, syncPolicy: { syncOptions: ['CreateNamespace=true'] } } }
+  type OnArgoSync = (params: object) => void | Promise<unknown>
+  const bar = (name: string, onArgoSync: OnArgoSync) => (
+    <ResourceActionsBar
+      resource={{ kind: 'applications', namespace: 'argocd', name, group: 'argoproj.io' }}
+      data={{ ...application, metadata: { ...application.metadata, name } }}
+      onArgoSync={onArgoSync}
+      argoSyncDialog={{ pinsComparedRevision: true }}
+    />
+  )
+  async function open(onArgoSync: OnArgoSync) {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => root.render(bar('guestbook', onArgoSync)))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    await act(async () => sync.click())
+    return {
+      rerender: async (name: string) => { await act(async () => root.render(bar(name, onArgoSync))) },
+      close: async () => { await act(async () => root.unmount()); host.remove() },
+    }
+  }
+  // A closed dialog's portal stays briefly for its exit animation; use the newest.
+  const dialog = () => [...document.querySelectorAll('[role="dialog"]')].at(-1)!
+  const dialogButton = (label: string) => [...dialog().querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === label)!
+
+  it('opens the dialog instead of syncing, and syncs nothing on Cancel', async () => {
+    const onArgoSync = vi.fn<OnArgoSync>()
+    const { close } = await open(onArgoSync)
+    expect(dialog().textContent).toContain('Leave empty for the revision Argo last compared (abc1234def).')
+    expect(onArgoSync).not.toHaveBeenCalled()
+    await act(async () => dialogButton('Cancel').click())
+    expect(onArgoSync).not.toHaveBeenCalled()
+    await close()
+  })
+
+  it('stays open with its choices when the sync fails, and closes once one succeeds', async () => {
+    let fail = true
+    const onArgoSync = vi.fn<OnArgoSync>(() => (fail ? Promise.reject(new Error('denied')) : Promise.resolve()))
+    const { close } = await open(onArgoSync)
+    const prune = () => [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune().click())
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync).toHaveBeenCalledTimes(1)
+    expect(dialog().textContent).toContain('Sync now')
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe('Sync failed: denied')
+    expect(prune().checked).toBe(true)
+    fail = false
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync.mock.calls[1][0]).toMatchObject({ prune: true })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await close()
+  })
+
+  it('is disabled while an Argo operation runs, instead of opening a dialog that can do nothing', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const running = { ...application, status: { ...application.status, operationState: { phase: 'Running' } } }
+    await act(async () => root.render(
+      <ResourceActionsBar
+        resource={{ kind: 'applications', namespace: 'argocd', name: 'guestbook', group: 'argoproj.io' }}
+        data={running}
+        onArgoSync={vi.fn<OnArgoSync>()}
+        argoSyncDialog={{ pinsComparedRevision: true }}
+      />,
+    ))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    expect(sync.disabled).toBe(true)
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('closes, dropping its choices, when the drawer switches to another Application', async () => {
+    const onArgoSync = vi.fn<OnArgoSync>()
+    const { rerender, close } = await open(onArgoSync)
+    const prune = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune.click())
+    await rerender('other')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await rerender('guestbook')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await rerender('other')
+    const reopen = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    await act(async () => reopen.click())
+    const prunedAgain = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    expect(prunedAgain.checked).toBe(false)
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync.mock.calls[0][0]).toMatchObject({ name: 'other', prune: false })
+    await close()
+  })
+
+  it("syncs with the dialog's choices and the Application's options", async () => {
+    const onArgoSync = vi.fn<OnArgoSync>()
+    const { close } = await open(onArgoSync)
+    const prune = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune.click())
+    const confirm = dialogButton('Sync now')
+    expect(confirm.disabled).toBe(false)
+    await act(async () => confirm.click())
+    expect(onArgoSync).toHaveBeenCalledTimes(1)
+    expect(onArgoSync.mock.calls[0][0]).toMatchObject({ namespace: 'argocd', name: 'guestbook', applicationSyncOptions: ['CreateNamespace=true'], prune: true, dryRun: false })
+    expect(onArgoSync.mock.calls[0][0]).not.toHaveProperty('syncOptions')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await close()
+  })
+})
+
 describe('auto-sync support pending or unavailable', () => {
   it.each(["Checking this cluster's Radar…", "Couldn't check this cluster's Radar support. Refresh to try again."])('disables each affected control with its reason: %s', reason => {
     const markup = html(layout(argo({ resumeBlockedReason: reason })))
