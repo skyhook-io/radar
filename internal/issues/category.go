@@ -275,9 +275,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		if in.Reason == "Rollout stuck" || in.Reason == "ReplicaFailure" {
 			return issuesapi.CategoryRolloutStalled
 		}
-		// Stable reason literal emitted by sharedRWOVolumeConflicts —
-		// a multi-replica Deployment mounting a ReadWriteOnce volume.
-		if in.Reason == "ReadWriteOnce volume shared across replicas" {
+		// A multi-replica Deployment mounting a single-node volume. Only the
+		// ReadWriteOncePod form reaches issues; ReadWriteOnce is info posture.
+		if in.Reason == k8s.SharedRWOPVolumeReason || in.Reason == k8s.SharedRWOVolumeReason {
 			return issuesapi.CategoryVolumeAccessModeConflict
 		}
 		// "{avail}/{desired} available" / "{ready}/{desired} ready" /
