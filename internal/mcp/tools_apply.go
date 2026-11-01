@@ -18,12 +18,12 @@ import (
 )
 
 type applyResourceInput struct {
-	YAML           string `json:"yaml" jsonschema:"YAML manifest to apply (supports multi-document with --- separator)"`
-	Mode           string `json:"mode,omitempty" jsonschema:"'apply' (default, create-or-update) or 'create' (fail if exists)"`
-	DryRun         bool   `json:"dry_run,omitempty" jsonschema:"validate and preview the server-side result without persisting changes"`
-	Namespace      string `json:"namespace,omitempty" jsonschema:"override namespace for the resource"`
-	Verify         *bool  `json:"verify,omitempty" jsonschema:"return compact post-mutation state, rollout/pod status, and related issues; on dry_run return a preview diff. Default true; set false for a terse write result."`
-	ForceConflicts bool   `json:"force_conflicts,omitempty" jsonschema:"apply mode only, like kubectl --force-conflicts: force server-side apply field ownership conflicts and take ownership from other managers. Default false; use only when you intend to override Helm/Flux/GitOps/kubectl ownership."`
+	YAML      string `json:"yaml" jsonschema:"YAML manifest to apply (supports multi-document with --- separator)"`
+	Mode      string `json:"mode,omitempty" jsonschema:"'apply' (default, create-or-update) or 'create' (fail if exists)"`
+	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate and preview the server-side result without persisting changes"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"override namespace for the resource"`
+	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-mutation state, rollout/pod status, and related issues; on dry_run return a preview diff. Default true; set false for a terse write result."`
+	Force     bool   `json:"force,omitempty" jsonschema:"apply mode only: force server-side apply field ownership conflicts and take ownership from other managers. Default false; use only when you intend to override Helm/Flux/GitOps/kubectl ownership."`
 }
 
 type applyMutationTarget struct {
@@ -74,7 +74,7 @@ func handleApplyResource(ctx context.Context, req *mcp.CallToolRequest, input ap
 			Mode:              mode,
 			DryRun:            input.DryRun,
 			NamespaceOverride: input.Namespace,
-			Force:             input.ForceConflicts,
+			Force:             input.Force,
 		}, dynClient)
 		if err != nil {
 			if len(docs) > 1 {

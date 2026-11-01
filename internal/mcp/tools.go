@@ -649,7 +649,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Description: "Create or update a Kubernetes resource from a YAML manifest. " +
 			"In 'apply' mode (default), performs a server-side apply with FieldManager=radar " +
 			"and reports field ownership conflicts instead of taking ownership by default. " +
-			"Set force_conflicts=true only when you intend to take field ownership from other managers " +
+			"Set force=true only when you intend to take field ownership from other managers " +
 			"(Helm, Flux, GitOps controllers, kubectl). " +
 			"In 'create' mode, performs a strict create that fails if the resource already exists. " +
 			"Supports multi-document YAML separated by '---'. " +
@@ -1187,9 +1187,8 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	// tier is the default: cheap managedBy / exposes / selectedBy /
 	// runsOn / uses / issueSummary / auditSummary / policySummary. Pass
 	// context=none for a bare minified resource (bulk scans, raw jq work).
-	contextMode := strings.ToLower(strings.TrimSpace(input.Context))
 	includes := parseIncludes(input.Include)
-	skipContext := contextMode == "none"
+	skipContext := contextNone(input.Context)
 
 	var issueSummary *resourcecontext.IssueSummary
 	var issueRows []issues.Issue
