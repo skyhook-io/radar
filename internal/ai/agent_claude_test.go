@@ -3,6 +3,8 @@ package ai
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +12,7 @@ import (
 )
 
 func TestClaudeExecutionProfiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	a := &claudeAgent{bin: "claude"}
 	safeguarded, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:1/mcp-readonly", prompt: "go",
@@ -62,6 +65,7 @@ func TestClaudeExecutionProfiles(t *testing.T) {
 }
 
 func TestClaudeSafeguardedApplyAllowlist(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	a := &claudeAgent{bin: "claude"}
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:1/mcp", prompt: "apply",
@@ -82,5 +86,29 @@ func TestClaudeSafeguardedApplyAllowlist(t *testing.T) {
 	}
 	if !strings.Contains(args, "mcp__radar__manage_rollout") {
 		t.Errorf("real Rollout mutations must be available on apply turns: %q", args)
+	}
+}
+
+// The "Continue in Claude Code" command (launch.ts) resumes from this folder,
+// and older Claude Code versions only find a session from the folder it was
+// created in.
+func TestClaudeRunsFromRadarAgentFolder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	a := &claudeAgent{bin: "claude"}
+	cmd, cleanup, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:1/mcp", prompt: "go",
+		profile: ExecutionProfileSafeguarded, maxTurns: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	want := filepath.Join(home, ".radar", "agent")
+	if cmd.Dir != want {
+		t.Fatalf("cmd.Dir = %q, want %q", cmd.Dir, want)
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Fatalf("agent folder not created: %v", err)
 	}
 }

@@ -51,7 +51,7 @@ describe("launchTrustHint", () => {
 });
 
 describe("Claude Code resume command", () => {
-  it("resumes from Radar's agent folder, creating it first", () => {
+  it("resumes from the folder Radar runs Claude in", () => {
     const run: RunSummary = {
       id: "run-test",
       kind: "Deployment",
@@ -66,7 +66,7 @@ describe("Claude Code resume command", () => {
       updatedAt: "2026-09-21T00:00:00Z",
     };
     expect(buildLaunchCommand(run, "http://localhost:9280/mcp")).toBe(
-      'mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
+      'cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
     );
   });
 });

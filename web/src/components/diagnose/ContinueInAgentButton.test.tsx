@@ -91,8 +91,7 @@ describe("canContinueInOwnAgent", () => {
 });
 
 describe("ContinueInAgentButton", () => {
-  const command =
-    "mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume 'ses_1'";
+  const command = "cd ~/.radar/agent && claude --resume 'ses_1'";
 
   it("splits a labelled terminal action from a menu of other ways", () => {
     const html = renderToStaticMarkup(
