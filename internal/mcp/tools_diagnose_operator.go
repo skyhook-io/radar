@@ -52,6 +52,9 @@ func operatorDiagnoseTarget(kind string) (canonical, group, resource string, ok 
 }
 
 func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, resource string) (*mcp.CallToolResult, any, error) {
+	if _, err := parseLogsSince(input.Since); err != nil {
+		return nil, nil, err
+	}
 	if !checkNamespaceAccess(ctx, input.Namespace) || !canReadInNamespace(ctx, input.Group, resource, input.Namespace, "get") {
 		return nil, nil, fmt.Errorf("forbidden: cannot get %s.%s in namespace %q", resource, input.Group, input.Namespace)
 	}

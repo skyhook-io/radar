@@ -20,6 +20,16 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestOperatorDiagnoseRejectsInvalidSinceWithoutWorkloads(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "opentelemetry.io/v1beta1", "kind": "OpenTelemetryCollector", "metadata": map[string]any{"name": "collector", "namespace": "observe", "uid": "root"}, "spec": map[string]any{"mode": "sidecar", "config": map[string]any{}}}}
+	initOperatorDiagnosisCache(t, root)
+	input := testDiagnoseInput("opentelemetrycollector", "observe", "collector")
+	input.Since = "not-a-duration"
+	if _, _, err := handleDiagnose(context.Background(), nil, input); err == nil || !strings.Contains(err.Error(), "invalid since duration") {
+		t.Fatalf("invalid duration was not rejected as an input error: %v", err)
+	}
+}
+
 func TestOperatorDiagnoseUsesObservedOwnership(t *testing.T) {
 	yes, zero := true, int32(0)
 	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "opentelemetry.io/v1beta1", "kind": "OpenTelemetryCollector", "metadata": map[string]any{"name": "collector", "namespace": "observe", "uid": "root"}, "spec": map[string]any{"mode": "deployment", "config": map[string]any{}}}}
