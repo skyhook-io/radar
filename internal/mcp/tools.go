@@ -126,14 +126,13 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(pods/po, deployments/deploy, services/svc, configmaps/cm, CRDs). Returns compact Kubernetes-shaped " +
 			"rows plus summaryContext by default (managedBy, health, issueCount) so you can " +
 			"compare many similar resources and pick suspects before calling get_resource. " +
-			"managedBy is the controller or manager to inspect next, not an edit target. " +
-			"A lead is not exclusive; omitted can qualify it. " +
-			"Neither a missing lead nor manager.state=none proves unmanaged. Read get_resource resourceContext.manager before planning edits. " +
+			"managedBy is the controller or manager to inspect next. It is a lead, not an edit target: read get_resource " +
+			"resourceContext.manager before choosing where to edit, and never infer unmanaged from its absence. " +
 			"Returns {summary, next?, coverage, items}: summary says in words what the rows cover and what was not read; " +
 			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
 			"get_dashboard or issues first. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
 	}, logToolCall("list_resources", handleListResources))
 
@@ -144,22 +143,21 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
 			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
-			"audit findings are posture and remediation priority, mostly latent risk though " +
-			"some (expired certificates, dangling references) can be live failures; " +
-			"auditSummary.highestSeverity uses the Checks ladder " +
-			"(critical|high|medium|low; current built-ins are high|medium), separate " +
-			"from issueSummary's live-operational critical|warning; manager: none is not " +
-			"unmanaged; disagree: check both). This is the drill-down " +
+			"auditSummary.highestSeverity uses critical|high|medium|low (current built-ins are high|medium) and " +
+			"issueSummary critical|warning; these are separate scales: audit is posture-remediation priority, issues are " +
+			"live failures, though a few audit findings (expired certificates, dangling references) are live too; " +
+			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
+			"disagree means a manager's list and the object's metadata name different managers: check both). This is the drill-down " +
 			"tool, not the best first call for broad incidents. Start with issues, " +
 			"get_dashboard, search, or list_resources to rank candidates; then call " +
 			"get_resource for the exact object. If you are looking for a string across " +
 			"ConfigMaps, CRD specs, env refs, or object content, use search instead of " +
 			"fetching resources one by one. Use the group parameter for ambiguous " +
-			"kinds such as Knative Service vs core Service. When recentChanges entries " +
-			"carry `application_configuration_change: true`, it is a factual edit " +
-			"classification and narrow ranking hint, not a causal or universal relevance verdict. " +
+			"kinds such as Knative Service vs core Service. In recentChanges, " +
+			"`application_configuration_change: true` marks an application configuration edit; it is a ranking hint, " +
+			"not proof of cause. " +
 			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
@@ -235,9 +233,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
 		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "`. Inspect source logs for low-confidence " +
 		"selections; `traceback_header_only` means the informative line was not captured. " +
-		"`auditSummary.highestSeverity` uses static-posture critical|high|medium|low (built-ins high|medium), " +
-		"unlike live `issueSummary` critical|warning. `application_configuration_change: true` classifies an edit; " +
-		"it is not a causal or universal relevance verdict. Application, Kustomization and Flux HelmRelease return " +
+		"`auditSummary.highestSeverity` (critical|high|medium|low; built-ins high|medium) is posture-remediation priority, " +
+		"a separate scale from live `issueSummary` (critical|warning). `application_configuration_change: true` marks " +
+		"an application configuration edit; it is a ranking hint, not proof of cause. Application, Kustomization and Flux HelmRelease return " +
 		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
 		"API-server proxy reached it, not the live path. Point-in-time means frozen from this call, " +
@@ -277,8 +275,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"Secret data updates appear when referenced by a workload template or current Pod spec at query time; kind=Secret lists all. " +
 			"consumed_by means referenced by; running_previous_value names Pods likely still on the earlier env value (absence means not established); *_withheld counts names you can't read. " +
 			"`application_configuration_change: true` identifies a workload-runtime or " +
-			"referenced-ConfigMap edit or likely stale Secret env readers, a ranking hint, not a causal or " +
-			"universal relevance verdict. Helm operation entries rank by category and recency " +
+			"referenced-ConfigMap edit or likely stale Secret env readers. It is a ranking hint, not proof of cause; " +
+			"unflagged changes may still matter. Helm operation entries rank by category and recency " +
 			"and are not raised by this flag. This is " +
 			"often faster than reading " +
 			"ReplicaSet histories or audit/log streams, especially when issues " +
@@ -447,9 +445,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"set evaluates `not_linked_to_returned_issues`; otherwise absence means linkage " +
 			"was not evaluated, not that every change is linked. A marked change ranks first " +
 			"as a lead to verify, not evidence of cause. " +
-			"`application_configuration_change: true` is a factual edit classification and " +
-			"narrow ranking hint, not a causal or universal relevance verdict; its presence " +
-			"inside `correlated_changes` does not strengthen causality. " +
+			"`application_configuration_change: true` marks an application configuration edit; it is a ranking " +
+			"hint, not proof of cause, and its presence inside `correlated_changes` does not strengthen causality. " +
 			"Under `recent_changes_truncated=true` or `recent_changes_history_coverage`, absence " +
 			"from the feed is not evidence. Per-issue " +
 			"`no_recent_changes.window_seconds` is the observed window with no tracked change; " +
@@ -482,11 +479,10 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
-			"summaryContext. managedBy is a controller-first inspection lead, not an edit target; absence never proves unmanaged. " +
-			"A lead is not exclusive; omitted can qualify it. " +
-			"Neither a missing lead nor manager.state=none proves unmanaged. Read get_resource resourceContext.manager before planning edits. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
+			"summaryContext. managedBy is the controller or manager to inspect next. It is a lead, not an edit target: read get_resource " +
+			"resourceContext.manager before choosing where to edit, and never infer unmanaged from its absence. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
 			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -721,7 +717,7 @@ type listResourcesInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind to list for a broad sweep, e.g. pods/po, deployments/deploy, services/svc, configmaps/cm. Prefer this before get_resource when comparing many same-kind objects."`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for app-scoped triage"`
-	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches health, issueCount, crossplanePause and managedBy (controller-first inspection lead; absence never proves unmanaged). Read get_resource resourceContext.manager for GitOps/Helm evidence before choosing where to edit. 'none' returns bare rows"`
+	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare rows"`
 }
 
 type getResourceInput struct {
@@ -730,7 +726,7 @@ type getResourceInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues, drain-plan. Comma-separated. drain-plan is Node-only: a read-only current pod/PDB estimate with explicit options, up to 100 pods and total/truncated indicators; not controller eviction history. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is mostly latent risk, though some findings (expired certificates, dangling references) can be live failures. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
 type topologyInput struct {
@@ -771,7 +767,7 @@ type searchInput struct {
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations, report (Trivy findings; the binding matches one finding). Guard fields with has(spec.sources); check map keys with '\"app\" in labels'. Example, Deployments with zero or unreported ready replicas: 'kind == \"Deployment\" && (!has(status.readyReplicas) || status.readyReplicas == 0)'"`
-	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches health, issueCount, crossplanePause and managedBy (controller-first inspection lead; absence never proves unmanaged). Read get_resource resourceContext.manager for GitOps/Helm evidence before choosing where to edit. 'none' returns bare hits"`
+	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare hits"`
 }
 
 type issuesInput struct {

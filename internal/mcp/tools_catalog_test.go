@@ -342,7 +342,7 @@ func TestToolsEmittingApplicationConfigurationMarkerDocumentRankingBoundary(t *t
 		}
 		for _, want := range []string{
 			"application_configuration_change",
-			"not a causal or universal relevance verdict",
+			"ranking hint, not proof of cause",
 		} {
 			if !strings.Contains(description, want) {
 				t.Errorf("%s tool description does not document %q", name, want)
