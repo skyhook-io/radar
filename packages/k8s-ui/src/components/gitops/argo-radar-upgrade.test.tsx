@@ -238,7 +238,8 @@ describe("the drawer's one-click Sync", () => {
 describe("the drawer's Sync with an options dialog", () => {
   const source = { repoURL: 'https://example.com/app.git', path: 'app', targetRevision: 'main' }
   const application = { ...app(undefined), status: { sync: { revision: 'abc1234def', comparedTo: { source } } }, spec: { project: 'default', source, destination: {}, syncPolicy: { syncOptions: ['CreateNamespace=true'] } } }
-  const bar = (name: string, onArgoSync: ReturnType<typeof vi.fn>) => (
+  type OnArgoSync = (params: object) => void | Promise<unknown>
+  const bar = (name: string, onArgoSync: OnArgoSync) => (
     <ResourceActionsBar
       resource={{ kind: 'applications', namespace: 'argocd', name, group: 'argoproj.io' }}
       data={{ ...application, metadata: { ...application.metadata, name } }}
@@ -246,7 +247,7 @@ describe("the drawer's Sync with an options dialog", () => {
       argoSyncDialog={{ pinsComparedRevision: true }}
     />
   )
-  async function open(onArgoSync: ReturnType<typeof vi.fn>) {
+  async function open(onArgoSync: OnArgoSync) {
     const host = document.createElement('div')
     document.body.append(host)
     const root = createRoot(host)
@@ -263,7 +264,7 @@ describe("the drawer's Sync with an options dialog", () => {
   const dialogButton = (label: string) => [...dialog().querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === label)!
 
   it('opens the dialog instead of syncing, and syncs nothing on Cancel', async () => {
-    const onArgoSync = vi.fn()
+    const onArgoSync = vi.fn<OnArgoSync>()
     const { close } = await open(onArgoSync)
     expect(dialog().textContent).toContain('Leave empty for the revision Argo last compared (abc1234def).')
     expect(onArgoSync).not.toHaveBeenCalled()
@@ -272,8 +273,26 @@ describe("the drawer's Sync with an options dialog", () => {
     await close()
   })
 
+  it('stays open with its choices when the sync fails, and closes once one succeeds', async () => {
+    let fail = true
+    const onArgoSync = vi.fn<OnArgoSync>(() => (fail ? Promise.reject(new Error('denied')) : Promise.resolve()))
+    const { close } = await open(onArgoSync)
+    const prune = () => [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune().click())
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync).toHaveBeenCalledTimes(1)
+    expect(dialog().textContent).toContain('Sync now')
+    expect(prune().checked).toBe(true)
+    fail = false
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync.mock.calls[1][0]).toMatchObject({ prune: true })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await close()
+  })
+
   it('closes, dropping its choices, when the drawer switches to another Application', async () => {
-    const onArgoSync = vi.fn()
+    const onArgoSync = vi.fn<OnArgoSync>()
     const { rerender, close } = await open(onArgoSync)
     const prune = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
     await act(async () => prune.click())
@@ -294,7 +313,7 @@ describe("the drawer's Sync with an options dialog", () => {
   })
 
   it("syncs with the dialog's choices and the Application's options", async () => {
-    const onArgoSync = vi.fn()
+    const onArgoSync = vi.fn<OnArgoSync>()
     const { close } = await open(onArgoSync)
     const prune = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
     await act(async () => prune.click())

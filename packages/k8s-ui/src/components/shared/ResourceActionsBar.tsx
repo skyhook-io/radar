@@ -132,7 +132,9 @@ interface ResourceActionsBarProps {
   isFluxResuming?: boolean
 
   // Argo actions
-  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void
+  // May return a promise that settles with the request: the options dialog
+  // then stays open, with its choices, when it rejects.
+  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>
   isArgoSyncing?: boolean
   // Set when onArgoSync forwards the options in its params: Sync then opens
   // the options dialog. Without it Sync syncs at once with the Application's
@@ -898,7 +900,7 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 
 function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
   resource: SelectedResource; data: any
-  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void; isSyncing?: boolean
+  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>; isSyncing?: boolean
   syncDialog?: { pinsComparedRevision: boolean }
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
@@ -918,14 +920,15 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
   if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
   const syncDialogOpen = syncDialogFor === appKey
   const applicationSyncOptions = argoApplicationSyncOptions(data)
-  const sync = (opts?: ArgoSyncOpts) => onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts })
+  // A failed request is reported by the host; it only keeps the dialog open.
+  const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts }))
 
   return (
     <>
       {onSync && (
         <Tooltip content={syncDialog ? 'Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision).' : "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
           <button
-            onClick={() => (syncDialog ? setSyncDialogFor(appKey) : sync())}
+            onClick={() => (syncDialog ? setSyncDialogFor(appKey) : void sync().catch(() => {}))}
             disabled={isSyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
@@ -947,7 +950,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
           autoSyncEnabled={isArgoAutoSyncEnabled(data)}
           operationInProgress={isArgoOperationInProgress(data)}
           onCancel={() => setSyncDialogFor(null)}
-          onConfirm={(opts) => { sync(opts); setSyncDialogFor(null) }}
+          onConfirm={(opts) => { sync(opts).then(() => setSyncDialogFor(null), () => {}) }}
         />
       )}
 

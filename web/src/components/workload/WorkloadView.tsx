@@ -463,8 +463,8 @@ function useActionsBarProps(
     onFluxResume: (params: Parameters<typeof fluxResumeMutation.mutate>[0]) =>
       fluxResumeMutation.mutate(params),
     isFluxResuming: fluxResumeMutation.isPending,
-    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutate>[0]) =>
-      argoSyncMutation.mutate(params),
+    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutateAsync>[0]) =>
+      argoSyncMutation.mutateAsync(params),
     isArgoSyncing: argoSyncMutation.isPending,
     argoSyncDialog: { pinsComparedRevision: argoInheritanceSupport === 'supported' },
     onArgoRefresh: (params: Parameters<typeof argoRefreshMutation.mutate>[0]) =>
