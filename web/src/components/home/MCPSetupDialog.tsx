@@ -333,7 +333,6 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
             ))}
           </div>
 
-          {/* First prompt */}
           <div className="space-y-2">
             <h4 className="text-sm font-semibold text-theme-text-primary">Try it</h4>
             <p className="text-xs text-theme-text-tertiary">Paste into your AI tool:</p>
