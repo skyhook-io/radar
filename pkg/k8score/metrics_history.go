@@ -3,13 +3,13 @@ package k8score
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -673,60 +673,22 @@ func (s *MetricsHistoryStore) CollectionHealth() MetricsCollectionHealth {
 	return health
 }
 
-// parseCPU converts a Kubernetes CPU string to nanocores.
+// parseCPU converts a Kubernetes CPU quantity to nanocores, rounding up.
+// Unparseable input reads as 0.
 func parseCPU(s string) int64 {
-	if s == "" {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
 		return 0
 	}
-	if len(s) > 1 && s[len(s)-1] == 'n' {
-		var n int64
-		if _, err := fmt.Sscanf(s[:len(s)-1], "%d", &n); err == nil {
-			return n
-		}
-		return 0
-	}
-	if len(s) > 1 && s[len(s)-1] == 'u' {
-		var n int64
-		if _, err := fmt.Sscanf(s[:len(s)-1], "%d", &n); err == nil {
-			return n * 1000
-		}
-		return 0
-	}
-	if len(s) > 1 && s[len(s)-1] == 'm' {
-		var n int64
-		if _, err := fmt.Sscanf(s[:len(s)-1], "%d", &n); err == nil {
-			return n * 1000000
-		}
-		return 0
-	}
-	var n float64
-	if _, err := fmt.Sscanf(s, "%f", &n); err == nil {
-		return int64(n * 1000000000)
-	}
-	return 0
+	return q.ScaledValue(resource.Nano)
 }
 
-// parseMemory converts a Kubernetes memory string to bytes.
+// parseMemory converts a Kubernetes memory quantity to bytes, rounding up.
+// Unparseable input reads as 0.
 func parseMemory(s string) int64 {
-	if s == "" {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
 		return 0
 	}
-	suffixes := map[string]int64{
-		"Ki": 1024, "Mi": 1024 * 1024, "Gi": 1024 * 1024 * 1024, "Ti": 1024 * 1024 * 1024 * 1024,
-		"K": 1000, "M": 1000 * 1000, "G": 1000 * 1000 * 1000, "T": 1000 * 1000 * 1000 * 1000,
-	}
-	for suffix, multiplier := range suffixes {
-		if len(s) > len(suffix) && s[len(s)-len(suffix):] == suffix {
-			var n int64
-			if _, err := fmt.Sscanf(s[:len(s)-len(suffix)], "%d", &n); err == nil {
-				return n * multiplier
-			}
-			return 0
-		}
-	}
-	var n int64
-	if _, err := fmt.Sscanf(s, "%d", &n); err == nil {
-		return n
-	}
-	return 0
+	return q.Value()
 }
