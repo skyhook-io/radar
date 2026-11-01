@@ -2,10 +2,13 @@ import { useState, type ComponentProps } from "react";
 import { AlertTriangle, Copy, Check } from "lucide-react";
 import { Markdown } from "../ui/Markdown";
 import { Tooltip } from "../ui/Tooltip";
+import { useInExampleInvestigation } from "./exampleInvestigation";
 
 export function CopyButton({ text, label }: { text: string; label: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const inExample = useInExampleInvestigation();
   const copied = state === "copied";
+  if (inExample) return null;
   return (
     <Tooltip
       content={

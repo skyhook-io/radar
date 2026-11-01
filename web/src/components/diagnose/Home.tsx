@@ -22,6 +22,7 @@ import {
 import { Tooltip } from "../ui/Tooltip";
 import { QuestionComposer } from "./QuestionComposer";
 import { plainVerdictText } from "./verdictText";
+import { ExampleInvestigationLink } from "./ExampleInvestigationLink";
 
 function daysBefore(date: Date, now: Date): number {
   const start = (d: Date) =>
@@ -145,17 +146,22 @@ export function statusWord(status: RunSummary["status"]): {
 export function InvestigationHome({
   agentLabel,
   onBrowseIssues,
+  onOpenExample,
   questions = false,
 }: {
   agentLabel: string;
   onBrowseIssues?: () => void;
+  onOpenExample?: () => void;
   /** The backend opens a run from a question; offer the composer. */
   questions?: boolean;
 }) {
   if (questions) {
     return (
       <div className="flex min-h-full w-full items-start justify-center px-4 py-10 sm:px-6">
-        <QuestionComposer onBrowseIssues={onBrowseIssues} />
+        <QuestionComposer
+          onBrowseIssues={onBrowseIssues}
+          onOpenExample={onOpenExample}
+        />
       </div>
     );
   }
@@ -187,6 +193,11 @@ export function InvestigationHome({
             <ArrowRight className="h-3.5 w-3.5" />
           </button>
         )}
+        {onOpenExample && (
+          <div className="mt-4">
+            <ExampleInvestigationLink onOpen={onOpenExample} />
+          </div>
+        )}
       </section>
     </div>
   );
@@ -202,6 +213,7 @@ export function RecentList({
   loaded = true,
   loadFailed = false,
   onRetry,
+  onOpenExample,
   questions = false,
 }: {
   agentLabel: string;
@@ -216,6 +228,7 @@ export function RecentList({
   /** The latest list request failed. */
   loadFailed?: boolean;
   onRetry?: () => void;
+  onOpenExample?: () => void;
   /** Home offers the question composer beside this list. */
   questions?: boolean;
 }) {
@@ -354,6 +367,9 @@ export function RecentList({
               a problem, or just ask about it. Investigations run in the
               background and are kept in your history here.
             </p>
+          )}
+          {onOpenExample && (
+            <ExampleInvestigationLink onOpen={onOpenExample} className="mt-3" />
           )}
         </div>
       </div>

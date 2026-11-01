@@ -32,6 +32,7 @@ import {
   type QuestionSuggestion,
 } from "./questionSuggestions";
 import { ResourcePicker } from "./ResourcePicker";
+import { ExampleInvestigationLink } from "./ExampleInvestigationLink";
 import { Tooltip } from "../ui/Tooltip";
 import { formatInvestigationTarget } from "./target";
 
@@ -51,8 +52,10 @@ const actionClass =
 
 export function QuestionComposer({
   onBrowseIssues,
+  onOpenExample,
 }: {
   onBrowseIssues?: () => void;
+  onOpenExample?: () => void;
 }) {
   const { openInvestigation, agentLabel, questionDraft, saveQuestionDraft } =
     useDiagnose();
@@ -481,6 +484,9 @@ export function QuestionComposer({
           Or pick a problem from Issues
           <ArrowRight className="h-3 w-3" />
         </button>
+      )}
+      {onOpenExample && (
+        <ExampleInvestigationLink onOpen={onOpenExample} className="mt-3" />
       )}
     </section>
   );
