@@ -65,6 +65,9 @@ var crdGroupToChart = map[string]string{
 	// Flagger
 	"flagger.app": "flagger",
 
+	// Secrets Store CSI Driver
+	"secrets-store.csi.x-k8s.io": "secrets-store-csi-driver",
+
 	// OpenTelemetry
 	"opentelemetry.io": "opentelemetry-operator",
 

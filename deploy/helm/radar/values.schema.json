@@ -109,6 +109,7 @@
             "reflector": { "type": "boolean" },
             "reloader": { "type": "boolean" },
             "sealedSecrets": { "type": "boolean" },
+            "secretsStoreCsi": { "type": "boolean" },
             "strimzi": { "type": "boolean" },
             "tekton": { "type": "boolean" },
             "traefik": { "type": "boolean" },

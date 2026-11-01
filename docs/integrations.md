@@ -987,6 +987,48 @@ They roll up under three categories, split by what you'd go and look at: `backup
 
 ---
 
+## Secrets Store CSI Driver
+
+The [Secrets Store CSI Driver](https://secrets-store-csi-driver.sigs.k8s.io/) mounts secrets from an external store (Vault, AWS, Azure, GCP and others) into Pods as a CSI volume. A volume with `csi.driver: secrets-store.csi.k8s.io` names a SecretProviderClass in the Pod's namespace; after a successful mount the driver writes a SecretProviderClassPodStatus owned by that Pod.
+
+### What Radar Shows
+
+**Pod Detail View — Secrets Store CSI section** (only for Pods with such a volume):
+- Each volume, the containers and paths that mount it, and a link to its SecretProviderClass
+- The class's provider and synced Kubernetes Secrets (names, types and keys)
+- Mount state from the driver status matched by the Pod's UID and class, with object IDs and versions
+- The kubelet's latest `FailedMount` message for that volume while the Pod waits
+
+| State | Source |
+|---|---|
+| Mounted | SecretProviderClassPodStatus with `mounted: true`, owned by this Pod |
+| Mount failed | Warning `FailedMount` event naming the volume, while the Pod has not started |
+| Not mounted yet | Pod pending, no status and no failure event |
+| Mount not recorded | Pod started but the driver wrote no status for it |
+| Class not found | A complete read of the namespace's classes has no class with that name |
+| No permission / could not read all / unavailable | The class or status read was denied, partial, or the API is not served |
+
+The driver never writes a status for a failed or pending mount, so a missing status is never shown as success. A status left by an earlier Pod with the same name is ignored.
+
+**SecretProviderClass Detail View:**
+- Provider and synced Secrets (names, types and keys)
+- Pods in the namespace whose volumes name the class, with each Pod's mount state
+
+Provider `parameters` are not summarized. This is presentation only, not a redaction boundary: the YAML view and REST/MCP reads return the full object to callers who can read it.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| SecretProviderClass | `secrets-store.csi.x-k8s.io/v1` | — | Yes | — |
+| SecretProviderClassPodStatus | `secrets-store.csi.x-k8s.io/v1` | — | Pod drawer | — |
+
+Collection is on by default in the Helm chart (`rbac.crdGroups.secretsStoreCsi`) and reads only these two kinds. For Radar Cloud callers, SecretProviderClass is withheld from the default integration-read grants (its `parameters` are free-form) and SecretProviderClassPodStatus is granted; see [the default read policy](cloud-rbac-baseline.md).
+
+Tested with driver 1.6.1 and the HashiCorp Vault provider (chart 0.34.1) on kind.
+
+---
+
 ## Strimzi Kafka connectors
 
 Radar surfaces failure evidence from `KafkaConnector` resources in `kafka.strimzi.io` through Issues, including the API and MCP. A connector can remain `RUNNING` while an individual task is `FAILED`; Radar checks both. Explicit connector/task failures and `NotReady=True` produce one warning per connector, attributed to Strimzi's operator snapshot. Task IDs are bounded; configurations, exception messages and stack traces are not included in the issue.
