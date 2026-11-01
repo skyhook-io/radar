@@ -233,8 +233,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
 		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "`. Inspect source logs for low-confidence " +
 		"selections; `traceback_header_only` means the informative line was not captured. " +
-		"`auditSummary.highestSeverity` (critical|high|medium|low; built-ins high|medium) is posture-remediation priority, " +
-		"a separate scale from live `issueSummary` (critical|warning). `application_configuration_change: true` marks " +
+		"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins high|medium), posture-remediation priority " +
+		"on a separate scale from live `issueSummary` critical|warning. `application_configuration_change: true` marks " +
 		"an application configuration edit; it is a ranking hint, not proof of cause. Application, Kustomization and Flux HelmRelease return " +
 		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
