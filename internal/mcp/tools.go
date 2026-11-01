@@ -694,8 +694,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",
 		Description: "Cordon, uncordon or drain a node. A drain waits until evicted pods are gone; with wait_for_deletion=false " +
-			"it returns outcome started once evictions are accepted. Outcome incomplete or unconfirmed (status partial) means " +
-			"pods remain or their deletion could not be confirmed. skippedPods with expectedSkip=true were left in place by " +
+			"it returns outcome started once evictions are accepted, unless the drain is incomplete. Outcome incomplete (status " +
+			"partial) means an eviction failed, a pod blocks the drain, or evicted pods are still there; unconfirmed (status " +
+			"partial) means their deletion could not be verified. skippedPods with expectedSkip=true were left in place by " +
 			"design. A complete drain does not mean the node is safe to shut down.",
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
