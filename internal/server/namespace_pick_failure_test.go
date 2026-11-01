@@ -113,12 +113,14 @@ func TestGetAccessibleNamespacesWithSource_RBACNamespaces(t *testing.T) {
 // let those callers treat the namespace's issues as gone.
 func TestNamespaceScope_RBACNamespacesAuthoritative(t *testing.T) {
 	cases := []struct {
-		name     string
-		readable []string
-		want     bool
+		name        string
+		readable    []string
+		statefulSet []string
+		want        bool
 	}{
-		{"every listed namespace readable", []string{"alpha", "beta"}, true},
-		{"grant missing in one namespace", []string{"alpha"}, false},
+		{"every listed namespace readable", []string{"alpha", "beta"}, []string{"alpha", "beta"}, true},
+		{"grant missing in one namespace", []string{"alpha"}, []string{"alpha"}, false},
+		{"one cached kind missing in one namespace", []string{"alpha", "beta"}, []string{"alpha"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,6 +135,8 @@ func TestNamespaceScope_RBACNamespacesAuthoritative(t *testing.T) {
 				scopes[kind] = k8score.ResourceScope{Enabled: true, Namespace: tc.readable[0]}
 				fanout[kind] = tc.readable
 			}
+			scopes[k8score.StatefulSets] = k8score.ResourceScope{Enabled: true, Namespace: tc.statefulSet[0]}
+			fanout[k8score.StatefulSets] = tc.statefulSet
 			restore := k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}, Scopes: scopes, ScopeNamespaces: fanout})
 			t.Cleanup(restore)
 
