@@ -32,7 +32,7 @@ import (
 //     specific Role/ClusterRole to inspect)
 
 type subjectPermissionsInput struct {
-	Kind              string  `json:"kind" jsonschema:"subject kind: ServiceAccount, User, or Group; access checks support ServiceAccount only. A serviceAccountName read off a pod spec can be passed directly as service_account instead of kind+name"`
+	Kind              string  `json:"kind" jsonschema:"subject kind: ServiceAccount, User, or Group; access checks support ServiceAccount only."`
 	Namespace         string  `json:"namespace,omitempty" jsonschema:"subject namespace (required for ServiceAccount, omit for User/Group)"`
 	Name              string  `json:"name" jsonschema:"subject name"`
 	Verb              string  `json:"verb,omitempty" jsonschema:"access check only: Kubernetes API verb; must be supplied together with resource"`
