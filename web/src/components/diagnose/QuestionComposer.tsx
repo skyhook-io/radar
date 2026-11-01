@@ -486,7 +486,9 @@ export function QuestionComposer({
         </button>
       )}
       {onOpenExample && (
-        <ExampleInvestigationLink onOpen={onOpenExample} className="mt-3" />
+        <div className="mt-3">
+          <ExampleInvestigationLink onOpen={onOpenExample} />
+        </div>
       )}
     </section>
   );

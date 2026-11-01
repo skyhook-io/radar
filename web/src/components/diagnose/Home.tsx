@@ -369,7 +369,10 @@ export function RecentList({
             </p>
           )}
           {onOpenExample && (
-            <ExampleInvestigationLink onOpen={onOpenExample} className="mt-3" />
+            <ExampleInvestigationLink
+              onOpen={onOpenExample}
+              className="mt-3"
+            />
           )}
         </div>
       </div>
