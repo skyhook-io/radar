@@ -37,6 +37,10 @@ type ResourceContext struct {
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`
 	Owner      *ContextRef        `json:"owner,omitempty"`
+	// Children names current direct children supplied by the host,
+	// resolved by owner-reference UID, never labels or generated names. Hosts
+	// currently supply this for Collector/Canary roots only; absent is not empty.
+	Children *ChildrenContext `json:"children,omitempty"`
 	// ManagedBy names the highest readable controller and separately observed
 	// non-GitOps managing controllers. Manager carries GitOps/Helm evidence.
 	// An incomplete controller walk is reported in Omitted.
@@ -911,4 +915,17 @@ type ReflectionContext struct {
 	Automatic             *bool        `json:"automatic,omitempty"`
 	VisibleMirrors        []ContextRef `json:"visibleMirrors,omitempty"`
 	Truncated             bool         `json:"truncated,omitempty"`
+}
+
+// ChildrenContext previews direct owner-reference children of any resource kind,
+// not an operator's runtime set. An absent block is not an empty inventory.
+type ChildrenContext struct {
+	Items []ContextRef `json:"items"`
+	// Complete: every direct child in the caller-readable scope is included.
+	// Uncollected kinds or truncation make this false, without implying a runtime failure.
+	Complete bool `json:"complete"`
+	// Narrowed means permissions may exclude children, not that hidden children exist.
+	Narrowed bool `json:"narrowed,omitempty"`
+	// Truncated marks the preview's response limit, independently of inventory gaps.
+	Truncated bool `json:"truncated,omitempty"`
 }
