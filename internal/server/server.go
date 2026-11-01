@@ -1503,6 +1503,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		GitOpsActionCapabilities: true,
 		ArgoRollbackSync:         true,
 		ArgoSyncInheritance:      true,
+		ArgoEnableSelfHealOff:    true,
 		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,

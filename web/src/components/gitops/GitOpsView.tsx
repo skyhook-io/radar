@@ -507,6 +507,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const { upgrade: argoRollbackUpgrade, blockedReason: argoRollbackBlockedReason } = useRadarFeature('argoRollback')
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
+  const { support: argoSelfHealOffSupport } = useRadarFeature('argoEnableSelfHealOff')
   const applyResource = useApplyResource()
   const fluxReconcile = useFluxReconcile()
   const fluxSyncWithSource = useFluxSyncWithSource()
@@ -729,7 +730,9 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     operationInProgress,
     resumeUpgrade: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeUpgrade : null,
     autoSyncController: argoAutoSyncController(resourceQ.relationships, { namespace, name }),
-    resumeSettings: argoResumeSettings(resourceQ.data, argoInheritanceSupport === 'unknown' ? undefined : argoInheritanceSupport === 'supported'),
+    resumeSettings: argoInheritanceSupport === 'unknown' || argoSelfHealOffSupport === 'unknown'
+      ? argoResumeSettings(resourceQ.data, undefined)
+      : argoResumeSettings(resourceQ.data, argoInheritanceSupport === 'supported', argoSelfHealOffSupport === 'supported'),
     resumeBlockedReason: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeBlockedReason : undefined,
   } : undefined
 

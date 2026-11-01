@@ -784,7 +784,7 @@ func stringValue(value any) string {
 //   - otherwise the block Radar saved on suspend;
 //   - otherwise prune and selfHeal from the per-field annotations older Radar
 //     builds wrote. With none, the Application was never suspended by Radar:
-//     prune starts off, as in Argo CD's UI, and selfHeal on.
+//     prune and selfHeal start off, as in Argo CD's UI and CLI.
 //
 // If auto-sync is already on, for example re-enabled outside Radar while
 // suspended, the current block is kept and only Radar's saved copy is
@@ -886,9 +886,13 @@ func argoResumePatch(app *unstructured.Unstructured) (map[string]any, bool) {
 	} else if saved := argoSavedAutomated(annotations); saved != nil {
 		automated = saved
 	} else {
+		// A prune key means a Radar suspended it, whose fallback for a missing
+		// selfHeal key was on; never suspended starts off, as in Argo CD.
+		_, suspended := annotations[ArgoSuspendedPruneAnnotation]
+		_, legacySuspended := annotations[legacyArgoSuspendedPruneAnnotation]
 		automated = map[string]any{
 			"prune":    argoSavedFlag(annotations, ArgoSuspendedPruneAnnotation, legacyArgoSuspendedPruneAnnotation, false),
-			"selfHeal": argoSavedFlag(annotations, ArgoSuspendedSelfHealAnnotation, legacyArgoSuspendedSelfHealAnnotation, true),
+			"selfHeal": argoSavedFlag(annotations, ArgoSuspendedSelfHealAnnotation, legacyArgoSuspendedSelfHealAnnotation, suspended || legacySuspended),
 		}
 	}
 	return map[string]any{

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +37,18 @@ type manageWorkloadInput struct {
 	Revision  *int64 `json:"revision,omitempty" jsonschema:"target revision number (required for rollback); enumerate valid values with get_resource include=revisions"`
 }
 
+// manageWorkloadInputSchema publishes the replica count's real domain. The
+// generator emits int32 bounds, which advertise negative counts.
+func manageWorkloadInputSchema() *jsonschema.Schema {
+	schema, err := jsonschema.For[manageWorkloadInput](nil)
+	if err != nil {
+		panic(err)
+	}
+	minReplicas := float64(0)
+	schema.Properties["replicas"].Minimum = &minReplicas
+	return schema
+}
+
 type manageRolloutInput struct {
 	Action    string `json:"action" jsonschema:"action to perform: abort (revert traffic to stable now), retry (clear an abort), promote (advance one step), promote-full (skip all remaining steps/pauses/analysis), or skip-step (advance exactly one canary step)"`
 	Namespace string `json:"namespace" jsonschema:"rollout namespace"`
@@ -57,7 +70,7 @@ type manageCronJobInput struct {
 }
 
 type getWorkloadLogsInput struct {
-	Kind      string `json:"kind,omitempty" jsonschema:"workload kind: deployment, statefulset, daemonset, job, or workflow. Defaults to deployment when omitted."`
+	Kind      string `json:"kind,omitempty" jsonschema:"workload kind: deployment, statefulset, daemonset, rollout, job, or workflow. Defaults to deployment when omitted."`
 	Namespace string `json:"namespace" jsonschema:"workload namespace"`
 	Name      string `json:"name" jsonschema:"workload name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container name, defaults to all containers"`
@@ -238,7 +251,7 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input getWorkloadLogsInput) (*mcp.CallToolResult, any, error) {
 	kind := normalizeWorkloadLogsKind(input.Kind)
 	if kind == "" {
-		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, daemonset, job, or workflow", input.Kind)
+		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, daemonset, rollout, job, or workflow", input.Kind)
 	}
 
 	if !checkNamespaceAccess(ctx, input.Namespace) {

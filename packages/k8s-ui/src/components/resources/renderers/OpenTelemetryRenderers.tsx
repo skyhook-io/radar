@@ -48,6 +48,8 @@ export function OpenTelemetryInstrumentationRenderer({ data }: { data: any }) {
   const spec = data.spec ?? {}
   const state = getOpenTelemetryInstrumentationStatus(data)
   const blocked = Object.keys(data.status?.upgradeBlockedVersions ?? {})
+  const blockedPreview = blocked.slice(0, 10)
+  const languageLabel = (language: string) => language.length > 160 ? `${language.slice(0, 160)}…` : language
   const runtimeImages = ['java', 'nodejs', 'python', 'dotnet', 'go', 'apacheHttpd', 'nginx', 'php', 'ruby'].filter(language => spec[language]?.image)
   return <>
     <Section title="Auto-instrumentation Configuration" defaultExpanded>
@@ -57,13 +59,13 @@ export function OpenTelemetryInstrumentationRenderer({ data }: { data: any }) {
         <Property label="Propagators" value={spec.propagators?.join(', ')} />
         <Property label="Sampler" value={spec.sampler?.type} />
         <Property label="Sampler argument" value={spec.sampler?.argument} />
-        {blocked.length > 0 && <Property label="Blocked image upgrades" value={blocked.join(', ')} />}
       </PropertyList>
       <p className="mt-2 text-xs text-theme-text-tertiary">These settings configure injection into annotated workloads. This resource does not report which Pods were injected or whether telemetry reaches the endpoint.</p>
-      {blocked.length > 0 && <p className="mt-2 text-sm text-theme-text-secondary">The operator could not automatically upgrade the listed runtime images. Inspect status in YAML and the operator logs before choosing a supported image.</p>}
+      {blocked.length > 0 && <p className="mt-2 text-sm text-theme-text-secondary">The operator recorded these blocks during a startup upgrade check. This record can remain after image changes. Inspect the current auto-instrumentation images, status in YAML and operator logs before choosing a supported image.</p>}
     </Section>
-    {blocked.length > 0 && <Section title="Blocked Image Upgrades" defaultExpanded>
-      <PropertyList>{blocked.map(language => <Property key={language} label={language} value={<span className="whitespace-pre-wrap break-words">{String(data.status.upgradeBlockedVersions[language]).slice(0, 1000)}{String(data.status.upgradeBlockedVersions[language]).length > 1000 ? '… Inspect YAML for the full explanation.' : ''}</span>} />)}</PropertyList>
+    {blocked.length > 0 && <Section title="Recorded Image Upgrade Blocks" defaultExpanded>
+      <PropertyList>{blockedPreview.map(language => <Property key={language} label={languageLabel(language)} value={<span className="whitespace-pre-wrap break-words">{String(data.status.upgradeBlockedVersions[language]).slice(0, 1000)}{String(data.status.upgradeBlockedVersions[language]).length > 1000 ? '… Inspect YAML for the full explanation.' : ''}</span>} />)}</PropertyList>
+      {blocked.length > 10 && <p className="mt-2 text-xs text-theme-text-tertiary">{blocked.length - 10} more recorded languages in YAML.</p>}
     </Section>}
     {/* Runtime image defaults are secondary to endpoint/sampler and upgrade failures. */}
     {runtimeImages.length > 0 && <Section title="Runtime Images" defaultExpanded={false}><PropertyList>

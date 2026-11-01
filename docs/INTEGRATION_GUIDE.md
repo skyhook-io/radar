@@ -138,6 +138,10 @@ owner enriches those findings; it needs no per-kind detector or renderer.
 
 ### MCP / AI context
 
+Keep shared identity, ownership and coverage contracts reusable. Put provider-native
+counters, lookup outcomes and absence rules in typed, provider-qualified blocks;
+do not make the next integration inherit another controller's semantics.
+
 - [ ] Check existing resource-tool output in `pkg/ai/context/summary_crd.go`,
   `detail.go` and `redact.go`. Preserve reasons and useful references, not raw
   configuration dumps; enrich summaries before considering a new tool.
