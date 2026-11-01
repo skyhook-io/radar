@@ -342,6 +342,17 @@ body {
   animation: status-enter 140ms ease-out both;
 }
 
+/* Home's Live Traffic card: dashes travelling along an observed flow toward its
+   destination. The offset moves one dash period per cycle, so the loop has no
+   seam. */
+@keyframes traffic-dash {
+  to { stroke-dashoffset: -12; }
+}
+.animate-traffic-dash {
+  stroke-dasharray: 1.6 10.4;
+  animation: traffic-dash 1.4s linear infinite;
+}
+
 /* Reduced motion is an app-level policy, not a per-class list. Durations and
    delays go to ~0 (a delay left in place would hold a fill-mode:both element
    invisible), every loop runs once (an infinite animation at 0.01ms is still an

@@ -494,9 +494,13 @@ export interface DashboardChange {
 
 export interface DashboardTopFlow {
   src: string;
+  srcNamespace?: string;
   dst: string;
+  dstNamespace?: string;
   requestsPerSec?: number;
   connections: number;
+  // src and dst may be the wrong way round.
+  directionUnknown?: boolean;
 }
 
 export interface DashboardTrafficSummary {

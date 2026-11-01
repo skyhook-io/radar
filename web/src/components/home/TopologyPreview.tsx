@@ -1,368 +1,130 @@
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import type { Topology } from '../../types'
-import { Network, ArrowRight } from 'lucide-react'
-import { clsx } from 'clsx'
-import { StatusDot, pluralNoun, type Issue } from '@skyhook-io/k8s-ui'
-import { Tooltip } from '../ui/Tooltip'
-
-/** What the Home issues query holds, for ranking namespaces when the graph is withheld. */
-export interface TopologyPreviewIssues {
-  issues: Issue[]
-  loading: boolean
-}
+import { Network } from 'lucide-react'
+import { HomeDiagramCard } from './HomeDiagramCard'
 
 interface TopologyPreviewProps {
   topology: Topology | null
   namespaceSelected: boolean
   onNavigate: () => void
-  issues: TopologyPreviewIssues
-  /** Opens Topology scoped to one namespace. */
-  onOpenNamespace: (namespace: string) => void
-  /** Namespaces the viewer can see, when known; shown on the large-cluster card. */
-  namespaceCount?: number
 }
 
-const MAX_NAMESPACE_ROWS = 4
-
-export interface RankedNamespace {
-  name: string
-  critical: number
-  total: number
+// One node drawn like a Topology card: surface, border, a health bar on the
+// left, the kind as a caption and a bar standing in for the name. Topology
+// marks kind with an icon, not a color. Every bar is healthy: a made-up problem
+// next to this cluster's real counts would read as one of its own.
+function SchematicNode({ x, y, w = 46, label, dashed }: {
+  x: number; y: number; w?: number; label: string; dashed?: boolean
+}) {
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={17} rx={3.5} fill="var(--bg-surface)"
+        stroke="var(--border-light)" strokeWidth={0.7} strokeDasharray={dashed ? '2 1.5' : undefined} />
+      <rect x={x} y={y + 2.5} width={1.8} height={12} rx={0.9} fill="var(--color-success)" />
+      <rect x={x + 4.8} y={y + 4.4} width={3.6} height={3.6} rx={0.9} fill="var(--text-tertiary)" opacity={0.55} />
+      <text x={x + 10.5} y={y + 7.8} fontSize={4.6} fontWeight={600} letterSpacing={0.3} fill="var(--text-tertiary)">{label}</text>
+      <rect x={x + 4.8} y={y + 10.8} width={w * 0.55} height={2.4} rx={1.2} fill="var(--text-tertiary)" opacity={0.35} />
+    </g>
+  )
 }
 
-/**
- * Namespaces with the most active issues: critical count first, then all
- * issues, then name. Cluster-scoped issues have no namespace to open.
- */
-export function rankNamespacesByIssues(issues: Issue[], limit = MAX_NAMESPACE_ROWS): RankedNamespace[] {
-  const byName = new Map<string, RankedNamespace>()
-  for (const issue of issues) {
-    if (!issue.namespace) continue
-    let row = byName.get(issue.namespace)
-    if (!row) {
-      row = { name: issue.namespace, critical: 0, total: 0 }
-      byName.set(issue.namespace, row)
-    }
-    row.total++
-    if (issue.severity === 'critical') row.critical++
-  }
-  return [...byName.values()]
-    .sort((a, b) => b.critical - a.critical || b.total - a.total || a.name.localeCompare(b.name))
-    .slice(0, limit)
-}
-
-/**
- * Static schematic SVG that hints at the topology graph layout.
- * Two groups with interconnected nodes using real topology color palette.
- */
+// A static picture of what Topology draws: traffic entering an Ingress and
+// fanning out through Services to workloads, in two namespace groups. It is a
+// hint at the view, not a rendering of this cluster, so it never moves and
+// looks the same whatever the cluster's size.
 function TopologySchematic() {
-  // Colors matching the real topology graph
-  const ingress = '#a78bfa'  // violet-400
-  const service = '#60a5fa'  // blue-400
-  const deploy  = '#34d399'  // emerald-400
-  const pod     = '#84cc16'  // lime-500
-  const config  = '#fbbf24'  // amber-400
-  const groupBorder = 'rgba(59, 130, 246, 0.25)'
-  const groupBg = 'rgba(59, 130, 246, 0.04)'
-
-  // Edge color — use a concrete color so markers render reliably
-  const ec = '#64748b' // slate-500
+  const arrow = `${useId()}-arrow`
+  const edge = (x1: number, y1: number, x2: number, y2: number, dashed?: boolean) => (
+    <path d={`M ${x1} ${y1} C ${x1 + 10} ${y1}, ${x2 - 10} ${y2}, ${x2} ${y2}`} fill="none"
+      stroke="var(--text-tertiary)" strokeWidth={0.7} opacity={dashed ? 0.35 : 0.55}
+      strokeDasharray={dashed ? '2 1.5' : undefined} markerEnd={`url(#${arrow})`} />
+  )
+  const group = (y: number, h: number, name: string) => (
+    <g>
+      <rect x={46} y={y} width={248} height={h} rx={7} fill="var(--group-header-namespace)" fillOpacity={0.45}
+        stroke="var(--group-border-namespace)" strokeWidth={0.7} strokeDasharray="3 2" />
+      <text x={52} y={y + 8} fontSize={4.6} fontFamily="var(--font-mono, monospace)" fill="var(--text-tertiary)">{name}</text>
+    </g>
+  )
 
   return (
-    <svg viewBox="0 0 160 120" className="w-full h-full" aria-hidden="true">
+    <svg viewBox="0 0 300 132" className="w-full h-full" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
       <defs>
-        <marker id="arr" viewBox="0 0 8 6" refX="7" refY="3"
-          markerWidth="6" markerHeight="5" orient="auto">
-          <path d="M 0 0 L 8 3 L 0 6 z" fill={ec} opacity="0.6" />
-        </marker>
-        <marker id="arr-f" viewBox="0 0 8 6" refX="7" refY="3"
-          markerWidth="6" markerHeight="5" orient="auto">
-          <path d="M 0 0 L 8 3 L 0 6 z" fill={ec} opacity="0.35" />
+        <marker id={arrow} viewBox="0 0 8 6" refX="7" refY="3" markerWidth="5" markerHeight="4" orient="auto">
+          <path d="M 0 0 L 8 3 L 0 6 z" fill="var(--text-tertiary)" opacity="0.7" />
         </marker>
       </defs>
 
-      {/* Group 1 — top: Ingress → Service → Deploys → Pods */}
-      <rect x="4" y="4" width="100" height="52" rx="6"
-        fill={groupBg} stroke={groupBorder} strokeWidth="1" strokeDasharray="3 2" />
+      {group(4, 62, 'storefront')}
+      {group(72, 56, 'payments')}
 
-      {/* Nodes */}
-      <rect x="10" y="24" width="16" height="10" rx="3" fill={ingress} opacity="0.85" />
-      <rect x="38" y="24" width="16" height="10" rx="3" fill={service} opacity="0.85" />
-      <rect x="66" y="14" width="16" height="10" rx="3" fill={deploy} opacity="0.85" />
-      <rect x="66" y="34" width="16" height="10" rx="3" fill={deploy} opacity="0.85" />
-      <circle cx="96" cy="19" r="4.5" fill={pod} opacity="0.65" />
-      <circle cx="96" cy="39" r="4.5" fill={pod} opacity="0.65" />
+      <rect x={4} y={54} width={32} height={16} rx={8} fill="var(--bg-surface)" stroke="var(--border-light)" strokeWidth={0.7} />
+      <circle cx={11.5} cy={62} r={2.5} fill="none" stroke="var(--color-brand)" strokeWidth={0.8} />
+      <text x={16} y={63.6} fontSize={4.6} fontWeight={600} fill="var(--text-tertiary)">WEB</text>
 
-      {/* Edges — group 1 */}
-      <line x1="26" y1="29" x2="37" y2="29" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="54" y1="29" x2="65" y2="20" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="54" y1="29" x2="65" y2="38" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="82" y1="19" x2="90" y2="19" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="82" y1="39" x2="90" y2="39" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
+      {edge(36, 62, 54, 36)}
+      {edge(100, 36, 112, 36)}
+      {edge(100, 36, 112, 102)}
+      {edge(158, 36, 170, 24)}
+      {edge(158, 36, 170, 48)}
+      {edge(216, 24, 228, 24)}
+      {edge(216, 48, 228, 48)}
+      {edge(158, 102, 170, 90)}
+      {edge(158, 102, 170, 112)}
+      {edge(216, 90, 228, 90)}
+      {edge(216, 112, 228, 112, true)}
 
-      {/* Group 2 — bottom: Service → Deploys → Pods + ConfigMap */}
-      <rect x="30" y="64" width="126" height="52" rx="6"
-        fill={groupBg} stroke={groupBorder} strokeWidth="1" strokeDasharray="3 2" />
+      <SchematicNode x={54} y={28} label="INGRESS" />
+      <SchematicNode x={112} y={28} label="SERVICE" />
+      <SchematicNode x={170} y={16} label="DEPLOY" />
+      <SchematicNode x={170} y={40} label="DEPLOY" />
+      <SchematicNode x={228} y={16} w={56} label="PODS ×3" />
+      <SchematicNode x={228} y={40} w={56} label="PODS ×2" />
 
-      {/* Nodes */}
-      <rect x="36" y="82" width="16" height="10" rx="3" fill={service} opacity="0.85" />
-      <rect x="66" y="72" width="16" height="10" rx="3" fill={deploy} opacity="0.85" />
-      <rect x="66" y="92" width="16" height="10" rx="3" fill={deploy} opacity="0.85" />
-      <circle cx="96" cy="73" r="4.5" fill={pod} opacity="0.65" />
-      <circle cx="96" cy="87" r="4.5" fill={pod} opacity="0.65" />
-      <circle cx="96" cy="101" r="4.5" fill={pod} opacity="0.65" />
-
-      {/* Config node */}
-      <rect x="120" y="82" width="16" height="10" rx="3" fill={config} opacity="0.55" />
-
-      {/* Edges — group 2 */}
-      <line x1="52" y1="87" x2="65" y2="78" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="52" y1="87" x2="65" y2="96" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="82" y1="77" x2="90" y2="74" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="82" y1="77" x2="90" y2="87" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-      <line x1="82" y1="97" x2="90" y2="101" stroke={ec} strokeWidth="1" opacity="0.55" markerEnd="url(#arr)" />
-
-      {/* Config dashed edge */}
-      <line x1="82" y1="77" x2="119" y2="87" stroke={ec} strokeWidth="0.7" opacity="0.3" strokeDasharray="2 2" markerEnd="url(#arr-f)" />
-
-      {/* Cross-group curved edge */}
-      <path d="M 18 34 Q 18 64, 36 82" fill="none" stroke={ec} strokeWidth="0.8" opacity="0.3" markerEnd="url(#arr-f)" />
+      <SchematicNode x={112} y={94} label="SERVICE" />
+      <SchematicNode x={170} y={82} label="DEPLOY" />
+      <SchematicNode x={170} y={104} label="STATEFUL" />
+      <SchematicNode x={228} y={82} w={56} label="PODS ×2" />
+      <SchematicNode x={228} y={104} w={56} label="CONFIG" dashed />
     </svg>
   )
 }
 
-// Derive stats from real topology data
-function useTopologyStats(topology: Topology | null) {
-  return useMemo(() => {
-    if (!topology || topology.nodes.length === 0) return null
-
-    const kindCounts: Record<string, number> = {}
-    const healthCounts = { healthy: 0, degraded: 0, unhealthy: 0, unknown: 0 }
-
-    for (const node of topology.nodes) {
-      kindCounts[node.kind] = (kindCounts[node.kind] || 0) + 1
-      if (node.status in healthCounts) {
-        healthCounts[node.status as keyof typeof healthCounts]++
-      }
-    }
-
-    // Top kinds sorted by display priority
-    const kindPriority: Record<string, number> = {
-      Deployment: 1, Rollout: 1, StatefulSet: 2, DaemonSet: 2,
-      Service: 3, Ingress: 4, Gateway: 4,
-      HTTPRoute: 4, GRPCRoute: 4, TCPRoute: 4, TLSRoute: 4, UDPRoute: 4,
-      Pod: 5, PodGroup: 5,
-      Job: 6, CronJob: 6, ConfigMap: 7, Secret: 7,
-    }
-    const topKinds = Object.entries(kindCounts)
-      .filter(([kind]) => kind !== 'Internet')
-      .sort(([a], [b]) => (kindPriority[a] || 99) - (kindPriority[b] || 99))
-      .slice(0, 8)
-
-    return { topKinds, healthCounts }
-  }, [topology])
-}
-
-const kindDotColors: Record<string, string> = {
-  Deployment: 'bg-emerald-400', Rollout: 'bg-emerald-400',
-  StatefulSet: 'bg-cyan-400', DaemonSet: 'bg-teal-400',
-  Service: 'bg-blue-400', Ingress: 'bg-violet-400', Gateway: 'bg-violet-400',
-  HTTPRoute: 'bg-purple-400', GRPCRoute: 'bg-purple-400', TCPRoute: 'bg-purple-400', TLSRoute: 'bg-purple-400', UDPRoute: 'bg-purple-400',
-  Pod: 'bg-lime-500', PodGroup: 'bg-lime-500',
-  Job: 'bg-purple-400', CronJob: 'bg-purple-400',
-  ConfigMap: 'bg-amber-400', Secret: 'bg-red-400',
-  ReplicaSet: 'bg-green-400', HPA: 'bg-pink-500', PVC: 'bg-cyan-400',
-}
-
-export function TopologyPreview({ topology, namespaceSelected, onNavigate, issues, onOpenNamespace, namespaceCount }: TopologyPreviewProps) {
-  const stats = useTopologyStats(topology)
-
+export function TopologyPreview({ topology, namespaceSelected, onNavigate }: TopologyPreviewProps) {
   // A large cluster with no namespace filter gets an empty graph carrying this
-  // flag instead of a build. There is no graph to preview until the user
-  // filters, so the card offers namespaces to start from instead.
+  // flag instead of a build, and Topology asks for a namespace. The card keeps
+  // its drawing but states no counts, which would read the refusal as zero.
   //
   // With a pick already active the same flag means something else entirely: SSE
   // only learns to filter server-side after a flagged frame arrives, so a
   // cluster-wide refusal still reaches a viewer whose namespace is on its way
-  // to the server. That resolves on its own, and asking for what the viewer
-  // already chose is the wrong thing to say while it does.
+  // to the server. That resolves on its own, so the header keeps loading.
   const needsNamespaceFilter = topology?.requiresNamespaceFilter === true && !namespaceSelected
 
-  // The graph this card draws is the only source for its caption. Node count is
-  // not the test for whether a frame counts — the stream holds topology at null
-  // until one lands and resets it there on reconnect and context switch, so a
-  // delivered graph with no nodes is an empty scope and an honest zero.
+  // Node count is not the test for whether a frame counts — the stream holds
+  // topology at null until one lands and resets it there on reconnect and
+  // context switch, so a delivered graph with no nodes is an empty scope and an
+  // honest zero.
   const counts = useMemo(() => {
     if (!topology || topology.requiresNamespaceFilter) return null
     return { nodeCount: topology.nodes.length, edgeCount: topology.edges.length }
   }, [topology])
 
-  if (needsNamespaceFilter) {
-    return <NamespaceStartCard issues={issues} onNavigate={onNavigate} onOpenNamespace={onOpenNamespace} namespaceCount={namespaceCount} />
-  }
-
-  return (
-    <button
-      onClick={onNavigate}
-      className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left overflow-hidden"
-    >
-      <div className="flex flex-col h-full w-full">
-      <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
-        <div className="flex items-center gap-2">
-          <Network className="w-4 h-4 text-theme-text-tertiary" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">Topology</span>
-        </div>
-        {counts ? (
-          <span className="text-[11px] text-theme-text-tertiary">
-            {counts.nodeCount} resources &middot; {counts.edgeCount} conn
-          </span>
-        ) : (
-          <span className="h-3 w-28 rounded bg-theme-text-tertiary/20 animate-pulse" />
-        )}
-      </div>
-
-      {/* Stats (left) + Schematic (right) */}
-      <div className="flex-1 flex items-stretch min-h-0 px-3 py-1.5 gap-2">
-        {/* Left: compact stats */}
-        <div className="flex flex-col justify-center gap-0.5 min-w-0 w-[105px] shrink-0">
-          {stats ? (
-            <>
-              {stats.topKinds.map(([kind, count]) => (
-                <div key={kind} className="flex items-center gap-1.5 text-[10px] leading-tight">
-                  <span className={clsx(
-                    'w-1.5 h-1.5 rounded-full shrink-0',
-                    kindDotColors[kind] || 'bg-theme-text-tertiary',
-                  )} />
-                  <span className="text-theme-text-primary font-medium w-5 text-right tabular-nums">{count}</span>
-                  <span className="text-theme-text-tertiary truncate">{kind}</span>
-                </div>
-              ))}
-
-              {(stats.healthCounts.degraded > 0 || stats.healthCounts.unhealthy > 0) && (
-                <div className="flex items-center gap-1.5 text-[10px] text-theme-text-tertiary mt-0.5 pt-1 border-t border-theme-border/50">
-                  {stats.healthCounts.unhealthy > 0 && (
-                    <span className="flex items-center gap-0.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                      {stats.healthCounts.unhealthy}
-                    </span>
-                  )}
-                  {stats.healthCounts.degraded > 0 && (
-                    <span className="flex items-center gap-0.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                      {stats.healthCounts.degraded}
-                    </span>
-                  )}
-                </div>
-              )}
-            </>
-          ) : (
-            // No graph yet, or one with nothing in scope. Until a frame lands
-            // there is no honest number here — a zero would read as an empty
-            // cluster, so pulse instead.
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-1.5 text-[10px] leading-tight">
-                <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', counts ? 'bg-blue-400' : 'bg-theme-text-tertiary/30 animate-pulse')} />
-                {counts ? (
-                  <span className="text-theme-text-primary font-medium w-5 text-right tabular-nums">{counts.nodeCount}</span>
-                ) : (
-                  <span className="h-3 w-5 rounded bg-theme-text-tertiary/20 animate-pulse" />
-                )}
-                <span className="text-theme-text-tertiary">resources</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-[10px] leading-tight">
-                <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', counts ? 'bg-theme-text-tertiary' : 'bg-theme-text-tertiary/30 animate-pulse')} />
-                {counts ? (
-                  <span className="text-theme-text-primary font-medium w-5 text-right tabular-nums">{counts.edgeCount}</span>
-                ) : (
-                  <span className="h-3 w-5 rounded bg-theme-text-tertiary/10 animate-pulse" />
-                )}
-                <span className="text-theme-text-tertiary">connections</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right: schematic illustration */}
-        <div className="flex-1 flex items-center min-w-0">
-          <TopologySchematic />
-        </div>
-      </div>
-
-      <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary group-hover:text-theme-text-primary transition-colors">
-        Open Topology
-        <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-      </div>
-      </div>
-    </button>
+  const fact = counts ? (
+    <>{counts.nodeCount} resources &middot; {counts.edgeCount} relationships</>
+  ) : needsNamespaceFilter ? undefined : (
+    <span data-testid="topology-counts-loading" className="inline-block h-3 w-28 rounded bg-theme-text-tertiary/20 animate-pulse align-middle" />
   )
-}
 
-// Same shape as the graph card: the namespaces take the legend's place beside
-// the drawing. They are a hint at where to start, not a ranking of the cluster,
-// so the issue list's completeness doesn't matter here and no counts show.
-function NamespaceStartCard({ issues, onNavigate, onOpenNamespace, namespaceCount }: Pick<TopologyPreviewProps, 'issues' | 'onNavigate' | 'onOpenNamespace' | 'namespaceCount'>) {
-  const ranked = useMemo(() => rankNamespacesByIssues(issues.issues), [issues.issues])
-
-  // The whole card opens Topology like the graph card does. A button can't
-  // hold the namespace buttons, so a full-card button sits underneath them.
   return (
-    <div className="group relative h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 overflow-hidden flex flex-col">
-      <button
-        type="button"
-        onClick={onNavigate}
-        aria-label="Open Topology"
-        className="absolute inset-0 rounded-xl"
-      />
-      <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
-        <div className="flex items-center gap-2">
-          <Network className="w-4 h-4 text-theme-text-tertiary" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">Topology</span>
-        </div>
-        {namespaceCount ? (
-          <span className="text-[11px] text-theme-text-tertiary">{namespaceCount} {pluralNoun(namespaceCount, 'namespace')}</span>
-        ) : null}
-      </div>
-
-      <div className="pointer-events-none flex-1 flex items-stretch min-h-0 px-3 py-1.5 gap-2">
-        {(issues.loading || ranked.length > 0) && (
-        <div className="flex flex-col justify-center min-w-[136px] w-[38%] shrink-0">
-          {issues.loading ? (
-            <div className="flex flex-col gap-1.5 px-2 pt-1" aria-label="Loading namespaces">
-              {Array.from({ length: 3 }, (_, i) => (
-                <span key={i} className="h-4 rounded bg-theme-text-tertiary/15 animate-pulse" />
-              ))}
-            </div>
-          ) : (
-            <ul className="flex flex-col">
-              {ranked.map(ns => (
-                <li key={ns.name} className="pointer-events-auto relative">
-                  <Tooltip content={`Open ${ns.name} in Topology. Sets the namespace for all of Radar.`} wrapperClassName="block w-full">
-                  <button
-                    type="button"
-                    onClick={() => onOpenNamespace(ns.name)}
-                    aria-label={`${ns.name}, ${ns.critical > 0 ? 'critical issues' : 'issues'}`}
-                    className="w-full flex items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-theme-hover transition-colors"
-                  >
-                    <StatusDot tone={ns.critical > 0 ? 'unhealthy' : 'degraded'} className="shrink-0" />
-                    <span className="min-w-0 truncate text-xs font-medium text-theme-text-primary">{ns.name}</span>
-                  </button>
-                  </Tooltip>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        )}
-
-        <div className="flex-1 flex items-center min-w-0 opacity-85">
-          <TopologySchematic />
-        </div>
-      </div>
-
-      <div className="pointer-events-none px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary group-hover:text-theme-text-primary transition-colors">
-        Open Topology
-        <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-      </div>
-    </div>
+    <HomeDiagramCard
+      icon={Network}
+      title="Topology"
+      fact={fact}
+      drawing={<TopologySchematic />}
+      caption="How ingresses, services and workloads connect, grouped by namespace."
+      footer="Open Topology"
+      onNavigate={onNavigate}
+    />
   )
 }
