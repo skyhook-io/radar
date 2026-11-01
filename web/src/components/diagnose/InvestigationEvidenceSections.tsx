@@ -79,7 +79,7 @@ export function RuledOutBlock({
                     onClick={() => onReveal(entry.item)}
                     className="rounded text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                   >
-                    See {observation.title}
+                    See {ruledOutEvidenceLabel(observation)}
                     {entry.item.placement === "revision"
                       ? " (earlier observation)"
                       : ""}
@@ -92,6 +92,16 @@ export function RuledOutBlock({
       </ul>
     </section>
   );
+}
+
+// An issue's title is only its reason ("IPExhaustion"), which says neither
+// that it is an issue nor which resource it is on; two entries can cite the
+// same reason on different resources.
+function ruledOutEvidenceLabel(
+  observation: NonNullable<InvestigationCaseItem["observation"]>,
+): string {
+  if (observation.data.type !== "issue") return observation.title;
+  return `${observation.title} issue on ${observation.data.issue.name}`;
 }
 
 export function AssessmentEvidenceQualification({
