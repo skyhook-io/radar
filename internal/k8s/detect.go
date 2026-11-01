@@ -122,6 +122,9 @@ type Detection struct {
 	// RestartLoop is set on a Pod crashloop row emitted because a container is
 	// in an active restart loop (see activeRestartLoop). Nil otherwise.
 	RestartLoop *issuesapi.RestartLoop
+	// EvictedFromNode is spec.nodeName of an Evicted pod: the node whose
+	// kubelet evicted it. The pod's own field, so it needs no node read.
+	EvictedFromNode string `json:"-"`
 	// AffectedRefs names resources a detection on another subject affects
 	// (the Services, workloads and Pods a NetworkPolicy isolates), so the issue
 	// also shows up on those resources. Ordered most to least important; the
@@ -617,6 +620,15 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 					cause, action = imagePullDiagnosis(reason, message)
 				}
 			}
+			var evictedFrom, messageSource string
+			var evictedAt time.Time
+			if reason == health.PodEvictedReason && health.IsEvictedPod(pod) {
+				ev := evictedPodProblem(pod, ownerKind)
+				severity, message, rawMessage, fingerprint = ev.severity, ev.message, ev.raw, ev.fingerprint
+				cause, action, evictedAt = ev.cause, ev.action, ev.onset
+				messageSource = issuesapi.MessageSourceRadar
+				evictedFrom = pod.Spec.NodeName
+			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
 			// healthy operation (started_after_resource_was_healthy).
@@ -715,6 +727,8 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				Reason:               reason,
 				Message:              message,
 				RawMessage:           rawMessage,
+				MessageSource:        messageSource,
+				EvictedFromNode:      evictedFrom,
 				Fingerprint:          fingerprint,
 				Age:                  timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
@@ -736,6 +750,9 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 			var onset time.Time
 			if reason == readinessGatesNotReadyReason {
 				onset, _ = health.PodReadinessGateFailure(pod, now)
+			}
+			if !evictedAt.IsZero() {
+				onset = evictedAt
 			}
 			setDetectionOnset(&detection, now, onset)
 			if pinLoopSeverity {

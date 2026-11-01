@@ -57,7 +57,7 @@ var catalogOrder = []Category{
 	CategoryImagePullFailed, CategoryContainerWaiting, CategoryInitContainerFailed,
 	// Runtime
 	CategoryCrashLoop, CategoryOOMKilled, CategoryLivenessProbeFail, CategoryReadinessFailed,
-	CategoryWorkloadDegraded, CategoryHighRestart, CategoryJobFailed, CategoryCronJobFailed,
+	CategoryWorkloadDegraded, CategoryHighRestart, CategoryPodEvicted, CategoryJobFailed, CategoryCronJobFailed,
 	// Configuration
 	CategoryMissingConfigRef, CategoryInvalidConfiguration, CategoryPDBBlocksEvictions, CategorySecretSyncFailed,
 	// Networking
@@ -104,6 +104,7 @@ var categoryDescription = map[Category]string{
 	CategoryReadinessFailed:   "A readiness probe is failing or a declared readiness gate has not passed; the Pod is not ready for normal Service traffic.",
 	CategoryWorkloadDegraded:  "A workload has fewer ready replicas than desired — some pods are unavailable.",
 	CategoryHighRestart:       "A container has restarted many times — unstable even if it's currently running.",
+	CategoryPodEvicted:        "The kubelet evicted a pod because its node ran low on memory, disk, or PIDs, or because the pod exceeded its own ephemeral-storage limit.",
 	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline — or has been running too long with no completions.",
 	CategoryCronJobFailed:     "A CronJob's recent runs are failing, or its schedule isn't producing successful jobs.",
 	// Configuration

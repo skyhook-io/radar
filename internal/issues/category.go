@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -221,6 +222,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	case "Pod":
 		if in.Reason == "OOMKilled" {
 			return issuesapi.CategoryOOMKilled
+		}
+		if in.Reason == health.PodEvictedReason {
+			return issuesapi.CategoryPodEvicted
 		}
 		switch in.Reason {
 		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ImageInspectError":
