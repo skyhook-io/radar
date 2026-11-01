@@ -1724,6 +1724,15 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if resp.HistoryCoverage != nil {
 		hints = append(hints, meaningfulchanges.HistoryCoverageGuidance(*resp.HistoryCoverage))
 	}
+	// A default query leaves out Nodes and untracked custom kinds; name the
+	// ones that changed so they stay discoverable.
+	if input.Kind == "" && input.Name == "" && (allowed == nil || len(allowed) > 0) {
+		if kinds, scanFull, err := meaningfulchanges.OmittedKinds(ctx, query); err == nil {
+			if hint := meaningfulchanges.OmittedKindsGuidance(kinds, scanFull); hint != "" {
+				hints = append(hints, hint)
+			}
+		}
+	}
 	resp.NarrowHint = strings.Join(hints, " ")
 	// After the cap and the hint, so both still describe every returned
 	// change. A name= query is one object's history and stays as rows.
