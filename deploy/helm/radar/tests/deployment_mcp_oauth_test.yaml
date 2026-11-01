@@ -1,0 +1,72 @@
+suite: MCP OAuth deployment
+templates:
+  - deployment.yaml
+tests:
+  - it: leaves MCP OAuth disabled by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-oauth
+
+  - it: enables MCP OAuth with OIDC and prevents overlapping replicas during rollout
+    set:
+      mcp.oauth.enabled: true
+      auth.mode: oidc
+      auth.oidc.redirectURL: https://radar.example.com/auth/callback
+      persistence.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-oauth
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-mode=oidc
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: rejects disabled MCP
+    set:
+      mcp.enabled: false
+      mcp.oauth.enabled: true
+      auth.mode: oidc
+    asserts:
+      - failedTemplate:
+          errorMessage: mcp.oauth.enabled requires mcp.enabled=true
+
+  - it: rejects unauthenticated deployments
+    set:
+      mcp.oauth.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: mcp.oauth.enabled requires auth.mode=oidc
+
+  - it: rejects proxy authentication
+    set:
+      mcp.oauth.enabled: true
+      auth.mode: proxy
+    asserts:
+      - failedTemplate:
+          errorMessage: mcp.oauth.enabled requires auth.mode=oidc
+
+  - it: rejects Cloud deployments
+    set:
+      mcp.oauth.enabled: true
+      auth.mode: oidc
+      cloud.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: mcp.oauth.enabled is not supported with cloud.enabled=true
+
+  - it: rejects multiple replicas without persistence
+    set:
+      mcp.oauth.enabled: true
+      auth.mode: oidc
+      replicaCount: 2
+      persistence.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "mcp.oauth.enabled requires replicaCount=1: OAuth clients and tokens are stored in memory and are not shared across pods"
