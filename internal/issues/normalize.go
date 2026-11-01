@@ -208,6 +208,9 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		}
 		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleContext, Facts: []issuesapi.DiagnosticFact{{Type: factNodeStartupCorroboration, Message: message, Refs: refs}}}
 	}
+	if p.EvictedFromNode != "" && reason == p.Reason {
+		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleContext, Facts: []issuesapi.DiagnosticFact{evictedFromNodeFact([]string{p.EvictedFromNode}, false)}}
+	}
 	if reason == p.Reason {
 		if ctx := networkPolicyIsolationContext(p); ctx != nil {
 			iss.DiagnosticContext = ctx

@@ -2,6 +2,7 @@ import { useEffect, type ComponentType, type ReactNode } from 'react'
 import { ArrowDownUp, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { PaneLoader } from '../ui/PaneLoader'
+import { AlertBanner } from '../ui/drawer-components'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
@@ -10,6 +11,12 @@ import { Tooltip } from '../ui/Tooltip'
 import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
+
+function argoResumeDescription(suspended: boolean, settings: ArgoActionHandlers['resumeSettings']): string {
+  if (suspended) return 'Turn auto-sync back on with its current or saved settings.'
+  if (!settings) return 'Turn on automated sync, so Argo applies new commits from Git.'
+  return `Argo applies new commits${settings.selfHeal ? ' and reverts live edits (self-heal)' : ''}. Resources removed from Git are ${settings.prune ? 'deleted (prune on)' : 'kept (prune off)'}.`
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -87,6 +94,9 @@ export interface ArgoActionHandlers {
   // on (isArgoAutoSyncSwitchedOff): Enable auto-sync renders disabled, with
   // the upgrade note under the header.
   resumeUpgrade?: RadarUpgradeRequirement | null
+  // What Enable auto-sync turns on when Radar didn't suspend the app
+  // (argoResumeSettings). Without it the tooltip makes no prune claim.
+  resumeSettings?: { prune: boolean; selfHeal: boolean } | null
   resumeBlockedReason?: string
 }
 
@@ -132,6 +142,8 @@ export interface GitOpsDetailLayoutProps {
   // Insights — drives StatusStrip + IssuesBand
   insight: GitOpsInsight | null
   insightLoading: boolean
+  // Tree warnings are independent of the insights request's success.
+  warnings?: string[]
   // Issue interactions — caller wires onSelectIssue to jump to Changes tab
   // and highlight the affected resource.
   onSelectIssue?: (issue: GitOpsIssue) => void
@@ -236,6 +248,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     detail,
     insight,
     insightLoading,
+    warnings,
     onSelectIssue,
     onRemediate,
     remediationPending,
@@ -432,7 +445,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   ) : (
                     <ActionButton
                       label="Enable auto-sync"
-                      description="Re-enable automatic syncing of Git changes to the cluster."
+                      description={argoResumeDescription(effectiveSuspended, argo.resumeSettings)}
                       icon={Play}
                       loading={argo.resuming}
                       onClick={() => !resumeBlockedReason && !resumeUpgrade && argo.onResume()}
@@ -543,6 +556,14 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
         <div className="p-4 text-sm text-red-500">Failed to load GitOps view: {resourceError.message}</div>
       ) : (
         <div className={bodyShellClass}>
+          {((warnings?.length ?? 0) > 0 || (insight?.warnings?.length ?? 0) > 0) && (
+            <AlertBanner
+              variant="warning"
+              title="Limited resource view"
+              items={[...new Set([...(warnings ?? []), ...(insight?.warnings ?? [])])]}
+              className="shrink-0 rounded-none border-x-0 border-t-0"
+            />
+          )}
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-4 py-2">
             <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-1">
               <ViewButton active={activeTab === 'topology'} icon={GitBranch} label="Topology" onClick={() => onTabChange('topology')} />

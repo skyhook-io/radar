@@ -66,6 +66,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   readiness_failed: 'Not ready for traffic',
   workload_degraded: 'Workload degraded',
   high_restart: 'High restart count',
+  pod_evicted: 'Pod evicted',
   missing_config_ref: 'Missing reference',
   pdb_blocks_evictions: 'Evictions blocked',
   secret_sync_failed: 'Secret sync failed',

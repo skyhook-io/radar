@@ -76,7 +76,10 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
 		refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app,
 	}}
-	builder := NewBuilder(dynamic, topo)
+	dep := ownedObject("apps", "Deployment", "prod", "billing", nil, false)
+	rs := ownedObject("apps", "ReplicaSet", "prod", "billing-abc", &dep, true)
+	pod := ownedObject("", "Pod", "prod", "billing-abc-1", &rs, true)
+	builder := newTestBuilder(t, dynamic, topo).WithOwnership(ownershipSession(t, dep, rs, pod))
 
 	tree, _, err := builder.Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
@@ -127,7 +130,7 @@ func TestBuildDoesNotEnrichManagedResourcesOutsideAllowedNamespaces(t *testing.T
 		refKey(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"}):           deployment,
 	}}
 
-	tree, _, err := NewBuilder(dynamic, nil).
+	tree, _, err := newTestBuilder(t, dynamic, nil).
 		WithAllowedNamespaces([]string{"argocd"}).
 		Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
@@ -225,7 +228,7 @@ func TestBuildUnknownKindWarnsOnceAndKeepsSyntheticNodes(t *testing.T) {
 		dynamic.errs[refKey(ResourceRef{Group: "monitoring.coreos.com", Kind: "Prometheus", Namespace: "monitoring", Name: fmt.Sprintf("prom-%d", i)})] = unknownErr
 	}
 
-	tree, _, err := NewBuilder(dynamic, nil).
+	tree, _, err := newTestBuilder(t, dynamic, nil).
 		WithUnknownKindMatcher(func(err error) bool { return errors.Is(err, unknownErr) }).
 		Build(context.Background(), "applications", "argocd", "monitoring", "argoproj.io")
 	if err != nil {
@@ -280,7 +283,7 @@ func TestBuildParallelEnrichmentMatchesObjects(t *testing.T) {
 	}}
 	objects[refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "cms"})] = app
 
-	tree, _, err := NewBuilder(&fakeDynamic{objects: objects}, nil).
+	tree, _, err := newTestBuilder(t, &fakeDynamic{objects: objects}, nil).
 		Build(context.Background(), "applications", "argocd", "cms", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -342,7 +345,7 @@ func TestBuild_ControllerHealthWinsOverTopology(t *testing.T) {
 		},
 	})
 	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
-	tree, _, err := NewBuilder(dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	tree, _, err := newTestBuilder(t, dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -368,7 +371,7 @@ func TestBuild_AppTreeModeFillsTopologyKindsFromRadar(t *testing.T) {
 		},
 	})
 	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
-	tree, _, err := NewBuilder(dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	tree, _, err := newTestBuilder(t, dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -412,7 +415,7 @@ func TestBuild_RemoteDestinationReadsNothingLocal(t *testing.T) {
 	topo := healthProvenanceTopo()
 	topo.Nodes = append(topo.Nodes, topology.Node{ID: "pod/prod/billing-1", Kind: topology.KindPod, Name: "billing-1", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "prod"}})
 	topo.Edges = []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages}}
-	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	tree, _, err := newTestBuilder(t, dynamic, topo).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -474,7 +477,7 @@ func TestBuild_RemoteFluxKustomizationReadsNothingLocal(t *testing.T) {
 		},
 		Edges: []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages}},
 	}
-	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "kustomizations", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
+	tree, _, err := newTestBuilder(t, dynamic, topo).Build(context.Background(), "kustomizations", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -515,7 +518,7 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 	topo := &topology.Topology{Nodes: []topology.Node{
 		topoNode("Deployment", "demo", "podinfo", map[string]string{fluxHelmNameLabel: "podinfo", fluxHelmNamespaceLabel: "flux-system"}),
 	}}
-	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "helmreleases", "flux-system", "podinfo", "helm.toolkit.fluxcd.io")
+	tree, _, err := newTestBuilder(t, dynamic, topo).Build(context.Background(), "helmreleases", "flux-system", "podinfo", "helm.toolkit.fluxcd.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -547,7 +550,7 @@ func TestFluxTreeFollowsObservedChartSourceAndGatesKinds(t *testing.T) {
 			for _, denied := range []string{"", "HelmChart", "HelmRepository"} {
 				t.Run(denied, func(t *testing.T) {
 					getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(cr): chart, refKey(rr): repo}}
-					builder := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied })
+					builder := newTestBuilder(t, getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied })
 					tree, _, err := builder.Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
 					if err != nil {
 						t.Fatal(err)
@@ -601,7 +604,7 @@ func TestFluxTreeFollowsObservedChartSourceAndGatesKinds(t *testing.T) {
 			}
 			if inline {
 				getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(rr): repo}}
-				tree, _, err := NewBuilder(getter, nil).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+				tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -626,7 +629,7 @@ func TestFluxBootstrapSourceRetainsInventoryOwnership(t *testing.T) {
 	kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "flux-system"}
 	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "flux-system", Name: "flux-system"}
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(kr): ks, refKey(rr): repo}}
-	tree, _, err := NewBuilder(getter, nil).Build(context.Background(), "Kustomization", "flux-system", "flux-system", "kustomize.toolkit.fluxcd.io")
+	tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "Kustomization", "flux-system", "flux-system", "kustomize.toolkit.fluxcd.io")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,10 +652,13 @@ func TestReadableGeneratedDescendantSurvivesDeniedIntermediate(t *testing.T) {
 		{ID: "replicaset/prod/hidden", Kind: topology.KindReplicaSet, Name: "hidden", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1", "labels": map[string]string{"private": "hidden-metadata"}}},
 		{ID: "pod/prod/visible", Kind: topology.KindPod, Name: "visible", Data: map[string]any{"namespace": "prod", "apiVersion": "v1"}},
 	}, Edges: []topology.Edge{{Source: "deployment/prod/app", Target: "replicaset/prod/hidden", Type: topology.EdgeManages}, {Source: "replicaset/prod/hidden", Target: "pod/prod/visible", Type: topology.EdgeManages}}}
+	dep := ownedObject("apps", "Deployment", "prod", "app", nil, false)
+	rs := ownedObject("apps", "ReplicaSet", "prod", "hidden", &dep, true)
+	pod := ownedObject("", "Pod", "prod", "visible", &rs, true)
 	for _, denied := range []string{"ReplicaSet", "Deployment"} {
 		t.Run(denied, func(t *testing.T) {
 			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "app"}): app}}
-			tree, _, err := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), "Application", "argocd", "app", "argoproj.io")
+			tree, _, err := newTestBuilder(t, getter, topo).WithOwnership(ownershipSession(t, dep, rs, pod)).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), "Application", "argocd", "app", "argoproj.io")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -691,7 +697,7 @@ func TestDeniedFluxSourceIsDisclosedWithoutFetchingIt(t *testing.T) {
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
 		refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "prod", Name: "app"}): root,
 	}}
-	tree, _, err := NewBuilder(getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "GitRepository" }).Build(context.Background(), "Kustomization", "prod", "app", "kustomize.toolkit.fluxcd.io")
+	tree, _, err := newTestBuilder(t, getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "GitRepository" }).Build(context.Background(), "Kustomization", "prod", "app", "kustomize.toolkit.fluxcd.io")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +745,7 @@ func TestExactDeclarationCannotHydrateDeniedCoreCollision(t *testing.T) {
 		{ID: "secret/team/shared", Kind: topology.KindSecret, Name: "shared", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "labels": map[string]string{"private": "denied-core-metadata"}}},
 		{ID: "pod/team/private", Kind: topology.KindPod, Name: "private", Data: map[string]any{"namespace": "team"}},
 	}, Edges: []topology.Edge{{Source: "secret/team/shared", Target: "pod/team/private", Type: topology.EdgeManages}}}
-	result, _, err := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool {
+	result, _, err := newTestBuilder(t, getter, topo).WithReadCheck(func(ref ResourceRef) bool {
 		return ref.Kind != "Secret" || ref.Group == "custom.example"
 	}).Build(context.Background(), "Application", "team", "app", "argoproj.io")
 	if err != nil {
@@ -777,7 +783,7 @@ func TestCoreDeclarationNeverHydratesCustomCollision(t *testing.T) {
 			topo.Nodes = append(topo.Nodes, topology.Node{ID: "service/team/dual", Kind: topology.KindService, Name: "dual", Data: map[string]any{"namespace": "team", "labels": map[string]string{"source": "core"}}})
 		}
 		topo.Nodes = append(topo.Nodes, topology.Node{ID: "knative/team/dual", Kind: topology.KindKnativeService, Name: "dual", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "apiVersion": "serving.knative.dev/v1", "labels": map[string]string{"source": "custom"}}})
-		tree, _, err := NewBuilder(getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+		tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -796,7 +802,7 @@ func TestRemoteInventoryDoesNotUseLocalReadPermissions(t *testing.T) {
 		"status": map[string]any{"resources": []any{map[string]any{"kind": "Secret", "namespace": "remote", "name": "declared", "status": "Synced"}}},
 	}}
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "fleet"}): root}}
-	tree, _, err := NewBuilder(getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "Secret" }).Build(context.Background(), "Application", "argocd", "fleet", "argoproj.io")
+	tree, _, err := newTestBuilder(t, getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "Secret" }).Build(context.Background(), "Application", "argocd", "fleet", "argoproj.io")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,7 +817,7 @@ func TestExactLookupRetainsServedCalicoIdentities(t *testing.T) {
 	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "app", "namespace": "team"}, "spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, "status": map[string]any{"resources": []any{map[string]any{"group": "crd.projectcalico.org", "kind": "NetworkPolicy", "namespace": "team", "name": "policy"}}}}}
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "team", Name: "app"}): root}}
 	topo := &topology.Topology{Nodes: []topology.Node{{ID: "calico/team/policy", Kind: topology.KindCalicoNetworkPolicy, Name: "policy", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "apiVersion": "projectcalico.org/v3", "apiVersions": []string{"projectcalico.org/v3", "crd.projectcalico.org/v1"}, "labels": map[string]string{"observed": "true"}}}}}
-	tree, _, err := NewBuilder(getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+	tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +834,7 @@ func TestFluxSharedSourceIsDependencyForEachConsumer(t *testing.T) {
 	for _, name := range []string{"one", "two"} {
 		kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "team", Name: name}
 		getter.objects[refKey(kr)] = &unstructured.Unstructured{Object: map[string]any{"apiVersion": kr.Group + "/v1", "kind": kr.Kind, "metadata": map[string]any{"namespace": kr.Namespace, "name": name}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "namespace": "shared", "name": "repo"}}}}
-		tree, _, err := NewBuilder(getter, nil).Build(context.Background(), kr.Kind, kr.Namespace, name, kr.Group)
+		tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), kr.Kind, kr.Namespace, name, kr.Group)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -852,7 +858,7 @@ func TestRemoteFluxInventoryOverlapDoesNotEnrichFromLocalSource(t *testing.T) {
 		if withTopology {
 			topo = &topology.Topology{Nodes: []topology.Node{{ID: "local-source", Kind: topology.KindGitRepository, Name: rr.Name, Data: map[string]any{"namespace": rr.Namespace, "apiVersion": repo.GetAPIVersion(), "labels": map[string]string{"private": "local"}}}}}
 		}
-		tree, _, err := NewBuilder(getter, topo).Build(context.Background(), root.GetKind(), root.GetNamespace(), root.GetName(), "kustomize.toolkit.fluxcd.io")
+		tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), root.GetKind(), root.GetNamespace(), root.GetName(), "kustomize.toolkit.fluxcd.io")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -868,7 +874,7 @@ func TestHelmReleaseRootKeepsInstalledChartOverTopologyRevision(t *testing.T) {
 	hr.Object["status"] = map[string]any{"lastAttemptedRevision": "6.15.0", "history": []any{map[string]any{"chartVersion": "6.15.0", "status": "deployed"}}}
 	topo := &topology.Topology{Nodes: []topology.Node{{ID: "helmrelease/team/app", Kind: "HelmRelease", Name: "app", Data: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "namespace": "team", "revision": 0}}}}
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}): hr}}
-	tree, _, err := NewBuilder(getter, topo).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+	tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -906,7 +912,7 @@ func TestBuildDecidesToolByAPIGroup(t *testing.T) {
 			dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
 				refKey(ResourceRef{Group: tc.requestGroup, Kind: tc.requestKind, Namespace: "apps", Name: "web"}): obj,
 			}}
-			tree, _, err := NewBuilder(dynamic, &topology.Topology{}).Build(context.Background(), tc.requestKind, "apps", "web", tc.requestGroup)
+			tree, _, err := newTestBuilder(t, dynamic, &topology.Topology{}).Build(context.Background(), tc.requestKind, "apps", "web", tc.requestGroup)
 			if tc.want == "" {
 				if !errors.Is(err, ErrNotGitOpsResource) {
 					t.Fatalf("Build error = %v, want ErrNotGitOpsResource", err)
@@ -935,7 +941,7 @@ func TestBuildNotGitOpsErrorNamesTheResource(t *testing.T) {
 	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
 		refKey(ResourceRef{Group: "app.k8s.io", Kind: "applications", Namespace: "shop", Name: "wordpress"}): obj,
 	}}
-	_, _, err := NewBuilder(dynamic, &topology.Topology{}).Build(context.Background(), "applications", "shop", "wordpress", "app.k8s.io")
+	_, _, err := newTestBuilder(t, dynamic, &topology.Topology{}).Build(context.Background(), "applications", "shop", "wordpress", "app.k8s.io")
 	want := "Application.app.k8s.io shop/wordpress is not a supported Argo CD or Flux resource, so it has no GitOps view"
 	if err == nil || err.Error() != want {
 		t.Fatalf("error = %v, want %q", err, want)

@@ -44,7 +44,7 @@ export {
   gitOpsDetailGroup,
   isDestinationRef,
 } from './detail-helpers'
-export { SyncOptionsDialog } from './SyncOptionsDialog'
+export { SyncOptionsDialog, argoSyncOptionsForRequest } from './SyncOptionsDialog'
 export type { SyncOptionsDialogProps, ArgoSyncOpts } from './SyncOptionsDialog'
 export { RollbackDialog } from './RollbackDialog'
 export type { RollbackDialogProps } from './RollbackDialog'

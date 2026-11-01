@@ -95,7 +95,7 @@ export interface GitOpsResourceTree {
   // The host couldn't reach the controller's API server and is retrying;
   // ask again now and then.
   healthApiRetrying?: boolean
-  // The Application (or Flux object with spec.kubeConfig) deploys to another
-  // cluster; Radar derives nothing about its resources from here.
+  // The current destination or recorded Argo comparison is elsewhere;
+  // Radar derives nothing from same-named local resources.
   remoteDestination?: boolean
 }

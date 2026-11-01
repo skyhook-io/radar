@@ -87,6 +87,8 @@ func TestClassify(t *testing.T) {
 		{"deploy degraded", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "3/5 available"}, issuesapi.CategoryWorkloadDegraded},
 		{"deploy rollout stuck", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Rollout stuck"}, issuesapi.CategoryRolloutStalled},
 		{"deploy replica failure", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "ReplicaFailure"}, issuesapi.CategoryRolloutStalled},
+		{"deploy RWOP volume shared", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: k8s.SharedRWOPVolumeReason}, issuesapi.CategoryVolumeAccessModeConflict},
+		{"deploy RWO volume shared", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: k8s.SharedRWOVolumeReason}, issuesapi.CategoryVolumeAccessModeConflict},
 		{"statefulset degraded", classifyInput{Source: SourceProblem, Kind: "StatefulSet", Reason: "2/3 ready"}, issuesapi.CategoryWorkloadDegraded},
 		{"daemonset degraded", classifyInput{Source: SourceProblem, Kind: "DaemonSet", Reason: "1 unavailable"}, issuesapi.CategoryWorkloadDegraded},
 		{"webhook backend unavailable", classifyInput{Source: SourceScheduling, Kind: "Deployment", Reason: "WebhookUnavailable"}, issuesapi.CategoryAdmissionWebhookBlocking},

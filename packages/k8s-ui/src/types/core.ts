@@ -180,6 +180,7 @@ export interface FeatureCapabilities {
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
   argoRollbackSync?: boolean
+  argoSyncInheritance?: boolean
   clusterScopedPlaceholder?: boolean
 }
 
