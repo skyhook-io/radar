@@ -244,26 +244,16 @@ type DashboardChange struct {
 }
 
 type DashboardTrafficSummary struct {
-	Source string `json:"source"`
-	// FlowCount is how many endpoint pairs exchanged traffic, counted the way
-	// TopFlows names them.
+	Source    string             `json:"source"`
 	FlowCount int                `json:"flowCount"`
 	TopFlows  []DashboardTopFlow `json:"topFlows"`
 }
 
-// DashboardTopFlow is one source-to-destination pair, named by workload when
-// the source resolved one. Flows between the same pair on different ports or
-// pods are summed, so a pair appears once.
 type DashboardTopFlow struct {
 	Src            string  `json:"src"`
-	SrcNamespace   string  `json:"srcNamespace,omitempty"`
 	Dst            string  `json:"dst"`
-	DstNamespace   string  `json:"dstNamespace,omitempty"`
 	RequestsPerSec float64 `json:"requestsPerSec,omitempty"`
 	Connections    int64   `json:"connections"`
-	// DirectionUnknown is set when any flow behind the pair could not be
-	// oriented, so Src and Dst may be the wrong way round.
-	DirectionUnknown bool `json:"directionUnknown,omitempty"`
 }
 
 type DashboardHelmSummary struct {
@@ -1250,48 +1240,37 @@ func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []st
 		flows = kept
 	}
 
-	pairs := dashboardFlowPairs(traffic.AggregateFlows(flows))
+	// Aggregate flows
+	aggregated := traffic.AggregateFlows(flows)
+
+	// Sort by connection count
+	sort.Slice(aggregated, func(i, j int) bool {
+		return aggregated[i].Connections > aggregated[j].Connections
+	})
+
+	topFlows := make([]DashboardTopFlow, 0, 3)
+	limit := min(len(aggregated), 3)
+	for _, f := range aggregated[:limit] {
+		srcName := f.Source.Name
+		if f.Source.Workload != "" {
+			srcName = f.Source.Workload
+		}
+		dstName := f.Destination.Name
+		if f.Destination.Workload != "" {
+			dstName = f.Destination.Workload
+		}
+		topFlows = append(topFlows, DashboardTopFlow{
+			Src:         srcName,
+			Dst:         dstName,
+			Connections: f.Connections,
+		})
+	}
+
 	return &DashboardTrafficSummary{
 		Source:    sourceName,
-		FlowCount: len(pairs),
-		TopFlows:  pairs[:min(len(pairs), 3)],
+		FlowCount: len(aggregated),
+		TopFlows:  topFlows,
 	}
-}
-
-// dashboardFlowPairs sums aggregated flows by the endpoint pair the dashboard
-// names, busiest first.
-func dashboardFlowPairs(aggregated []traffic.AggregatedFlow) []DashboardTopFlow {
-	type pairKey struct{ srcNS, src, dstNS, dst string }
-	byPair := make(map[pairKey]*DashboardTopFlow)
-	order := make([]pairKey, 0, len(aggregated))
-	for _, f := range aggregated {
-		src := f.Source.Name
-		if f.Source.Workload != "" {
-			src = f.Source.Workload
-		}
-		dst := f.Destination.Name
-		if f.Destination.Workload != "" {
-			dst = f.Destination.Workload
-		}
-		k := pairKey{f.Source.Namespace, src, f.Destination.Namespace, dst}
-		p, ok := byPair[k]
-		if !ok {
-			p = &DashboardTopFlow{Src: src, SrcNamespace: k.srcNS, Dst: dst, DstNamespace: k.dstNS}
-			byPair[k] = p
-			order = append(order, k)
-		}
-		p.Connections += f.Connections
-		p.DirectionUnknown = p.DirectionUnknown || f.DirectionUnknown
-	}
-
-	pairs := make([]DashboardTopFlow, 0, len(order))
-	for _, k := range order {
-		pairs = append(pairs, *byPair[k])
-	}
-	sort.SliceStable(pairs, func(i, j int) bool {
-		return pairs[i].Connections > pairs[j].Connections
-	})
-	return pairs
 }
 
 func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {

@@ -101,10 +101,6 @@
   --edge-configures: #f59e0b;
   --edge-uses: #ec4899;
 
-  /* Observed network traffic (Live Traffic illustrations). Its own hue so it
-     never reads as health (success green) or the traffic graph's DNS cyan. */
-  --traffic-flow: light-dark(#0D9488, #2DD4BF);
-
   /* ── Group styling ── */
   --group-border-namespace: light-dark(rgba(59, 130, 246, 0.3), rgba(59, 130, 246, 0.4));
   --group-border-app: light-dark(rgba(16, 185, 129, 0.3), rgba(16, 185, 129, 0.4));

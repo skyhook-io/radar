@@ -53,8 +53,6 @@ Cool, professional, data-dense. A barely-blue-tinted neutral palette — not gen
 
 Full Skyhook brand scale: `--color-skyhook-50` (`#EBF2FA`) through `--color-skyhook-900` (`#1F365C`), centered on `--color-skyhook` (`#5088CC`). Available as `bg-skyhook-*` / `text-skyhook-*` utilities.
 
-`text-traffic` / `--traffic-flow` (`#0D9488` light, `#2DD4BF` dark) marks observed network traffic in illustrations such as Home's Live Traffic card. It is not a health or status color.
-
 ### Semantic Status
 | Color | Variable | Hex | Use for |
 |-------|----------|-----|---------|

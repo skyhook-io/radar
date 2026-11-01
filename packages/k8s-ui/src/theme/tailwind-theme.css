@@ -42,9 +42,6 @@
   --color-accent-muted: var(--accent-muted);
   --color-accent-text: var(--accent-text);
 
-  /* Observed traffic */
-  --color-traffic: var(--traffic-flow);
-
   /* Skyhook brand (refined blue palette — more saturated) */
   --color-skyhook: #5088CC;
   --color-skyhook-50: #EBF2FA;
