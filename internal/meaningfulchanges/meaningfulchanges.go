@@ -228,6 +228,10 @@ var (
 		// get_changes, not in a single-namespace query — correct, since one
 		// webhook config gates admission across all namespaces.
 		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration", "GatewayClass",
+		// A new or edited grant changes what a workload's ServiceAccount may
+		// do, with no trace on the workload. Roles and RoleBindings list in
+		// their namespace's feed; the cluster-scoped kinds list cluster-wide.
+		"Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding",
 	}
 	// lifecycleOnlyKinds contribute deletes; Secret updates have a separate
 	// reference gate in the default feed.
@@ -1092,6 +1096,10 @@ var trackedKindGroups = map[string]string{
 	"UDPRoute":                       "gateway.networking.k8s.io",
 	"TLSRoute":                       "gateway.networking.k8s.io",
 	"ReferenceGrant":                 "gateway.networking.k8s.io",
+	"Role":                           "rbac.authorization.k8s.io",
+	"RoleBinding":                    "rbac.authorization.k8s.io",
+	"ClusterRole":                    "rbac.authorization.k8s.io",
+	"ClusterRoleBinding":             "rbac.authorization.k8s.io",
 }
 
 // TrackedKindForGroup is TrackedKind with kind-collision protection: when
@@ -1153,6 +1161,9 @@ func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange 
 		Timestamp:      e.Timestamp.Format(time.RFC3339),
 		ChangeCategory: category,
 		RankReason:     reason,
+	}
+	if grant := bindingGrantReason(e); grant != "" {
+		change.RankReason = grant
 	}
 	if e.Diff != nil {
 		if eventGroupMatchesTracked(e.Kind, e.APIVersion) && hasApplicationConfigField(e.Kind, e.Diff.Fields) {
@@ -1229,11 +1240,12 @@ func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {
 }
 
 func hasSpecConfigField(e timeline.TimelineEvent) bool {
-	// ConfigMap data and admission webhook configs hold their configuration at
-	// the top level (data / webhooks[]), not under spec. — the path-prefix
-	// heuristic below would drop their (curated, status-free) diffs entirely.
+	// ConfigMap data, admission webhook configs and RBAC objects hold their
+	// configuration at the top level (data / webhooks[] / rules, subjects),
+	// not under spec; the path-prefix heuristic below would drop their
+	// (curated, status-free) diffs entirely.
 	trackedGroup := eventGroupMatchesTracked(e.Kind, e.APIVersion)
-	if trackedGroup && (isConfigKind(e.Kind) || isWebhookConfigKind(e.Kind)) {
+	if trackedGroup && (isConfigKind(e.Kind) || isWebhookConfigKind(e.Kind) || isRBACKind(e.Kind)) {
 		return true
 	}
 	for _, f := range e.Diff.Fields {
@@ -1532,6 +1544,16 @@ func isWebhookConfigKind(kind string) bool {
 	return kind == "MutatingWebhookConfiguration" || kind == "ValidatingWebhookConfiguration"
 }
 
+// isRBACKind reports the RBAC kinds. Their differs compare only rules,
+// subjects and roleRef, so every tracked diff is a configuration change.
+func isRBACKind(kind string) bool {
+	switch kind {
+	case "Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding":
+		return true
+	}
+	return false
+}
+
 func isLifecycleOnlyKind(kind string) bool {
 	for _, item := range lifecycleOnlyKinds {
 		if kind == item {
@@ -1646,6 +1668,14 @@ func canonicalKind(kind string) string {
 		return "GRPCRoute"
 	case "gateway", "gateways":
 		return "Gateway"
+	case "role", "roles":
+		return "Role"
+	case "rolebinding", "rolebindings":
+		return "RoleBinding"
+	case "clusterrole", "clusterroles":
+		return "ClusterRole"
+	case "clusterrolebinding", "clusterrolebindings":
+		return "ClusterRoleBinding"
 	default:
 		if kind == "" {
 			return ""

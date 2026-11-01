@@ -949,6 +949,17 @@ func isSyncAdd(obj any) bool {
 // the update carries nothing the timeline records (a heartbeat, a
 // managedFields-only write, a reconcile counter). The no-store path asks the same
 // question, so an outage counts only the changes it actually lost.
+func toTimelineDiff(d *DiffInfo) *timeline.DiffInfo {
+	if d == nil {
+		return nil
+	}
+	out := &timeline.DiffInfo{Fields: make([]timeline.FieldChange, len(d.Fields)), Summary: d.Summary}
+	for i, f := range d.Fields {
+		out.Fields[i] = timeline.FieldChange{Path: f.Path, OldValue: f.OldValue, NewValue: f.NewValue}
+	}
+	return out
+}
+
 func timelineUpdateDiff(kind string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) (*timeline.DiffInfo, bool) {
 	var diff *timeline.DiffInfo
 	// Reuse the cache layer's already-computed diff on the hot path; only
@@ -958,17 +969,7 @@ func timelineUpdateDiff(kind string, oldObj, newObj any, precomputedDiff *DiffIn
 		localDiff = ComputeDiff(kind, oldObj, newObj)
 	}
 	if localDiff != nil {
-		diff = &timeline.DiffInfo{
-			Fields:  make([]timeline.FieldChange, len(localDiff.Fields)),
-			Summary: localDiff.Summary,
-		}
-		for i, f := range localDiff.Fields {
-			diff.Fields[i] = timeline.FieldChange{
-				Path:     f.Path,
-				OldValue: f.OldValue,
-				NewValue: f.NewValue,
-			}
-		}
+		diff = toTimelineDiff(localDiff)
 	} else if KindHasDiffer(kind) || isUnstructuredUpdate(oldObj, newObj) {
 		// Diff handling found nothing observable — usually a heartbeat,
 		// managedFields-only update, or reconcile counter.
@@ -1118,6 +1119,9 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 			return
 		}
 	}
+	if op == "add" || op == "delete" {
+		diff = toTimelineDiff(rbacBindingLifecycleDiff(kind, namespace, op, obj))
+	}
 
 	// Recreate-join: an add that replaces a just-deleted object of the same
 	// group, kind, namespace, and name but a different UID carries the diff
@@ -1136,17 +1140,8 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		if meta, ok := newObj.(metav1.Object); ok && time.Since(meta.GetCreationTimestamp().Time) <= 30*time.Second {
 			if stashed, ok := takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
 				if localDiff := ComputeDiff(kind, stripStatusForRecreateDiff(stashed), stripStatusForRecreateDiff(newObj)); localDiff != nil && len(localDiff.Fields) > 0 {
-					diff = &timeline.DiffInfo{
-						Fields:  make([]timeline.FieldChange, len(localDiff.Fields)),
-						Summary: "recreated with changes: " + localDiff.Summary,
-					}
-					for i, f := range localDiff.Fields {
-						diff.Fields[i] = timeline.FieldChange{
-							Path:     f.Path,
-							OldValue: f.OldValue,
-							NewValue: f.NewValue,
-						}
-					}
+					diff = toTimelineDiff(localDiff)
+					diff.Summary = "recreated with changes: " + localDiff.Summary
 					recreated = true
 				}
 			}
