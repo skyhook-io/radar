@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -75,13 +76,30 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	if s.profile == ExecutionProfileSafeguarded {
 		cmd.Env = scrubbedEnv()
 	}
-	// Run from the user's home dir so the session is stored under a stable,
-	// predictable project path: Claude Code's `--resume <id>` is cwd-scoped, and
-	// the "Open in Claude Code" hand-off resumes from a home-dir terminal.
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
+	dir, err := claudeWorkDir()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
 	}
+	cmd.Dir = dir
 	return cmd, cleanup, nil
+}
+
+// claudeWorkDir is where every Claude turn runs, and where the "Continue in
+// Claude Code" hand-off resumes (launch.ts). Older Claude Code versions find a
+// session only from the folder it was created in, so the two must match. It
+// is a folder Radar owns rather than the home dir because Claude Code never
+// remembers the user's folder-trust answer for the home dir.
+func claudeWorkDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("ai: find the home dir for Claude: %w", err)
+	}
+	dir := filepath.Join(home, ".radar", "agent")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("ai: create Claude's working folder: %w", err)
+	}
+	return dir, nil
 }
 
 func (a *claudeAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {

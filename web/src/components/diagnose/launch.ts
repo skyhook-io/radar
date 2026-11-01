@@ -13,6 +13,10 @@ function sq(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+// Radar also creates it before each Claude turn, but a run from before Radar
+// used it can be continued first. Unquoted so the shell expands ~.
+const AGENT_DIR = "~/.radar/agent";
+
 export function launchAgentLabel(run: RunSummary): string {
   if (run.agent === "codex") return "Codex";
   if (run.agent === "opencode") return "OpenCode";
@@ -20,9 +24,8 @@ export function launchAgentLabel(run: RunSummary): string {
   return "Claude Code";
 }
 
-// Claude Code asks whether to trust the folder it starts in, and does not
-// remember the answer for the home directory, which is where the resume runs.
-// Its default answer exits, so a user who presses Enter loses the session.
+// Claude Code asks once whether to trust the folder the resume runs in, and
+// its default answer exits, so a user who presses Enter loses the session.
 export function launchTrustHint(run: RunSummary): string | null {
   if (
     run.agent === "codex" ||
@@ -30,7 +33,7 @@ export function launchTrustHint(run: RunSummary): string | null {
     run.agent === "cursor-agent"
   )
     return null;
-  return "Claude Code may ask to trust your home folder. Select Yes before pressing Enter; the default exits.";
+  return "The first time, Claude Code may ask to trust Radar's agent folder. Select Yes before pressing Enter; the default exits.";
 }
 
 // openInTerminal asks App (which owns the DockProvider) to open Radar's local
@@ -70,13 +73,13 @@ export function buildLaunchCommand(
     // Codex threads are stored globally by id (cwd-independent); -c re-attaches MCP.
     return `codex resume ${sq(run.sessionId)} -c ${sq(`mcp_servers.radar.url="${mcpUrl}"`)}`;
   }
-  // Claude Code: --resume is cwd-scoped, and Radar runs its headless sessions from
-  // the home dir (see claudeAgent). The Radar terminal starts there too, but a user
-  // pasting this into their own terminal is usually in a project dir — so prefix
-  // `cd ~` to resolve the session wherever it's run (harmless in the home-dir case).
-  // --mcp-config MERGES radar alongside the user's own servers.
+  // Claude Code: resume from the folder Radar runs Claude turns in (claudeWorkDir
+  // in agent_claude.go). Older versions find a session only from the folder it
+  // was created in, and Claude Code remembers the folder-trust answer there,
+  // which it never does for the home dir. --mcp-config MERGES radar alongside
+  // the user's own servers.
   const cfg = JSON.stringify({
     mcpServers: { radar: { type: "http", url: mcpUrl } },
   });
-  return `cd ~ && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
+  return `mkdir -p ${AGENT_DIR} && cd ${AGENT_DIR} && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
 }

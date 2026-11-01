@@ -91,7 +91,8 @@ describe("canContinueInOwnAgent", () => {
 });
 
 describe("ContinueInAgentButton", () => {
-  const command = "cd ~ && claude --resume 'ses_1'";
+  const command =
+    "mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume 'ses_1'";
 
   it("splits a labelled terminal action from a menu of other ways", () => {
     const html = renderToStaticMarkup(
@@ -119,7 +120,7 @@ describe("ContinueInAgentButton", () => {
       <ContinueInAgentButton run={run()} command={command} />,
     );
     expect(html).toContain("data-continue-trust-hint");
-    expect(html).toContain("Select Yes before pressing Enter");
+    expect(html).toContain("agent folder");
     // Announced with the button, not only shown under it.
     const hintId = html.match(/id="([^"]+)" data-continue-trust-hint/)?.[1];
     expect(hintId).toBeTruthy();
@@ -134,7 +135,7 @@ describe("ContinueInAgentButton", () => {
       />,
     );
     expect(html).not.toContain("data-continue-trust-hint");
-    expect(html).not.toContain("trust your home folder");
+    expect(html).not.toContain("agent folder");
   });
 
   it("opens the command menu from one button when Radar has no terminal", () => {
