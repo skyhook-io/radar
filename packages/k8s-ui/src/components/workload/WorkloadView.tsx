@@ -1131,6 +1131,7 @@ export function WorkloadView({
               )}
               {overviewIntro && <div className="px-4 pt-4">{overviewIntro}</div>}
               <ResourceRendererDispatch
+                active={active}
                 resource={selectedResource}
                 data={resource}
                 relationships={rendererRelationships}
@@ -1357,6 +1358,7 @@ export function WorkloadView({
           <div className="h-full min-h-0 overflow-y-auto">{specTab.render()}</div>
         ) : (effectiveTab === 'overview' || effectiveTab === 'spec') && (
             <InfoTab
+              active={active}
               resource={resource}
               selectedResource={selectedResource}
               relationships={rendererRelationships}
@@ -1997,6 +1999,7 @@ function EventsTab({
 // ============================================================================
 
 function InfoTab({
+  active,
   resource,
   selectedResource,
   relationships,
@@ -2034,6 +2037,7 @@ function InfoTab({
   onEvaluateCapacity,
   recentImageSave,
 }: {
+  active: boolean
   resource: any
   selectedResource: SelectedResource
   relationships?: Relationships
@@ -2089,6 +2093,7 @@ function InfoTab({
           </div>
         )}
         <ResourceRendererDispatch
+          active={active}
           resource={selectedResource}
           data={resource}
           relationships={relationships}
