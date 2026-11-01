@@ -66,9 +66,9 @@ function InvestigateLine() {
         <button
           type="button"
           onClick={d.openHome}
-          className="flex w-full items-center gap-2 rounded px-0.5 text-left text-xs font-medium text-accent hover:underline"
+          className="flex w-full items-center gap-2 rounded px-0.5 text-left text-xs font-medium text-accent-text hover:underline"
         >
-          <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
           {label}
         </button>
       </Tooltip>
