@@ -300,6 +300,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
 
   const effectiveSuspended = status?.suspended ?? false
   const argoOperationInProgress = argo?.operationInProgress ?? argo?.isRunning ?? false
+  const argoSyncDisabled = effectiveSuspended || terminating || argoOperationInProgress
   const resumeUpgrade = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeUpgrade ?? null : null
   const resumeBlockedReason = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeBlockedReason : undefined
   // graphFullscreen hides everything chrome-side; the body region expands.
@@ -400,7 +401,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     icon={ArrowDownUp}
                     loading={argo.syncing}
                     onClick={argo.onSyncRequested}
-                    disabled={effectiveSuspended || terminating || argoOperationInProgress}
+                    disabled={argoSyncDisabled}
                     disabledReason={terminating
                       ? terminatingActionTooltip
                       : argoOperationInProgress
@@ -435,7 +436,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   {argo.autoSyncEnabled ? (
                     <ActionButton
                       label="Disable auto-sync"
-                      description="Stop Argo from automatically syncing Git changes. Manual Sync still works."
+                      description={`Stop Argo from automatically syncing Git changes.${argoSyncDisabled ? '' : ' Manual Sync still works.'}`}
                       icon={Pause}
                       loading={argo.suspending}
                       onClick={argo.onSuspend}

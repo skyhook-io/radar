@@ -45,6 +45,11 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
     ),
   }
 })
+const toast = vi.hoisted(() => ({ success: vi.fn() }))
+vi.mock('../ui/Toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ui/Toast')>()),
+  showApiSuccess: toast.success,
+}))
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>()
   const idle = () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false })
@@ -188,6 +193,21 @@ describe('an older Radar, without argoSyncInheritance', () => {
     expect(requests[0].body.syncOptions).toEqual(APP_OPTIONS)
     expect(requests[1].body).toMatchObject({ prune: false, syncOptions: APP_OPTIONS })
   })
+})
+
+it.each([
+  { dryRun: false, message: 'Sync initiated' },
+  { dryRun: true, message: 'Dry run started' },
+])('confirms a sync with dryRun $dryRun as "$message"', async ({ dryRun, message }) => {
+  toast.success.mockClear()
+  await click(button('Open sync'))
+  if (dryRun) {
+    const label = [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith('Dry run'))!
+    await click(label.querySelector('input')!)
+  }
+  await click(button(dryRun ? 'Run dry-run' : 'Sync now'))
+  expect(requests[0].body).toMatchObject({ dryRun })
+  expect(toast.success).toHaveBeenCalledWith(message)
 })
 
 it('treats a Radar whose capabilities have not loaded as older', async () => {

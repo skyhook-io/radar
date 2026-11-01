@@ -906,7 +906,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
   return (
     <>
       {onSync && (
-        <Tooltip content="Sync application" delay={150}>
+        <Tooltip content="Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page." delay={150}>
           <button
             onClick={() => onSync({
               namespace: resource.namespace,
