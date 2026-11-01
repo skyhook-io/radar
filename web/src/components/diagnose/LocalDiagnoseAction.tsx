@@ -127,11 +127,13 @@ export function IssueDiagnoseButton({
   group,
   namespace,
   name,
+  onActivate,
 }: {
   kind: string;
   group?: string;
   namespace: string;
   name: string;
+  onActivate?: () => void;
 }) {
   const d = useDiagnose();
   if (d.setupState === "off" || d.setupState === "unknown") return null;
@@ -150,6 +152,7 @@ export function IssueDiagnoseButton({
       <button
         onClick={(e) => {
           e.stopPropagation();
+          onActivate?.();
           if (ready)
             d.openInvestigation({
               kind,

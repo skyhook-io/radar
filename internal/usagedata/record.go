@@ -3,6 +3,7 @@ package usagedata
 import (
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -16,7 +17,13 @@ var allowedViews = map[string]bool{
 	"helm": true, "helmCompare": true, "traffic": true, "cost": true,
 	"capacity": true, "workload": true, "checks": true, "upgrade": true,
 	"gitops": true, "applications": true, "compare": true, "issues": true,
-	"investigations": true,
+	"investigations": true, "cnpg": true,
+}
+
+// Resource drawer panels. The drawer's Timeline tab carries the resource's
+// events (it replaced the Events tab), so it counts as panel:events.
+var panelViews = map[string]bool{
+	"panel:logs": true, "panel:yaml": true, "panel:metrics": true, "panel:events": true,
 }
 
 var (
@@ -37,18 +44,46 @@ var actionReads = []string{"/exec", "/logs", "/logs/stream", "/debug"}
 
 // Named UI moments without an API call of their own.
 var allowedUIEvents = map[string]bool{
-	"command_palette": true,
-	"search":          true,
+	"command_palette":          true,
+	"search":                   true,
+	"issue_action:open":        true,
+	"issue_action:investigate": true,
+	"issue_action:capacity":    true,
 }
 
-// The screens a crash is counted under: CRASH_LABELS in web/src/App.tsx, plus
-// the upgrade-impact page.
+// The screens a crash is counted under: CRASH_LABELS in web/src/App.tsx
+// (workspace labels included), plus the upgrade-impact page.
 var crashScreens = map[string]bool{
 	"Home": true, "Topology": true, "Resources": true, "Timeline": true,
 	"Issues": true, "Helm": true, "HelmCompare": true, "Traffic": true,
 	"Cost": true, "Capacity": true, "Checks": true, "GitOps": true,
 	"Applications": true, "Workload": true, "Compare": true,
-	"Investigations": true, "Upgrade": true,
+	"Investigations": true, "Upgrade": true, "CloudNativePG": true,
+}
+
+// Statuses an error is counted under exactly; any other failure keeps its
+// class, 4xx or 5xx.
+var exactStatuses = map[int]bool{
+	401: true, 403: true, 404: true, 409: true, 429: true,
+	500: true, 502: true, 503: true, 504: true,
+}
+
+// Routes whose successful requests also count the built-in kind they acted
+// on, as "<verb>:<plural>".
+var kindActions = map[string]string{
+	"DELETE /api/resources/{kind}/{namespace}/{name}":       "delete",
+	"POST /api/workloads/{kind}/{namespace}/{name}/restart": "restart",
+}
+
+// k8s.ClassifyError's vocabulary.
+var connectionFailureTypes = map[string]bool{
+	"config": true, "auth": true, "auth-rejected": true, "auth-plugin-stuck": true,
+	"rbac": true, "network": true, "timeout": true, "tls": true, "unknown": true,
+}
+
+// The traffic sources Radar can read flows from.
+var trafficSources = map[string]bool{
+	"hubble": true, "caretta": true, "istio": true, "beyla": true,
 }
 
 var browserFamilies = []struct{ marker, family string }{
@@ -59,7 +94,7 @@ var browserFamilies = []struct{ marker, family string }{
 // IsAllowedView reports whether name is a countable view. "resources:<plural>"
 // counts a built-in kind's list; custom resource kinds are never named.
 func IsAllowedView(name string) bool {
-	if allowedViews[name] {
+	if allowedViews[name] || panelViews[name] {
 		return true
 	}
 	if kind, ok := strings.CutPrefix(name, "resources:"); ok {
@@ -115,12 +150,48 @@ func RecordSession(userAgent string) {
 	})
 }
 
-// RecordActive adds minutes the UI was visible.
+// RecordActive adds minutes the UI was in use.
 func RecordActive(minutes int) {
+	RecordActiveView(minutes, "")
+}
+
+// RecordActiveView adds minutes the UI was in use, and counts view once if
+// the period has no views yet: a window left open since an earlier period is
+// used without navigating, and its report would otherwise show time but no
+// views.
+func RecordActiveView(minutes int, view string) {
 	if minutes <= 0 || minutes > 60 {
 		return
 	}
-	increment(func(p *pending) { p.ActiveMinutes += minutes })
+	if !IsAllowedView(view) {
+		view = ""
+	}
+	if kind, ok := strings.CutPrefix(view, "resources:"); ok {
+		view = "resources:" + strings.ToLower(kind)
+	}
+	increment(func(p *pending) {
+		p.ActiveMinutes += minutes
+		if view != "" && len(p.Views) == 0 {
+			p.Views = bump(p.Views, view)
+		}
+	})
+}
+
+// RecordConnectionFailure counts one failure to connect to a cluster by its
+// k8s.ClassifyError type. Anything outside that vocabulary counts as unknown.
+func RecordConnectionFailure(errorType string) {
+	if !connectionFailureTypes[errorType] {
+		errorType = "unknown"
+	}
+	increment(func(p *pending) { p.ConnectionFailures = bump(p.ConnectionFailures, errorType) })
+}
+
+// TrafficSource names the traffic source in use, or "none".
+func TrafficSource(name string) string {
+	if trafficSources[name] {
+		return name
+	}
+	return "none"
 }
 
 // RecordAPI counts one API request by its route pattern, which the caller has
@@ -129,20 +200,69 @@ func RecordActive(minutes int) {
 // reads count only when they are the action (exec, logs) or when the server
 // failed them.
 func RecordAPI(method, pattern string, status int) {
-	if !knownMethods[method] || !routePattern.MatchString(pattern) || strings.HasPrefix(pattern, "/api/usage-data") {
+	RecordRequest(APIRequest{Method: method, Pattern: pattern, Status: status})
+}
+
+// APIRequest is one API request as the router saw it.
+type APIRequest struct {
+	Method  string
+	Pattern string
+	Status  int
+	// Automatic marks a request the UI made on its own, such as a background
+	// probe or a reconnect attempt. It is not something the user did, so it
+	// never counts as an action; it still counts when it fails.
+	Automatic bool
+	// NotConnected marks the answer "no cluster is connected yet". That is a
+	// state the UI already shows, not a failed request.
+	NotConnected bool
+	// Kind and Group are the request's {kind} URL parameter and group query
+	// parameter. Only kindActions routes read them, and only a built-in kind
+	// is ever named.
+	Kind  string
+	Group string
+}
+
+// RecordRequest counts one API request; see RecordAPI.
+func RecordRequest(r APIRequest) {
+	if !knownMethods[r.Method] || !routePattern.MatchString(r.Pattern) || strings.HasPrefix(r.Pattern, "/api/usage-data") {
 		return
 	}
-	key := method + " " + pattern
-	read := method == http.MethodGet || method == http.MethodHead
+	key := r.Method + " " + r.Pattern
+	read := r.Method == http.MethodGet || r.Method == http.MethodHead
 	// Hijacked connections (exec's WebSocket) report 0 or 101.
-	ok := status == 0 || (status >= 100 && status < 400)
+	ok := r.Status == 0 || (r.Status >= 100 && r.Status < 400)
 	switch {
-	case ok && (!read || isActionRead(pattern)):
-		increment(func(p *pending) { p.Actions = bump(p.Actions, key) })
-	case status >= 500 || (!read && status >= 400):
-		errKey := key + " " + strconvStatusClass(status)
+	case ok && (!read || isActionRead(r.Pattern)):
+		if r.Automatic {
+			return
+		}
+		kindKey := actionKindKey(key, r.Kind, r.Group)
+		increment(func(p *pending) {
+			p.Actions = bump(p.Actions, key)
+			if kindKey != "" {
+				p.ActionKinds = bump(p.ActionKinds, kindKey)
+			}
+		})
+	case ok || r.NotConnected:
+	case r.Status >= 500 || (!read && r.Status >= 400):
+		errKey := key + " " + strconvStatusClass(r.Status)
 		increment(func(p *pending) { p.Errors = bump(p.Errors, errKey) })
 	}
+}
+
+// actionKindKey names the built-in kind a kindActions route acted on. A group
+// that isn't the built-in's own means a custom resource sharing its name,
+// which is never named.
+func actionKindKey(routeKey, kind, group string) string {
+	verb, ok := kindActions[routeKey]
+	if !ok {
+		return ""
+	}
+	b, ok := resourceid.BuiltinForName(kind)
+	if !ok || (group != "" && group != b.Group) {
+		return ""
+	}
+	return verb + ":" + b.Resource
 }
 
 func isActionRead(pattern string) bool {
@@ -155,6 +275,9 @@ func isActionRead(pattern string) bool {
 }
 
 func strconvStatusClass(status int) string {
+	if exactStatuses[status] {
+		return strconv.Itoa(status)
+	}
 	switch {
 	case status >= 500:
 		return "5xx"

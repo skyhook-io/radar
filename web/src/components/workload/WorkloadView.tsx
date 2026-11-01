@@ -131,8 +131,19 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
+import { recordUsageEvent } from '../../api/usage-data'
 
 type TabType = WorkloadTabType
+
+// The usage-report view a tab counts under. Timeline holds the resource's
+// events (it replaced the Events tab), so it counts as panel:events.
+const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+  logs: 'panel:logs',
+  yaml: 'panel:yaml',
+  metrics: 'panel:metrics',
+  timeline: 'panel:events',
+}
+
 const BATCH_EXECUTION_KINDS = new Set([
   'Job',
   'CronJob',
@@ -529,8 +540,14 @@ export function WorkloadView({
           ? 'reachability' // the network tab was renamed Reachability
           : (rawTab as TabType) || 'overview'
 
+
+  // A panel counts when someone switches to it. Counting renders instead would
+  // recount the same open tab: the drawer mounts hidden WorkloadView layers
+  // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {
+      const panel = PANEL_USAGE_VIEWS[tab]
+      if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
         params.delete('tab')
@@ -539,7 +556,7 @@ export function WorkloadView({
       }
       setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory, state: location.state })
     },
-    [pushTabHistory, searchParams, setSearchParams, location.state],
+    [migratedTab, pushTabHistory, searchParams, setSearchParams, location.state],
   )
 
   const selectedRunKey = searchParams.get('run') ?? ''

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { getApiBase } from '../api/config'
+import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
 
@@ -97,9 +97,10 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
   return { ...status, sseGenerationAtStart }
 }
 
-async function retryConnection(): Promise<ConnectionState> {
+async function retryConnection(automatic = false): Promise<ConnectionState> {
   const response = await apiFetch(`${getApiBase()}/connection/retry`, {
     method: 'POST',
+    headers: automatic ? automaticRequestHeaders() : undefined,
   })
   if (!response.ok) {
     const error = await readErrorBody(response) as { error?: string; errorType?: string }
@@ -267,7 +268,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   // Retry mutation
   const retryMutation = useMutation({
-    mutationFn: retryConnection,
+    mutationFn: () => retryConnection(),
     onMutate: () => {
       manualRetryPendingRef.current = true
       // Until SSE re-delivers state, a failed retry may report its own error
@@ -346,7 +347,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         autoRetryInFlightRef.current = true
         setIsAutoRetrying(true)
         let recovered = false
-        retryConnection()
+        retryConnection(true)
           .then((result) => {
             if (stopped) return
             recovered = true

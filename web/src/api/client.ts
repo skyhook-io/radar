@@ -67,7 +67,7 @@ import type {
   PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
@@ -1788,7 +1788,8 @@ export function useWhatsNewState(enabled: boolean) {
 export async function markWhatsNewSeen(version: string): Promise<void> {
   const response = await apiFetch(`${getApiBase()}/whats-new/seen`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // Bookkeeping that follows the dialog, not a separate action.
+    headers: { "Content-Type": "application/json", ...automaticRequestHeaders() },
     body: JSON.stringify({ version }),
   });
   if (!response.ok) throw new ApiError(`HTTP ${response.status}`, response.status);
@@ -4069,6 +4070,7 @@ export function useAutoPromConnect(): void {
       // meta-driven toast handler stays silent — the user didn't click anything.
       apiFetch(`${getApiBase()}/prometheus/connect?optional=true`, {
         method: "POST",
+        headers: automaticRequestHeaders(),
       })
         .then(async (resp) => {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

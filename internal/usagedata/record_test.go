@@ -47,7 +47,7 @@ func TestRecordAPIClassifiesByRoutePattern(t *testing.T) {
 			t.Errorf("client-chosen method recorded: %q", k)
 		}
 	}
-	if st.Preview.Errors["GET /api/resources/{kind} 5xx"] != 1 || st.Preview.Errors["PUT /api/settings 4xx"] != 1 {
+	if st.Preview.Errors["GET /api/resources/{kind} 500"] != 1 || st.Preview.Errors["PUT /api/settings 403"] != 1 {
 		t.Errorf("errors = %v", st.Preview.Errors)
 	}
 	for k := range st.Preview.Actions {
