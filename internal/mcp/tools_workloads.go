@@ -140,24 +140,43 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		if input.Revision == nil {
 			return nil, nil, fmt.Errorf("revision is required for rollback action (list valid numbers with get_resource include=revisions)")
 		}
-		if err := k8s.RollbackWorkloadWithClient(ctx, kind, input.Namespace, input.Name, *input.Revision, dynClient); err != nil {
-			return nil, nil, fmt.Errorf("rollback failed: %w", err)
-		}
-		resp := map[string]any{
-			"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
-			"status":   "ok",
-			"message":  fmt.Sprintf("Rollback of %s %s/%s to revision %d initiated — the controller applies it", kind, input.Namespace, input.Name, *input.Revision),
-			"revision": *input.Revision,
-		}
-		if kind == "rollouts" {
-			resp["note"] = "This starts a new rollout of the old template — every canary step, pause, and analysis re-runs. " +
-				"Use manage_rollout action=promote-full to skip them, or action=abort to revert traffic immediately instead."
+		resp, err := rollbackResult(kind, input.Namespace, input.Name, *input.Revision,
+			k8s.RollbackWorkloadWithClient(ctx, kind, input.Namespace, input.Name, *input.Revision, dynClient))
+		if err != nil {
+			return nil, nil, err
 		}
 		return toJSONResult(resp)
 
 	default:
 		return nil, nil, fmt.Errorf("unknown action %q: must be restart, scale, or rollback", input.Action)
 	}
+}
+
+// rollbackResult builds the manage_workload rollback result. A revision whose
+// pod template is already live is reported as a skipped no-op, not a failure,
+// as kubectl rollout undo does.
+func rollbackResult(kind, namespace, name string, revision int64, err error) (map[string]any, error) {
+	if errors.Is(err, rollouts.ErrTemplateUnchanged) {
+		return map[string]any{
+			"status":   "unchanged",
+			"message":  fmt.Sprintf("Skipped rollback of %s %s/%s: its pod template already matches revision %d, so nothing was changed", kind, namespace, name, revision),
+			"revision": revision,
+		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rollback failed: %w", err)
+	}
+	resp := map[string]any{
+		"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), name, namespace),
+		"status":   "ok",
+		"message":  fmt.Sprintf("Rollback of %s %s/%s to revision %d initiated — the controller applies it", kind, namespace, name, revision),
+		"revision": revision,
+	}
+	if kind == "rollouts" {
+		resp["note"] = "This starts a new rollout of the old template — every canary step, pause, and analysis re-runs. " +
+			"Use manage_rollout action=promote-full to skip them, or action=abort to revert traffic immediately instead."
+	}
+	return resp, nil
 }
 
 func handleManageRollout(ctx context.Context, req *mcp.CallToolRequest, input manageRolloutInput) (*mcp.CallToolResult, any, error) {
