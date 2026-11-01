@@ -35,7 +35,11 @@ export function NextStepJump({
   useLayoutEffect(() => {
     const el = textRef.current;
     if (!el) return;
-    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    const measure = () =>
+      setClamped(
+        el.scrollHeight > el.clientHeight + 1 ||
+          el.scrollWidth > el.clientWidth + 1,
+      );
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
@@ -56,7 +60,10 @@ export function NextStepJump({
         onClick={onClick}
         className="flex max-w-md items-start gap-1 rounded-md px-2 py-1 text-left text-xs font-medium text-accent-text hover:bg-theme-hover"
       >
-        <span ref={textRef} className="line-clamp-2 min-w-0">
+        <span
+          ref={textRef}
+          className="line-clamp-2 min-w-0 [overflow-wrap:anywhere]"
+        >
           {text}
         </span>
         <span aria-hidden="true" className="shrink-0">
