@@ -243,17 +243,11 @@ type DashboardChange struct {
 	Timestamp  string `json:"timestamp"`
 }
 
+// DashboardTrafficSummary names the traffic source Radar has detected. Home's
+// Live Traffic card draws a fixed picture of the Traffic view and reads only
+// this name, so the dashboard does not read flows.
 type DashboardTrafficSummary struct {
-	Source    string             `json:"source"`
-	FlowCount int                `json:"flowCount"`
-	TopFlows  []DashboardTopFlow `json:"topFlows"`
-}
-
-type DashboardTopFlow struct {
-	Src            string  `json:"src"`
-	Dst            string  `json:"dst"`
-	RequestsPerSec float64 `json:"requestsPerSec,omitempty"`
-	Connections    int64   `json:"connections"`
+	Source string `json:"source"`
 }
 
 type DashboardHelmSummary struct {
@@ -334,11 +328,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var cluster DashboardCluster
 	var metrics *DashboardMetrics
-	var trafficSummary *DashboardTrafficSummary
 
 	ctx := r.Context()
 
-	wg.Add(3)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		t := time.Now()
@@ -356,12 +349,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			metrics = s.getDashboardMetrics(ctx, namespaces)
 		}
 		k8s.LogTiming("  [dashboard] metrics: %v", time.Since(t))
-	}()
-	go func() {
-		defer wg.Done()
-		t := time.Now()
-		trafficSummary = s.getDashboardTrafficSummary(ctx, namespaces)
-		k8s.LogTiming("  [dashboard] traffic: %v", time.Since(t))
 	}()
 
 	// --- Fast cache-based calls: run while network calls are in flight ---
@@ -453,7 +440,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// data exists. metrics is now non-nil whenever nodes are cached, so gate the
 	// flag on actual usage so the frontend's "usage unavailable" hint still fires.
 	resp.MetricsServerAvailable = metrics != nil && metrics.UsageAvailable
-	resp.TrafficSummary = trafficSummary
+	resp.TrafficSummary = s.getDashboardTrafficSummary()
 
 	k8s.LogTiming(" [dashboard] total: %v", time.Since(dashStart))
 	s.writeJSON(w, resp)
@@ -1201,76 +1188,16 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []str
 	return result
 }
 
-func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []string) *DashboardTrafficSummary {
+func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 	manager := traffic.GetManager()
 	if manager == nil {
 		return nil
 	}
-
 	sourceName := manager.GetActiveSourceName()
 	if sourceName == "" {
 		return nil
 	}
-
-	opts := traffic.DefaultFlowOptions()
-	// Traffic only supports single namespace filter for now
-	if len(namespaces) == 1 {
-		opts.Namespace = namespaces[0]
-	}
-
-	response, err := manager.GetFlows(ctx, opts)
-	if err != nil || len(response.Flows) == 0 {
-		return &DashboardTrafficSummary{
-			Source:    sourceName,
-			FlowCount: 0,
-			TopFlows:  []DashboardTopFlow{},
-		}
-	}
-
-	// The source only filters by a single namespace; restrict multi-namespace
-	// users here so the summary doesn't count flows outside their allowed set.
-	flows := response.Flows
-	if allowed := namespaceLookup(namespaces); allowed != nil {
-		kept := make([]traffic.Flow, 0, len(flows))
-		for _, f := range flows {
-			if flowVisibleForNamespaces(f, allowed) {
-				kept = append(kept, f)
-			}
-		}
-		flows = kept
-	}
-
-	// Aggregate flows
-	aggregated := traffic.AggregateFlows(flows)
-
-	// Sort by connection count
-	sort.Slice(aggregated, func(i, j int) bool {
-		return aggregated[i].Connections > aggregated[j].Connections
-	})
-
-	topFlows := make([]DashboardTopFlow, 0, 3)
-	limit := min(len(aggregated), 3)
-	for _, f := range aggregated[:limit] {
-		srcName := f.Source.Name
-		if f.Source.Workload != "" {
-			srcName = f.Source.Workload
-		}
-		dstName := f.Destination.Name
-		if f.Destination.Workload != "" {
-			dstName = f.Destination.Workload
-		}
-		topFlows = append(topFlows, DashboardTopFlow{
-			Src:         srcName,
-			Dst:         dstName,
-			Connections: f.Connections,
-		})
-	}
-
-	return &DashboardTrafficSummary{
-		Source:    sourceName,
-		FlowCount: len(aggregated),
-		TopFlows:  topFlows,
-	}
+	return &DashboardTrafficSummary{Source: sourceName}
 }
 
 func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {
