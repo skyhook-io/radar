@@ -919,6 +919,8 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
   const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
   if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
   const syncDialogOpen = syncDialogFor === appKey
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const operationRunning = isArgoOperationInProgress(data)
   const applicationSyncOptions = argoApplicationSyncOptions(data)
   // A failed request is reported by the host; it only keeps the dialog open.
   const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts }))
@@ -926,10 +928,14 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
   return (
     <>
       {onSync && (
-        <Tooltip content={syncDialog ? 'Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision).' : "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
+        <Tooltip content={operationRunning ? 'Wait for the current Argo operation to finish.' : syncDialog ? 'Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision).' : "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
           <button
-            onClick={() => (syncDialog ? setSyncDialogFor(appKey) : void sync().catch(() => {}))}
-            disabled={isSyncing}
+            onClick={() => {
+              if (!syncDialog) return void sync().catch(() => {})
+              setSyncError(null)
+              setSyncDialogFor(appKey)
+            }}
+            disabled={isSyncing || operationRunning}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -948,9 +954,13 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
           applicationSyncOptions={applicationSyncOptions}
           pending={isSyncing}
           autoSyncEnabled={isArgoAutoSyncEnabled(data)}
-          operationInProgress={isArgoOperationInProgress(data)}
+          operationInProgress={operationRunning}
+          syncError={syncError}
           onCancel={() => setSyncDialogFor(null)}
-          onConfirm={(opts) => { sync(opts).then(() => setSyncDialogFor(null), () => {}) }}
+          onConfirm={(opts) => {
+            setSyncError(null)
+            sync(opts).then(() => setSyncDialogFor(null), (error: unknown) => setSyncError(error instanceof Error ? error.message : 'the request was refused'))
+          }}
         />
       )}
 

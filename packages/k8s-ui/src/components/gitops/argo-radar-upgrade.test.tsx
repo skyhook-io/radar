@@ -282,6 +282,7 @@ describe("the drawer's Sync with an options dialog", () => {
     await act(async () => dialogButton('Sync now').click())
     expect(onArgoSync).toHaveBeenCalledTimes(1)
     expect(dialog().textContent).toContain('Sync now')
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe('Sync failed: denied')
     expect(prune().checked).toBe(true)
     fail = false
     await act(async () => dialogButton('Sync now').click())
@@ -289,6 +290,25 @@ describe("the drawer's Sync with an options dialog", () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
     expect(document.body.textContent).not.toContain('Sync now')
     await close()
+  })
+
+  it('is disabled while an Argo operation runs, instead of opening a dialog that can do nothing', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const running = { ...application, status: { ...application.status, operationState: { phase: 'Running' } } }
+    await act(async () => root.render(
+      <ResourceActionsBar
+        resource={{ kind: 'applications', namespace: 'argocd', name: 'guestbook', group: 'argoproj.io' }}
+        data={running}
+        onArgoSync={vi.fn<OnArgoSync>()}
+        argoSyncDialog={{ pinsComparedRevision: true }}
+      />,
+    ))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    expect(sync.disabled).toBe(true)
+    await act(async () => root.unmount())
+    host.remove()
   })
 
   it('closes, dropping its choices, when the drawer switches to another Application', async () => {
