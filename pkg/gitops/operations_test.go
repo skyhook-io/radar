@@ -909,6 +909,22 @@ func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 			wantSelfHeal: false,
 		},
 		{
+			name: "only a prune key → selfHeal on, the suspending Radar's fallback",
+			annotations: map[string]any{
+				ArgoSuspendedPruneAnnotation: "true",
+			},
+			wantPrune:    true,
+			wantSelfHeal: true,
+		},
+		{
+			name: "only the legacy prune key → selfHeal on",
+			annotations: map[string]any{
+				legacyArgoSuspendedPruneAnnotation: "false",
+			},
+			wantPrune:    false,
+			wantSelfHeal: true,
+		},
+		{
 			name: "only the legacy selfHeal key → prune off",
 			annotations: map[string]any{
 				legacyArgoSuspendedSelfHealAnnotation: "false",

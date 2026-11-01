@@ -859,9 +859,13 @@ func argoResumePatch(app *unstructured.Unstructured) (map[string]any, bool) {
 	} else if saved := argoSavedAutomated(annotations); saved != nil {
 		automated = saved
 	} else {
+		// A prune key means a Radar suspended it, whose fallback for a missing
+		// selfHeal key was on; never suspended starts off, as in Argo CD.
+		_, suspended := annotations[ArgoSuspendedPruneAnnotation]
+		_, legacySuspended := annotations[legacyArgoSuspendedPruneAnnotation]
 		automated = map[string]any{
 			"prune":    argoSavedFlag(annotations, ArgoSuspendedPruneAnnotation, legacyArgoSuspendedPruneAnnotation, false),
-			"selfHeal": argoSavedFlag(annotations, ArgoSuspendedSelfHealAnnotation, legacyArgoSuspendedSelfHealAnnotation, false),
+			"selfHeal": argoSavedFlag(annotations, ArgoSuspendedSelfHealAnnotation, legacyArgoSuspendedSelfHealAnnotation, suspended || legacySuspended),
 		}
 	}
 	return map[string]any{
