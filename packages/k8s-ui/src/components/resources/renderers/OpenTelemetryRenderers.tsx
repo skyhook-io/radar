@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Badge } from '../../ui/Badge'
 import { healthToSeverity } from '../../../utils/badge-colors'
 import { Section, PropertyList, Property, ConditionsSection } from '../../ui/drawer-components'
 import { getCollectorPipelines, getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resource-utils-opentelemetry'
 
-export function OpenTelemetryCollectorRenderer({ data }: { data: any }) {
+// workloadEvidence is the host-provided current workload preview; shared hosts
+// can omit it and retain the native reconciliation/configuration view.
+export function OpenTelemetryCollectorRenderer({ data, workloadEvidence }: { data: any; workloadEvidence?: ReactNode }) {
   const state = getOpenTelemetryCollectorStatus(data)
   const preview = useMemo(() => getCollectorPipelines(data), [data])
   const [showAll, setShowAll] = useState(false)
@@ -24,6 +26,7 @@ export function OpenTelemetryCollectorRenderer({ data }: { data: any }) {
       {state.text === 'Status stale' && <p className="mt-2 text-sm text-theme-text-secondary">The reported reconciliation describes an earlier configuration generation.</p>}
       {ready?.message && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-theme-text-secondary">{ready.message}</p>}
     </Section>
+    {workloadEvidence}
     <Section title={preview.error ? 'Configured Pipelines' : `Configured Pipelines (${preview.pipelines.length})`} defaultExpanded>
       {preview.error ? <p className="text-sm text-theme-text-secondary">{preview.error}</p> : preview.pipelines.length === 0 ? <p className="text-sm text-theme-text-tertiary">No pipelines are declared in this configuration.</p> : <>
         <div className="space-y-3">
