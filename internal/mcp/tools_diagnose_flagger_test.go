@@ -51,6 +51,22 @@ func TestFlaggerDiagnosisSeparatesDeclaredTargetFromObservedPrimary(t *testing.T
 	}
 }
 
+func TestFlaggerDiagnosisQualifiesUnsupportedDeclaredTarget(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "flagger.app/v1beta1", "kind": "Canary", "metadata": map[string]any{"name": "release", "namespace": "observe", "uid": "release"}, "spec": map[string]any{"targetRef": map[string]any{"apiVersion": "apps/v1", "kind": "StatefulSet", "name": "target"}}}}
+	initOperatorDiagnosisCache(t, root)
+	result, _, err := handleDiagnose(context.Background(), nil, testDiagnoseInput("canary", "observe", "release"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got operatorDiagnoseResponse
+	if err := json.Unmarshal([]byte(extractText(t, result)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.DeclaredTarget != nil || !strings.Contains(strings.Join(got.Warnings, " "), "Deployment fallback") {
+		t.Fatalf("unsupported target invented a reference or lacked guidance: %s", extractText(t, result))
+	}
+}
+
 func TestFlaggerDiagnosisWithholdsUnreadableDeclaredTarget(t *testing.T) {
 	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "flagger.app/v1beta1", "kind": "Canary", "metadata": map[string]any{"name": "release", "namespace": "observe", "uid": "release"}, "spec": map[string]any{"targetRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "target"}}}}
 	target := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "target", Namespace: "observe", UID: "target"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "target"}}, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "private-image-marker", Image: "private-image-marker"}}}}}}
