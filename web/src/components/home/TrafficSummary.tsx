@@ -98,8 +98,9 @@ function TrafficSketch() {
           const b = anchor(to)
           const x1 = a.right
           const x2 = b.left - 1.5
-          // The count sits on the destination's run, where the Traffic view puts it.
-          const labelX = a.y === b.y ? (x1 + x2) / 2 : ((x1 + x2) / 2 + x2) / 2
+          // The count sits on the destination's run, past any fan-out bend,
+          // where the Traffic view puts it.
+          const labelX = ((x1 + x2) / 2 + x2) / 2
           const labelW = 3 + String(count).length * 2.8
           return (
             <g key={`${from}-${to}`}>
