@@ -436,24 +436,6 @@ func deniedNamespaces(namespaces []string, permissions *k8s.PermissionCheckResul
 	return denied
 }
 
-// namespacesFullyReadable reports whether Radar's own probe could list every
-// core workload kind in each namespace.
-func namespacesFullyReadable(namespaces []string, permissions *k8s.PermissionCheckResult) bool {
-	if permissions == nil {
-		return false
-	}
-	for _, namespace := range namespaces {
-		if visibility := k8s.BuildVisibilitySummary(permissions, namespace); visibility != nil {
-			for _, status := range visibility.Core {
-				if status != "allowed" {
-					return false
-				}
-			}
-		}
-	}
-	return true
-}
-
 func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -478,7 +460,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// every listed namespace. Callers that resolve what they no longer see
 	// (Radar Cloud alerts) would otherwise close issues in a namespace whose
 	// grant was removed.
-	if source == k8s.NamespaceListRBAC && !namespacesFullyReadable(saAccessible, k8s.GetCachedPermissionResult()) {
+	if source == k8s.NamespaceListRBAC && !k8s.GetCachedPermissionResult().ReadableInEvery(saAccessible) {
 		authoritative = false
 	}
 
