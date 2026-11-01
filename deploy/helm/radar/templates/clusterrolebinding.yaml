@@ -1,16 +1,8 @@
 {{- if .Values.rbac.create -}}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "radar.fullname" . }}
-subjects:
-  - kind: ServiceAccount
-    name: {{ include "radar.serviceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
+{{ include "radar.binding" (dict
+  "root" .
+  "name" (include "radar.fullname" .)
+  "roleRef" (include "radar.fullname" .)
+  "serviceAccount" (dict "name" (include "radar.serviceAccountName" .) "namespace" .Release.Namespace)
+) }}
 {{- end }}

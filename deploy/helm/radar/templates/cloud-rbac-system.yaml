@@ -25,21 +25,12 @@ aggregationRule:
     - matchLabels:
         rbac.authorization.k8s.io/aggregate-to-view: "true"
 # Omit rules because the aggregation controller owns them.
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-system-read
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "radar.fullname" . }}-cloud-system-read
-subjects:
-  - kind: Group
-    name: radar:system
-    apiGroup: rbac.authorization.k8s.io
+{{- include "radar.binding" (dict
+  "root" .
+  "name" (printf "%s-cloud-system-read" (include "radar.fullname" .))
+  "roleRef" (printf "%s-cloud-system-read" (include "radar.fullname" .))
+  "groups" (list "radar:system")
+) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -51,19 +42,10 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-system-secrets-read
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "radar.fullname" . }}-system-secrets-read
-subjects:
-  - kind: Group
-    name: radar:system
-    apiGroup: rbac.authorization.k8s.io
+{{- include "radar.binding" (dict
+  "root" .
+  "name" (printf "%s-cloud-system-secrets-read" (include "radar.fullname" .))
+  "roleRef" (printf "%s-system-secrets-read" (include "radar.fullname" .))
+  "groups" (list "radar:system")
+) }}
 {{- end -}}

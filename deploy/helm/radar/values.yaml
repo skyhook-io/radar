@@ -71,6 +71,16 @@ rbac:
   create: true
   # Additional rules to add to the ClusterRole
   additionalRules: []
+  # Limit Radar to these namespaces. Radar's ServiceAccount and, with
+  # cloud.enabled, the Radar Cloud people, alerts and AI bindings get their usual
+  # roles only in the listed namespaces, so Radar never reads anything outside
+  # them. Cluster-scoped views (Nodes, PersistentVolumes, CRDs) show no access.
+  # Empty keeps cluster-wide access. Set this at install: narrowing an install
+  # that already reported to Radar Cloud does not remove what Radar Cloud holds.
+  # With auth or cloud on, Radar's own namespace must not be listed.
+  namespaces: []
+  # - app
+  # - billing
 
   # Privileged permissions (disabled by default for security)
   # Enable these based on features you need:

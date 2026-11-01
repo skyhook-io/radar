@@ -529,6 +529,35 @@ read at startup and keeps serving objects it already cached after a grant is
 removed. `helm upgrade` rolls the pod whenever `rbac` values change. If you change
 Radar's RBAC outside Helm, restart Radar.
 
+### Limit Radar to selected namespaces
+
+Set `rbac.namespaces` to keep Radar inside a list of namespaces:
+
+```yaml
+rbac:
+  namespaces: [app, billing]
+```
+
+Radar's ClusterRole is then bound by a RoleBinding in each listed namespace instead of cluster-wide, so its ServiceAccount can read only there. Radar never caches anything outside the list, so nothing from other namespaces reaches the UI, MCP or Radar Cloud. With `cloud.enabled`, every Radar Cloud binding (the owner, member and viewer tiers, `radar:system` and `radar:ai:reader`) also becomes a RoleBinding in the same namespaces: people keep their usual role inside the list and get none outside it.
+
+What else changes:
+
+- Nodes, PersistentVolumes, StorageClasses, CRDs and other cluster-scoped views show no access. A CRD installed after Radar starts is picked up when Radar restarts.
+- One ClusterRole stays cluster-wide, named after the release with a `-cluster` suffix (`radar-cluster` for a release named `radar`): access reviews, and with auth or Radar Cloud, impersonation. Impersonation cannot be limited to namespaces; each impersonated request is still bounded by that person's RBAC.
+- Cluster-scoped rules in `rbac.additionalRules` have no effect, because that ClusterRole is bound per namespace.
+- `rbac.selfUpgrade` still grants get and patch on Radar's own Deployment in its namespace.
+
+Limits:
+
+- RBAC grants add up. A binding created outside the chart for `radar:member`, a `radar:user:<id>` group or an identity-provider group still applies to writes made through Radar.
+- `edit` and `admin` in a listed namespace let people run pods as any ServiceAccount there, so a privileged ServiceAccount in a listed namespace reaches beyond the list.
+- Prometheus, OpenCost, Kubecost and Hubble are not limited by RBAC. Radar shows what those backends return, which can cover the whole cluster.
+- Set the list at install. Narrowing an install that already reported to Radar Cloud does not remove what Radar Cloud holds: people with access to every listed namespace can still see history from namespaces that left the list, and alerts there resolve.
+- If Radar's ServiceAccount cannot read a listed namespace when Radar starts (its RoleBinding is missing, say), Radar reports its view as incomplete and Radar Cloud stops evaluating alerts for the cluster. As with any grant change, Radar notices a removed grant only when it restarts.
+- Radar's ServiceAccount must not be able to list namespaces cluster-wide. If a binding added outside the chart lets it, Radar logs a warning and is not limited.
+
+The chart refuses Radar's own namespace in the list when auth or Radar Cloud is on, since people with access there could use Radar's ServiceAccount, which can impersonate anyone. It also refuses `cloud.defaultRbac.nodeOps`, and `--namespace-scope` or `--rbac-namespaces` in `extraArgs`. To clear the list on an existing release, use `--set-json 'rbac.namespaces=[]'`: `--set rbac.namespaces={}` sets a list holding one empty name, which the chart rejects.
+
 ### Default Permissions (Core K8s Resources)
 
 Always granted (required for basic functionality):

@@ -47,6 +47,7 @@ type AppConfig struct {
 	RestoreLastDesktopContext   bool
 	Namespace                   string
 	Namespaces                  []string
+	RBACNamespaces              []string
 	Port                        int
 	PortFallback                bool // Port is a preference, not a requirement (Desktop's remembered port)
 	ListenAddress               string
@@ -157,6 +158,17 @@ func InitializeK8s(cfg AppConfig) error {
 		return fmt.Errorf("failed to initialize K8s client: %w", err)
 	}
 
+	if len(cfg.RBACNamespaces) > 0 {
+		k8s.SetRBACNamespaces(cfg.RBACNamespaces)
+		probed := slices.DeleteFunc(slices.Concat([]string{k8s.GetContextNamespace()}, cfg.Namespaces, cfg.RBACNamespaces), func(ns string) bool { return ns == "" })
+		slices.Sort(probed)
+		if probed = slices.Compact(probed); len(probed) > k8s.MaxScopeCandidates {
+			return fmt.Errorf("--rbac-namespaces with the context namespace and --namespaces gives %d namespaces to probe, over the fanout cap of %d; raise --max-scope-candidates", len(probed), k8s.MaxScopeCandidates)
+		}
+		if _, source := k8s.GetAccessibleNamespacesWithSource(context.Background()); source == k8s.NamespaceListCluster {
+			log.Printf("[k8s] --rbac-namespaces is set, but this ServiceAccount can list namespaces cluster-wide, so Radar is not limited to %v. Remove the cluster-wide grant to limit it.", cfg.RBACNamespaces)
+		}
+	}
 	if len(cfg.Namespaces) > 0 {
 		k8s.SetFallbackNamespaces(cfg.Namespaces)
 		if err := validateNamespaceFanout(cfg.Namespaces, k8s.GetContextNamespace(), k8s.MaxScopeCandidates); err != nil {
