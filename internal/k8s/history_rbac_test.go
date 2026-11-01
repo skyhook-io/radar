@@ -62,6 +62,27 @@ func TestDiffRBACRoleRules(t *testing.T) {
 	}
 }
 
+func TestDiffRBACRoleIgnoresOrderAndReadsSelectorExpressions(t *testing.T) {
+	oldRole := &rbacv1.ClusterRole{Rules: []rbacv1.PolicyRule{
+		{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"get", "list"}},
+		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}},
+	}}
+	reordered := oldRole.DeepCopy()
+	reordered.Rules[0], reordered.Rules[1] = reordered.Rules[1], reordered.Rules[0]
+	reordered.Rules[1].Verbs = []string{"list", "get"}
+	reordered.Rules[1].Resources = []string{"statefulsets", "deployments"}
+	if diff := ComputeDiff("ClusterRole", oldRole, reordered); diff != nil {
+		t.Fatalf("reorder-only diff = %+v, want nil", diff)
+	}
+	withAgg := oldRole.DeepCopy()
+	withAgg.AggregationRule = &rbacv1.AggregationRule{ClusterRoleSelectors: []metav1.LabelSelector{{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"a"}}}}}}
+	changed := withAgg.DeepCopy()
+	changed.AggregationRule.ClusterRoleSelectors[0].MatchExpressions[0].Values = []string{"b"}
+	if diff := ComputeDiff("ClusterRole", withAgg, changed); diff == nil || diff.Fields[0].Path != "aggregationRule" {
+		t.Fatalf("matchExpressions edit diff = %+v", diff)
+	}
+}
+
 func TestDiffRBACUnstructured(t *testing.T) {
 	toU := func(rb *rbacv1.RoleBinding) *unstructured.Unstructured {
 		obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(rb)

@@ -1276,6 +1276,14 @@ func score(c issuesapi.RecentChange) int {
 	if isGenerationOnly(c) {
 		return 80
 	}
+	// A binding create or delete that grants to, or revoked a grant from, a
+	// ServiceAccount outside its namespace (its rank_reason names them)
+	// points at an actor the namespace's own objects never mention, so it
+	// ranks with desired-state edits rather than with install runs of
+	// creates.
+	if c.ChangeCategory == issuesapi.ChangeCategoryLifecycle && isRBACBindingKind(c.Kind) && c.RankReason != lifecycleRankReason {
+		return 100
+	}
 	switch c.ChangeCategory {
 	case issuesapi.ChangeCategorySpecConfig:
 		return 100
@@ -1552,6 +1560,10 @@ func isRBACKind(kind string) bool {
 		return true
 	}
 	return false
+}
+
+func isRBACBindingKind(kind string) bool {
+	return kind == "RoleBinding" || kind == "ClusterRoleBinding"
 }
 
 func isLifecycleOnlyKind(kind string) bool {

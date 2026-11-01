@@ -18,20 +18,25 @@ const maxNamedGrantSubjects = 3
 // RoleBinding. Such a grant points at an actor the namespace's own objects
 // never mention. Returns "" for other changes.
 //
-// Subjects come from the recorded change only: the snapshot a create or
-// delete records, or an update's subjects diff. The live binding may have
-// changed since.
+// Subjects come from the recorded change: the snapshot a create or delete
+// records, or an update's subjects diff. The live binding may have changed
+// since. The one exception is a recreate that re-pointed roleRef and kept
+// its subjects: its diff lists only roleRef, so the subjects now granted the
+// new role are read from the cached binding while it is the same object.
 func bindingGrantReason(e timeline.TimelineEvent) string {
-	if (e.Kind != "RoleBinding" && e.Kind != "ClusterRoleBinding") || !eventGroupMatchesTracked(e.Kind, e.APIVersion) {
+	if !isRBACBindingKind(e.Kind) || !eventGroupMatchesTracked(e.Kind, e.APIVersion) {
 		return ""
 	}
 	oldSubjects, newSubjects, role := recordedBinding(e)
+	if e.Reason == timeline.ReasonRecreated && role != "" && oldSubjects == nil && newSubjects == nil {
+		newSubjects, _ = cachedBinding(e)
+	}
 	granted := k8s.OutsideServiceAccountSubjects(e.Kind, e.Namespace, subtract(newSubjects, oldSubjects))
 	removed := k8s.OutsideServiceAccountSubjects(e.Kind, e.Namespace, subtract(oldSubjects, newSubjects))
 	if role == "" {
 		// roleRef is immutable, so the cached binding's is the event's while
 		// it is the same object.
-		role = cachedRoleRef(e)
+		_, role = cachedBinding(e)
 	}
 	if role == "" {
 		role = "its role"
@@ -75,42 +80,43 @@ func recordedBinding(e timeline.TimelineEvent) (oldSubjects, newSubjects []strin
 	return oldSubjects, newSubjects, roleRef
 }
 
-// cachedRoleRef returns the roleRef of the cached binding the event is
-// about, or "" when it is gone, not cached, or a later object under the same
-// name.
-func cachedRoleRef(e timeline.TimelineEvent) string {
+// cachedBinding returns the subjects and roleRef of the cached binding the
+// event is about, or nothing when it is gone, not cached, or a later object
+// under the same name.
+func cachedBinding(e timeline.TimelineEvent) (subjects []string, roleRef string) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return ""
+		return nil, ""
 	}
 	var uid string
+	var refs []rbacv1.Subject
 	var ref rbacv1.RoleRef
 	switch e.Kind {
 	case "RoleBinding":
 		if cache.RoleBindings() == nil {
-			return ""
+			return nil, ""
 		}
 		b, err := cache.RoleBindings().RoleBindings(e.Namespace).Get(e.Name)
 		if err != nil {
-			return ""
+			return nil, ""
 		}
-		uid, ref = string(b.UID), b.RoleRef
+		uid, refs, ref = string(b.UID), b.Subjects, b.RoleRef
 	case "ClusterRoleBinding":
 		if cache.ClusterRoleBindings() == nil {
-			return ""
+			return nil, ""
 		}
 		b, err := cache.ClusterRoleBindings().Get(e.Name)
 		if err != nil {
-			return ""
+			return nil, ""
 		}
-		uid, ref = string(b.UID), b.RoleRef
+		uid, refs, ref = string(b.UID), b.Subjects, b.RoleRef
 	default:
-		return ""
+		return nil, ""
 	}
 	if e.UID != "" && uid != e.UID {
-		return ""
+		return nil, ""
 	}
-	return ref.Kind + " " + ref.Name
+	return k8s.RBACSubjectRefs(refs), ref.Kind + " " + ref.Name
 }
 
 func namedSubjects(refs []string) string {

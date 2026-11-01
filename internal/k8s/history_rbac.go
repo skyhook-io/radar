@@ -2,10 +2,12 @@ package k8s
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -108,8 +110,8 @@ func rbacRoleFields(obj any) (rules, aggregation []string, ok bool) {
 	case *rbacv1.ClusterRole:
 		var agg []string
 		if r.AggregationRule != nil {
-			for _, selector := range r.AggregationRule.ClusterRoleSelectors {
-				agg = append(agg, selectorRef(selector.MatchLabels))
+			for i := range r.AggregationRule.ClusterRoleSelectors {
+				agg = append(agg, metav1.FormatLabelSelector(&r.AggregationRule.ClusterRoleSelectors[i]))
 			}
 			sort.Strings(agg)
 		}
@@ -154,12 +156,15 @@ func ParseServiceAccountSubjectRef(ref string) (namespace, name string, ok bool)
 	return strings.Cut(rest, "/")
 }
 
+// policyRuleRefs renders each rule as "<groups>/<resources>[names]: <verbs>"
+// with every list sorted, so reordering a role's rules or a rule's verbs is
+// not a change.
 func policyRuleRefs(rules []rbacv1.PolicyRule) []string {
 	out := make([]string, 0, len(rules))
 	for _, rule := range rules {
-		verbs := strings.Join(rule.Verbs, ",")
+		verbs := sortedJoin(rule.Verbs)
 		if len(rule.NonResourceURLs) > 0 {
-			out = append(out, strings.Join(rule.NonResourceURLs, ",")+": "+verbs)
+			out = append(out, sortedJoin(rule.NonResourceURLs)+": "+verbs)
 			continue
 		}
 		groups := make([]string, len(rule.APIGroups))
@@ -169,9 +174,9 @@ func policyRuleRefs(rules []rbacv1.PolicyRule) []string {
 			}
 			groups[i] = g
 		}
-		target := strings.Join(groups, ",") + "/" + strings.Join(rule.Resources, ",")
+		target := sortedJoin(groups) + "/" + sortedJoin(rule.Resources)
 		if len(rule.ResourceNames) > 0 {
-			target += "[" + strings.Join(rule.ResourceNames, ",") + "]"
+			target += "[" + sortedJoin(rule.ResourceNames) + "]"
 		}
 		out = append(out, target+": "+verbs)
 	}
@@ -179,15 +184,8 @@ func policyRuleRefs(rules []rbacv1.PolicyRule) []string {
 	return out
 }
 
-func selectorRef(labels map[string]string) string {
-	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, len(keys))
-	for i, k := range keys {
-		parts[i] = k + "=" + labels[k]
-	}
-	return strings.Join(parts, ",")
+func sortedJoin(items []string) string {
+	sorted := slices.Clone(items)
+	sort.Strings(sorted)
+	return strings.Join(sorted, ",")
 }

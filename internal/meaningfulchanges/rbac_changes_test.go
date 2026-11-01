@@ -52,6 +52,7 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "saleor", UID: "rb-local"}, RoleRef: roleRef, Subjects: []rbacv1.Subject{sa("saleor", "app")}},
 		// Recreated since the recorded create: a later object under the name.
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "replaced", Namespace: "saleor", UID: "rb-new"}, RoleRef: roleRef, Subjects: []rbacv1.Subject{sa("other", "x")}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "repointed", Namespace: "saleor", UID: "rb-repointed"}, RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "edit"}, Subjects: []rbacv1.Subject{sa("kube-system", "vpa-updater"), sa("saleor", "app")}},
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "ops", UID: "crb-1"}, RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "edit"}, Subjects: []rbacv1.Subject{sa("ops", "bot")}},
 	}
 	store := secretFeedFixture(t, objects...)
@@ -81,6 +82,10 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 			Summary: "rules changed",
 			Fields:  []timeline.FieldChange{{Path: "rules", OldValue: []string{"batch/cronjobs: get"}, NewValue: []string{"batch/cronjobs: get,patch"}}},
 		}),
+		recreated(rbacEvent("RoleBinding", "saleor", "repointed", "rb-repointed", timeline.EventTypeAdd, now.Add(-90*time.Second), &timeline.DiffInfo{
+			Summary: "recreated with changes: roleRef: Role vpa-updater→ClusterRole edit",
+			Fields:  []timeline.FieldChange{{Path: "roleRef", OldValue: "Role vpa-updater", NewValue: "ClusterRole edit"}},
+		})),
 		rbacEvent("ClusterRoleBinding", "", "ops", "crb-1", timeline.EventTypeAdd, now.Add(-time.Minute), &timeline.DiffInfo{
 			Summary: "created; it binds ClusterRole edit",
 			Fields:  []timeline.FieldChange{{Path: "subjects", NewValue: []string{"ServiceAccount ops/bot"}}, {Path: "roleRef", NewValue: "ClusterRole edit"}},
@@ -124,6 +129,11 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 	}
 }
 
+func recreated(e timeline.TimelineEvent) timeline.TimelineEvent {
+	e.Reason = timeline.ReasonRecreated
+	return e
+}
+
 func feedRecentIn(t *testing.T, namespace string) []issuesapi.RecentChange {
 	t.Helper()
 	result, err := Recent(context.Background(), Query{Namespaces: []string{namespace}})
@@ -145,5 +155,21 @@ func TestRBACKindsAreTracked(t *testing.T) {
 		if !TrackedKindForGroup(kind, "rbac.authorization.k8s.io") || TrackedKindForGroup(kind, "example.com") {
 			t.Errorf("%s tracking by group is wrong", kind)
 		}
+	}
+}
+
+// An install run of newer creates must not push an outside grant past the
+// output limit.
+func TestOutsideGrantRanksAboveInstallCreates(t *testing.T) {
+	now := time.Now()
+	changes := []issuesapi.RecentChange{{Kind: "RoleBinding", Name: "vpa-updater", ChangeType: "add", ChangeCategory: issuesapi.ChangeCategoryLifecycle,
+		RankReason: "grants Role vpa-updater to ServiceAccount kube-system/vpa-updater", Timestamp: now.Add(-time.Minute).Format(time.RFC3339)}}
+	for _, name := range []string{"a", "b", "c"} {
+		changes = append(changes, issuesapi.RecentChange{Kind: "ConfigMap", Name: name, ChangeType: "add", ChangeCategory: issuesapi.ChangeCategoryLifecycle,
+			RankReason: lifecycleRankReason, Timestamp: now.Format(time.RFC3339)})
+	}
+	RankAndCap(&changes, 2)
+	if changes[0].Name != "vpa-updater" {
+		t.Fatalf("ranked = %+v, want the outside grant first", changes)
 	}
 }
