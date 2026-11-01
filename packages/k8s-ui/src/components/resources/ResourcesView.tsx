@@ -1,3 +1,5 @@
+import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getFlaggerColumnValue } from './resource-utils-flagger'
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
 import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
@@ -577,6 +579,44 @@ const DEFAULT_COLUMNS: Column[] = [
 ]
 
 const KNOWN_COLUMNS: Record<string, Column[]> = {
+  opentelemetrycollectors: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Reconciliation', width: 'w-40 shrink-0', tooltip: 'Operator reconciliation only, not Pod health or telemetry delivery.' },
+    { key: 'mode', label: 'Mode', width: 'w-28 shrink-0' },
+    { key: 'reportedPods', label: 'Reported Pods', width: 'w-32 shrink-0', tooltip: 'Last reported ready/total snapshot. Total is observed Pods for Deployment/StatefulSet, desired scheduled Pods for DaemonSet. Inspect the owned workload for current readiness.' },
+    { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
+    { key: 'image', label: 'Image', width: 'min-w-48' },
+    { key: 'management', label: 'Management', width: 'w-28 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  instrumentations: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Configuration', width: 'w-36 shrink-0' },
+    { key: 'endpoint', label: 'OTLP Endpoint', width: 'min-w-48' },
+    { key: 'sampler', label: 'Sampler', width: 'w-40 shrink-0' },
+    { key: 'samplerArgument', label: 'Sampler Argument', width: 'w-32 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  canaries: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Rollout State', width: 'w-40 shrink-0', tooltip: 'Last recorded rollout outcome, with requested suspension separate from a failed result. Not a latest-generation guarantee.' },
+    { key: 'strategy', label: 'Strategy', width: 'w-36 shrink-0' },
+    { key: 'target', label: 'Canary Target', width: 'min-w-40' },
+    { key: 'canaryWeight', label: 'Reported Weight', width: 'w-36 shrink-0', tooltip: 'Last reported canary routing weight, not measured traffic. Blue/green and A/B strategies are not weighted.' },
+    { key: 'suspended', label: 'Suspend Requested', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  metrictemplates: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Configuration', width: 'w-36 shrink-0' },
+    { key: 'provider', label: 'Provider', width: 'w-32 shrink-0' },
+    { key: 'address', label: 'Provider Address', width: 'min-w-48' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
   pods: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
@@ -2874,6 +2914,10 @@ function isCuratedUnboundedGroup(key: string, group: string): boolean {
  * cannot occupy one. See CORE_API_GROUPS.
  */
 const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
+  opentelemetrycollectors: ['opentelemetry.io'],
+  instrumentations: ['opentelemetry.io'],
+  canaries: ['flagger.app'],
+  metrictemplates: ['flagger.app'],
   challenges: ['acme.cert-manager.io'],
   orders: ['acme.cert-manager.io'],
   compositeresourcedefinitions: ['apiextensions.crossplane.io'],
@@ -5397,6 +5441,10 @@ export function ResourcesView({
     const meta = resource.metadata || {}
     const status = resource.status || {}
     const kindLower = kind?.toLowerCase() || ''
+    const otelValue = getOpenTelemetryColumnValue(resource, column)
+    if (otelValue !== undefined) return otelValue
+    const flaggerValue = getFlaggerColumnValue(resource, column)
+    if (flaggerValue !== undefined) return flaggerValue
 
     switch (column) {
       case 'name':
@@ -5843,7 +5891,9 @@ export function ResourcesView({
   const selectedKindName = selectedKind.name.toLowerCase()
   const canBulkRestartSelectedKind = onBulkRestart != null && BULK_RESTART_WORKLOAD_KINDS.has(selectedKindName)
   const canBulkScaleSelectedKind = onBulkScale != null && BULK_SCALE_WORKLOAD_KINDS.has(selectedKindName)
-  const canBulkSelect = onBulkDelete != null || canBulkRestartSelectedKind || canBulkScaleSelectedKind
+  // Phones skip bulk selection and create (see the toolbar): phone triage
+  // is one resource at a time.
+  const canBulkSelect = !isPhone && (onBulkDelete != null || canBulkRestartSelectedKind || canBulkScaleSelectedKind)
   const isBulkMutating = isBulkDeleting || isBulkRestarting || isBulkScaling
 
   const openBulkScaleDialog = useCallback(() => {
@@ -6571,7 +6621,7 @@ export function ResourcesView({
               </div>
             )}
           </div>
-          {onCreateResource && (
+          {onCreateResource && !isPhone && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
                 aria-label={`Create ${selectedKind.kind || 'resource'}`}
@@ -7529,6 +7579,14 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     return <KyvernoCleanupPolicyCell resource={resource} column={column} />
   }
 
+  if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
+  }
   switch (kindLower) {
     case 'pods':
       return <PodCell resource={resource} column={column} />

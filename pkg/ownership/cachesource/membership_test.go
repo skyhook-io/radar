@@ -445,3 +445,43 @@ func TestRecordingManagersOfDynamicNativeAndForeignCollidingKinds(t *testing.T) 
 		}
 	}
 }
+
+func TestMembershipValidationTracksInventoryObservation(t *testing.T) {
+	s := &session{}
+	current := manager(ownership.ArgoApplication, localDestination, map[string]any{"resources": []any{}})
+	current.SetUID("first")
+	current.SetResourceVersion("1")
+	current.SetAPIVersion("argoproj.io/v1alpha1")
+	check := func(want ownership.MembershipState) {
+		t.Helper()
+		if got := s.cachedMemberState(ownership.ArgoApplication, current); got != want {
+			t.Fatalf("state = %v, want %v", got, want)
+		}
+	}
+	check(ownership.MembersRecorded)
+	current = current.DeepCopy()
+	current.SetResourceVersion("2")
+	delete(current.Object, "status")
+	check(ownership.MembersUnreadable)
+	current = current.DeepCopy()
+	current.SetResourceVersion("3")
+	current.Object["spec"] = map[string]any{"destination": map[string]any{"name": "remote"}}
+	check(ownership.MembersRemote)
+	current = current.DeepCopy()
+	current.SetUID("replacement")
+	current.Object["spec"] = localDestination
+	current.Object["status"] = map[string]any{"resources": []any{}}
+	check(ownership.MembersRecorded)
+	current = current.DeepCopy()
+	current.SetAPIVersion("argoproj.io/v1beta1")
+	delete(current.Object, "status")
+	check(ownership.MembersUnreadable)
+	current.SetResourceVersion("")
+	current.Object["status"] = map[string]any{"resources": []any{}}
+	check(ownership.MembersRecorded)
+	delete(current.Object, "status")
+	check(ownership.MembersUnreadable)
+	if len(s.membershipStates) != 1 {
+		t.Fatalf("retained %d observations", len(s.membershipStates))
+	}
+}

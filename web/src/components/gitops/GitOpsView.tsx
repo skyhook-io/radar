@@ -24,6 +24,8 @@ import {
   getGitOpsTool,
   gitOpsDetailGroup,
   isDestinationRef,
+  isArgoAutoSyncEnabled,
+  isArgoAutoSyncSwitchedOff,
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
@@ -33,6 +35,7 @@ import {
   normalizeFluxHelmRelease,
   normalizeFluxKustomization,
   parseArgoRollbackID,
+  radarUpgradeNoteText,
   toggleSet,
   type APIResource,
   type ArgoActionHandlers,
@@ -73,6 +76,7 @@ import {
   useFluxSyncWithSource,
   useGitOpsInsights,
   useGitOpsTree,
+  useRadarFeature,
   useResource,
 } from '../../api/client'
 import { useAPIResources, GITOPS_KINDS } from '../../api/apiResources'
@@ -138,6 +142,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const fluxSyncWithSource = useFluxSyncWithSource()
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
+  const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
 
   const [syncDialogRow, setSyncDialogRow] = useState<GitOpsRow | null>(null)
   const [pendingActions, setPendingActions] = useState<Map<string, Set<GitOpsRowAction>>>(new Map())
@@ -302,6 +307,10 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         else fluxSuspend.mutate({ kind, namespace, name }, settle)
         return
       case 'resume':
+        if (row.tool === 'argo' && isArgoAutoSyncSwitchedOff(row.raw) && (argoResumeUpgrade || argoResumeBlockedReason)) {
+          markAction(id, action, false)
+          return
+        }
         if (row.tool === 'argo') argoResume.mutate({ namespace, name }, settle)
         else fluxResume.mutate({ kind, namespace, name }, settle)
         return
@@ -340,6 +349,8 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         }}
         onRowAction={handleRowAction}
         pendingRowActions={pendingActions}
+        argoResumeUpgrade={argoResumeUpgrade}
+        argoResumeBlockedReason={argoResumeBlockedReason}
         searchHotkey
         globalNamespaces={namespaces}
         onClearNamespaces={onClearNamespaces}
@@ -401,11 +412,12 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const tool = resourceQ.data ? getGitOpsTool(kind, effectiveGroup) : null
   const isArgoApp = tool === 'argo' && kind === 'applications'
   const status = tool && resourceQ.data ? getGitOpsResourceStatus(kind, resourceQ.data) : null
-  // Argo "auto-sync ON" is determined by spec.syncPolicy.automated being set,
-  // not by health.status === Suspended (which is Argo's CronJob-style suspend).
+  // Argo "auto-sync ON" is read from spec.syncPolicy.automated (honoring
+  // `enabled: false`), not from health.status === Suspended (which is Argo's
+  // CronJob-style suspend).
   // The toggle button reads from this so the label flips correctly when an
   // app is in Manual mode or suspended via Radar's annotations.
-  const argoAutoSyncEnabled = isArgoApp && Boolean(resourceQ.data?.spec?.syncPolicy?.automated)
+  const argoAutoSyncEnabled = isArgoApp && isArgoAutoSyncEnabled(resourceQ.data)
   // Radar-driven Argo suspension is signaled by annotations that record the
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
   // the app is in a deliberately-paused state (vs. Manual mode, which is a
@@ -456,6 +468,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const argoSuspend = useArgoSuspend()
   const argoResume = useArgoResume()
   const argoRollback = useArgoRollback()
+  const { upgrade: argoRollbackUpgrade, blockedReason: argoRollbackBlockedReason } = useRadarFeature('argoRollback')
+  const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const applyResource = useApplyResource()
   const fluxReconcile = useFluxReconcile()
   const fluxSyncWithSource = useFluxSyncWithSource()
@@ -656,7 +670,10 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     },
     onTerminate: () => argoTerminate.mutate({ namespace, name }),
     onSuspend: () => argoSuspend.mutate({ namespace, name }),
-    onResume: () => argoResume.mutate({ namespace, name }),
+    onResume: () => {
+      if (isArgoAutoSyncSwitchedOff(resourceQ.data) && (argoResumeUpgrade || argoResumeBlockedReason)) return
+      argoResume.mutate({ namespace, name })
+    },
     syncing: argoSync.isPending,
     refreshing: argoRefresh.isPending,
     refreshingKind: refreshKind,
@@ -666,6 +683,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     autoSyncEnabled: argoAutoSyncEnabled,
     isRunning,
     operationInProgress,
+    resumeUpgrade: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeUpgrade : null,
+    resumeBlockedReason: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeBlockedReason : undefined,
   } : undefined
 
   const fluxHandlers: FluxActionHandlers | undefined = isFlux ? {
@@ -696,6 +715,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       terminatingActionTooltip={terminatingActionTooltip}
       detail={tool ? detail : undefined}
       insight={tool ? insightsQ.data ?? null : null}
+      warnings={tree?.warnings}
       insightLoading={insightsQ.isLoading}
       healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
       remoteDestinationHint={<RemoteDestinationCloudHint />}
@@ -812,9 +832,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
               onRollback={isArgoApp && !operationInProgress ? (item) => {
-                if (parseArgoRollbackID(item.id) == null) return
+                if (argoRollbackUpgrade || argoRollbackBlockedReason || parseArgoRollbackID(item.id) == null) return
                 setRollbackTarget(item)
               } : undefined}
+              rollbackUpgrade={argoRollbackUpgrade}
+              rollbackBlockedReason={argoRollbackBlockedReason}
             />
           )
         }
@@ -917,9 +939,17 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             appLabel={`${namespace}/${name}`}
             revision={rollbackTarget?.revision || ''}
             historyId={rollbackTarget?.id}
+            source={rollbackTarget?.source}
+            multiSourceWarning={rollbackTarget?.rollbackMultiSourceWarning}
             pending={argoRollback.isPending}
+            blockedReason={argoRollbackBlockedReason || (argoRollbackUpgrade ? radarUpgradeNoteText(argoRollbackUpgrade) : undefined)}
             onCancel={() => setRollbackTarget(null)}
             onConfirm={(opts) => {
+              if (argoRollbackUpgrade || argoRollbackBlockedReason) {
+                showError('Rollback unavailable', argoRollbackBlockedReason || radarUpgradeNoteText(argoRollbackUpgrade!))
+                setRollbackTarget(null)
+                return
+              }
               const id = parseArgoRollbackID(rollbackTarget?.id)
               if (id == null) {
                 showError('Rollback target became invalid', 'The history entry changed while the dialog was open. Reselect a target and try again.')
@@ -1128,7 +1158,7 @@ function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
   const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
   return (
     <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary sm:flex">
-      <span><span className="text-theme-text-primary">{total}</span> resources</span>
+      <span><span className="text-theme-text-primary">{total}</span> resources shown</span>
       {dependencies > 0 && <span><span className="text-theme-text-primary">{dependencies}</span> {dependencies === 1 ? 'dependency' : 'dependencies'}</span>}
       {failingDependencies > 0 && <span className="flex items-center gap-1 font-medium text-red-600 dark:text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {failingDependencies} {failingDependencies === 1 ? 'dependency' : 'dependencies'} failing</span>}
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}

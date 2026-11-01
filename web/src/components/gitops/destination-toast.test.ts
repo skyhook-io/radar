@@ -27,7 +27,7 @@ describe('destinationToast', () => {
   })
   test('unknown destination', () => {
     const t = destinationToast('ConfigMap a/b', { canSwitch: true })
-    expect(t.message).toBe('ConfigMap a/b is on another cluster')
+    expect(t.message).toBe("ConfigMap a/b can't be opened from this cluster")
     expect(t.actionLabel).toBeUndefined()
   })
 })

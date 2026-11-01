@@ -73,6 +73,9 @@ func TestAttributionOversizeIsExplained(t *testing.T) {
 }
 
 func TestAttributionWaitsForDiscoveryBeforeProbeDeadline(t *testing.T) {
+	previousBudget := workloadAttributionProbeBudget
+	workloadAttributionProbeBudget = time.Second
+	t.Cleanup(func() { workloadAttributionProbeBudget = previousBudget })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rows := []prom.Series{}
 		if r.FormValue("query") == "up" {
@@ -96,7 +99,12 @@ func TestAttributionWaitsForDiscoveryBeforeProbeDeadline(t *testing.T) {
 	defer func() { c.mu.Lock(); c.retired = true; c.cancelWorkloadAttributionsLocked(); c.mu.Unlock() }()
 	scope := PodScope{Namespace: "shop", Kind: "Deployment", Name: "api", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}}}
 	c.automaticWorkloadAttributions(scope)
-	time.Sleep(8200 * time.Millisecond)
+	waitFor(t, "attribution discovery to start", func() bool {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		return c.flightActive
+	})
+	time.Sleep(workloadAttributionProbeBudget + 200*time.Millisecond)
 	if _, state := c.automaticWorkloadAttributions(scope); state != "detecting" {
 		t.Fatalf("discovery became probe error: %s", state)
 	}

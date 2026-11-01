@@ -57,7 +57,7 @@ var catalogOrder = []Category{
 	CategoryImagePullFailed, CategoryContainerWaiting, CategoryInitContainerFailed,
 	// Runtime
 	CategoryCrashLoop, CategoryOOMKilled, CategoryLivenessProbeFail, CategoryReadinessFailed,
-	CategoryWorkloadDegraded, CategoryHighRestart, CategoryJobFailed, CategoryCronJobFailed,
+	CategoryWorkloadDegraded, CategoryHighRestart, CategoryPodEvicted, CategoryJobFailed, CategoryCronJobFailed,
 	// Configuration
 	CategoryMissingConfigRef, CategoryInvalidConfiguration, CategoryPDBBlocksEvictions, CategorySecretSyncFailed,
 	// Networking
@@ -74,7 +74,7 @@ var catalogOrder = []Category{
 	// Control plane
 	CategoryTerminationStuck, CategoryNodeNotReady, CategoryAPIServiceUnavailable,
 	CategoryNodeProvisioningFail, CategoryCrossplaneReconcile, CategoryOperatorConditionFail,
-	CategoryGitOpsSyncFailed, CategoryGitOpsRenderFailed, CategoryGitOpsSpecInvalid,
+	CategoryGitOpsResourceWarning, CategoryGitOpsSyncFailed, CategoryGitOpsRenderFailed, CategoryGitOpsSpecInvalid,
 	CategoryGitOpsOperationFailed, CategoryGitOpsOutOfSync, CategoryGitOpsHealthDegraded,
 	CategoryGitOpsStale,
 	CategoryHelmReleaseFailed, CategoryWebhookBackendDown, CategoryControlPlaneNotReady, CategoryMachineNotReady,
@@ -104,6 +104,7 @@ var categoryDescription = map[Category]string{
 	CategoryReadinessFailed:   "A readiness probe is failing or a declared readiness gate has not passed; the Pod is not ready for normal Service traffic.",
 	CategoryWorkloadDegraded:  "A workload has fewer ready replicas than desired — some pods are unavailable.",
 	CategoryHighRestart:       "A container has restarted many times — unstable even if it's currently running.",
+	CategoryPodEvicted:        "The kubelet evicted a pod because its node ran low on memory, disk, or PIDs, or because the pod exceeded its own ephemeral-storage limit.",
 	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline — or has been running too long with no completions.",
 	CategoryCronJobFailed:     "A CronJob's recent runs are failing, or its schedule isn't producing successful jobs.",
 	// Configuration
@@ -114,7 +115,7 @@ var categoryDescription = map[Category]string{
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
 	CategoryServiceMixedBackends:  "A Service's selector matches pods of workloads that don't all serve it (different applications, or a port some don't declare), so part of its traffic reaches pods that may not serve it.",
-	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s.",
+	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s — or a Traefik router needs a Service or Middleware that doesn't exist, so Traefik doesn't load it.",
 	CategoryIngressClassMissing:   "An Ingress names an IngressClass that doesn't exist, so no matching controller can serve it.",
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",
 	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed — its listeners aren't serving.",
@@ -127,7 +128,7 @@ var categoryDescription = map[Category]string{
 	CategoryPVFailed:                 "A PersistentVolume is in Failed state — its reclaim or backing storage failed.",
 	CategoryPVCResizeFailed:          "A volume expansion didn't complete — the requested resize failed or is stuck.",
 	CategoryVolumeMountFailed:        "A pod can't mount a volume — attach/mount failed (wrong node, missing CSI driver, or permissions).",
-	CategoryVolumeAccessModeConflict: "A volume's access mode conflicts with how it's mounted (e.g. an RWO volume claimed by pods on different nodes).",
+	CategoryVolumeAccessModeConflict: "A volume's access mode conflicts with how it's mounted (e.g. a multi-replica Deployment mounting a ReadWriteOncePod volume, which only one pod can use).",
 	CategoryBackupFailed:             "A backup or restore run failed, partially failed, or was rejected in validation, or a database's continuous archiving has stopped — the recovery point you'd expect to have may not exist.",
 	CategoryBackupTargetUnavailable:  "The backup destination itself is unhealthy — an object-store location or backup repository the backup tool can't reach or validate.",
 	CategoryBackupStalled:            "A backup or restore run is still in flight long past the time its own tool allows, so nothing appears to be advancing it — it has neither succeeded nor failed, and no new recovery point is being written.",
@@ -136,7 +137,7 @@ var categoryDescription = map[Category]string{
 	CategoryHPALimitedOrFailed: "A HorizontalPodAutoscaler can't scale — missing metrics, pinned at max replicas, or scaling errors.",
 	// Security
 	CategoryRBACForbidden:        "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
-	CategoryCertificateNotReady:  "A certificate isn't usable or soon won't be — cert-manager issuance is failing or pending, or a certificate (including CloudNativePG's operator-managed ones) is expiring or has expired.",
+	CategoryCertificateNotReady:  "A certificate isn't usable or soon won't be — cert-manager issuance is failing or pending, or a certificate (including CloudNativePG's operator-managed ones) is expiring or has expired, or a live Ingress or Gateway uses a TLS Secret whose certificate is expired, not yet valid or about to expire.",
 	CategoryPodSecurityViolation: "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
 	// Control plane
 	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer hasn't been released, often because its controller is down, missing, or failing its cleanup.",
@@ -145,6 +146,7 @@ var categoryDescription = map[Category]string{
 	CategoryNodeProvisioningFail:  "Node provisioning failed — the autoscaler or Karpenter couldn't bring up a node.",
 	CategoryCrossplaneReconcile:   "A Crossplane managed or composite resource can't reconcile — its Ready or Synced condition is False.",
 	CategoryOperatorConditionFail: "An operator-managed resource is reporting a failed status condition.",
+	CategoryGitOpsResourceWarning: "Argo CD reports shared tracking, repeated rendering, or orphaned resources. Repeated rendering is info-level and excluded from the live critical/warning Issues stream.",
 	CategoryGitOpsSyncFailed:      "A GitOps app failed to sync (catch-all) — Argo CD or Flux couldn't reconcile it to the desired state.",
 	CategoryGitOpsRenderFailed:    "GitOps couldn't render manifests from Git — a kustomize/helm build or source fetch failed.",
 	CategoryGitOpsSpecInvalid:     "A GitOps app's spec is invalid — a bad destination, source, or project reference.",

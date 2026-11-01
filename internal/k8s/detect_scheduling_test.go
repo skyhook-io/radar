@@ -436,6 +436,7 @@ func TestClassifyPostBindFailure(t *testing.T) {
 		{"FailedCreatePodSandBox", `failed to create pod sandbox: ... failed to assign an IP address to container; InsufficientFreeAddresses`, "IPExhaustion", true},
 		{"FailedCreatePodSandBox", `failed to create pod sandbox: rpc error: code = Unknown`, "SandboxCreationFailed", true},
 		{"FailedAttachVolume", `Multi-Attach error for volume "pvc-123" Volume is already used by pod(s) other-pod`, "VolumeMultiAttach", true},
+		{"FailedAttachVolume", `Waiting for detach for volume "pvc-123" Volume is already used by pod(s) other-pod`, "VolumeMultiAttach", true},
 		{"FailedAttachVolume", `AttachVolume.Attach failed for volume "pvc-123": timed out`, "VolumeAttach", true},
 		{"FailedMount", `Unable to attach or mount volumes: timed out waiting for the condition`, "VolumeMount", true},
 		{"BackOff", `Back-off restarting failed container`, "", false},

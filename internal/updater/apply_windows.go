@@ -85,7 +85,10 @@ func Relaunch() error {
 	}
 
 	log.Printf("[updater] Executing trampoline: %s", bat)
-	cmd := exec.Command("cmd", "/C", "start", "/MIN", bat)
+	// start reads its first quoted argument as the window title, and the
+	// path is quoted whenever TEMP has a space (as under C:\Users\Jane Doe),
+	// so give it an empty title first.
+	cmd := exec.Command("cmd", "/C", "start", "", "/MIN", bat)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start trampoline: %w", err)
 	}

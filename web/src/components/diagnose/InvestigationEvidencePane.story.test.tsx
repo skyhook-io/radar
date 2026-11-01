@@ -1,4 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
@@ -621,7 +624,12 @@ describe("story card defaults", () => {
         matches: 1,
         row: { kind: "ConfigMap", namespace: "b", name: "config" },
       },
-      { key: "ConfigMap//missing", label: "missing", matches: 0, row: undefined },
+      {
+        key: "ConfigMap//missing",
+        label: "missing",
+        matches: 0,
+        row: undefined,
+      },
     ]);
     // Rows of a namespace-scoped listing omit their namespace: the scope is
     // theirs, and only that namespace satisfies a namespaced citation.
@@ -749,21 +757,104 @@ describe("story card defaults", () => {
         },
       },
     ];
-    const html = renderToStaticMarkup(
+    const render = (report: string, items = evidence) =>
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          investigationCase={resolveInvestigationCase(
+            projection,
+            { evidence: items },
+            0,
+          )}
+          story={{ report, evidence: items }}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={() => {}}
+          onViewActivity={() => {}}
+        />,
+      );
+    const symptom = render("Memory climbs.\n\n[[radar:evidence=0]]");
+    expect(symptom).toContain("data-story-metrics");
+    expect(symptom).not.toContain("height:140px");
+    const context = [{ ...evidence[0], role: "context" as const }];
+    const contextHtml = render(
+      "Memory climbs.\n\n[[radar:evidence=0]]",
+      context,
+    );
+    expect(contextHtml).toContain("data-story-metrics");
+    expect(contextHtml).toContain("height:140px");
+    expect(contextHtml).toContain('aria-expanded="true"');
+    expect(contextHtml).not.toContain("data-chart-reading");
+    const folded = render(
+      "Memory climbs.\n\n[[radar:evidence=0|compact]]",
+      context,
+    );
+    expect(folded).not.toContain("data-story-metrics");
+    expect(folded).toContain('aria-expanded="false"');
+    expect(folded).toMatch(/data-chart-reading[^>]*>161\.5 Mi?B?/);
+    // Agents mark cards compact for the prose's flow, not their weight, so a
+    // compact symptom stays open.
+    const compactSymptom = render(
+      "Memory climbs.\n\n[[radar:evidence=0|compact]]",
+    );
+    expect(compactSymptom).toContain("data-story-metrics");
+    expect(compactSymptom).not.toContain("height:140px");
+    // The collapsed preview bounds its height and leaves the chart out.
+    expect(
+      render("Memory climbs.\n\n[[radar:evidence=0]]\n\nMore after the fold."),
+    ).not.toContain("data-story-metrics");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const pane = (report: string, items: DiagnosisEvidenceItem[]) => (
       <InvestigationEvidencePane
         projection={projection}
         investigationCase={resolveInvestigationCase(
           projection,
-          { evidence },
+          { evidence: items },
           0,
         )}
-        story={{ report: "Memory climbs.\n\n[[radar:evidence=0]]", evidence }}
+        story={{ report, evidence: items }}
         collecting={false}
         animateGroupIds={new Set()}
         onViewSource={() => {}}
         onViewActivity={() => {}}
-      />,
+      />
     );
-    expect(html).toContain("data-story-metrics");
+    // The story's card comes first; Captured results follows it.
+    const header = () =>
+      container.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    act(() =>
+      root.render(
+        pane("Memory climbs.\n\n[[radar:evidence=0|compact]]", context),
+      ),
+    );
+    expect(container.querySelector("[data-story-metrics]")).toBeNull();
+    act(() => header().click());
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("[data-story-metrics]")).not.toBeNull();
+    expect(container.querySelector("[data-chart-reading]")).toBeNull();
+    act(() => header().click());
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector("[data-chart-reading]")).not.toBeNull();
+    act(() =>
+      root.render(
+        pane(
+          "Memory climbs.\n\n[[radar:evidence=0|compact]]\n\nSee [[radar:evidence=0]] again.",
+          context,
+        ),
+      ),
+    );
+    act(() => header().click());
+    expect(container.querySelector("[data-chart-reading]")).not.toBeNull();
+    const reference = container.querySelector<HTMLButtonElement>(
+      "[data-story-ref-direction]",
+    )!;
+    Element.prototype.scrollIntoView ??= () => {};
+    act(() => reference.click());
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    act(() => root.unmount());
+    container.remove();
   });
 });

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -56,7 +57,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		// config/resource reference.
 		switch in.Reason {
 		case "Missing backend Service", "Missing backend Service port",
-			"Missing ALB action annotation", "Invalid ALB action annotation":
+			"Missing ALB action annotation", "Invalid ALB action annotation",
+			k8s.TraefikRouterMissingServiceReason, k8s.TraefikRouterMissingMiddlewareReason:
 			return issuesapi.CategoryIngressBackendMissing
 		case "Missing IngressClass":
 			return issuesapi.CategoryIngressClassMissing
@@ -206,6 +208,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryInvalidConfiguration
 	case k8s.NetworkPolicyDenyAllIngressReason:
 		return issuesapi.CategoryNetworkPolicyDenied
+	case k8s.TLSCertificateExpiredReason, k8s.TLSCertificateNotYetValidReason, k8s.TLSCertificateExpiringReason:
+		return issuesapi.CategoryCertificateNotReady
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":
@@ -218,6 +222,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	case "Pod":
 		if in.Reason == "OOMKilled" {
 			return issuesapi.CategoryOOMKilled
+		}
+		if in.Reason == health.PodEvictedReason {
+			return issuesapi.CategoryPodEvicted
 		}
 		switch in.Reason {
 		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ImageInspectError":
@@ -268,9 +275,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		if in.Reason == "Rollout stuck" || in.Reason == "ReplicaFailure" {
 			return issuesapi.CategoryRolloutStalled
 		}
-		// Stable reason literal emitted by sharedRWOVolumeConflicts —
-		// a multi-replica Deployment mounting a ReadWriteOnce volume.
-		if in.Reason == "ReadWriteOnce volume shared across replicas" {
+		// A multi-replica Deployment mounting a single-node volume. Only the
+		// ReadWriteOncePod form reaches issues; ReadWriteOnce is info posture.
+		if in.Reason == k8s.SharedRWOPVolumeReason || in.Reason == k8s.SharedRWOVolumeReason {
 			return issuesapi.CategoryVolumeAccessModeConflict
 		}
 		// "{avail}/{desired} available" / "{ready}/{desired} ready" /
@@ -404,8 +411,12 @@ func classifyGitOpsReason(reason string, fallback issuesapi.Category) issuesapi.
 		return issuesapi.CategoryGitOpsRenderFailed
 	case "InvalidSpecError":
 		return issuesapi.CategoryGitOpsSpecInvalid
-	case "OperationFailed", "SyncError", "StuckDriftLoop":
+	case "OperationFailed", "SyncError", "StuckDriftLoop", "RollbackRevisionMismatch":
 		return issuesapi.CategoryGitOpsOperationFailed
+	case "AutoSyncBlockedEmpty":
+		return issuesapi.CategoryGitOpsSyncFailed
+	case "SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning":
+		return issuesapi.CategoryGitOpsResourceWarning
 	case "OutOfSync", "OutOfSyncManual":
 		return issuesapi.CategoryGitOpsOutOfSync
 	case "GitOpsControllerStalled", "GitOpsComparisonsStale", "ComparisonStale":

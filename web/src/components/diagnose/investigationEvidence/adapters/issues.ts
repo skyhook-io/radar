@@ -148,6 +148,7 @@ export function adaptIssues(
       "Issue-related changes",
       "Radar's change history is incomplete for part of the window, so earlier changes may be missing.",
       "unknown",
+      "history",
     );
   }
   if (nonEmptyString(value.recent_changes_error)) {

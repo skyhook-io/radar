@@ -57,6 +57,8 @@ import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
 import { useUsageData, useUsageRecording } from './api/usage-data'
 import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
+import { ProductHuntNotice } from './components/product-hunt/ProductHuntNotice'
+import { useProductHuntRailEntry } from './components/product-hunt/useProductHuntRailEntry'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
@@ -135,7 +137,7 @@ type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'w
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
 // the PR that gives it a phone layout.
-const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology'])
+const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology', 'capacity'])
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -553,6 +555,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }, [location.search, navigate, takeover, goHost, viewMemory, kindFilterStore])
 
   const whatsNewStatus = useWhatsNewStatus()
+  const productHuntRailEntry = useProductHuntRailEntry()
 
   const navigateToPath = useCallback((path: string) => {
     navigate(withCrossViewParams(path, location.search))
@@ -1831,6 +1834,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onOpenSettings={() => openSettings()}
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
           whatsNew={whatsNewStatus.available ? { unread: whatsNewStatus.unread, onOpen: openWhatsNew } : undefined}
+          productHunt={productHuntRailEntry}
         />
       )}
       {/* `relative` makes this column the containing block for the absolute
@@ -2105,7 +2109,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onNavigateToView={setMainView}
             onNavigateToHelmRelease={navCustomization.embedded ? undefined : navigateToHelmRelease}
             onNavigateToManagerPath={navCustomization.embedded || takeover.gitops ? undefined : navigateToPath}
-            onShowWhatsNew={!navCustomization.embedded && whatsNewStatus.available ? openWhatsNew : undefined}
             // Upgrade impact lives under /checks, which a Cloud host takes
             // over wholesale — its fleet pages have no upgrade sub-route, so
             // the version line stays plain text there.
@@ -2578,6 +2581,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {!navCustomization.embedded && <UpdateNotification />}
       {!navCustomization.embedded && <WhatsNew onNavigate={navigateToPath} usageData={usageData.data} />}
       {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
+      {!navCustomization.embedded && <ProductHuntNotice usageData={usageData.data} usageDataPending={usageData.isPending} />}
 
       {/* Bottom Dock for Terminal/Logs */}
       <BottomDock viewNamespaces={namespaces} />

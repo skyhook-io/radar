@@ -12,9 +12,11 @@ import (
 // TraefikService, or Middleware that doesn't exist: routers (spec.routes →
 // Service/Middleware), chain middlewares (spec.chain.middlewares → Middleware),
 // and errors middlewares (spec.errors.service → Service). Traefik ships no
-// validation webhook or linter — a typo'd ref silently drops traffic or skips a
-// middleware until someone reads the controller logs — so this is genuinely
-// additive (cf. Kubevious' built-in "missing Middleware reference" validator).
+// validation webhook or linter, and it does not load a router whose Service or
+// Middleware is missing (directly or through a chain or errors Middleware), so
+// the route stops serving and the error shows only in its log and dashboard.
+// Issues reports the routers a running Traefik loads; audit lists every
+// dangling reference, including middlewares no router uses yet.
 //
 // Matching is conservative to avoid false positives:
 //   - Only genuinely-absent refs are flagged; an explicit cross-namespace ref
@@ -181,9 +183,9 @@ func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 
 	// Middleware subjects (audited namespaces): a `chain` middleware referencing a
 	// missing Middleware, or an `errors` middleware referencing a missing Service.
-	// Same silent-failure class as routes — Traefik accepts the bad ref and the
-	// chain/error-page simply doesn't work. Only HTTP Middlewares carry chain/
-	// errors; a MiddlewareTCP has neither key, so its loops are no-ops.
+	// Every router using such a middleware is not loaded. Only HTTP Middlewares
+	// carry chain/errors; a MiddlewareTCP has neither key, so its loops are
+	// no-ops.
 	for _, mw := range input.MiddlewareSubjects {
 		group := resourceid.GroupFromAPIVersion(mw.GetAPIVersion())
 		mwKind := mw.GetKind()

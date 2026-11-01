@@ -14,19 +14,43 @@ import {
   pluralToKind,
 } from "@skyhook-io/k8s-ui/utils/navigation";
 import { parseContextName } from "../../utils/context-name";
-import { formatInvestigationTarget } from "./target";
+import {
+  formatInvestigationTitle,
+  formatQuestionScope,
+  isQuestionOnly,
+} from "./target";
 import { Tooltip } from "../ui/Tooltip";
+import { QuestionComposer } from "./QuestionComposer";
+import { plainVerdictText } from "./verdictText";
 
+function daysBefore(date: Date, now: Date): number {
+  const start = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Math.round((start(now) - start(date)) / 86_400_000);
+}
+
+// A header per day gave sparse history one header per row; four buckets keep
+// the list scannable, and rows older than yesterday carry their own date.
 function historyDay(date: Date, now: Date): string {
-  if (date.toDateString() === now.toDateString()) return "Today";
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return date.toLocaleDateString(undefined, {
+  const days = daysBefore(date, now);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return "Previous 7 days";
+  return "Earlier";
+}
+
+function historyTime(date: Date, now: Date): string {
+  const time = date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  if (daysBefore(date, now) <= 1) return time;
+  const day = date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
   });
+  return `${day} · ${time}`;
 }
 
 // Relative age makes the list easy to scan; a stable local timestamp makes two
@@ -116,13 +140,25 @@ export function statusWord(status: RunSummary["status"]): {
   }
 }
 
+// The run's latest headline as plain text: rows are too small for the
+// markdown a headline may carry.
 export function InvestigationHome({
   agentLabel,
   onBrowseIssues,
+  questions = false,
 }: {
   agentLabel: string;
   onBrowseIssues?: () => void;
+  /** The backend opens a run from a question; offer the composer. */
+  questions?: boolean;
 }) {
+  if (questions) {
+    return (
+      <div className="flex min-h-full w-full items-start justify-center px-4 py-10 sm:px-6">
+        <QuestionComposer onBrowseIssues={onBrowseIssues} />
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-full w-full items-center justify-center px-4 py-8 sm:px-6">
       <section className="mx-auto max-w-2xl text-center">
@@ -163,6 +199,10 @@ export function RecentList({
   selectedId,
   historyDegraded = false,
   currentContext,
+  loaded = true,
+  loadFailed = false,
+  onRetry,
+  questions = false,
 }: {
   agentLabel: string;
   runs: RunSummary[];
@@ -170,6 +210,14 @@ export function RecentList({
   selectedId?: string | null;
   historyDegraded?: boolean;
   currentContext?: string;
+  /** The first list response has arrived; until then an empty list means
+   *  nothing is known yet, not that there are no investigations. */
+  loaded?: boolean;
+  /** The latest list request failed. */
+  loadFailed?: boolean;
+  onRetry?: () => void;
+  /** Home offers the question composer beside this list. */
+  questions?: boolean;
 }) {
   const now = new Date();
   const contexts = new Map(
@@ -183,6 +231,7 @@ export function RecentList({
     contextsByName.set(parsed.clusterName, names);
   }
   for (const r of runs) {
+    if (isQuestionOnly(r)) continue;
     const kind = pluralToKind(r.kind);
     const groups = groupsByKind.get(kind) ?? new Set<string>();
     // Match Radar's resource-lane display convention: built-in API groups
@@ -224,25 +273,88 @@ export function RecentList({
     </div>
   ) : null;
 
+  if (runs.length === 0 && !loaded) {
+    return loadFailed ? (
+      <div className="flex flex-col items-center px-4 py-12 text-center">
+        <CircleAlert className="mb-3 h-6 w-6 text-theme-text-tertiary" />
+        <div className="text-sm font-medium text-theme-text-primary">
+          Couldn’t load investigations
+        </div>
+        <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
+          Radar keeps retrying while this page is open.
+        </p>
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-3 rounded-md border border-theme-border px-2.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+          >
+            Try again
+          </button>
+        )}
+      </div>
+    ) : (
+      <div
+        role="status"
+        aria-label="Loading investigations"
+        className="space-y-3 px-2 py-4"
+      >
+        {[0, 1, 2].map((row) => (
+          <div key={row} className="space-y-1.5">
+            <div className="h-3.5 w-2/3 animate-pulse rounded bg-theme-hover" />
+            <div className="h-3 w-1/3 animate-pulse rounded bg-theme-hover" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // After the first answer a failed refresh keeps the last list, and says so.
+  const staleNote =
+    loaded && loadFailed ? (
+      <div
+        role="status"
+        className="mb-2 flex items-center justify-between gap-2 rounded-md border border-theme-border px-2.5 py-1.5 text-[11px] leading-snug text-theme-text-secondary"
+      >
+        <span>Couldn’t refresh investigations; showing the last list.</span>
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="shrink-0 font-medium text-theme-text-primary hover:underline"
+          >
+            Try again
+          </button>
+        )}
+      </div>
+    ) : null;
+
   if (runs.length === 0) {
     return (
       <div>
         {degradedNote}
+        {staleNote}
         <div className="flex flex-col items-center px-4 py-12 text-center">
           <Sparkles className="mb-3 h-7 w-7 text-accent" />
           <div className="text-sm font-medium text-theme-text-primary">
             No investigations yet
           </div>
-          <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
-            Open a resource and use its{" "}
-            <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
-            action to investigate it with {agentLabel} —{" "}
-            <span className="font-medium text-theme-text-secondary">
-              Investigate
-            </span>{" "}
-            a problem, or just ask about it. Investigations run in the
-            background and are kept in your history here.
-          </p>
+          {questions ? (
+            <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
+              Investigations run in the background and are kept here.
+            </p>
+          ) : (
+            <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
+              Open a resource and use its{" "}
+              <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
+              action to investigate it with {agentLabel} —{" "}
+              <span className="font-medium text-theme-text-secondary">
+                Investigate
+              </span>{" "}
+              a problem, or just ask about it. Investigations run in the
+              background and are kept in your history here.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -251,6 +363,7 @@ export function RecentList({
   return (
     <div className="space-y-4">
       {degradedNote}
+      {staleNote}
       <h2 className="px-2 text-sm font-medium text-theme-text-secondary">
         Investigations
       </h2>
@@ -292,12 +405,24 @@ export function RecentList({
                         })
                       ? `${parsed.account} · ${parsed.region}`
                       : r.context;
+                const questionOnly = isQuestionOnly(r);
+                const title = formatInvestigationTitle(r);
                 const readableKind = pluralToKind(r.kind);
-                const kind =
-                  groupsByKind.get(readableKind)!.size > 1
-                    ? `${readableKind} · ${r.group || "core"}`
-                    : readableKind;
-                const initialIssue = r.health?.topReason?.trim();
+                const where = questionOnly
+                  ? formatQuestionScope(r)
+                  : `${r.namespace ? `${r.namespace} · ` : ""}${
+                      groupsByKind.get(readableKind)!.size > 1
+                        ? `${readableKind} · ${r.group || "core"}`
+                        : readableKind
+                    }`;
+                const askedAbout = questionOnly ? "" : (r.question ?? "");
+                // The engineer's question frames a run better than the issue
+                // Radar flagged when it started, so a run shows one or the other.
+                const found = plainVerdictText(r.preview);
+                // What it found says more than what it started from, so the
+                // starting issue shows only until there is a finding.
+                const initialIssue =
+                  r.question || found ? undefined : r.health?.topReason?.trim();
                 const isCurrentCluster = currentContext === r.context;
                 const visibility =
                   r.trigger === "background"
@@ -307,7 +432,7 @@ export function RecentList({
                       : r.visibility === "private"
                         ? "Private"
                         : "";
-                const identity = `${formatInvestigationTarget(r)} · ${r.context}${isCurrentCluster ? " · Current cluster" : ""} · ${label}${visibility ? ` · ${visibility}` : ""} · Started ${new Date(r.createdAt).toLocaleString()}${initialIssue ? ` · Started with ${initialIssue}` : ""}`;
+                const identity = `${title}${found ? ` · Found: ${found}` : ""}${askedAbout ? ` · Asked: ${askedAbout}` : ""} · ${r.context}${isCurrentCluster ? " · Current cluster" : ""} · ${label}${visibility ? ` · ${visibility}` : ""} · Started ${new Date(r.createdAt).toLocaleString()}${initialIssue ? ` · Started with ${initialIssue}` : ""}`;
                 return (
                   <button
                     key={r.id}
@@ -322,14 +447,14 @@ export function RecentList({
                   >
                     <span className="flex w-full items-start gap-2">
                       <Tooltip
-                        content={r.name}
+                        content={title}
                         position="right"
                         delay={600}
                         className="pointer-events-none"
                         wrapperClassName="min-w-0 flex-1"
                       >
                         <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary">
-                          {r.name}
+                          {questionOnly ? title : r.name}
                         </span>
                       </Tooltip>
                       {(Icon || short) && (
@@ -346,19 +471,18 @@ export function RecentList({
                         </span>
                       )}
                     </span>
-                    <span className="flex w-full items-baseline gap-2 text-xs leading-4 text-theme-text-secondary">
-                      <span className="min-w-0 flex-1 truncate">
-                        {r.namespace ? `${r.namespace} · ` : ""}
-                        {kind}
+                    {found && (
+                      <span className="line-clamp-2 w-full break-words text-xs leading-4 text-theme-text-secondary">
+                        {found}
                       </span>
+                    )}
+                    <span className="flex w-full items-baseline gap-2 text-xs leading-4 text-theme-text-tertiary">
+                      <span className="min-w-0 flex-1 truncate">{where}</span>
                       <time
                         dateTime={r.createdAt}
                         className="shrink-0 tabular-nums text-theme-text-tertiary"
                       >
-                        {new Date(r.createdAt).toLocaleTimeString(undefined, {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
+                        {historyTime(new Date(r.createdAt), now)}
                       </time>
                     </span>
                     <Tooltip
@@ -374,9 +498,12 @@ export function RecentList({
                             ? `Current cluster: ${parsed.clusterName}`
                             : `Cluster: ${parsed.clusterName}`
                         }
-                        className={`flex w-full items-center gap-1 text-xs leading-4 ${isCurrentCluster ? "text-accent-text" : "text-theme-text-tertiary"}`}
+                        className="flex w-full items-center gap-1 text-xs leading-4 text-theme-text-tertiary"
                       >
-                        <Server className="h-3 w-3 shrink-0" aria-hidden />
+                        <Server
+                          className={`h-3 w-3 shrink-0 ${isCurrentCluster ? "text-accent" : ""}`}
+                          aria-hidden
+                        />
                         <span className="min-w-0 flex-1 truncate">
                           {parsed.clusterName}
                         </span>
@@ -388,12 +515,17 @@ export function RecentList({
                       </span>
                     </Tooltip>
                     {collision && qualifier !== parsed.clusterName && (
-                      <span className="w-full break-words text-xs leading-4 text-theme-text-secondary">
+                      <span className="w-full break-words text-xs leading-4 text-theme-text-tertiary">
                         {qualifier}
                       </span>
                     )}
+                    {askedAbout && (
+                      <span className="line-clamp-1 w-full text-xs leading-4 text-theme-text-tertiary">
+                        Asked: {askedAbout}
+                      </span>
+                    )}
                     {initialIssue && (
-                      <span className="line-clamp-1 w-full text-xs leading-4 text-theme-text-secondary">
+                      <span className="line-clamp-1 w-full text-xs leading-4 text-theme-text-tertiary">
                         Started with {initialIssue}
                       </span>
                     )}

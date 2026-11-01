@@ -72,8 +72,9 @@ func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
 		return k8s.DetectProblems(p.cache, "")
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
+	scope := k8s.NewDetectScope()
 	for _, ns := range namespaces {
-		perNs = append(perNs, k8s.DetectProblems(p.cache, ns))
+		perNs = append(perNs, k8s.DetectProblemsInScope(p.cache, ns, scope))
 	}
 	return flattenNamespacedProblems(perNs)
 }
@@ -92,13 +93,16 @@ func (p *CacheProvider) DetectMissingRefs(namespaces []string) []k8s.Detection {
 		out = append(out, k8s.DetectMissingWebhookRefs(p.cache, p.dynamic, p.discovery, "")...)
 		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, "")...)
 		out = append(out, k8s.DetectMissingCRDRefs(p.cache, p.dynamic, p.discovery, "")...)
+		out = append(out, k8s.DetectLiveTraefikMissingRefs(p.cache, p.dynamic, p.discovery, "", nil)...)
 		return out
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
+	scope := k8s.NewDetectScope()
 	for _, ns := range namespaces {
 		out := k8s.DetectMissingRefs(p.cache, ns)
 		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, ns)...)
 		out = append(out, k8s.DetectMissingCRDRefs(p.cache, p.dynamic, p.discovery, ns)...)
+		out = append(out, k8s.DetectLiveTraefikMissingRefs(p.cache, p.dynamic, p.discovery, ns, scope)...)
 		perNs = append(perNs, out)
 	}
 	// Webhook configs are cluster-scoped — namespace-bounded callers do

@@ -32,7 +32,7 @@ type fallbackFixture struct {
 	forbid, fail, slow func(ns string) bool
 }
 
-const slowList = 2 * time.Second
+var slowList = 2 * time.Second
 
 func inNamespaces(names ...string) func(string) bool {
 	return func(ns string) bool { return slices.Contains(names, ns) }
@@ -226,11 +226,15 @@ func readCNPGClusters(namespaces []string) (integration.KindCoverage, []*unstruc
 // as slow syncs. Watches the budget cut short carry on, and a later read finds
 // them.
 func TestCNPGWorkspace_FallbackCacheSlowWatchStartsWithinOneBudget(t *testing.T) {
+	previousWait, previousSlowList := dynamicSyncWait, slowList
+	dynamicSyncWait, slowList = 500*time.Millisecond, 500*time.Millisecond
+	t.Cleanup(func() { dynamicSyncWait, slowList = previousWait, previousSlowList })
+
 	seedCNPGFallbackCache(t, fallbackFixture{fallbacks: []string{"a"}, slow: inNamespaces("x", "y", "z")}, "a", "pg-a", "x", "pg-x", "y", "pg-y", "z", "pg-z")
 	namespaces := []string{"a", "x", "y", "z"}
 
 	cov, clusters, elapsed := readCNPGClusters(namespaces)
-	if elapsed > dynamicSyncWait+time.Second {
+	if elapsed > dynamicSyncWait+dynamicSyncWait/3 {
 		t.Errorf("kind reads took %v; starting three slow watches must share one %v budget", elapsed, dynamicSyncWait)
 	}
 	if cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 3 {
@@ -252,7 +256,7 @@ func TestCNPGWorkspace_FallbackCacheSlowWatchStartsWithinOneBudget(t *testing.T)
 		if time.Now().After(deadline) {
 			t.Fatalf("the watches never finished starting: %+v", cov)
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

@@ -96,11 +96,11 @@ func (i controllerInfo) podOwnerName() string {
 // genuinely nothing in-cluster to check. Unknown controllers fall through to
 // fail-soft handling (named, never condemned).
 var knownControllers = map[string]controllerInfo{
-	"k8s.io/ingress-nginx":           {name: "ingress-nginx", labels: map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"}},
-	"nginx.org/ingress-controller":   {name: "NGINX Ingress (F5)", labels: map[string]string{"app.kubernetes.io/name": "nginx-ingress"}},
-	"traefik.io/ingress-controller":  {name: "Traefik", labels: map[string]string{"app.kubernetes.io/name": "traefik"}},
-	"projectcontour.io/contour":      {name: "Contour", labels: map[string]string{"app.kubernetes.io/name": "contour"}},
-	"haproxy.org/ingress-controller": {name: "HAProxy Ingress", labels: map[string]string{"app.kubernetes.io/instance": "haproxy-ingress"}},
+	"k8s.io/ingress-nginx":           {name: "ingress-nginx", labels: ingressstatus.ControllerPodLabels["k8s.io/ingress-nginx"]},
+	"nginx.org/ingress-controller":   {name: "NGINX Ingress (F5)", labels: ingressstatus.ControllerPodLabels["nginx.org/ingress-controller"]},
+	"traefik.io/ingress-controller":  {name: "Traefik", labels: ingressstatus.ControllerPodLabels["traefik.io/ingress-controller"]},
+	"projectcontour.io/contour":      {name: "Contour", labels: ingressstatus.ControllerPodLabels["projectcontour.io/contour"]},
+	"haproxy.org/ingress-controller": {name: "HAProxy Ingress", labels: ingressstatus.ControllerPodLabels["haproxy.org/ingress-controller"]},
 	"ingress.k8s.aws/alb":            {name: "AWS Application Load Balancer", controllerName: "aws-load-balancer-controller", labels: map[string]string{"app.kubernetes.io/name": "aws-load-balancer-controller"}, cloud: true},
 	"k8s.io/ingress-gce":             {name: "Google Cloud load balancer", cloud: true},
 }

@@ -3222,3 +3222,14 @@ func TestAdmissionWebhookCallFailureDoesNotBlameService(t *testing.T) {
 		}
 	}
 }
+
+func TestFromProblemHazardClearedOnReasonPromotion(t *testing.T) {
+	p := k8s.Detection{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "billing", Severity: "critical", Reason: "OperationFailed", Message: "sync failed", Action: "Review sync. Hazard.", Hazard: "Hazard."}
+	if got := fromProblem(p, time.Now(), SourceProblem); got.Hazard != p.Hazard || got.Action != p.Action {
+		t.Fatalf("lost hazard or complete action: %+v", got)
+	}
+	p.Message = `applications.argoproj.io is forbidden: User "reader" cannot get resource "applications"`
+	if got := fromProblem(p, time.Now(), SourceProblem); got.Reason != "RBACForbidden" || got.Hazard != "" || got.Action != "" {
+		t.Fatalf("promoted reason kept unrelated guidance: %+v", got)
+	}
+}

@@ -68,7 +68,7 @@ func TestNetworkPolicyIsolationRefsCap(t *testing.T) {
 	}
 	ctx := networkPolicyIsolationContext(netpolDetection(refs...))
 	fact := ctx.Facts[0]
-	if len(fact.Refs) != maxNetworkPolicyIsolationRefs || fact.Refs[0].Kind != "Service" || fact.Refs[1].Kind != "Deployment" {
+	if len(fact.Refs) != maxAffectedRefLinks || fact.Refs[0].Kind != "Service" || fact.Refs[1].Kind != "Deployment" {
 		t.Fatalf("refs = %+v", fact.Refs)
 	}
 	if !strings.Contains(fact.Message, "Only the first links are shown") || strings.ContainsAny(fact.Message, "0123456789") {

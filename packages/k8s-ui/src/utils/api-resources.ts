@@ -216,6 +216,7 @@ export function formatGroupName(group: string): string {
     'logstash.k8s.elastic.co': 'Elastic',
     'jaegertracing.io': 'Jaeger',
     'opentelemetry.io': 'OpenTelemetry',
+    'flagger.app': 'Flagger',
     'projectcalico.org': 'Calico',
     'crd.projectcalico.org': 'Calico',
     'projectcontour.io': 'Contour',

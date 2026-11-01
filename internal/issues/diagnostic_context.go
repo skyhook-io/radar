@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -28,6 +29,7 @@ const (
 	factAPIServiceHPA            = "apiservice_hpa"
 	factSecretNotReady           = "secret_not_ready"
 	factAdmissionWebhook         = "admission_webhook_backend"
+	factEvictedFromNode          = "evicted_from_node"
 )
 
 type serviceBackendIssueProvider interface {
@@ -150,6 +152,9 @@ var pvcAttributableCategories = map[issuesapi.Category]bool{
 // equivalent. Resource pressure produces specific, live symptoms (memory → OOM /
 // OOM-restart loops; disk or PID exhaustion → containers that can't be created).
 //
+// Evicted pods are attributable to the pressure that matches the resource the
+// kubelet said it reclaimed (see evictionMatchesNodePressure).
+//
 // A fully NotReady (dead-kubelet) node is DELIBERATELY ABSENT: once the kubelet
 // stops reporting, a pod's status is stale, so its crashloop / OOM rows are
 // pre-existing application problems that merely happen to sit on the node — not
@@ -162,12 +167,15 @@ var nodeReasonAttributable = map[string]map[issuesapi.Category]bool{
 	"MemoryPressure": {
 		issuesapi.CategoryOOMKilled:   true,
 		issuesapi.CategoryHighRestart: true,
+		issuesapi.CategoryPodEvicted:  true,
 	},
 	"DiskPressure": {
 		issuesapi.CategoryContainerWaiting: true,
+		issuesapi.CategoryPodEvicted:       true,
 	},
 	"PIDPressure": {
 		issuesapi.CategoryContainerWaiting: true,
+		issuesapi.CategoryPodEvicted:       true,
 	},
 }
 
@@ -194,10 +202,17 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 
 	flatByResource := make(map[string][]Issue, len(flat))
 	flatRowsByID := make(map[string]int, len(flat))
+	var evictedByID map[string][]Issue
 	for _, f := range flat {
 		key := resourceKey(f.Group, f.Kind, f.Namespace, f.Name)
 		flatByResource[key] = append(flatByResource[key], f)
 		flatRowsByID[f.ID]++
+		if f.Category == issuesapi.CategoryPodEvicted {
+			if evictedByID == nil {
+				evictedByID = map[string][]Issue{}
+			}
+			evictedByID[f.ID] = append(evictedByID[f.ID], f)
+		}
 	}
 
 	var serviceProvider serviceBackendIssueProvider
@@ -236,13 +251,17 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 				switch fact.Type {
 				case factNodeStartupCorroboration:
 					b.add(issuesapi.DiagnosticRoleContext, fact)
-				case factNetworkPolicyIsolates:
+				case factNetworkPolicyIsolates, factTLSCertificateConsumers:
 					b.add(issuesapi.DiagnosticRoleCandidate, fact)
 				}
 			}
 		}
 		if changeProvider != nil {
 			i.ChangeContext = changeProvider.ChangeContextForIssue(*i)
+		}
+
+		if i.Category == issuesapi.CategoryPodEvicted {
+			addEvictedFromNodeContext(&b, *i, evictedByID, len(grouped) > 0)
 		}
 
 		if i.Source == SourceMissingRef {
@@ -846,7 +865,97 @@ func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, edges *[
 	}
 	linkBlastRadius(b, node, edges, np.PodsOnNode(node.Name), attributable, flatByResource, groupedByID,
 		factNodeBlastRadius, issuesapi.ConfidenceMedium,
-		"Pods on this node show problems consistent with its resource pressure — the node may be the cause.", nil)
+		"Pods on this node show problems consistent with its resource pressure — the node may be the cause.",
+		func(symptom Issue) bool {
+			return symptom.Category != issuesapi.CategoryPodEvicted || evictionMatchesNodePressure(symptom, node)
+		})
+}
+
+// evictionPressureLag is how far an eviction may precede the node's recorded
+// pressure transition and still belong to that episode: the kubelet evicts
+// and reports the condition from the same loop, so they are seconds apart.
+const evictionPressureLag = 2 * time.Minute
+
+// evictionMatchesNodePressure reports whether an evicted pod belongs to the
+// node's current pressure. The kubelet's message must name the resource behind
+// the condition — a pod evicted for memory is not explained by DiskPressure,
+// and one that exceeded its own ephemeral-storage limit by no node pressure.
+// And the eviction must be shown to fall within the episode: Evicted pods
+// linger for days, and yesterday's eviction is not a symptom of pressure that
+// began today. An eviction with no recorded time cannot be placed in the
+// episode, so it is not linked once the episode's start is known.
+func evictionMatchesNodePressure(symptom Issue, node Issue) bool {
+	if health.ParsePodEviction(symptom.RawMessage).PressureCondition() != node.Reason {
+		return false
+	}
+	if node.FirstSeen.IsZero() {
+		return true
+	}
+	return !symptom.FirstSeen.IsZero() && !symptom.FirstSeen.Before(node.FirstSeen.Add(-evictionPressureLag))
+}
+
+// addEvictedFromNodeContext names the node(s) whose kubelet evicted the pods
+// behind a pod_evicted row. In grouped mode a row gathers the nodes of every
+// member, since the representative's node alone would hide evictions
+// elsewhere. A flat row keeps its own pod's node: flat siblings share the
+// grouped ID, and regrouping later reads these per-pod facts.
+func addEvictedFromNodeContext(b *diagnosticContextBuilder, i Issue, flatByID map[string][]Issue, grouped bool) {
+	seen := map[string]bool{}
+	var nodes []string
+	collect := func(row Issue) {
+		if row.DiagnosticContext == nil {
+			return
+		}
+		for _, fact := range row.DiagnosticContext.Facts {
+			if fact.Type != factEvictedFromNode {
+				continue
+			}
+			for _, ref := range fact.Refs {
+				if ref.Kind == "Node" && !seen[ref.Name] {
+					seen[ref.Name] = true
+					nodes = append(nodes, ref.Name)
+				}
+			}
+		}
+	}
+	if grouped {
+		for _, row := range flatByID[i.ID] {
+			collect(row)
+		}
+	}
+	if len(nodes) == 0 {
+		collect(i)
+	}
+	if len(nodes) == 0 {
+		return
+	}
+	sort.Strings(nodes)
+	b.add(issuesapi.DiagnosticRoleContext, evictedFromNodeFact(nodes, grouped && len(flatByID[i.ID]) > 1))
+}
+
+// evictedFromNodeFact names the node that performed an eviction. The node
+// comes from the pod's own spec.nodeName and the eviction from the kubelet's
+// own status, so this is recorded context, not an inferred cause; the node's
+// pressure, when it still holds, links back through node_blast_radius.
+func evictedFromNodeFact(nodes []string, plural bool) issuesapi.DiagnosticFact {
+	subject := "this pod"
+	if plural {
+		subject = "these pods"
+	}
+	var msg string
+	if len(nodes) == 1 {
+		msg = fmt.Sprintf("The kubelet on node %s evicted %s.", nodes[0], subject)
+	} else {
+		msg = fmt.Sprintf("The kubelet evicted %s on %d nodes.", subject, len(nodes))
+	}
+	refs := make([]Ref, 0, min(len(nodes), maxDiagnosticRefs))
+	for _, n := range nodes[:min(len(nodes), maxDiagnosticRefs)] {
+		refs = append(refs, Ref{Kind: "Node", Name: n})
+	}
+	if len(refs) < len(nodes) {
+		msg += fmt.Sprintf(" Showing %d of %d nodes.", len(refs), len(nodes))
+	}
+	return issuesapi.DiagnosticFact{Type: factEvictedFromNode, Message: msg, Refs: refs}
 }
 
 // addPVCBlastRadiusContext links a broken PVC (pending / lost / resize-failed) to

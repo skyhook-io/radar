@@ -12,16 +12,15 @@ export function getArgoApplicationStatus(app: any): StatusBadge {
   const sync = app.status?.sync?.status
   const opPhase = app.status?.operationState?.phase
 
-  // Check for suspended (no automated sync policy). Honor both the current
+  // Check for suspended (auto-sync off). Honor both the current
   // "radarhq.io/suspended-prune" annotation and the legacy "skyhook.io/..."
   // key still present on Applications suspended by older Radar builds.
   // The annotation value stores the prior prune state as "true"/"false" for
   // restore on resume — both strings are truthy in JS, which is intentional:
   // the *presence* of the annotation is what signals suspended, not its value.
-  const hasAutomatedSync = !!app.spec?.syncPolicy?.automated
   const annotations = app.metadata?.annotations
   const suspendedByRadar = annotations?.['radarhq.io/suspended-prune'] || annotations?.['skyhook.io/suspended-prune']
-  if (health === 'Suspended' || (!hasAutomatedSync && suspendedByRadar)) {
+  if (health === 'Suspended' || (!isArgoAutoSyncEnabled(app) && suspendedByRadar)) {
     // Suspended = an operator deliberately paused this app — intentional, not a
     // degradation. Neutral (sky), matching the backend rollup (mapArgoHealth) so a
     // suspended app reads the same Idle tone in Applications, the resource table,
@@ -62,6 +61,26 @@ export function getArgoApplicationStatus(app: any): StatusBadge {
   }
 
   return { text: health || sync || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+// isArgoAutoSyncEnabled reports whether an Argo CD Application auto-syncs.
+// Argo CD 3.x can keep spec.syncPolicy.automated, with its prune and selfHeal
+// settings, while switching automation off with `enabled: false`, so the block
+// being present is not enough: only an absent or true `enabled` counts. Same
+// rule as Argo's SyncPolicy.IsAutomatedSyncEnabled and the backend's
+// gitops.ArgoAutoSyncEnabled, so the UI and the rollback gate agree.
+export function isArgoAutoSyncEnabled(app: any): boolean {
+  const automated = app?.spec?.syncPolicy?.automated
+  if (automated == null || typeof automated !== 'object') return false
+  return automated.enabled !== false
+}
+
+// isArgoAutoSyncSwitchedOff reports an automated block kept with
+// `enabled: false`. Only a Radar advertising `argoRollbackSync` turns such an
+// app's auto-sync back on; an older one's resume leaves `enabled: false` set.
+export function isArgoAutoSyncSwitchedOff(app: any): boolean {
+  const automated = app?.spec?.syncPolicy?.automated
+  return automated != null && typeof automated === 'object' && automated.enabled === false
 }
 
 export function isArgoOperationInProgress(app: any): boolean {

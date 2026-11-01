@@ -60,12 +60,12 @@ func hasNode(topo *topology.Topology, name string) bool {
 func TestSummaryContextTopologyAfterSwitch(t *testing.T) {
 	freshSummaryCtxTopoMemo(t)
 	useSwitchTestCluster(t, "old-cluster-web")
-	if before := buildSummaryContextTopology([]string{"demo"}); !hasNode(before, "old-cluster-web") {
+	if before := buildSummaryContextTopology().Topology; !hasNode(before, "old-cluster-web") {
 		t.Fatal("seed: expected old-cluster-web in the summary-context topology")
 	}
 
 	useSwitchTestCluster(t, "new-cluster-api")
-	after := buildSummaryContextTopology([]string{"demo"})
+	after := buildSummaryContextTopology().Topology
 	if hasNode(after, "old-cluster-web") || !hasNode(after, "new-cluster-api") {
 		t.Errorf("post-switch summary-context topology still describes the previous cluster: %+v", after)
 	}
@@ -99,6 +99,11 @@ func TestResourceContextUsesHostRelationshipGraph(t *testing.T) {
 	got, gotIndex, _, _, ok := mcpTopologyForContext()
 	if !ok || got != host || gotIndex != index {
 		t.Fatalf("resource context built its own graph instead of reusing the host's: %+v", got)
+	}
+
+	summary := buildSummaryContextTopology()
+	if summary.Topology != host || summary.Index != index {
+		t.Fatal("summary built or indexed a second graph instead of reusing the host snapshot")
 	}
 
 	// Before the host has a graph, resource context still builds one.

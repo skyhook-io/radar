@@ -2,12 +2,15 @@ import { useEffect, type ComponentType, type ReactNode } from 'react'
 import { ArrowDownUp, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { PaneLoader } from '../ui/PaneLoader'
+import { AlertBanner } from '../ui/drawer-components'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
 import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
+import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -76,11 +79,16 @@ export interface ArgoActionHandlers {
   terminating: boolean
   suspending: boolean
   resuming: boolean
-  // autoSyncEnabled: caller derives from spec.syncPolicy.automated.
+  // autoSyncEnabled: caller derives via isArgoAutoSyncEnabled.
   autoSyncEnabled: boolean
   // isRunning: caller derives from status.operationState.phase === 'Running'.
   isRunning: boolean
   operationInProgress?: boolean
+  // Set when the connected Radar is too old to turn this app's auto-sync back
+  // on (isArgoAutoSyncSwitchedOff): Enable auto-sync renders disabled, with
+  // the upgrade note under the header.
+  resumeUpgrade?: RadarUpgradeRequirement | null
+  resumeBlockedReason?: string
 }
 
 export interface FluxActionHandlers {
@@ -125,6 +133,8 @@ export interface GitOpsDetailLayoutProps {
   // Insights — drives StatusStrip + IssuesBand
   insight: GitOpsInsight | null
   insightLoading: boolean
+  // Tree warnings are independent of the insights request's success.
+  warnings?: string[]
   // Issue interactions — caller wires onSelectIssue to jump to Changes tab
   // and highlight the affected resource.
   onSelectIssue?: (issue: GitOpsIssue) => void
@@ -229,6 +239,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     detail,
     insight,
     insightLoading,
+    warnings,
     onSelectIssue,
     onRemediate,
     remediationPending,
@@ -280,6 +291,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
 
   const effectiveSuspended = status?.suspended ?? false
   const argoOperationInProgress = argo?.operationInProgress ?? argo?.isRunning ?? false
+  const resumeUpgrade = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeUpgrade ?? null : null
+  const resumeBlockedReason = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeBlockedReason : undefined
   // graphFullscreen hides everything chrome-side; the body region expands.
   // Mirrors the OSS GitOpsDetailView shell behavior so the visual chrome
   // class set carries through.
@@ -365,6 +378,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   {detail.autoSyncMode && <AppFact label="Sync mode" value={detail.autoSyncMode} />}
                 </div>
               )}
+              {resumeBlockedReason && <p className="mt-2 text-xs text-theme-text-secondary">{resumeBlockedReason}</p>}
+              {resumeUpgrade && <RadarUpgradeNote requirement={resumeUpgrade} className="mt-2" />}
             </div>
             {/* Action buttons */}
             <div className="flex flex-wrap items-center gap-2">
@@ -424,9 +439,13 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       description="Re-enable automatic syncing of Git changes to the cluster."
                       icon={Play}
                       loading={argo.resuming}
-                      onClick={argo.onResume}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      onClick={() => !resumeBlockedReason && !resumeUpgrade && argo.onResume()}
+                      disabled={terminating || !!resumeUpgrade || !!resumeBlockedReason}
+                      disabledReason={terminating
+                        ? terminatingActionTooltip
+                        : resumeBlockedReason || (resumeUpgrade
+                          ? radarUpgradeNoteText(resumeUpgrade)
+                          : undefined)}
                     />
                   )}
                 </>
@@ -528,6 +547,14 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
         <div className="p-4 text-sm text-red-500">Failed to load GitOps view: {resourceError.message}</div>
       ) : (
         <div className={bodyShellClass}>
+          {((warnings?.length ?? 0) > 0 || (insight?.warnings?.length ?? 0) > 0) && (
+            <AlertBanner
+              variant="warning"
+              title="Limited resource view"
+              items={[...new Set([...(warnings ?? []), ...(insight?.warnings ?? [])])]}
+              className="shrink-0 rounded-none border-x-0 border-t-0"
+            />
+          )}
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-4 py-2">
             <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-1">
               <ViewButton active={activeTab === 'topology'} icon={GitBranch} label="Topology" onClick={() => onTabChange('topology')} />

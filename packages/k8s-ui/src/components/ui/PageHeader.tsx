@@ -19,7 +19,8 @@ interface PageHeaderProps {
 export function PageHeader({ icon: Icon, title, description, onBack, actions }: PageHeaderProps) {
   return (
     // Phones: actions (freshness, summary tiles) wrap under the title
-    // instead of squeezing it to nothing.
+    // instead of squeezing it to nothing, and take the full row so summary
+    // tiles can grow into it.
     <div className="flex items-center gap-4 phone:flex-wrap phone:gap-y-3">
       {onBack && (
         <button
@@ -39,7 +40,7 @@ export function PageHeader({ icon: Icon, title, description, onBack, actions }: 
           <p className="text-sm text-theme-text-tertiary mt-1 ml-7 truncate phone:whitespace-normal phone:line-clamp-2">{description}</p>
         )}
       </div>
-      {actions && <div className="flex flex-wrap items-center justify-end gap-2 shrink-0 phone:shrink phone:justify-start">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center justify-end gap-2 shrink-0 phone:shrink phone:basis-full phone:justify-start">{actions}</div>}
     </div>
   )
 }

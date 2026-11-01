@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,11 +22,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -98,6 +101,10 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
 	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
 	"Rollout":                        {group: "argoproj.io", diff: chainDiffs(diffRollout, diffRolloutSpec), backstopRoot: "spec"},
+	"Role":                           {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"ClusterRole":                    {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"RoleBinding":                    {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
+	"ClusterRoleBinding":             {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and
@@ -195,6 +202,14 @@ func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
 		return typedOrUnstructured[corev1.ResourceQuota](u)
 	case "LimitRange":
 		return typedOrUnstructured[corev1.LimitRange](u)
+	case "Role":
+		return typedOrUnstructured[rbacv1.Role](u)
+	case "ClusterRole":
+		return typedOrUnstructured[rbacv1.ClusterRole](u)
+	case "RoleBinding":
+		return typedOrUnstructured[rbacv1.RoleBinding](u)
+	case "ClusterRoleBinding":
+		return typedOrUnstructured[rbacv1.ClusterRoleBinding](u)
 	default:
 		return u.DeepCopy()
 	}
@@ -257,10 +272,9 @@ func KindHasDiffer(kind string) bool {
 func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
+	oldDesired, newDesired := genericDesiredState(oldU), genericDesiredState(newU)
 
-	// Kinds whose deletion does not bump generation (CustomResourceDefinition)
-	// can still fold a spec edit into a +1 update, so the spec must match too.
-	if deletionAccountsForGenerationBump(oldU, newU) && reflect.DeepEqual(oldU.Object["spec"], newU.Object["spec"]) {
+	if oldU.GetDeletionTimestamp() == nil && newU.GetDeletionTimestamp() != nil && reflect.DeepEqual(oldDesired, newDesired) {
 		// Without this row the update would read as "resource changed".
 		changes = append(changes, FieldChange{
 			Path:     "metadata.deletionTimestamp",
@@ -269,12 +283,34 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 		})
 		summary = append(summary, "deletion started")
 	} else if oldGen, newGen := oldU.GetGeneration(), newU.GetGeneration(); oldGen != newGen && oldGen > 0 && newGen > 0 {
-		changes = append(changes, FieldChange{
-			Path:     "metadata.generation",
-			OldValue: oldGen,
-			NewValue: newGen,
-		})
-		summary = append(summary, fmt.Sprintf("spec changed (gen %d→%d, fields not specifically tracked)", oldGen, newGen))
+		var paths []changedSpecPath
+		for _, root := range unionKeys(oldDesired, newDesired) {
+			oldValue, oldFound := oldDesired[root]
+			newValue, newFound := newDesired[root]
+			before := len(paths)
+			// A custom kind's list order may be significant (route or
+			// rule precedence), and its schema cannot say, so any reorder
+			// of a keyed list is reported.
+			collectChangedPaths(root, oldValue, newValue, "", func(string) bool { return true }, &paths)
+			if len(paths) == before && (oldFound != newFound || !reflect.DeepEqual(oldValue, newValue)) {
+				paths = append(paths, changedSpecPath{path: root + " (order or structure changed)", oldV: hiddenValueMarker, newV: hiddenValueMarker})
+			}
+		}
+		paths = collapseUntracked(paths, nil, nil)
+		for i := range paths {
+			// A bare key has no schema-backed identifier meaning on a CR.
+			if sensitivePath(paths[i].path) || slices.Contains(splitSpecPath(paths[i].path), "key") {
+				paths[i].oldV, paths[i].newV = hiddenValues(paths[i].oldV != nil, paths[i].newV != nil)
+			}
+		}
+		changes, summary = untrackedSpecRows("desired state", paths)
+		if len(changes) == 0 && desiredStateStripped(newU) {
+			changes = []FieldChange{{Path: "spec.versions[].schema or spec.conversion", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker}}
+			summary = []string{"schema or conversion changed (fields Radar does not keep)"}
+		}
+		if len(changes) > 0 {
+			changes = append(changes, FieldChange{Path: "metadata.generation", OldValue: oldGen, NewValue: newGen})
+		}
 	}
 
 	genChanged := len(changes) > 0
@@ -305,6 +341,26 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 		OldValue: "changed",
 		NewValue: "changed",
 	}}, []string{"resource changed"}
+}
+
+// desiredStateStripped reports kinds whose informer transform removes
+// desired-state fields (pkg/k8score/transform.go drops CRD schemas and
+// conversion settings), so a generation bump with no visible desired-state
+// change is still an edit.
+func desiredStateStripped(u *unstructured.Unstructured) bool {
+	return u.GetKind() == "CustomResourceDefinition" && resourceid.GroupFromAPIVersion(u.GetAPIVersion()) == "apiextensions.k8s.io"
+}
+
+func genericDesiredState(u *unstructured.Unstructured) map[string]any {
+	out := make(map[string]any, len(u.Object))
+	for key, value := range u.Object {
+		switch key {
+		case "apiVersion", "kind", "metadata", "status":
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func genericConditionChanges(oldU, newU *unstructured.Unstructured, fields ...string) []FieldChange {
@@ -358,6 +414,7 @@ func genericConditionSignalMap(obj map[string]any, fields ...string) map[string]
 
 func normalizedUnstructuredForTimeline(u *unstructured.Unstructured) map[string]any {
 	cp := u.DeepCopy().Object
+	unstructured.RemoveNestedField(cp, "metadata", "generation")
 	normalizeTimelineObject(cp)
 	return cp
 }
@@ -2502,24 +2559,20 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
-	// Check sync policy changes (auto-sync enabled/disabled)
-	oldAutoSync, oldAutoExists, _ := unstructured.NestedMap(oldApp.Object, "spec", "syncPolicy", "automated")
-	newAutoSync, newAutoExists, _ := unstructured.NestedMap(newApp.Object, "spec", "syncPolicy", "automated")
-
-	if !oldAutoExists && newAutoExists {
+	// Check sync policy changes (auto-sync enabled/disabled). Argo CD 3.x can
+	// switch automation off in place with `automated.enabled: false`, so
+	// compare the effective state, not whether the block exists.
+	if oldAutoEnabled, newAutoEnabled := gitops.ArgoAutoSyncEnabled(oldApp), gitops.ArgoAutoSyncEnabled(newApp); oldAutoEnabled != newAutoEnabled {
 		changes = append(changes, FieldChange{
 			Path:     "spec.syncPolicy.automated",
-			OldValue: nil,
-			NewValue: newAutoSync,
+			OldValue: argoAutomatedBlock(oldApp),
+			NewValue: argoAutomatedBlock(newApp),
 		})
-		summary = append(summary, "auto-sync enabled")
-	} else if oldAutoExists && !newAutoExists {
-		changes = append(changes, FieldChange{
-			Path:     "spec.syncPolicy.automated",
-			OldValue: oldAutoSync,
-			NewValue: nil,
-		})
-		summary = append(summary, "auto-sync disabled")
+		if newAutoEnabled {
+			summary = append(summary, "auto-sync enabled")
+		} else {
+			summary = append(summary, "auto-sync disabled")
+		}
 	}
 
 	// Check target revision change
@@ -2597,6 +2650,15 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	return changes, summary
+}
+
+// argoAutomatedBlock returns spec.syncPolicy.automated, or nil (not a nil map)
+// when the block is absent, so the change record reads null.
+func argoAutomatedBlock(app *unstructured.Unstructured) any {
+	if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+		return automated
+	}
+	return nil
 }
 
 // Step index, weights, pause conditions and abort/promoteFull all move without

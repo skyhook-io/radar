@@ -1,13 +1,13 @@
 # Radar
 
-<a href="https://www.producthunt.com/products/radar-7?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1130618&theme=neutral&period=daily" alt="Radar - The missing open-source Kubernetes UI | Product Hunt" width="250" height="54" /></a>
-
-**The missing open-source Kubernetes UI.**
+**The missing open-source Kubernetes UI, with a built-in MCP server for your AI agent.**
 <br>Single binary. No account required. Free forever.
 
-🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Releases](https://github.com/skyhook-io/radar/releases)
+🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Benchmarks](https://radarhq.io/benchmark) · [Releases](https://github.com/skyhook-io/radar/releases)
 
-Topology, resources, Helm, GitOps, traffic, audit, upgrade impact, and MCP context for AI agents — from your laptop or in-cluster.
+Radar shows you what's broken in a Kubernetes cluster, why, and what changed: issues, topology, a timeline of events and resource changes, Helm, GitOps, traffic, audit, and upgrade impact. Your AI agent reads the same cluster data and relationships through Radar's MCP server, and Radar can run an AI investigation for you with the agent CLI you already use. It runs on your laptop as a `kubectl` plugin or desktop app, or in-cluster with Helm.
+
+<a href="https://www.producthunt.com/products/radar-7?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1130618&theme=neutral&period=daily" alt="Radar - The missing open-source Kubernetes UI | Product Hunt" width="250" height="54" /></a>
 
 [![CI](https://github.com/skyhook-io/radar/actions/workflows/ci.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/skyhook-io/radar/actions/workflows/codeql.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/codeql.yml)
@@ -16,15 +16,15 @@ Topology, resources, Helm, GitOps, traffic, audit, upgrade impact, and MCP conte
 [![Helm repo downloads](https://img.shields.io/github/downloads/skyhook-io/helm-charts/total?logo=helm&label=Helm%20repo%20downloads)](https://artifacthub.io/packages/helm/skyhook/radar)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://radarhq.io/community/chat)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
 <details>
 <summary><b>Table of contents</b></summary>
 
-- [Why Radar?](#why-radar)
+- [Why Radar?](#why-radar) · [Debugging in the UI](#debugging-in-the-ui)
+- [AI agents: MCP server and AI investigations](#ai-agents-mcp-server-and-ai-investigations) — Connect your agent · AI investigations · Benchmarks
 - [Installation](#installation)
 - [Usage](#usage)
-- [Views](#views) — Topology · Resources · Image Filesystem · Timeline · Helm · Compare · TLS · GitOps · Traffic · Cost · Audit · Upgrade impact · RBAC · MCP · Auth
+- [Views](#views) — Issues · Topology · Resources · Image Filesystem · Timeline · Helm · Compare · TLS · GitOps · Traffic · Metrics · Capacity · Cost · Audit · Network path · Upgrade impact · RBAC · Auth
 - [Supported Resources](#supported-resources)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Security](#security)
@@ -33,28 +33,99 @@ Topology, resources, Helm, GitOps, traffic, audit, upgrade impact, and MCP conte
 </details>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Radar Screenshot" width="800">
+  <img src="docs/screenshot.png" alt="Radar home view for one cluster: pod, deployment and node health, resource utilization, topology, Helm releases, timeline, traffic, and unhealthy workloads" width="800">
 </p>
 
 **Install and run in 30 seconds:**
 ```bash
 curl -fsSL https://get.radarhq.io | sh && kubectl radar
 ```
-[More installation options ↓](#installation)
+Or `brew install kubectl-radar`. [Windows, Krew, desktop app and Helm ↓](#installation)
+
+**Then, with Radar running, connect your AI agent** (read-only):
+```bash
+claude mcp add --transport http radar http://localhost:9280/mcp-readonly
+```
+[Codex, Cursor, GitHub Copilot, other clients, and the desktop app ↓](#connect-your-agent)
 
 ## Why Radar?
 
-- **Zero install on your cluster** — runs on your laptop, talks to the K8s API directly
-- **Single binary** — no dependencies, no agents, no CRDs
-- **Fast on big clusters** — tested on tens of thousands of pods, with responsive views and live updates under real cluster churn
-- **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync. Usage reporting is off unless you opt in, and then sends only anonymous usage counts and coarse cluster facts: Kubernetes version, platform, node-count range, known integrations ([what Radar sends](docs/configuration.md#what-radar-sends))
+- **Nothing to install in your cluster** — a single binary on your laptop that talks to the Kubernetes API with your kubeconfig. No agents, no CRDs, no dependencies
+- **Fast on big clusters** — tested on tens of thousands of pods; watches the cluster through informers and pushes live updates to the browser over SSE
+- **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync. Usage reporting is off unless you opt in, and then sends only anonymous usage counts and coarse cluster facts: Kubernetes version, platform, node-count range, known integrations ([what Radar sends](docs/configuration.md#what-radar-sends)). An AI agent you connect sends what it reads to its own model provider
 - **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
-- **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
-- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents inspect, investigate, and operate your cluster through Radar
-- **In-cluster option** — deploy with Helm for shared team access with RBAC-scoped permissions
+- **One model of the cluster, for you and your agent** — the UI, the [MCP server](#ai-agents-mcp-server-and-ai-investigations), and AI investigations read the same live data: relationships, health, events, and changes
+- **Ready for teams** — deploy in-cluster with Helm for shared access, with SSO (OIDC or an auth proxy) and per-user Kubernetes RBAC in the open-source build
 
 > "Have Radar deployed at work. As far as Kubernetes dashboards go, this is one of the best." — u/TheRealNetroxen
+
+---
+
+## Debugging in the UI
+
+Start from **[Issues](#issues)**, a ranked queue of what's broken right now. Open a failing resource to see it in context: its owners, Pods, Services, and config on the **[Topology](#topology)**, what changed and when on the **[Timeline](#timeline)** (with diffs), and its events, logs, and YAML in the detail drawer. **[Helm](#helm)**, **[GitOps](#gitops)**, and **[Traffic](#traffic)** cover how it got deployed and who talks to it. When you want help, **Investigate** hands the same evidence to your agent ([AI investigations](#ai-investigations)). Radar records resource changes while it watches the cluster; history is in memory by default, and `--timeline-storage=sqlite` or `postgres` keeps it across restarts.
+
+<p align="center">
+  <img src="docs/screenshots/issues-view.png" alt="Radar's Issues queue in the shop namespace with two warnings: a crash loop on the checkout Deployment, and the orders-db-legacy Service, whose selector matches no pods. Each row has an Investigate button." width="800">
+  <br><em>Issues for the incident the agent diagnoses below: a crash loop on checkout and a Service with no endpoints</em>
+</p>
+
+---
+
+## AI agents: MCP server and AI investigations
+
+Pointed at raw `kubectl`, an agent spends its context window on YAML and its time on round trips. Radar's built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server gives it what Radar already knows instead: how resources connect, what is unhealthy, deduplicated events, recent changes with diffs, and filtered logs. In our benchmarks, the same agent and model reached a diagnosis about 3× faster through Radar than through kubectl ([details](#benchmarks)).
+
+<p align="center">
+  <img src="docs/screenshots/mcp-claude-code.png" alt="Claude Code connected to Radar's read-only MCP endpoint, asked why the last checkout rollout failed. It calls diagnose, get_changes, list_resources and get_resource, then answers: the rollout changed DB_HOST to orders-db-legacy, a Service with no pods behind it, so the new pod crash-loops while the two old pods keep serving." width="800">
+  <br><em>Claude Code on Radar's read-only endpoint, finding why a rollout failed (replay of a real session)</em>
+</p>
+
+<a id="ai-integration-mcp"></a>
+
+### Connect your agent
+
+MCP is on by default and served on the same port as the UI: `9280` unless you set `--port`. The desktop app picks its own port: copy the URL from Radar's MCP dialog and change the final `/mcp` to `/mcp-readonly`. Start with the read-only endpoint:
+
+```bash
+# Claude Code
+claude mcp add --transport http radar http://localhost:9280/mcp-readonly
+
+# Codex
+codex mcp add radar --url http://localhost:9280/mcp-readonly
+```
+
+Setup for Cursor, VS Code (GitHub Copilot), Copilot CLI, OpenCode, Google Antigravity, Kiro, JetBrains, Cline, Devin, Claude Desktop, Zed, Gemini CLI, and any other MCP client is in the **[MCP guide](docs/mcp.md#setup-instructions)**. Its examples use `/mcp`; use `/mcp-readonly` instead to keep Radar's tools read-only. Your agent's other tools follow its own configuration.
+
+- **Context, not raw YAML** — topology, health assessments, events, changes, and logs, minified so they don't burn the context window. The [tools](docs/mcp.md#available-tools) cover resources and topology, issues, events and changes, logs, Helm, audit, upgrade readiness, RBAC, cost, and Prometheus
+- **You pick the endpoint** — `/mcp-readonly` has no write tools. The full `/mcp` endpoint, also on by default, adds write tools (restart, scale, apply, rollback, GitOps sync, node drain) marked destructive so clients can ask before running them. On `/mcp`, `diagnose` can also run an in-cluster reachability probe that creates short-lived pods. Calls use Radar's Kubernetes access: your kubeconfig locally, or each user's own RBAC when authentication is on. `--mcp-read-only` turns `/mcp` off (and with it, applying a fix from an AI investigation); `--no-mcp` turns MCP and AI investigations off. Neither blocks ordinary UI writes
+- **Secret values are withheld** — Secret reads never include `.data` or `.stringData`. Environment variables, Helm values, and logs are scrubbed for known secret patterns, which can't catch everything, and the opt-in `exec_pod` tool returns raw command output. See [MCP security](docs/mcp.md#security)
+
+### AI investigations
+
+Radar can also run the investigation for you, with the agent CLI you already have — Claude Code, Codex, Cursor, or OpenCode — on your machine and signed in with your own account. Radar needs no API key of its own. Start one from a resource's **Investigate** action, from an issue, by describing what you're seeing on the AI investigations page (where to start, since when, and optionally the resource it's about), or from a terminal against a running Radar:
+
+```bash
+radar diagnose deploy/checkout -n shop
+radar diagnose deploy/checkout -n shop --json > conclusion.json
+```
+
+Every investigation ends on the same Findings page, with the evidence behind each claim. Radar's investigation tools can only read the cluster, and Radar applies a fix only when you approve it, from an investigation of the resource it changes. What else the agent can do depends on how Radar runs it. **Radar safeguards** (Claude Code and Codex) shuts off the agent's other MCP servers and its ability to write. **Your agent setup** (the only option for Cursor and OpenCode) runs the agent with its normal configuration, tools, and MCP servers, which Radar cannot constrain and which may be able to change your cluster. Cursor and OpenCode approve tool requests automatically in these runs, without asking you. See [agents and isolation](https://radarhq.io/docs/features/diagnose#agents-and-isolation).
+
+Investigations need a supported agent CLI on the machine running Radar, MCP on, and authentication off. In-cluster installs don't run them. See the [AI investigations guide](https://radarhq.io/docs/features/diagnose) and [agent CLI setup](docs/configuration.md#ai-investigations-agent-cli).
+
+### Benchmarks
+
+Three studies of an AI agent diagnosing live faults from [SREGym](https://github.com/SREGym/SREGym) (Microsoft and UIUC) on a 3-node EKS cluster, with the same judge scoring every tool. Times are averages to a submitted answer, right or wrong. These are our own benchmarks; compare numbers within a study, not across studies.
+
+| Study | Faults | Result |
+|-------|--------|--------|
+| [Radar MCP vs raw kubectl](https://radarhq.io/benchmark/mcp-vs-kubectl) — same agent and model | 50 | 64s vs 191s to a diagnosis (about 3× faster); 86% vs 60% diagnosed correctly within two minutes |
+| [Kubernetes MCP servers](https://radarhq.io/benchmark/kubernetes-mcp-servers) — Radar, containers/kubernetes-mcp-server, Flux159/mcp-server-kubernetes, Amazon EKS MCP Server, k8sgpt, raw kubectl | 25 | Radar took 57s, 2.3× faster than the next-fastest MCP server; on the 14 faults every tool got right, 33s vs 58s for the next-fastest |
+| [AI SRE tools](https://radarhq.io/benchmark/ai-sre-tools) — Claude Code + Radar MCP vs kubectl-ai, HolmesGPT, OpenSRE, kagent, AWS DevOps Agent | 50 | Claude Code + Radar MCP was the most accurate (44/50 correct), fastest (79s), and cheapest ($0.27 a fault) |
+
+Per-scenario scores and timings are downloadable from the [benchmark pages](https://radarhq.io/benchmark); the AI SRE study also includes costs.
 
 ---
 
@@ -155,110 +226,39 @@ kubectl radar
 radar
 ```
 
-To inspect an in-cluster Radar Cloud installation without changing it:
-
-```bash
-radar cloud status
-radar cloud status --context my-cluster
-radar cloud status --context my-cluster --namespace radar --release radar
-```
-
-The command reports installation ownership, chart and image, agent readiness,
-and Cloud configuration without printing the connection token. Passing both
-`--namespace` and `--release` selects an exact installation. Live tunnel status
-is reported by Radar Cloud using the token in the referenced Kubernetes Secret.
-If the Secret or Hub is unavailable, local installation diagnostics still run.
-Interactive terminals use restrained status colors; set `NO_COLOR` (or pipe the
-output) for plain text. URLs, tokens, and suggested commands remain unstyled.
-
-**CLI Flags**
-
-The table below covers common startup flags. See the [full CLI reference](https://radarhq.io/docs/configuration/cli); `radar --help` is authoritative for the installed version.
+**Common flags**
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--kubeconfig` | `~/.kube/config` | Path to primary kubeconfig file |
-| `--kubeconfig-dir` | | Comma-separated directories containing additional kubeconfig files |
-| `--namespace` | (all) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users) |
-| `--namespaces` | (all) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |
-| `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
+| `--namespace` | (context namespace) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users). Unset, Radar uses your saved pick, then the kubeconfig context's namespace, then all namespaces |
 | `--port` | `9280` | Server port |
 | `--listen-address` | `127.0.0.1` | HTTP listen IP address (IPv4 or IPv6), or `localhost`. Bind a specific local IP or use `0.0.0.0` for all interfaces. Non-loopback access needs authentication and network controls. |
-| `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
-| `--allowed-hosts` | | Comma-separated hostnames, besides `localhost`, IP addresses and Kubernetes Service names, that an unauthenticated non-loopback listener answers, e.g. `radar.internal`. Other hostnames are refused so DNS rebinding cannot reach Radar. Exact names, or `*.example.com` for names under a domain (not the domain itself); `*` turns the check off. Env: `RADAR_ALLOWED_HOSTS`. See [HTTP Listener](docs/configuration.md#http-listener) |
-| `--trusted-origins` | | Comma-separated origins, besides the address Radar is opened at, that may use Radar's API, including changes and terminals, e.g. `http://radar.internal`. Set this when a proxy in front of Radar rewrites the `Host` header and changes fail with "Radar refused this request". Exact origins, no wildcards. Does not apply to `/mcp` (see `RADAR_MCP_TRUSTED_ORIGINS`). Env: `RADAR_TRUSTED_ORIGINS` |
 | `--no-browser` | `false` | Don't auto-open browser |
-| `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
-| `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
-| `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
-| `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
 | `--disable-exec` | `false` | Disable pod terminal, debug shells and pod file browsing |
-| `--disable-helm-write` | `false` | Disable Helm write operations |
-| `--disable-local-terminal` | `false` | Disable the host local terminal |
-| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
-| `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
-| `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
-| `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
-| `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
-| `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
-| `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery). In local CLI/Desktop mode, applies only to the launch's initial context and never inherits saved headers. |
-| `--prometheus-single-cluster` | `false` | Declare the backend dedicated to this cluster for workload metrics and PVC usage, replacing automatic identity matching. Other metrics do not use this override. [Scope and lifetime](docs/workload-metrics.md#optional-operator-override). |
-| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
-| `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
-| `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
-| `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](docs/workload-metrics.md#request-sources). |
-| `--opencost-currency` | (auto-detect, then USD) | Override the ISO 4217 currency label for OpenCost values. Radar labels values but does not convert them. |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
 | `--no-mcp` | `false` | Disable all MCP endpoints |
 | `--mcp-read-only` | `false` | Expose only read-only MCP tools; disable `/mcp` (env: `RADAR_MCP_READ_ONLY`) |
-| `--mcp-catalog-stdio` | `false` | Start only the MCP catalog over stdio for registry introspection |
-| `--version` | | Show version and exit |
 
-See [Configuration Guide](docs/configuration.md) for details on cluster connection precedence, multiple kubeconfig files, and context switching.
+<a id="tuning-for-slow-or-high-latency-clusters"></a>The [Configuration Guide](docs/configuration.md#cli-flags) describes every startup flag in the table above and 27 more, plus tuning for slow or high-latency clusters, kubeconfig precedence, and context switching.
 
-### Tuning for slow or high-latency clusters
+<details>
+<summary>The other 27 flags</summary>
 
-The default deadlines (30 s context switch, 5 m first-paint backstop, 5 s
-namespace LIST, 20 scope candidates) are tuned for healthy clusters reached
-over fast, low-latency connections. They are too tight for clusters reached
-over SSH tunnels, geographically distant control planes, or accounts subject
-to API-server throttling, where they surface as one of three symptoms:
+`--kubeconfig-dir`, `--namespaces`, `--namespace-scope`, `--base-path`, `--allowed-hosts`, `--trusted-origins`, `--browser`, `--timeline-db`, `--timeline-max-size`, `--history-limit`, `--disable-helm-write`, `--disable-local-terminal`, `--debug-image`, `--list-page-size`, `--context-switch-timeout`, `--first-paint-backstop`, `--namespace-list-timeout`, `--max-scope-candidates`, `--prometheus-url`, `--prometheus-single-cluster`, `--prometheus-cluster-label`, `--prometheus-header`, `--prometheus-header-from-env`, `--beyla-job-selector`, `--opencost-currency`, `--mcp-catalog-stdio`, `--version`
 
-- "Context switch timed out" toasts when the cache eventually does sync
-- "Limited list — RBAC doesn't allow listing all namespaces" even though the
-  account has cluster-wide list permission (the LIST timed out, not RBAC)
-- Kinds silently marked denied because the namespace they live in fell past
-  the 20-entry candidate cap
+</details>
 
-Widen the four flags via CLI or via the matching environment variables
-(`RADAR_CONTEXT_SWITCH_TIMEOUT`, `RADAR_FIRST_PAINT_BACKSTOP`,
-`RADAR_NAMESPACE_LIST_TIMEOUT`, `RADAR_MAX_SCOPE_CANDIDATES`) — env vars
-keep secrets out of `ps` and let in-cluster deployments source the values
-from a ConfigMap:
-
-```bash
-# CLI
-kubectl radar \
-  --context-switch-timeout=120s \
-  --first-paint-backstop=10m \
-  --namespace-list-timeout=30s \
-  --max-scope-candidates=200
-
-# Environment (e.g. in a Deployment manifest)
-RADAR_CONTEXT_SWITCH_TIMEOUT=120s \
-RADAR_FIRST_PAINT_BACKSTOP=10m \
-RADAR_NAMESPACE_LIST_TIMEOUT=30s \
-RADAR_MAX_SCOPE_CANDIDATES=200 \
-  kubectl radar
-```
-
-Defaults are preserved when neither the flag nor the env var is set, so
-existing deployments are unaffected.
+`radar --help` is authoritative for the installed version. `radar cloud status` inspects an in-cluster Radar Cloud installation without changing it ([details](docs/configuration.md#radar-cloud)).
 
 ---
 
 ## Views
+
+### Issues
+
+One ranked queue of what's broken right now — crash loops, image pull failures, stuck rollouts, pods that can't be scheduled, dangling references, and failing Argo CD / Flux conditions — each with an **Investigate** action. See [Issues](https://radarhq.io/docs/features/issues).
 
 ### Topology
 
@@ -298,12 +298,10 @@ Inspect container image filesystems directly from the Pod view — no need to pu
   <br><em>Image Filesystem Viewer — Browse container image contents</em>
 </p>
 
-- Click any container image in a Pod to browse its complete filesystem
-- Tree view with file sizes, permissions, and symlink targets
-- Search files by name across the entire image
-- Download individual files for inspection
+- Browse, search, and download files from any container image in a Pod
 - Works with public images (Docker Hub, Quay, GHCR) and private registries (GCR, ECR, ACR) using your cluster's ImagePullSecrets
-- Disk-based layer caching for fast repeated access
+
+See [Image filesystem](https://radarhq.io/docs/features/image-filesystem).
 
 ### Timeline
 
@@ -320,39 +318,20 @@ Unified timeline of Kubernetes events and resource changes.
 
 ### Helm
 
-Manage Helm releases deployed in your cluster — inspect values and rendered manifests, diff revisions, identify failed upgrades and rollback-after-failure patterns, diagnose failed hooks, upgrade, rollback, and uninstall. Radar tracks available chart upgrades (from your configured repos or your own OCI registries) and lets you pick a specific target version. See [Helm Support](docs/helm.md) for the detailed behavior and limits.
+Manage Helm releases deployed in your cluster — inspect values and rendered manifests, diff revisions, see why an upgrade or hook failed, then upgrade, roll back, or uninstall. Radar tracks available chart upgrades from your configured repos or your own OCI registries. See [Helm Support](docs/helm.md) for the detailed behavior and limits.
 
 <p align="center">
   <img src="docs/screenshots/helm-view.png" alt="Helm View" width="800">
   <br><em>Helm View — Manage your Helm deployments</em>
 </p>
 
-- View all releases across namespaces with status, chart version, app version, resource health, storage namespace, and Flux ownership
-- Inspect values, compare revisions across values/manifests/notes/resources, and view release history
-- Surface failed upgrades, stuck pending operations, rollback history, and inferred atomic-style rollbacks
-- Correlate failed/running hooks with remaining Job, Pod, Event, and redacted log evidence
-- Upgrade, rollback, or uninstall releases directly from the UI
-
 ### Compare Resources
 
-Diff any two Kubernetes resources of the same kind side-by-side — like comparing a staging Deployment to its production sibling, or two pods that should be identical but aren't.
+Diff any two Kubernetes resources of the same kind side-by-side — like comparing a staging Deployment to its production sibling, or two pods that should be identical but aren't. Server-assigned noise (`managedFields`, `resourceVersion`, last-applied) is stripped, and diff-only and spec-only modes cut the rest. See [Compare](https://radarhq.io/docs/features/compare).
 
 <p align="center">
   <img src="docs/screenshots/compare-view.png" alt="Compare View" width="800">
   <br><em>Compare View — Side-by-side YAML diff with field-level highlighting</em>
-</p>
-
-- **Two entry points**: a `Compare` button in the resource detail drawer, or compare mode in the resource table (toggle, pick two rows, hit Compare)
-- **Side-by-side or unified** view, with one-click swap of A ↔ B
-- **Diff-only mode** collapses unchanged regions so you only see what differs
-- **Spec-only mode** drops `status` fields to focus on intent rather than observed state
-- Server-assigned noise (`managedFields`, `resourceVersion`, `kubectl.kubernetes.io/last-applied-configuration`) is stripped automatically so the diff stays signal — flip **Raw metadata** on if you actually want to see it
-- Same-namespace candidates are surfaced first in the picker — usually the resource you want to compare against
-- Shareable URLs: `/compare?kind=&apiGroup=&a=ns/name&b=ns/name`
-
-<p align="center">
-  <img src="docs/screenshots/compare-mode-tray.png" alt="Compare Mode Tray" width="800">
-  <br><em>Compare mode in the resource table — pick two rows, hit Compare</em>
 </p>
 
 ### TLS Certificate Management
@@ -372,11 +351,9 @@ Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
   <br><em>GitOps fleet view — Argo + Flux applications side-by-side with sync, health, source, destination, and lifecycle state</em>
 </p>
 
-- Fleet view + per-app detail page (Topology / Changes / Activity tabs) for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
-- **Diagnosis pipeline** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation-failures, structured one-click remediation
-- **Lifecycle awareness** — `Terminating` chip replaces stale Sync/Health badges; severity ramps with deletion age; mutating ops refuse on zombies
-- **Cross-linked from the rest of Radar** — `Managed by` chip in resource drawers, GitOps routing from Topology + Timeline + Helm view, `Consumed by` panel on Flux source CRs
-- **MCP integration** — `manage_gitops` exposes sync / suspend / resume / reconcile / rollback with lifecycle-aware refusal
+- Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
+- **Diagnosis** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation failures, one-click remediation
+- Sync, suspend, resume, reconcile, and rollback from the UI or through MCP
 
 See the [GitOps guide](docs/gitops.md) for the full feature matrix, RBAC requirements, demo cluster, and single-cluster scope notes.
 
@@ -389,15 +366,12 @@ Visualize live network traffic between services using Hubble, Caretta, Istio, or
   <br><em>Traffic View — See how services communicate in real-time</em>
 </p>
 
-- Auto-detects Hubble (Cilium), Istio, Caretta, or Grafana Beyla as traffic data sources
-- Beyla (standalone or via Grafana Alloy) provides eBPF L4 + HTTP visibility with no service mesh, read from Prometheus
+- Auto-detects Hubble (Cilium), Istio, Caretta, or Grafana Beyla as traffic data sources, with a setup wizard to install one if none is detected
 - Beyla needs its `network` feature enabled, and per-port edges additionally need `dst.port` and `transport` named in `attributes.select` — both are off by default, and Radar says so in the Traffic view rather than showing partial edges silently
-- Animated flow graph showing requests per second between services
-- Filter by namespace, protocol, or status code
-- Built for large clusters: hidden traffic is filtered at the source, each refresh keeps a bounded number of the newest flows and says how much of the window it covers, and the flow list fetches the records behind a selected node or edge
-- Hubble traffic is drawn per workload (Deployment, StatefulSet, …) rather than per pod; the flow list keeps the pods. A map too large to lay out is listed as its connections, failures first, with ways to narrow it
-- Focus on a workload (`/`, a node's details, or **Live traffic** on its page once a traffic source is detected) to see only it and what it talks to; the focus is in the URL, so it can be shared
-- Setup wizard to install a traffic source if none is detected
+- Animated flow graph showing requests per second between services, filterable by namespace, protocol, or status code
+- Focus on a workload to see only it and what it talks to; the focus is in the URL, so it can be shared
+
+See [Traffic](https://radarhq.io/docs/features/traffic) for source-specific requirements and large-cluster behavior.
 
 ### Workload Metrics
 
@@ -406,77 +380,35 @@ request rate, HTTP errors, latency, CPU, memory and throttling. Radar reads an
 existing Prometheus-compatible backend; resource charts do not require HTTP
 instrumentation, and request charts use supported Beyla or Istio observations.
 
-- Workload history includes previous replicas when metrics and ownership are retained
-- Compare current Pods to find resource outliers
-- Automatic discovery and identity checks, with missing or partial data labeled explicitly
-
 See [Workload metrics](docs/workload-metrics.md) for screenshots, prerequisites,
 supported configurations and local multi-cluster setup limitations.
 
 ### Capacity (Karpenter)
 
-Read-only diagnosis for Karpenter-managed fleets — why is my pod pending, which NodePool could take it, why aren't my nodes joining, what is disruption doing to my fleet? Appears automatically when Karpenter NodePools are detected (RBAC-gated).
-
-- **Overview** — fleet KPIs with claim lifecycle detail, a cluster scheduling-capacity bar (requests vs allocatable, in-flight beyond the edge, pending demand as an honest not-to-scale count), prioritized operational signals, and the NodePool inventory
-- **NodePool detail** — the capacity ledger (configured limit, provisioned, headroom, allocatable, scheduled requests, unallocated, actual usage), claim lifecycle, fleet composition, and workload attribution
-- **Demand** — pending pods grouped by scheduling signature, each group evaluated against every NodePool's declared constraints with per-predicate evidence; filterable by state, pool, and workload
-- **Activity** — provisioning / disruption / interruption episodes classified from Karpenter's exact event vocabulary, with per-evidence confidence
-- Every quantity carries per-value certainty (`= ≥ ≤ ?`) — unavailable is never rendered as zero, partial is never rendered as exact
-- Issues, Pending-pod drawers, and the Home posture card deep-link into the right diagnosis
-
-See [docs/capacity.md](docs/capacity.md) for the full reference.
+Read-only diagnosis for Karpenter-managed fleets — why is my pod pending, which NodePool could take it, why aren't my nodes joining, what is disruption doing to my fleet? Appears automatically when Karpenter NodePools are detected (RBAC-gated). Overview, NodePool detail, Demand, and Activity screens; every quantity carries its certainty (`= ≥ ≤ ?`), so unavailable is never shown as zero. See [docs/capacity.md](docs/capacity.md).
 
 ### Cost Insights
 
-Track Kubernetes spending from OpenCost metrics in a PromQL-compatible backend or a Kubecost 3 Aggregator.
-Auto mode keeps working Prometheus cost metrics, then discovers a local Kubecost Aggregator; a
-federated agent-only cluster can use its central Aggregator URL in Settings, config, or Helm. Radar
-reads the configured currency from a running OpenCost or Kubecost workload when available and
-otherwise uses USD. Source changes are tested and applied separately from the display-currency
-preference, which can be saved even when a source is unavailable. Radar labels values but does not
-convert them.
-
-- Allocated workload cost with namespace scope called out separately from cluster-wide node capacity cost
-- Cost trend charts with 6h/24h/7d range selector when Prometheus history is available
-- Namespace and workload-level cost breakdowns with efficiency scoring
-- Node costs with instance type and region pricing
-- Appears automatically when compatible Prometheus metrics or Kubecost current allocation data is detected
+Track Kubernetes spending from OpenCost metrics in a PromQL-compatible backend or a Kubecost 3 Aggregator: allocated workload cost, namespace and workload breakdowns with efficiency scoring, node costs, and trends when Prometheus history is available. Appears automatically when compatible data is detected. See [Cost](https://radarhq.io/docs/features/cost).
 
 ### Cluster Audit
 
 Proactive best-practices scanner with 44 checks across security, reliability, and efficiency — inspired by Polaris, Kubescape, Trivy, and NSA/CISA guidelines. Runs instantly against cached data with zero cluster-side installation.
 
-- Security: privileged containers, privilege escalation, dangerous/insecure capabilities, host namespaces, container runtime socket mounts, sensitive host paths, secrets in ConfigMaps, auto-mounted service account tokens
-- Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, pod HA risk (all replicas on same node), orphan services/ingresses, deprecated API versions
-- Efficiency: missing CPU/memory requests and limits, orphan ConfigMaps/Secrets, PVCs with no consumer observed, long-Pending PVCs, Released PVs that are retained or failing deletion, and Failed PVs
-- Check-grouped remediation queue with search and category, severity, and framework filters; expand a check to see affected resources
-- Each finding includes description and remediation guidance, with inline hide actions for a check or category
-- Configurable: ignored namespaces (with wildcard patterns), disabled checks, persisted across sessions
-- Per-resource opt-out via the `radarhq.io/ignore-checks` annotation (comma-separated check IDs) — set on the resource a finding is attributed to, so the exclusion travels with the manifest instead of living in one operator's local settings
-- Framework labels: NSA/CISA, CIS benchmarks
-- MCP tool (`get_cluster_audit`) for AI-assisted cluster analysis
+- Security: privileged containers, privilege escalation, host namespaces, runtime socket mounts, secrets in ConfigMaps, and more
+- Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, deprecated API versions
+- Efficiency: missing requests and limits, orphan ConfigMaps/Secrets, PVCs with no consumer observed, long-Pending PVCs, and Released or Failed PVs
+- Remediation guidance per finding, NSA/CISA and CIS framework labels, and per-resource opt-out via the `radarhq.io/ignore-checks` annotation
+
+See [Cluster audit](https://radarhq.io/docs/features/cluster-audit) and [audit configuration](docs/configuration.md#per-resource-check-suppression).
 
 ### Network Path Diagnose
 
-Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway - answering "if traffic is sent toward this resource, does it reach a healthy process, and if not which hop breaks first?"
+Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway — answering "if traffic is sent toward this resource, does it reach a healthy process, and if not which hop breaks first?" It names the first broken hop with a kubectl reproducer, predicts NetworkPolicy blocks, and can run an optional DNS / TCP / TLS / HTTP probe from your laptop or in-cluster. Open the **Reachability** tab on the resource; see [docs/reachability.md](docs/reachability.md).
 
-- Composes the detections Radar already runs (missing backend Service, port mismatches, no-ready-endpoints, route not Accepted by parent Gateway, readiness probe targeting the wrong port) into a path shape ordered along the traffic flow
-- Upstreams (Ingresses / Routes pointing at a Service) are judged independently - one broken Ingress doesn't condemn the other delivery paths
-- First critical hop is named explicitly so the operator can localize the break without reading the whole list; each finding ships a kubectl reproducer
-- **Optional one-shot reachability test** runs DNS / TCP / TLS / HTTP probes against the declared path - direct TCP when Radar is in-cluster, K8s API server proxy when running from a laptop - so the same button works regardless of where Radar runs. Probes never override the static verdict; they add evidence.
-- NetworkPolicies that select the subject's pods are statically evaluated for their caller-independent ingress rules: a "would block" **WARNING prediction** when no rule admits the path's port, a source-restricted advisory, or an outbound egress note. It's a prediction, never a verdict - the CNI is the only enforcement authority, so the live in-cluster probe confirms or downgrades it
-- Static trace is pure functions over the in-memory informer cache. Active probing from a laptop uses the cluster's normal RBAC (`get services/proxy`, `get pods/proxy`); in-cluster mode goes directly to the data path.
-- Exposed via the **Reachability** tab in the resource detail view (and via the network branch of the MCP `diagnose` tool for AI consumers) - see [docs/reachability.md](docs/reachability.md)
 ### Kubernetes Upgrade Impact
 
-Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action. Release-specific checks appear only when their Kubernetes minor lies in the selected upgrade path; the current catalog is reviewed through Kubernetes 1.37.
-
-- Finds blockers such as skipped minor versions, APIs removed in the target release, unsupported kubelet or kube-proxy skew, overlapping PodDisruptionBudgets, the `gitRepo` volume driver disabled in Kubernetes 1.36, and removed or locked Kubernetes 1.37 feature gates or `scheduling.k8s.io/v1alpha2` objects
-- Flags likely operational impact such as FlexVolume exposure and renamed control-plane metrics as warnings, while intent-dependent configuration such as deprecated Service `externalIPs` remains review
-- Inspects live resources, aggregated API availability, Helm release manifests, kubectl last-applied configuration, API server usage metrics, and PrometheusRule expressions
-- Distinguishes **Passed**, **Review**, **Warning**, **Blocked**, **Incomplete**, and **Not applicable** instead of flattening advisory findings, likely impact, and missing evidence into one state
-- Scans every namespace the current identity can read; the header namespace picker remains a browsing filter and does not narrow upgrade analysis
-- Shows the bundled catalog boundary and the evidence scope for sampled or unavailable data
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics.
 
 See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
 
@@ -484,27 +416,11 @@ See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgra
 
 Inspect what any ServiceAccount can actually do — without three `kubectl describe` calls.
 
-- **ServiceAccount detail**: direct bindings, effective permissions (per-binding and deduplicated flat view), inherited grants via implicit groups (`system:authenticated`, `system:serviceaccounts`), and "Used by Pods" closing the loop
-- **Pod detail**: "Permissions" section showing the most-permissive rules the Pod's SA grants, plus a blast-radius alert when the SA has wildcards, cluster-admin, escalation verbs, or cluster-wide `create pods`
-- **Workload detail** (Deployment / StatefulSet / DaemonSet): same Permissions section framed at the workload level — every Pod the workload spawns inherits these grants
-- **Namespace detail**: RBAC summary with RoleBindings configured here + ClusterRoleBindings whose subjects reference this namespace
-- **Role / ClusterRole detail**: who is bound to this role, with subject summaries inline
-- **RoleBinding detail**: inline preview of the rules the binding grants + warnings when subjects include wide groups (`system:authenticated`, `system:unauthenticated`, `system:masters`)
-- **"My Permissions" panel**: namespace-scoped live `SelfSubjectRulesReview` for the current user — for fast "why can't I do X" debugging
-- **MCP**: `get_subject_permissions` tool exposes the same data to AI agents for "is this SA over-privileged?" / "blast radius if compromised?" queries
+- **ServiceAccount, Role, and binding details**: direct and inherited bindings, effective permissions, and the Pods that use a ServiceAccount
+- **Pod and workload Permissions**: the most-permissive rules the Pod's ServiceAccount grants, with a blast-radius alert for wildcards, cluster-admin, escalation verbs, or cluster-wide `create pods`
+- **"My Permissions" panel**: a live `SelfSubjectRulesReview` for the current user, for fast "why can't I do X" debugging
 
-Read-only visibility ships first; the considered follow-ups (RBAC audit checks, verb × resource matrix, subject explorer, graph view, in-UI edits, "can-i" queries) are tracked in [#1090](https://github.com/skyhook-io/radar/issues/1090).
-
-### AI Integration (MCP)
-
-Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents — Claude Code, Codex, Cursor, GitHub Copilot (VS Code and CLI), OpenCode, Google Antigravity, and any other MCP client — inspect, investigate, and operate your cluster through Radar.
-
-Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Diagnosis is read-only by default; optional in-cluster route probing uses short-lived, self-deleting probe pods. Write operations such as restart, scale, apply, and rollback are identified for client confirmation and enforced through Kubernetes RBAC.
-
-Enabled by default. Disable all MCP endpoints with `--no-mcp`, or expose only
-read-only MCP tools with `--mcp-read-only` and connect to `/mcp-readonly`.
-This setting does not restrict UI or REST API writes. See the
-**[MCP Guide](docs/mcp.md)** for setup and configuration precedence.
+See [Access control](https://radarhq.io/docs/features/access-control).
 
 ### Authentication
 
@@ -523,9 +439,7 @@ No auth by default (local use). See the **[Authentication Guide](docs/authentica
 
 Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integrations](docs/integrations.md) with topology edges, detail views, and AI summaries.
 
-**Default chart RBAC** covers the built-in Kubernetes kinds listed below — Workloads, Networking (including NetworkPolicies and PodDisruptionBudgets), Configuration, Storage (PersistentVolumes, PersistentVolumeClaims, StorageClasses), HorizontalPodAutoscalers, ServiceAccounts, LimitRanges, ResourceQuotas, Nodes, Namespaces, and Events. On Kubernetes 1.37, Radar also surfaces the Workload, PodGroup, CompositePodGroup, PodCertificateRequest, and ClusterTrustBundle APIs when the API server advertises them; the scheduling APIs are feature-gated, while the certificate APIs are stable and enabled by default. These use the generic resource browser rather than dedicated renderers. RBAC objects (Roles, ClusterRoles, RoleBindings, ClusterRoleBindings) are opt-in via `rbac.viewRBAC=true`. **CRD-based integrations** (Gateway API, VerticalPodAutoscaler, Calico, ArgoCD, FluxCD, cert-manager, etc.) need both the CRD installed in your cluster *and* read access granted — most groups are default-on under `rbac.crdGroups.<name>` (e.g. `gatewayApi`, `verticalPodAutoscaler`, `calico`); check `values.yaml` or add custom rules via `rbac.additionalRules`.
-
-Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, PriorityLevelConfigurations, and PodSecurityPolicies on clusters where those kinds are served. These reads inspect source-manifest evidence and do not add the kinds to Radar's resource browser.
+The Helm chart grants read access to common built-in Kubernetes kinds; Secrets and RBAC objects depend on chart settings and the authentication mode. CRD-based integrations need the CRD installed in your cluster *and* read access; most API groups are granted by default, and the chart's [RBAC](deploy/helm/radar/README.md#rbac) and [CRD access](deploy/helm/radar/README.md#crd-access) sections list what is on, what is opt-in, and how to add rules.
 
 | Category | Resources |
 |----------|-----------|
@@ -552,6 +466,8 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **Knative Flows** | Sequence, Parallel |
 | **Knative Networking** | Ingress, Certificate, ServerlessService |
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
+| **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
+| **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |
 | **Security (Trivy)** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, ClusterComplianceReport, SbomReport, RbacAssessmentReport, InfraAssessmentReport |
@@ -579,30 +495,14 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `g` then a letter | Switch view — `g h` Home, `g r` Resources, `g i` Issues, `g t` Topology, `g a` Applications, `g l` Timeline, `g f` Traffic, `g m` Helm, `g o` GitOps, `g u` Checks, `g c` Cost |
-| `t` | Toggle dark/light theme |
-| `?` | Show keyboard shortcuts |
-| `⌘K` | Open command palette |
-| `/` | Focus search (context-aware) |
-| `f` | Fit topology to screen |
-| `+` / `-` / `0` | Zoom in / out / reset (topology) |
-| `j` / `k` | Navigate rows (resources, helm) |
-| `g g` / `G` | Jump to first / last row |
-| `Enter` / `d` | Open selected resource detail |
-| `y` | Open YAML view |
-| `l` | Open logs (pods/workloads) |
-| `[` / `]` | Previous / next resource kind |
-| `Escape` | Close panel/modal/search |
-
-**Topology:** Pan (drag), Zoom (scroll), Select (click), Multi-select (Shift+click)
+Radar is keyboard-first: `?` lists every shortcut, `⌘K` opens the command palette, `/` focuses search, and `g` followed by a letter switches views (`g i` Issues, `g t` Topology, `g l` Timeline, `g r` Resources). The full list is in the [keyboard shortcuts reference](https://radarhq.io/docs/reference/keyboard-shortcuts).
 
 ---
 
+
 ## Security
 
-Radar reads your cluster through your own credentials and keeps cluster data local. It does not upload manifests, logs, events, metrics, or resource data to Skyhook, and it does not require an account, agent, or cloud backend. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
+Radar reads your cluster through your own credentials and keeps cluster data local. It does not upload manifests, logs, events, metrics, or resource data to Skyhook, and it does not require an account, agent, or cloud backend. When you connect an AI agent or run an AI investigation, what Radar returns goes to that agent and its model provider. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
 
 ---
 
@@ -637,7 +537,7 @@ Questions or ideas? [GitHub Discussions](https://github.com/skyhook-io/radar/dis
 
 Radar is built and maintained by [Skyhook](https://skyhook.io) (YC W23) and is open source under Apache-2.0. The OSS version is fully featured and the recommended way to run Radar.
 
-For teams that want hosted multi-cluster Radar with SSO and shared dashboards, we also offer [Radar Cloud](https://radarhq.io).
+For teams that want hosted multi-cluster Radar, with fleet views, alerts, and shared links, we also offer [Radar Cloud](https://radarhq.io).
 
 ---
 

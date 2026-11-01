@@ -1048,6 +1048,7 @@ export function KpiTile({
   attention = false,
   linkLabel,
   onClick,
+  className,
 }: {
   label: string;
   value: ReactNode;
@@ -1057,6 +1058,7 @@ export function KpiTile({
   attention?: boolean;
   linkLabel?: string;
   onClick?: () => void;
+  className?: string;
 }) {
   const clickable = Boolean(onClick);
   return (
@@ -1078,9 +1080,9 @@ export function KpiTile({
         clickable
           ? "cursor-pointer transition-colors hover:border-theme-border-light hover:bg-theme-hover/40"
           : ""
-      }`}
+      } ${className ?? ""}`}
     >
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 phone:flex-wrap phone:gap-y-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           {label}
         </span>
@@ -1128,10 +1130,11 @@ export function KeyValueRows({ rows }: { rows: [string, ReactNode][] }) {
       {rows.map(([label, value], index) => (
         <div
           key={`${label}-${index}`}
-          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0"
+          // Phones: a value too long for the row moves under its label and breaks inside it.
+          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0 phone:flex-wrap phone:gap-y-0.5"
         >
           <span className="text-sm text-theme-text-secondary">{label}</span>
-          <span className="text-right font-mono text-sm text-theme-text-primary">
+          <span className="text-right font-mono text-sm text-theme-text-primary phone:ml-auto phone:min-w-0 phone:[overflow-wrap:anywhere]">
             {value}
           </span>
         </div>
@@ -1157,7 +1160,8 @@ export function TokenGroup({
       <div className="flex flex-wrap gap-1">
         {values.length > 0 ? (
           values.map((value) => (
-            <Badge key={value} tone="structural" size="sm">
+            // Phones: a value wider than the row breaks inside its chip instead of being clipped.
+            <Badge key={value} tone="structural" size="sm" className="phone:[overflow-wrap:anywhere]">
               {value}
             </Badge>
           ))

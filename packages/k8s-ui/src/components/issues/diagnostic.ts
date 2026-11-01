@@ -26,6 +26,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Missing reference';
     case 'node_startup_corroboration':
       return 'Same-node failures';
+    case 'evicted_from_node':
+      return 'Evicted by node';
     case 'owner_rollup':
       return 'Grouped from pods';
     case 'selected_backend_issue':
@@ -54,6 +56,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Admission dependency';
     case 'network_policy_isolates':
       return 'Affected resources';
+    case 'tls_certificate_consumers':
+      return 'Used for TLS by';
     default:
       return type.replace(/_/g, ' ');
   }

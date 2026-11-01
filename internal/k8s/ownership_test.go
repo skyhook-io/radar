@@ -289,6 +289,61 @@ func (a liveManagerAccess) CanRead(kind resourceid.GroupKind, namespace string) 
 	return a.Access.CanRead(kind, namespace)
 }
 
+// The rows of one list read their chains in one session, as the caller, and
+// a session whose caches were replaced answers nothing more.
+func TestAgentOwnershipReadRowsInOneSession(t *testing.T) {
+	_, _, source, _ := historyFixture(t, historyReplicaSet("web-3", "3", 2, 2), historyPod("web-3-a", "web-3"), historyPod("web-3-b", "web-3"))
+	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	counted := &countingSource{Source: source}
+	chains := &AgentOwnership{source: counted, access: unrestricted}
+	for _, name := range []string{"web-3-a", "web-3-b"} {
+		top := chains.Of(historyPod(name, "web-3"), podRef(name)).Top()
+		if top == nil || *top != (topology.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}) {
+			t.Fatalf("%s: top %v, want the Deployment", name, top)
+		}
+	}
+	if counted.begun != 1 {
+		t.Errorf("began %d sessions for two rows, want 1", counted.begun)
+	}
+
+	denied := &AgentOwnership{source: source, access: func(*ownership.Catalog) ownership.Access {
+		return liveManagerAccess{Access: ownership.Unrestricted(), denied: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}}
+	}}
+	if c := denied.Of(historyPod("web-3-a", "web-3"), podRef("web-3-a")); c == nil || c.Top() == nil || c.Top().Kind != "ReplicaSet" || c.Stop != "withheld" {
+		t.Errorf("a Deployment the caller may not read: %+v, want the ReplicaSet, withheld", c)
+	}
+
+	// A row read from the API, not the caches, still walks up; here its owner
+	// is gone, so there is nothing above it.
+	if c := (&AgentOwnership{source: source, access: unrestricted}).Of(historyPod("web-9-a", "web-9"), podRef("web-9-a")); c == nil || c.Top() != nil {
+		t.Errorf("a row whose owner is gone: %+v, want no top", c)
+	}
+
+	replaced := &AgentOwnership{source: &scriptedSource{t: t, validate: []error{ownership.ErrCachesReplaced}}, access: unrestricted}
+	pod := historyPod("web-1-a", "web-1")
+	pod.Namespace = "alpha"
+	if c := replaced.Of(pod, resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "web-1-a"}); c != nil {
+		t.Errorf("replaced caches answered %+v", c)
+	}
+	if !replaced.failed {
+		t.Error("replaced caches did not invalidate the chain reader")
+	}
+}
+
+func podRef(name string) resourceid.Ref {
+	return resourceid.Ref{Kind: "Pod", Namespace: "shop", Name: name}
+}
+
+type countingSource struct {
+	ownership.Source
+	begun int
+}
+
+func (s *countingSource) Begin() (ownership.ReadSession, error) {
+	s.begun++
+	return s.Source.Begin()
+}
+
 func TestAnswerLiveManagerPreservesCallerAccess(t *testing.T) {
 	_, _, source, deployment := historyFixture(t)
 	live := deployment.DeepCopy()

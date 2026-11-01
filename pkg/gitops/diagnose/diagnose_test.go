@@ -260,6 +260,8 @@ func TestSeverityForConditionType(t *testing.T) {
 		{"InvalidSpecError", "critical", true},
 		{"OrphanedResourceWarning", "warning", true},
 		{"SharedResourceWarning", "warning", true},
+		{"RepeatedResourceWarning", "info", true},
+		{"OtherWarning", "warning", true},
 		{"SomeUnrelatedInfo", "info", false},
 		{"", "info", false},
 	}
@@ -296,5 +298,220 @@ func TestActionForFluxReason(t *testing.T) {
 	// Unknown reasons fall back to generic guidance, never empty.
 	if ActionForFluxReason("TotallyNovelReason") == "" {
 		t.Error("unknown flux reason should fall back to generic guidance, got empty")
+	}
+}
+
+func TestParseArgoOperationError_EmptyAutoSync(t *testing.T) {
+	got := ParseArgoOperationError("Skipping sync attempt to [abc123]: auto-sync will wipe out all resources")
+	if got.Cause != "Argo CD blocked auto-sync because the render includes none of the resources this Application manages." {
+		t.Fatalf("missing empty-state cause: %+v", got)
+	}
+	// The list row shows the summary; a leading revision SHA would push the
+	// meaning past the truncation point.
+	if got.Reason != ReasonAutoSyncBlockedEmpty || got.Summary != "Auto-sync blocked: the render includes none of the managed resources" || strings.Contains(got.Summary, "abc123") {
+		t.Fatalf("summary must lead with the meaning: %+v", got)
+	}
+	if !strings.Contains(got.Action, "A sync with Prune enabled could delete all of them") {
+		t.Fatalf("guard advice must warn against a manual sync: %q", got.Action)
+	}
+	if got.ActionSecondaryTitle != "If removing all managed resources is intended" || len(got.ActionSecondary) != 2 || got.Action != got.ActionPrimary+" "+strings.Join(got.ActionSecondary, " ") {
+		t.Fatalf("must retain complete guidance plus its presentation: %+v", got)
+	}
+	if !strings.Contains(got.ActionSecondary[0], "cascade/resources finalizer choice") || !strings.Contains(got.ActionSecondary[0], "ApplicationSet generator") || !strings.Contains(got.ActionSecondary[1], "syncPolicy.automated.allowEmpty: true") || !strings.Contains(got.ActionSecondary[1], "all future syncs") {
+		t.Fatalf("missing intended-render paths: %+v", got)
+	}
+	if got.RemediationKind != "" {
+		t.Fatalf("must not disable the empty-state guard: %+v", got)
+	}
+}
+
+func TestParseArgoOperationError_EmptyAutoSyncPrecision(t *testing.T) {
+	for _, message := range []string{"Skipping auto-sync: most recent sync already to [abc123]", "Skipping auto-sync: another operation is in progress", "Failed last sync attempt to [abc123]: application path does not exist"} {
+		parsed := ParseArgoOperationError(message)
+		if parsed.Reason != "" || parsed.Action != "" {
+			t.Errorf("ordinary skip/failure must not suggest allowEmpty: %+v", parsed)
+		}
+	}
+	action := ActionForCondition("RepeatedResourceWarning")
+	if strings.Contains(action, "multiple Argo Applications") || !strings.Contains(action, "last rendered occurrence") || !strings.Contains(action, "unintended") {
+		t.Fatalf("repeated-resource guidance must distinguish intentional source overrides: %q", action)
+	}
+}
+
+func TestEmptyAutoSyncAdviceOrderAndSafety(t *testing.T) {
+	action := ParseArgoOperationError("Skipping sync attempt to [abc]: auto-sync will wipe out all resources").Action
+	source := strings.Index(action, "source path")
+	generator := strings.Index(action, "remove it from the ApplicationSet generator")
+	recreation := strings.Index(action, "while the generator still emits it, the ApplicationSet recreates it")
+	survivor := strings.Index(action, "Check whether the generated Application survives; its ApplicationSet sync policy may keep it")
+	deleteSurvivor := strings.Index(action, "If it survives, delete it explicitly with the intended cascade choice")
+	removal := strings.Index(action, "delete the Application")
+	allow := strings.Index(action, "allowEmpty: true")
+	if source < 0 || generator <= source || recreation <= generator || survivor <= recreation || deleteSurvivor <= survivor || removal <= deleteSurvivor || allow <= removal {
+		t.Fatalf("expected source checks, generator removal and recreation warning, surviving child check and explicit deletion with cascade choice, plain Application deletion, then allowEmpty: %s", action)
+	}
+	for _, required := range []string{"A sync with Prune enabled could delete all of them", "Prune=false blocks direct Argo pruning", "Prune=confirm requires confirmation", "Pruning a rendered Namespace deletes its contents, regardless of their Prune options", "Delete=false / Delete=confirm, not Prune options", "targetRevision", "Helm values", "include/exclude", "resources finalizer", "remove it from the ApplicationSet generator", "all future syncs", "If it should render empty"} {
+		if !strings.Contains(action, required) {
+			t.Errorf("missing %q: %s", required, action)
+		}
+	}
+	if strings.Contains(action, "delete the ApplicationSet") || strings.Contains(action, "Application/ApplicationSet") {
+		t.Fatalf("unsafe removal advice: %s", action)
+	}
+	orphan := ActionForCondition("OrphanedResourceWarning")
+	if !strings.Contains(orphan, "spec.orphanedResources.ignore") || !strings.Contains(orphan, "spec.orphanedResources.warn") || strings.Contains(orphan, "label") {
+		t.Fatalf("wrong orphan exclusion mechanism: %s", orphan)
+	}
+}
+
+func TestIsArgoFailedAttemptCondition(t *testing.T) {
+	for _, prefix := range []string{"Failed sync attempt to ", "Failed last sync attempt to "} {
+		for _, operationMessage := range []string{"denied", "", "  "} {
+			if got := IsArgoFailedAttemptCondition(prefix+"[abc]: denied", operationMessage); got != (operationMessage == "denied") {
+				t.Errorf("%q / %q: got %v", prefix, operationMessage, got)
+			}
+		}
+	}
+	for _, message := range []string{"", "a different sync error", "Skipping sync attempt to [new]: auto-sync will wipe out all resources", "Failed sync attempt unrelated"} {
+		if IsArgoFailedAttemptCondition(message, "denied") {
+			t.Errorf("unrelated condition deduplicated: %q", message)
+		}
+	}
+}
+
+func TestSharedResourceWarningAction(t *testing.T) {
+	// One condition row names one resource; generic advice must read right for
+	// one resource or many.
+	if got := ActionForCondition("SharedResourceWarning"); strings.Contains(got, "These resources") || !strings.Contains(got, "remove it from this Application's source") {
+		t.Fatalf("expected number-neutral ownership guidance: %q", got)
+	}
+	one := ArgoConditionGuidance("SharedResourceWarning", "argocd/b", []string{"Deployment/guestbook-ui is part of applications argocd/live-shared-b and live-shared-a"}).Action
+	if !strings.HasPrefix(one, "To leave it with Application live-shared-a, ") {
+		t.Fatalf("expected the other owner named: %q", one)
+	}
+	for _, want := range []string{
+		"To leave it with Application live-shared-a, remove it from this Application's source.",
+		"Note the resource's live UID. Note whether Application live-shared-a has auto-sync on, and turn it off if so. Do not sync it manually during the move.",
+		"For an ApplicationSet or parent-managed Application, disable auto-sync in the template or Git so it stays off.",
+	} {
+		if !strings.Contains(one, want) {
+			t.Fatalf("ownership advice missing %q: %q", want, one)
+		}
+	}
+	last := -1
+	for _, step := range []string{
+		"Note the resource's live UID",
+		"Note whether Application live-shared-a has auto-sync on, and turn it off if so",
+		"disable auto-sync in the template or Git so it stays off",
+		"For a generated child, confirm its live auto-sync is off",
+		"Its ApplicationSet sync policy may prevent a template change from reaching it",
+		"Finish or terminate any running or retrying operation on Application live-shared-a",
+		"and confirm none is left",
+		"Turning off auto-sync does not stop it",
+		"Check that Application live-shared-a and the resource are not being deleted",
+		"If deletion has started, stop the move and recover",
+		"Sync this Application",
+		"Confirm the live resource's tracking metadata names this Application",
+		"Confirm its UID is unchanged and it is not being deleted",
+		"If it is deleting, was deleted, or was replaced, stop the move and recover",
+		"Remove it from the source of Application live-shared-a",
+		"Restore Application live-shared-a's previous auto-sync setting",
+	} {
+		at := strings.Index(one, step)
+		if at <= last {
+			t.Fatalf("missing or misordered move step %q: %q", step, one)
+		}
+		last = at
+	}
+	if strings.ContainsAny(one, "\r\n") {
+		t.Fatalf("ownership advice must remain one paragraph: %q", one)
+	}
+	if strings.Contains(one, "remove it from the others") {
+		t.Fatalf("advice must not leave the side to remove it from ambiguous: %q", one)
+	}
+	many := ArgoConditionGuidance("SharedResourceWarning", "argocd/b", []string{
+		"Service/a is part of applications argocd/b and owner-2",
+		"Service/b is part of applications argocd/b and owner-1",
+		"Service/c is part of applications argocd/b and owner-2",
+		"Service/d is part of applications argocd/b and owner-3",
+		"Service/e is part of applications argocd/b and owner-4",
+		"a message in some other shape",
+	}).Action
+	if !strings.HasPrefix(many, "To leave it with Applications owner-1, owner-2, owner-3 and 1 more, ") {
+		t.Fatalf("expected deduplicated, bounded owners: %q", many)
+	}
+	if got := ArgoConditionGuidance("SharedResourceWarning", "argocd/b", []string{"unparseable"}).Action; got != ActionForCondition("SharedResourceWarning") {
+		t.Fatalf("unparseable message must fall back to generic advice: %q", got)
+	}
+}
+
+func TestArgoSyncHazardActionSharedTrackingIsTemporary(t *testing.T) {
+	for _, tc := range []struct{ message, owner string }{
+		{"Deployment/web is part of applications argocd/billing and payments", "Application payments"},
+		{"unparseable", "another Application"},
+	} {
+		got := ArgoSyncHazardAction(false, false, []string{tc.message})
+		if !strings.Contains(got, "A successful sync can take over their tracking unless it uses FailOnSharedResource=true") || !strings.Contains(got, "While "+tc.owner+" still declares them, its next successful sync can take tracking back") || !strings.Contains(got, "remove them from this Application's source before syncing") {
+			t.Errorf("must explain temporary tracking and how to leave ownership unchanged: %q", got)
+		}
+	}
+}
+
+func TestOrphanedResourceWarningActionSaysWhereToLook(t *testing.T) {
+	got := ArgoConditionGuidance("OrphanedResourceWarning", "argocd/live-orphan", []string{"Application has 3 orphaned resources"}).Action
+	if !strings.Contains(got, "Argo CD doesn't associate with any Application") || !strings.Contains(got, `"argocd app resources argocd/live-orphan --orphaned"`) || !strings.Contains(got, "Argo CD UI") || !strings.Contains(got, "spec.orphanedResources.ignore") {
+		t.Fatalf("orphan guidance must say where to see which resources: %q", got)
+	}
+	if generic := ActionForCondition("OrphanedResourceWarning"); strings.Contains(generic, "argocd app") || strings.Contains(generic, "  ") || !strings.Contains(generic, "Argo CD UI") || !strings.Contains(generic, "Argo CD doesn't associate with any Application") {
+		t.Fatalf("generic orphan guidance without an app name: %q", generic)
+	}
+}
+
+func TestArgoSyncHazardAction(t *testing.T) {
+	shared := []string{"Deployment/web is part of applications argocd/b and live-shared-a"}
+	for _, tc := range []struct {
+		name     string
+		prunes   bool
+		failed   bool
+		shared   []string
+		contains string
+	}{
+		{"plain drift", false, false, nil, ""},
+		{"comparison error", true, true, nil, "Argo CD's last reported resource list marks every listed resource for pruning, and its latest comparison reported an error. Fix the comparison error and refresh before syncing: if the render still includes none of them, a sync with Prune enabled could delete all of them"},
+		{"empty render", true, false, nil, "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options."},
+		{"empty render outranks shared", true, false, shared, "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options."},
+		{"shared", false, false, shared, "also tracked by Application live-shared-a"},
+		{"shared, owner unknown", false, false, []string{"unparseable"}, "also tracked by another Application"},
+	} {
+		got := ArgoSyncHazardAction(tc.prunes, tc.failed, tc.shared)
+		if tc.contains == "" {
+			if got != "" {
+				t.Errorf("%s: want no hazard, got %q", tc.name, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, tc.contains) || strings.Contains(got, "click Sync") {
+			t.Errorf("%s: got %q, want %q and no click-Sync advice", tc.name, got, tc.contains)
+		}
+	}
+}
+
+func TestSharedResourceGuidanceSteps(t *testing.T) {
+	for _, messages := range [][]string{{"Deployment/web is part of applications argocd/billing and payments"}, {"unparseable"}} {
+		got := ArgoConditionGuidance("SharedResourceWarning", "argocd/billing", messages)
+		owner := "Application payments"
+		if messages[0] == "unparseable" {
+			owner = "the Application that tracks it now"
+		}
+		if got.ActionPrimary != "To leave it with "+owner+", remove it from this Application's source." || got.ActionSecondaryTitle != "To move it to this Application" {
+			t.Fatalf("wrong presentation: %+v", got)
+		}
+		if len(got.ActionSecondary) != 12 || got.ActionSecondary[0] != "Check this Application's sync options for FailOnSharedResource=true. If set, the sync will refuse the takeover. Stop unless taking it over is intended and allowed." || got.ActionSecondary[1] != "Note the resource's live UID." {
+			t.Fatalf("guard must precede any move: %+v", got)
+		}
+		want := got.ActionPrimary + " " + got.ActionSecondaryTitle + ": " + strings.Join(got.ActionSecondary, " ")
+		if got.Action != want {
+			t.Fatalf("API/MCP action lost steps: %+v", got)
+		}
 	}
 }

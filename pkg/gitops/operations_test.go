@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -207,7 +209,7 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 		return argoAppForTest("argocd", "demo", func(obj map[string]any) {
 			status, _ := obj["status"].(map[string]any)
 			status["history"] = []any{
-				map[string]any{"id": historyID, "revision": "abc123"},
+				map[string]any{"id": historyID, "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo", "path": "app"}},
 			}
 		})
 	}
@@ -219,12 +221,8 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 			t.Fatalf("expected success for int64 id=7, got %v", err)
 		}
 		body := captureLastPatch(t, client)
-		rb := nestedMap(body, "operation", "rollback")
-		// Patch encodes the id as int64; JSON marshal produces a number that
-		// Unmarshal into map[string]any yields as float64. Assert via
-		// numeric comparison rather than type-strict equality.
-		if got, _ := rb["id"].(float64); got != 7 {
-			t.Fatalf("rollback id in patch = %#v, want 7", rb["id"])
+		if got := nestedMap(body, "operation", "sync")["revision"]; got != "abc123" {
+			t.Fatalf("operation.sync.revision = %#v, want abc123", got)
 		}
 	})
 
@@ -233,6 +231,14 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 42})
 		if err != nil {
 			t.Fatalf("expected success for float64 id=42, got %v", err)
+		}
+	})
+
+	// Argo's controller numbers history from 0, so the first deploy is id 0.
+	t.Run("id 0 is the first history entry", func(t *testing.T) {
+		client := newFakeArgo(makeAppWithHistory(int64(0)))
+		if _, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 0}); err != nil {
+			t.Fatalf("expected success for id=0, got %v", err)
 		}
 	})
 
@@ -245,20 +251,14 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 		if !errors.Is(err, ErrHistoryEntryNotFound) {
 			t.Fatalf("expected ErrHistoryEntryNotFound, got %v", err)
 		}
-		// Verify no patch was issued — the whole point of the verify-first
-		// design is that we don't touch the cluster on bad input.
-		for _, action := range client.Actions() {
-			if _, ok := action.(clienttesting.PatchAction); ok {
-				t.Fatalf("rollback issued a patch despite invalid id; actions=%v", client.Actions())
-			}
-		}
+		assertNoPatch(t, client)
 	})
 
-	t.Run("non-positive id rejected upfront", func(t *testing.T) {
+	t.Run("negative id rejected upfront", func(t *testing.T) {
 		client := newFakeArgo(makeAppWithHistory(int64(7)))
-		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 0})
+		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: -1})
 		if err == nil {
-			t.Fatal("expected error for id=0")
+			t.Fatal("expected error for id=-1")
 		}
 	})
 
@@ -277,6 +277,212 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 			t.Fatalf("expected ErrOperationInProgress, got %v", err)
 		}
 	})
+
+	t.Run("pending operation rejects rollback with sentinel error", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["operation"] = map[string]any{"sync": map[string]any{"revision": "abc123"}}
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{map[string]any{"id": int64(1), "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo"}}}
+		}))
+		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+		if !errors.Is(err, ErrOperationInProgress) {
+			t.Fatalf("expected ErrOperationInProgress, got %v", err)
+		}
+		assertNoPatch(t, client)
+	})
+}
+
+func assertNoPatch(t *testing.T, client *fake.FakeDynamicClient) {
+	t.Helper()
+	for _, action := range client.Actions() {
+		if _, ok := action.(clienttesting.PatchAction); ok {
+			t.Fatalf("expected no patch; actions=%v", client.Actions())
+		}
+	}
+}
+
+// The Application CRD has no operation.rollback: the API server prunes it and
+// Argo's controller fails the empty operation. Rollback must be written the
+// way argocd-server writes it — a sync pinned to the history entry.
+func TestRollbackArgoAppWritesSyncOperation(t *testing.T) {
+	ctx := context.Background()
+	trueValue := true
+
+	t.Run("single source", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["spec"] = map[string]any{
+				"project":    "default",
+				"source":     map[string]any{"repoURL": "https://example.com/repo", "path": "current", "targetRevision": "main"},
+				"syncPolicy": map[string]any{"syncOptions": []any{"CreateNamespace=true"}},
+			}
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{
+				map[string]any{"id": int64(0), "revision": "rev-old", "source": map[string]any{"repoURL": "https://example.com/repo", "path": "old", "targetRevision": "main"}},
+				map[string]any{"id": int64(1), "revision": "rev-new", "source": map[string]any{"repoURL": "https://example.com/repo", "path": "current", "targetRevision": "main"}},
+			}
+		}))
+		if _, err := RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 0}); err != nil {
+			t.Fatalf("RollbackArgoApp: %v", err)
+		}
+		body := captureLastPatch(t, client)
+		operation := nestedMap(body, "operation")
+		if _, ok := operation["rollback"]; ok {
+			t.Fatalf("patch still writes operation.rollback: %v", operation)
+		}
+		if got := nestedMap(operation, "initiatedBy")["username"]; got != "radar" {
+			t.Fatalf("initiatedBy.username = %#v, want radar", got)
+		}
+		if !argoOperationHasInfo(operation, argoRollbackInfoName, "true") {
+			t.Fatalf("rollback operation lacks its marker: %#v", operation)
+		}
+		want := map[string]any{
+			"revision":     "rev-old",
+			"source":       map[string]any{"repoURL": "https://example.com/repo", "path": "old", "targetRevision": "main"},
+			"prune":        false,
+			"syncStrategy": map[string]any{"apply": map[string]any{}},
+			"syncOptions":  []any{"CreateNamespace=true"},
+		}
+		if got := nestedMap(operation, "sync"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("operation.sync = %#v\nwant %#v", got, want)
+		}
+	})
+
+	t.Run("multi source", func(t *testing.T) {
+		sources := []any{
+			map[string]any{"repoURL": "https://example.com/a", "path": "app", "targetRevision": "main"},
+			map[string]any{"repoURL": "https://example.com/b", "path": "values", "targetRevision": "v2", "ref": "values"},
+		}
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{map[string]any{
+				"id":        int64(3),
+				"revisions": []any{"rev-a", "rev-b"},
+				"sources":   sources,
+				// Argo serializes the unused single source of a multi-source
+				// entry as an all-empty object.
+				"source": map[string]any{"repoURL": ""},
+			}}
+		}))
+		if _, err := RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 3, Prune: &trueValue, DryRun: &trueValue}); err != nil {
+			t.Fatalf("RollbackArgoApp: %v", err)
+		}
+		want := map[string]any{
+			"revisions":    []any{"rev-a", "rev-b"},
+			"sources":      sources,
+			"prune":        true,
+			"dryRun":       true,
+			"syncStrategy": map[string]any{"apply": map[string]any{}},
+		}
+		if got := nestedMap(captureLastPatch(t, client), "operation", "sync"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("operation.sync = %#v\nwant %#v", got, want)
+		}
+	})
+
+	t.Run("entry without a source is refused", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{map[string]any{"id": int64(1), "revision": "abc123"}}
+		}))
+		_, err := RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+		if !errors.Is(err, ErrHistoryEntryNotRollbackable) {
+			t.Fatalf("expected ErrHistoryEntryNotRollbackable, got %v", err)
+		}
+		assertNoPatch(t, client)
+	})
+}
+
+func TestArgoOperationsClearCompletedState(t *testing.T) {
+	for _, action := range []string{"sync", "rollback"} {
+		t.Run(action, func(t *testing.T) {
+			ctx := context.Background()
+			client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+				obj["status"] = map[string]any{
+					"operationState": map[string]any{
+						"phase":      "Succeeded",
+						"operation":  map[string]any{"info": []any{map[string]any{"name": argoRollbackInfoName, "value": "true"}}},
+						"syncResult": map[string]any{"revision": "abc123"},
+					},
+					"history": []any{map[string]any{"id": int64(0), "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo"}}},
+				}
+			}))
+			var err error
+			if action == "sync" {
+				_, err = SyncArgoApp(ctx, client, "argocd", "demo", ArgoSyncOptions{})
+			} else {
+				_, err = RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 0})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			app, err := client.Resource(argoAppGVR).Namespace("argocd").Get(ctx, "demo", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, found, _ := unstructured.NestedFieldNoCopy(app.Object, "status", "operationState"); found {
+				t.Fatalf("completed operation state survives %s: %#v", action, app.Object)
+			}
+		})
+	}
+}
+
+// Argo CD refuses a rollback while automated sync is on; Argo CD 3.x can keep
+// the automated block with enabled: false, which is off.
+func TestRollbackArgoAppAutoSync(t *testing.T) {
+	cases := []struct {
+		name      string
+		automated map[string]any
+		wantErr   bool
+	}{
+		{name: "automated block present", automated: map[string]any{"prune": true, "selfHeal": true}, wantErr: true},
+		{name: "empty automated block", automated: map[string]any{}, wantErr: true},
+		{name: "enabled: true", automated: map[string]any{"enabled": true}, wantErr: true},
+		{name: "enabled: false", automated: map[string]any{"enabled": false, "prune": true}, wantErr: false},
+		{name: "no automated block", automated: nil, wantErr: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+				spec, _ := obj["spec"].(map[string]any)
+				if tc.automated != nil {
+					spec["syncPolicy"] = map[string]any{"automated": tc.automated}
+				}
+				status, _ := obj["status"].(map[string]any)
+				status["history"] = []any{map[string]any{"id": int64(0), "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo"}}}
+			}))
+			_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 0})
+			if tc.wantErr {
+				if !errors.Is(err, ErrAutoSyncEnabled) {
+					t.Fatalf("expected ErrAutoSyncEnabled, got %v", err)
+				}
+				assertNoPatch(t, client)
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected rollback to start, got %v", err)
+			}
+		})
+	}
+}
+
+func TestArgoHistoryEntryRollbackable(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry map[string]any
+		want  bool
+	}{
+		{name: "single source", entry: map[string]any{"id": int64(0), "source": map[string]any{"repoURL": "https://example.com/repo"}}, want: true},
+		{name: "multi source", entry: map[string]any{"id": float64(2), "sources": []any{map[string]any{"repoURL": "https://example.com/repo"}}, "source": map[string]any{"repoURL": ""}}, want: true},
+		{name: "empty source object", entry: map[string]any{"id": int64(1), "revision": "abc", "source": map[string]any{"repoURL": ""}}, want: false},
+		{name: "no source at all", entry: map[string]any{"id": int64(1), "revision": "abc"}, want: false},
+		{name: "no id", entry: map[string]any{"source": map[string]any{"repoURL": "https://example.com/repo"}}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ArgoHistoryEntryRollbackable(tc.entry); got != tc.want {
+				t.Fatalf("ArgoHistoryEntryRollbackable = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 // Sanity: the rollback-collision sentinel maps the same way in tests as it
@@ -528,7 +734,7 @@ func TestArgoOperationPatchesUseResourceVersion(t *testing.T) {
 		metadata, _ := obj["metadata"].(map[string]any)
 		metadata["resourceVersion"] = "17"
 		status, _ := obj["status"].(map[string]any)
-		status["history"] = []any{map[string]any{"id": int64(1)}}
+		status["history"] = []any{map[string]any{"id": int64(1), "source": map[string]any{"repoURL": "https://example.com/repo"}}}
 	})
 
 	t.Run("sync", func(t *testing.T) {
@@ -557,7 +763,7 @@ func TestArgoOperationPatchesUseResourceVersion(t *testing.T) {
 func TestArgoOperationPatchConflictMapsToOperationInProgress(t *testing.T) {
 	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
 		status, _ := obj["status"].(map[string]any)
-		status["history"] = []any{map[string]any{"id": int64(1)}}
+		status["history"] = []any{map[string]any{"id": int64(1), "source": map[string]any{"repoURL": "https://example.com/repo"}}}
 	})
 	cases := []struct {
 		name string
@@ -769,6 +975,40 @@ func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 				}
 				if v != nil {
 					t.Fatalf("annotation %q = %v, want nil (delete)", key, v)
+				}
+			}
+		})
+	}
+}
+
+// Argo CD 3.x can switch automation off in place with automated.enabled:
+// false. Resume must clear that flag, or Argo stays manual while Radar reports
+// auto-sync resumed, and it keeps the block's own prune/selfHeal settings.
+func TestSetArgoAutoSyncResumeKeepsTheBlocksSettings(t *testing.T) {
+	for name, automated := range map[string]map[string]any{
+		"switched off in place": {"enabled": false, "prune": false, "selfHeal": true},
+		"already on":            {"prune": false, "selfHeal": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+				spec, _ := obj["spec"].(map[string]any)
+				spec["syncPolicy"] = map[string]any{"automated": automated}
+			}))
+			// A retried or duplicated resume must not fall back to the defaults.
+			for call := 1; call <= 2; call++ {
+				if _, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", true); err != nil {
+					t.Fatalf("SetArgoAutoSync(resume) #%d: %v", call, err)
+				}
+				app, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+				if err != nil {
+					t.Fatalf("get app: %v", err)
+				}
+				if !ArgoAutoSyncEnabled(app) {
+					t.Fatalf("auto-sync off after resume #%d: %#v", call, app.Object["spec"])
+				}
+				got, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+				if got["prune"] != false || got["selfHeal"] != true {
+					t.Fatalf("resume #%d changed the block's settings: %#v", call, got)
 				}
 			}
 		})
@@ -1299,3 +1539,192 @@ func TestTerminateArgoSyncRepairsStaleRunningStatus(t *testing.T) {
 
 // Suppress the unused-metav1 lint when this file is compiled alone.
 var _ = metav1.ObjectMeta{}
+
+func TestArgoRollbackRevisionMismatch(t *testing.T) {
+	for _, tc := range []struct {
+		name                             string
+		target, result                   []string
+		multi, dryRun, unmarked, pending bool
+		phase                            string
+		wantTarget, wantResult           string
+	}{
+		{name: "single mismatch", target: []string{"old"}, result: []string{"new"}, wantTarget: "old", wantResult: "new"},
+		{name: "single match", target: []string{"old"}, result: []string{"old"}},
+		{name: "multi mismatch", multi: true, target: []string{"old-a", "old-b"}, result: []string{"new-a", "new-b"}, wantTarget: "old-a, old-b", wantResult: "new-a, new-b"},
+		{name: "multi partial mismatch", multi: true, target: []string{"old-a", "old-b"}, result: []string{"old-a", "new-b"}, wantTarget: "old-a, old-b", wantResult: "old-a, new-b"},
+		{name: "multi match", multi: true, target: []string{"a", "b"}, result: []string{"a", "b"}},
+		{name: "dry run", dryRun: true, target: []string{"old"}, result: []string{"new"}},
+		{name: "multi dry run", multi: true, dryRun: true, target: []string{"old"}, result: []string{"new"}},
+		{name: "unmarked sync", unmarked: true, target: []string{"old"}, result: []string{"new"}},
+		{name: "failed", phase: "Failed", target: []string{"old"}, result: []string{"new"}},
+		{name: "running", phase: "Running", target: []string{"old"}, result: []string{"new"}},
+		{name: "pending operation", pending: true, target: []string{"old"}, result: []string{"new"}},
+		{name: "no result", target: []string{"old"}, wantTarget: "old"},
+		{name: "no target", result: []string{"new"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := argoAppForTest("argocd", "demo", nil)
+			sync, result := map[string]any{"dryRun": tc.dryRun}, map[string]any{}
+			if tc.multi {
+				_ = unstructured.SetNestedStringSlice(sync, tc.target, "revisions")
+				_ = unstructured.SetNestedStringSlice(result, tc.result, "revisions")
+			} else {
+				if len(tc.target) > 0 {
+					sync["revision"] = tc.target[0]
+				}
+				if len(tc.result) > 0 {
+					result["revision"] = tc.result[0]
+				}
+			}
+			operation := map[string]any{"sync": sync, "initiatedBy": map[string]any{"username": "alice"}}
+			if !tc.unmarked {
+				operation["info"] = []any{map[string]any{"name": argoRollbackInfoName, "value": "true"}}
+			}
+			phase := tc.phase
+			if phase == "" {
+				phase = "Succeeded"
+			}
+			_ = unstructured.SetNestedMap(app.Object, map[string]any{"phase": phase, "operation": operation, "syncResult": result}, "status", "operationState")
+			if tc.pending {
+				app.Object["operation"] = map[string]any{"sync": map[string]any{}}
+			}
+			target, applied := ArgoRollbackRevisionMismatch(app)
+			if target != tc.wantTarget || applied != tc.wantResult {
+				t.Fatalf("mismatch = (%q, %q), want (%q, %q)", target, applied, tc.wantTarget, tc.wantResult)
+			}
+			if tc.wantTarget != "" {
+				if revision, _ := ArgoSuccessfulRollback(app); revision != "" {
+					t.Fatalf("mismatch reported as successful rollback: %q", revision)
+				}
+			}
+		})
+	}
+}
+
+func TestArgoRollbackSourceComparison(t *testing.T) {
+	source := map[string]any{
+		"repoURL": "https://example.com/repo", "path": "historical", "targetRevision": "main",
+		"helm": map[string]any{"parameters": []any{map[string]any{"name": "replicas", "value": "2"}}},
+	}
+	for _, multi := range []bool{false, true} {
+		for _, tc := range []struct {
+			name                       string
+			field                      string
+			value                      any
+			missingResult, placeholder bool
+			mismatch                   bool
+		}{
+			{name: "identical"},
+			{name: "path differs at same revision", field: "path", value: "current", mismatch: true},
+			{name: "repo differs", field: "repoURL", value: "https://example.com/other", mismatch: true},
+			{name: "chart differs", field: "chart", value: "other", mismatch: true},
+			{name: "target revision differs", field: "targetRevision", value: "other", mismatch: true},
+			{name: "helm values differ", field: "helm", value: map[string]any{"parameters": []any{map[string]any{"name": "replicas", "value": "3"}}}, mismatch: true},
+			{name: "kustomize differs", field: "kustomize", value: map[string]any{"namePrefix": "other"}, mismatch: true},
+			{name: "directory differs", field: "directory", value: map[string]any{"recurse": true}, mismatch: true},
+			{name: "plugin differs", field: "plugin", value: map[string]any{"name": "other"}, mismatch: true},
+			{name: "missing result sources", missingResult: true},
+			{name: "zero single source placeholder", placeholder: true},
+			{name: "missing plural result with placeholder", missingResult: true, placeholder: true},
+			{name: "placeholder does not hide plural mismatch", placeholder: true, field: "path", value: "current", mismatch: true},
+		} {
+			t.Run(fmt.Sprintf("multi=%v/%s", multi, tc.name), func(t *testing.T) {
+				sync := map[string]any{"revision": "same"}
+				result := map[string]any{"revision": "same"}
+				appliedSource := (&unstructured.Unstructured{Object: source}).DeepCopy().Object
+				if tc.field != "" {
+					appliedSource[tc.field] = tc.value
+				}
+				if multi {
+					sync = map[string]any{"revisions": []any{"same", "values"}, "sources": []any{source, map[string]any{"repoURL": "https://example.com/values", "ref": "values"}}}
+					result = map[string]any{"revisions": []any{"same", "values"}}
+					if !tc.missingResult {
+						result["sources"] = []any{appliedSource, map[string]any{"repoURL": "https://example.com/values", "ref": "values"}}
+					}
+					if tc.placeholder {
+						sync["source"] = map[string]any{}
+						result["source"] = map[string]any{"repoURL": ""}
+					}
+				} else {
+					sync["source"] = source
+					if !tc.missingResult {
+						result["source"] = appliedSource
+					}
+				}
+				app := argoAppForTest("argocd", "demo", nil)
+				_ = unstructured.SetNestedMap(app.Object, map[string]any{
+					"phase":      "Succeeded",
+					"operation":  map[string]any{"sync": sync, "info": []any{map[string]any{"name": argoRollbackInfoName, "value": "true"}}},
+					"syncResult": result,
+				}, "status", "operationState")
+				target, applied := ArgoRollbackRevisionMismatch(app)
+				if got := target != "" && applied != ""; got != tc.mismatch {
+					t.Errorf("mismatch = (%q, %q), want mismatch %v", target, applied, tc.mismatch)
+				}
+				revision, _ := ArgoSuccessfulRollback(app)
+				if got := revision != ""; got == tc.mismatch {
+					t.Errorf("successful rollback = %q, want success %v", revision, !tc.mismatch)
+				}
+			})
+		}
+	}
+}
+
+func TestArgoRollbackRevisionShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		target, result         map[string]any
+		wantTarget, wantResult string
+	}{
+		{"plural target scalar result", map[string]any{"revisions": []any{"old-a", "old-b"}}, map[string]any{"revision": "new"}, "old-a, old-b", "new"},
+		{"scalar target plural result", map[string]any{"revision": "old"}, map[string]any{"revisions": []any{"new-a", "new-b"}}, "old", "new-a, new-b"},
+		{"plural target absent result", map[string]any{"revisions": []any{"old-a", "old-b"}}, map[string]any{}, "old-a, old-b", ""},
+		{"scalar target absent result", map[string]any{"revision": "old"}, map[string]any{}, "old", ""},
+		{"normalized equal", map[string]any{"revision": "old"}, map[string]any{"revisions": []any{"old"}}, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := argoAppForTest("argocd", "demo", nil)
+			_ = unstructured.SetNestedMap(app.Object, map[string]any{
+				"phase":      "Succeeded",
+				"operation":  map[string]any{"info": []any{map[string]any{"name": argoRollbackInfoName, "value": "true"}}, "sync": tc.target},
+				"syncResult": tc.result,
+			}, "status", "operationState")
+			target, applied := ArgoRollbackRevisionMismatch(app)
+			if target != tc.wantTarget || applied != tc.wantResult {
+				t.Fatalf("mismatch = (%q, %q), want (%q, %q)", target, applied, tc.wantTarget, tc.wantResult)
+			}
+			revision, _ := ArgoSuccessfulRollback(app)
+			if (revision != "") != (tc.wantTarget == "") {
+				t.Fatalf("successful rollback = %q, mismatch = %q", revision, tc.wantTarget)
+			}
+		})
+	}
+}
+
+func TestArgoAppliedCurrentComparison(t *testing.T) {
+	source := map[string]any{"repoURL": "repo", "path": "app", "targetRevision": "main"}
+	other := map[string]any{"repoURL": "repo", "path": "other", "targetRevision": "main"}
+	for _, tc := range []struct {
+		name               string
+		result, comparison map[string]any
+		want               bool
+	}{
+		{"single match", map[string]any{"revision": "a", "source": source}, map[string]any{"revision": "a", "comparedTo": map[string]any{"source": source}}, true},
+		{"revision differs", map[string]any{"revision": "old", "source": source}, map[string]any{"revision": "new", "comparedTo": map[string]any{"source": source}}, false},
+		{"source differs", map[string]any{"revision": "a", "source": source}, map[string]any{"revision": "a", "comparedTo": map[string]any{"source": other}}, false},
+		{"plural match", map[string]any{"revisions": []any{"a", "b"}, "sources": []any{source, other}}, map[string]any{"revisions": []any{"a", "b"}, "comparedTo": map[string]any{"sources": []any{source, other}}}, true},
+		{"plural revision differs", map[string]any{"revisions": []any{"a", "old"}, "sources": []any{source, other}}, map[string]any{"revisions": []any{"a", "new"}, "comparedTo": map[string]any{"sources": []any{source, other}}}, false},
+		{"plural source order differs", map[string]any{"revisions": []any{"a", "b"}, "sources": []any{source, other}}, map[string]any{"revisions": []any{"a", "b"}, "comparedTo": map[string]any{"sources": []any{other, source}}}, false},
+		{"missing applied evidence", map[string]any{}, map[string]any{"revision": "a", "comparedTo": map[string]any{"source": source}}, false},
+		{"missing comparison evidence", map[string]any{"revision": "a", "source": source}, map[string]any{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := argoAppForTest("argocd", "demo", nil)
+			_ = unstructured.SetNestedMap(app.Object, tc.result, "status", "operationState", "syncResult")
+			_ = unstructured.SetNestedMap(app.Object, tc.comparison, "status", "sync")
+			if got := ArgoAppliedCurrentComparison(app); got != tc.want {
+				t.Fatalf("matches = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

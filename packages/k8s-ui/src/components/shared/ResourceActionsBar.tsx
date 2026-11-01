@@ -30,6 +30,8 @@ import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
+import { isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff } from '../resources/resource-utils-argo'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
@@ -137,6 +139,10 @@ interface ResourceActionsBarProps {
   isArgoSuspending?: boolean
   onArgoResume?: (params: { namespace: string; name: string }) => void
   isArgoResuming?: boolean
+  // Set when the connected Radar is too old to turn auto-sync back on for an
+  // Application with automated.enabled: false; Enable Auto-Sync renders disabled.
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 
   // Node debug shell
   onOpenNodeTerminal?: (params: { nodeName: string }) => void
@@ -186,7 +192,7 @@ export function ResourceActionsBar({
   onArgoSync, isArgoSyncing,
   onArgoRefresh, isArgoRefreshing,
   onArgoSuspend, isArgoSuspending,
-  onArgoResume, isArgoResuming,
+  onArgoResume, isArgoResuming, argoResumeUpgrade, argoResumeBlockedReason,
   onOpenNodeTerminal,
   canNodeWrite,
   onCordonNode, isCordoningNode,
@@ -562,6 +568,8 @@ export function ResourceActionsBar({
           isSuspending={isArgoSuspending}
           onResume={onArgoResume}
           isResuming={isArgoResuming}
+          resumeUpgrade={argoResumeUpgrade}
+          resumeBlockedReason={argoResumeBlockedReason}
         />
       )}
 
@@ -881,14 +889,19 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 // ARGO ACTIONS
 // ============================================================================
 
-function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming }: {
+function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
   resource: SelectedResource; data: any
   onSync?: (params: { namespace: string; name: string }) => void; isSyncing?: boolean
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
   onResume?: (params: { namespace: string; name: string }) => void; isResuming?: boolean
+  resumeUpgrade?: RadarUpgradeRequirement | null
+  resumeBlockedReason?: string
 }) {
-  const hasAutomatedSync = !!data?.spec?.syncPolicy?.automated
+  const autoSyncEnabled = isArgoAutoSyncEnabled(data)
+  const resumeBlocked = isArgoAutoSyncSwitchedOff(data)
+    ? resumeBlockedReason || (resumeUpgrade ? radarUpgradeNoteText(resumeUpgrade) : undefined)
+    : undefined
 
   return (
     <>
@@ -925,7 +938,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
         </Tooltip>
       )}
 
-      {hasAutomatedSync ? (
+      {autoSyncEnabled ? (
         onSuspend && (
           <button
             onClick={() => onSuspend({
@@ -941,17 +954,19 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
         )
       ) : (
         onResume && (
-          <button
-            onClick={() => onResume({
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isResuming}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Play className="w-3.5 h-3.5" />
-            {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
-          </button>
+          <Tooltip content={resumeBlocked} disabled={!resumeBlocked} delay={150}>
+            <button
+              onClick={() => !resumeBlocked && onResume({
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={isResuming || !!resumeBlocked}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Play className="w-3.5 h-3.5" />
+              {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
+            </button>
+          </Tooltip>
         )
       )}
     </>
