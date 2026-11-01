@@ -917,13 +917,15 @@ type ReflectionContext struct {
 	Truncated             bool         `json:"truncated,omitempty"`
 }
 
-// ChildrenContext is a bounded direct-child inventory. Complete covers only
-// the caller-readable scope; Narrowed means that scope may exclude children.
-// An omitted block does not establish that no runtime exists. Items can include
-// non-workloads (for example a TargetAllocator CR); follow them independently.
+// ChildrenContext previews direct owner-reference children of any resource kind,
+// not an operator's runtime set. An absent block is not an empty inventory.
 type ChildrenContext struct {
-	Items     []ContextRef `json:"items"`
-	Complete  bool         `json:"complete"`
-	Narrowed  bool         `json:"narrowed,omitempty"`
-	Truncated bool         `json:"truncated,omitempty"`
+	Items []ContextRef `json:"items"`
+	// Complete: every direct child in the caller-readable scope is included.
+	// Uncollected kinds or truncation make this false, without implying a runtime failure.
+	Complete bool `json:"complete"`
+	// Narrowed means permissions may exclude children, not that hidden children exist.
+	Narrowed bool `json:"narrowed,omitempty"`
+	// Truncated marks the preview's response limit, independently of inventory gaps.
+	Truncated bool `json:"truncated,omitempty"`
 }
