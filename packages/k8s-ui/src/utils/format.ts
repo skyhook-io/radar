@@ -46,32 +46,14 @@ export function formatCPUNanocores(nanocores: number): string {
 
 /**
  * Parse a Kubernetes CPU string (e.g., "500m", "2", "100n") to nanocores.
+ * metrics-server writes each value in its shortest exact form, so the same
+ * reading can arrive as "98753000n" or "98753u".
  *
- * @param cpuString - K8s CPU string like "500m", "2", "100n"
+ * @param cpuString - K8s CPU string like "500m", "2", "100n", "98753u"
  * @returns CPU in nanocores
  */
 export function parseCPUToNanocores(cpuString: string): number {
-  if (!cpuString) return 0
-
-  const str = cpuString.trim()
-
-  // Nanocores suffix
-  if (str.endsWith('n')) {
-    return parseInt(str.slice(0, -1), 10) || 0
-  }
-
-  // Millicores suffix
-  if (str.endsWith('m')) {
-    return (parseInt(str.slice(0, -1), 10) || 0) * 1_000_000
-  }
-
-  // Plain number = cores
-  const cores = parseFloat(str)
-  if (!isNaN(cores)) {
-    return cores * 1_000_000_000
-  }
-
-  return 0
+  return Math.round(parseQuantityToNumber(cpuString) * 1e9)
 }
 
 /**

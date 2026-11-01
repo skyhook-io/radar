@@ -123,11 +123,35 @@ func TestParseCPU(t *testing.T) {
 		{"188u", 188000},
 		{"250m", 250000000},
 		{"1", 1000000000},
+		{"1.5", 1500000000},
+		{"1k", 1000000000000},
+		{"garbage", 0},
 	}
 
 	for _, tt := range tests {
 		if got := parseCPU(tt.input); got != tt.want {
 			t.Errorf("parseCPU(%q) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseMemory(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"", 0},
+		{"1024", 1024},
+		{"966240Ki", 966240 * 1024},
+		{"1500k", 1500 * 1000},
+		{"1.5Gi", 3 * 512 * 1024 * 1024},
+		{"400m", 1},
+		{"garbage", 0},
+	}
+
+	for _, tt := range tests {
+		if got := parseMemory(tt.input); got != tt.want {
+			t.Errorf("parseMemory(%q) = %d, want %d", tt.input, got, tt.want)
 		}
 	}
 }

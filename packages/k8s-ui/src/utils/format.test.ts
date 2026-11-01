@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseMemoryToBytes, parseQuantityToNumber } from './format'
+import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantityToNumber } from './format'
 
 describe('formatCPUString', () => {
   it('renders exact zero as zero, not a fabricated near-zero', () => {
@@ -167,5 +167,21 @@ describe('relative ages', () => {
     expect(formatRelativeAgeTime(undefined)).toBe('-')
     expect(formatRelativeAgeTime('', '')).toBe('')
     expect(formatRelativeAgeTime('not a time')).toBe('not a time')
+  })
+})
+
+describe('parseCPUToNanocores', () => {
+  it.each([
+    ['', 0],
+    ['2', 2_000_000_000],
+    ['1.5', 1_500_000_000],
+    ['250m', 250_000_000],
+    ['98753000n', 98_753_000],
+    // metrics-server's shortest exact form for the same reading
+    ['98753u', 98_753_000],
+    ['2k', 2_000_000_000_000],
+    ['garbage', 0],
+  ])('%s -> %d', (input, want) => {
+    expect(parseCPUToNanocores(input)).toBe(want)
   })
 })
