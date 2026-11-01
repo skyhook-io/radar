@@ -181,7 +181,10 @@ func omittedCategory(e timeline.TimelineEvent) issuesapi.ChangeCategory {
 	category, _ := classify(e)
 	switch {
 	case category == issuesapi.ChangeCategorySpecConfig:
-		if (e.Kind == "Node" && e.Namespace == "") || isUntrackedCustomResource(e) {
+		if isNodeEvent(e) && e.Namespace == "" && !onlyAutoscalerTaintChanges(e) {
+			return category
+		}
+		if isUntrackedCustomResource(e) {
 			return category
 		}
 	case category == issuesapi.ChangeCategoryLifecycle:
@@ -191,6 +194,46 @@ func omittedCategory(e timeline.TimelineEvent) issuesapi.ChangeCategory {
 		}
 	}
 	return ""
+}
+
+// autoscalerTaints are the taints cluster-autoscaler and Karpenter add and
+// remove as they scale nodes down. History keeps them; they don't name Node in
+// the hint. Readiness taints (not-ready, unreachable) still do.
+var autoscalerTaints = map[string]bool{
+	"ToBeDeletedByClusterAutoscaler":       true,
+	"DeletionCandidateOfClusterAutoscaler": true,
+	"karpenter.sh/disrupted":               true,
+}
+
+// onlyAutoscalerTaintChanges reports a Node row whose every field adds,
+// removes or re-values autoscaler taints.
+func onlyAutoscalerTaintChanges(e timeline.TimelineEvent) bool {
+	if e.Diff == nil || len(e.Diff.Fields) == 0 {
+		return false
+	}
+	for _, f := range e.Diff.Fields {
+		if key, ok := strings.CutPrefix(f.Path, "spec.taints["); ok {
+			if !autoscalerTaints[strings.TrimSuffix(key, "]")] {
+				return false
+			}
+			continue
+		}
+		if f.Path != "spec.taints" {
+			return false
+		}
+		oldKeys, newKeys := stringList(f.OldValue), stringList(f.NewValue)
+		changed := append(subtract(oldKeys, newKeys), subtract(newKeys, oldKeys)...)
+		// A value this can't read as key lists counts, rather than hide a change.
+		if len(changed) == 0 {
+			return false
+		}
+		for _, key := range changed {
+			if !autoscalerTaints[key] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func isUntrackedCustomResource(e timeline.TimelineEvent) bool {

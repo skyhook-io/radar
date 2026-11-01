@@ -10,6 +10,8 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestOmittedKindsNamesChangesTheDefaultFeedLeavesOut(t *testing.T) {
@@ -162,5 +164,64 @@ func TestOmittedKindsGuidanceCapsNames(t *testing.T) {
 	got := OmittedKindsGuidance(many)
 	if want := "This window also has changes to kinds the default feed leaves out: A, B, C, D, E and 2 more. Pass kind=<Kind> to list them."; got != want {
 		t.Fatalf("guidance = %q, want %q", got, want)
+	}
+}
+
+// Autoscaler scale-down taints are routine: a Node row made only of them
+// doesn't name Node in the hint. Readiness taints and real edits still do.
+// Diffs come from the recording layer's Node differ.
+func TestOmittedKindsSkipsAutoscalerTaints(t *testing.T) {
+	node := func(labels map[string]string, taints ...string) *corev1.Node {
+		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker", Labels: labels, CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))}}
+		for _, key := range taints {
+			effect := corev1.TaintEffectNoSchedule
+			if key == "DeletionCandidateOfClusterAutoscaler" {
+				effect = corev1.TaintEffectPreferNoSchedule
+			}
+			n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: key, Value: "1730000000", Effect: effect})
+		}
+		return n
+	}
+	base := node(map[string]string{"team": "a"})
+	for _, tt := range []struct {
+		name  string
+		after *corev1.Node
+		named bool
+	}{
+		{"cluster-autoscaler deletion", node(map[string]string{"team": "a"}, "ToBeDeletedByClusterAutoscaler"), false},
+		{"cluster-autoscaler candidate", node(map[string]string{"team": "a"}, "DeletionCandidateOfClusterAutoscaler"), false},
+		{"karpenter disruption", node(map[string]string{"team": "a"}, "karpenter.sh/disrupted"), false},
+		{"not ready", node(map[string]string{"team": "a"}, "node.kubernetes.io/not-ready"), true},
+		{"autoscaler taint with a label edit", node(map[string]string{"team": "b"}, "ToBeDeletedByClusterAutoscaler"), true},
+		{"label edit", node(map[string]string{"team": "b"}), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			timeline.ResetStore()
+			t.Cleanup(timeline.ResetStore)
+			if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+				t.Fatal(err)
+			}
+			diff := k8s.ComputeDiff("Node", base, tt.after)
+			if diff == nil {
+				t.Fatal("no Node diff recorded")
+			}
+			if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+				ID: "n", Timestamp: time.Now(), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+				Kind: "Node", APIVersion: "v1", Name: "worker", EventType: timeline.EventTypeUpdate, Diff: diff,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			kinds, err := OmittedKinds(context.Background(), Query{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if named := len(kinds) == 1 && kinds[0].Kind == "Node"; named != tt.named {
+				t.Fatalf("Node named = %v, want %v (diff %+v)", named, tt.named, diff.Fields)
+			}
+			// History keeps the row either way.
+			if got, _ := Recent(context.Background(), Query{Kinds: []string{"Node"}}); len(got.Changes) != 1 {
+				t.Fatalf("kind=Node rows = %+v, want the recorded change", got.Changes)
+			}
+		})
 	}
 }
