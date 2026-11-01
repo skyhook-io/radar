@@ -8,8 +8,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/ownership"
-	"github.com/skyhook-io/radar/pkg/topology"
-	"k8s.io/apimachinery/pkg/api/meta"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -20,8 +19,7 @@ const maxStrimziContextFindings = 5
 const maxStrimziContextScan = 500
 
 type strimziContextReader struct {
-	get   func(Ref) (runtime.Object, error)
-	owner func(runtime.Object) *topology.ResourceRef
+	owner func(resourceid.Ref) ownership.OwnerAnswer
 	list  func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error)
 }
 
@@ -33,39 +31,32 @@ func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ow
 	if _, ok := discovery.GetGVRWithGroup("KafkaConnect", strimziGroup); !ok {
 		return nil
 	}
+	runtimeObj, ok := obj.(runtime.Object)
+	if !ok {
+		return nil
+	}
+	fetched, ok := k8s.OwnershipObservation(runtimeObj)
+	if !ok || fetched.UID == "" {
+		return nil
+	}
+	session, err := k8s.BeginOwnershipRead(typed)
+	if err != nil {
+		return nil
+	}
+	current := session.Object(fetched.Ref)
+	if current.State != ownership.Present || current.Object.UID != fetched.UID {
+		return nil
+	}
+	view := ownership.NewView(session, ownerAccess(session.Catalog()))
+	observed := map[resourceid.Ref]ownership.Observation{fetched.Ref: current.Object}
 	reader := strimziContextReader{
-		owner: func(obj runtime.Object) *topology.ResourceRef {
-			fetched, ok := k8s.OwnershipObservation(obj)
-			if !ok {
-				return nil
+		owner: func(ref resourceid.Ref) ownership.OwnerAnswer {
+			answer := view.Owner(ref)
+			if answer.Resolution.State == ownership.OwnerFound {
+				owner := answer.Resolution.Owner
+				observed[owner.Ref] = owner
 			}
-			rel := &topology.Relationships{}
-			k8s.AnswerOwner(rel, fetched, ownerAccess)
-			return rel.Owner
-		},
-		get: func(ref Ref) (runtime.Object, error) {
-			if k8s.TypedKindOwnsGroup(ref.Kind, ref.Group) {
-				if typed == nil {
-					return nil, fmt.Errorf("typed cache is unavailable")
-				}
-				gvr, _ := k8s.BuiltinGVR(ref.Kind, ref.Group)
-				obj, found, readable := typed.ReadableObject(gvr.Resource, ref.Namespace, ref.Name)
-				if !readable || !found {
-					return nil, fmt.Errorf("owner is unavailable in the cache")
-				}
-				copy := obj.DeepCopyObject()
-				k8s.SetTypeMeta(copy)
-				return copy, nil
-			}
-			gvr, ok := discovery.GetGVRWithGroup(ref.Kind, ref.Group)
-			if !ok {
-				return nil, k8s.ErrUnknownDynamicKind
-			}
-			obj, found, readable := dynamic.ReadableObject(gvr, ref.Namespace, ref.Name)
-			if !readable || !found {
-				return nil, fmt.Errorf("owner is unavailable in the cache")
-			}
-			return obj, nil
+			return answer
 		},
 		list: func(namespace string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
 			gvr, ok := discovery.GetGVRWithGroup("KafkaConnector", strimziGroup)
@@ -79,72 +70,39 @@ func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ow
 			return rows, gvr, truncated, err
 		},
 	}
-	runtimeObj, ok := obj.(runtime.Object)
-	if !ok {
-		return nil
-	}
-	m, err := meta.Accessor(runtimeObj)
-	if err != nil || m.GetUID() == "" {
-		return nil
-	}
-	gvk := runtimeObj.GetObjectKind().GroupVersionKind()
-	current, err := reader.get(Ref{Group: gvk.Group, Kind: gvk.Kind, Namespace: m.GetNamespace(), Name: m.GetName()})
-	if err != nil {
-		return nil
-	}
-	currentMeta, err := meta.Accessor(current)
-	if err != nil || currentMeta.GetUID() != m.GetUID() {
-		return nil
-	}
 	out := strimziEvidence(runtimeObj, canRead, reader)
-	if typed != k8s.GetResourceCache() || dynamic != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() || dynamic.IsStopped() {
+	for ref, earlier := range observed {
+		current := session.Object(ref)
+		if current.State != ownership.Present || current.Object.UID != earlier.UID {
+			return nil
+		}
+	}
+	if session.ValidateCaches() != nil || dynamic != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() || dynamic.IsStopped() {
 		return nil
 	}
 	return out
 }
 
 func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziContextReader) *issuesapi.RelatedApplicationFindings {
-	current := obj
+	current, ok := k8s.OwnershipObservation(obj)
+	if !ok || current.UID == "" {
+		return nil
+	}
 	var connect Ref
-	for depth := 0; depth < 6 && current != nil; depth++ {
-		m, err := meta.Accessor(current)
-		if err != nil {
-			return nil
-		}
-		gvk := current.GetObjectKind().GroupVersionKind()
-		if gvk.Group == strimziGroup && gvk.Kind == "KafkaConnect" {
-			connect = Ref{Group: strimziGroup, Kind: "KafkaConnect", Namespace: m.GetNamespace(), Name: m.GetName()}
+	for depth := 0; depth < 6; depth++ {
+		ref := current.Ref
+		if ref.Group == strimziGroup && ref.Kind == "KafkaConnect" {
+			connect = Ref{Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 			break
 		}
-		if gvk.Group == strimziGroup && gvk.Kind == "KafkaConnector" {
+		if ref.Group == strimziGroup && ref.Kind == "KafkaConnector" {
 			return nil
 		}
-		owner := reader.owner(current)
-		if owner == nil {
+		answer := reader.owner(ref)
+		if !answer.Subject.Present() || answer.Subject.Read.Object.UID != current.UID || answer.Resolution.State != ownership.OwnerFound {
 			return nil
 		}
-		ref := Ref{Group: owner.Group, Kind: owner.Kind, Namespace: owner.Namespace, Name: owner.Name}
-
-		parent, err := reader.get(ref)
-		if err != nil || parent == nil {
-			return nil
-		}
-		pm, err := meta.Accessor(parent)
-		if err != nil || pm.GetUID() == "" {
-			return nil
-		}
-		matched := false
-		for _, declared := range m.GetOwnerReferences() {
-			gv, err := schema.ParseGroupVersion(declared.APIVersion)
-			if err == nil && gv.Group == ref.Group && declared.Kind == ref.Kind && declared.Name == ref.Name && declared.UID == pm.GetUID() {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return nil
-		}
-		current = parent
+		current = answer.Resolution.Owner
 	}
 	if connect.Name == "" || canRead != nil && !canRead(connect) {
 		return nil

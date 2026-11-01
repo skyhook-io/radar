@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -83,9 +85,16 @@ func TestCachedStrimziEvidenceReadsCurrentAuthorizedOwnerChain(t *testing.T) {
 					t.Fatal("fixture cache not synchronized")
 				}
 			}
-			access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+			accessCalls := 0
+			access := func(*ownership.Catalog) ownership.Access {
+				accessCalls++
+				return ownership.Unrestricted()
+			}
 			if got := CachedStrimziEvidence(pod, nil, access); got == nil || len(got.Findings) != 1 || got.Source.Name != "connect" {
 				t.Fatalf("cached owner chain lost: %+v", got)
+			}
+			if accessCalls != 1 {
+				t.Fatalf("owner walk opened %d caller sessions, want one", accessCalls)
 			}
 			restricted := func(*ownership.Catalog) ownership.Access {
 				return strimziOwnerAccess{Access: ownership.Unrestricted(), denied: denied}
@@ -100,6 +109,36 @@ func TestCachedStrimziEvidenceReadsCurrentAuthorizedOwnerChain(t *testing.T) {
 			}
 			if got := CachedStrimziEvidence(connector, nil, access); got != nil {
 				t.Fatal("direct connector invented unavailable related findings")
+			}
+			connectGVR := schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnects"}
+			replaceRoot := func(ref Ref) bool {
+				if ref.Kind != "KafkaConnector" {
+					return true
+				}
+				replacement := connect.DeepCopy()
+				replacement.SetUID("replacement-during-collection")
+				if _, err := client.Resource(connectGVR).Namespace("app").Update(t.Context(), replacement, metav1.UpdateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				if err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, 2*time.Second, true, func(context.Context) (bool, error) {
+					current, found, readable := cache.ReadableObject(connectGVR, "app", "connect")
+					return readable && found && current.GetUID() == replacement.GetUID(), nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return true
+			}
+			if got := CachedStrimziEvidence(pod, replaceRoot, access); got != nil {
+				t.Fatal("root replaced during connector inspection retained findings")
+			}
+			if _, err := client.Resource(connectGVR).Namespace("app").Update(t.Context(), connect, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, 2*time.Second, true, func(context.Context) (bool, error) {
+				current, found, readable := cache.ReadableObject(connectGVR, "app", "connect")
+				return readable && found && current.GetUID() == connect.GetUID(), nil
+			}); err != nil {
+				t.Fatal(err)
 			}
 			switchCache := func(Ref) bool { k8s.ResetTestDynamicState(); return true }
 			if got := CachedStrimziEvidence(connect, switchCache, access); got != nil {

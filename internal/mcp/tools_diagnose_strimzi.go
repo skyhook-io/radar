@@ -8,7 +8,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -58,8 +57,10 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 		OperatorSnapshot: issues.AssessStrimziSnapshot(gvr, obj),
 		Coverage:         "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
 		Resource:         map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
-		ResourceContext:  &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })},
+		ResourceContext:  buildMCPResourceContext(ctx, obj, kind, input.Namespace, input.Name, resourcecontext.TierBasic, nil),
 	}
+	// Generic condition messages may contain credentials or exception traces.
+	resp.ResourceContext.StatusSummary = nil
 	if kind == "KafkaConnector" {
 		resp.RelatedIssues = issues.StrimziConnectorIssues(gvr, obj)
 	}

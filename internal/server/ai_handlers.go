@@ -578,7 +578,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }),
 		Reflections:                k8s.ReflectionLookup{Cache: cache},
 		Tier:                       resourcecontext.TierBasic,
 		AccessChecker:              s.newRequestScopedChecker(r),

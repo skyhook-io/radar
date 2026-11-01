@@ -10,7 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
-	"github.com/skyhook-io/radar/pkg/topology"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,9 +27,9 @@ func contextConnector(ns, name, cluster string) *unstructured.Unstructured {
 	u.Object["status"] = map[string]any{"observedGeneration": int64(1), "connectorStatus": map[string]any{"connector": map[string]any{"state": "RUNNING"}, "tasks": []any{map[string]any{"id": int64(0), "state": "FAILED", "trace": "secret-do-not-emit"}}}}
 	return u
 }
-func contextOwnerResolver(t *testing.T, objects ...runtime.Object) func(runtime.Object) *topology.ResourceRef {
+func contextOwnerResolver(t *testing.T, objects ...runtime.Object) func(resourceid.Ref) ownership.OwnerAnswer {
 	t.Helper()
-	return func(subject runtime.Object) *topology.ResourceRef {
+	return func(subject resourceid.Ref) ownership.OwnerAnswer {
 		world := ownershiptest.World{}
 		for _, obj := range objects {
 			observed, ok := k8s.OwnershipObservation(obj)
@@ -44,10 +44,7 @@ func contextOwnerResolver(t *testing.T, objects ...runtime.Object) func(runtime.
 		if err != nil {
 			t.Fatal(err)
 		}
-		observed, _ := k8s.OwnershipObservation(subject)
-		rel := &topology.Relationships{}
-		topology.ApplyOwner(rel, ownership.NewView(session, ownership.Unrestricted()), observed)
-		return rel.Owner
+		return ownership.NewView(session, ownership.Unrestricted()).Owner(subject)
 	}
 }
 
@@ -100,7 +97,7 @@ func TestStrimziContextOwnerUIDAndMissing(t *testing.T) {
 	pod.SetAPIVersion("v1")
 	yes := false
 	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "kafka.strimzi.io/v1", Kind: "KafkaConnect", Name: "connect", UID: types.UID("connect-uid"), Controller: &yes}})
-	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, connect), get: func(Ref) (runtime.Object, error) { return connect, nil }, list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, connect), list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
 		return nil, schema.GroupVersionResource{}, false, fmt.Errorf("not watched")
 	}}
 	if out := strimziEvidence(pod, nil, reader); out == nil || out.Coverage == "" {
@@ -114,7 +111,7 @@ func TestStrimziContextOwnerUIDAndMissing(t *testing.T) {
 	if out := strimziEvidence(pod, func(Ref) bool { return false }, reader); out != nil {
 		t.Fatal("denied owner exposed")
 	}
-	reader.get = func(Ref) (runtime.Object, error) { return nil, fmt.Errorf("not watched") }
+	reader.owner = contextOwnerResolver(t, pod)
 	if out := strimziEvidence(pod, nil, reader); out != nil {
 		t.Fatal("unwatched owner guessed")
 	}
@@ -200,16 +197,7 @@ func TestStrimziContextModernOwnerChain(t *testing.T) {
 	pod := contextStrimzi("Pod", "app", "worker")
 	pod.SetAPIVersion("v1")
 	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: podset.GetAPIVersion(), Kind: "StrimziPodSet", Name: "workers", UID: podset.GetUID(), Controller: &yes}})
-	refs := map[Ref]runtime.Object{
-		{Group: "core.strimzi.io", Kind: "StrimziPodSet", Namespace: "app", Name: "workers"}: podset,
-		{Group: strimziGroup, Kind: "KafkaConnect", Namespace: "app", Name: "connect"}:       connect,
-	}
-	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, podset, connect), get: func(ref Ref) (runtime.Object, error) {
-		if obj, ok := refs[ref]; ok {
-			return obj, nil
-		}
-		return nil, fmt.Errorf("not watched")
-	}, list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, podset, connect), list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
 		return []*unstructured.Unstructured{contextConnector("app", "sink", "connect")}, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
 	}}
 	if got := strimziEvidence(pod, nil, reader); got == nil || len(got.Findings) != 1 {

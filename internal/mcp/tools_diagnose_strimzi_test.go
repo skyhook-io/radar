@@ -11,6 +11,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -67,7 +68,7 @@ func TestStrimziDiagnoseOmitsParentConditionMessages(t *testing.T) {
 		"status":   map[string]any{"observedGeneration": int64(1), "conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed", "message": "raw-condition-sentinel\nexception trace"}}},
 	}}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "KafkaConnectList"}, obj)
-	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnect", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnect", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
@@ -105,7 +106,7 @@ func TestStrimziDiagnoseCacheMissDoesNotInventAbsence(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	gvr := schema.GroupVersionResource{Group: "kafka.strimzi.io", Version: "v1", Resource: "kafkaconnects"}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "KafkaConnectList"})
-	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnect", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnect", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
@@ -160,7 +161,7 @@ func TestStrimziDiagnoseSnapshotAndIssuesAgree(t *testing.T) {
 		}})
 	}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "KafkaConnectorList"}, objects...)
-	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnector", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnector", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
@@ -184,9 +185,13 @@ func TestStrimziDiagnoseSnapshotAndIssuesAgree(t *testing.T) {
 			var body struct {
 				OperatorSnapshot issues.StrimziSnapshotAssessment `json:"operatorSnapshot"`
 				RelatedIssues    []issues.Issue                   `json:"relatedIssues"`
+				ResourceContext  *resourcecontext.ResourceContext `json:"resourceContext"`
 			}
 			if err := json.Unmarshal([]byte(raw), &body); err != nil {
 				t.Fatal(err)
+			}
+			if body.ResourceContext == nil || body.ResourceContext.Manager == nil {
+				t.Fatalf("diagnosis omitted management assessment: %s", raw)
 			}
 			if body.OperatorSnapshot.State != tc.want || (len(body.RelatedIssues) > 0) != tc.issue {
 				t.Fatalf("snapshot and findings: %s", raw)
