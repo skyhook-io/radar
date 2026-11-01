@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -727,6 +728,85 @@ func TestPodAliasRepairsPlainNamesOnly(t *testing.T) {
 		_ = json.Unmarshal(fixed, &got)
 		if fixedOK := got["name"] == tt.val; fixedOK != tt.wantFixed {
 			t.Errorf("pod=%q: name set = %v, want %v (repairs %v)", tt.val, fixedOK, tt.wantFixed, repairs)
+		}
+	}
+}
+
+func TestEnumCaseRepairUsesThePublishedEnum(t *testing.T) {
+	registerToolsOnce(t)
+	cases := []struct {
+		name, tool, args, want string
+		repaired               bool
+	}{
+		{"lowercase kind", "get_rightsizing", `{"scope":"workload","kind":"deployment","namespace":"shop","name":"web"}`, `"kind":"Deployment"`, true},
+		{"uppercase kind", "get_rightsizing", `{"scope":"workload","kind":"STATEFULSET","namespace":"shop","name":"db"}`, `"kind":"StatefulSet"`, true},
+		{"scope case", "get_rightsizing", `{"scope":"Cluster"}`, `"scope":"cluster"`, true},
+		{"cost view", "get_cost", `{"view":"Summary"}`, `"view":"summary"`, true},
+		{"already valid", "get_rightsizing", `{"scope":"workload","kind":"Deployment","namespace":"shop","name":"web"}`, `"kind":"Deployment"`, false},
+		{"plural is not a case variant", "get_rightsizing", `{"scope":"workload","kind":"deployments","namespace":"shop","name":"web"}`, `"kind":"deployments"`, false},
+		{"tool without enums", "get_events", `{"type":"WARNING"}`, `"type":"WARNING"`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixed, repairs, _ := repairToolArgs(tc.tool, json.RawMessage(tc.args))
+			if tc.repaired != (len(repairs) > 0) {
+				t.Fatalf("repairs = %v, want repaired=%v", repairs, tc.repaired)
+			}
+			if !strings.Contains(string(fixed), tc.want) {
+				t.Fatalf("args = %s, want %s", fixed, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnumCaseRepairRefusesAmbiguousValues(t *testing.T) {
+	enums := map[string][]string{"mode": {"Fast", "fast", "Slow"}}
+	args := map[string]json.RawMessage{"mode": json.RawMessage(`"FAST"`)}
+	var repairs []string
+	repairEnumCase(enums, args, &repairs)
+	if len(repairs) != 0 || string(args["mode"]) != `"FAST"` {
+		t.Fatalf("ambiguous value was rewritten: %s (%v)", args["mode"], repairs)
+	}
+}
+
+// The repaired value must reach the handler: the SDK validates against the
+// enum after the middleware runs, so a lowercase kind fails without the repair.
+func TestMiddlewareDeliversEnumCaseRepairToHandler(t *testing.T) {
+	type in struct {
+		Kind string `json:"kind"`
+	}
+	schema, err := jsonschema.For[in](nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema.Properties["kind"].Enum = []any{"Deployment", "StatefulSet", "DaemonSet"}
+
+	for _, repair := range []bool{false, true} {
+		registry := newToolParamRegistry()
+		server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar-test", Version: "test"}, nil)
+		if repair {
+			server.AddReceivingMiddleware(paramRepairMiddlewareFor(registry))
+		}
+		var got string
+		addToolWithRegistry(registry, server, &mcpsdk.Tool{Name: "enum_tool", InputSchema: schema},
+			func(_ context.Context, _ *mcpsdk.CallToolRequest, v in) (*mcpsdk.CallToolResult, any, error) {
+				got = v.Kind
+				return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "ok"}}}, nil, nil
+			})
+		res, err := connectTo(t, server).CallTool(context.Background(), &mcpsdk.CallToolParams{
+			Name: "enum_tool", Arguments: map[string]any{"kind": "deployment"},
+		})
+		if err != nil {
+			t.Fatalf("repair=%v: CallTool: %v", repair, err)
+		}
+		if !repair {
+			if !res.IsError {
+				t.Fatal("without repair the SDK accepted a value outside the enum; this test no longer proves anything")
+			}
+			continue
+		}
+		if res.IsError || got != "Deployment" {
+			t.Fatalf("handler got kind %q (error=%v: %s), want Deployment", got, res.IsError, renderContent(res.Content))
 		}
 	}
 }
