@@ -224,7 +224,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
 	diagnoseDescription := "Get a bounded, point-in-time evidence bundle for one narrowed workload, " +
-		"GitOps reconciler or network entry. Combines signals in one round-trip; " +
+		"GitOps reconciler, Strimzi connector or network entry. Combines signals in one round-trip; " +
 		"it does not run an agent and is not an authoritative root-cause verdict or an exhaustive account. " +
 		"Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, GitOps sync/health, " +
 		"or traffic not reaching a service, route or ingress. Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout " +
@@ -238,7 +238,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"`auditSummary.highestSeverity` uses static-posture critical|high|medium|low (built-ins high|medium), " +
 		"unlike live `issueSummary` critical|warning. `application_configuration_change: true` classifies an edit; " +
 		"it is not a causal or universal relevance verdict. Application, Kustomization and Flux HelmRelease return " +
-		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
+		"status and parsed issues; no logs. " +
+		"KafkaConnector and KafkaConnect (group=kafka.strimzi.io) return cached curated operator findings, not configuration, logs or application endpoint reads. " +
+		"Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
 		"API-server proxy reached it, not the live path. Point-in-time means frozen from this call, " +
 		"not that every source was read atomically; preserve collection limits, errors, timestamps, and confidence. " +
@@ -1352,14 +1354,15 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          tier,
-		AccessChecker: newMCPRequestScopedChecker(ctx),
-		IssueSummary:  issueSummary,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, tier),
-		Execution:     executioninsight.ForResource(obj, tier),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }),
+		Reflections:                k8s.ReflectionLookup{Cache: cache},
+		Tier:                       tier,
+		AccessChecker:              newMCPRequestScopedChecker(ctx),
+		IssueSummary:               issueSummary,
+		AuditSummary:               auditSum,
+		Scheduling:                 schedulinginsight.ForResource(obj, tier),
+		Execution:                  executioninsight.ForResource(obj, tier),
+		Serving:                    servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),

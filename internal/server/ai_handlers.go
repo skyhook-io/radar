@@ -578,14 +578,15 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }),
+		Reflections:                k8s.ReflectionLookup{Cache: cache},
+		Tier:                       resourcecontext.TierBasic,
+		AccessChecker:              s.newRequestScopedChecker(r),
+		IssueSummary:               issueSum,
+		AuditSummary:               auditSum,
+		Scheduling:                 schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
+		Execution:                  executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:                    servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),

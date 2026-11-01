@@ -52,6 +52,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -2992,9 +2993,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.writeJSON(w, topology.ResourceWithRelationships{
-			Resource:      resource,
-			Relationships: relationships,
-			HPADiagnosis:  hpaDiagnosisFor(resource),
+			RelatedApplicationFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
+			Resource:                   resource,
+			Relationships:              relationships,
+			HPADiagnosis:               hpaDiagnosisFor(resource),
 		})
 		return
 	}
@@ -3225,9 +3227,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// Pass the already-fetched resource so ManagedBy synthesis uses the
 	// authoritative object instead of a group-blind kind/name lookup.
 	response := topology.ResourceWithRelationships{
-		Resource:      resource,
-		Relationships: s.relationshipsFor(r, kind, namespace, name, resource),
-		HPADiagnosis:  hpaDiagnosisFor(resource),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
+		Resource:                   resource,
+		Relationships:              s.relationshipsFor(r, kind, namespace, name, resource),
+		HPADiagnosis:               hpaDiagnosisFor(resource),
 	}
 
 	// Enrich TLS secrets with parsed certificate info

@@ -330,6 +330,7 @@ export function adaptDiagnose(
     source.confirmedSuccess &&
     related.length === 0 &&
     relatedValid &&
+    context?.relatedApplicationFindings === undefined &&
     isDiagnosableWorkloadKind(resource.kind)
   ) {
     const scope = scopeFromArgs(source);
@@ -357,6 +358,42 @@ export function adaptDiagnose(
     related.some((item) => item.severity === "critical"),
     bundleRelevance,
   );
+
+  if (
+    apiVersionToGroup(resource.apiVersion) === "kafka.strimzi.io" &&
+    (resource.kind === "KafkaConnector" || resource.kind === "KafkaConnect")
+  ) {
+    const snapshot = record(value.operatorSnapshot);
+    if (
+      !snapshot ||
+      !["observed", "failing", "recovered", "unknown"].includes(
+        String(snapshot.state),
+      ) ||
+      typeof snapshot.generationCurrent !== "boolean"
+    ) {
+      invalidPayload(builder, source, "Operator snapshot");
+    } else if (snapshot.state === "unknown") {
+      builder.limit(
+        source,
+        "Operator snapshot",
+        `Operator status is unverifiable: ${nonEmptyString(snapshot.reason) ? snapshot.reason : "unknown"}. Missing findings do not establish application health.`,
+        "unknown",
+      );
+    } else if (
+      resource.kind === "KafkaConnector" &&
+      source.confirmedSuccess &&
+      snapshot.state === "recovered" &&
+      snapshot.generationCurrent === true
+    ) {
+      builder.connectorRecoveryBySource.set(source.id, {
+        group: "kafka.strimzi.io",
+        kind: "KafkaConnector",
+        namespace: resource.metadata.namespace,
+        name: resource.metadata.name,
+      });
+    }
+    return;
+  }
 
   if (Array.isArray(blockersRaw)) {
     for (const { blocker, pods, foldedInto } of blockerGroups) {

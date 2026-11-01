@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 type Severity string
@@ -889,4 +890,15 @@ var CELBindings = []CELBinding{
 	{Name: "issue_timing_basis", Type: BindingString},
 	{Name: "operation_retry_count", Type: BindingInt},
 	{Name: "stuck", Type: BindingBool},
+}
+
+// RelatedApplicationFindings links canonical source findings without changing the subject's health.
+type RelatedApplicationFindings struct {
+	Gaps      []resourceapi.Gap `json:"gaps"`
+	Checked   int               `json:"checked"`
+	Unknown   int               `json:"unknown"`
+	Source    Ref               `json:"source"`
+	Findings  []Issue           `json:"findings,omitempty"`
+	Coverage  string            `json:"coverage"`
+	Truncated bool              `json:"truncated,omitempty"`
 }

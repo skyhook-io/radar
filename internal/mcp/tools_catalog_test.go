@@ -262,8 +262,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Rollback guidance, its source-mode warning and sync_options
-		// inheritance: 66,869 bytes without exec.
-		maxCatalogBytes         = 66900
+		// inheritance: 66,869 bytes without exec. Application evidence adds 908
+		// bytes and Strimzi routing adds 243; retain the existing 31-byte headroom.
+		maxCatalogBytes         = 68051
 		maxToolDescriptionBytes = 3200
 	)
 
