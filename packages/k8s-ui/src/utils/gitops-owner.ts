@@ -39,6 +39,23 @@ export function gitOpsOwnerFromRelationships(
   return gitOpsOwnerFromRef(refs[0])
 }
 
+/**
+ * The Argo CD object that rewrites an Application's spec, and so can turn its
+ * auto-sync back on after a suspend: the ApplicationSet that owns it, else the
+ * Application that manages it from Git.
+ */
+export function argoAutoSyncController(
+  rel: Relationships | undefined | null,
+  self: { namespace: string; name: string },
+): { kind: 'ApplicationSet' | 'Application'; name: string } | null {
+  const appSet = [rel?.owner, ...(rel?.owners ?? [])].find(ref => ref?.kind === 'ApplicationSet' && ref.group === ARGO_APPLICATION_GROUP)
+  if (appSet) return { kind: 'ApplicationSet', name: appSet.name }
+  const parent = gitOpsOwnerFromRelationships(rel)
+  return parent?.tool === 'argocd' && !(parent.namespace === self.namespace && parent.name === self.name)
+    ? { kind: 'Application', name: parent.name }
+    : null
+}
+
 /** A manager ref (relationships.managedBy, a workspace's managedBy) as a GitOps owner, or null when the manager is not a GitOps controller. */
 export function gitOpsOwnerFromRef(ref: ResourceRef): GitOpsOwnerRef | null {
   switch (true) {

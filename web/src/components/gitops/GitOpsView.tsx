@@ -29,6 +29,7 @@ import {
   isDestinationRef,
   isArgoAutoSyncEnabled,
   isArgoAutoSyncSwitchedOff,
+  argoAutoSyncController,
   argoResumeSettings,
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
@@ -712,6 +713,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     isRunning,
     operationInProgress,
     resumeUpgrade: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeUpgrade : null,
+    autoSyncController: argoAutoSyncController(resourceQ.relationships, { namespace, name }),
     resumeSettings: argoResumeSettings(resourceQ.data, argoInheritanceSupport === 'unknown' ? undefined : argoInheritanceSupport === 'supported'),
     resumeBlockedReason: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeBlockedReason : undefined,
   } : undefined
