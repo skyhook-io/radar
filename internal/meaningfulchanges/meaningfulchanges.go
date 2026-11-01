@@ -647,7 +647,11 @@ var (
 // queryCandidates reads up to bound of the newest matching rows and reports
 // whether the window held more: it asks for one extra row, which it drops.
 // Tracked-source queries filter groups before the limit where possible.
-// Explicit user filters also admit custom resources, including owned ones.
+// Explicit user filters also admit custom resources, including owned ones,
+// and owned Nodes. Other owned built-ins (Pods, ReplicaSets, Endpoints) stay
+// out even then: they are derived copies whose churn would crowd the rows
+// asked for. A Node's owner (Karpenter's NodeClaim) manages the machine, and
+// the Node's taints and labels are its own configuration.
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
 	includeCustom := !q.TrackedOnly && (len(q.Kinds) > 0 || q.Name != "")
@@ -719,7 +723,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 	// that prefix follow it in their original order.
 	merged := make([]timeline.TimelineEvent, 0, len(events)+len(custom))
 	for _, e := range custom {
-		if isCustomResourceEvent(e) || trackedIDs[e.ID] {
+		if isCustomResourceEvent(e) || isNodeEvent(e) || trackedIDs[e.ID] {
 			merged = append(merged, e)
 		}
 	}
@@ -772,6 +776,12 @@ func filterTrackedGroupEvents(events []timeline.TimelineEvent) []timeline.Timeli
 		}
 	}
 	return out
+}
+
+// isNodeEvent reports a core Node row; an unrecorded apiVersion is taken as
+// core, as eventGroupMatchesTracked does.
+func isNodeEvent(e timeline.TimelineEvent) bool {
+	return e.Kind == "Node" && (e.APIVersion == "" || resourceid.GroupFromAPIVersion(e.APIVersion) == "")
 }
 
 func isCustomResourceEvent(e timeline.TimelineEvent) bool {
@@ -1592,6 +1602,8 @@ func canonicalKind(kind string) string {
 		return "HorizontalPodAutoscaler"
 	case "pod", "pods":
 		return "Pod"
+	case "no", "node", "nodes":
+		return "Node"
 	case "application", "applications":
 		return "Application"
 	case "kustomization", "kustomizations":
