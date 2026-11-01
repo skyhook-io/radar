@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantityToNumber } from './format'
+import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantity, parseQuantityToNumber } from './format'
 
 describe('formatCPUString', () => {
   it('renders exact zero as zero, not a fabricated near-zero', () => {
@@ -175,6 +175,8 @@ describe('parseCPUToNanocores', () => {
     ['', 0],
     ['2', 2_000_000_000],
     ['1.5', 1_500_000_000],
+    ['.5', 500_000_000],
+    ['1.', 1_000_000_000],
     ['250m', 250_000_000],
     ['98753000n', 98_753_000],
     // metrics-server's shortest exact form for the same reading
@@ -183,5 +185,23 @@ describe('parseCPUToNanocores', () => {
     ['garbage', 0],
   ])('%s -> %d', (input, want) => {
     expect(parseCPUToNanocores(input)).toBe(want)
+  })
+})
+
+describe('parseQuantity', () => {
+  it.each([
+    ['+1Gi', 1024 ** 3],
+    ['.5Ki', 512],
+    ['-.5', -0.5],
+    ['1.e3', 1000],
+    ['0', 0],
+  ])('%s -> %d', (input, want) => {
+    expect(parseQuantity(input)).toBe(want)
+    expect(parseMemoryToBytes(input)).toBe(want)
+  })
+
+  it.each(['', 'abcMi', '.', '1.2.3', '5Xi', null, undefined])('cannot read %s', (input) => {
+    expect(parseQuantity(input)).toBeNull()
+    expect(parseQuantityToNumber(input)).toBe(0)
   })
 })

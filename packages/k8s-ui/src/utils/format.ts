@@ -99,55 +99,7 @@ export function formatMemoryBytes(bytes: number): string {
  * @returns Memory in bytes
  */
 export function parseMemoryToBytes(memString: string): number {
-  if (!memString) return 0
-
-  const str = memString.trim()
-  // Decimal-exponent form ("1e9") is decided before the suffix table, as in
-  // parseQuantityToNumber, so "1E3" reads as 1000 and not as exa.
-  if (/^[+-]?\d+(?:\.\d+)?[eE][+-]?\d+$/.test(str)) return Number(str)
-
-  const match = str.match(/^(-?\d+(?:\.\d+)?)\s*([A-Za-z]*)$/)
-  if (!match) return 0
-
-  const num = parseFloat(match[1])
-  const suffix = match[2]
-
-  // Binary suffixes (powers of 1024). Pi/Ei are real inputs at cluster scale —
-  // an aggregate of a thousand 1TiB nodes serializes as "1Pi".
-  const binarySuffixes: Record<string, number> = {
-    'Ki': 1024,
-    'Mi': 1024 ** 2,
-    'Gi': 1024 ** 3,
-    'Ti': 1024 ** 4,
-    'Pi': 1024 ** 5,
-    'Ei': 1024 ** 6,
-  }
-
-  // Decimal suffixes (powers of 1000). The sub-unit ones are real inputs too:
-  // a request written as "1288490188800m" is valid, and a sum that includes one
-  // keeps the milli scale, so a whole cluster's total serializes with "m".
-  const decimalSuffixes: Record<string, number> = {
-    'n': 1000 ** -3,
-    'u': 1000 ** -2,
-    'm': 1000 ** -1,
-    'k': 1000,
-    'K': 1000,
-    'M': 1000 ** 2,
-    'G': 1000 ** 3,
-    'T': 1000 ** 4,
-    'P': 1000 ** 5,
-    'E': 1000 ** 6,
-  }
-
-  if (suffix in binarySuffixes) {
-    return num * binarySuffixes[suffix]
-  }
-  if (suffix in decimalSuffixes) {
-    return num * decimalSuffixes[suffix]
-  }
-
-  // No suffix = bytes
-  return num
+  return parseQuantityToNumber(memString)
 }
 
 /**
@@ -206,32 +158,46 @@ const QUANTITY_SUFFIXES: Record<string, number> = {
  * @returns The value as a number, or 0 when it cannot be parsed
  */
 export function parseQuantityToNumber(quantity: string | number | null | undefined): number {
-  if (typeof quantity === 'number') return Number.isFinite(quantity) ? quantity : 0
-  if (!quantity) return 0
+  return parseQuantity(quantity) ?? 0
+}
+
+// A Quantity's number: optional sign, then digits with an optional fraction,
+// where either side of the point may be empty ("1.", ".5") but not both.
+const QUANTITY_NUMBER = String.raw`[+-]?(?:\d+(?:\.\d*)?|\.\d+)`
+const QUANTITY_EXPONENT_RE = new RegExp(`^(${QUANTITY_NUMBER})[eE]([+-]?\\d+)$`)
+const QUANTITY_SUFFIX_RE = new RegExp(`^(${QUANTITY_NUMBER})\\s*([A-Za-z]*)$`)
+
+/**
+ * Like parseQuantityToNumber, but null when the input is missing or cannot be
+ * parsed, for callers that must tell garbage apart from a real 0.
+ */
+export function parseQuantity(quantity: string | number | null | undefined): number | null {
+  if (typeof quantity === 'number') return Number.isFinite(quantity) ? quantity : null
+  if (quantity == null) return null
 
   const str = String(quantity).trim()
-  if (!str) return 0
+  if (!str) return null
 
   // Decimal-exponent form. A Quantity's suffix is either an SI suffix or an
   // exponent, never both, so this is decided before the suffix table — which
   // also keeps "1E3" (1000) from being read as exa (1e18).
-  const exponent = str.match(/^([+-]?\d+(?:\.\d+)?)[eE]([+-]?\d+)$/)
+  const exponent = str.match(QUANTITY_EXPONENT_RE)
   if (exponent) {
     const value = Number(`${exponent[1]}e${exponent[2]}`)
-    return Number.isFinite(value) ? value : 0
+    return Number.isFinite(value) ? value : null
   }
 
-  const match = str.match(/^([+-]?\d+(?:\.\d+)?)\s*([A-Za-z]*)$/)
-  if (!match) return 0
+  const match = str.match(QUANTITY_SUFFIX_RE)
+  if (!match) return null
 
   const num = parseFloat(match[1])
-  if (!Number.isFinite(num)) return 0
+  if (!Number.isFinite(num)) return null
 
   const suffix = match[2]
   if (!suffix) return num
 
   const multiplier = QUANTITY_SUFFIXES[suffix]
-  return multiplier === undefined ? 0 : num * multiplier
+  return multiplier === undefined ? null : num * multiplier
 }
 
 // =============================================================================
