@@ -5,6 +5,8 @@ import { SelectMenu } from '@skyhook-io/k8s-ui/components/ui/SelectMenu'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { TimeValue } from '@skyhook-io/k8s-ui/components/ui/ScheduleValue'
+import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
+import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { ApiError, fetchJSON, useClusterInfo, useCapabilities, useRadarFeature } from '../../api/client'
 import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidate, type EvidenceCandidates } from '../../api/application-evidence'
 
@@ -135,8 +137,8 @@ function EvidenceDialog({ open, data, currentData, refreshing, onClose, onTarget
       <p className="mt-2 text-sm text-theme-text-secondary">Collects: {candidate.expectedEvidence.join(', ')}.</p>
       <p className="mt-1 text-xs text-theme-text-tertiary">{candidate.coverage}</p>
     </> : <p className="mt-2 text-sm text-theme-text-secondary">{refreshing ? 'Refreshing available Pods…' : choices.candidates.length > 0 ? 'Select a current Pod before collecting again.' : <>A current Pod endpoint has not been verified. <button type="button" className="text-accent-text hover:underline" onClick={onTargetChanged}>Refresh Pod choices</button></>}</p>}
-    {(choices.truncated || choices.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">Discovery or permission limits may exclude endpoints. Collection covers only the selected Pod.</p>}
-    <p className="mt-2 text-xs text-theme-text-tertiary">Collection may be unavailable if the endpoint requires credentials or cannot be reached. Results describe this Pod at collection time.</p>
+    {(choices.truncated || choices.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">Discovery or permission limits may exclude endpoints. To inspect another endpoint, open that Pod directly.</p>}
+    <p className="mt-2 text-xs text-theme-text-tertiary">Requires a reachable default plaintext endpoint; credentials, TLS and custom ports are not supported.</p>
     {error && <div role="alert" className="mt-4"><AlertBanner variant="error" title="Could not complete the request" message={error} /></div>}
     {result && <ApplicationEvidenceObservation result={result} />}
     <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -154,16 +156,20 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
   return <section aria-label="Application observations" className="card-inner mt-4 p-3 text-sm text-theme-text-primary">
     <h3 className="font-semibold">{result.outcome === 'observed' ? 'Endpoint observations' : 'Evidence unavailable'}</h3>
     <p className="mt-1 break-all text-xs text-theme-text-secondary">{result.target.namespace}/{result.target.pod}{result.target.container && ` · ${result.target.container}`}</p>
-    <p className="mt-1 text-xs text-theme-text-tertiary"><TimeValue timestamp={result.observedAt} /> · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · HTTP ${result.httpStatus}`}</p>
+    <p className="mt-1 text-xs text-theme-text-tertiary"><TimeValue timestamp={result.observedAt} /> · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · Endpoint status: HTTP ${result.httpStatus}`}</p>
+    {facts && <p className="mt-2 text-xs text-theme-text-secondary">This Pod at collection time; other replicas were not checked.</p>}
     {result.reason && <p className="mt-2">{unavailableReasons[result.reason] ?? `Collection unavailable (${result.reason}).`} No conclusion about application health can be drawn from unavailable evidence.</p>}
     {facts?.rabbitmq && <dl className="mt-3 grid grid-cols-2 gap-2"><dt>Disk alarm</dt><dd>{facts.rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd><dt>Memory alarm</dt><dd>{facts.rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd></dl>}
+    {facts?.rabbitmq && <p className="mt-2 text-xs text-theme-text-secondary">An alarm on another node can block publishers across the cluster.</p>}
     {vault && <dl className="mt-3 grid grid-cols-2 gap-2">{Object.entries(vault).filter(([key]) => key === 'initialized' || key === 'sealed' || vault.initialized && !vault.sealed).map(([key, value]) => <div key={key} className="contents"><dt>{vaultNames[key]}</dt><dd>{value ? 'Yes' : 'No'}</dd></div>)}</dl>}
     {nats && <div className="mt-3 space-y-2">
       <p>JetStream: {nats.jetStreamEnabled ? 'Enabled' : 'Disabled'}</p>
-      <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {nats.returnedAccounts} accounts · {nats.returnedStreams} streams · {nats.returnedConsumers} consumers returned{nats.truncated ? ' · Truncated' : ''}</p>
-      {nats.totals && <p>Node reports {nats.totals.messages} messages across {nats.totals.streams} streams and {nats.totals.consumers} consumers.</p>}
+      <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {pluralize(nats.returnedAccounts, 'account')} · {pluralize(nats.returnedStreams, 'stream')} · {pluralize(nats.returnedConsumers, 'consumer')} returned{nats.truncated ? ' · Truncated' : ''}</p>
+      {nats.totals && <p>Node reports {pluralize(nats.totals.messages, 'message')} across {pluralize(nats.totals.streams, 'stream')} and {pluralize(nats.totals.consumers, 'consumer')}.</p>}
       {nats.consumers.length > 0 && <div className="overflow-x-auto"><table className="w-full min-w-[480px] text-left text-xs"><thead><tr><th className="pr-3">Account / stream / consumer</th><th className="pr-3">Pending</th><th className="pr-3">Ack pending</th><th>Redelivered</th></tr></thead><tbody>{nats.consumers.map(item => <tr key={JSON.stringify([item.account, item.stream, item.name])}><td className="py-2 pr-3 break-all">{item.account} / {item.stream} / {item.name}</td><td>{item.pending}</td><td>{item.ackPending}</td><td>{item.redelivered}</td></tr>)}</tbody></table></div>}
     </div>}
-    <ul className="mt-3 space-y-1 text-xs text-theme-text-secondary">{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>
+    {result.limitations.length > 0 && <Disclosure summary="Collection limits" className="mt-3" summaryClassName="text-xs text-theme-text-secondary">
+      <ul className="mt-2 space-y-1 text-xs text-theme-text-secondary">{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>
+    </Disclosure>}
   </section>
 }

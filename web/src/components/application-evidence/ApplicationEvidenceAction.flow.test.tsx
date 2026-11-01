@@ -6,6 +6,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { guardRadarFeature, radarFeatureSupport } from '../../api/radarFeatures'
 import { ApiError } from '../../api/client'
 import { ApplicationEvidenceAction } from './ApplicationEvidenceAction'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
+
+vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: vi.fn().mockResolvedValue(true) }))
 
 const state = vi.hoisted(() => ({ fetch: vi.fn(), supported: true, ApiError: class extends Error { constructor(message: string, readonly status: number) { super(message) } } }))
 vi.mock('../../api/client', () => ({
@@ -30,6 +33,25 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 })
 afterEach(() => { act(() => root.unmount()); client.clear(); host.remove() })
+it('keeps limitations expandable and in copied observations, with guidance for omitted Pods', async () => {
+  const limitations = ['One selected Pod only.', 'Identity checks do not attest endpoint contents.']
+  const observation = { adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'observed', httpStatus: 501, facts: { vault: { initialized: false, sealed: true, standby: true } }, limitations }
+  state.fetch.mockResolvedValueOnce({ ...candidates, coverageLimited: true }).mockResolvedValueOnce(observation)
+  await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Service" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toContain('Collect Vault evidence'))
+  act(() => host.querySelector('button')!.click())
+  expect(document.body.textContent).toContain('To inspect another endpoint, open that Pod directly.')
+  await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Collect evidence')!.click())
+  const toggle = [...document.querySelectorAll('button')].find(item => item.textContent === 'Collection limits')!
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(document.body.textContent).toContain('Endpoint status: HTTP 501')
+  expect(document.body.textContent).toContain('This Pod at collection time; other replicas were not checked.')
+  act(() => toggle.click())
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  expect(document.getElementById(toggle.getAttribute('aria-controls')!)!.textContent).toContain(limitations[1])
+  await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Copy observation')!.click())
+  expect(JSON.parse(vi.mocked(copyText).mock.calls.at(-1)![0])).toEqual({ context: 'test-cluster', ...observation })
+})
 it('does not request endpoints from a Radar without the collection flag', async () => {
   state.supported = false
   await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Deployment" group="apps" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
