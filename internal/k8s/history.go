@@ -22,11 +22,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -99,6 +101,10 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
 	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
 	"Rollout":                        {group: "argoproj.io", diff: chainDiffs(diffRollout, diffRolloutSpec), backstopRoot: "spec"},
+	"Role":                           {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"ClusterRole":                    {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"RoleBinding":                    {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
+	"ClusterRoleBinding":             {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and
@@ -196,6 +202,14 @@ func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
 		return typedOrUnstructured[corev1.ResourceQuota](u)
 	case "LimitRange":
 		return typedOrUnstructured[corev1.LimitRange](u)
+	case "Role":
+		return typedOrUnstructured[rbacv1.Role](u)
+	case "ClusterRole":
+		return typedOrUnstructured[rbacv1.ClusterRole](u)
+	case "RoleBinding":
+		return typedOrUnstructured[rbacv1.RoleBinding](u)
+	case "ClusterRoleBinding":
+		return typedOrUnstructured[rbacv1.ClusterRoleBinding](u)
 	default:
 		return u.DeepCopy()
 	}
@@ -2235,8 +2249,10 @@ func diffNode(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	// Check taints
-	oldTaints := getTaintKeys(oldNode.Spec.Taints)
-	newTaints := getTaintKeys(newNode.Spec.Taints)
+	oldTaintValues := nodeTaintsByKey(oldNode.Spec.Taints)
+	newTaintValues := nodeTaintsByKey(newNode.Spec.Taints)
+	oldTaints := genericMapKeys(oldTaintValues)
+	newTaints := genericMapKeys(newTaintValues)
 	if !equalStringSlices(oldTaints, newTaints) {
 		changes = append(changes, FieldChange{
 			Path:     "spec.taints",
@@ -2251,6 +2267,54 @@ func diffNode(oldObj, newObj any) ([]FieldChange, []string) {
 		if len(removed) > 0 {
 			summary = append(summary, fmt.Sprintf("taints removed: %v", removed))
 		}
+	}
+	for _, key := range oldTaints {
+		// Compare before redaction so sensitive value rotations remain visible.
+		if newValues, ok := newTaintValues[key]; ok && !reflect.DeepEqual(oldTaintValues[key], newValues) {
+			changes = append(changes, FieldChange{
+				Path:     "spec.taints[" + key + "]",
+				OldValue: nodeTaintDisplayValues(oldTaintValues[key]),
+				NewValue: nodeTaintDisplayValues(newValues),
+			})
+			summary = append(summary, fmt.Sprintf("taint %s changed", key))
+		}
+	}
+
+	joining := nodeJoining(newNode)
+	for _, key := range changedMapKeys(oldNode.Labels, newNode.Labels) {
+		if nodeMetadataKeyIgnored(key, false) {
+			continue
+		}
+		oldVal, oldOK := oldNode.Labels[key]
+		newVal, newOK := newNode.Labels[key]
+		if joining && !oldOK && !nodePolicyMetadataKey(key) {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     specPathKey("metadata.labels", key),
+			OldValue: templateLabelValue(key, oldVal, oldOK),
+			NewValue: templateLabelValue(key, newVal, newOK),
+		})
+		summary = append(summary, fmt.Sprintf("label %s %s", key, mapKeyVerb(oldOK, newOK)))
+	}
+	for _, key := range changedMapKeys(oldNode.Annotations, newNode.Annotations) {
+		if nodeMetadataKeyIgnored(key, true) {
+			continue
+		}
+		_, oldOK := oldNode.Annotations[key]
+		_, newOK := newNode.Annotations[key]
+		if joining && !oldOK && !nodePolicyMetadataKey(key) {
+			continue
+		}
+		// Like pod-template annotations, these can hold arbitrary config or
+		// credentials. Keep the field and presence without storing the value.
+		oldShown, newShown := hiddenValues(oldOK, newOK)
+		changes = append(changes, FieldChange{
+			Path:     specPathKey("metadata.annotations", key),
+			OldValue: oldShown,
+			NewValue: newShown,
+		})
+		summary = append(summary, fmt.Sprintf("annotation %s %s", key, mapKeyVerb(oldOK, newOK)))
 	}
 
 	// Check pressure + ready conditions. MemoryPressure / DiskPressure /
@@ -2495,24 +2559,20 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
-	// Check sync policy changes (auto-sync enabled/disabled)
-	oldAutoSync, oldAutoExists, _ := unstructured.NestedMap(oldApp.Object, "spec", "syncPolicy", "automated")
-	newAutoSync, newAutoExists, _ := unstructured.NestedMap(newApp.Object, "spec", "syncPolicy", "automated")
-
-	if !oldAutoExists && newAutoExists {
+	// Check sync policy changes (auto-sync enabled/disabled). Argo CD 3.x can
+	// switch automation off in place with `automated.enabled: false`, so
+	// compare the effective state, not whether the block exists.
+	if oldAutoEnabled, newAutoEnabled := gitops.ArgoAutoSyncEnabled(oldApp), gitops.ArgoAutoSyncEnabled(newApp); oldAutoEnabled != newAutoEnabled {
 		changes = append(changes, FieldChange{
 			Path:     "spec.syncPolicy.automated",
-			OldValue: nil,
-			NewValue: newAutoSync,
+			OldValue: argoAutomatedBlock(oldApp),
+			NewValue: argoAutomatedBlock(newApp),
 		})
-		summary = append(summary, "auto-sync enabled")
-	} else if oldAutoExists && !newAutoExists {
-		changes = append(changes, FieldChange{
-			Path:     "spec.syncPolicy.automated",
-			OldValue: oldAutoSync,
-			NewValue: nil,
-		})
-		summary = append(summary, "auto-sync disabled")
+		if newAutoEnabled {
+			summary = append(summary, "auto-sync enabled")
+		} else {
+			summary = append(summary, "auto-sync disabled")
+		}
 	}
 
 	// Check target revision change
@@ -2590,6 +2650,15 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	return changes, summary
+}
+
+// argoAutomatedBlock returns spec.syncPolicy.automated, or nil (not a nil map)
+// when the block is absent, so the change record reads null.
+func argoAutomatedBlock(app *unstructured.Unstructured) any {
+	if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+		return automated
+	}
+	return nil
 }
 
 // Step index, weights, pause conditions and abort/promoteFull all move without
@@ -3239,13 +3308,86 @@ func truncateSourceRevision(rev string) string {
 	return rev
 }
 
-// getTaintKeys extracts taint keys from a list of taints
-func getTaintKeys(taints []corev1.Taint) []string {
-	keys := make([]string, len(taints))
-	for i, t := range taints {
-		keys[i] = t.Key
+func nodeTaintsByKey(taints []corev1.Taint) map[string][]corev1.Taint {
+	values := make(map[string][]corev1.Taint)
+	for _, taint := range taints {
+		// Autoscaler values are controller timestamps, not user configuration.
+		switch taint.Key {
+		case "ToBeDeletedByClusterAutoscaler", "DeletionCandidateOfClusterAutoscaler":
+			taint.Value = ""
+		}
+		// TimeAdded is controller bookkeeping, not a scheduling change.
+		taint.TimeAdded = nil
+		values[taint.Key] = append(values[taint.Key], taint)
 	}
-	return keys
+	for _, taints := range values {
+		sort.Slice(taints, func(i, j int) bool { return taints[i].ToString() < taints[j].ToString() })
+	}
+	return values
+}
+
+func nodeTaintDisplayValues(taints []corev1.Taint) []string {
+	values := make([]string, 0, len(taints))
+	for _, taint := range taints {
+		taint.Value = fmt.Sprint(templateLabelValue(taint.Key, taint.Value, true))
+		values = append(values, taint.ToString())
+	}
+	sort.Strings(values)
+	return values
+}
+
+// nodeJoinWindow covers the metadata a new node collects after registering:
+// cloud-controller topology labels within a second, Karpenter instance labels
+// about 20s later, CNI annotations at boot.
+const nodeJoinWindow = 5 * time.Minute
+
+// nodeJoining reports whether keys added to this node now are most likely
+// join-time bookkeeping rather than a change someone made.
+func nodeJoining(node *corev1.Node) bool {
+	created := node.CreationTimestamp.Time
+	return !created.IsZero() && time.Since(created) < nodeJoinWindow
+}
+
+// nodePolicyMetadataKey is user-set disruption and scale-down policy, recorded
+// even on a joining node.
+func nodePolicyMetadataKey(key string) bool {
+	switch key {
+	case "karpenter.sh/do-not-disrupt", "karpenter.sh/do-not-evict", "karpenter.sh/do-not-repair",
+		"cluster-autoscaler.kubernetes.io/scale-down-disabled":
+		return true
+	}
+	return false
+}
+
+func nodeMetadataKeyIgnored(key string, annotation bool) bool {
+	if key == "node.alpha.kubernetes.io/ttl" || key == "nvidia.com/gfd.timestamp" || strings.HasPrefix(key, "rke2.io/") || strings.HasPrefix(key, "k3s.io/") {
+		return true
+	}
+	if !annotation {
+		return false
+	}
+	switch key {
+	case "volumes.kubernetes.io/controller-managed-attach-detach", "csi.volume.kubernetes.io/nodeid",
+		"alpha.kubernetes.io/provided-node-ip", "kubectl.kubernetes.io/last-applied-configuration", "kubevirt.io/heartbeat":
+		return true
+	// Rancher recomputes the node's pod request/limit totals every 15s.
+	case "management.cattle.io/pod-requests", "management.cattle.io/pod-limits":
+		return true
+	}
+	// User policy must remain visible even when the controller's runtime
+	// annotations are excluded. Karpenter labels also drive scheduling.
+	if nodePolicyMetadataKey(key) {
+		return false
+	}
+	for _, prefix := range []string{
+		"kubeadm.alpha.kubernetes.io/", "kubelet.alpha.kubernetes.io/",
+		"flannel.alpha.coreos.com/", "cluster-autoscaler.kubernetes.io/", "karpenter.sh/",
+	} {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // getNodeConditionStatus gets the status of a specific node condition

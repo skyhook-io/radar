@@ -1,0 +1,369 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { normalizeArgoApplication } from '@skyhook-io/k8s-ui'
+import type { ArgoActionHandlers, GitOpsInsight, GitOpsInsightRef, GitOpsRow, GitOpsRowAction } from '@skyhook-io/k8s-ui'
+import { GitOpsView } from './GitOpsView'
+
+// The requests the Sync dialog builds, sent by the real useArgoSync and
+// useArgoResourceValidation: only a Radar advertising argoSyncInheritance is
+// trusted to read an omitted syncOptions as the Application's own.
+
+const APP_OPTIONS = ['CreateNamespace=true', 'ServerSideApply=true']
+const app = {
+  apiVersion: 'argoproj.io/v1alpha1',
+  kind: 'Application',
+  metadata: { name: 'guestbook', namespace: 'argocd' },
+  spec: { project: 'default', source: {} as Record<string, unknown>, sources: undefined as Array<{ repoURL: string; targetRevision: string }> | undefined, destination: {}, syncPolicy: { syncOptions: APP_OPTIONS } },
+  status: { sync: { status: 'OutOfSync', revision: undefined as string | undefined, revisions: undefined as string[] | undefined, comparedTo: undefined as Record<string, unknown> | undefined }, health: { status: 'Healthy' } },
+}
+const insight = {
+  summary: { tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'guestbook', autoSyncMode: 'Manual' },
+} as unknown as GitOpsInsight
+const deployment: GitOpsInsightRef = { kind: 'Deployment', group: 'apps', namespace: 'guestbook', name: 'web' }
+
+vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@skyhook-io/k8s-ui')>()
+  return {
+    ...actual,
+    useToast: () => ({ showError: vi.fn(), showSuccess: vi.fn(), showToast: vi.fn() }),
+    GitOpsTableView: (props: { rows: GitOpsRow[]; onRowAction: (row: GitOpsRow, action: GitOpsRowAction) => void }) => (
+      <button type="button" onClick={() => props.onRowAction(props.rows[0], 'sync')}>Open sync</button>
+    ),
+    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => (
+      <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
+        <button type="button" onClick={() => props.argo?.onSyncRequested()}>Open sync</button>
+        {props.renderTabBody({ tab: 'changes', fullscreen: false })}
+        {props.children}
+      </div>
+    ),
+    GitOpsChangesView: (props: { onSyncResource?: (ref: GitOpsInsightRef) => void }) => (
+      <button type="button" onClick={() => props.onSyncResource?.(deployment)}>Open resource sync</button>
+    ),
+  }
+})
+const toast = vi.hoisted(() => ({ success: vi.fn() }))
+vi.mock('../ui/Toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ui/Toast')>()),
+  showApiSuccess: toast.success,
+}))
+vi.mock('../../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/client')>()
+  const idle = () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false })
+  return {
+    ...actual,
+    useResource: () => ({ data: app, isLoading: false, error: null }),
+    useGitOpsTree: () => ({ data: undefined, isLoading: false, error: null }),
+    useGitOpsInsights: () => ({ data: insight, isLoading: false, error: null }),
+    useArgoRollback: idle, useArgoRefresh: idle, useArgoTerminate: idle,
+    useArgoSuspend: idle, useArgoResume: idle, useApplyResource: idle,
+    useFluxReconcile: idle, useFluxSyncWithSource: idle, useFluxSuspend: idle, useFluxResume: idle,
+  }
+})
+vi.mock('../../api/apiResources', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/apiResources')>()),
+  useAPIResources: () => ({ data: [], isLoading: false }),
+}))
+vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected' } }) }))
+vi.mock('../../context/RadarUpgradeHost', () => ({ useRadarUpgradeHost: () => ({}) }))
+vi.mock('../useContextSwitchFlow', () => ({ useContextSwitchFlow: () => ({ confirmDialog: null, requestSwitch: vi.fn() }) }))
+vi.mock('./useDestinationCluster', () => ({ useDestinationCluster: () => ({}) }))
+vi.mock('../../hooks/useKeyboardShortcuts', () => ({ useRegisterShortcut: () => {} }))
+vi.mock('../../hooks/usePreviousIntegrationSettings', () => ({ usePreviousIntegrationSettings: () => ({}), previousSettingsNote: () => undefined }))
+vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+
+let client: QueryClient
+let host: HTMLDivElement
+let root: ReturnType<typeof createRoot>
+let requests: Array<{ path: string; body: Record<string, unknown> }>
+
+beforeEach(async () => {
+  requests = []
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (init?.method === 'POST') {
+      requests.push({ path, body: JSON.parse(String(init.body)) })
+      const answer = path.endsWith('/validate-resource') ? { outcome: 'succeeded', message: 'ok' } : { message: 'Sync initiated' }
+      return Promise.resolve(new Response(JSON.stringify(answer), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    }
+    // /api/capabilities and /version-check stay pending; tests set capabilities.
+    return new Promise<Response>(() => {})
+  }))
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  host = document.createElement('div')
+  document.body.append(host)
+  root = createRoot(host)
+  await renderView('/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io')
+})
+
+afterEach(async () => {
+  await act(async () => root.unmount())
+  client.clear()
+  host.remove()
+  document.body.innerHTML = ''
+  app.spec.source = {}
+  app.spec.sources = undefined
+  app.status.sync.revision = undefined
+  app.status.sync.revisions = undefined
+  app.status.sync.comparedTo = undefined
+  vi.unstubAllGlobals()
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+})
+
+async function renderView(path: string) {
+  if (path === '/gitops') {
+    client.setQueryData(['gitops-rows-main', [], 0], { coverageStatus: 'complete', rows: [normalizeArgoApplication(app)] })
+  }
+  await act(async () => root.render(
+    <MemoryRouter key={path} initialEntries={[path]}>
+      <QueryClientProvider client={client}><GitOpsView namespaces={[]} onOpenResource={() => {}} /></QueryClientProvider>
+    </MemoryRouter>,
+  ))
+}
+
+const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) }) }
+// A sync using Replace or Force is labelled "Sync with replace" etc.
+const button = (label: string) => [...document.querySelectorAll('button')].find((b) => {
+  const text = b.textContent?.trim() ?? ''
+  return text === label || text.startsWith(`${label === 'Sync now' ? 'Sync' : label} with `)
+})!
+const toggle = (label: string) => [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith(label))!.querySelector('input')!
+const click = async (el: HTMLElement) => { await act(async () => el.click()); await settle() }
+const advertise = async (features: Record<string, boolean>) => {
+  await act(async () => { client.setQueryData(['capabilities'], { features }) })
+  await settle()
+}
+
+describe('a Radar that advertises argoSyncInheritance', () => {
+  beforeEach(async () => { await advertise({ argoRollbackSync: true, argoSyncInheritance: true }) })
+
+  it("omits the options for an unchanged sync and always sends prune", async () => {
+    await click(button('Open sync'))
+    await click(button('Sync now'))
+    expect(requests).toHaveLength(1)
+    expect(requests[0].path).toBe('/api/argo/applications/argocd/guestbook/sync')
+    expect(requests[0].body.prune).toBe(false)
+    expect(requests[0].body).not.toHaveProperty('syncOptions')
+  })
+
+  it('sends an edited list when a toggle changes', async () => {
+    await click(button('Open sync'))
+    await click(toggle('Server-side apply'))
+    await click(button('Sync now'))
+    expect(requests[0].body).toMatchObject({ prune: false, syncOptions: ['CreateNamespace=true'] })
+  })
+
+  it.each([
+    { change: 'the compared revision', apply: () => { app.status.sync.revision = 'new-sha' } },
+    { change: 'the source', apply: () => { app.spec.source = { repoURL: 'https://example.com/other', targetRevision: 'main' } } },
+    { change: 'the comparison', apply: () => { app.status.sync.comparedTo = { source: app.spec.source } } },
+  ])('drops a dry-run pass once $change changes', async ({ apply }) => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    expect(document.body.textContent).toContain('Dry-run passed')
+    apply()
+    await renderView('/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io')
+    await settle()
+    expect(document.body.textContent).toContain('Sync resource')
+    expect(document.body.textContent).not.toContain('Dry-run passed')
+  })
+
+  it('keeps a dry-run pass while what it checked is unchanged', async () => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    await renderView('/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io')
+    await settle()
+    expect(document.body.textContent).toContain('Dry-run passed')
+  })
+
+  it('validates and syncs one resource with the inherited options', async () => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    await click(button('Sync resource'))
+    expect(requests.map((r) => r.path)).toEqual([
+      '/api/argo/applications/argocd/guestbook/validate-resource',
+      '/api/argo/applications/argocd/guestbook/sync',
+    ])
+    expect(requests[0].body).not.toHaveProperty('syncOptions')
+    expect(requests[1].body).toMatchObject({ prune: false, resources: [{ group: 'apps', kind: 'Deployment', namespace: 'guestbook', name: 'web' }] })
+    expect(requests[1].body).not.toHaveProperty('syncOptions')
+  })
+})
+
+describe('an older Radar, without argoSyncInheritance', () => {
+  beforeEach(async () => { await advertise({ argoRollbackSync: true }) })
+
+  it("sends the Application's options, which it would otherwise drop, and prune false, which it would otherwise default to true", async () => {
+    await click(button('Open sync'))
+    await click(button('Sync now'))
+    expect(requests[0].body).toMatchObject({ prune: false, syncOptions: APP_OPTIONS })
+  })
+
+  it('sends an edited list the same way', async () => {
+    await click(button('Open sync'))
+    await click(toggle('Server-side apply'))
+    await click(button('Sync now'))
+    expect(requests[0].body).toMatchObject({ prune: false, syncOptions: ['CreateNamespace=true'] })
+  })
+
+  it("validates and syncs one resource with the Application's options", async () => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    await click(button('Sync resource'))
+    expect(requests[0].body.syncOptions).toEqual(APP_OPTIONS)
+    expect(requests[1].body).toMatchObject({ prune: false, syncOptions: APP_OPTIONS })
+  })
+})
+
+it.each([
+  { dryRun: false, message: 'Sync initiated' },
+  { dryRun: true, message: 'Dry run started' },
+])('confirms a sync with dryRun $dryRun as "$message"', async ({ dryRun, message }) => {
+  toast.success.mockClear()
+  await click(button('Open sync'))
+  if (dryRun) {
+    const label = [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith('Dry run'))!
+    await click(label.querySelector('input')!)
+  }
+  await click(button(dryRun ? 'Run dry-run' : 'Sync now'))
+  expect(requests[0].body).toMatchObject({ dryRun })
+  expect(toast.success).toHaveBeenCalledWith(message)
+})
+
+it('treats a Radar whose capabilities have not loaded as older', async () => {
+  await click(button('Open sync'))
+  await click(button('Sync now'))
+  expect(requests[0].body).toMatchObject({ prune: false, syncOptions: APP_OPTIONS })
+})
+
+it.each([
+  '/gitops',
+  '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
+])('explains compared revisions for multi-source sync from %s', async (path) => {
+  app.spec.sources = [
+    { repoURL: 'https://example.com/app', targetRevision: 'main' },
+    { repoURL: 'https://example.com/values', targetRevision: 'v1' },
+  ]
+  app.status.sync.revisions = ['app-sha', 'values-sha']
+  app.status.sync.comparedTo = { sources: app.spec.sources }
+  await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
+  await renderView(path)
+  await click(button('Open sync'))
+  expect(document.body.textContent).not.toContain('Revision (optional)')
+  expect(document.body.textContent).toContain('Syncs each source at the revision Argo last compared.')
+  await click(button('Sync now'))
+  expect(requests).toHaveLength(1)
+  expect(requests[0].body).not.toHaveProperty('revision')
+})
+
+it.each([
+  '/gitops',
+  '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
+])('shows the compared revision in the sync dialog from %s', async (path) => {
+  app.spec.source = { repoURL: 'https://example.com/app', targetRevision: 'main' }
+  app.status.sync.revision = 'abcdef0123456789abcdef0123456789abcdef01'
+  app.status.sync.comparedTo = { source: { targetRevision: 'main', repoURL: 'https://example.com/app' } }
+  await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
+  await renderView(path)
+  await click(button('Open sync'))
+  expect(document.body.textContent).toContain('Leave empty for the revision Argo last compared (abcdef0).')
+  await click(button('Sync now'))
+  expect(requests[0].body).not.toHaveProperty('revision')
+})
+
+// A comparison made for an earlier source won't be pinned, so it isn't promised.
+it('promises no compared revision when the source changed since the comparison', async () => {
+  app.spec.source = { repoURL: 'https://example.com/app', targetRevision: 'release' }
+  app.status.sync.revision = 'abcdef0123456789abcdef0123456789abcdef01'
+  app.status.sync.comparedTo = { source: { repoURL: 'https://example.com/app', targetRevision: 'main' } }
+  await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
+  await renderView('/gitops')
+  await click(button('Open sync'))
+  expect(document.body.textContent).toContain('Leave empty for the target revision, resolved when the sync runs.')
+})
+
+// An older Radar resolves an omitted revision when the sync runs.
+it.each([
+  '/gitops',
+  '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
+])('promises no compared revision to an older Radar from %s', async (path) => {
+  app.status.sync.revision = 'abcdef0123456789abcdef0123456789abcdef01'
+  await advertise({ argoRollbackSync: true })
+  await renderView(path)
+  await click(button('Open sync'))
+  expect(document.body.textContent).toContain('Leave empty for the target revision, resolved when the sync runs.')
+  expect(document.body.textContent).not.toContain('last compared')
+})
+
+const STALE_OPTIONS_NOTICE = "The Application's sync options changed while this dialog was open. This sync uses the options shown here. Cancel and reopen to load the latest."
+
+async function replaceTableApplication(syncOptions: string[], automated = false) {
+  const replacement = {
+    ...app,
+    spec: { ...app.spec, syncPolicy: { syncOptions, ...(automated ? { automated: {} } : {}) } },
+  }
+  await act(async () => {
+    client.setQueryData(['gitops-rows-main', [], 0], { coverageStatus: 'complete', rows: [normalizeArgoApplication(replacement)] })
+  })
+  await settle()
+}
+
+it('uses replacement table rows for untouched sync policy and request context after refetch', async () => {
+  await advertise({ argoRollbackSync: true })
+  await renderView('/gitops')
+  await click(button('Open sync'))
+  await replaceTableApplication(['Replace=true', 'FailOnSharedResource=true'])
+  expect(toggle('Replace').checked).toBe(true)
+  expect(toggle('Server-side apply').checked).toBe(false)
+  expect(document.body.textContent).not.toContain(STALE_OPTIONS_NOTICE)
+  await click(button('Sync now'))
+  expect(requests[0].body.syncOptions).toEqual(['Replace=true', 'FailOnSharedResource=true'])
+})
+
+it('shows the stale-options notice for edited sync options after replacement-row refetch', async () => {
+  await advertise({ argoRollbackSync: true, argoSyncInheritance: true })
+  await renderView('/gitops')
+  await click(button('Open sync'))
+  await click(toggle('Replace'))
+  await replaceTableApplication(['PruneLast=true'])
+  expect(document.body.textContent).toContain(STALE_OPTIONS_NOTICE)
+  expect(toggle('Server-side apply').checked).toBe(true)
+  await click(button('Sync now'))
+  expect(requests[0].body.syncOptions).toEqual(['CreateNamespace=true', 'Replace=true', 'ServerSideApply=true'])
+})
+
+it('closes the table sync dialog when its selected row disappears and keeps it closed if the row returns', async () => {
+  await renderView('/gitops')
+  await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  await act(async () => {
+    client.setQueryData(['gitops-rows-main', [], 0], { coverageStatus: 'complete', rows: [] })
+  })
+  await settle()
+  await replaceTableApplication(APP_OPTIONS)
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)) })
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  expect(requests).toHaveLength(0)
+})
+
+it('refreshes auto-sync status in the table sync dialog', async () => {
+  await renderView('/gitops')
+  await click(button('Open sync'))
+  const revision = document.querySelector('input:not([type="checkbox"])') as HTMLInputElement
+  expect(revision.disabled).toBe(false)
+  await replaceTableApplication(APP_OPTIONS, true)
+  expect(revision.disabled).toBe(true)
+  expect(document.body.textContent).toContain('Turn off auto-sync to deploy another revision')
+})
+
+it.each([
+  { label: 'starts self-heal off', features: { argoRollbackSync: true, argoSyncInheritance: true, argoEnableSelfHealOff: true }, expected: { prune: false, selfHeal: false } },
+  { label: 'still starts self-heal on', features: { argoRollbackSync: true, argoSyncInheritance: true, argoEnableSelfHealOff: false }, expected: { prune: false, selfHeal: true } },
+])('predicts what a first-time Enable auto-sync turns on for a Radar that $label', async ({ features, expected }) => {
+  await advertise(features)
+  const settings = document.querySelector('[data-resume-settings]')!.getAttribute('data-resume-settings')!
+  expect(JSON.parse(settings)).toEqual(expected)
+})

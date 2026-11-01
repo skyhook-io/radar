@@ -116,7 +116,9 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 				username := r.Header.Get(cfg.UserHeader)
 				if username != "" {
 					var groups []string
-					if g := r.Header.Get(cfg.GroupsHeader); g != "" {
+					// Proxies send groups as one comma-separated header or as
+					// one header per group; accept both.
+					for _, g := range r.Header.Values(cfg.GroupsHeader) {
 						for _, part := range strings.Split(g, ",") {
 							if trimmed := strings.TrimSpace(part); trimmed != "" {
 								groups = append(groups, trimmed)

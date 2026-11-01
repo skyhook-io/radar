@@ -101,7 +101,7 @@ import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
-import { useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
+import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
@@ -357,6 +357,8 @@ function useActionsBarProps(
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
+  const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
+  const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
 
   const {
     data: cascadePreview,
@@ -461,9 +463,10 @@ function useActionsBarProps(
     onFluxResume: (params: Parameters<typeof fluxResumeMutation.mutate>[0]) =>
       fluxResumeMutation.mutate(params),
     isFluxResuming: fluxResumeMutation.isPending,
-    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutate>[0]) =>
-      argoSyncMutation.mutate(params),
+    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutateAsync>[0]) =>
+      argoSyncMutation.mutateAsync(params),
     isArgoSyncing: argoSyncMutation.isPending,
+    argoSyncDialog: { pinsComparedRevision: argoInheritanceSupport === 'supported' },
     onArgoRefresh: (params: Parameters<typeof argoRefreshMutation.mutate>[0]) =>
       argoRefreshMutation.mutate(params),
     isArgoRefreshing: argoRefreshMutation.isPending,
@@ -473,6 +476,8 @@ function useActionsBarProps(
     onArgoResume: (params: Parameters<typeof argoResumeMutation.mutate>[0]) =>
       argoResumeMutation.mutate(params),
     isArgoResuming: argoResumeMutation.isPending,
+    argoResumeUpgrade,
+    argoResumeBlockedReason,
     canNodeWrite,
     onCordonNode: (params: Parameters<typeof cordonMutation.mutate>[0]) =>
       cordonMutation.mutate(params),
@@ -814,7 +819,9 @@ export function WorkloadView({
   const isCronJob = apiKind === 'cronjobs' && (!effectiveGroup || effectiveGroup === 'batch')
   const { support: coverageSupport } = useRadarFeature('resourceIssueCoverage')
   const useCronJobCoverage = isCronJob && coverageSupport === 'supported'
-  const ordinaryIssues = useResourceIssues(apiKind, rest.group, namespace, name, !useCronJobCoverage)
+  const issueObservation = resource ? JSON.stringify([resource.metadata?.uid, resource.metadata?.resourceVersion]) : undefined
+  const ordinaryIssues = useResourceIssues(apiKind, rest.group, namespace, name,
+    rest.active !== false && !useCronJobCoverage && !isNotFoundError(resourceError), issueObservation)
   const cronJobIssues = useSubjectIssues(useCronJobCoverage ? { kind: 'CronJob', group: 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useCronJobCoverage && Boolean(resource))
   const liveIssues = useCronJobCoverage ? cronJobIssues.data?.issues : ordinaryIssues.data
   const issuesPending = useCronJobCoverage ? cronJobIssues.isPending : ordinaryIssues.isPending

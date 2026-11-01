@@ -45,7 +45,7 @@ func TestArgoMissingRequiresConfirmedLocalNotFound(t *testing.T) {
 				if tc.present {
 					dynamic.objects[refKey(ref)] = &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": kind, "metadata": map[string]any{"namespace": "workloads", "name": "values", "uid": "live-uid"}}}
 				}
-				builder := NewBuilder(verifiedFakeDynamic{dynamic}, nil)
+				builder := newTestBuilder(t, verifiedFakeDynamic{dynamic}, nil)
 				if tc.restricted {
 					builder.WithAllowedNamespaces([]string{"argocd"})
 				}
@@ -73,7 +73,7 @@ func (f verifiedFakeDynamic) GetDynamicWithGroupVerified(ctx context.Context, ki
 
 func TestUnverifiedGetterDoesNotConfirmAbsence(t *testing.T) {
 	ref := ResourceRef{Kind: "ConfigMap", Namespace: "workloads", Name: "values"}
-	b := NewBuilder(&fakeDynamic{errs: map[string]error{refKey(ref): k8score.ErrResourceNotFound}}, nil)
+	b := newTestBuilder(t, &fakeDynamic{errs: map[string]error{refKey(ref): k8score.ErrResourceNotFound}}, nil)
 	_, _, missing := b.prefetchObjects(context.Background(), []ResourceRef{ref})
 	if missing[refKey(ref)] {
 		t.Fatal("plain cache NotFound must not confirm absence")

@@ -21,6 +21,7 @@ import {
 } from "./target";
 import { Tooltip } from "../ui/Tooltip";
 import { QuestionComposer } from "./QuestionComposer";
+import { plainVerdictText } from "./verdictText";
 
 function daysBefore(date: Date, now: Date): number {
   const start = (d: Date) =>
@@ -141,15 +142,6 @@ export function statusWord(status: RunSummary["status"]): {
 
 // The run's latest headline as plain text: rows are too small for the
 // markdown a headline may carry.
-function previewText(preview: string | undefined): string {
-  return (preview ?? "")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/`|\*\*|__/g, "")
-    .replace(/(^|\W)[*_](\S(?:[^*_\n]*\S)?)[*_](?=\W|$)/g, "$1$2")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 export function InvestigationHome({
   agentLabel,
   onBrowseIssues,
@@ -426,7 +418,7 @@ export function RecentList({
                 const askedAbout = questionOnly ? "" : (r.question ?? "");
                 // The engineer's question frames a run better than the issue
                 // Radar flagged when it started, so a run shows one or the other.
-                const found = previewText(r.preview);
+                const found = plainVerdictText(r.preview);
                 // What it found says more than what it started from, so the
                 // starting issue shows only until there is a finding.
                 const initialIssue =

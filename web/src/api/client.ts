@@ -4,6 +4,7 @@ import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
+import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
@@ -26,7 +27,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
+import { focusManager, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
@@ -72,7 +73,10 @@ import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } 
 import {
   RadarFeatureUnsupportedError,
   guardRadarFeature,
+  radarControlBlocked,
+  radarControlBlockedReason,
   radarFeatureSupport,
+  radarUpgradeRequirement,
   shouldRetryRadarQuery,
   type RadarFeature,
 } from './radarFeatures'
@@ -828,12 +832,17 @@ export function useResourceAudit(
 // the "Operational Issues" section in the resource detail. Cluster-scoped
 // resources pass "_" for namespace; namespaced ones also scope the scan via
 // ?namespaces= for a cheap, bounded Compose.
+// rootObservation is an opaque root UID/resourceVersion token: changes schedule
+// a refresh at most every 10s, without creating a query key per version. Omit it
+// to retain the 60s visible-tab fallback and stale-view/focus refreshes.
+// Disabled hooks and cluster-scoped subjects do not poll for namespaced Issues.
 export function useResourceIssues(
   kind: string,
   group: string | undefined,
   namespace: string,
   name: string,
   enabled = true,
+  rootObservation?: string,
 ) {
   const clusterScoped = !namespace;
   const pathNs = clusterScoped ? "_" : encodeURIComponent(namespace);
@@ -843,16 +852,52 @@ export function useResourceIssues(
   const qs = params.toString();
   // An older Radar without the endpoint settles as unsupported, so the
   // renderers fall back to their own status-derived problem banners.
-  const { guard, gatedKey } = useRadarFeature("resourceIssues");
-  return useQuery<Issue[]>({
-    queryKey: ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
+  const { guard, gatedKey, support } = useRadarFeature("resourceIssues");
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(() => ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
+    [kind, group, namespace, name, gatedKey]);
+  const query = useQuery<Issue[]>({
+    queryKey,
     queryFn: () => guard(() => fetchJSON<Issue[]>(`${path}${qs ? `?${qs}` : ""}`)),
     retry: shouldRetryRadarQuery,
-    // No refetchInterval: a drawer doesn't need to poll; staleTime keeps it fresh
-    // on reopen without re-running an uncapped Compose every 30s.
     staleTime: 30000,
+    // Time-based detections can change without a resource watch update.
+    refetchInterval: (q) => clusterScoped || q.state.error instanceof RadarFeatureUnsupportedError ? false : 60000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: (q) => !(q.state.error instanceof RadarFeatureUnsupportedError),
     enabled: enabled && !!kind && !!name,
   });
+  const { error, refetch } = query;
+  useEffect(() => {
+    if (enabled && kind && name && support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
+  }, [enabled, kind, name, support, error, refetch]);
+  const identity = JSON.stringify(queryKey);
+  const previous = useRef<{ identity: string; rootObservation: string | undefined; refreshedAt: number } | null>(null);
+  useEffect(() => {
+    const prior = previous.current;
+    if (prior?.identity !== identity) {
+      previous.current = { identity, rootObservation, refreshedAt: Date.now() };
+      return;
+    }
+    if (prior.rootObservation === undefined) {
+      prior.rootObservation = rootObservation;
+      return;
+    }
+    if (clusterScoped || !enabled || !kind || !name || query.error instanceof RadarFeatureUnsupportedError ||
+      rootObservation === undefined || prior.rootObservation === rootObservation) return;
+
+    // Keep the rootObservation out of the query key, and bound Compose requests even
+    // when a busy workload's resource version changes continuously.
+    const delay = Math.max(0, 10000 - (Date.now() - Math.max(prior.refreshedAt, query.dataUpdatedAt)));
+    const timer = window.setTimeout(() => {
+      prior.rootObservation = rootObservation;
+      prior.refreshedAt = Date.now();
+      void queryClient.invalidateQueries({ queryKey, exact: true,
+        refetchType: focusManager.isFocused() ? 'active' : 'none' });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [identity, rootObservation, enabled, kind, name, clusterScoped, queryClient, query.error, query.dataUpdatedAt, queryKey]);
+  return query;
 }
 
 // The Issues page narrowed to one subject: the same per-resource lookup with
@@ -1886,9 +1931,14 @@ export function useVersionCheck() {
  * (a host-supplied version before /capabilities answers) can lift later, and
  * the key change is what makes the query fetch for real; ungated keys are
  * unchanged.
+ *
+ * `upgrade` is set when a control the feature backs must render disabled with
+ * RadarUpgradeNote's copy: the Radar is known to be too old, or failed to
+ * answer /api/capabilities (see radarControlBlocked). Controls requiring
+ * affirmative support instead get `blockedReason` while checking or unavailable.
  */
 export function useRadarFeature(feature: RadarFeature) {
-  const { data: capabilities } = useCapabilities()
+  const { data: capabilities, isError: capabilitiesFailed } = useCapabilities()
   const { data: versionInfo } = useQuery<VersionInfo>(versionCheckQueryOptions(getApiBase()))
   const { radarVersion } = useRadarUpgradeHost()
   const currentVersion = versionInfo?.currentVersion || radarVersion
@@ -1900,8 +1950,17 @@ export function useRadarFeature(feature: RadarFeature) {
     [feature, support, currentVersion, latestVersion],
   )
   const gatedKey = useMemo(() => (support === 'unsupported' ? ['radar-feature-unsupported'] : []), [support])
+  const blockedReason = radarControlBlockedReason(feature, support, capabilitiesFailed)
 
-  return { support, gatedKey, guard }
+  return {
+    support,
+    blockedReason,
+    upgrade: !blockedReason && radarControlBlocked(support, capabilitiesFailed)
+      ? radarUpgradeRequirement(feature, { currentVersion, latestVersion })
+      : null,
+    gatedKey,
+    guard,
+  }
 }
 
 // ============================================================================
@@ -6910,12 +6969,15 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
-interface GitOpsMutationConfig<TVariables> {
+interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   getPath: (variables: TVariables) => string;
-  getBody?: (variables: TVariables) => unknown;
+  // Called by the hook on every render (so it may call hooks); its value is
+  // passed to getBody.
+  useRequestContext?: () => TContext;
+  getBody?: (variables: TVariables, context: TContext) => unknown;
   errorMessage: string;
   successMessage?: string;
-  getSuccessMessage?: (data: GitOpsOperationResponse) => string;
+  getSuccessMessage?: (data: GitOpsOperationResponse, variables: TVariables) => string;
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][];
 }
 
@@ -6923,11 +6985,12 @@ interface GitOpsMutationConfig<TVariables> {
  * Factory function for creating GitOps mutation hooks with consistent patterns.
  * Handles fetch, error handling, meta messages, and query invalidation.
  */
-function createGitOpsMutation<TVariables>(
-  config: GitOpsMutationConfig<TVariables>,
+function createGitOpsMutation<TVariables, TContext = undefined>(
+  config: GitOpsMutationConfig<TVariables, TContext>,
 ) {
   return function useGitOpsMutation() {
     const queryClient = useQueryClient();
+    const requestContext = config.useRequestContext?.() as TContext;
     return useMutation<GitOpsOperationResponse, Error, TVariables>({
       mutationFn: async (
         variables: TVariables,
@@ -6940,7 +7003,7 @@ function createGitOpsMutation<TVariables>(
               ? { "Content-Type": "application/json" }
               : undefined,
             body: config.getBody
-              ? JSON.stringify(config.getBody(variables))
+              ? JSON.stringify(config.getBody(variables, requestContext))
               : undefined,
           },
         );
@@ -6956,7 +7019,7 @@ function createGitOpsMutation<TVariables>(
       },
       onSuccess: (data, variables) => {
         if (config.getSuccessMessage)
-          showApiSuccess(config.getSuccessMessage(data));
+          showApiSuccess(config.getSuccessMessage(data, variables));
         config
           .getInvalidateKeys(variables)
           .forEach((key) => queryClient.invalidateQueries({ queryKey: key }));
@@ -6987,8 +7050,12 @@ export type ArgoSyncVars = ArgoAppVars & {
   applyOnly?: boolean;
   // Free-form Argo SyncOption strings, e.g. "Replace=true",
   // "ServerSideApply=true", "PruneLast=true". Caller is responsible for
-  // spelling.
+  // spelling. Omitted: the Application's own spec.syncPolicy.syncOptions.
   syncOptions?: string[];
+  // The Application's spec.syncPolicy.syncOptions as the caller last read
+  // them. Not a request field: sent as syncOptions only to a Radar that would
+  // otherwise drop them (see argoSyncRequestBody).
+  applicationSyncOptions?: string[];
 };
 
 export interface ArgoResourceValidationResult {
@@ -7009,11 +7076,13 @@ export function buildArgoResourceSyncVars(
   name: string,
   resource: GitOpsInsightRef,
   opts: ArgoSyncOpts,
+  applicationSyncOptions?: string[],
 ): ArgoSyncVars {
   return {
     namespace,
     name,
     ...opts,
+    applicationSyncOptions,
     resources: [
       {
         group: resource.group,
@@ -7096,24 +7165,45 @@ export const useFluxSyncWithSource = createGitOpsMutation<FluxResourceVars>({
 // ArgoCD API hooks
 // ============================================================================
 
-export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
-  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
-  getBody: (v) => ({
+// argoSyncRequestBody is the body POSTed to .../sync. A Radar that predates
+// argoSyncInheritance prunes when prune is omitted and syncs with no options
+// when syncOptions is omitted, so prune is always sent and, for such a Radar,
+// the Application's options are sent in place of an omission.
+export function argoSyncRequestBody(
+  v: ArgoSyncVars,
+  serverInheritsOptions: boolean,
+) {
+  return {
     resources: v.resources,
     revision: v.revision,
-    prune: v.prune,
+    prune: v.prune ?? false,
     dryRun: v.dryRun,
     force: v.force,
     applyOnly: v.applyOnly,
-    syncOptions: v.syncOptions,
-  }),
+    syncOptions: argoSyncOptionsForRequest(
+      v.syncOptions,
+      v.applicationSyncOptions,
+      serverInheritsOptions,
+    ),
+  };
+}
+
+function useArgoSyncInheritance(): boolean {
+  return useRadarFeature("argoSyncInheritance").support === "supported";
+}
+
+export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
+  useRequestContext: useArgoSyncInheritance,
+  getBody: argoSyncRequestBody,
   errorMessage: "Failed to trigger sync",
-  successMessage: "Sync initiated",
+  getSuccessMessage: (_data, v) => (v.dryRun ? "Dry run started" : "Sync initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
 
 export function useArgoResourceValidation() {
   const queryClient = useQueryClient();
+  const serverInheritsOptions = useArgoSyncInheritance();
   return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
     mutationFn: async (variables) => {
       const response = await apiFetch(
@@ -7124,7 +7214,11 @@ export function useArgoResourceValidation() {
           body: JSON.stringify({
             resources: variables.resources,
             force: variables.force,
-            syncOptions: variables.syncOptions,
+            syncOptions: argoSyncOptionsForRequest(
+              variables.syncOptions,
+              variables.applicationSyncOptions,
+              serverInheritsOptions,
+            ),
           }),
         },
       );
@@ -7146,7 +7240,7 @@ export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/rollback`,
   getBody: (v) => ({ id: v.id, prune: v.prune, dryRun: v.dryRun }),
   errorMessage: "Failed to roll back application",
-  successMessage: "Rollback initiated",
+  getSuccessMessage: (_data, v) => (v.dryRun ? "Rollback preview started" : "Rollback initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
 

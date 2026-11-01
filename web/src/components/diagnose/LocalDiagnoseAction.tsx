@@ -119,22 +119,34 @@ export const defaultDiagnoseAction: RenderDiagnoseAction = ({
   />
 );
 
+// Whether the per-issue Investigate action renders here at all, for hosts
+// that lay out around it.
+export function useIssueDiagnoseShown(): boolean {
+  const d = useDiagnose();
+  return d.setupState !== "off" && d.setupState !== "unknown";
+}
+
 // Compact per-issue "Investigate" action for the Issues queue — launches an
 // investigation for the issue's subject from where the problem is surfaced.
-// stopPropagation so it doesn't toggle the issue row it lives in.
+// stopPropagation so it doesn't toggle the issue row it lives in. `compact`
+// fits a single line of a dense list (Home's Active Issues); without hover it
+// keeps a finger-sized target.
 export function IssueDiagnoseButton({
   kind,
   group,
   namespace,
   name,
+  size = "default",
 }: {
   kind: string;
   group?: string;
   namespace: string;
   name: string;
+  size?: "default" | "compact";
 }) {
   const d = useDiagnose();
-  if (d.setupState === "off" || d.setupState === "unknown") return null;
+  const shown = useIssueDiagnoseShown();
+  if (!shown) return null;
   const ready = d.available;
   return (
     <Tooltip
@@ -159,9 +171,17 @@ export function IssueDiagnoseButton({
             });
           else d.openHome();
         }}
-        className="flex shrink-0 items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+        className={
+          size === "compact"
+            ? "flex h-4 shrink-0 items-center gap-1 rounded border border-theme-border px-1.5 text-[10.5px] leading-none text-theme-text-secondary hover:bg-theme-surface hover:text-theme-text-primary [@media(hover:none)]:h-7 [@media(hover:none)]:rounded-md [@media(hover:none)]:px-2.5 [@media(hover:none)]:text-xs"
+            : "flex shrink-0 items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+        }
       >
-        <Sparkles className="h-3 w-3 text-accent" />
+        <Sparkles
+          className={
+            size === "compact" ? "h-2.5 w-2.5 text-accent" : "h-3 w-3 text-accent"
+          }
+        />
         Investigate
       </button>
     </Tooltip>
@@ -170,7 +190,7 @@ export function IssueDiagnoseButton({
 
 // The tooltip every AI entry point shows while investigations aren't runnable.
 // It gives the same reason as the setup notice the button opens.
-function notReadyTooltip(d: {
+export function notReadyTooltip(d: {
   cliOverride: boolean;
   setupState: DiagnoseSetup;
 }): string {

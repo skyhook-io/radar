@@ -21,6 +21,18 @@ describe('Pod request and limit overlays', () => {
   })
 
   it.each([
+    ['.5', '1k', 0.5, 1000],
+    ['500u', '2.', 0.0005, 2],
+  ])('reads CPU request %s and limit %s as cores', (request, limit, wantRequest, wantLimit) => {
+    const resource = { spec: { containers: [
+      { resources: { requests: { cpu: request }, limits: { cpu: limit } } },
+    ] } }
+    const lines = computeRequestLimitLines(resource, 'Pod', 'cpu')!
+    expect(lines[0].value).toBeCloseTo(wantRequest)
+    expect(lines[1].value).toBeCloseTo(wantLimit)
+  })
+
+  it.each([
     ['1024000m', '2048000m'],
     ['1024000000u', '2048000000u'],
     ['1024000000000n', '2048000000000n'],

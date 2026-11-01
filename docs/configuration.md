@@ -1,6 +1,91 @@
 # Configuration
 
-This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
+This document covers Radar's command-line flags and cluster connection behavior. The [CLI reference](https://radarhq.io/docs/configuration/cli) on the docs site covers subcommands.
+
+## CLI flags
+
+Common startup flags for `radar` and `kubectl radar`. `radar --help` lists every flag for the
+installed version. Several flags also take a persistent default from `~/.radar/config.json`; see
+[Persistent Configuration](#persistent-configuration).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--kubeconfig` | `~/.kube/config` | Path to primary kubeconfig file |
+| `--kubeconfig-dir` | | Comma-separated directories containing additional kubeconfig files |
+| `--namespace` | (context namespace) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users). Unset, Radar uses your saved pick, then the kubeconfig context's namespace, then all namespaces ([Namespace Picker](#namespace-picker)) |
+| `--namespaces` | (context namespace) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |
+| `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
+| `--port` | `9280` | Server port |
+| `--listen-address` | `127.0.0.1` | HTTP listen IP address (IPv4 or IPv6), or `localhost`. Bind a specific local IP or use `0.0.0.0` for all interfaces. Non-loopback access needs authentication and network controls. |
+| `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
+| `--allowed-hosts` | | Comma-separated hostnames, besides `localhost`, IP addresses and Kubernetes Service names, that an unauthenticated non-loopback listener answers, e.g. `radar.internal`. Other hostnames are refused so DNS rebinding cannot reach Radar. Exact names, or `*.example.com` for names under a domain (not the domain itself); `*` turns the check off. Env: `RADAR_ALLOWED_HOSTS`. See [HTTP Listener](#http-listener) |
+| `--trusted-origins` | | Comma-separated origins, besides the address Radar is opened at, that may use Radar's API, including changes and terminals, e.g. `http://radar.internal`. Set this when a proxy in front of Radar rewrites the `Host` header and changes fail with "Radar refused this request". Exact origins, no wildcards. Does not apply to `/mcp` (see `RADAR_MCP_TRUSTED_ORIGINS`). Env: `RADAR_TRUSTED_ORIGINS` |
+| `--no-browser` | `false` | Don't auto-open browser |
+| `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
+| `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
+| `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
+| `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
+| `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
+| `--disable-exec` | `false` | Disable pod terminal, debug shells and pod file browsing |
+| `--disable-helm-write` | `false` | Disable Helm write operations |
+| `--disable-local-terminal` | `false` | Disable the host local terminal |
+| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
+| `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
+| `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
+| `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
+| `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
+| `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
+| `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery). In local CLI/Desktop mode, applies only to the launch's initial context and never inherits saved headers. |
+| `--prometheus-single-cluster` | `false` | Declare the backend dedicated to this cluster for workload metrics and PVC usage, replacing automatic identity matching. Other metrics do not use this override. [Scope and lifetime](workload-metrics.md#optional-operator-override). |
+| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
+| `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
+| `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
+| `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](workload-metrics.md#request-sources). |
+| `--opencost-currency` | (auto-detect, then USD) | Override the ISO 4217 currency label for OpenCost values. Radar labels values but does not convert them. |
+| `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](authentication.md)) |
+| `--no-mcp` | `false` | Disable all MCP endpoints |
+| `--mcp-read-only` | `false` | Expose only read-only MCP tools; disable `/mcp` (env: `RADAR_MCP_READ_ONLY`) |
+| `--mcp-catalog-stdio` | `false` | Start only the MCP catalog over stdio for registry introspection |
+| `--version` | | Show version and exit |
+
+### Tuning for slow or high-latency clusters
+
+The default deadlines (30 s context switch, 5 m first-paint backstop, 5 s
+namespace LIST, 20 scope candidates) are tuned for healthy clusters reached
+over fast, low-latency connections. They are too tight for clusters reached
+over SSH tunnels, geographically distant control planes, or accounts subject
+to API-server throttling, where they surface as one of three symptoms:
+
+- "Context switch timed out" toasts when the cache eventually does sync
+- "Limited list — RBAC doesn't allow listing all namespaces" even though the
+  account has cluster-wide list permission (the LIST timed out, not RBAC)
+- Kinds silently marked denied because the namespace they live in fell past
+  the 20-entry candidate cap
+
+Widen the four flags via CLI or via the matching environment variables
+(`RADAR_CONTEXT_SWITCH_TIMEOUT`, `RADAR_FIRST_PAINT_BACKSTOP`,
+`RADAR_NAMESPACE_LIST_TIMEOUT`, `RADAR_MAX_SCOPE_CANDIDATES`) — env vars
+keep secrets out of `ps` and let in-cluster deployments source the values
+from a ConfigMap:
+
+```bash
+# CLI
+kubectl radar \
+  --context-switch-timeout=120s \
+  --first-paint-backstop=10m \
+  --namespace-list-timeout=30s \
+  --max-scope-candidates=200
+
+# Environment (e.g. in a Deployment manifest)
+RADAR_CONTEXT_SWITCH_TIMEOUT=120s \
+RADAR_FIRST_PAINT_BACKSTOP=10m \
+RADAR_NAMESPACE_LIST_TIMEOUT=30s \
+RADAR_MAX_SCOPE_CANDIDATES=200 \
+  kubectl radar
+```
+
+Defaults are preserved when neither the flag nor the env var is set, so
+existing deployments are unaffected.
 
 ## MCP exposure
 
@@ -922,6 +1007,22 @@ the configured primary kubeconfig and report configured directories they
 ignore. With no configured source, they use the normal `KUBECONFIG` / default
 kubeconfig loading rules. Directory-only configuration must add a primary
 kubeconfig before these commands can run.
+
+To inspect an in-cluster Radar Cloud installation without changing it:
+
+```bash
+radar cloud status
+radar cloud status --context my-cluster
+radar cloud status --context my-cluster --namespace radar --release radar
+```
+
+The command reports installation ownership, chart and image, agent readiness,
+and Cloud configuration without printing the connection token. Passing both
+`--namespace` and `--release` selects an exact installation. Live tunnel status
+is reported by Radar Cloud using the token in the referenced Kubernetes Secret.
+If the Secret or Hub is unavailable, local installation diagnostics still run.
+Interactive terminals use restrained status colors; set `NO_COLOR` (or pipe the
+output) for plain text. URLs, tokens, and suggested commands remain unstyled.
 
 ### What Radar sends
 

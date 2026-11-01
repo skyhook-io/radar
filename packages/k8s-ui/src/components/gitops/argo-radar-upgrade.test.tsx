@@ -1,0 +1,369 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { renderToString } from 'react-dom/server'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
+import { GitOpsDetailLayout, type ArgoActionHandlers, type GitOpsDetailStatus } from './GitOpsDetailLayout'
+import { buildRowActionItems, normalizeArgoApplication } from './GitOpsTableView'
+import { ResourceActionsBar } from '../shared/ResourceActionsBar'
+
+vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+
+// SSR splits interpolated text with <!-- --> markers; strip so assertions read as prose.
+const html = (node: Parameters<typeof renderToString>[0]) => renderToString(node).replace(/<!-- -->/g, '')
+
+// The attributes of the button labelled `label`.
+function buttonAttrs(markup: string, label: string): string {
+  const chunk = markup.split('<button').find((part) => part.includes(`${label}</button>`))
+  if (chunk === undefined) throw new Error(`no ${label} button rendered`)
+  return chunk.slice(0, chunk.indexOf('>'))
+}
+
+const upgrade: RadarUpgradeRequirement = {
+  feature: 'Auto-sync controls for Applications with automated.enabled: false',
+  currentVersion: 'v1.16.3',
+  latestVersion: 'v1.17.0',
+}
+const NOTE = 'Auto-sync controls for Applications with automated.enabled: false need the latest Radar (v1.17) on this cluster. It runs v1.16.3.'
+// RadarUpgradeNote sets the feature in its own <span>.
+const NOTE_MARKUP = 'Auto-sync controls for Applications with automated.enabled: false</span> need the latest Radar (v1.17) on this cluster. It runs v1.16.3.'
+
+function app(automated: Record<string, unknown> | undefined, annotations?: Record<string, string>) {
+  return {
+    apiVersion: 'argoproj.io/v1alpha1',
+    metadata: { name: 'guestbook', namespace: 'argocd', annotations },
+    spec: { project: 'default', source: {}, destination: {}, syncPolicy: automated ? { automated } : {} },
+    status: {},
+  }
+}
+
+function argo(overrides: Partial<ArgoActionHandlers> = {}): ArgoActionHandlers {
+  const noop = () => {}
+  return {
+    onSyncRequested: noop, onRefresh: noop, onTerminate: noop, onSuspend: noop, onResume: noop,
+    syncing: false, refreshing: false, refreshingKind: 'normal', terminating: false, suspending: false, resuming: false,
+    autoSyncEnabled: false, isRunning: false,
+    ...overrides,
+  }
+}
+
+function layout(handlers: ArgoActionHandlers, status: GitOpsDetailStatus | null = null) {
+  return (
+    <GitOpsDetailLayout
+      identity={{ kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'guestbook', toolLabel: 'ArgoCD', kindLabel: 'Application' }}
+      status={status}
+      terminating={false}
+      terminatingChipTooltip=""
+      terminatingActionTooltip=""
+      detail={{ project: 'default' }}
+      insight={null}
+      insightLoading={false}
+      isArgoApp
+      isFlux={false}
+      isFluxWorkload={false}
+      argo={handlers}
+      activeTab="activity"
+      onTabChange={() => {}}
+      fullscreen={false}
+      onToggleFullscreen={() => {}}
+      renderTabBody={() => null}
+      onNavigateRoot={() => {}}
+    />
+  )
+}
+
+const enableAutoSync = (markup: string) => buttonAttrs(markup, 'Enable auto-sync')
+
+describe('Enable auto-sync on the GitOps detail page', () => {
+  it('is disabled with the upgrade note when the Radar cannot clear enabled: false', () => {
+    const markup = html(layout(argo({ resumeUpgrade: upgrade })))
+    expect(enableAutoSync(markup)).toMatch(/\sdisabled=""/)
+    expect(markup).toContain(NOTE_MARKUP)
+  })
+
+  it('is enabled, with no note, when the Radar advertises the behavior', () => {
+    const markup = html(layout(argo({ resumeUpgrade: null })))
+    expect(enableAutoSync(markup)).not.toMatch(/\sdisabled=""/)
+    expect(markup).not.toContain('need the latest Radar')
+  })
+
+  // Disable auto-sync works on every Radar; only the way back on is gated.
+  it('leaves Disable auto-sync alone', () => {
+    const markup = html(layout(argo({ autoSyncEnabled: true, resumeUpgrade: upgrade })))
+    expect(markup).toContain('Disable auto-sync')
+    expect(markup).not.toContain('need the latest Radar')
+  })
+
+  describe('tooltip', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    it.each([
+      { name: 'saved settings', status: { sync: 'OutOfSync', health: 'Healthy', suspended: true } as GitOpsDetailStatus, settings: undefined, copy: 'Turn auto-sync back on with its current or saved settings.' },
+      { name: 'first-time enable', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: false, selfHeal: true }, copy: 'Argo applies new commits and reverts live edits (self-heal). Resources removed from Git are kept (prune off).' },
+      { name: 'first-time enable on a Radar that starts self-heal off', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: false, selfHeal: false }, copy: 'Argo applies new commits. Resources removed from Git are kept (prune off).' },
+      { name: 'a block switched off in place with prune on', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: true, selfHeal: false }, copy: 'Argo applies new commits. Resources removed from Git are deleted (prune on).' },
+      { name: 'unknown settings', status: null, settings: null, copy: 'Turn on automated sync, so Argo applies new commits from Git.' },
+    ])('explains $name', async ({ status, settings, copy }) => {
+      vi.useFakeTimers()
+      const element = document.createElement('div')
+      document.body.appendChild(element)
+      const root = createRoot(element)
+      try {
+        await act(async () => { root.render(layout(argo({ resumeSettings: settings }), status)) })
+        const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Enable auto-sync')!
+        await act(async () => {
+          button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+          vi.advanceTimersByTime(1000)
+        })
+        expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(copy)
+      } finally {
+        await act(async () => root.unmount())
+        element.remove()
+      }
+    })
+
+    it.each([
+      { name: 'Sync is available', copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works.' },
+      { name: 'an operation holds Sync', running: true, copy: 'Stop Argo from automatically syncing Git changes.' },
+      { name: 'the Application is suspended', suspended: true, copy: 'Stop Argo from automatically syncing Git changes.' },
+      { name: 'an ApplicationSet owns it', controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. Manual Sync still works. ApplicationSet clusters can turn it back on; to keep it off, change the ApplicationSet's template." },
+      { name: 'a parent Application manages it', controller: { kind: 'Application' as const, name: 'apps' }, copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works. Application apps manages this one from Git and can turn it back on when it syncs; to keep it off, change it in Git.' },
+      { name: 'an operation holds Sync on an ApplicationSet-owned app', running: true, controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. ApplicationSet clusters can turn it back on; to keep it off, change the ApplicationSet's template." },
+    ] as Array<{ name: string; running?: boolean; suspended?: boolean; controller?: ArgoActionHandlers['autoSyncController']; copy: string }>)('describes Disable auto-sync when $name', async ({ running = false, suspended, controller, copy }) => {
+      vi.useFakeTimers()
+      const element = document.createElement('div')
+      document.body.appendChild(element)
+      const root = createRoot(element)
+      try {
+        await act(async () => { root.render(layout(argo({ autoSyncEnabled: true, isRunning: running, autoSyncController: controller }), suspended ? { sync: 'Synced', health: 'Suspended', suspended: true } as GitOpsDetailStatus : null)) })
+        const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Disable auto-sync')!
+        await act(async () => {
+          button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+          vi.advanceTimersByTime(1000)
+        })
+        expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(copy)
+      } finally {
+        await act(async () => root.unmount())
+        element.remove()
+      }
+    })
+
+    it('explains the disabled button with the note copy', async () => {
+      vi.useFakeTimers()
+      const element = document.createElement('div')
+      document.body.appendChild(element)
+      const root = createRoot(element)
+      await act(async () => { root.render(layout(argo({ resumeUpgrade: upgrade }))) })
+      const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Enable auto-sync')!
+      await act(async () => {
+        button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+        vi.advanceTimersByTime(1000)
+      })
+      expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(NOTE)
+      await act(async () => root.unmount())
+      element.remove()
+    })
+  })
+})
+
+describe('Resume in the GitOps table row menu', () => {
+  const resume = (raw: ReturnType<typeof app>, gate: RadarUpgradeRequirement | null) =>
+    buildRowActionItems(normalizeArgoApplication(raw), () => {}, undefined, gate).find((item) => item.key === 'resume')
+  const suspended = { 'radarhq.io/suspended-prune': 'true' }
+
+  it('is disabled with the note copy for a suspended app whose automated block says enabled: false', () => {
+    const item = resume(app({ enabled: false, prune: true }, suspended), upgrade)
+    expect(item).toMatchObject({ disabled: true, disabledReason: NOTE })
+  })
+
+  it('stays enabled when the Radar advertises the behavior', () => {
+    expect(resume(app({ enabled: false, prune: true }, suspended), null)).toMatchObject({ disabled: false, disabledReason: undefined })
+  })
+
+  // A Radar-suspended app has no automated block; every Radar resumes it.
+  it('stays enabled for a suspended app without enabled: false', () => {
+    expect(resume(app(undefined, suspended), upgrade)).toMatchObject({ disabled: false, disabledReason: undefined })
+  })
+})
+
+describe('Enable Auto-Sync in the resource actions bar', () => {
+  function bar(data: ReturnType<typeof app>, gate: RadarUpgradeRequirement | null) {
+    const markup = html(
+      <ResourceActionsBar
+        resource={{ kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'guestbook' }}
+        data={data}
+        onArgoResume={() => {}}
+        argoResumeUpgrade={gate}
+      />,
+    )
+    return buttonAttrs(markup, 'Enable Auto-Sync')
+  }
+
+  it('is disabled for an app with enabled: false on a Radar without the behavior', () => {
+    expect(bar(app({ enabled: false, prune: true }), upgrade)).toMatch(/\sdisabled=""/)
+  })
+
+  it('is enabled when the Radar advertises the behavior', () => {
+    expect(bar(app({ enabled: false, prune: true }), null)).not.toMatch(/\sdisabled=""/)
+  })
+
+  // A Manual app without an automated block resumes correctly on every Radar.
+  it('is enabled for a Manual app without an automated block', () => {
+    expect(bar(app(undefined), upgrade)).not.toMatch(/\sdisabled=""/)
+  })
+})
+
+describe("the drawer's one-click Sync", () => {
+  it("hands the Application's sync options to the caller", async () => {
+    const onArgoSync = vi.fn()
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const application = { ...app(undefined), spec: { project: 'default', source: {}, destination: {}, syncPolicy: { syncOptions: ['CreateNamespace=true'] } } }
+    await act(async () => root.render(
+      <ResourceActionsBar
+        resource={{ kind: 'applications', namespace: 'argocd', name: 'guestbook', group: 'argoproj.io' }}
+        data={application}
+        onArgoSync={onArgoSync}
+      />,
+    ))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync')!
+    await act(async () => sync.click())
+    expect(onArgoSync).toHaveBeenCalledWith({ namespace: 'argocd', name: 'guestbook', applicationSyncOptions: ['CreateNamespace=true'] })
+    await act(async () => root.unmount())
+    host.remove()
+  })
+})
+
+describe("the drawer's Sync with an options dialog", () => {
+  const source = { repoURL: 'https://example.com/app.git', path: 'app', targetRevision: 'main' }
+  const application = { ...app(undefined), status: { sync: { revision: 'abc1234def', comparedTo: { source } } }, spec: { project: 'default', source, destination: {}, syncPolicy: { syncOptions: ['CreateNamespace=true'] } } }
+  type OnArgoSync = (params: object) => void | Promise<unknown>
+  const bar = (name: string, onArgoSync: OnArgoSync) => (
+    <ResourceActionsBar
+      resource={{ kind: 'applications', namespace: 'argocd', name, group: 'argoproj.io' }}
+      data={{ ...application, metadata: { ...application.metadata, name } }}
+      onArgoSync={onArgoSync}
+      argoSyncDialog={{ pinsComparedRevision: true }}
+    />
+  )
+  async function open(onArgoSync: OnArgoSync) {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => root.render(bar('guestbook', onArgoSync)))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    await act(async () => sync.click())
+    return {
+      rerender: async (name: string) => { await act(async () => root.render(bar(name, onArgoSync))) },
+      close: async () => { await act(async () => root.unmount()); host.remove() },
+    }
+  }
+  // A closed dialog's portal stays briefly for its exit animation; use the newest.
+  const dialog = () => [...document.querySelectorAll('[role="dialog"]')].at(-1)!
+  const dialogButton = (label: string) => [...dialog().querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === label)!
+
+  it('opens the dialog instead of syncing, and syncs nothing on Cancel', async () => {
+    const onArgoSync = vi.fn<OnArgoSync>()
+    const { close } = await open(onArgoSync)
+    expect(dialog().textContent).toContain('Leave empty for the revision Argo last compared (abc1234def).')
+    expect(onArgoSync).not.toHaveBeenCalled()
+    await act(async () => dialogButton('Cancel').click())
+    expect(onArgoSync).not.toHaveBeenCalled()
+    await close()
+  })
+
+  it('stays open with its choices when the sync fails, and closes once one succeeds', async () => {
+    let fail = true
+    const onArgoSync = vi.fn<OnArgoSync>(() => (fail ? Promise.reject(new Error('denied')) : Promise.resolve()))
+    const { close } = await open(onArgoSync)
+    const prune = () => [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune().click())
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync).toHaveBeenCalledTimes(1)
+    expect(dialog().textContent).toContain('Sync now')
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe('Sync failed: denied')
+    expect(prune().checked).toBe(true)
+    fail = false
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync.mock.calls[1][0]).toMatchObject({ prune: true })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await close()
+  })
+
+  it('is disabled while an Argo operation runs, instead of opening a dialog that can do nothing', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const running = { ...application, status: { ...application.status, operationState: { phase: 'Running' } } }
+    await act(async () => root.render(
+      <ResourceActionsBar
+        resource={{ kind: 'applications', namespace: 'argocd', name: 'guestbook', group: 'argoproj.io' }}
+        data={running}
+        onArgoSync={vi.fn<OnArgoSync>()}
+        argoSyncDialog={{ pinsComparedRevision: true }}
+      />,
+    ))
+    const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    expect(sync.disabled).toBe(true)
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('closes, dropping its choices, when the drawer switches to another Application', async () => {
+    const onArgoSync = vi.fn<OnArgoSync>()
+    const { rerender, close } = await open(onArgoSync)
+    const prune = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune.click())
+    await rerender('other')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await rerender('guestbook')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await rerender('other')
+    const reopen = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
+    await act(async () => reopen.click())
+    const prunedAgain = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    expect(prunedAgain.checked).toBe(false)
+    await act(async () => dialogButton('Sync now').click())
+    expect(onArgoSync.mock.calls[0][0]).toMatchObject({ name: 'other', prune: false })
+    await close()
+  })
+
+  it("syncs with the dialog's choices and the Application's options", async () => {
+    const onArgoSync = vi.fn<OnArgoSync>()
+    const { close } = await open(onArgoSync)
+    const prune = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!
+    await act(async () => prune.click())
+    const confirm = dialogButton('Sync now')
+    expect(confirm.disabled).toBe(false)
+    await act(async () => confirm.click())
+    expect(onArgoSync).toHaveBeenCalledTimes(1)
+    expect(onArgoSync.mock.calls[0][0]).toMatchObject({ namespace: 'argocd', name: 'guestbook', applicationSyncOptions: ['CreateNamespace=true'], prune: true, dryRun: false })
+    expect(onArgoSync.mock.calls[0][0]).not.toHaveProperty('syncOptions')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await close()
+  })
+})
+
+describe('auto-sync support pending or unavailable', () => {
+  it.each(["Checking this cluster's Radar…", "Couldn't check this cluster's Radar support. Refresh to try again."])('disables each affected control with its reason: %s', reason => {
+    const markup = html(layout(argo({ resumeBlockedReason: reason })))
+    expect(enableAutoSync(markup)).toMatch(/\sdisabled=""/)
+    expect(markup).toContain(reason.replace(/'/g, '&#x27;'))
+    const raw = app({ enabled: false }, { 'radarhq.io/suspended-prune': 'true' })
+    const onAction = vi.fn()
+    const item = buildRowActionItems(normalizeArgoApplication(raw), onAction, undefined, null, reason).find(i => i.key === 'resume')!
+    expect(item).toMatchObject({ disabled: true, disabledReason: reason })
+    item.onClick()
+    expect(onAction).not.toHaveBeenCalled()
+    const bar = html(<ResourceActionsBar resource={{ kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'guestbook' }} data={raw} onArgoResume={() => {}} argoResumeBlockedReason={reason} />)
+    expect(buttonAttrs(bar, 'Enable Auto-Sync')).toMatch(/\sdisabled=""/)
+    const ordinary = buildRowActionItems(normalizeArgoApplication(app(undefined, { 'radarhq.io/suspended-prune': 'true' })), onAction, undefined, null, reason).find(i => i.key === 'resume')!
+    expect(ordinary.disabled).toBe(false)
+  })
+})

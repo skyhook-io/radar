@@ -65,11 +65,14 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
+      # A prerelease ships only its Docker image and Helm chart: GoReleaser still
+      # builds the binaries the Docker job needs, but publishes nothing (no
+      # GitHub release, no Homebrew or Scoop).
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
-          args: release --clean
+          args: ${{ steps.version.outputs.is_prerelease == 'true' && 'release --clean --skip=publish' || 'release --clean' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -100,7 +103,7 @@ jobs:
             echo "## CLI Release ${VERSION}"
             echo ""
             if [[ "$VERSION" == *-* ]]; then
-              echo "> **Pre-release** — not published to Homebrew/Scoop/Krew/Helm"
+              echo "> **Pre-release** — binaries built but not published (no GitHub release, Homebrew, Scoop or Krew); only the Docker image and the Helm chart (helm --devel) are published"
               echo ""
             fi
             echo "### Assets"
@@ -203,11 +206,14 @@ jobs:
       - name: Publish to MCP Registry
         run: ./mcp-publisher publish
 
+  # Prerelease tags (v1.2.3-rc.1) publish their chart too, as version 1.2.3-rc.1.
+  # helm-charts' release marks it a prerelease on GitHub and pushes it to the
+  # index and OCI; Helm only offers it with --devel. Waits for the image the
+  # chart points at.
   helm:
     name: Helm Chart
     runs-on: ubuntu-latest
-    needs: release
-    if: needs.release.outputs.is_prerelease != 'true'
+    needs: [release, docker]
     steps:
       - uses: actions/checkout@v7
 

@@ -261,7 +261,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		maxCatalogBytes         = 66500
+		// Rollback guidance, its source-mode warning and sync_options
+		// inheritance: 66,869 bytes without exec.
+		maxCatalogBytes         = 66900
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -738,4 +740,43 @@ func TestSearchDescriptionNamesCoverageStatus(t *testing.T) {
 		}
 	}
 	t.Fatal("search tool missing")
+}
+
+// The generator gives *int32 fields int32 bounds; a replica count is never
+// negative, so the published schema must not advertise it.
+func TestManageWorkloadReplicasSchemaIsNonNegative(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name != "manage_workload" {
+			continue
+		}
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal schema: %v", err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Minimum *float64 `json:"minimum"`
+				Maximum *float64 `json:"maximum"`
+				Type    any      `json:"type"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("unmarshal schema: %v", err)
+		}
+		replicas, ok := schema.Properties["replicas"]
+		if !ok {
+			t.Fatal("manage_workload has no replicas property")
+		}
+		if replicas.Minimum == nil || *replicas.Minimum != 0 {
+			t.Fatalf("replicas minimum = %v, want 0", replicas.Minimum)
+		}
+		if replicas.Maximum == nil || *replicas.Maximum != 2147483647 {
+			t.Fatalf("replicas maximum = %v, want the int32 maximum", replicas.Maximum)
+		}
+		if !strings.Contains(fmt.Sprint(replicas.Type), "null") {
+			t.Fatalf("replicas type = %v, want nullable so scale can tell an omitted count from 0", replicas.Type)
+		}
+		return
+	}
+	t.Fatal("manage_workload is not registered")
 }
