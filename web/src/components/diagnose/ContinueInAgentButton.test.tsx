@@ -119,7 +119,11 @@ describe("ContinueInAgentButton", () => {
       <ContinueInAgentButton run={run()} command={command} />,
     );
     expect(html).toContain("data-continue-trust-hint");
-    expect(html).toContain("Choose Yes; Enter exits.");
+    expect(html).toContain("Select Yes before pressing Enter");
+    // Announced with the button, not only shown under it.
+    const hintId = html.match(/id="([^"]+)" data-continue-trust-hint/)?.[1];
+    expect(hintId).toBeTruthy();
+    expect(html).toContain(`aria-describedby="${hintId}"`);
   });
 
   it("does not show the trust hint for Codex", () => {
@@ -130,7 +134,7 @@ describe("ContinueInAgentButton", () => {
       />,
     );
     expect(html).not.toContain("data-continue-trust-hint");
-    expect(html).not.toContain("trust this folder");
+    expect(html).not.toContain("trust your home folder");
   });
 
   it("opens the command menu from one button when Radar has no terminal", () => {

@@ -42,7 +42,7 @@ describe("launchTrustHint", () => {
   };
 
   it("warns about Claude Code's folder trust prompt", () => {
-    expect(launchTrustHint(base)).toMatch(/trust this folder/);
+    expect(launchTrustHint(base)).toMatch(/trust your home folder/);
   });
 
   it("stays quiet for agents without that prompt", () => {

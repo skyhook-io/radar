@@ -44,6 +44,8 @@ export function ContinueInAgentButton({
   const { localTerminal } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
   const trustHint = launchTrustHint(run);
+  const trustHintId = useId();
+  const menuTrustHintId = useId();
   const [open, setOpen] = useState(false);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const { shouldRender, isOpen } = useAnimatedUnmount(
@@ -51,7 +53,6 @@ export function ContinueInAgentButton({
     overlayExitMs("menu"),
   );
   const rootRef = useRef<HTMLDivElement>(null);
-  const anchorRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
@@ -65,7 +66,7 @@ export function ContinueInAgentButton({
 
   useLayoutEffect(() => {
     if (!open || !shouldRender) return;
-    const trigger = anchorRef.current?.getBoundingClientRect();
+    const trigger = rootRef.current?.getBoundingClientRect();
     const menuHeight = menuRef.current?.scrollHeight ?? 0;
     if (!trigger) return;
     const bounds = rootRef.current
@@ -157,13 +158,15 @@ export function ContinueInAgentButton({
   const segment =
     "inline-flex items-center gap-1.5 py-1 text-xs font-medium text-theme-text-primary hover:bg-theme-hover focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50";
 
+  // The fragment's hint takes its own line in the wrapping action row, so the
+  // row's other actions stay aligned with the button.
   return (
-    <div
-      ref={rootRef}
-      onBlur={onFocusLeave}
-      className="inline-flex shrink-0 flex-col items-end gap-0.5"
-    >
-      <div ref={anchorRef} className="relative inline-flex">
+    <>
+      <div
+        ref={rootRef}
+        onBlur={onFocusLeave}
+        className="relative inline-flex shrink-0"
+      >
         <div className="inline-flex rounded-md border border-theme-border bg-theme-surface">
           {localTerminal ? (
             <>
@@ -175,6 +178,7 @@ export function ContinueInAgentButton({
                 <button
                   type="button"
                   onClick={runInTerminal}
+                  aria-describedby={trustHint ? trustHintId : undefined}
                   className={clsx(segment, "rounded-l-md px-2")}
                 >
                   <TerminalSquare
@@ -256,7 +260,7 @@ export function ContinueInAgentButton({
               <p className="text-[11px] text-theme-text-tertiary">
                 Paste where you run {label}. It resumes this session with
                 Radar&apos;s MCP attached.
-                {trustHint && <> {trustHint}</>}
+                {trustHint && <span id={menuTrustHintId}> {trustHint}</span>}
               </p>
               <div className="mt-1.5 flex items-start gap-1 rounded-md border border-theme-border bg-theme-base py-1 pl-2 pr-1">
                 <code
@@ -269,6 +273,7 @@ export function ContinueInAgentButton({
                   type="button"
                   role="menuitem"
                   onClick={copyCommand}
+                  aria-describedby={trustHint ? menuTrustHintId : undefined}
                   aria-label={
                     copy === "copied"
                       ? "Command copied"
@@ -323,13 +328,16 @@ export function ContinueInAgentButton({
         )}
       </div>
       {localTerminal && trustHint && (
-        <p
-          data-continue-trust-hint
-          className="max-w-[18rem] text-right text-[11px] leading-snug text-theme-text-tertiary"
-        >
-          {trustHint}
-        </p>
+        <div className="flex basis-full justify-end">
+          <p
+            id={trustHintId}
+            data-continue-trust-hint
+            className="max-w-xs text-right text-xs text-theme-text-tertiary"
+          >
+            {trustHint}
+          </p>
+        </div>
       )}
-    </div>
+    </>
   );
 }

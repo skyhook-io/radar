@@ -30,7 +30,7 @@ export function launchTrustHint(run: RunSummary): string | null {
     run.agent === "cursor-agent"
   )
     return null;
-  return "Claude Code may ask whether to trust this folder. Choose Yes; Enter exits.";
+  return "Claude Code may ask to trust your home folder. Select Yes before pressing Enter; the default exits.";
 }
 
 // openInTerminal asks App (which owns the DockProvider) to open Radar's local
