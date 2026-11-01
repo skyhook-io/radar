@@ -109,6 +109,11 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 			parent = owner
 		}
 		parentID := nodeID(parent)
+		if group, grouped := podGroups[refKey(parent)]; grouped {
+			if _, declared := nodes[parentID]; !declared {
+				parentID = nodeID(refFromTopologyNode(group))
+			}
+		}
 		if _, visible := nodes[parentID]; visible && parentID != id {
 			edges[edgeKey(parentID, id)] = Edge{Source: parentID, Target: id, Type: EdgeOwns}
 		}

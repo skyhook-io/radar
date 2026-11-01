@@ -372,6 +372,10 @@ func TestGeneratedTreeShowsDisplayPodGroupForGroupedPods(t *testing.T) {
 			status = string(topology.StatusUnhealthy)
 		}
 		details = append(details, map[string]any{"name": pod.Ref.Name, "namespace": "monitoring", "phase": phase, "restarts": int32(i), "status": status, "ownerKey": "monitoring/ReplicaSet/web-1"})
+		if i == 1 {
+			// A generic ephemeral volume's claim is owned by its Pod.
+			objects = append(objects, ownedObject("", "PersistentVolumeClaim", "monitoring", "web-1-1-data", &pod, true))
+		}
 	}
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
@@ -410,6 +414,14 @@ func TestGeneratedTreeShowsDisplayPodGroupForGroupedPods(t *testing.T) {
 			}
 			if !found {
 				t.Fatalf("group not under its ReplicaSet: %+v", got.Edges)
+			}
+			claim := edgeKey(node.ID, nodeID(ResourceRef{Kind: "PersistentVolumeClaim", Namespace: "monitoring", Name: "web-1-1-data"}))
+			found = false
+			for _, e := range got.Edges {
+				found = found || edgeKey(e.Source, e.Target) == claim
+			}
+			if !found {
+				t.Fatalf("grouped Pod's claim not under its group: %+v", got.Edges)
 			}
 		}
 	}
