@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -134,6 +135,12 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 				entry.Error = "Runtime bundles support apps Deployments and DaemonSets for declared targets. Read this reference with get_resource instead."
 			}
 			resp.DeclaredTarget = entry
+		} else {
+			targetKind, _, _ := unstructured.NestedString(u.Object, "spec", "targetRef", "kind")
+			targetName, _, _ := unstructured.NestedString(u.Object, "spec", "targetRef", "name")
+			if targetKind != "" && targetName != "" {
+				resp.Warnings = append(resp.Warnings, "No declared-target bundle was collected for this target kind. Flagger uses a Deployment fallback for unrecognized kinds; inspect spec.targetRef and the controller's Events.")
+			}
 		}
 	}
 	// Refuse a mixed-cluster answer or one whose root was recreated while
