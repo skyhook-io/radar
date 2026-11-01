@@ -417,9 +417,9 @@ own owners.
 - [ ] Add fixtures for supported API shapes and meaningful states: healthy, failing,
   intentionally inactive, stale/missing status, collisions and unavailable related
   resources. Test only relevant combinations, not a speculative matrix.
-- [ ] Follow [QA](../.claude/commands/qa.md): `make test-changed` while iterating,
-  then the full suite once via CI where available. Use `make build` when running
-  the embedded app for live or visual testing; it is not an extra verification
+- [ ] For code changes, run `make test-changed` while iterating, then the full
+  suite once via CI; run it locally if CI will not test the branch. Use `make build`
+  when running the embedded app for live or visual testing; it is not an extra verification
   round. Existing guards include
   `internal/k8s/{dynamic_cache_fallback,chart_rbac_coverage,capabilities_alignment}_test.go`
   and resource `curated-column-ownership.test.ts` / `ResourceRendererDispatch.test.tsx`.
