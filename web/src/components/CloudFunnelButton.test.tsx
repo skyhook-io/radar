@@ -9,8 +9,16 @@ import { CloudFunnelButton } from './CloudFunnelButton'
 const connection = vi.hoisted(() => ({ state: 'connecting' as ConnectionStateType }))
 vi.mock('../context/ConnectionContext', () => ({ useConnection: () => ({ connection }) }))
 vi.mock('./ui/Tooltip', () => ({ Tooltip: ({ children }: { children: ReactNode }) => children }))
-vi.mock('./ui/Toast', () => ({ showApiError: vi.fn() }))
-vi.mock('./CloudConnectFlow', () => ({ CloudConnectFlow: () => <div>Install flow</div> }))
+const toast = vi.hoisted(() => ({ showApiError: vi.fn() }))
+vi.mock('./ui/Toast', () => toast)
+vi.mock('./CloudConnectFlow', () => ({
+  CloudConnectFlow: ({ status, blocked, onExit }: { status: { state: string; prepareStep?: string }; blocked: unknown; onExit: () => void }) => (
+    <div>
+      Install flow [{blocked ? 'blocked' : status.state} {status.prepareStep ?? '-'}]
+      <button onClick={onExit}>Leave flow</button>
+    </div>
+  ),
+}))
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
@@ -19,6 +27,10 @@ let lane: 'driver' | 'wizard'
 let discovery: { connected: { namespace: string; deployment: string; clusterUrl: string }[] }
 let discoveryStatus: number
 let flowState: 'idle' | 'awaiting_approval'
+// When set, /status answers with this body instead of { state: flowState }.
+let statusBody: Record<string, unknown> | null
+// When set, the prepare POST stays pending until the test settles it.
+let prepareReply: { promise: Promise<Response>; resolve: (r: Response) => void; reject: (e: unknown) => void } | null
 const requests: string[] = []
 
 beforeEach(() => {
@@ -27,6 +39,9 @@ beforeEach(() => {
   discovery = { connected: [] }
   discoveryStatus = 200
   flowState = 'idle'
+  statusBody = null
+  prepareReply = null
+  toast.showApiError.mockClear()
   requests.length = 0
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const element = document.createElement('div')
@@ -38,12 +53,13 @@ beforeEach(() => {
     const bodies: Record<string, unknown> = {
       '/api/capabilities': { cloudConnect: { lane, appUrl: 'https://cloud.example', apiUrl: 'https://cloud.example' }, deployment: { mode: 'local' } },
       '/api/cluster-info': { context: 'test-cluster' },
-      '/api/cloud/install/status': { state: flowState },
+      '/api/cloud/install/status': statusBody ?? { state: flowState },
       '/api/cloud/install/discover': discoveryStatus === 200 ? discovery : { error: 'Discovery failed' },
       '/api/cloud/install/prepare': { error: 'Not connected to cluster' },
       '/api/connect/info': {},
     }
     if (!(url.pathname in bodies)) throw new Error(`Unexpected request: ${input}`)
+    if (url.pathname.endsWith('/prepare') && prepareReply) return prepareReply.promise
     const status = url.pathname.endsWith('/prepare') ? 503 : url.pathname.endsWith('/discover') ? discoveryStatus : 200
     return new Response(JSON.stringify(bodies[url.pathname]), { status })
   }))
@@ -62,11 +78,28 @@ async function render() {
   })
 }
 
-async function until(assertion: () => void) {
+async function until(assertion: () => void, timeout = 1000) {
   await vi.waitFor(async () => {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
     assertion()
-  })
+  }, { timeout })
+}
+
+function holdPrepare() {
+  let resolve!: (r: Response) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<Response>((res, rej) => { resolve = res; reject = rej })
+  prepareReply = { promise, resolve, reject }
+  return prepareReply
+}
+
+const statusPolls = () => requests.filter(path => path === '/api/cloud/install/status').length
+
+async function startConnect() {
+  connection.state = 'connected'
+  await openDialog()
+  await until(() => expect(button('Connect this cluster…')?.disabled).toBe(false))
+  await act(async () => { button('Connect this cluster…')!.click() })
 }
 
 function button(text: string) {
@@ -151,5 +184,107 @@ describe('Cloud dialog connection availability', () => {
     await openDialog()
     await until(() => expect(document.body.textContent).toContain('Install flow'))
     expect(document.body.textContent).not.toContain('Continue in Radar Cloud')
+  })
+})
+
+describe('Cloud connect preparation progress', () => {
+  it('polls the server while the prepare request is pending and shows its step', async () => {
+    holdPrepare()
+    await startConnect()
+    await until(() => expect(document.body.textContent).toContain('Install flow [preparing -]'))
+    const before = statusPolls()
+    statusBody = { flowId: 'f1', state: 'preparing', prepareStep: 'prepare' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [preparing prepare]'), 3000)
+    expect(statusPolls()).toBeGreaterThan(before)
+  })
+
+  it('keeps the last step seen when the server clears a blocked preparation before answering', async () => {
+    const reply = holdPrepare()
+    await startConnect()
+    statusBody = { flowId: 'f1', state: 'preparing', prepareStep: 'preflight' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [preparing preflight]'), 3000)
+    statusBody = { state: 'idle' }
+    const before = statusPolls()
+    await until(() => expect(statusPolls()).toBeGreaterThan(before), 3000)
+    expect(document.body.textContent).toContain('Install flow [preparing preflight]')
+
+    await act(async () => {
+      reply.resolve(new Response(JSON.stringify({ state: 'blocked', blocked: { reason: 'preflight', message: 'No permission' } }), { status: 200 }))
+    })
+    await until(() => expect(document.body.textContent).toContain('Install flow [blocked -]'))
+    const settled = statusPolls()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1300)) })
+    expect(statusPolls()).toBe(settled)
+  })
+
+  it.each(['ready', 'failed'] as const)('stays on a flow the poll saw %s when the prepare request itself is lost', async state => {
+    const reply = holdPrepare()
+    await startConnect()
+    statusBody = { flowId: 'f1', state: 'preparing', prepareStep: 'preflight' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [preparing preflight]'), 3000)
+    statusBody = { flowId: 'f1', state }
+    await until(() => expect(document.body.textContent).toContain(`Install flow [${state} -]`), 3000)
+    await act(async () => { reply.reject(new TypeError('Failed to fetch')) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(document.body.textContent).toContain(`Install flow [${state} -]`)
+    expect(toast.showApiError).not.toHaveBeenCalled()
+    expect(button('Try again')).toBeUndefined()
+  })
+
+  it('keeps a reattached flow that moved on when the retry\'s own answer is lost', async () => {
+    // The first request fails while the server is still preparing f1, so the
+    // dialog returns to the pitch with f1 cached as preparing.
+    const first = holdPrepare()
+    await startConnect()
+    statusBody = { flowId: 'f1', state: 'preparing', prepareStep: 'inspect' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [preparing inspect]'), 3000)
+    await act(async () => { first.reject(new TypeError('Failed to fetch')) })
+    await until(() => expect(button('Try again')).toBeDefined())
+    // The retry attaches to the same flow; it reaches ready, and this answer
+    // is lost too. Same flow id, but a state seen only after the retry began.
+    const retry = holdPrepare()
+    await act(async () => { button('Try again')!.click() })
+    statusBody = { flowId: 'f1', state: 'ready' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [ready -]'), 3000)
+    toast.showApiError.mockClear()
+    await act(async () => { retry.reject(new TypeError('Failed to fetch')) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(document.body.textContent).toContain('Install flow [ready -]')
+    expect(toast.showApiError).not.toHaveBeenCalled()
+  })
+
+  it('reports a failed attempt even when an older flow arrived in the status cache after the click', async () => {
+    const reply = holdPrepare()
+    await startConnect()
+    // The status fetched as the dialog opened answers late, with a failed
+    // flow from an earlier session that this attempt never saw preparing.
+    statusBody = { flowId: 'f0', state: 'failed' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [failed -]'), 3000)
+    await act(async () => { reply.reject(new TypeError('Failed to fetch')) })
+    await until(() => expect(toast.showApiError).toHaveBeenCalled())
+    expect(button('Try again')).toBeDefined()
+  })
+
+  it('ignores a late answer from an earlier attempt once a new one has started', async () => {
+    const first = holdPrepare()
+    await startConnect()
+    statusBody = { flowId: 'f1', state: 'preparing', prepareStep: 'inspect' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [preparing inspect]'), 3000)
+    statusBody = { flowId: 'f1', state: 'ready' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [ready -]'), 3000)
+    // The person leaves the first plan and connects again while the first
+    // request still has not answered.
+    statusBody = { state: 'idle' }
+    await act(async () => { button('Leave flow')!.click() })
+    await until(() => expect(button('Connect this cluster…')?.disabled).toBe(false), 3000)
+    holdPrepare()
+    await act(async () => { button('Connect this cluster…')!.click() })
+    statusBody = { flowId: 'f2', state: 'preparing', prepareStep: 'prepare' }
+    await until(() => expect(document.body.textContent).toContain('Install flow [preparing prepare]'), 3000)
+
+    await act(async () => { first.reject(new TypeError('Failed to fetch')) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(document.body.textContent).toContain('Install flow [preparing prepare]')
+    expect(toast.showApiError).not.toHaveBeenCalled()
   })
 })
