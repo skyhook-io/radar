@@ -244,6 +244,15 @@ func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
 	}
 }
 
+func TestAutoInstrumentationContractIsDiscoverableOnDetailTools(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		has := strings.Contains(tool.Description, "autoInstrumentation.openTelemetry checks per-language refs for NEW Pods, never existing injection")
+		if (tool.Name == "get_resource" || tool.Name == "diagnose") != has {
+			t.Errorf("%s prospective request contract present=%v", tool.Name, has)
+		}
+	}
+}
+
 func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
@@ -254,6 +263,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// get_resource's result shapes, with "only object_not_found means it is
 	// absent", a third, and get_resource's "manager: none is not unmanaged" a
 	// fourth.
+	// OTel request evaluation must distinguish NEW Pod configuration from existing
+	// admission history. Its concise native contract appears on both detail tools.
 	// Annotation pause intent and stored acknowledgement need distinct source
 	// semantics in the catalog so agents do not infer fresh external health
 	// or treat absence as ruling out another pause mechanism.
@@ -261,9 +272,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Rollback guidance, its source-mode warning and sync_options
-		// inheritance: 66,869 bytes without exec.
-		maxCatalogBytes         = 66900
+		// Includes rollback guidance and sync_options inheritance.
+		maxCatalogBytes         = 67350
 		maxToolDescriptionBytes = 3200
 	)
 

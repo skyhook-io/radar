@@ -32,11 +32,18 @@ import (
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
-	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
+	// AutoInstrumentation contains provider-specific declared injection evidence,
+	// not successful injection or telemetry delivery. Absence is not an all-clear.
+	AutoInstrumentation *AutoInstrumentationContext `json:"autoInstrumentation,omitempty"`
+	CrossplanePause     CrossplanePauseState        `json:"crossplanePause,omitempty"`
 
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`
 	Owner      *ContextRef        `json:"owner,omitempty"`
+	// Children names current direct children supplied by the host,
+	// resolved by owner-reference UID, never labels or generated names. Hosts
+	// currently supply this for Collector/Canary roots only; absent is not empty.
+	Children *ChildrenContext `json:"children,omitempty"`
 	// ManagedBy names the highest readable controller and separately observed
 	// non-GitOps managing controllers. Manager carries GitOps/Helm evidence.
 	// An incomplete controller walk is reported in Omitted.
@@ -82,6 +89,71 @@ type ResourceContext struct {
 	// have changed it, never who did.
 	TemplateDivergence *TemplateDivergence `json:"templateDivergence,omitempty"`
 	Omitted            []OmittedField      `json:"omitted,omitempty"`
+}
+
+// AutoInstrumentationContext separates native provider observations. Missing
+// providers were not established; this is not an exhaustive injector inventory.
+type AutoInstrumentationContext struct {
+	OpenTelemetry *OpenTelemetryAutoInstrumentationContext `json:"openTelemetry,omitempty"`
+}
+
+// OpenTelemetryAutoInstrumentationContext checks each language's current reference for a
+// hypothetical new Pod. This is not the combined webhook admission result:
+// one failing language selection can prevent injection of the other languages.
+// Workload metadata annotations do not configure Pods created from its template.
+type OpenTelemetryAutoInstrumentationContext struct {
+	// NamespaceDefaultsUnknown means Namespace annotations could not be read;
+	// absent requests do not rule out inherited configuration for other languages.
+	NamespaceDefaultsUnknown bool `json:"namespaceDefaultsUnknown,omitempty"`
+
+	RequestsIfPodCreatedNow []OpenTelemetryInjectionRequest `json:"requestsIfPodCreatedNow,omitempty"`
+	// IgnoredWorkloadMetadataAnnotations contains supported injection annotation
+	// keys, not values, found on workload metadata instead of the Pod template.
+	// Omitted means no such supported keys were detected, not all keys checked.
+	IgnoredWorkloadMetadataAnnotations []string `json:"ignoredWorkloadMetadataAnnotations,omitempty"`
+}
+
+// OpenTelemetryInjectionResolution is a per-language reference lookup result,
+// not evidence that this or any other language will be injected.
+type OpenTelemetryInjectionResolution string
+
+const (
+	OpenTelemetryInjectionDisabled         OpenTelemetryInjectionResolution = "disabled"
+	OpenTelemetryInjectionResolved         OpenTelemetryInjectionResolution = "resolved"
+	OpenTelemetryInjectionMissing          OpenTelemetryInjectionResolution = "missing"
+	OpenTelemetryInjectionInvalidReference OpenTelemetryInjectionResolution = "invalid_reference"
+	OpenTelemetryInjectionUnknown          OpenTelemetryInjectionResolution = "unknown"
+	OpenTelemetryInjectionDefaultResolved  OpenTelemetryInjectionResolution = "default_resolved"
+	OpenTelemetryInjectionDefaultMissing   OpenTelemetryInjectionResolution = "default_missing"
+	OpenTelemetryInjectionDefaultAmbiguous OpenTelemetryInjectionResolution = "default_ambiguous"
+)
+
+// OpenTelemetryInjectionRequest evaluates configuration for a hypothetical Pod created
+// now. It does not describe the admission history of an existing Pod.
+type OpenTelemetryInjectionRequest struct {
+	// Language is the native injection component identifier: the exact suffix of
+	// instrumentation.opentelemetry.io/inject-. It includes sdk and server modules
+	// as well as application languages; it is not a provider-neutral language enum.
+	Language string `json:"language"`
+	// Source names the Pod, workload template's object, or Namespace whose
+	// effective annotation was used. Pod=true can inherit a Namespace name.
+	Source ContextRef `json:"source"`
+	// Resolution: disabled, resolved, missing, invalid_reference, unknown,
+	// default_resolved, default_missing, or default_ambiguous. Missing requires
+	// a synced, caller-readable inventory; unknown never means absent. Unknown
+	// can reflect hidden Namespace inheritance, a named ref that could not be
+	// checked, or unreadable default-selection inventory; inspect the context
+	// qualifiers and declared Instrumentation coordinates to choose a follow-up.
+	Resolution OpenTelemetryInjectionResolution `json:"resolution"`
+	// Instrumentation is the declared/selected reference. When Resolution is
+	// unknown a named annotation still supplies coordinates, not existence proof.
+	Instrumentation *ContextRef `json:"instrumentation,omitempty"`
+	// AnnotationPath is the JSON pointer within Source, including Pod-template
+	// nesting for workloads, and the escaped annotation key.
+	AnnotationPath string `json:"annotationPath"`
+	// AssumesOperatorCRDMode qualifies every true/default selection. If the
+	// operator uses inline configuration instead, its selection can differ.
+	AssumesOperatorCRDMode bool `json:"assumesOperatorCRDMode,omitempty"`
 }
 
 // TemplateDivergence reports differences between live Pods and the current
@@ -911,4 +983,17 @@ type ReflectionContext struct {
 	Automatic             *bool        `json:"automatic,omitempty"`
 	VisibleMirrors        []ContextRef `json:"visibleMirrors,omitempty"`
 	Truncated             bool         `json:"truncated,omitempty"`
+}
+
+// ChildrenContext previews direct owner-reference children of any resource kind,
+// not an operator's runtime set. An absent block is not an empty inventory.
+type ChildrenContext struct {
+	Items []ContextRef `json:"items"`
+	// Complete: every direct child in the caller-readable scope is included.
+	// Uncollected kinds or truncation make this false, without implying a runtime failure.
+	Complete bool `json:"complete"`
+	// Narrowed means permissions may exclude children, not that hidden children exist.
+	Narrowed bool `json:"narrowed,omitempty"`
+	// Truncated marks the preview's response limit, independently of inventory gaps.
+	Truncated bool `json:"truncated,omitempty"`
 }

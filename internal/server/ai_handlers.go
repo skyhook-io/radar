@@ -627,6 +627,13 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		// `rel == nil && opts.Topology != nil` fallback re-ran the identical
 		// scan. Leaving opts.Relationships unset is the canonical path.
 	}
+	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
+		return (namespace == "" || len(s.getUserNamespaces(r, []string{namespace})) > 0) && s.canRead(r, group, resource, namespace, verb)
+	})
+	if children := k8s.OperatorChildrenForObject(obj, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }); children != nil {
+		opts.Children = children.Context
+		opts.ChildrenUnavailable = children.Unavailable != ""
+	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) })
 	}
