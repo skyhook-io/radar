@@ -68,6 +68,10 @@ baseline exception is not a full-object UI/REST confidentiality guarantee; runti
 response authorization remains separate. It does not revoke
 permissions already granted by other roles.
 
+### Instrumentation upgrade history
+
+The neutral “Upgrade block recorded” status describes `status.upgradeBlockedVersions`, written during an operator startup upgrade pass. A record can remain after a manual image change; it is not a current compatibility or runtime-health verdict. The drawer shows at most ten recorded languages, with shortened labels and a link to full YAML for remaining entries. Compact agent summaries retain their bounded language preview; detail reads retain native status without a duplicate context block.
+
 ## Flagger
 
 Radar provides native details and concise REST/MCP summaries for `flagger.app`

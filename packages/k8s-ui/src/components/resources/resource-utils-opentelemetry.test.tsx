@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { renderToString } from 'react-dom/server'
+import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import { getCollectorPipelines, getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getGenericResourceStatus } from './generic-status'
 import { getCellFilterValue } from './resource-utils'
@@ -71,4 +71,12 @@ describe('OpenTelemetry drawer identity and meaning', () => {
     expect(html).not.toContain('do-not-surface')
     expect(render('other.example/v1', 'Instrumentation', { custom: 'generic-visible' })).toContain('generic-visible')
   })
+})
+
+it('bounds recorded upgrade language rows and labels', () => {
+ const blocked = Object.fromEntries(Array.from({length:30},(_,i)=>[`language-${String(i).padStart(2,'0')}${'x'.repeat(200)}`, 'recorded reason']))
+ const html=renderToStaticMarkup(<ResourceRendererDispatch resource={{kind:'instrumentations',namespace:'test',name:'test'}} data={{apiVersion:'opentelemetry.io/v1alpha1',kind:'Instrumentation',metadata:{name:'test',namespace:'test'},status:{upgradeBlockedVersions:blocked}}} onCopy={()=>{}} copied={null} showCommonSections={false} />)
+ expect(html).toContain('20 more recorded languages in YAML')
+ expect(html).not.toContain('language-10')
+ expect(html).not.toContain('x'.repeat(161))
 })
