@@ -1442,6 +1442,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 	// an older one. Backoff is tracked per disk, so an echo for one volume says
 	// nothing about another's error.
 	informativeAttach := map[string]*corev1.Event{}
+	// The newest Multi-Attach event per pod, also kept across the window: the
+	// attach-detach controller reports it once per volume, after which the
+	// kubelet's FailedMount timeouts become the latest event while the
+	// conflict persists.
+	multiAttach := map[string]*corev1.Event{}
 	var order []string
 	for _, e := range events {
 		if e.InvolvedObject.Kind != "Pod" {
@@ -1467,6 +1472,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				if cur := informativeAttach[volKey]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
 					informativeAttach[volKey] = e
 				}
+			}
+		}
+		if reason == "VolumeMultiAttach" {
+			if cur := multiAttach[key]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
+				multiAttach[key] = e
 			}
 		}
 		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
@@ -1502,6 +1512,10 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				}
 			}
 			cause, action = attachFailureDiagnosis(cache, pod, eventMessage)
+		} else if ma := multiAttach[key]; ma != nil && (c.reason == "VolumeMultiAttach" || c.reason == "VolumeMount") && ownerKind == "Deployment" {
+			// The diagnosis rechecks the holder in the cache, so an old event
+			// only explains the mount timeout while that replica still exists.
+			cause, action = multiAttachSharedVolumeDiagnosis(cache, pod, ownerName, ma.Message)
 		}
 		detection := Detection{
 			Kind:              "Pod",
@@ -1644,6 +1658,54 @@ func attachEventVolume(message string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// The attach-detach controller's Multi-Attach event ("Waiting for detach" since
+// Kubernetes 1.37): the volume (PV name) and the pods in the pod's namespace
+// already using it, minus any count of pods in other namespaces.
+var multiAttachEventRE = regexp.MustCompile(`(?:Multi-Attach error|Waiting for detach) for volume "([^"]+)" Volume is already used by pod\(s\) (.+?)(?: and \d+ pod\(s\) in different namespaces)?$`)
+
+// multiAttachSharedVolumeDiagnosis names the root cause of a Multi-Attach
+// failure on a Deployment pod when the volume is a ReadWriteOnce claim the
+// Deployment's replicas share and the pod holding it is another replica of the
+// same Deployment on a different node. Returns "" otherwise: a holder from
+// another workload, or a one-replica rollout surge (which the stuck-rollout
+// row explains), is not this cause.
+func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (cause, action string) {
+	m := multiAttachEventRE.FindStringSubmatch(eventMessage)
+	if m == nil || cache == nil || cache.Deployments() == nil || cache.Pods() == nil {
+		return "", ""
+	}
+	d, err := cache.Deployments().Deployments(pod.Namespace).Get(deployment)
+	if err != nil || d == nil || schedDesiredReplicas(d.Spec.Replicas) < 2 {
+		return "", ""
+	}
+	var claim *corev1.PersistentVolumeClaim
+	for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
+		// ReadWriteOncePod is one pod, not one node; its Deployment row covers it.
+		if pvc.Spec.VolumeName == m[1] && singleNodeAccessMode(pvc) == corev1.ReadWriteOnce {
+			claim = pvc
+			break
+		}
+	}
+	if claim == nil {
+		return "", ""
+	}
+	for _, name := range strings.Split(m[2], ",") {
+		holder, err := cache.Pods().Pods(pod.Namespace).Get(strings.TrimSpace(name))
+		if err != nil || holder == nil || holder.Spec.NodeName == "" || holder.Spec.NodeName == pod.Spec.NodeName {
+			continue
+		}
+		if _, kind, owner := podOwnerKindName(cache, holder); kind != "Deployment" || owner != d.Name {
+			continue
+		}
+		// Pod and node names stay in the message: the cause must read the same
+		// for every blocked replica so grouping keeps it.
+		return fmt.Sprintf("Deployment %s runs %d replicas that share ReadWriteOnce PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
+				d.Name, schedDesiredReplicas(d.Spec.Replicas), claim.Name),
+			sharedRWOVolumeFix
+	}
+	return "", ""
 }
 
 // attachFailureDiagnosis explains an attach failure the cloud rejected
@@ -1852,7 +1914,9 @@ func classifyPostBindFailure(reason, msg string) (string, bool) {
 		}
 		return "SandboxCreationFailed", true
 	case reason == "FailedAttachVolume":
-		if strings.Contains(lower, "multi-attach") {
+		// Kubernetes 1.37 renamed the attach-detach controller's "Multi-Attach
+		// error" prefix to "Waiting for detach".
+		if strings.Contains(lower, "multi-attach") || strings.HasPrefix(lower, "waiting for detach") {
 			return "VolumeMultiAttach", true
 		}
 		return "VolumeAttach", true
