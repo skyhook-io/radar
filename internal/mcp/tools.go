@@ -126,8 +126,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(pods/po, deployments/deploy, services/svc, configmaps/cm, CRDs). Returns compact Kubernetes-shaped " +
 			"rows plus summaryContext by default (managedBy, health, issueCount) so you can " +
 			"compare many similar resources and pick suspects before calling get_resource. " +
-			"managedBy is the controller or manager to inspect next. It is a lead, not an edit target: read get_resource " +
-			"resourceContext.manager before choosing where to edit, and never infer unmanaged from its absence. " +
+			"managedBy is the controller or manager to inspect next. It is a lead, not an edit target and not necessarily the only " +
+			"manager (omitted can qualify it): read get_resource resourceContext.manager before choosing where to edit, and never " +
+			"infer unmanaged from its absence. " +
 			"Returns {summary, next?, coverage, items}: summary says in words what the rows cover and what was not read; " +
 			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
@@ -147,7 +148,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"issueSummary critical|warning; these are separate scales: audit is posture-remediation priority, issues are " +
 			"live failures, though some audit findings (expired certificates, dangling references) can be live failures; " +
 			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
-			"disagree means a manager's list and the object's metadata name different managers: check both). This is the drill-down " +
+			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
+			"check both). This is the drill-down " +
 			"tool, not the best first call for broad incidents. Start with issues, " +
 			"get_dashboard, search, or list_resources to rank candidates; then call " +
 			"get_resource for the exact object. If you are looking for a string across " +
@@ -155,7 +157,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"fetching resources one by one. Use the group parameter for ambiguous " +
 			"kinds such as Knative Service vs core Service. In recentChanges, " +
 			"`application_configuration_change: true` marks an application configuration edit; it is a ranking hint, " +
-			"not proof of cause. " +
+			"not proof of cause, and unflagged changes may still matter. " +
 			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent. " +
 			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
@@ -235,7 +237,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"selections; `traceback_header_only` means the informative line was not captured. " +
 		"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins high|medium), posture-remediation priority " +
 		"on a separate scale from live `issueSummary` critical|warning. `application_configuration_change: true` marks " +
-		"an application configuration edit; it is a ranking hint, not proof of cause. Application, Kustomization and Flux HelmRelease return " +
+		"an application configuration edit; it is a ranking hint, not proof of cause, and unflagged changes may still matter. Application, Kustomization and Flux HelmRelease return " +
 		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
 		"API-server proxy reached it, not the live path. Point-in-time means frozen from this call, " +
@@ -445,8 +447,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"set evaluates `not_linked_to_returned_issues`; otherwise absence means linkage " +
 			"was not evaluated, not that every change is linked. A marked change ranks first " +
 			"as a lead to verify, not evidence of cause. " +
-			"`application_configuration_change: true` marks an application configuration edit; it is a ranking " +
-			"hint, not proof of cause, and its presence inside `correlated_changes` does not strengthen causality. " +
+			"`application_configuration_change: true` marks an application configuration edit: a ranking hint, not proof " +
+			"of cause; unflagged changes may still matter, and inside `correlated_changes` it does not strengthen causality. " +
 			"Under `recent_changes_truncated=true` or `recent_changes_history_coverage`, absence " +
 			"from the feed is not evidence. Per-issue " +
 			"`no_recent_changes.window_seconds` is the observed window with no tracked change; " +
@@ -479,8 +481,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
-			"summaryContext. managedBy is the controller or manager to inspect next. It is a lead, not an edit target: read get_resource " +
-			"resourceContext.manager before choosing where to edit, and never infer unmanaged from its absence. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
+			"summaryContext. managedBy is the controller or manager to inspect next. It is a lead, not an edit target and not necessarily " +
+			"the only manager (omitted can qualify it): read get_resource resourceContext.manager before choosing where to edit, and " +
+			"never infer unmanaged from its absence. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
 			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint. " +
 			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
