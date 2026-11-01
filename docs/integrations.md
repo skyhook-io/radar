@@ -2,6 +2,13 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
+Operational Issues in an open resource detail view refresh after observed root
+resource changes, coalesced to limit expensive checks. A once-per-minute visible-tab
+refresh covers Pod-only changes and findings that depend on elapsed time. Returning
+to a stale view refreshes it without requiring the detail view to be reopened.
+
+Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polling: their Issues request scans the whole cluster.
+
 ## OpenTelemetry Operator
 
 Radar provides native resource details for `opentelemetry.io` **OpenTelemetryCollector**
