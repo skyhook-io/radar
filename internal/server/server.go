@@ -4886,11 +4886,17 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := k8s.PerformContextSwitch(name); err != nil {
+	if err := k8s.PerformCheckedContextSwitch(r.Context(), name); err != nil {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
-			s.writeError(w, http.StatusBadRequest, err.Error())
+			s.writeSwitchPreflightError(w, "", err)
+			return
+		}
+		// Another switch or retry started while this one checked its target;
+		// nothing was torn down on this request's behalf.
+		if errors.Is(err, k8s.ErrReconnectSuperseded) {
+			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
@@ -5133,6 +5139,9 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// CAPI connects keep the unchecked switch: the merged source is shared by
+	// reconnects to the same workload cluster, and probing outside the switch
+	// lock would let one request discard a source another just refreshed.
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
 		discarded := k8s.DiscardFailedMergedContext(mergedPath, created)
 		if discarded {
@@ -5192,6 +5201,26 @@ func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		// Can't change HTTP status at this point, but log for debugging
 		log.Printf("Failed to encode JSON response: %v", err)
+	}
+}
+
+// writeSwitchPreflightError answers a context switch refused before any
+// teardown. When the refusal was a failed reachability check it adds
+// errorType, the connection screen's error vocabulary, so the UI can explain
+// it in plain words while the person stays on their current cluster.
+func (s *Server) writeSwitchPreflightError(w http.ResponseWriter, prefix string, err error) {
+	var probeErr *k8s.ContextProbeError
+	if !errors.As(err, &probeErr) {
+		s.writeError(w, http.StatusBadRequest, prefix+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	if encodeErr := json.NewEncoder(w).Encode(map[string]string{
+		"error":     prefix + probeErr.Error(),
+		"errorType": k8s.ClassifyError(probeErr.Err),
+	}); encodeErr != nil {
+		log.Printf("Failed to encode error response: %v", encodeErr)
 	}
 }
 

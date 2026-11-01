@@ -7350,6 +7350,19 @@ export async function fetchSessionCounts(): Promise<SessionCounts> {
 const CONTEXT_SWITCH_TIMEOUT = 45000; // 45 seconds
 
 // Switch to a different context
+// A refused context switch. errorType is set when the server checked the new
+// cluster before leaving the current one and it didn't answer; older Radar
+// servers never send it.
+export class SwitchContextError extends Error {
+  constructor(
+    message: string,
+    readonly errorType?: string,
+  ) {
+    super(message);
+    this.name = "SwitchContextError";
+  }
+}
+
 export function useSwitchContext() {
   const queryClient = useQueryClient();
 
@@ -7373,7 +7386,10 @@ export function useSwitchContext() {
 
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+          throw new SwitchContextError(
+            error.error || `HTTP ${response.status}`,
+            typeof error.errorType === "string" ? error.errorType : undefined,
+          );
         }
         return response.json();
       } catch (error) {
