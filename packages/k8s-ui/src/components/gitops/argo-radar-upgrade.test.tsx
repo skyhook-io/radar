@@ -280,6 +280,10 @@ describe("the drawer's Sync with an options dialog", () => {
     await rerender('other')
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
     expect(document.body.textContent).not.toContain('Sync now')
+    await rerender('guestbook')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)) })
+    expect(document.body.textContent).not.toContain('Sync now')
+    await rerender('other')
     const reopen = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
     await act(async () => reopen.click())
     const prunedAgain = [...dialog().querySelectorAll('label')].find((l) => l.textContent?.startsWith('Prune'))!.querySelector('input')!

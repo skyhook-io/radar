@@ -915,6 +915,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
   // belong to the one it was opened for, so it closes on any other.
   const appKey = `${resource.namespace}/${resource.name}`
   const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
+  if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
   const syncDialogOpen = syncDialogFor === appKey
   const applicationSyncOptions = argoApplicationSyncOptions(data)
   const sync = (opts?: ArgoSyncOpts) => onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts })
