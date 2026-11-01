@@ -160,15 +160,15 @@ func TestCompileIssueFilter_ExactOnsetCoverage(t *testing.T) {
 
 func TestCompileIssueFilter_OnsetExpressionsRemainCELCompatible(t *testing.T) {
 	for _, expr := range []string{
-		`first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
-		`first_seen > timestamp("2026-05-01T00:00:00Z").getSeconds()`,
-		`first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
-		`!onset_unknown && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
-		`onset_coverage_unknown == 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`,
-		`first_seen == 0 || (first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
-		`severity == "critical" || (first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
-		`first_seen != 0 ? first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds() : false`,
-		`!(first_seen != 0 && first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds())`,
+		`first_seen < int(timestamp("2026-05-01T00:00:00Z"))`,
+		`first_seen > int(timestamp("2026-05-01T00:00:00Z"))`,
+		`first_seen != 0 && first_seen < int(timestamp("2026-05-01T00:00:00Z"))`,
+		`!onset_unknown && first_seen < int(timestamp("2026-05-01T00:00:00Z"))`,
+		`onset_coverage_unknown == 0 && first_seen < int(timestamp("2026-05-01T00:00:00Z"))`,
+		`first_seen == 0 || (first_seen != 0 && first_seen < int(timestamp("2026-05-01T00:00:00Z")))`,
+		`severity == "critical" || (first_seen != 0 && first_seen < int(timestamp("2026-05-01T00:00:00Z")))`,
+		`first_seen != 0 ? first_seen < int(timestamp("2026-05-01T00:00:00Z")) : false`,
+		`!(first_seen != 0 && first_seen < int(timestamp("2026-05-01T00:00:00Z")))`,
 	} {
 		if _, err := CompileIssueFilter(expr); err != nil {
 			t.Errorf("CompileIssueFilter(%q): %v", expr, err)
@@ -240,5 +240,31 @@ func TestCachedFilters_EmptyExpressionReturnsNil(t *testing.T) {
 	}
 	if f, err := CachedIssueFilter(""); f != nil || err != nil {
 		t.Fatalf("empty issue: f=%v err=%v", f, err)
+	}
+}
+
+// An age filter compares first_seen (unix seconds) with int(timestamp(...)).
+// timestamp(...).getSeconds() is the seconds field (0-59), so a filter written
+// with it compiles and silently matches nothing; this pins the semantics the
+// issues tool's documented example relies on.
+func TestCompileIssueFilter_DateComparisonUsesEpochSeconds(t *testing.T) {
+	before := int64(1774000000) // 2026-03-20, before 2026-05-01
+	after := int64(1793527200)  // 2026-11-01
+	f, err := CompileIssueFilter(`first_seen != 0 && onset_coverage_unknown == 0 && first_seen < int(timestamp("2026-05-01T00:00:00Z"))`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for seen, want := range map[int64]bool{before: true, after: false, 0: false} {
+		ok, err := f.Match(map[string]any{"first_seen": seen, "onset_coverage_unknown": int64(0)})
+		if err != nil || ok != want {
+			t.Errorf("first_seen=%d: match=%v err=%v, want %v", seen, ok, err, want)
+		}
+	}
+	broken, err := CompileIssueFilter(`first_seen < timestamp("2026-05-01T00:00:00Z").getSeconds()`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if ok, _ := broken.Match(map[string]any{"first_seen": before}); ok {
+		t.Fatal("getSeconds() now yields epoch seconds; revisit the issues filter guidance")
 	}
 }
