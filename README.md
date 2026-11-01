@@ -496,7 +496,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 
 ### Local runtime evidence
 
-When Radar runs locally, use **Collect application evidence** in resource details to select a Pod and collect explicitly. MCP clients can also collect after operator approval.
+When Radar runs locally, use **Collect RabbitMQ evidence**, **Collect NATS evidence** or **Collect Vault evidence** in resource details to select a Pod and collect explicitly. MCP clients can also collect after operator approval.
 
 
 These observations describe one Pod endpoint, not overall application health, and do not add automatic Issues detection. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
