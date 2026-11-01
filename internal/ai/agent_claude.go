@@ -75,9 +75,8 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	if s.profile == ExecutionProfileSafeguarded {
 		cmd.Env = scrubbedEnv()
 	}
-	// Run from the user's home dir so the session is stored under a stable,
-	// predictable project path: Claude Code's `--resume <id>` is cwd-scoped, and
-	// the "Open in Claude Code" hand-off resumes from a home-dir terminal.
+	// Run from the user's home dir so every session is stored under one stable
+	// project path. The hand-off resumes by session id from ~/.radar/agent.
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home
 	}

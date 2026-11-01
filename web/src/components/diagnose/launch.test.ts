@@ -42,10 +42,31 @@ describe("launchTrustHint", () => {
   };
 
   it("warns about Claude Code's folder trust prompt", () => {
-    expect(launchTrustHint(base)).toMatch(/trust your home folder/);
+    expect(launchTrustHint(base)).toMatch(/trust Radar's agent folder/);
   });
 
   it("stays quiet for agents without that prompt", () => {
     expect(launchTrustHint({ ...base, agent: "codex" })).toBeNull();
+  });
+});
+
+describe("Claude Code resume command", () => {
+  it("resumes from Radar's agent folder, creating it first", () => {
+    const run: RunSummary = {
+      id: "run-test",
+      kind: "Deployment",
+      group: "apps",
+      namespace: "default",
+      name: "demo",
+      context: "test",
+      agent: "claude",
+      status: "done",
+      sessionId: "ses_1",
+      createdAt: "2026-09-21T00:00:00Z",
+      updatedAt: "2026-09-21T00:00:00Z",
+    };
+    expect(buildLaunchCommand(run, "http://localhost:9280/mcp")).toBe(
+      'mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
+    );
   });
 });
