@@ -129,6 +129,21 @@ func TestCompose_EvictedPodsCategorizedGroupedAndLinkedToNode(t *testing.T) {
 	if f := findFact(solo.DiagnosticContext, factEvictedFromNode); f == nil || f.Message != "The kubelet on node node-b evicted this pod." {
 		t.Errorf("solo evicted_from_node fact = %+v", f)
 	}
+
+	// Flat rows share the grouped ID but each keeps its own pod's node.
+	for _, i := range Compose(provider, Filters{Limit: NoLimit}) {
+		if i.Category != issuesapi.CategoryPodEvicted {
+			continue
+		}
+		want := "node-a"
+		if i.Name == "web-3" || i.Name == "solo" {
+			want = "node-b"
+		}
+		f := findFact(i.DiagnosticContext, factEvictedFromNode)
+		if f == nil || len(f.Refs) != 1 || f.Refs[0].Name != want || !strings.HasSuffix(f.Message, "evicted this pod.") {
+			t.Errorf("flat %s evicted_from_node fact = %+v, want only %s", i.Name, f, want)
+		}
+	}
 }
 
 // A node's pressure explains only evictions of the resource it is short of.
@@ -147,6 +162,24 @@ func TestNodeBlastRadiusContext_EvictionMustMatchPressure(t *testing.T) {
 	fact := findFact(out[0].DiagnosticContext, factNodeBlastRadius)
 	if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "disk" {
 		t.Fatalf("blast radius = %+v, want only the disk eviction", fact)
+	}
+}
+
+// Evicted pods linger: a disk eviction from before the node's current
+// DiskPressure episode is not a symptom of it.
+func TestNodeBlastRadiusContext_EvictionBeforePressureEpisodeNotLinked(t *testing.T) {
+	pressureSince := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	node := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "DiskPressure", FirstSeen: pressureSince}
+	stale := Issue{ID: "stale", Kind: "Pod", Namespace: "prod", Name: "stale", Category: issuesapi.CategoryPodEvicted, RawMessage: diskEvictionMessage, FirstSeen: pressureSince.Add(-24 * time.Hour)}
+	fresh := Issue{ID: "fresh", Kind: "Pod", Namespace: "prod", Name: "fresh", Category: issuesapi.CategoryPodEvicted, RawMessage: diskEvictionMessage, FirstSeen: pressureSince.Add(-30 * time.Second)}
+	p := &fakeProvider{podsOnNode: map[string][]Ref{"node-1": {
+		{Kind: "Pod", Namespace: "prod", Name: "stale"},
+		{Kind: "Pod", Namespace: "prod", Name: "fresh"},
+	}}}
+	out := enrichDiagnosticContext([]Issue{node}, []Issue{node, stale, fresh}, nil, p)
+	fact := findFact(out[0].DiagnosticContext, factNodeBlastRadius)
+	if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != "fresh" {
+		t.Fatalf("blast radius = %+v, want only the eviction from this episode", fact)
 	}
 }
 

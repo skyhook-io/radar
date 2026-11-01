@@ -221,7 +221,10 @@ func PodProblemReason(pod *corev1.Pod, now time.Time) string {
 // with nothing to act on. The second pass restores the plain walk so a pod whose
 // containers all succeeded still reports what it did.
 func podProblemReasonRaw(pod *corev1.Pod, now time.Time) string {
-	if evictionOutranksContainers(pod) {
+	if IsEvictedPod(pod) {
+		if cs := oomKilledContainer(pod); cs != nil {
+			return containerStateReason(cs)
+		}
 		return PodEvictedReason
 	}
 	if cs := problemContainer(pod, true); cs != nil {
@@ -284,18 +287,22 @@ func problemContainer(pod *corev1.Pod, skipSucceeded bool) *corev1.ContainerStat
 	return nil
 }
 
-// evictionOutranksContainers reports whether an Evicted pod's own reason should
-// describe it rather than a container's termination. The kubelet kills the
-// containers on its way out, so they usually end as Error or
-// ContainerStatusUnknown with exit 137: a consequence of the eviction, not its
-// cause. An OOMKilled container still wins, because the kernel killed it before
-// the kubelet chose the pod, and that is the more specific explanation.
-func evictionOutranksContainers(pod *corev1.Pod) bool {
-	if !IsEvictedPod(pod) {
-		return false
+// oomKilledContainer is the first container whose current state is an
+// OOMKilled termination, in any position. On an Evicted pod it is the only
+// container that outranks the pod-level reason: the kubelet kills the other
+// containers on its way out, so they end as Error or ContainerStatusUnknown
+// with exit 137 — a consequence of the eviction, not its cause — while the
+// kernel OOM-killed this one before the kubelet chose the pod. Scanning every
+// position keeps a killed sidecar listed first from hiding it.
+func oomKilledContainer(pod *corev1.Pod) *corev1.ContainerStatus {
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for i := range statuses {
+			if t := statuses[i].State.Terminated; t != nil && t.Reason == "OOMKilled" {
+				return &statuses[i]
+			}
+		}
 	}
-	cs := problemContainer(pod, true)
-	return cs == nil || containerStateReason(cs) != "OOMKilled"
+	return nil
 }
 
 func containerStateReason(cs *corev1.ContainerStatus) string {
@@ -328,7 +335,10 @@ func containerStateMessage(cs *corev1.ContainerStatus) string {
 // container's failure. A failing container with no message stays empty rather
 // than borrowing one.
 func PodProblemMessage(pod *corev1.Pod) string {
-	if evictionOutranksContainers(pod) {
+	if IsEvictedPod(pod) {
+		if cs := oomKilledContainer(pod); cs != nil {
+			return containerStateMessage(cs)
+		}
 		return pod.Status.Message
 	}
 	if cs := problemContainer(pod, true); cs != nil {

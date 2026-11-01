@@ -109,3 +109,22 @@ func TestPodProblemReasonEvictedOutranksKilledContainers(t *testing.T) {
 		}
 	}
 }
+
+// The kubelet kills a sidecar on the way out (Error, exit 137); a container the
+// kernel OOM-killed later in the list still names the pod's problem.
+func TestPodProblemReasonEvictedKeepsOOMKilledInAnyPosition(t *testing.T) {
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodFailed, Reason: "Evicted", Message: "The node was low on resource: memory. ",
+		ContainerStatuses: []corev1.ContainerStatus{
+			{Name: "sidecar", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 137}}},
+			{Name: "app", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137, Message: "oom"}}},
+		},
+	}}
+	if got := PodProblemReason(pod, now); got != "OOMKilled" {
+		t.Errorf("PodProblemReason = %q, want OOMKilled", got)
+	}
+	if got := PodProblemMessage(pod); got != "oom" {
+		t.Errorf("PodProblemMessage = %q, want the OOM container's message", got)
+	}
+}

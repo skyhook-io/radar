@@ -261,7 +261,7 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 		}
 
 		if i.Category == issuesapi.CategoryPodEvicted {
-			addEvictedFromNodeContext(&b, *i, evictedByID)
+			addEvictedFromNodeContext(&b, *i, evictedByID, len(grouped) > 0)
 		}
 
 		if i.Source == SourceMissingRef {
@@ -867,22 +867,37 @@ func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, edges *[
 		factNodeBlastRadius, issuesapi.ConfidenceMedium,
 		"Pods on this node show problems consistent with its resource pressure — the node may be the cause.",
 		func(symptom Issue) bool {
-			return symptom.Category != issuesapi.CategoryPodEvicted || evictionMatchesNodePressure(symptom, node.Reason)
+			return symptom.Category != issuesapi.CategoryPodEvicted || evictionMatchesNodePressure(symptom, node)
 		})
 }
 
-// evictionMatchesNodePressure reports whether the kubelet's eviction message
-// names the resource behind the node's pressure condition: a pod evicted for
-// memory is not explained by the node's DiskPressure, and a pod that exceeded
-// its own ephemeral-storage limit is not explained by any node pressure.
-func evictionMatchesNodePressure(symptom Issue, pressure string) bool {
-	return health.ParsePodEviction(symptom.RawMessage).PressureCondition() == pressure
+// evictionPressureLag is how far an eviction may precede the node's recorded
+// pressure transition and still belong to that episode: the kubelet evicts
+// and reports the condition from the same loop, so they are seconds apart.
+const evictionPressureLag = 2 * time.Minute
+
+// evictionMatchesNodePressure reports whether an evicted pod belongs to the
+// node's current pressure. The kubelet's message must name the resource behind
+// the condition — a pod evicted for memory is not explained by DiskPressure,
+// and one that exceeded its own ephemeral-storage limit by no node pressure.
+// And the eviction must not predate the episode: Evicted pods linger for days,
+// and yesterday's eviction is not a symptom of pressure that began today.
+func evictionMatchesNodePressure(symptom Issue, node Issue) bool {
+	if health.ParsePodEviction(symptom.RawMessage).PressureCondition() != node.Reason {
+		return false
+	}
+	if !symptom.FirstSeen.IsZero() && !node.FirstSeen.IsZero() && symptom.FirstSeen.Before(node.FirstSeen.Add(-evictionPressureLag)) {
+		return false
+	}
+	return true
 }
 
 // addEvictedFromNodeContext names the node(s) whose kubelet evicted the pods
-// behind a pod_evicted row. A grouped row gathers the nodes of every member,
-// since the representative's node alone would hide evictions elsewhere.
-func addEvictedFromNodeContext(b *diagnosticContextBuilder, i Issue, flatByID map[string][]Issue) {
+// behind a pod_evicted row. In grouped mode a row gathers the nodes of every
+// member, since the representative's node alone would hide evictions
+// elsewhere. A flat row keeps its own pod's node: flat siblings share the
+// grouped ID, and regrouping later reads these per-pod facts.
+func addEvictedFromNodeContext(b *diagnosticContextBuilder, i Issue, flatByID map[string][]Issue, grouped bool) {
 	seen := map[string]bool{}
 	var nodes []string
 	collect := func(row Issue) {
@@ -901,8 +916,10 @@ func addEvictedFromNodeContext(b *diagnosticContextBuilder, i Issue, flatByID ma
 			}
 		}
 	}
-	for _, row := range flatByID[i.ID] {
-		collect(row)
+	if grouped {
+		for _, row := range flatByID[i.ID] {
+			collect(row)
+		}
 	}
 	if len(nodes) == 0 {
 		collect(i)
@@ -911,7 +928,7 @@ func addEvictedFromNodeContext(b *diagnosticContextBuilder, i Issue, flatByID ma
 		return
 	}
 	sort.Strings(nodes)
-	b.add(issuesapi.DiagnosticRoleContext, evictedFromNodeFact(nodes, len(flatByID[i.ID]) > 1))
+	b.add(issuesapi.DiagnosticRoleContext, evictedFromNodeFact(nodes, grouped && len(flatByID[i.ID]) > 1))
 }
 
 // evictedFromNodeFact names the node that performed an eviction. The node
