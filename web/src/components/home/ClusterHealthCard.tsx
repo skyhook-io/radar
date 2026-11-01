@@ -303,7 +303,7 @@ export function ClusterHealthCard({
                 (org-wide endpoint, PAT-authed) rather than per-cluster, so this
                 localhost/no-auth entry would mislead a Cloud user. */}
             {showLocalMcpCard && (
-              <HomeAgentBlock mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} execTools={caps.mcpExecTools} />
+              <HomeAgentBlock mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} execTools={caps.mcpExecTools} applicationEvidenceAvailable={caps.mcpApplicationEvidence} />
             )}
           </div>
 

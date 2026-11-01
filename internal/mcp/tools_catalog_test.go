@@ -262,8 +262,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Rollback guidance, its source-mode warning and sync_options
-		// inheritance: 66,869 bytes without exec.
-		maxCatalogBytes         = 66900
+		// inheritance: 66,869 bytes without exec. Application evidence adds 908
+		// bytes and Strimzi routing adds 243; retain the existing 31-byte headroom.
+		maxCatalogBytes         = 68051
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -459,8 +460,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		}
 		// diagnose is read-only EXCEPT its optional in_cluster=true arg, which creates
 		// ONE transient, self-destructing probe pod - so it is non-read-only but NOT
-		// destructive (additive + self-deleting). It is the only such tool.
-		if tool.Name == "diagnose" {
+		// destructive (additive + self-deleting). Runtime collection likewise requires explicit network authorization.
+		if tool.Name == "diagnose" || tool.Name == "collect_application_evidence" {
 			if tool.Annotations.ReadOnlyHint {
 				t.Errorf("diagnose must NOT set readOnlyHint=true - in_cluster=true creates a transient pod")
 			}
@@ -706,7 +707,7 @@ func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
 	registered := map[string]bool{}
 	for _, tool := range listRegisteredTools(t) {
 		registered[tool.Name] = true
-		if writes[tool.Name] || allowed[tool.Name] {
+		if writes[tool.Name] || tool.Name == "collect_application_evidence" || allowed[tool.Name] {
 			continue
 		}
 		missing = append(missing, tool.Name)

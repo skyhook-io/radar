@@ -156,7 +156,22 @@ func readDynamicRoot(ctx context.Context, cache *DynamicResourceCache, gvr schem
 // by API group, kind, name and UID. It reads only already-watched cache listers.
 // A missing root UID cannot establish current membership and returns no Pods.
 func WorkloadPodsForUID(cache *ResourceCache, kind, namespace, name, group string, uid types.UID) ([]*corev1.Pod, error) {
-	return workloadPods(cache, kind, namespace, name, workloadOwnerIdentity{group: group, uid: uid})
+	pods, _, err := workloadPods(cache, kind, namespace, name, workloadOwnerIdentity{group: group, uid: uid}, nil, 0)
+	return pods, err
+}
+
+type WorkloadPodOptions struct {
+	OwnerGroup    string
+	OwnerUID      types.UID
+	Selector      labels.Selector
+	MaxCandidates int
+}
+
+// WorkloadPodsWithOptions is WorkloadPodsForUID narrowed to Pods matching
+// Selector. When more than MaxCandidates Pods match, it returns no Pods and
+// reports truncation instead of a partial membership.
+func WorkloadPodsWithOptions(cache *ResourceCache, kind, namespace, name string, options WorkloadPodOptions) ([]*corev1.Pod, bool, error) {
+	return workloadPods(cache, kind, namespace, name, workloadOwnerIdentity{group: options.OwnerGroup, uid: options.OwnerUID}, options.Selector, options.MaxCandidates)
 }
 
 type workloadOwnerIdentity struct {
@@ -164,27 +179,33 @@ type workloadOwnerIdentity struct {
 	uid   types.UID
 }
 
-func workloadPods(cache *ResourceCache, kind, namespace, name string, identity workloadOwnerIdentity) ([]*corev1.Pod, error) {
+func workloadPods(cache *ResourceCache, kind, namespace, name string, identity workloadOwnerIdentity, selector labels.Selector, maxCandidates int) ([]*corev1.Pod, bool, error) {
 	canonical := CanonicalWorkloadKind(kind)
 	if canonical == "" {
-		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
+		return nil, false, fmt.Errorf("unsupported workload kind: %s", kind)
 	}
 	kind = canonical
 	if cache == nil || cache.ResourceCache == nil || cache.Pods() == nil {
-		return nil, fmt.Errorf("%w: list pods", ErrWorkloadAccessDenied)
+		return nil, false, fmt.Errorf("%w: list pods", ErrWorkloadAccessDenied)
 	}
 	// Every kind reaches its pods through this lister, including the ones
 	// that need no ownership hop, so it is gated before the hop is chosen.
 	if err := requireCovers(cache, "pods", namespace); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	ownedBy, err := workloadOwnershipTest(cache, kind, namespace, name, identity)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	pods, err := cache.Pods().Pods(namespace).List(labels.Everything())
+	if selector == nil {
+		selector = labels.Everything()
+	}
+	pods, err := cache.Pods().Pods(namespace).List(selector)
 	if err != nil {
-		return nil, fmt.Errorf("list pods in %s: %w", namespace, err)
+		return nil, false, fmt.Errorf("list pods in %s: %w", namespace, err)
+	}
+	if maxCandidates > 0 && len(pods) > maxCandidates {
+		return nil, true, nil
 	}
 	var owned []*corev1.Pod
 	for _, pod := range pods {
@@ -193,7 +214,7 @@ func workloadPods(cache *ResourceCache, kind, namespace, name string, identity w
 		}
 	}
 	sort.Slice(owned, func(i, j int) bool { return owned[i].Name < owned[j].Name })
-	return owned, nil
+	return owned, false, nil
 }
 
 // WorkloadPodNames is WorkloadPods reduced to sorted names.
