@@ -209,8 +209,10 @@ func TestGeneratedTreeFollowsNestedLocalInventory(t *testing.T) {
 			if got.Summary.Generated != wantGenerated {
 				t.Fatalf("nested inventory: %+v", got)
 			}
-			if state == ownership.MembersRemote && !strings.Contains(strings.Join(got.Warnings, " "), "unconfirmed cluster") {
-				t.Fatal("remote nested inventory lacked a warning")
+			// Hub-and-spoke Argo CD nests remote Applications routinely; their
+			// own pages explain the destination.
+			if state == ownership.MembersRemote && len(got.Warnings) != 0 {
+				t.Fatalf("remote nested inventory raised a notice: %v", got.Warnings)
 			}
 			if state == ownership.MembersUnreadable && !strings.Contains(strings.Join(got.Warnings, " "), "resource lists are unavailable") {
 				t.Fatal("unreadable nested inventory lacked a warning")
@@ -297,7 +299,7 @@ func TestGeneratedTreeDistinguishesCollectionScopeFromReadFailures(t *testing.T)
 		{name: "uncollected", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Lease", Group: "coordination.k8s.io"}, Namespace: "monitoring", Reason: readreason.RadarKindNotCollected}}},
 		{name: "namespace scope", present: true, gaps: []ownership.Gap{{Kind: prom.Ref.GroupKind(), Namespace: "monitoring", Reason: readreason.RadarNamespaceNotCollected}}},
 		{name: "radar forbidden", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Widget", Group: "example.com"}, Namespace: "monitoring", Reason: readreason.RadarForbidden}}},
-		{name: "partial discovery", present: true, gaps: []ownership.Gap{{Reason: readreason.KindUnknown}}, warn: true},
+		{name: "unserved kind", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "NodePool", Group: "karpenter.sh"}, Namespace: "default", Reason: readreason.KindUnknown}}},
 		{name: "loading", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "monitoring", Reason: readreason.KindSyncPending}}, warn: true},
 		{name: "read failure", present: true, gaps: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "monitoring", Reason: readreason.ReadError}}, warn: true},
 	} {

@@ -43,7 +43,7 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	for _, ref := range queue {
 		queued[identity(ref)] = true
 	}
-	steps, incomplete, truncated, inventoryUnavailable, remoteMembers, limitedClaims := 0, false, false, false, false, false
+	steps, incomplete, truncated, inventoryUnavailable, limitedClaims := 0, false, false, false, false
 	// An inactive ReplicaSet maps to its owner, which stands in as the parent
 	// of Pods it still has, such as terminating ones, as in topology.
 	hiddenRevisions := map[resourceid.Ref]ResourceRef{}
@@ -155,8 +155,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 			if b.canEmit(ref) {
 				if ownershipReadFailed(members.Subject) || hasOwnershipReadFailure(members.Gaps) {
 					incomplete = true
-				} else if members.Membership == ownership.MembersRemote {
-					remoteMembers = true
 				} else if members.Subject.Present() && members.Membership == ownership.MembersUnreadable && !helmClaims {
 					inventoryUnavailable = true
 				}
@@ -240,9 +238,6 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	if inventoryUnavailable {
 		warnings = append(warnings, "Some GitOps resource lists are unavailable; the resource tree may be incomplete.")
 	}
-	if remoteMembers {
-		warnings = append(warnings, "Some nested GitOps resource lists describe another or unconfirmed cluster; those resources are not expanded here.")
-	}
 	if limitedClaims {
 		warnings = append(warnings, limitedHelmProjectionWarning)
 	}
@@ -301,9 +296,14 @@ func ownershipReadFailed(subject ownership.Subject) bool {
 }
 
 // Kinds Radar doesn't collect, including those its identity may not list,
-// define the search scope; failed discovery and reads do not.
+// define the search scope; failed discovery and reads do not. A kind complete
+// discovery doesn't serve has no objects to miss.
 func hasOwnershipReadFailure(gaps []ownership.Gap) bool {
 	return slices.ContainsFunc(gaps, func(g ownership.Gap) bool {
-		return g.Reason != readreason.RadarKindNotCollected && g.Reason != readreason.RadarNamespaceNotCollected && g.Reason != readreason.RadarForbidden
+		switch g.Reason {
+		case readreason.RadarKindNotCollected, readreason.RadarNamespaceNotCollected, readreason.RadarForbidden, readreason.KindUnknown:
+			return false
+		}
+		return true
 	})
 }
