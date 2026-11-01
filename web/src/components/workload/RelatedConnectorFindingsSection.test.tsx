@@ -21,6 +21,14 @@ describe('Related connector findings coverage', () => {
     expect(html).toContain('status is reported separately')
     expect(html).not.toContain('Operational issues')
   })
+  it.each([
+    ['radar_kind_not_collected', 'Radar doesn&#x27;t collect it'],
+    ['kind_sync_pending', 'still loading'],
+  ])('explains %s using the existing read vocabulary', (code, explanation) => {
+    const html = renderToString(<RelatedConnectorFindingsSection data={{ ...cached, gaps: [{ code }] }} />)
+    expect(html).toContain(explanation)
+    expect(html).not.toContain('Operational issues')
+  })
   it('keeps unavailable and over-budget coverage visible without inventing issues', () => {
     for (const data of [{ ...cached, gaps: [{ code: 'radar_kind_not_collected' }] }, { ...cached, truncated: true }]) {
       const html = renderToString(<RelatedConnectorFindingsSection data={data} />)

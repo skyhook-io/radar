@@ -8,6 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -37,6 +38,12 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 	gvr, ok := discovery.GetGVRWithGroup(kind, group)
 	if !ok {
 		return nil, nil, errKindUnknown(kind, group, nil)
+	}
+	plan := readplan.Dynamic(cache, gvr, []string{input.Namespace}, false)
+	for _, part := range plan.Partitions {
+		if part.Verdict.State != readplan.Readable {
+			return nil, nil, readErrorf(part.Verdict.Code, "%s cached evidence is unavailable", kind)
+		}
 	}
 	obj, found, readable := cache.ReadableObject(gvr, input.Namespace, input.Name)
 	if !readable {

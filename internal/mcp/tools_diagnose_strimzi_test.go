@@ -120,7 +120,7 @@ func TestStrimziDiagnoseCacheMissDoesNotInventAbsence(t *testing.T) {
 			t.Fatalf("got %v, want %s", err, want)
 		}
 	}
-	check(readreason.ReadError)
+	check(readreason.RadarKindNotCollected)
 	if len(cache.GetWatchedResources()) != 0 {
 		t.Fatal("passive diagnosis started a watch")
 	}
@@ -132,7 +132,7 @@ func TestStrimziDiagnoseCacheMissDoesNotInventAbsence(t *testing.T) {
 	}
 	check(readreason.ObjectNotFound)
 	cache.Stop()
-	check(readreason.ReadError)
+	check(readreason.ConnectionChanged)
 }
 
 func TestStrimziDiagnoseSnapshotAndIssuesAgree(t *testing.T) {
