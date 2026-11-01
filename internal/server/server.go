@@ -4931,6 +4931,7 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
+		"disconnectedAt":  status.DisconnectedAt,
 		// Lets the browser stand down its auto-retry for the whole auth-loss
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),

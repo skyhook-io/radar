@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
+import { ClusterConnectedContext } from './clusterConnected'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
 
@@ -13,6 +14,9 @@ export interface ConnectionState {
   error?: string
   errorType?: string // config, auth, auth-rejected, auth-plugin-stuck, rbac, network, timeout, tls, unknown
   progressMessage?: string
+  // When this context stopped working (RFC 3339). Set by the server while
+  // disconnected; older servers never send it.
+  disconnectedAt?: string
   // Per-kind readiness while the initial informer sync runs ('connecting'
   // with informers started). Drives the progressive app shell — absent once
   // connected or before informers exist.
@@ -49,6 +53,11 @@ class ConnectionRetryError extends Error {
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 const AUTO_RETRY_INITIAL_DELAY_MS = 10000
 const AUTO_RETRY_MAX_DELAY_MS = 60000
+// Failed attempts in an outage before an unattended window slows to
+// AUTO_RETRY_UNATTENDED_DELAY_MS (10s + 20s + 40s + 60s + 60s ≈ 3 minutes).
+const AUTO_RETRY_ATTEMPTS_BEFORE_SLOWDOWN = 5
+const AUTO_RETRY_UNATTENDED_DELAY_MS = 5 * 60_000
+const WAKE_RETRY_DEDUPE_MS = 2000
 const CONNECTION_STATUS_FALLBACK_POLL_MS = 30000
 
 export function refreshQueriesAfterReconnect(queryClient: QueryClient, previousContext: string, nextContext: string) {
@@ -125,6 +134,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const hasConnectedRef = useRef(false)
   const autoRetryInFlightRef = useRef(false)
   const autoRetryDelayRef = useRef(AUTO_RETRY_INITIAL_DELAY_MS)
+  // Attempts in the current outage; only a successful connect resets it, so a
+  // manual retry's brief 'connecting' doesn't restart the count.
+  const autoRetryAttemptsRef = useRef(0)
+  const autoRetryContextRef = useRef('')
+  const lastWakeRetryAtRef = useRef(0)
   const manualRetryPendingRef = useRef(false)
   // Fed by the status poll only (SSE frames don't carry the field, and must
   // not clear it): while the server's recovery loop owns the episode, browser
@@ -155,6 +169,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // Cache refresh shared by every path that lands on 'connected'.
   const lastCacheRefreshAtRef = useRef(0)
   const refreshCachesOnConnect = useCallback(() => {
+    // RBAC queries don't refetch an errored answer on mount; a fresh
+    // connection is when that answer may have changed.
+    queryClient.removeQueries({ queryKey: ['rbac'], predicate: query => query.state.status === 'error' })
     const firstConnect = !hasConnectedRef.current
     hasConnectedRef.current = true
     // Poll and SSE can both observe the same reconnect within moments of each
@@ -258,6 +275,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       error: data.error,
       errorType: data.errorType,
       progressMessage: data.progressMessage,
+      disconnectedAt: data.disconnectedAt,
       syncStatus: data.syncStatus,
     })
     if (becameConnected) {
@@ -322,6 +340,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [retryMutation.isPending])
 
   useEffect(() => {
+    // An outage belongs to one context: switching to another starts its own
+    // count and backoff, and so does connecting.
+    if (connection.state === 'connected' || autoRetryContextRef.current !== connection.context) {
+      autoRetryAttemptsRef.current = 0
+      autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
+      autoRetryContextRef.current = connection.context
+    }
     if (connection.state !== 'disconnected' || !shouldAutoRetryConnection(connection.errorType)) {
       autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
       return
@@ -329,65 +354,98 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     let stopped = false
     let retryTimeout: number | undefined
 
-    const scheduleRetry = () => {
-      retryTimeout = window.setTimeout(() => {
-        if (stopped) return
-        if (manualRetryPendingRef.current || autoRetryInFlightRef.current) {
-          scheduleRetry()
-          return
-        }
-        // Checked at fire time (not arm time): the poll may have learned
-        // mid-wait that the server's recovery loop owns this episode.
-        if (serverOwnsRecoveryRef.current) {
-          scheduleRetry()
-          return
-        }
-
-        autoRetryInFlightRef.current = true
-        setIsAutoRetrying(true)
-        let recovered = false
-        retryConnection()
-          .then((result) => {
-            if (stopped) return
-            recovered = true
-            autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
-            sseActiveRef.current = false
-            const previousContext = connectionRef.current.context
-            setConnection(result)
-            if (result.state === 'connected') {
-              hasConnectedRef.current = true
-              lastCacheRefreshAtRef.current = Date.now()
-            }
-            refreshQueriesAfterReconnect(queryClient, previousContext, result.context)
-          })
-          .catch((error: Error) => {
-            if (stopped) return
-            const retryError = error as ConnectionRetryError
-            setConnection(prev => {
-              if (sseActiveRef.current && prev.state === 'connected') return prev
-              return {
-                ...prev,
-                state: 'disconnected',
-                error: error.message || prev.error,
-                errorType: retryError.errorType || prev.errorType,
-                progressMessage: undefined,
-              }
-            })
-            autoRetryDelayRef.current = Math.min(autoRetryDelayRef.current * 2, AUTO_RETRY_MAX_DELAY_MS)
-            // Keep the visible disconnected state until a retry succeeds.
-          })
-          .finally(() => {
-            autoRetryInFlightRef.current = false
-            setIsAutoRetrying(false)
-            // Mirror the manual-retry onSettled: re-poll so a status update
-            // dropped by the mid-retry guard isn't stranded until next tick.
-            queryClient.invalidateQueries({ queryKey: ['connection-status'] })
-            if (!stopped && !recovered) {
-              scheduleRetry()
-            }
-          })
-      }, autoRetryDelayRef.current)
+    // Nobody is looking at a hidden or unfocused window (a desktop window
+    // behind others still reports visible), so after a few failures it
+    // checks only every few minutes. Coming back retries at once.
+    const nextDelay = () => {
+      const unattended = document.visibilityState === 'hidden' || !document.hasFocus()
+      return unattended && autoRetryAttemptsRef.current >= AUTO_RETRY_ATTEMPTS_BEFORE_SLOWDOWN
+        ? AUTO_RETRY_UNATTENDED_DELAY_MS
+        : autoRetryDelayRef.current
     }
+
+    const attempt = () => {
+      if (stopped) return
+      if (manualRetryPendingRef.current || autoRetryInFlightRef.current) {
+        scheduleRetry()
+        return
+      }
+      // Checked at fire time (not arm time): the poll may have learned
+      // mid-wait that the server's recovery loop owns this episode.
+      if (serverOwnsRecoveryRef.current) {
+        scheduleRetry()
+        return
+      }
+
+      autoRetryInFlightRef.current = true
+      autoRetryAttemptsRef.current += 1
+      setIsAutoRetrying(true)
+      let recovered = false
+      retryConnection()
+        .then((result) => {
+          if (stopped) return
+          recovered = true
+          autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
+          sseActiveRef.current = false
+          const previousContext = connectionRef.current.context
+          setConnection(result)
+          if (result.state === 'connected') {
+            hasConnectedRef.current = true
+            lastCacheRefreshAtRef.current = Date.now()
+          }
+          refreshQueriesAfterReconnect(queryClient, previousContext, result.context)
+        })
+        .catch((error: Error) => {
+          if (stopped) return
+          const retryError = error as ConnectionRetryError
+          setConnection(prev => {
+            if (sseActiveRef.current && prev.state === 'connected') return prev
+            return {
+              ...prev,
+              state: 'disconnected',
+              error: error.message || prev.error,
+              errorType: retryError.errorType || prev.errorType,
+              progressMessage: undefined,
+            }
+          })
+          autoRetryDelayRef.current = Math.min(autoRetryDelayRef.current * 2, AUTO_RETRY_MAX_DELAY_MS)
+          // Keep the visible disconnected state until a retry succeeds.
+        })
+        .finally(() => {
+          autoRetryInFlightRef.current = false
+          setIsAutoRetrying(false)
+          // Mirror the manual-retry onSettled: re-poll so a status update
+          // dropped by the mid-retry guard isn't stranded until next tick.
+          queryClient.invalidateQueries({ queryKey: ['connection-status'] })
+          if (!stopped && !recovered) {
+            scheduleRetry()
+          }
+        })
+    }
+
+    const scheduleRetry = () => {
+      retryTimeout = window.setTimeout(attempt, nextDelay())
+    }
+
+    // Returning to the window or regaining the network retries now, silently.
+    // focus and visibilitychange often fire together, so one wake per moment.
+    // The network coming back counts even in a background window.
+    const wake = (event: Event) => {
+      if (stopped) return
+      if (event.type !== 'online' && document.visibilityState === 'hidden') return
+      const now = Date.now()
+      if (now - lastWakeRetryAtRef.current < WAKE_RETRY_DEDUPE_MS) return
+      lastWakeRetryAtRef.current = now
+      if (manualRetryPendingRef.current || autoRetryInFlightRef.current || serverOwnsRecoveryRef.current) return
+      if (retryTimeout !== undefined) {
+        window.clearTimeout(retryTimeout)
+      }
+      autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
+      attempt()
+    }
+    window.addEventListener('focus', wake)
+    window.addEventListener('online', wake)
+    document.addEventListener('visibilitychange', wake)
 
     scheduleRetry()
 
@@ -396,8 +454,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       if (retryTimeout !== undefined) {
         window.clearTimeout(retryTimeout)
       }
+      window.removeEventListener('focus', wake)
+      window.removeEventListener('online', wake)
+      document.removeEventListener('visibilitychange', wake)
     }
-  }, [connection.errorType, connection.state, queryClient])
+  }, [connection.context, connection.errorType, connection.state, queryClient])
 
   const retry = useCallback(() => {
     if (retryMutation.isPending || autoRetryInFlightRef.current) return
@@ -444,7 +505,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   return (
     <ConnectionContext.Provider value={value}>
-      {children}
+      <ClusterConnectedContext.Provider value={connection.state === 'connected'}>
+        {children}
+      </ClusterConnectedContext.Provider>
     </ConnectionContext.Provider>
   )
 }

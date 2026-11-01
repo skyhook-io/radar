@@ -11,6 +11,7 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { allShellSafe, awsProfileFlag } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
 import { useCapabilitiesContext } from '../contexts/CapabilitiesContext'
+import { outageSinceLabel } from './outageSince'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -360,6 +361,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const matchedContext = contexts?.find((context) => context.name === connection.context)
   const originalContext = matchedContext?.originalName
   const awsProfile = contextsLoading ? undefined : matchedContext?.awsProfile
+  const since = outageSinceLabel(connection.disconnectedAt)
   const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile)
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
@@ -410,6 +412,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
               ) : (
                 <span className="inline-code">(none)</span>
               )}
+              {since && <span>· since {since}</span>}
             </p>
 
             {connection.clusterName && (
