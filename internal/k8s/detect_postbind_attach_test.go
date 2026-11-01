@@ -304,6 +304,44 @@ func TestDetectPostBindProblems_WaitingForDetachNamesSharedClaim(t *testing.T) {
 	}
 }
 
+// The controller reports Multi-Attach once; later the kubelet's FailedMount
+// timeout is the latest event. The row keeps the shared-claim cause.
+func TestDetectPostBindProblems_MountTimeoutKeepsSharedClaimCause(t *testing.T) {
+	defer ResetTestState()
+	controller := true
+	objs := sharedClaimDeployment(metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", Controller: &controller})
+	for _, o := range objs {
+		if e, ok := o.(*corev1.Event); ok {
+			e.FirstTimestamp = metav1.NewTime(time.Now().Add(-30 * time.Minute))
+			e.LastTimestamp = e.FirstTimestamp
+		}
+	}
+	objs = append(objs, &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "mount", Namespace: "redis"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "redis", Name: "web-b"},
+		Reason:         "FailedMount",
+		Type:           corev1.EventTypeWarning,
+		Message:        `Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[data]: timed out waiting for the condition`,
+		FirstTimestamp: metav1.NewTime(time.Now().Add(-28 * time.Minute)),
+		LastTimestamp:  metav1.NewTime(time.Now().Add(-1 * time.Minute)),
+	})
+	if err := InitTestResourceCache(fake.NewClientset(objs...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	var got *Detection
+	for _, p := range DetectPostBindProblems(GetResourceCache(), "redis") {
+		if p.Name == "web-b" {
+			got = &p
+		}
+	}
+	if got == nil || got.Reason != "VolumeMount" {
+		t.Fatalf("want the VolumeMount row for web-b, got %+v", got)
+	}
+	if !strings.Contains(got.Cause, "share ReadWriteOnce PVC data") {
+		t.Errorf("cause should still name the shared claim: %q", got.Cause)
+	}
+}
+
 // The holder belongs to another workload, so the Deployment's replica count
 // isn't the cause and none is invented.
 func TestDetectPostBindProblems_MultiAttachForeignHolderHasNoCause(t *testing.T) {

@@ -1442,6 +1442,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 	// an older one. Backoff is tracked per disk, so an echo for one volume says
 	// nothing about another's error.
 	informativeAttach := map[string]*corev1.Event{}
+	// The newest Multi-Attach event per pod, also kept across the window: the
+	// attach-detach controller reports it once per volume, after which the
+	// kubelet's FailedMount timeouts become the latest event while the
+	// conflict persists.
+	multiAttach := map[string]*corev1.Event{}
 	var order []string
 	for _, e := range events {
 		if e.InvolvedObject.Kind != "Pod" {
@@ -1467,6 +1472,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				if cur := informativeAttach[volKey]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
 					informativeAttach[volKey] = e
 				}
+			}
+		}
+		if reason == "VolumeMultiAttach" {
+			if cur := multiAttach[key]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
+				multiAttach[key] = e
 			}
 		}
 		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
@@ -1502,8 +1512,10 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				}
 			}
 			cause, action = attachFailureDiagnosis(cache, pod, eventMessage)
-		} else if c.reason == "VolumeMultiAttach" && ownerKind == "Deployment" {
-			cause, action = multiAttachSharedVolumeDiagnosis(cache, pod, ownerName, eventMessage)
+		} else if ma := multiAttach[key]; ma != nil && (c.reason == "VolumeMultiAttach" || c.reason == "VolumeMount") && ownerKind == "Deployment" {
+			// The diagnosis rechecks the holder in the cache, so an old event
+			// only explains the mount timeout while that replica still exists.
+			cause, action = multiAttachSharedVolumeDiagnosis(cache, pod, ownerName, ma.Message)
 		}
 		detection := Detection{
 			Kind:              "Pod",
