@@ -39,22 +39,23 @@ func bindingGrantReason(e timeline.TimelineEvent) string {
 		_, role = cachedBinding(e)
 	}
 	if role == "" {
-		role = "its role"
+		role = "its role (not recorded)"
 	}
-	scope := ""
+	// Say outright that the actor is outside: that is what makes the row a lead.
+	scope := " (outside this namespace)"
 	if e.Kind == "ClusterRoleBinding" {
 		scope = " cluster-wide"
 	}
 	var parts []string
 	if len(granted) > 0 {
-		parts = append(parts, fmt.Sprintf("grants %s%s to %s", role, scope, namedSubjects(granted)))
+		parts = append(parts, grantText("grants", role, scope, e.Kind, granted))
 	}
 	if len(removed) > 0 {
 		verb := "no longer grants"
 		if e.EventType == timeline.EventTypeDelete {
 			verb = "deleted; it granted"
 		}
-		parts = append(parts, fmt.Sprintf("%s %s%s to %s", verb, role, scope, namedSubjects(removed)))
+		parts = append(parts, grantText(verb, role, scope, e.Kind, removed))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -117,6 +118,16 @@ func cachedBinding(e timeline.TimelineEvent) (subjects []string, roleRef string)
 		return nil, ""
 	}
 	return k8s.RBACSubjectRefs(refs, namespace), ref.Kind + " " + ref.Name
+}
+
+// grantText reads "grants Role x cluster-wide to ServiceAccount a/b" for a
+// ClusterRoleBinding and "grants Role x to ServiceAccount a/b (outside this
+// namespace)" for a RoleBinding.
+func grantText(verb, role, scope, kind string, subjects []string) string {
+	if kind == "ClusterRoleBinding" {
+		return fmt.Sprintf("%s %s%s to %s", verb, role, scope, namedSubjects(subjects))
+	}
+	return fmt.Sprintf("%s %s to %s%s", verb, role, namedSubjects(subjects), scope)
 }
 
 func namedSubjects(refs []string) string {

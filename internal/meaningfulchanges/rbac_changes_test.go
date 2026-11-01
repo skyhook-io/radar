@@ -94,12 +94,12 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 
 	changes := feedRecentIn(t, "saleor")
 	wantReasons := map[string]string{
-		"RoleBinding/vpa-updater": "grants Role vpa-updater to ServiceAccount kube-system/vpa-updater",
+		"RoleBinding/vpa-updater": "grants Role vpa-updater to ServiceAccount kube-system/vpa-updater (outside this namespace)",
 		"RoleBinding/app":         lifecycleRankReason,
-		"RoleBinding/replaced":    "grants its role to ServiceAccount other/x",
+		"RoleBinding/replaced":    "grants its role (not recorded) to ServiceAccount other/x (outside this namespace)",
 		// widened is not cached, so its role is unknown.
-		"RoleBinding/widened": "grants its role to ServiceAccount monitoring/prom",
-		"RoleBinding/revoked": "deleted; it granted ClusterRole admin to ServiceAccount ci/deployer",
+		"RoleBinding/widened": "grants its role (not recorded) to ServiceAccount monitoring/prom (outside this namespace)",
+		"RoleBinding/revoked": "deleted; it granted ClusterRole admin to ServiceAccount ci/deployer (outside this namespace)",
 		"Role/vpa-updater":    "desired-state or configuration field changed",
 	}
 	for key, want := range wantReasons {
@@ -163,7 +163,7 @@ func TestRBACKindsAreTracked(t *testing.T) {
 func TestOutsideGrantRanksAboveInstallCreates(t *testing.T) {
 	now := time.Now()
 	changes := []issuesapi.RecentChange{{Kind: "RoleBinding", Name: "vpa-updater", ChangeType: "add", ChangeCategory: issuesapi.ChangeCategoryLifecycle,
-		RankReason: "grants Role vpa-updater to ServiceAccount kube-system/vpa-updater", Timestamp: now.Add(-time.Minute).Format(time.RFC3339)}}
+		RankReason: "grants Role vpa-updater to ServiceAccount kube-system/vpa-updater (outside this namespace)", Timestamp: now.Add(-time.Minute).Format(time.RFC3339)}}
 	for _, name := range []string{"a", "b", "c"} {
 		changes = append(changes, issuesapi.RecentChange{Kind: "ConfigMap", Name: name, ChangeType: "add", ChangeCategory: issuesapi.ChangeCategoryLifecycle,
 			RankReason: lifecycleRankReason, Timestamp: now.Format(time.RFC3339)})
