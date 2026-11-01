@@ -85,13 +85,10 @@ type Detection struct {
 	// TerminatingRemovals maps each operator finalizer to a dry-run removal.
 	// Issue composition offers one only as a ConditionalCleanup, after finding
 	// no running copy of the finalizer's catalog controller.
-	TerminatingRemovals      map[string]issuesapi.FinalizerRemoval `json:"-"`
-	ConditionalCleanup       *issuesapi.ConditionalCleanup         `json:"-"`
-	NodeStartupCorroboration *NodeStartupCorroboration             `json:"-"`
-	// EvictedFromNode is spec.nodeName of an Evicted pod: the node whose
-	// kubelet evicted it. The pod's own field, so it needs no node read.
-	EvictedFromNode            string `json:"-"`
-	MessageBeforeCorroboration string `json:"-"`
+	TerminatingRemovals        map[string]issuesapi.FinalizerRemoval `json:"-"`
+	ConditionalCleanup         *issuesapi.ConditionalCleanup         `json:"-"`
+	NodeStartupCorroboration   *NodeStartupCorroboration             `json:"-"`
+	MessageBeforeCorroboration string                                `json:"-"`
 	Kind                       string
 	Namespace                  string
 	Name                       string
@@ -125,6 +122,9 @@ type Detection struct {
 	// RestartLoop is set on a Pod crashloop row emitted because a container is
 	// in an active restart loop (see activeRestartLoop). Nil otherwise.
 	RestartLoop *issuesapi.RestartLoop
+	// EvictedFromNode is spec.nodeName of an Evicted pod: the node whose
+	// kubelet evicted it. The pod's own field, so it needs no node read.
+	EvictedFromNode string `json:"-"`
 	// AffectedRefs names resources a detection on another subject affects
 	// (the Services, workloads and Pods a NetworkPolicy isolates), so the issue
 	// also shows up on those resources. Ordered most to least important; the
