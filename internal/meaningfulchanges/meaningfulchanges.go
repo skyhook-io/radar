@@ -1270,6 +1270,9 @@ func hasSpecConfigField(e timeline.TimelineEvent) bool {
 	}
 	for _, f := range e.Diff.Fields {
 		p := strings.ToLower(f.Path)
+		if isNodeEvent(e) && (strings.HasPrefix(p, "metadata.labels") || strings.HasPrefix(p, "metadata.annotations")) {
+			return true
+		}
 		if strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || (trackedGroup && (p == "immutable" || strings.HasPrefix(p, "data"))) {
 			return true
 		}
