@@ -606,6 +606,38 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 
 	})
 
+	// Group and group-kind exclusions run before the limit, so excluded churn
+	// cannot fill a bounded scan; unknown versions match no exclusion.
+	t.Run("group and group-kind exclusions run before the limit", func(t *testing.T) {
+		store := newStore(t)
+		row := func(id string, offset time.Duration, kind, apiVersion string) timeline.TimelineEvent {
+			e := informer(id, offset)
+			e.Kind, e.APIVersion = kind, apiVersion
+			return e
+		}
+		mustAppend(t, store, row("custom", 0, "BGPConfiguration", "crd.projectcalico.org/v1"))
+		mustAppend(t, store, row("same-group-other-kind", time.Second, "AppProject", "argoproj.io/v1alpha1"))
+		mustAppend(t, store, row("unknown", 2*time.Second, "Widget", ""))
+		for i := 0; i < 5; i++ {
+			mustAppend(t, store, row(fmt.Sprintf("tracked-%d", i), time.Minute+time.Duration(i)*time.Second, "Application", "argoproj.io/v1alpha1"))
+			mustAppend(t, store, row(fmt.Sprintf("builtin-%d", i), 2*time.Minute+time.Duration(i)*time.Second, "Deployment", "apps/v1"))
+		}
+		opts := timeline.QueryOptions{
+			ExcludeAPIGroups:  []string{"apps"},
+			ExcludeGroupKinds: []resourceid.GroupKind{{Group: "argoproj.io", Kind: "Application"}},
+			Limit:             3, IncludeManaged: true,
+		}
+		got, err := store.Query(ctx, opts)
+		if err != nil || fmt.Sprint(idsOfEvents(got)) != "[unknown same-group-other-kind custom]" {
+			t.Fatalf("exclusions before limit: got %v, error %v", idsOfEvents(got), err)
+		}
+		opts.RequireAPIVersion = true
+		got, err = store.Query(ctx, opts)
+		if err != nil || fmt.Sprint(idsOfEvents(got)) != "[same-group-other-kind custom]" {
+			t.Fatalf("exclusions with RequireAPIVersion: got %v, error %v", idsOfEvents(got), err)
+		}
+	})
+
 	// Excluding managed rows or K8s Events after the limit would let newer
 	// excluded rows fill it, returning a short page with an older visible row
 	// missing and nothing to say so.

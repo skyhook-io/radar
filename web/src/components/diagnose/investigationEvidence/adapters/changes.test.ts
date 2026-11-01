@@ -121,3 +121,74 @@ describe("get_changes created runs", () => {
     }
   });
 });
+
+describe("get_changes omittedKinds", () => {
+  const sentence =
+    "This window also has changes to kinds the default feed leaves out: BGPConfiguration, Node. Pass kind=<Kind> to list them.";
+  const omittedKinds = [
+    {
+      kind: "BGPConfiguration",
+      group: "crd.projectcalico.org",
+      latestChangeType: "add",
+      latestTimestamp: "2026-11-01T10:03:00Z",
+    },
+    {
+      kind: "Node",
+      latestChangeType: "update",
+      latestTimestamp: "2026-11-01T10:01:00Z",
+    },
+  ];
+
+  it("shows the kinds as a routine note, not as a truncated result", () => {
+    const projection = project([
+      tool("changes", "get_changes", {
+        changes: [],
+        narrowHint: sentence,
+        omittedKinds,
+      }),
+    ]);
+    expect(projection.limitations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "Other changed kinds",
+          kind: "unknown",
+          presentation: "history",
+          message:
+            "Changed in this window but outside the default change feed: BGPConfiguration.crd.projectcalico.org (last created 2026-11-01T10:03:00Z), Node (last edited 2026-11-01T10:01:00Z).",
+        }),
+      ]),
+    );
+    expect(
+      projection.limitations.some((entry) => entry.kind === "truncated"),
+    ).toBe(false);
+  });
+
+  it("keeps the rest of narrowHint as a truncation note", () => {
+    const projection = project([
+      tool("changes", "get_changes", {
+        changes: [],
+        narrowHint: `Radar fetched every recorded change in this window but returned only the highest-ranked. ${sentence}`,
+        omittedKinds,
+      }),
+    ]);
+    expect(
+      projection.limitations.filter((entry) => entry.kind === "truncated"),
+    ).toHaveLength(1);
+  });
+
+  it("rejects a malformed entry", () => {
+    const projection = project([
+      tool("changes", "get_changes", {
+        changes: [],
+        omittedKinds: [{ kind: "Node" }],
+      }),
+    ]);
+    expect(projection.limitations).toEqual([
+      expect.objectContaining({
+        source: "Other changed kinds",
+        message:
+          "Radar couldn't summarize this investigation step. Review it in Activity.",
+      }),
+    ]);
+  });
+});

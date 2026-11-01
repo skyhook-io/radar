@@ -24,8 +24,11 @@ func TestGetChangesNamesOmittedKinds(t *testing.T) {
 	if len(response.Changes) != 0 || !strings.Contains(response.NarrowHint, want) {
 		t.Fatalf("default get_changes = %+v, want no rows and the omitted-kinds hint", response)
 	}
+	if len(response.OmittedKinds) != 1 || response.OmittedKinds[0].Kind != "BGPConfiguration" || response.OmittedKinds[0].Group != "crd.projectcalico.org" || response.OmittedKinds[0].LatestChangeType != "add" {
+		t.Fatalf("omittedKinds = %+v", response.OmittedKinds)
+	}
 	response, _ = getChangesForTest(t, context.Background(), getChangesInput{Kind: "BGPConfiguration"})
-	if len(response.Changes) != 1 || strings.Contains(response.NarrowHint, "leaves out") {
+	if len(response.Changes) != 1 || strings.Contains(response.NarrowHint, "leaves out") || response.OmittedKinds != nil {
 		t.Fatalf("kind=BGPConfiguration = %+v, want the row and no hint", response)
 	}
 	// A namespace query doesn't point at other scopes.

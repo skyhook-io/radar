@@ -85,6 +85,12 @@ type QueryOptions struct {
 	APIGroups []string
 	// RequireAPIVersion excludes unknown identities for exact resource drill-downs.
 	RequireAPIVersion bool
+	// ExcludeAPIGroups drops rows whose recorded apiVersion's group is listed,
+	// and ExcludeGroupKinds rows whose group and kind match an entry, before
+	// pagination limits are applied. Rows that did not record apiVersion are
+	// unknown and match neither; pair with RequireAPIVersion to drop them.
+	ExcludeAPIGroups  []string
+	ExcludeGroupKinds []resourceid.GroupKind
 	Since             time.Time     // Filter events after this time
 	Until             time.Time     // Filter events before this time
 	Sources           []EventSource // Filter by event source (empty = all)
