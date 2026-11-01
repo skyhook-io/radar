@@ -34,7 +34,7 @@ const context = {
   workloadSummary: { replicas: { desired: 1, ready: 1, available: 1 } },
   relatedApplicationFindings: {
     source,
-    coverageState: "cached",
+    gaps: [],
     checked: 1,
     unknown: 0,
     findings: [connector],
@@ -126,7 +126,7 @@ describe("cached application findings", () => {
           tier: "basic",
           relatedApplicationFindings: {
             source,
-            coverageState: "limited",
+            gaps: [{ code: "list_too_large", action: "change_request" }],
             checked: 0,
             unknown: 0,
             truncated: true,

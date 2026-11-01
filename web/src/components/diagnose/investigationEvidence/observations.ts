@@ -1049,9 +1049,8 @@ function addRelatedApplicationFindings(
   if (
     !value ||
     !applicationSource ||
-    !["cached", "limited", "unavailable"].includes(
-      String(value.coverageState),
-    ) ||
+    !Array.isArray(value.gaps) ||
+    !value.gaps.every((gap) => nonEmptyString(record(gap)?.code)) ||
     !nonNegativeInteger(value.checked) ||
     !nonNegativeInteger(value.unknown) ||
     !nonEmptyString(value.coverage) ||

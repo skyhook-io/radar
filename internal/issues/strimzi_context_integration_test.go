@@ -2,11 +2,15 @@ package issues
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -77,7 +81,11 @@ func TestCachedStrimziEvidenceReadsCurrentAuthorizedOwnerChain(t *testing.T) {
 				t.Fatal(err)
 			}
 			cache := k8s.GetDynamicResourceCache()
+			connectorGVR := schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}
 			for gvr := range listKinds {
+				if gvr == connectorGVR {
+					continue
+				}
 				if err := cache.EnsureWatching(gvr); err != nil {
 					t.Fatal(err)
 				}
@@ -90,6 +98,24 @@ func TestCachedStrimziEvidenceReadsCurrentAuthorizedOwnerChain(t *testing.T) {
 				accessCalls++
 				return ownership.Unrestricted()
 			}
+			uncollected := CachedStrimziEvidence(pod, nil, access)
+			if uncollected == nil || len(uncollected.Gaps) != 1 || uncollected.Gaps[0].Code != readreason.RadarKindNotCollected || uncollected.Checked != 0 {
+				t.Fatalf("uncollected inventory looked inspected: %+v", uncollected)
+			}
+			wire, err := json.Marshal(uncollected)
+			if err != nil || !strings.Contains(string(wire), `"action":"radar_config"`) {
+				t.Fatalf("read gap omitted its canonical remedy: %s %v", wire, err)
+			}
+			if slices.Contains(cache.WatchedGVRs(), connectorGVR) {
+				t.Fatal("passive evidence started a connector watch")
+			}
+			if err := cache.EnsureWatching(connectorGVR); err != nil {
+				t.Fatal(err)
+			}
+			if !cache.WaitForSync(connectorGVR, 5*time.Second) {
+				t.Fatal("connector cache not synchronized")
+			}
+			accessCalls = 0
 			if got := CachedStrimziEvidence(pod, nil, access); got == nil || len(got.Findings) != 1 || got.Source.Name != "connect" {
 				t.Fatalf("cached owner chain lost: %+v", got)
 			}

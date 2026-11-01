@@ -6,8 +6,11 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,7 +23,7 @@ const maxStrimziContextScan = 500
 
 type strimziContextReader struct {
 	owner func(resourceid.Ref) ownership.OwnerAnswer
-	list  func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error)
+	list  func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code)
 }
 
 func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ownership.Catalog) ownership.Access) *issuesapi.RelatedApplicationFindings {
@@ -58,16 +61,26 @@ func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ow
 			}
 			return answer
 		},
-		list: func(namespace string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+		list: func(namespace string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
 			gvr, ok := discovery.GetGVRWithGroup("KafkaConnector", strimziGroup)
 			if !ok {
-				return nil, gvr, false, k8s.ErrUnknownDynamicKind
+				return nil, gvr, false, readreason.KindUnknown
 			}
-			if !dynamic.IsNamespaceSynced(gvr, namespace) {
-				return nil, gvr, false, fmt.Errorf("cache not synced")
+			plan := readplan.Dynamic(dynamic, gvr, []string{namespace}, false)
+			for _, part := range plan.Partitions {
+				if part.Verdict.State != readplan.Readable {
+					return nil, gvr, false, part.Verdict.Code
+				}
 			}
 			rows, truncated, err := dynamic.ListWatchedNamespaceReadOnly(gvr, namespace, maxStrimziContextScan)
-			return rows, gvr, truncated, err
+			if err != nil {
+				code, known := readplan.CollectorErrorCode(err)
+				if !known {
+					code = readreason.ReadError
+				}
+				return nil, gvr, false, code
+			}
+			return rows, gvr, truncated, ""
 		},
 	}
 	out := strimziEvidence(runtimeObj, canRead, reader)
@@ -107,15 +120,19 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	if connect.Name == "" || canRead != nil && !canRead(connect) {
 		return nil
 	}
-	out := &issuesapi.RelatedApplicationFindings{CoverageState: "unavailable", Source: connect, Coverage: "Connector status could not be read from the cache; missing findings do not establish application health."}
-	rows, gvr, truncated, err := reader.list(connect.Namespace)
-	if err != nil {
-		return out
-	}
+	out := &issuesapi.RelatedApplicationFindings{Gaps: []resourceapi.Gap{}, Source: connect, Coverage: "Connector status could not be read from the cache; missing findings do not establish application health."}
+	rows, gvr, truncated, code := reader.list(connect.Namespace)
 	if truncated || len(rows) > maxStrimziContextScan {
 		out.Truncated = true
-		out.CoverageState = "limited"
+		code = readreason.ListTooLarge
 		out.Coverage = "Connector findings were not checked because this namespace exceeds the inspection budget; missing findings do not establish application health."
+	}
+	if code != "" {
+		out.Gaps = []resourceapi.Gap{{
+			Code:       code,
+			Kinds:      resourceapi.Kinds([]resourceapi.KindRef{{Group: strimziGroup, Kind: "KafkaConnector"}}, 1),
+			Namespaces: resourceapi.Names([]string{connect.Namespace}, 1),
+		}}
 		return out
 	}
 	var matched []*unstructured.Unstructured
@@ -148,10 +165,6 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		out.Findings = append(out.Findings, findings...)
 	}
 	out.Checked, out.Unknown = checked, unknown
-	out.CoverageState = "cached"
-	if out.Truncated || unknown > 0 {
-		out.CoverageState = "limited"
-	}
 	out.Coverage = fmt.Sprintf("Checked %d authorized cached connector snapshots; %d were unverifiable or inactive. Missing findings do not establish application health.", checked, unknown)
 	if out.Truncated {
 		out.Coverage += " The five-finding limit was reached; additional findings may be omitted."

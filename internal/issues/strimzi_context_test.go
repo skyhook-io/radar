@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -55,8 +56,8 @@ func TestStrimziContextExactAuthorizedAndImmutable(t *testing.T) {
 	collision.SetAPIVersion("other.io/v1")
 	rows = append(rows, collision)
 	before, _ := json.Marshal(rows)
-	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
-		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
+	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
+		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, ""
 	}}
 	seen := []string{}
 	out := strimziEvidence(connect, func(r Ref) bool { seen = append(seen, r.Namespace+"/"+r.Name); return r.Name != "denied" }, reader)
@@ -97,8 +98,8 @@ func TestStrimziContextOwnerUIDAndMissing(t *testing.T) {
 	pod.SetAPIVersion("v1")
 	yes := false
 	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "kafka.strimzi.io/v1", Kind: "KafkaConnect", Name: "connect", UID: types.UID("connect-uid"), Controller: &yes}})
-	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, connect), list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
-		return nil, schema.GroupVersionResource{}, false, fmt.Errorf("not watched")
+	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, connect), list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
+		return nil, schema.GroupVersionResource{}, false, readreason.RadarKindNotCollected
 	}}
 	if out := strimziEvidence(pod, nil, reader); out == nil || out.Coverage == "" {
 		t.Fatal("valid UID path lost")
@@ -122,11 +123,11 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 	for n := 0; n < 8; n++ {
 		rows = append(rows, contextConnector("app", fmt.Sprintf("c%d", n), "connect"))
 	}
-	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
-		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
+	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
+		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, ""
 	}}
 	out := strimziEvidence(connect, nil, reader)
-	if len(out.Findings) != 5 || !out.Truncated || out.Checked != len(rows) {
+	if len(out.Findings) != 5 || !out.Truncated || out.Checked != len(rows) || len(out.Gaps) != 0 {
 		t.Fatalf("unbounded findings %+v", out)
 	}
 	rows = rows[:1]
@@ -135,7 +136,7 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 	if len(out.Findings) != 0 {
 		t.Fatal("stale status emitted")
 	}
-	if out.Checked != 1 || out.Unknown != 1 || out.CoverageState != "limited" {
+	if out.Checked != 1 || out.Unknown != 1 || len(out.Gaps) != 0 {
 		t.Fatalf("stale inspection looked verified: %+v", out)
 	}
 	rows = nil
@@ -143,7 +144,7 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 		rows = append(rows, contextConnector("app", fmt.Sprintf("c%d", n), "connect"))
 	}
 	out = strimziEvidence(connect, nil, reader)
-	if !out.Truncated || len(out.Findings) != 0 {
+	if !out.Truncated || len(out.Findings) != 0 || len(out.Gaps) != 1 || out.Gaps[0].Code != readreason.ListTooLarge {
 		t.Fatal("scan cap missed")
 	}
 }
@@ -161,11 +162,11 @@ func TestStrimziCandidateBudgetPrecedesAuthorizationAndRelevance(t *testing.T) {
 				rows = append(rows, contextConnector("app", fmt.Sprintf("skip-%d", n), cluster))
 			}
 			rows = append(rows, contextConnector("app", "beyond-budget", "connect"))
-			reader := strimziContextReader{list: func(ns string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+			reader := strimziContextReader{list: func(ns string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
 				if ns != "app" {
 					t.Fatalf("wrong namespace %q", ns)
 				}
-				return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, true, nil
+				return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, true, ""
 			}}
 			calls := 0
 			out := strimziEvidence(connect, func(ref Ref) bool {
@@ -197,8 +198,8 @@ func TestStrimziContextModernOwnerChain(t *testing.T) {
 	pod := contextStrimzi("Pod", "app", "worker")
 	pod.SetAPIVersion("v1")
 	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: podset.GetAPIVersion(), Kind: "StrimziPodSet", Name: "workers", UID: podset.GetUID(), Controller: &yes}})
-	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, podset, connect), list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
-		return []*unstructured.Unstructured{contextConnector("app", "sink", "connect")}, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
+	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, podset, connect), list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
+		return []*unstructured.Unstructured{contextConnector("app", "sink", "connect")}, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, ""
 	}}
 	if got := strimziEvidence(pod, nil, reader); got == nil || len(got.Findings) != 1 {
 		t.Fatalf("real chain lost: %+v", got)

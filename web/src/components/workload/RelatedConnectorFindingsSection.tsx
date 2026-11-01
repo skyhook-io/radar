@@ -4,7 +4,7 @@ export function RelatedConnectorFindingsSection({ data, onResourceClick }: {
   data: RelatedApplicationFindings | undefined
   onResourceClick?: (ref: IssueResourceRef) => void
 }) {
-  if (!data || (!data.findings?.length && !data.truncated && data.unknown === 0 && data.coverageState !== 'unavailable')) return null
+  if (!data || (!data.findings?.length && !data.truncated && data.unknown === 0 && data.gaps.length === 0)) return null
 
   return (
     <div className="space-y-2">
