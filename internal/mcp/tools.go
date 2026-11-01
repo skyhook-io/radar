@@ -145,7 +145,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
 			"auditSummary.highestSeverity uses critical|high|medium|low (current built-ins are high|medium) and " +
 			"issueSummary critical|warning; these are separate scales: audit is posture-remediation priority, issues are " +
-			"live failures, though a few audit findings (expired certificates, dangling references) are live too; " +
+			"live failures, though some audit findings (expired certificates, dangling references) can be live failures; " +
 			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
 			"disagree means a manager's list and the object's metadata name different managers: check both). This is the drill-down " +
 			"tool, not the best first call for broad incidents. Start with issues, " +
