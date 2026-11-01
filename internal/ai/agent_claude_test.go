@@ -12,7 +12,7 @@ import (
 )
 
 func TestClaudeExecutionProfiles(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	a := &claudeAgent{bin: "claude"}
 	safeguarded, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:1/mcp-readonly", prompt: "go",
@@ -65,7 +65,7 @@ func TestClaudeExecutionProfiles(t *testing.T) {
 }
 
 func TestClaudeSafeguardedApplyAllowlist(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	a := &claudeAgent{bin: "claude"}
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:1/mcp", prompt: "apply",
@@ -93,8 +93,7 @@ func TestClaudeSafeguardedApplyAllowlist(t *testing.T) {
 // and older Claude Code versions only find a session from the folder it was
 // created in.
 func TestClaudeRunsFromRadarAgentFolder(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateHome(t)
 	a := &claudeAgent{bin: "claude"}
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:1/mcp", prompt: "go",
@@ -111,4 +110,30 @@ func TestClaudeRunsFromRadarAgentFolder(t *testing.T) {
 	if info, err := os.Stat(want); err != nil || !info.IsDir() {
 		t.Fatalf("agent folder not created: %v", err)
 	}
+}
+
+// A turn that cannot run from the shared folder fails rather than running from
+// a folder the hand-off would not resume from.
+func TestClaudeFailsWithoutRadarAgentFolder(t *testing.T) {
+	home := isolateHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".radar"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &claudeAgent{bin: "claude"}
+	if _, _, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:1/mcp", prompt: "go",
+		profile: ExecutionProfileSafeguarded, maxTurns: 1,
+	}); err == nil {
+		t.Fatal("want an error when ~/.radar/agent cannot be created")
+	}
+}
+
+// isolateHome points the user's home dir at a temp dir, so Claude turns create
+// .radar/agent there instead of in the real profile.
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
 }

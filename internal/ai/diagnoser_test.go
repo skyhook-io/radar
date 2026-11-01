@@ -602,6 +602,7 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 // JSON block) — free-text alone means the process died mid-stream and must
 // surface as an error, never as a calm "done".
 func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
+	isolateHome(t)
 	mkCLI := func(t *testing.T, resultLine, exitCode string) string {
 		t.Helper()
 		dir := t.TempDir()
@@ -719,6 +720,7 @@ func TestParseStream_InitReportsAgentReady(t *testing.T) {
 // phase: the private mount's handshake produces exactly one event per turn, no
 // matter how many times the scope is marked, and it lands before the stream ends.
 func TestDiagnoseStreamReportsHandshakeOnce(t *testing.T) {
+	isolateHome(t)
 	dir := t.TempDir()
 	flag := filepath.Join(dir, "handshake-observed")
 	bin := filepath.Join(dir, "claude")

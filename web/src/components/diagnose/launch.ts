@@ -13,7 +13,8 @@ function sq(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-// Radar creates it before the first Claude turn. Unquoted so the shell expands ~.
+// Radar also creates it before each Claude turn, but a run from before Radar
+// used it can be continued first. Unquoted so the shell expands ~.
 const AGENT_DIR = "~/.radar/agent";
 
 export function launchAgentLabel(run: RunSummary): string {
@@ -80,5 +81,5 @@ export function buildLaunchCommand(
   const cfg = JSON.stringify({
     mcpServers: { radar: { type: "http", url: mcpUrl } },
   });
-  return `cd ${AGENT_DIR} && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
+  return `mkdir -p ${AGENT_DIR} && cd ${AGENT_DIR} && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
 }

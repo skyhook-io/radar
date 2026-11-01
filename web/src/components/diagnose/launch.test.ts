@@ -66,7 +66,7 @@ describe("Claude Code resume command", () => {
       updatedAt: "2026-09-21T00:00:00Z",
     };
     expect(buildLaunchCommand(run, "http://localhost:9280/mcp")).toBe(
-      'cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
+      'mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
     );
   });
 });
