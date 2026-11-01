@@ -1,6 +1,7 @@
 import { useId } from 'react'
 import type { DashboardTopFlow, DashboardTrafficSummary } from '../../api/client'
 import { Activity } from 'lucide-react'
+import { useElementSize } from '../../hooks/useElementSize'
 import { HomeDiagramCard } from './HomeDiagramCard'
 
 interface TrafficSummaryProps {
@@ -21,13 +22,9 @@ export function trafficSourceName(source: string): string {
 
 const VIEW_W = 300
 const VIEW_H = 130
-const LABEL_SIZE = 10
-// DM Mono's advance is 0.6em, so a label's width follows from its length.
-const LABEL_ADVANCE = LABEL_SIZE * 0.6
 const NODE_R = 6.5
-const MARGIN = 24
-// How far an outer column's label starts outside its circle's centre.
-const LABEL_OUTSET = NODE_R + 4
+// Space kept between two labels on one line, so they never read as one name.
+const LABEL_GAP = 16
 
 const curve = (x1: number, y1: number, x2: number, y2: number, k = 26) =>
   `M ${x1} ${y1} C ${x1 + k} ${y1}, ${x2 - k} ${y2}, ${x2} ${y2}`
@@ -82,13 +79,16 @@ function InternetNode({ x, y }: { x: number; y: number }) {
 export interface FlowNode {
   key: string
   name: string
-  // The name to show: namespace-qualified when another endpoint shares the name.
-  label: string
   namespace?: string
+  // What the circle is labelled: namespace-qualified when another endpoint
+  // shares the name, then cut to the room the layout leaves it.
+  label: string
+  labelX: number
+  labelY: number
+  labelAnchor: 'start' | 'middle' | 'end'
   x: number
   y: number
   column: number
-  columns: number
 }
 
 export interface FlowEdge {
@@ -98,16 +98,40 @@ export interface FlowEdge {
   directionUnknown: boolean
 }
 
+export interface FlowLayout {
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+  radius: number
+  labelSize: number
+}
+
+export interface DrawingSize {
+  width: number
+  height: number
+}
+
 const endpointKey = (name: string, namespace?: string) => `${namespace ?? ''}/${name}`
 
-// Lays the top flows out left to right: an endpoint sits one column right of
-// the first endpoint found sending to it, so a chain reads as a chain. An
-// endpoint named in two flows is one circle; the same name in two namespaces is
-// two.
-export function layoutTopFlows(flows: DashboardTopFlow[]): { nodes: FlowNode[]; edges: FlowEdge[] } {
+// Cuts a label to the room it has. DM Mono's advance is 0.6em, so a label's
+// width follows from its length.
+export function fitLabel(name: string, room: number, labelSize: number): string {
+  const max = Math.floor(room / (labelSize * 0.6))
+  if (name.length <= max) return name
+  // Too little room to say anything; the circle's title still names it.
+  return max < 4 ? '' : `${name.slice(0, max - 1)}…`
+}
+
+// Lays the top flows out left to right in the drawing's own pixels: an
+// endpoint sits one column right of the first endpoint found sending to it, so
+// a chain reads as a chain. An endpoint named in two flows is one circle; the
+// same name in two namespaces is two. Fewer endpoints get bigger circles and
+// labels, and the whole picture is centred, so one flow looks as deliberate as
+// three.
+export function layoutTopFlows(flows: DashboardTopFlow[], size: DrawingSize = { width: 300, height: 130 }): FlowLayout {
   const info = new Map<string, { name: string; namespace?: string }>()
   const out = new Map<string, string[]>()
   const incoming = new Set<string>()
+  const looped = new Set<string>()
   const order: string[] = []
   // Radar servers that predate per-pair summing can name one pair twice.
   const pairs = new Map<string, { src: string; dst: string; connections: number; directionUnknown: boolean }>()
@@ -128,7 +152,9 @@ export function layoutTopFlows(flows: DashboardTopFlow[]): { nodes: FlowNode[]; 
       continue
     }
     pairs.set(pairKey, { src, dst, connections: f.connections, directionUnknown: f.directionUnknown === true })
-    if (src !== dst) {
+    if (src === dst) {
+      looped.add(src)
+    } else {
       out.set(src, [...(out.get(src) ?? []), dst])
       incoming.add(dst)
     }
@@ -155,100 +181,161 @@ export function layoutTopFlows(flows: DashboardTopFlow[]): { nodes: FlowNode[]; 
   const columns = Math.max(...column.values()) + 1
   const byColumn: string[][] = Array.from({ length: columns }, () => [])
   for (const k of order) byColumn[column.get(k)!].push(k)
+  const rows = Math.max(...byColumn.map(c => c.length))
 
-  const xAt = (c: number) => columns === 1 ? VIEW_W / 2 : MARGIN + (c * (VIEW_W - 2 * MARGIN)) / (columns - 1)
+  const { width, height } = size
+  const radius = order.length <= 2 ? 11 : order.length <= 4 ? 9 : 7.5
+  const labelSize = order.length <= 2 ? 13 : order.length <= 4 ? 12 : 11
+  const outset = radius + 4
+  // A loop over an outer circle needs room beside it too.
+  const margin = looped.size > 0 ? radius * 2.6 + 6 : radius + 6
+  const spacing = columns === 1 ? 0 : (width - 2 * margin) / (columns - 1)
+  const xAt = (c: number) => (columns === 1 ? width / 2 : margin + c * spacing)
+  const rowGap = Math.min(radius * 2 + labelSize + 28, (height - labelSize - 16) / rows)
+
+  // Outer columns label below their circles. An inner column labels its upper
+  // circles above and its lower ones below, keeping its labels off the outer
+  // columns' line; a lone inner circle labels above in odd columns. A circle
+  // with a loop over it keeps its label below.
+  const labelAbove = (c: number, i: number, k: string) => {
+    if (c === 0 || c === columns - 1 || looped.has(k)) return false
+    const count = byColumn[c].length
+    return count === 1 ? c % 2 === 1 : i < count / 2
+  }
+
   const nameUses = new Map<string, number>()
   for (const { name } of info.values()) nameUses.set(name, (nameUses.get(name) ?? 0) + 1)
-  const nodes = new Map<string, FlowNode>()
+  const placed: (FlowNode & { full: string })[] = []
   byColumn.forEach((keys, c) => {
-    const gap = Math.min(40, (VIEW_H - 24) / keys.length)
     keys.forEach((k, i) => {
       const { name, namespace } = info.get(k)!
-      const y = VIEW_H / 2 - 6 + (i - (keys.length - 1) / 2) * gap
-      const label = namespace && nameUses.get(name)! > 1 ? `${namespace}/${name}` : name
-      nodes.set(k, { key: k, name, label, namespace, x: xAt(c), y, column: c, columns })
+      const x = xAt(c)
+      const y = (i - (keys.length - 1) / 2) * rowGap
+      const anchor = columns > 1 && c === 0 ? 'start' : columns > 1 && c === columns - 1 ? 'end' : 'middle'
+      placed.push({
+        key: k, name, namespace, x, y, column: c, label: '',
+        full: namespace && nameUses.get(name)! > 1 ? `${namespace}/${name}` : name,
+        labelX: anchor === 'start' ? x - outset : anchor === 'end' ? x + outset : x,
+        labelY: labelAbove(c, i, k) ? y - radius - 5 : y + radius + labelSize + 1,
+        labelAnchor: anchor,
+      })
     })
   })
 
+  // Centre everything that is drawn: circles, loops over them and labels.
+  const top = Math.min(...placed.map(n => Math.min(n.y - radius * (looped.has(n.key) ? 4.2 : 1), n.labelY - labelSize)))
+  const bottom = Math.max(...placed.map(n => Math.max(n.y + radius, n.labelY + 3)))
+  const shift = height / 2 - (top + bottom) / 2
+  for (const n of placed) {
+    n.y += shift
+    n.labelY += shift
+  }
+
+  // A label may reach the card's edge, stops short of any circle beside it,
+  // and shares a line with another label only up to the midpoint between
+  // them. A second pass, one label at a time against the others' current
+  // extents, lets a cut label take room a short neighbour left unused.
+  const advance = labelSize * 0.6
+  const extent = (n: (typeof placed)[number]) => {
+    const w = n.label.length * advance
+    const left = n.labelAnchor === 'start' ? n.labelX : n.labelAnchor === 'end' ? n.labelX - w : n.labelX - w / 2
+    return [left, left + w]
+  }
+  const fit = (n: (typeof placed)[number], limit: (o: (typeof placed)[number], toRight: boolean) => number) => {
+    let left = 4
+    let right = width - 4
+    for (const o of placed) {
+      if (o === n) continue
+      if (o.x !== n.labelX && o.y + radius > n.labelY - labelSize && o.y - radius < n.labelY + 3) {
+        if (o.x > n.labelX) right = Math.min(right, o.x - radius - LABEL_GAP / 2)
+        else left = Math.max(left, o.x + radius + LABEL_GAP / 2)
+      }
+      if (Math.abs(o.labelY - n.labelY) >= labelSize + 2 || o.labelX === n.labelX) continue
+      if (o.labelX > n.labelX) right = Math.min(right, limit(o, true))
+      else left = Math.max(left, limit(o, false))
+    }
+    const room = n.labelAnchor === 'start' ? right - n.labelX
+      : n.labelAnchor === 'end' ? n.labelX - left
+        : 2 * Math.min(n.labelX - left, right - n.labelX)
+    return fitLabel(n.full, room, labelSize)
+  }
+  for (const n of placed) {
+    n.label = fit(n, (o, toRight) => (o.labelX + n.labelX) / 2 + (toRight ? -LABEL_GAP / 2 : LABEL_GAP / 2))
+  }
+  for (const n of placed) {
+    n.label = fit(n, (o, toRight) => toRight ? extent(o)[0] - LABEL_GAP : extent(o)[1] + LABEL_GAP)
+  }
+  const nodes: FlowNode[] = placed.map(({ full: _full, ...n }) => n)
+  const byKey = new Map(nodes.map(n => [n.key, n]))
+
   const edges = [...pairs.values()].map(p => ({
-    from: nodes.get(p.src)!,
-    to: nodes.get(p.dst)!,
+    from: byKey.get(p.src)!,
+    to: byKey.get(p.dst)!,
     connections: p.connections,
     directionUnknown: p.directionUnknown,
   }))
-  return { nodes: [...nodes.values()], edges }
-}
-
-// Room for a label under its circle. Outer columns anchor at the circle's
-// outside edge and inner ones are centred; either way a label stops at the
-// midpoint to its neighbour, so labels at the same height never overlap.
-export function fitLabel(name: string, node: Pick<FlowNode, 'column' | 'columns'>): string {
-  let room = VIEW_W - 16
-  if (node.columns > 1) {
-    const spacing = (VIEW_W - 2 * MARGIN) / (node.columns - 1)
-    const outer = node.column === 0 || node.column === node.columns - 1
-    room = outer ? spacing / 2 + LABEL_OUTSET - 3 : spacing - 6
-  }
-  const max = Math.max(4, Math.floor(room / LABEL_ADVANCE))
-  return name.length <= max ? name : `${name.slice(0, max - 1)}…`
+  return { nodes, edges, radius, labelSize }
 }
 
 const fullName = (n: FlowNode) => n.namespace ? `${n.namespace}/${n.name}` : n.name
 
-function edgePath(a: FlowNode, b: FlowNode): string {
+function edgePath(a: FlowNode, b: FlowNode, r: number): string {
   // Traffic between replicas of one workload: a loop over its circle.
-  if (a === b) return `M ${a.x - 5} ${a.y - 4} C ${a.x - 26} ${a.y - 36}, ${a.x + 26} ${a.y - 36}, ${a.x + 5} ${a.y - NODE_R - 1}`
-  if (b.x > a.x) return curve(a.x + NODE_R, a.y, b.x - NODE_R - 2, b.y)
+  if (a === b) return `M ${a.x - r * 0.8} ${a.y - r * 0.6} C ${a.x - r * 3.2} ${a.y - r * 5}, ${a.x + r * 3.2} ${a.y - r * 5}, ${a.x + r * 0.8} ${a.y - r - 1.5}`
+  if (b.x > a.x) return curve(a.x + r, a.y, b.x - r - 2, b.y, Math.min(60, (b.x - a.x) * 0.4))
   // Backward or within a column: bow out so the line clears the circles.
-  const mx = (a.x + b.x) / 2 + (a.x === b.x ? 26 : 0)
-  const my = (a.y + b.y) / 2 - (a.x === b.x ? 0 : 26)
-  return `M ${a.x} ${a.y - NODE_R} Q ${mx} ${my}, ${b.x} ${b.y - NODE_R - 2}`
+  const mx = (a.x + b.x) / 2 + (a.x === b.x ? r * 4 : 0)
+  const my = (a.y + b.y) / 2 - (a.x === b.x ? 0 : r * 4)
+  return `M ${a.x} ${a.y - r} Q ${mx} ${my}, ${b.x} ${b.y - r - 2}`
 }
 
 function ObservedTraffic({ flows }: { flows: DashboardTopFlow[] }) {
   const arrow = `${useId()}-arrow`
-  const { nodes, edges } = layoutTopFlows(flows)
+  const [ref, size] = useElementSize<HTMLDivElement>({ width: 300, height: 130 })
+  const { nodes, edges, radius: r, labelSize } = layoutTopFlows(flows, size)
   const maxConnections = Math.max(1, ...edges.map(e => e.connections))
+  const scale = r / 7.5
   return (
-    <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="w-full h-full" preserveAspectRatio="xMidYMid meet" role="img"
-      aria-label={edges.map(e => e.directionUnknown
-        ? `between ${fullName(e.from)} and ${fullName(e.to)}, direction unknown`
-        : `${fullName(e.from)} to ${fullName(e.to)}`).join('; ')}>
-      <defs>
-        <marker id={arrow} viewBox="0 0 8 6" refX="6" refY="3" markerWidth="6" markerHeight="4.5" markerUnits="userSpaceOnUse" orient="auto">
-          <path d="M 0 0 L 8 3 L 0 6 z" fill="var(--traffic-flow)" />
-        </marker>
-      </defs>
-      {edges.map((e, i) => {
-        const d = edgePath(e.from, e.to)
-        const width = 1.2 + 2.4 * Math.sqrt(e.connections / maxConnections)
-        return (
-          <g key={i}>
-            <path d={d} fill="none" stroke="var(--traffic-flow)" strokeOpacity={0.22} strokeWidth={width + 1.2}
-              strokeLinecap="round" markerEnd={e.directionUnknown ? undefined : `url(#${arrow})`} />
-            {!e.directionUnknown && (
-              <path d={d} fill="none" stroke="var(--traffic-flow)" strokeWidth={Math.max(1.2, width * 0.75)}
-                strokeLinecap="round" className="animate-traffic-dash" data-testid="traffic-dash" />
-            )}
-          </g>
-        )
-      })}
-      {nodes.map(n => {
-        const anchor = n.columns > 1 && n.column === 0 ? 'start' : n.columns > 1 && n.column === n.columns - 1 ? 'end' : 'middle'
-        const lx = anchor === 'start' ? n.x - LABEL_OUTSET : anchor === 'end' ? n.x + LABEL_OUTSET : n.x
-        return (
+    <div ref={ref} className="w-full h-full">
+      <svg viewBox={`0 0 ${size.width} ${size.height}`} className="w-full h-full" role="img"
+        aria-label={edges.map(e => e.directionUnknown
+          ? `between ${fullName(e.from)} and ${fullName(e.to)}, direction unknown`
+          : `${fullName(e.from)} to ${fullName(e.to)}`).join('; ')}>
+        <defs>
+          <marker id={arrow} viewBox="0 0 8 6" refX="6" refY="3" markerWidth={7 * scale} markerHeight={5.25 * scale}
+            markerUnits="userSpaceOnUse" orient="auto">
+            <path d="M 0 0 L 8 3 L 0 6 z" fill="var(--traffic-flow)" />
+          </marker>
+        </defs>
+        {edges.map((e, i) => {
+          const d = edgePath(e.from, e.to, r)
+          const volume = (1.4 + 2.6 * Math.sqrt(e.connections / maxConnections)) * scale
+          // A loop is short and tight, so full width would fill it in.
+          const width = e.from === e.to ? Math.min(volume, r * 0.3) : volume
+          return (
+            <g key={i}>
+              <path d={d} fill="none" stroke="var(--traffic-flow)" strokeOpacity={0.22} strokeWidth={width + 1.4}
+                strokeLinecap="round" markerEnd={e.directionUnknown ? undefined : `url(#${arrow})`} />
+              {!e.directionUnknown && (
+                <path d={d} fill="none" stroke="var(--traffic-flow)" strokeWidth={Math.max(1.4, width * 0.75)}
+                  strokeLinecap="round" className="animate-traffic-dash" data-testid="traffic-dash" />
+              )}
+            </g>
+          )
+        })}
+        {nodes.map(n => (
           <g key={n.key}>
             <title>{fullName(n)}</title>
-            <circle cx={n.x} cy={n.y} r={NODE_R} fill="var(--bg-surface)" stroke="var(--traffic-flow)" strokeWidth={1} />
-            <circle cx={n.x} cy={n.y} r={2} fill="var(--traffic-flow)" />
-            <text x={lx} y={n.y + NODE_R + LABEL_SIZE + 1} textAnchor={anchor} fontSize={LABEL_SIZE}
-              fontFamily="var(--font-mono)" fill="var(--text-secondary)">
-              {fitLabel(n.label, n)}
+            <circle cx={n.x} cy={n.y} r={r} fill="var(--bg-surface)" stroke="var(--traffic-flow)" strokeWidth={1.2} />
+            <circle cx={n.x} cy={n.y} r={r * 0.32} fill="var(--traffic-flow)" />
+            <text x={n.labelX} y={n.labelY} textAnchor={n.labelAnchor} fontSize={labelSize} fontFamily="var(--font-mono)"
+              fill="var(--text-secondary)" stroke="var(--bg-surface)" strokeWidth={3} paintOrder="stroke">
+              {n.label}
             </text>
           </g>
-        )
-      })}
-    </svg>
+        ))}
+      </svg>
+    </div>
   )
 }
 

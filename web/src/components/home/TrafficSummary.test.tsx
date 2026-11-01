@@ -136,11 +136,86 @@ describe('layoutTopFlows', () => {
 })
 
 describe('labels', () => {
-  it('fits neighbouring labels inside their half of the gap', () => {
-    const name = 'x'.repeat(60)
-    expect(fitLabel(name, { column: 0, columns: 2 }).length).toBeLessThan(25)
-    expect(fitLabel(name, { column: 1, columns: 3 }).length).toBeLessThan(25)
-    expect(fitLabel('cart', { column: 0, columns: 4 })).toBe('cart')
+  it('gives labels more room on a wider card and never lets same-line labels overlap', () => {
+    const long = 'x'.repeat(60)
+    const flows = [
+      { src: 'frontend', dst: 'cart', connections: 3 },
+      { src: 'frontend', dst: long, connections: 2 },
+      { src: 'cart', dst: 'redis-master', connections: 1 },
+    ]
+    const narrow = layoutTopFlows(flows, { width: 270, height: 130 })
+    const wide = layoutTopFlows(flows, { width: 430, height: 150 })
+    const label = (l: typeof narrow, name: string) => l.nodes.find(n => n.name === name)!.label
+    expect(label(narrow, 'redis-master')).toBe('redis-master')
+    expect(label(wide, long).length).toBeGreaterThan(label(narrow, long).length)
+    for (const l of [narrow, wide]) {
+      const extents = l.nodes.map(n => {
+        const w = n.label.length * l.labelSize * 0.6
+        const left = n.labelAnchor === 'start' ? n.labelX : n.labelAnchor === 'end' ? n.labelX - w : n.labelX - w / 2
+        return { y: n.labelY, left, right: left + w }
+      })
+      for (const a of extents) for (const b of extents) {
+        if (a !== b && Math.abs(a.y - b.y) < l.labelSize) expect(a.right <= b.left || b.right <= a.left).toBe(true)
+      }
+    }
+  })
+
+  it('keeps labels clear of each other and of circles in crowded cases', () => {
+    const name = (c: string) => c.repeat(40)
+    const cases: [Parameters<typeof layoutTopFlows>[0], { width: number; height: number }][] = [
+      [[{ src: name('a'), dst: name('b'), connections: 1 }], { width: 430, height: 150 }],
+      [[{ src: 'payments-reconciliation-worker-prod', dst: 'backend', connections: 2 },
+        { src: 'payments-reconciliation-worker-prod', dst: 'cache', connections: 1 }], { width: 270, height: 130 }],
+      [[{ src: 'a', dst: 'b', connections: 1 }, { src: 'b', dst: 'c', connections: 1 }, { src: 'c', dst: name('d'), connections: 1 }],
+        { width: 270, height: 130 }],
+    ]
+    for (const [flows, size] of cases) {
+      const l = layoutTopFlows(flows, size)
+      const boxes = l.nodes.map(n => {
+        const w = n.label.length * l.labelSize * 0.6
+        const left = n.labelAnchor === 'start' ? n.labelX : n.labelAnchor === 'end' ? n.labelX - w : n.labelX - w / 2
+        return { n, left, right: left + w, top: n.labelY - l.labelSize, bottom: n.labelY + 3 }
+      })
+      for (const a of boxes) {
+        expect(a.left).toBeGreaterThanOrEqual(0)
+        expect(a.right).toBeLessThanOrEqual(size.width)
+        for (const b of boxes) {
+          if (a === b || !a.n.label || !b.n.label) continue
+          const sameLine = a.top < b.bottom && b.top < a.bottom
+          if (sameLine) expect(a.right <= b.left || b.right <= a.left).toBe(true)
+        }
+        for (const o of l.nodes) {
+          if (o === a.n || !a.n.label) continue
+          const crossesBand = o.y + l.radius > a.top && o.y - l.radius < a.bottom
+          if (crossesBand) expect(a.right <= o.x - l.radius || a.left >= o.x + l.radius).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('keeps loops over circles inside the drawing', () => {
+    const l = layoutTopFlows([
+      { src: 'a', dst: 'a', connections: 3 }, { src: 'b', dst: 'b', connections: 2 },
+    ], { width: 270, height: 130 })
+    for (const n of l.nodes) expect(n.y - l.radius * 4.2).toBeGreaterThanOrEqual(0)
+  })
+
+  it('draws fewer endpoints larger and centres them', () => {
+    const one = layoutTopFlows([{ src: 'world', dst: 'api', connections: 1 }], { width: 300, height: 130 })
+    const three = layoutTopFlows([
+      { src: 'a', dst: 'b', connections: 1 }, { src: 'a', dst: 'c', connections: 1 }, { src: 'b', dst: 'd', connections: 1 },
+    ], { width: 300, height: 130 })
+    expect(one.radius).toBeGreaterThan(three.radius)
+    expect(one.labelSize).toBeGreaterThan(three.labelSize)
+    const top = Math.min(...one.nodes.map(n => n.y - one.radius))
+    const bottom = Math.max(...one.nodes.map(n => n.labelY + 3))
+    expect(Math.abs((top + bottom) / 2 - 65)).toBeLessThan(1)
+  })
+
+  it('cuts a label to its room', () => {
+    expect(fitLabel('cart', 100, 12)).toBe('cart')
+    expect(fitLabel('x'.repeat(40), 60, 10)).toBe(`${'x'.repeat(9)}…`)
+    expect(fitLabel('x'.repeat(40), 15, 10)).toBe('')
   })
 
   it('capitalizes source names', () => {
