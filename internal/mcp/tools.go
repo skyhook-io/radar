@@ -139,7 +139,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
-		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
+		Description: "Use after narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
 			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
 			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
@@ -171,7 +171,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"Ingresses, ConfigMaps, Secrets, owners) so you can see service-to-workload " +
 			"routing and ownership relationships instead of inspecting resources one by one. " +
 			"Use view=traffic for routing/connectivity questions and view=resources for " +
-			"ownership/deployment hierarchy. NOTE: view=traffic is SPEC-DERIVED routing " +
+			"ownership/deployment hierarchy. view=traffic is routing derived from specs " +
 			"(Ingress→Service→Pod declarations) — it does not show observed traffic, " +
 			"request rates, or live connections. Always specify namespace unless you " +
 			"specifically need a cross-namespace graph. If you already know the suspicious " +
@@ -230,7 +230,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"or traffic not reaching a service, route or ingress. Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout " +
 		"bundle resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
 		"related issues and recent workload/ConfigMap changes. " +
-		"Warning events are a capped sample for the observed resource and Pods; UID-less evidence cannot prove an incarnation. Use get_events for a broader, dedicated event read, including history. " +
+		"Warning events are a capped sample for the observed resource and Pods; an event without a UID may belong to an earlier object of the same name. Use get_events for a broader, dedicated event read, including history. " +
 		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
 		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "`. Inspect source logs for low-confidence " +
@@ -246,8 +246,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	if includeWrites {
 		tool := &mcp.Tool{
 			Name: "diagnose",
-			Description: diagnoseDescription + " Read-only EXCEPT the optional in_cluster=true arg " +
-				"(network kinds), which creates up to 5 transient, self-destructing probe pods to test the real dataplane.",
+			Description: diagnoseDescription + " Read-only except in_cluster=true " +
+				"(network kinds), which creates up to 5 short-lived probe pods to test the real dataplane.",
 			// NOT readOnly: in_cluster=true creates pods. A client gating on
 			// readOnlyHint must be told that.
 			Annotations: diagnoseAnno,
@@ -302,7 +302,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_cluster_audit",
 		Description: "Use when the agent's decision is 'is this cluster well-configured / " +
-			"compliant?' — STATIC CONFIG POSTURE. Returns " +
+			"compliant?': static configuration posture. Returns " +
 			"best-practice findings: Security (runAsRoot, privileged containers, dangerous " +
 			"capabilities, hostPath/hostNetwork, secret-in-ConfigMap), Reliability (single " +
 			"replicas, missing PDB, missing TopologySpread, podHARisk, Service/Ingress " +
@@ -320,7 +320,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"or diagnose to see its resourceContext policy rollup. " +
 			"Respects user's audit settings (ignored namespaces, disabled checks). Filter " +
 			"by namespace, category, or severity. Resources absent from findings should " +
-			"NOT be reported as non-compliant — empty findings for a scope means no " +
+			"not be reported as non-compliant — empty findings for a scope means no " +
 			"violations, not a failed check.",
 		Annotations: readOnly,
 	}, logToolCall("get_cluster_audit", handleGetAudit))
@@ -334,7 +334,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"check catalog (reviewed through " + upgradereadiness.ReviewedThrough + "): version " +
 			"skew, removed/deprecated API usage (live manifests, Helm sources, API-server " +
 			"metrics), node runtime and cgroup evidence, drain feasibility, admission/conversion " +
-			"webhook readiness, and release-specific configuration checks. The verdict is NOT a " +
+			"webhook readiness, and release-specific configuration checks. The verdict is not a " +
 			"readiness guarantee: checks with status `unknown` had incomplete evidence and may " +
 			"hide blockers — report them alongside the verdict, never as passed. `coverage` " +
 			"describes what could actually be inspected under the caller's RBAC; " +
@@ -356,7 +356,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_runtime_versions",
-		Description: "Which running workloads use which runtime version, for runtime CVEs " +
+		Description: "Lists which running workloads use which runtime version, for runtime CVEs " +
 			"(PHP, Node, Python, Go, Java, …). Reads the version each running image declares in its " +
 			"config (PHP_VERSION etc., set by Docker official images and inherited by images built " +
 			"FROM them) for the digest the Pod runs: manifest and config only. Declared, not proof; " +
@@ -474,7 +474,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Description: "Find resources by content/term match when you do not know which object " +
 			"contains a string, config key, env ref, image, label/annotation value, " +
 			"ConfigMap data, CRD field, or status message. Tokens are AND'd. " +
-			"Secret content is intentionally NOT indexed — Secret names match by " +
+			"Secret content is intentionally not indexed — Secret names match by " +
 			"metadata, but data values won't appear in snippets to avoid leaking " +
 			"secret material through search results. " +
 			"Examples: `readinessProbe user-service`, `image:flagd`, `kind:Pod label:app=cart error`. " +
@@ -519,13 +519,13 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "query_prometheus",
-		Description: "Use when the question needs metric VALUES or history: CPU/memory over time, " +
+		Description: "Use when the question needs metric values or history: CPU/memory over time, " +
 			"request rates, error ratios, saturation, restarts trend, 'was there a spike?'. Executes " +
 			"PromQL against the cluster's Prometheus (auto-discovered or configured in Radar; also " +
 			"works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). " +
 			"type=instant returns current values; type=range returns time series for a window " +
 			"(since=1h default). For live top-N snapshots prefer top_resources; for metric/label " +
-			"NAME discovery use discover_metrics first — do not guess metric names. " +
+			"name discovery use discover_metrics first — do not guess metric names. " +
 			"For cluster or namespace spend use get_cost rather than hand-writing cost queries — " +
 			"it handles currency, idle attribution, and the Kubecost vs OpenCost source split. " +
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
@@ -536,7 +536,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "discover_metrics",
-		Description: "Use BEFORE query_prometheus when unsure of exact metric or label names. " +
+		Description: "Use before query_prometheus when unsure of exact metric or label names. " +
 			"Lists metric names matching a selector (match={__name__=~\"node_cpu.*\"}) with their " +
 			"type (counter vs gauge — counters need rate()) and help text, or values of one label " +
 			"(label=namespace). Returns up to limit values from the last hour of active series; " +
@@ -549,7 +549,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Name: "get_prometheus_rules",
 		Description: "List Prometheus alerting and recording rules with their PromQL definitions, " +
 			"state (firing/pending/inactive), labels, annotations, and active alert instances. " +
-			"When investigating a firing alert, ALWAYS fetch its rule definition here FIRST, then " +
+			"When investigating a firing alert, fetch its rule definition here first, then " +
 			"run its query with query_prometheus to see the actual values. state=firing shows " +
 			"everything currently alerting. Filters are substring matches; results cap at limit " +
 			"(default 50) with truncated=true — narrow rather than paging.",
@@ -604,7 +604,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(requires 'replicas' parameter), 'rollback' reverts to a previous revision " +
 			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions). " +
 			"Use list_resources or get_dashboard first to identify the target. " +
-			"On a Rollout, 'rollback' rewrites the pod template and so starts a NEW rollout that re-runs every " +
+			"On a Rollout, 'rollback' rewrites the pod template and so starts a new rollout that re-runs every " +
 			"canary step, pause, and analysis — to revert traffic now use manage_rollout abort, or follow the " +
 			"rollback with manage_rollout promote-full.",
 		InputSchema: manageWorkloadInputSchema(),
@@ -617,7 +617,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"'abort' reverts traffic to the last stable version at once without touching spec, and stays " +
 			"aborted until retried — the incident-response verb; " +
 			"'retry' clears an abort; 'promote' clears the current pause to advance one step; " +
-			"'promote-full' skips ALL remaining steps, pauses, and analysis (emergency hotfix) — straight after a " +
+			"'promote-full' skips all remaining steps, pauses, and analysis (emergency hotfix) — straight after a " +
 			"rollback it may report that the Argo Rollouts controller has not caught up, which is safe to retry; " +
 			"'skip-step' advances exactly one canary step (canary only). " +
 			"For rollback, restart, or scale use manage_workload with kind=rollout. " +
@@ -681,18 +681,22 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "delete_resource",
-		Description: "Delete one Kubernetes object as the caller. Review the mandatory server dry-run preview before confirming with dry_run=false. " +
-			"The token binds the caller, context and target UID/spec/finalizers/policy; dependent lists are advisory. Unavailable preview produces no token. " +
-			"Owner-reference dependents, uncertain dependents and root GitOps finalizer cleanup are separate, caller-readable observations with coverage limits. Namespace/CRD deletion removes all contents/instances, even with orphan. " +
-			"Defaults to background unless GC finalizers record a policy to preserve. Never patches finalizers; accepted deletion may remain pending. Inspect cleanup before explicit finalizer intervention through patch_resource.",
+		Description: "Delete one Kubernetes object as the caller, in two calls: the first returns a server dry-run preview and a " +
+			"confirm token; after reviewing it, call again with dry_run=false and that token. The token is bound to you, the " +
+			"context and the previewed object (UID, spec, finalizers, policy) and fails if any changed; no preview, no token. " +
+			"The preview's dependents and GitOps finalizer cleanup cover only what you can read and are advisory. Deleting a " +
+			"Namespace or CRD removes all its contents or instances, even with orphan. Propagation defaults to background " +
+			"unless GC finalizers record a policy. Radar never edits finalizers, so an accepted deletion can stay pending: " +
+			"inspect what blocks it before removing a finalizer with patch_resource.",
 		Annotations: writeTool,
 	}, logToolCall("delete_resource", handleDeleteResource))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",
-		Description: "Cordon, uncordon or drain a node. Drain waits for deletion. " +
-			"outcome: complete/incomplete/unconfirmed/started. started: status ok; incomplete/unconfirmed: partial. " +
-			"expectedSkip: normal exclusions. Complete does not certify shutdown safety.",
+		Description: "Cordon, uncordon or drain a node. A drain waits until evicted pods are gone; with wait_for_deletion=false " +
+			"it returns outcome started once evictions are accepted. Outcome incomplete or unconfirmed (status partial) means " +
+			"pods remain or their deletion could not be confirmed. skippedPods with expectedSkip=true were left in place by " +
+			"design. A complete drain does not mean the node is safe to shut down.",
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 
