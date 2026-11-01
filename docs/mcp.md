@@ -1542,7 +1542,7 @@ The tool is available only through full local MCP, outside built-in investigatio
 
 | Adapter | Source | What observations mean |
 |---|---|---|
-| RabbitMQ | Pod port 15692 `/metrics` | Source-reported disk and memory alarms for that node. Both samples must exist and be unambiguous. Metrics responses above 256 KiB, including large per-object metrics payloads, are unavailable; no partial scrape is interpreted. False alarms do not establish cluster health. |
+| RabbitMQ | Pod port 15692 `/metrics` | Source-reported disk and memory alarms for that node. Both samples must exist and be unambiguous. Metrics responses above 256 KiB, including large per-object metrics payloads, are unavailable; no partial scrape is interpreted. False alarms do not establish cluster health: an alarm on another node can block publishers across the cluster. This limitation is also included in each RabbitMQ collection result. |
 | NATS | Pod port 8222 `/jsz` with stream/consumer details | Account-scoped pending, acknowledgement-pending and redelivery counts, capped at 20 consumer rows with explicit coverage. A backlog is not necessarily a stuck consumer. JetStream disabled is distinct from zero pending messages. |
 | Vault | Pod port 8200 `/v1/sys/health` | Source HTTP code plus initialized/sealed/standby booleans. A standby is not necessarily a fault, and HTTP 200 alone is not a health conclusion. |
 
