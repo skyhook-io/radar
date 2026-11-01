@@ -31,6 +31,21 @@ describe('application observations', () => {
     expect(html).toContain('$G / events / worker')
     expect(html).not.toContain('stuck')
   })
+  it.each([
+    { initialized: false, sealed: true },
+    { initialized: true, sealed: true },
+  ])('does not present a Vault role while initialized=$initialized sealed=$sealed', state => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { ...state, standby: true, performanceStandby: false } } }} />)
+    expect(html).toContain('Initialized')
+    expect(html).toContain('Sealed')
+    expect(html).not.toContain('Standby')
+    expect(html).not.toContain('Performance standby')
+  })
+  it('shows reported Vault roles after initialization and unsealing', () => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { initialized: true, sealed: false, standby: true, performanceStandby: false } } }} />)
+    expect(html).toContain('Standby')
+    expect(html).toContain('Performance standby')
+  })
 })
 
 it.each(['pod_not_running', 'container_not_running', 'endpoint_port_not_declared', 'unsupported_image', 'ambiguous_target', 'host_network_unsupported', 'cluster_unavailable', 'invalid_target'])('explains %s without exposing a raw code', reason => {

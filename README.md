@@ -493,7 +493,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 
 ### Local runtime evidence
 
-In local resource details, use **Collect application evidence** to select a Pod and collect explicitly. Local MCP clients can also collect after operator approval:
+In local resource details, use **Collect RabbitMQ evidence**, **Collect NATS evidence** or **Collect Vault evidence** to select a Pod and collect explicitly. Local MCP clients can also collect after operator approval:
 
 | Integration | Evidence collected |
 |---|---|

@@ -150,13 +150,14 @@ function EvidenceDialog({ open, data, currentData, refreshing, onClose, onTarget
 export function ApplicationEvidenceObservation({ result }: { result: ApplicationEvidenceResult }) {
   const facts = result.outcome === 'observed' ? result.facts : undefined
   const nats = facts?.nats
+  const vault = facts?.vault
   return <section aria-label="Application observations" className="card-inner mt-4 p-3 text-sm text-theme-text-primary">
     <h3 className="font-semibold">{result.outcome === 'observed' ? 'Endpoint observations' : 'Evidence unavailable'}</h3>
     <p className="mt-1 break-all text-xs text-theme-text-secondary">{result.target.namespace}/{result.target.pod}{result.target.container && ` · ${result.target.container}`}</p>
     <p className="mt-1 text-xs text-theme-text-tertiary"><TimeValue timestamp={result.observedAt} /> · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · HTTP ${result.httpStatus}`}</p>
     {result.reason && <p className="mt-2">{unavailableReasons[result.reason] ?? `Collection unavailable (${result.reason}).`} No conclusion about application health can be drawn from unavailable evidence.</p>}
     {facts?.rabbitmq && <dl className="mt-3 grid grid-cols-2 gap-2"><dt>Disk alarm</dt><dd>{facts.rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd><dt>Memory alarm</dt><dd>{facts.rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd></dl>}
-    {facts?.vault && <dl className="mt-3 grid grid-cols-2 gap-2">{Object.entries(facts.vault).map(([key, value]) => <div key={key} className="contents"><dt>{vaultNames[key]}</dt><dd>{value ? 'Yes' : 'No'}</dd></div>)}</dl>}
+    {vault && <dl className="mt-3 grid grid-cols-2 gap-2">{Object.entries(vault).filter(([key]) => key === 'initialized' || key === 'sealed' || vault.initialized && !vault.sealed).map(([key, value]) => <div key={key} className="contents"><dt>{vaultNames[key]}</dt><dd>{value ? 'Yes' : 'No'}</dd></div>)}</dl>}
     {nats && <div className="mt-3 space-y-2">
       <p>JetStream: {nats.jetStreamEnabled ? 'Enabled' : 'Disabled'}</p>
       <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {nats.returnedAccounts} accounts · {nats.returnedStreams} streams · {nats.returnedConsumers} consumers returned{nats.truncated ? ' · Truncated' : ''}</p>
