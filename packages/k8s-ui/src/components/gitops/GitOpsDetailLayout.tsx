@@ -435,7 +435,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   {argo.autoSyncEnabled ? (
                     <ActionButton
                       label="Disable auto-sync"
-                      description="Stop Argo from automatically syncing Git changes. Manual Sync still works."
+                      description={`Stop Argo from automatically syncing Git changes.${argoOperationInProgress || terminating ? '' : ' Manual Sync still works.'}`}
                       icon={Pause}
                       loading={argo.suspending}
                       onClick={argo.onSuspend}

@@ -122,6 +122,28 @@ describe('Enable auto-sync on the GitOps detail page', () => {
       }
     })
 
+    it.each([
+      { name: 'Sync is available', running: false, copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works.' },
+      { name: 'an operation holds Sync', running: true, copy: 'Stop Argo from automatically syncing Git changes.' },
+    ])('describes Disable auto-sync when $name', async ({ running, copy }) => {
+      vi.useFakeTimers()
+      const element = document.createElement('div')
+      document.body.appendChild(element)
+      const root = createRoot(element)
+      try {
+        await act(async () => { root.render(layout(argo({ autoSyncEnabled: true, isRunning: running }))) })
+        const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Disable auto-sync')!
+        await act(async () => {
+          button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+          vi.advanceTimersByTime(1000)
+        })
+        expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(copy)
+      } finally {
+        await act(async () => root.unmount())
+        element.remove()
+      }
+    })
+
     it('explains the disabled button with the note copy', async () => {
       vi.useFakeTimers()
       const element = document.createElement('div')
