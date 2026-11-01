@@ -1653,7 +1653,7 @@ func attachEventVolume(message string) string {
 var multiAttachEventRE = regexp.MustCompile(`Multi-Attach error for volume "([^"]+)" Volume is already used by pod\(s\) (.+)`)
 
 // multiAttachSharedVolumeDiagnosis names the root cause of a Multi-Attach
-// failure on a Deployment pod when the volume is a single-node claim the
+// failure on a Deployment pod when the volume is a ReadWriteOnce claim the
 // Deployment's replicas share and the pod holding it is another replica of the
 // same Deployment on a different node. Returns "" otherwise: a holder from
 // another workload, or a one-replica rollout surge (which the stuck-rollout
@@ -1669,7 +1669,8 @@ func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, dep
 	}
 	var claim *corev1.PersistentVolumeClaim
 	for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
-		if pvc.Spec.VolumeName == m[1] {
+		// ReadWriteOncePod is one pod, not one node; its Deployment row covers it.
+		if pvc.Spec.VolumeName == m[1] && singleNodeAccessMode(pvc) == corev1.ReadWriteOnce {
 			claim = pvc
 			break
 		}
@@ -1687,8 +1688,8 @@ func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, dep
 		}
 		// Pod and node names stay in the message: the cause must read the same
 		// for every blocked replica so grouping keeps it.
-		return fmt.Sprintf("Deployment %s runs %d replicas that share %s PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
-				d.Name, schedDesiredReplicas(d.Spec.Replicas), singleNodeAccessMode(claim), claim.Name),
+		return fmt.Sprintf("Deployment %s runs %d replicas that share ReadWriteOnce PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
+				d.Name, schedDesiredReplicas(d.Spec.Replicas), claim.Name),
 			sharedRWOVolumeFix
 	}
 	return "", ""
