@@ -911,7 +911,11 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
     ? resumeBlockedReason || (resumeUpgrade ? radarUpgradeNoteText(resumeUpgrade) : undefined)
     : undefined
 
-  const [syncDialogOpen, setSyncDialogOpen] = useState(false)
+  // The drawer can switch Applications under an open dialog; its choices
+  // belong to the one it was opened for, so it closes on any other.
+  const appKey = `${resource.namespace}/${resource.name}`
+  const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
+  const syncDialogOpen = syncDialogFor === appKey
   const applicationSyncOptions = argoApplicationSyncOptions(data)
   const sync = (opts?: ArgoSyncOpts) => onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts })
 
@@ -920,7 +924,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
       {onSync && (
         <Tooltip content={syncDialog ? 'Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision).' : "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
           <button
-            onClick={() => (syncDialog ? setSyncDialogOpen(true) : sync())}
+            onClick={() => (syncDialog ? setSyncDialogFor(appKey) : sync())}
             disabled={isSyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
@@ -931,6 +935,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
       )}
       {onSync && syncDialog && (
         <SyncOptionsDialog
+          key={appKey}
           open={syncDialogOpen}
           appLabel={`${resource.namespace}/${resource.name}`}
           multiSource={isArgoMultiSource(data)}
@@ -940,8 +945,8 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
           pending={isSyncing}
           autoSyncEnabled={isArgoAutoSyncEnabled(data)}
           operationInProgress={isArgoOperationInProgress(data)}
-          onCancel={() => setSyncDialogOpen(false)}
-          onConfirm={(opts) => { sync(opts); setSyncDialogOpen(false) }}
+          onCancel={() => setSyncDialogFor(null)}
+          onConfirm={(opts) => { sync(opts); setSyncDialogFor(null) }}
         />
       )}
 
