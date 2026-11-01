@@ -202,6 +202,10 @@ func TestDetectPostBindProblems_UnrelatedAttachFailureHasNoDiskCause(t *testing.
 // ReadWriteOnce claim "data" (PV "pv-data"): web-a runs on node-a and web-b is
 // stuck creating on node-b. holderOwner is the controller of web-a.
 func sharedClaimDeployment(holderOwner metav1.OwnerReference) []runtime.Object {
+	return sharedClaimDeploymentEvent(holderOwner, `Multi-Attach error for volume "pv-data" Volume is already used by pod(s) web-a`)
+}
+
+func sharedClaimDeploymentEvent(holderOwner metav1.OwnerReference, eventMessage string) []runtime.Object {
 	two := int32(2)
 	controller := true
 	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", Controller: &controller}
@@ -244,7 +248,7 @@ func sharedClaimDeployment(holderOwner metav1.OwnerReference) []runtime.Object {
 			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "redis", Name: "web-b"},
 			Reason:         "FailedAttachVolume",
 			Type:           corev1.EventTypeWarning,
-			Message:        `Multi-Attach error for volume "pv-data" Volume is already used by pod(s) web-a`,
+			Message:        eventMessage,
 			FirstTimestamp: metav1.NewTime(time.Now().Add(-4 * time.Minute)),
 			LastTimestamp:  metav1.NewTime(time.Now().Add(-30 * time.Second)),
 		},
@@ -284,6 +288,19 @@ func TestDetectPostBindProblems_MultiAttachNamesSharedClaim(t *testing.T) {
 	}
 	if !strings.Contains(p.Action, "ReadWriteMany") {
 		t.Errorf("action = %q", p.Action)
+	}
+}
+
+// Kubernetes 1.37 words the same event "Waiting for detach" and may append a
+// count of holders in other namespaces; the cause still names the shared claim.
+func TestDetectPostBindProblems_WaitingForDetachNamesSharedClaim(t *testing.T) {
+	defer ResetTestState()
+	controller := true
+	p := multiAttachProblem(t, sharedClaimDeploymentEvent(
+		metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", Controller: &controller},
+		`Waiting for detach for volume "pv-data" Volume is already used by pod(s) web-a and 1 pod(s) in different namespaces`))
+	if p.Severity != "critical" || !strings.Contains(p.Cause, "share ReadWriteOnce PVC data") {
+		t.Errorf("severity %q, cause %q", p.Severity, p.Cause)
 	}
 }
 

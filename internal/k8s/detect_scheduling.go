@@ -1648,9 +1648,10 @@ func attachEventVolume(message string) string {
 	return ""
 }
 
-// The attach-detach controller's Multi-Attach event: the volume (PV name) and,
-// when the holders share the pod's namespace, the pods already using it.
-var multiAttachEventRE = regexp.MustCompile(`Multi-Attach error for volume "([^"]+)" Volume is already used by pod\(s\) (.+)`)
+// The attach-detach controller's Multi-Attach event ("Waiting for detach" since
+// Kubernetes 1.37): the volume (PV name) and the pods in the pod's namespace
+// already using it, minus any count of pods in other namespaces.
+var multiAttachEventRE = regexp.MustCompile(`(?:Multi-Attach error|Waiting for detach) for volume "([^"]+)" Volume is already used by pod\(s\) (.+?)(?: and \d+ pod\(s\) in different namespaces)?$`)
 
 // multiAttachSharedVolumeDiagnosis names the root cause of a Multi-Attach
 // failure on a Deployment pod when the volume is a ReadWriteOnce claim the
@@ -1901,7 +1902,9 @@ func classifyPostBindFailure(reason, msg string) (string, bool) {
 		}
 		return "SandboxCreationFailed", true
 	case reason == "FailedAttachVolume":
-		if strings.Contains(lower, "multi-attach") {
+		// Kubernetes 1.37 renamed the attach-detach controller's "Multi-Attach
+		// error" prefix to "Waiting for detach".
+		if strings.Contains(lower, "multi-attach") || strings.HasPrefix(lower, "waiting for detach") {
 			return "VolumeMultiAttach", true
 		}
 		return "VolumeAttach", true
