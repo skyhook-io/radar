@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func testRoleBinding(subjects ...rbacv1.Subject) *rbacv1.RoleBinding {
@@ -137,8 +138,7 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 		t.Fatalf("summary = %q", diff.Summary)
 	}
 
-	// A create records its grant only when it reaches outside the namespace,
-	// so ordinary creates stay plain.
+	// Every create records its grant when it arrives.
 	prevSynced := initialSyncComplete.Load()
 	initialSyncComplete.Store(true)
 	t.Cleanup(func() { initialSyncComplete.Store(prevSynced) })
@@ -160,8 +160,8 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 				t.Errorf("outside-actor create diff = %+v", e.Diff)
 			}
 		case "local":
-			if e.Diff != nil {
-				t.Errorf("in-namespace create diff = %+v, want none", e.Diff)
+			if e.Diff == nil || !reflect.DeepEqual(e.Diff.Fields[0].NewValue, []string{"ServiceAccount saleor/app"}) {
+				t.Errorf("in-namespace create diff = %+v", e.Diff)
 			}
 		}
 	}
@@ -171,5 +171,54 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 	events, _ = timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Role"}})
 	if len(events) != 1 || events[0].Diff != nil {
 		t.Fatalf("Role delete = %+v, want no diff", events)
+	}
+}
+
+// A recreate that re-points roleRef records the subjects it kept, so its row
+// never reads the live binding.
+func TestRecreatedBindingRecordsKeptSubjects(t *testing.T) {
+	oldRB := testRoleBinding(vpaUpdaterSA)
+	newRB := oldRB.DeepCopy()
+	newRB.RoleRef.Kind, newRB.RoleRef.Name = "ClusterRole", "edit"
+	diff := withRecreatedBindingSnapshot("RoleBinding", newRB, ComputeDiff("RoleBinding", oldRB, newRB))
+	want := []FieldChange{
+		{Path: "roleRef", OldValue: "Role vpa-updater", NewValue: "ClusterRole edit"},
+		{Path: UnchangedBindingSubjectsPath, NewValue: []string{"ServiceAccount kube-system/vpa-updater"}},
+	}
+	if diff == nil || !reflect.DeepEqual(diff.Fields, want) {
+		t.Fatalf("recreate diff = %+v, want %+v", diff, want)
+	}
+}
+
+func TestClusterRoleAggregationLabels(t *testing.T) {
+	oldRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "widgets-edit", Labels: map[string]string{"team": "a"}}}
+	newRole := oldRole.DeepCopy()
+	newRole.Labels = map[string]string{"team": "b", "rbac.authorization.k8s.io/aggregate-to-edit": "true"}
+	diff := ComputeDiff("ClusterRole", oldRole, newRole)
+	want := []FieldChange{{Path: "metadata.labels[rbac.authorization.k8s.io/aggregate-to-edit]", NewValue: "true"}}
+	if diff == nil || !reflect.DeepEqual(diff.Fields, want) || diff.Summary != "aggregation labels changed" {
+		t.Fatalf("diff = %+v, want only the aggregate-to label", diff)
+	}
+
+	// A key a cached aggregationRule selects on counts too; others stay quiet.
+	aggregator := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "platform-view"},
+		AggregationRule: &rbacv1.AggregationRule{ClusterRoleSelectors: []metav1.LabelSelector{{MatchLabels: map[string]string{"example.com/aggregate-to-platform": "true"}}}}}
+	if err := InitTestResourceCache(fake.NewSimpleClientset(aggregator)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ResetTestState)
+	selected := oldRole.DeepCopy()
+	selected.Labels = map[string]string{"team": "a", "example.com/aggregate-to-platform": "true"}
+	if diff := ComputeDiff("ClusterRole", oldRole, selected); diff == nil || diff.Fields[0].Path != "metadata.labels[example.com/aggregate-to-platform]" {
+		t.Fatalf("selector-key diff = %+v", diff)
+	}
+	relabeled := oldRole.DeepCopy()
+	relabeled.Labels = map[string]string{"team": "c"}
+	if diff := ComputeDiff("ClusterRole", oldRole, relabeled); diff != nil {
+		t.Fatalf("other label diff = %+v, want nil", diff)
+	}
+	// Role labels never count: aggregation selects ClusterRoles only.
+	if diff := ComputeDiff("Role", &rbacv1.Role{}, &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"rbac.authorization.k8s.io/aggregate-to-edit": "true"}}}); diff != nil {
+		t.Fatalf("Role label diff = %+v, want nil", diff)
 	}
 }

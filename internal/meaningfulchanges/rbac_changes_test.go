@@ -63,7 +63,10 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 			Summary: "created; it binds Role vpa-updater",
 			Fields:  []timeline.FieldChange{{Path: "subjects", NewValue: []string{"ServiceAccount kube-system/vpa-updater"}}, {Path: "roleRef", NewValue: "Role vpa-updater"}},
 		}),
-		rbacEvent("RoleBinding", "saleor", "app", "rb-local", timeline.EventTypeAdd, now.Add(-4*time.Minute), nil),
+		rbacEvent("RoleBinding", "saleor", "app", "rb-local", timeline.EventTypeAdd, now.Add(-4*time.Minute), &timeline.DiffInfo{
+			Summary: "created; it binds Role vpa-updater",
+			Fields:  []timeline.FieldChange{{Path: "subjects", NewValue: []string{"ServiceAccount saleor/app"}}, {Path: "roleRef", NewValue: "Role vpa-updater"}},
+		}),
 		// The cached "replaced" is a later object, so its roleRef is not this one's.
 		rbacEvent("RoleBinding", "saleor", "replaced", "rb-old", timeline.EventTypeUpdate, now.Add(-4*time.Minute), &timeline.DiffInfo{
 			Summary: "subjects changed",
@@ -84,7 +87,8 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 		}),
 		recreated(rbacEvent("RoleBinding", "saleor", "repointed", "rb-repointed", timeline.EventTypeAdd, now.Add(-90*time.Second), &timeline.DiffInfo{
 			Summary: "recreated with changes: roleRef: Role vpa-updater→ClusterRole edit",
-			Fields:  []timeline.FieldChange{{Path: "roleRef", OldValue: "Role vpa-updater", NewValue: "ClusterRole edit"}},
+			Fields: []timeline.FieldChange{{Path: "roleRef", OldValue: "Role vpa-updater", NewValue: "ClusterRole edit"},
+				{Path: k8s.UnchangedBindingSubjectsPath, NewValue: []string{"ServiceAccount kube-system/vpa-updater"}}},
 		})),
 		rbacEvent("ClusterRoleBinding", "", "ops", "crb-1", timeline.EventTypeAdd, now.Add(-time.Minute), &timeline.DiffInfo{
 			Summary: "created; it binds ClusterRole edit",
@@ -111,6 +115,11 @@ func TestRecentListsRBACChangesAndNamesOutsideActors(t *testing.T) {
 		if got.RankReason != want {
 			t.Errorf("%s rank_reason = %q, want %q", key, got.RankReason, want)
 		}
+	}
+	// An in-namespace create records its grant but reads as a plain create,
+	// so an install run of them still compacts.
+	if local := changeByName(changes, "RoleBinding", "app"); local.Summary != "add" || len(local.Fields) != 0 || !isPlainCreate(*local) {
+		t.Errorf("in-namespace create row = %+v, want a plain create", local)
 	}
 	if role := changeByName(changes, "Role", "vpa-updater"); role.ChangeCategory != issuesapi.ChangeCategorySpecConfig {
 		t.Errorf("Role rules edit category = %q", role.ChangeCategory)

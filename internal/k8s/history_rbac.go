@@ -9,11 +9,13 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // RBAC objects hold their configuration at the top level (rules, subjects,
 // roleRef), not under spec, and have no status. Each differ compares only
-// those fields, so a metadata-only update records nothing.
+// those fields, so a metadata-only update records nothing, except a
+// ClusterRole label that decides which aggregated roles include it.
 
 func diffRBACRole(oldObj, newObj any) ([]FieldChange, []string) {
 	oldRules, oldAgg, ok1 := rbacRoleFields(oldObj)
@@ -34,7 +36,91 @@ func diffRBACRole(oldObj, newObj any) ([]FieldChange, []string) {
 		changes = append(changes, FieldChange{Path: "aggregationRule", OldValue: oldAgg, NewValue: newAgg})
 		summary = append(summary, "aggregation rule changed")
 	}
+	if label := aggregationLabelChanges(oldObj, newObj); len(label) > 0 {
+		changes = append(changes, label...)
+		summary = append(summary, "aggregation labels changed")
+	}
 	return changes, summary
+}
+
+// aggregationLabelChanges reports changes to a ClusterRole's labels that
+// aggregation reads: rbac.authorization.k8s.io/aggregate-to-* keys, and any
+// key a cached ClusterRole's aggregationRule selects on. Such a label edit
+// adds or removes this role's rules from every role that aggregates it,
+// with no change to this role's own rules.
+func aggregationLabelChanges(oldObj, newObj any) []FieldChange {
+	oldRole, ok1 := oldObj.(*rbacv1.ClusterRole)
+	newRole, ok2 := newObj.(*rbacv1.ClusterRole)
+	if !ok1 || !ok2 {
+		return nil
+	}
+	var selected map[string]bool
+	var changes []FieldChange
+	keys := map[string]bool{}
+	for k := range oldRole.Labels {
+		keys[k] = true
+	}
+	for k := range newRole.Labels {
+		keys[k] = true
+	}
+	sorted := make([]string, 0, len(keys))
+	for k := range keys {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	for _, key := range sorted {
+		oldValue, hadOld := oldRole.Labels[key]
+		newValue, hasNew := newRole.Labels[key]
+		if hadOld == hasNew && oldValue == newValue {
+			continue
+		}
+		if !strings.HasPrefix(key, "rbac.authorization.k8s.io/aggregate-to-") {
+			if selected == nil {
+				selected = aggregationSelectorKeys()
+			}
+			if !selected[key] {
+				continue
+			}
+		}
+		change := FieldChange{Path: "metadata.labels[" + key + "]"}
+		if hadOld {
+			change.OldValue = oldValue
+		}
+		if hasNew {
+			change.NewValue = newValue
+		}
+		changes = append(changes, change)
+	}
+	return changes
+}
+
+// aggregationSelectorKeys returns the label keys the cached ClusterRoles'
+// aggregationRule selectors read. Read only when a ClusterRole's labels
+// change, which is rare.
+func aggregationSelectorKeys() map[string]bool {
+	keys := map[string]bool{}
+	cache := GetResourceCache()
+	if cache == nil || cache.ClusterRoles() == nil {
+		return keys
+	}
+	roles, err := cache.ClusterRoles().List(labels.Everything())
+	if err != nil {
+		return keys
+	}
+	for _, role := range roles {
+		if role.AggregationRule == nil {
+			continue
+		}
+		for _, selector := range role.AggregationRule.ClusterRoleSelectors {
+			for k := range selector.MatchLabels {
+				keys[k] = true
+			}
+			for _, expr := range selector.MatchExpressions {
+				keys[expr.Key] = true
+			}
+		}
+	}
+	return keys
 }
 
 func diffRBACBinding(oldObj, newObj any) ([]FieldChange, []string) {
@@ -58,21 +144,22 @@ func diffRBACBinding(oldObj, newObj any) ([]FieldChange, []string) {
 	return changes, summary
 }
 
+// Paths a recreated binding's diff uses for the subjects and roleRef it kept,
+// so the recreate row records the whole grant even when only one side moved.
+const (
+	UnchangedBindingSubjectsPath = "subjects (unchanged)"
+	UnchangedBindingRoleRefPath  = "roleRef (unchanged)"
+)
+
 // rbacBindingLifecycleDiff records what a binding grants when it is created
-// or deleted; neither event has another object to diff against. A delete
-// always records its subjects and roleRef, so a revoked grant can be
-// attributed to the subjects it covered. A create records them only when the
-// binding grants to a ServiceAccount from outside its namespace: that keeps
-// the row out of compact create runs and fixes the subjects it was created
-// with, while ordinary creates stay plain.
-func rbacBindingLifecycleDiff(kind, namespace, op string, obj any) *DiffInfo {
-	if (kind != "RoleBinding" && kind != "ClusterRoleBinding") || (op != "add" && op != "delete") {
+// or deleted, when the event arrives; neither event has another object to
+// diff against, and the live object may change or go away later. A create
+// records the new side, a delete the old.
+func rbacBindingLifecycleDiff(kind, op string, obj any) *DiffInfo {
+	if !isRBACBindingKind(kind) || (op != "add" && op != "delete") {
 		return nil
 	}
-	if u, ok := obj.(*unstructured.Unstructured); ok {
-		obj = diffInputForUnstructured(kind, u)
-	}
-	subjects, ref, ok := rbacBindingFields(obj)
+	subjects, ref, ok := rbacBindingFields(normalizeRBACObject(kind, obj))
 	if !ok {
 		return nil
 	}
@@ -82,13 +169,46 @@ func rbacBindingLifecycleDiff(kind, namespace, op string, obj any) *DiffInfo {
 			{Path: "roleRef", OldValue: ref},
 		}, []string{"deleted; it bound " + ref})
 	}
-	if len(OutsideServiceAccountSubjects(kind, namespace, subjects)) == 0 {
-		return nil
-	}
 	return buildDiff([]FieldChange{
 		{Path: "subjects", NewValue: subjects},
 		{Path: "roleRef", NewValue: ref},
 	}, []string{"created; it binds " + ref})
+}
+
+// withRecreatedBindingSnapshot completes a recreated binding's diff with the
+// subjects and roleRef the recreate kept, so the row says who holds which
+// role without reading the live binding later.
+func withRecreatedBindingSnapshot(kind string, newObj any, diff *DiffInfo) *DiffInfo {
+	if diff == nil || !isRBACBindingKind(kind) {
+		return diff
+	}
+	subjects, ref, ok := rbacBindingFields(normalizeRBACObject(kind, newObj))
+	if !ok {
+		return diff
+	}
+	var hasSubjects, hasRoleRef bool
+	for _, f := range diff.Fields {
+		hasSubjects = hasSubjects || f.Path == "subjects"
+		hasRoleRef = hasRoleRef || f.Path == "roleRef"
+	}
+	if !hasSubjects {
+		diff.Fields = append(diff.Fields, FieldChange{Path: UnchangedBindingSubjectsPath, NewValue: subjects})
+	}
+	if !hasRoleRef {
+		diff.Fields = append(diff.Fields, FieldChange{Path: UnchangedBindingRoleRefPath, NewValue: ref})
+	}
+	return diff
+}
+
+func isRBACBindingKind(kind string) bool {
+	return kind == "RoleBinding" || kind == "ClusterRoleBinding"
+}
+
+func normalizeRBACObject(kind string, obj any) any {
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		return diffInputForUnstructured(kind, u)
+	}
+	return obj
 }
 
 // OutsideServiceAccountSubjects keeps the subjects rendered by

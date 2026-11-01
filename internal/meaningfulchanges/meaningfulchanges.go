@@ -1162,8 +1162,18 @@ func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange 
 		ChangeCategory: category,
 		RankReason:     reason,
 	}
-	if grant := bindingGrantReason(e); grant != "" {
+	grant := bindingGrantReason(e)
+	if grant != "" {
 		change.RankReason = grant
+	}
+	// Every binding create records its subjects and roleRef. A RoleBinding
+	// that grants nothing outside its namespace reads as a plain create in the
+	// feed, so an install's run of them stays compact; the timeline keeps the
+	// record. Cluster-scoped rows never compact, so a ClusterRoleBinding keeps
+	// its fields.
+	if grant == "" && e.Kind == "RoleBinding" && e.EventType == timeline.EventTypeAdd && e.Reason != timeline.ReasonRecreated {
+		change.Summary = string(e.EventType)
+		return change
 	}
 	if e.Diff != nil {
 		if eventGroupMatchesTracked(e.Kind, e.APIVersion) && hasApplicationConfigField(e.Kind, e.Diff.Fields) {

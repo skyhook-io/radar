@@ -1120,7 +1120,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		}
 	}
 	if op == "add" || op == "delete" {
-		diff = toTimelineDiff(rbacBindingLifecycleDiff(kind, namespace, op, obj))
+		diff = toTimelineDiff(rbacBindingLifecycleDiff(kind, op, obj))
 	}
 
 	// Recreate-join: an add that replaces a just-deleted object of the same
@@ -1140,7 +1140,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		if meta, ok := newObj.(metav1.Object); ok && time.Since(meta.GetCreationTimestamp().Time) <= 30*time.Second {
 			if stashed, ok := takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
 				if localDiff := ComputeDiff(kind, stripStatusForRecreateDiff(stashed), stripStatusForRecreateDiff(newObj)); localDiff != nil && len(localDiff.Fields) > 0 {
-					diff = toTimelineDiff(localDiff)
+					diff = toTimelineDiff(withRecreatedBindingSnapshot(kind, newObj, localDiff))
 					diff.Summary = "recreated with changes: " + localDiff.Summary
 					recreated = true
 				}
