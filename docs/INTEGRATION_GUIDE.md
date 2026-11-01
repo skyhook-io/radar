@@ -45,13 +45,46 @@ don't assume every discoverable resource has a CRD object.
 ## 2. Choose relevant surfaces
 
 **These sections are optional:** use only those needed for your contribution.
-Check existing generic behavior before adding custom handling. Status fixes must
-cover the surfaces they affect, but every integration need not customize all four.
+Check existing generic behavior before adding custom handling. For each affected
+surface, decide whether the generic behavior is enough, needs enrichment, or is
+deliberately deferred. State meaningful omissions in the PR; this is a scope
+decision, not a requirement to customize every surface.
 
 Paths below are relative to the repository root. Shared presentation lives in
 `packages/k8s-ui`; host data fetching lives in `web`. Read [DESIGN.md](../DESIGN.md)
 for UI work and follow the existing wrapper pattern rather than fetching inside
 shared renderers.
+
+### Package boundaries
+
+The Go `pkg/` module and `packages/k8s-ui` are also consumed outside the standalone
+app. Keep reusable interpretation there; Radar's HTTP, caller and connection
+adapters belong in `internal/` and `web/`.
+
+| Responsibility | Start here | Boundary |
+|---|---|---|
+| Native API interpretation | `pkg/configrefs`, `pkg/conditions`, `pkg/health`, or an existing integration package | Pure parsing and domain rules; no HTTP, global cache or caller authorization. Extract a new package only when the rule needs one. |
+| Inventory and ownership | `pkg/k8score`, `pkg/ownership`, `pkg/ownership/cachesource`; Radar adapters in `internal/k8s` | Reuse informer stores, indexes and caller-scoped ownership views. Do not build a second owner/manager model from display edges or name guesses. |
+| Display relationships | `pkg/topology` | Spec references, selectors and semantic edges for topology and Related Resources. A displayed relationship is not proof of controller ownership or observed traffic. |
+| Issues | `internal/issues`, reusing shared domain rules | One canonical finding and its required evidence reads, reused by resource views and agent context. Do not create a separate detector in a drawer or MCP handler. |
+| Agent contracts | `pkg/ai/context` for resource summaries/minification; `pkg/resourcecontext` for structured related evidence | Importable contracts and builders. Hosts supply authorized observations and lookups; these packages do not call `internal` services. |
+| Runtime orchestration | `internal/server`, `internal/mcp`, existing integration services | Request scope, authorization, connection lifetime and bounded live reads. Share selection and interpretation below the transport adapters; list/search enrichment already uses `internal/summarycontext`. |
+| UI | `packages/k8s-ui` presentation; `web/src/integrations` and integration-owned host components | Shared renderers receive facts and callbacks. Hosts fetch, gate capabilities, refresh and compose screens. Use the existing host seams. |
+
+### Follow the operator question
+
+| User question | Surfaces to consider | What the answer establishes |
+|---|---|---|
+| What is configured or reported? | Resource table/drawer, AI list/search summary and resource detail | Native declarations and controller-reported status, with their freshness limits. |
+| What is wrong? | Issues, drawer problem banners, AI issue summary and diagnosis | Reuse canonical findings; intentional pause, historical records and unknown status need not be failures. |
+| What does it reference, own or manage? | Related Resources, topology, AI ownership/context | Keep spec dependencies, owner references and GitOps management evidence distinct. |
+| Why is its runtime failing? | Workload `diagnose`, related workload/log links, host detail sections | Link to supported workloads first. A custom-resource diagnosis entry is an additional surface to implement explicitly; a declared target is a separate relationship. |
+| What should I do across several objects? | Workspace, reports or reviewed actions | Add a workflow only for a concrete cross-object question; follow the workspace and action contracts below. |
+
+A useful first slice can stop at native status and references. Generic MCP access
+does not imply integration-specific diagnosis, and a renderer does not imply a
+workspace or actions. Document the surfaces actually supported in
+[integrations.md](integrations.md).
 
 ### Resource views
 
@@ -137,6 +170,25 @@ Keep shared identity, ownership and coverage contracts reusable. Put provider-na
 counters, lookup outcomes and absence rules in typed, provider-qualified blocks;
 do not make the next integration inherit another controller's semantics.
 
+- [ ] Separate compact list/search facts from resource-detail evidence and live
+  diagnosis. For example, Flagger's reported traffic weight is not a measured
+  traffic split; an OTel Instrumentation lookup is not proof of injection or
+  telemetry delivery. Argo Rollouts and other providers need their own native
+  interpretation, not aliases for these facts.
+- [ ] Before adding a shared field, check its meaning for another plausible
+  integration. Share identity, coverage or bounded-preview machinery when the
+  semantics match; keep native counters and resolution rules qualified. This
+  does not require implementing the next provider or a provider registry.
+- [ ] Authorize host-precomputed blocks before passing them to a shared builder.
+  A builder's reference filter does not automatically authorize nested bodies,
+  counts or pass-through observations. Follow the
+  [existing read granularity](authentication.md#read-granularity-namespace-level):
+  ordinary cached namespaced reads use namespace visibility. REST AI and MCP
+  derived reference links use exact-kind `get` through `RefAccessChecker`
+  (both hosts' `rc_rbac.go`); preserve that gate when moving such links into a
+  pass-through block. Coordinates copied from a readable declaration are a
+  different fact, not evidence the referenced object exists or was read.
+  Live logs and protected resources have their own checks.
 - [ ] Check existing resource-tool output in `pkg/ai/context/summary_crd.go`,
   `detail.go` and `redact.go`. Preserve reasons and useful references, not raw
   configuration dumps; enrich summaries before considering a new tool.
@@ -146,9 +198,39 @@ do not make the next integration inherit another controller's semantics.
 - [ ] If a new tool is justified, follow [MCP docs](mcp.md) and the catalog/test
   requirements in [the repository instructions](../CLAUDE.md).
 
+### Adding operator runtime diagnosis
+
+First link to the workloads that `diagnose` already supports. Accepting the
+operator CR itself is a separate feature: check the tool's kind dispatch,
+schema and help before assuming support. Keep root selection and declared-target
+rules integration-owned; reuse the ordinary workload bundle beneath them.
+
+- [ ] Select observed controller-owned workloads through the ownership view,
+  checking current UID, API group and controller identity. Keep a configured
+  target separate: Flagger's declared target can differ from its generated
+  primary workload. Reuse ordinary workload diagnosis rather than copying it.
+- [ ] Select relevant workloads before capping a generic child preview, so
+  unrelated ConfigMaps or Services cannot consume the runtime slots. Keep
+  inventory coverage, permission narrowing and output truncation distinct.
+  An output cap alone does not bound enumeration, sorting or live-read time.
+- [ ] Reuse bounded log/metric collection and propagate cancellation. For added
+  fan-out, measure the whole response's latency and size, including slow or
+  unavailable dependencies. Add another budget only when existing bounds are
+  insufficient; preserve useful completed evidence and explicit partial errors.
+- [ ] Compare UI and agent selection/coverage intentionally. Hosts can have
+  different read policies or preview limits; neither a missing preview nor an
+  incomplete inventory proves there are no workloads. Use actionable reasons:
+  retrying a cold cache and obtaining permission are different next steps.
+
 ### Topology and relationships
 
-- [ ] Start in `pkg/topology/`: `builder.go`, `relationships.go`, `pseudokinds.go`
+- [ ] For owner references, dependents and GitOps/Helm management, start with
+  [ownership.md](ownership.md), `pkg/ownership` and the existing caller adapters.
+  The topology graph is a display/projection consumer of that evidence, not its
+  replacement. Do not require a kind to have a visual node before agents can
+  follow its controller chain.
+- [ ] For spec/selector edges and display nodes, start in `pkg/topology/`:
+  `builder.go`, `relationships.go`, `pseudokinds.go`
   and `types.go`. Use actual references, documented labels/selectors or controller
   links—not matching names, historical references treated as live usage, or
   configuration treated as observed traffic. Preserve group/namespace identity
@@ -335,15 +417,20 @@ own owners.
 - [ ] Add fixtures for supported API shapes and meaningful states: healthy, failing,
   intentionally inactive, stale/missing status, collisions and unavailable related
   resources. Test only relevant combinations, not a speculative matrix.
-- [ ] Run `make tsc`, `make test` and `make build` for integration code changes, plus
-  `npm test --prefix packages/k8s-ui` and `npm test --prefix web` for frontend tests.
-  The full build includes frontend embedding. Existing guards include
+- [ ] For code changes, run `make test-changed` while iterating, then the full
+  suite once via CI; run it locally if CI will not test the branch. Use `make build`
+  when running the embedded app for live or visual testing; it is not an extra verification
+  round. Existing guards include
   `internal/k8s/{dynamic_cache_fallback,chart_rbac_coverage,capabilities_alignment}_test.go`
   and resource `curated-column-ownership.test.ts` / `ResourceRendererDispatch.test.tsx`.
 - [ ] Validate changed views against a real controller, including restricted access
   where relevant. Record versions, screenshots and what was actually exercised;
   distinguish real status from synthetic fixtures. Don't induce destructive
   failures in a shared or production cluster for a test.
+- [ ] For cross-resource context or diagnosis, exercise a reader who can inspect
+  the root but not all referenced kinds/namespaces. Check retained useful evidence
+  as well as withheld data across REST AI and MCP; compare the changed UI where
+  applicable. Test freshness without reopening the drawer if the view refreshes.
 - [ ] For the surfaces changed, confirm intended table columns/cells, drawer,
   topology icons and edges. For collisions, verify both core and custom resources'
   renderers, status and available actions; check existing resource types for regressions.
