@@ -64,12 +64,20 @@ describe('MCP setup in read-only mode', () => {
   })
 })
 
-describe('MCP setup first prompt', () => {
-  it('offers the prompt under the client setups, without the in-Radar link when no handler is given', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
-    expect(html).toContain('Use Radar to find what&#x27;s broken in my cluster and why.')
-    expect(html.indexOf('Try it')).toBeGreaterThan(html.indexOf('Connect your AI tool'))
-    expect(html.indexOf('Try it')).toBeLessThan(html.indexOf('list_namespaces'))
+describe('MCP setup prompt tip', () => {
+  it('tips to name Radar under the client setups, as plain text, without the in-Radar link when no handler is given', () => {
+    const host = document.createElement('div')
+    host.innerHTML = renderToStaticMarkup(<MCPSetupDialog open mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    const tip = [...host.querySelectorAll('p')].find((p) => p.textContent?.startsWith('Tip:'))
+    expect(tip?.textContent).toBe(
+      "Tip: name Radar in your prompt so your agent uses Radar instead of kubectl, e.g. Use Radar to find what's broken in my cluster and why.",
+    )
+    expect(tip!.querySelector('code.inline-code')?.textContent).toBe("Use Radar to find what's broken in my cluster and why.")
+    expect(tip!.querySelector('button, pre')).toBeNull()
+    expect(tip!.nextElementSibling).toBeNull()
+    const html = host.innerHTML
+    expect(html.indexOf('Tip:')).toBeGreaterThan(html.indexOf('Connect your AI tool'))
+    expect(html.indexOf('Tip:')).toBeLessThan(html.indexOf('list_namespaces'))
     expect(html).not.toContain('investigate from Radar itself')
   })
 
@@ -101,7 +109,7 @@ describe('MCP setup first prompt', () => {
   it.each([
     [true, 'Copied'],
     [false, 'Copy to clipboard'],
-  ])('copies the prompt and shows the tick only when the copy worked (ok=%s)', async (ok, label) => {
+  ])('copies the endpoint and shows the tick only when the copy worked (ok=%s)', async (ok, label) => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     clipboard.ok = ok
     clipboard.copied = []
@@ -110,10 +118,10 @@ describe('MCP setup first prompt', () => {
     const root = createRoot(host)
     try {
       act(() => root.render(<MCPSetupDialog open mcpUrl={mcpEndpointUrl()} onClose={() => {}} />))
-      const pre = [...host.querySelectorAll('pre')].find((p) => p.textContent?.startsWith('Use Radar'))!
-      const copy = pre.parentElement!.querySelector('button')!
+      const endpoint = [...host.querySelectorAll('code')].find((c) => c.textContent === mcpEndpointUrl())!
+      const copy = endpoint.closest('.relative')!.querySelector('button')!
       await act(async () => copy.click())
-      expect(clipboard.copied).toEqual(ok ? ["Use Radar to find what's broken in my cluster and why."] : [])
+      expect(clipboard.copied).toEqual(ok ? [mcpEndpointUrl()] : [])
       expect(copy.getAttribute('aria-label')).toBe(label)
     } finally {
       act(() => root.unmount())

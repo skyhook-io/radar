@@ -6,7 +6,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 
-const MCP_TRY_PROMPT = "Use Radar to find what's broken in my cluster and why."
+const MCP_EXAMPLE_PROMPT ="Use Radar to find what's broken in my cluster and why."
 
 interface MCPSetupDialogProps {
   open: boolean
@@ -331,17 +331,11 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
                 </div>
               </Disclosure>
             ))}
-          </div>
 
-          <div className="space-y-2">
-            <h4 className="text-sm font-semibold text-theme-text-primary">Try it</h4>
-            <p className="text-xs text-theme-text-tertiary">Paste into your AI tool:</p>
-            <div className="relative">
-              <pre className="bg-theme-base rounded-md pl-3 pr-11 py-2.5 text-xs font-mono text-theme-text-secondary whitespace-pre-wrap break-words">
-                {MCP_TRY_PROMPT}
-              </pre>
-              <CopyButton text={MCP_TRY_PROMPT} />
-            </div>
+            <p className="pt-1 text-xs text-theme-text-tertiary leading-relaxed">
+              <span className="font-medium text-theme-text-secondary">Tip:</span> name Radar in your prompt so your
+              agent uses Radar instead of kubectl, e.g. <code className="inline-code">{MCP_EXAMPLE_PROMPT}</code>
+            </p>
             {onInvestigate && (
               <button
                 type="button"
