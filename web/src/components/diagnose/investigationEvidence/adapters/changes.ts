@@ -38,7 +38,18 @@ export function adaptChanges(
     return;
   }
   const changes = mergeCreated(rows, created);
-  addNarrowHint(builder, source, value);
+  const omitted = omittedKinds(value.omittedKinds);
+  if (!omitted) {
+    invalidPayload(builder, source, OMITTED_KINDS_LABEL);
+    return;
+  }
+  // The omitted-kinds sentence points past this answer's kinds; it says
+  // nothing about this answer being cut short, so it is not a narrowHint.
+  const narrowHint = nonEmptyString(value.narrowHint)
+    ? value.narrowHint.replace(OMITTED_KINDS_SENTENCE, "").trim()
+    : "";
+  addNarrowHint(builder, source, { narrowHint });
+  addOmittedKinds(builder, source, omitted);
   let sourceErrors = 0;
   if (Array.isArray(value.sourcesErrored)) {
     for (const sourceError of value.sourcesErrored) {
@@ -59,13 +70,81 @@ export function adaptChanges(
     changes,
     `changes:${scopeFromArgs(source)}`,
     undefined,
-    !nonEmptyString(value.narrowHint) && sourceErrors === 0,
+    !narrowHint && sourceErrors === 0,
     false,
     sourceArgsRelevance(builder, source),
     changesSubjectFromArgs(source),
     nonEmptyString(args?.since) ? args.since : undefined,
   );
   addClusterScopedChanges(builder, source, value.clusterScopedChanges);
+}
+
+const OMITTED_KINDS_LABEL = "Other changed kinds";
+
+// The sentence internal/meaningfulchanges/omitted_kinds.go
+// (OmittedKindsGuidance) adds to narrowHint beside omittedKinds.
+const OMITTED_KINDS_SENTENCE =
+  /\s*This window also has changes to kinds the default feed leaves out: [^.]*\. Pass kind=<Kind> to list them\./;
+
+interface OmittedKind {
+  kind: string;
+  group?: string;
+  latestChangeType: string;
+  latestTimestamp: string;
+}
+
+/** Parses get_changes `omittedKinds`; [] when absent, undefined when malformed. */
+export function omittedKinds(payload: unknown): OmittedKind[] | undefined {
+  if (payload === undefined || payload === null) return [];
+  if (!Array.isArray(payload)) return undefined;
+  const out: OmittedKind[] = [];
+  for (const raw of payload) {
+    const entry = record(raw);
+    if (
+      !entry ||
+      !nonEmptyString(entry.kind) ||
+      !nonEmptyString(entry.latestChangeType) ||
+      !nonEmptyString(entry.latestTimestamp) ||
+      (entry.group !== undefined && typeof entry.group !== "string")
+    )
+      return undefined;
+    out.push({
+      kind: entry.kind,
+      group: entry.group || undefined,
+      latestChangeType: entry.latestChangeType,
+      latestTimestamp: entry.latestTimestamp,
+    });
+  }
+  return out;
+}
+
+const OMITTED_CHANGE_VERB: Record<string, string> = {
+  add: "created",
+  update: "edited",
+  delete: "deleted",
+};
+
+// Kinds the default feed leaves out that changed in the window. A pointer for
+// the record, folded with the routine notes: it is not a gap in what was read.
+function addOmittedKinds(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  kinds: OmittedKind[],
+): void {
+  if (kinds.length === 0) return;
+  const named = kinds.map((entry) => {
+    const kind = entry.group ? `${entry.kind}.${entry.group}` : entry.kind;
+    const verb =
+      OMITTED_CHANGE_VERB[entry.latestChangeType] ?? entry.latestChangeType;
+    return `${kind} (last ${verb} ${entry.latestTimestamp})`;
+  });
+  builder.limit(
+    source,
+    OMITTED_KINDS_LABEL,
+    `Changed in this window but outside the default change feed: ${named.join(", ")}.`,
+    "unknown",
+    "history",
+  );
 }
 
 const CLUSTER_SCOPED_LABEL = "Cluster-scoped admission changes";

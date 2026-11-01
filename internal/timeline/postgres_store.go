@@ -1179,6 +1179,17 @@ func (s *PostgresStore) buildQuery(opts QueryOptions, excludeManaged bool) (stri
 		// before LIMIT so they cannot crowd out the requested resource's changes.
 		addFilter(" AND (COALESCE(api_version, '') = '' OR CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END = ANY($%d::text[]))", opts.APIGroups)
 	}
+	// Exclusions match known versions only; an unknown version is no evidence
+	// of the excluded group.
+	const pgGroupExpr = "(CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END)"
+	if len(opts.ExcludeAPIGroups) > 0 {
+		addFilter(" AND (COALESCE(api_version, '') = '' OR NOT ("+pgGroupExpr+" = ANY($%d::text[])))", opts.ExcludeAPIGroups)
+	}
+	for _, gk := range opts.ExcludeGroupKinds {
+		query.WriteString(fmt.Sprintf(" AND (COALESCE(api_version, '') = '' OR NOT (kind = $%d AND "+pgGroupExpr+" = $%d))", argN, argN+1))
+		args = append(args, gk.Kind, gk.Group)
+		argN += 2
+	}
 	if len(opts.Names) > 0 {
 		vals := make([]any, len(opts.Names))
 		for i, n := range opts.Names {

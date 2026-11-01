@@ -730,6 +730,25 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		query.WriteString("))")
 	}
 
+	// Exclusions match known versions only; an unknown version is no evidence
+	// of the excluded group.
+	const sqliteGroupExpr = "(CASE WHEN instr(api_version, '/') > 0 THEN substr(api_version, 1, instr(api_version, '/') - 1) ELSE '' END)"
+	if len(opts.ExcludeAPIGroups) > 0 {
+		query.WriteString(" AND (COALESCE(api_version, '') = '' OR " + sqliteGroupExpr + " NOT IN (")
+		for i, group := range opts.ExcludeAPIGroups {
+			if i > 0 {
+				query.WriteString(",")
+			}
+			query.WriteString("?")
+			args = append(args, group)
+		}
+		query.WriteString("))")
+	}
+	for _, gk := range opts.ExcludeGroupKinds {
+		query.WriteString(" AND (COALESCE(api_version, '') = '' OR NOT (kind = ? AND " + sqliteGroupExpr + " = ?))")
+		args = append(args, gk.Kind, gk.Group)
+	}
+
 	if len(opts.Names) > 0 {
 		query.WriteString(" AND name IN (")
 		for i, name := range opts.Names {

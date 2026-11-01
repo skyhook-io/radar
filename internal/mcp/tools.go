@@ -1724,6 +1724,16 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if resp.HistoryCoverage != nil {
 		hints = append(hints, meaningfulchanges.HistoryCoverageGuidance(*resp.HistoryCoverage))
 	}
+	// A default query leaves out Nodes and untracked custom kinds; name the
+	// ones that changed so they stay discoverable.
+	if input.Kind == "" && input.Name == "" && (allowed == nil || len(allowed) > 0) {
+		if kinds, err := meaningfulchanges.OmittedKinds(ctx, query); err != nil {
+			hints = append(hints, meaningfulchanges.OmittedKindsErrorGuidance(err))
+		} else if hint := meaningfulchanges.OmittedKindsGuidance(kinds); hint != "" {
+			hints = append(hints, hint)
+			resp.OmittedKinds = kinds
+		}
+	}
 	resp.NarrowHint = strings.Join(hints, " ")
 	// After the cap and the hint, so both still describe every returned
 	// change. A name= query is one object's history and stays as rows.
@@ -1751,6 +1761,10 @@ type getChangesResponseMCP struct {
 	// HistoryCoverage is set when the window starts before the history Radar
 	// holds, including when no change was returned.
 	HistoryCoverage *issuesapi.HistoryCoverage `json:"historyCoverage,omitempty"`
+	// OmittedKinds is set for a query without kind or name: the kinds the
+	// default feed leaves out that changed in the window, which narrowHint
+	// names too.
+	OmittedKinds []meaningfulchanges.OmittedKind `json:"omittedKinds,omitempty"`
 	// Coverage is set when kind names a custom kind: where Radar collects it
 	// now, as list_resources reports it. It does not say how much history
 	// Radar holds; complete coverage with a recent start still misses

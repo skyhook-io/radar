@@ -416,6 +416,12 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 			return false
 		}
 	}
+	if event.APIVersion != "" && (len(opts.ExcludeAPIGroups) > 0 || len(opts.ExcludeGroupKinds) > 0) {
+		group := resourceid.GroupFromAPIVersion(event.APIVersion)
+		if slices.Contains(opts.ExcludeAPIGroups, group) || slices.Contains(opts.ExcludeGroupKinds, resourceid.GroupKind{Group: group, Kind: event.Kind}) {
+			return false
+		}
+	}
 
 	if len(opts.Names) > 0 {
 		found := slices.Contains(opts.Names, event.Name)
