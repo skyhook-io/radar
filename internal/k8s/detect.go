@@ -1252,14 +1252,14 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 			}
 			ageDur := now.Sub(d.CreationTimestamp.Time)
 			for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
-				severity, message := sharedRWOVolumeProblem(d, pvc)
+				severity, reason, message := sharedRWOVolumeProblem(d, pvc)
 				problems = append(problems, Detection{
 					Kind:      "Deployment",
 					Namespace: d.Namespace,
 					Name:      d.Name,
 					Group:     "apps",
 					Severity:  severity,
-					Reason:    "ReadWriteOnce volume shared across replicas",
+					Reason:    reason,
 					Message:   message,
 					// One Deployment can share multiple distinct RWO PVCs; fingerprint
 					// per PVC so each is its own row rather than collapsing into one.
@@ -1899,16 +1899,23 @@ func pdbBlocksEvictionsMessage(pdb *policyv1.PodDisruptionBudget) string {
 
 const sharedRWOVolumeFix = "Use a ReadWriteMany volume, switch to a StatefulSet with volumeClaimTemplates (a volume per replica), or reduce to 1 replica."
 
+// Stable reason literals for the multi-replica single-node-volume row; the
+// issues category mapping keys on them.
+const (
+	SharedRWOVolumeReason  = "ReadWriteOnce volume shared across replicas"
+	SharedRWOPVolumeReason = "ReadWriteOncePod volume shared across replicas"
+)
+
 // sharedRWOVolumeProblem words the multi-replica single-node-volume row:
 // high for ReadWriteOncePod (one pod only), info for ReadWriteOnce (one node
 // only, so it fails only when replicas land on different nodes).
-func sharedRWOVolumeProblem(d *appsv1.Deployment, pvc *corev1.PersistentVolumeClaim) (severity, message string) {
+func sharedRWOVolumeProblem(d *appsv1.Deployment, pvc *corev1.PersistentVolumeClaim) (severity, reason, message string) {
 	replicas := schedDesiredReplicas(d.Spec.Replicas)
 	if singleNodeAccessMode(pvc) == corev1.ReadWriteOncePod {
-		return "high", fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOncePod PVC %q, which only one pod at a time can use, so only one replica can run. %s",
+		return "high", SharedRWOPVolumeReason, fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOncePod PVC %q, which only one pod at a time can use, so only one replica can run. %s",
 			replicas, pvc.Name, sharedRWOVolumeFix)
 	}
-	return "info", fmt.Sprintf("Deployment wants %d replicas that share ReadWriteOnce PVC %q. ReadWriteOnce lets only one node mount the volume: replicas on that node can share it, but a replica scheduled onto another node fails to attach (Multi-Attach). To spread replicas across nodes, use a ReadWriteMany volume or a StatefulSet with volumeClaimTemplates (a volume per replica).",
+	return "info", SharedRWOVolumeReason, fmt.Sprintf("Deployment wants %d replicas that share ReadWriteOnce PVC %q. ReadWriteOnce lets only one node mount the volume: replicas on that node can share it, but a replica scheduled onto another node fails to attach (Multi-Attach). To spread replicas across nodes, use a ReadWriteMany volume or a StatefulSet with volumeClaimTemplates (a volume per replica).",
 		replicas, pvc.Name)
 }
 

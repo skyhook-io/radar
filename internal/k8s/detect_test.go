@@ -2606,7 +2606,7 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	}
 	cache := GetResourceCache()
 
-	const reason = "ReadWriteOnce volume shared across replicas"
+	const reason = SharedRWOVolumeReason
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if hasProblem(DetectProblems(cache, "prod"), "Deployment", "conflict", reason) {
@@ -2621,8 +2621,8 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 		!strings.Contains(p.Message, "only one node mount the volume") || !strings.Contains(p.Message, "replicas on that node can share it") {
 		t.Errorf("RWO message should describe the node-level risk, not claim replicas can't start: %q", p.Message)
 	}
-	assertProblem(t, problems, "Deployment", "rwop", reason, "high")
-	if p, _ := lookupProblem(problems, "Deployment", "rwop", reason); !strings.Contains(p.Message, "only one replica can run") {
+	assertProblem(t, problems, "Deployment", "rwop", SharedRWOPVolumeReason, "high")
+	if p, _ := lookupProblem(problems, "Deployment", "rwop", SharedRWOPVolumeReason); !strings.Contains(p.Message, "only one replica can run") {
 		t.Errorf("RWOP message = %q", p.Message)
 	}
 	if hasProblem(problems, "Deployment", "single", reason) {
