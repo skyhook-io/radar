@@ -1499,6 +1499,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		ServiceEndpointSlices:    true,
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,
+		ArgoRollbackSync:         true,
 		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,

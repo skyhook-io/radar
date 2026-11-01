@@ -72,7 +72,10 @@ import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } 
 import {
   RadarFeatureUnsupportedError,
   guardRadarFeature,
+  radarControlBlocked,
+  radarControlBlockedReason,
   radarFeatureSupport,
+  radarUpgradeRequirement,
   shouldRetryRadarQuery,
   type RadarFeature,
 } from './radarFeatures'
@@ -1890,9 +1893,14 @@ export function useVersionCheck() {
  * (a host-supplied version before /capabilities answers) can lift later, and
  * the key change is what makes the query fetch for real; ungated keys are
  * unchanged.
+ *
+ * `upgrade` is set when a control the feature backs must render disabled with
+ * RadarUpgradeNote's copy: the Radar is known to be too old, or failed to
+ * answer /api/capabilities (see radarControlBlocked). Controls requiring
+ * affirmative support instead get `blockedReason` while checking or unavailable.
  */
 export function useRadarFeature(feature: RadarFeature) {
-  const { data: capabilities } = useCapabilities()
+  const { data: capabilities, isError: capabilitiesFailed } = useCapabilities()
   const { data: versionInfo } = useQuery<VersionInfo>(versionCheckQueryOptions(getApiBase()))
   const { radarVersion } = useRadarUpgradeHost()
   const currentVersion = versionInfo?.currentVersion || radarVersion
@@ -1904,8 +1912,17 @@ export function useRadarFeature(feature: RadarFeature) {
     [feature, support, currentVersion, latestVersion],
   )
   const gatedKey = useMemo(() => (support === 'unsupported' ? ['radar-feature-unsupported'] : []), [support])
+  const blockedReason = radarControlBlockedReason(feature, support, capabilitiesFailed)
 
-  return { support, gatedKey, guard }
+  return {
+    support,
+    blockedReason,
+    upgrade: !blockedReason && radarControlBlocked(support, capabilitiesFailed)
+      ? radarUpgradeRequirement(feature, { currentVersion, latestVersion })
+      : null,
+    gatedKey,
+    guard,
+  }
 }
 
 // ============================================================================
@@ -6919,7 +6936,7 @@ interface GitOpsMutationConfig<TVariables> {
   getBody?: (variables: TVariables) => unknown;
   errorMessage: string;
   successMessage?: string;
-  getSuccessMessage?: (data: GitOpsOperationResponse) => string;
+  getSuccessMessage?: (data: GitOpsOperationResponse, variables: TVariables) => string;
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][];
 }
 
@@ -6960,7 +6977,7 @@ function createGitOpsMutation<TVariables>(
       },
       onSuccess: (data, variables) => {
         if (config.getSuccessMessage)
-          showApiSuccess(config.getSuccessMessage(data));
+          showApiSuccess(config.getSuccessMessage(data, variables));
         config
           .getInvalidateKeys(variables)
           .forEach((key) => queryClient.invalidateQueries({ queryKey: key }));
@@ -7150,7 +7167,7 @@ export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/rollback`,
   getBody: (v) => ({ id: v.id, prune: v.prune, dryRun: v.dryRun }),
   errorMessage: "Failed to roll back application",
-  successMessage: "Rollback initiated",
+  getSuccessMessage: (_data, v) => (v.dryRun ? "Rollback preview started" : "Rollback initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
 

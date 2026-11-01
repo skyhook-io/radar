@@ -180,6 +180,11 @@ type FeatureCapabilities struct {
 	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
 	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
 	AgentSigninCheck      bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
+	// the history entry (id 0 included), and .../resume also clears
+	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
+	// operation.rollback the API server prunes, and leaves enabled: false set.
+	ArgoRollbackSync bool `json:"argoRollbackSync"`
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`

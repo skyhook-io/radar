@@ -179,6 +179,7 @@ export interface FeatureCapabilities {
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
+  argoRollbackSync?: boolean
   clusterScopedPlaceholder?: boolean
 }
 
