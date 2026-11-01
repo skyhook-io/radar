@@ -41,12 +41,13 @@ var runtimeGeneratedKinds = map[string]bool{
 // such as CiliumEndpoints) and status-only changes are left out, so routine
 // churn names nothing; so do creates and deletes of runtimeGeneratedKinds.
 // Kinds with desired-state edits come first, then by how many rows they had.
-// scanFull reports that the window held more rows than the scan read, so
-// other kinds may be missing. q must be a default query (no kind or name).
-func OmittedKinds(ctx context.Context, q Query) (kinds []string, scanFull bool, err error) {
+// It reads only the window's newest omittedKindsScanBound rows, so in a busy
+// window it can miss kinds; an absent hint makes no claim. q must be a
+// default query (no kind or name).
+func OmittedKinds(ctx context.Context, q Query) ([]string, error) {
 	store := timeline.GetStore()
 	if store == nil {
-		return nil, false, timeline.StoreMissingError()
+		return nil, timeline.StoreMissingError()
 	}
 	q = normalizeQuery(q)
 	events, err := store.Query(ctx, timeline.QueryOptions{
@@ -55,15 +56,11 @@ func OmittedKinds(ctx context.Context, q Query) (kinds []string, scanFull bool, 
 		Sources:        []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:     append(append([]timeline.EventType{}, updateEventTypes...), lifecycleEventTypes...),
 		ClusterContext: k8s.ActiveClusterContext(),
-		Limit:          omittedKindsScanBound + 1,
+		Limit:          omittedKindsScanBound,
 		IncludeManaged: false,
 	})
 	if err != nil {
-		return nil, false, err
-	}
-	if len(events) > omittedKindsScanBound {
-		scanFull = true
-		events = events[:omittedKindsScanBound]
+		return nil, err
 	}
 	edits, lifecycle := map[string]int{}, map[string]int{}
 	for _, e := range events {
@@ -81,6 +78,7 @@ func OmittedKinds(ctx context.Context, q Query) (kinds []string, scanFull bool, 
 			lifecycle[e.Kind]++
 		}
 	}
+	var kinds []string
 	for _, counts := range []map[string]int{edits, lifecycle} {
 		for kind := range counts {
 			kinds = append(kinds, kind)
@@ -94,7 +92,7 @@ func OmittedKinds(ctx context.Context, q Query) (kinds []string, scanFull bool, 
 		}
 		return edits[a]+lifecycle[a] > edits[b]+lifecycle[b]
 	})
-	return kinds, scanFull, nil
+	return kinds, nil
 }
 
 // omittedCategory returns the category an explicit kind= query would list the
@@ -121,15 +119,11 @@ func isUntrackedCustomResource(e timeline.TimelineEvent) bool {
 	return isCustomResourceEvent(e) && !(TrackedKind(e.Kind) && eventGroupMatchesTracked(e.Kind, e.APIVersion))
 }
 
-// OmittedKindsGuidance is the narrowHint sentence for OmittedKinds' result:
-// the kinds it named, or, when the scan was cut short and named none, that
-// the check was partial. It is "" when a complete scan named no kind.
-func OmittedKindsGuidance(kinds []string, scanFull bool) string {
+// OmittedKindsGuidance is the narrowHint sentence naming OmittedKinds'
+// result, or "" when it names no kind.
+func OmittedKindsGuidance(kinds []string) string {
 	if len(kinds) == 0 {
-		if !scanFull {
-			return ""
-		}
-		return fmt.Sprintf("Radar checked only the newest %d changes in this window for kinds the default feed leaves out (Nodes, untracked custom kinds) and found none; pass kind=<Kind> to check one.", omittedKindsScanBound)
+		return ""
 	}
 	named := kinds
 	more := ""
@@ -137,11 +131,7 @@ func OmittedKindsGuidance(kinds []string, scanFull bool) string {
 		named = kinds[:omittedKindsNamed]
 		more = fmt.Sprintf(" and %d more", len(kinds)-omittedKindsNamed)
 	}
-	sentence := fmt.Sprintf("This window also has changes to kinds the default feed leaves out: %s%s. Pass kind=<Kind> to list them.", strings.Join(named, ", "), more)
-	if scanFull {
-		sentence += fmt.Sprintf(" Radar checked only the newest %d changes for these, so other kinds may have changes too.", omittedKindsScanBound)
-	}
-	return sentence
+	return fmt.Sprintf("This window also has changes to kinds the default feed leaves out: %s%s. Pass kind=<Kind> to list them.", strings.Join(named, ", "), more)
 }
 
 // OmittedKindsErrorGuidance is the narrowHint sentence when the omitted-kinds

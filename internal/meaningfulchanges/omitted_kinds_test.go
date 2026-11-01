@@ -3,7 +3,6 @@ package meaningfulchanges
 import (
 	"context"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -57,9 +56,9 @@ func TestOmittedKindsNamesChangesTheDefaultFeedLeavesOut(t *testing.T) {
 	add("Application", "argoproj.io/v1alpha1", "argocd", "shop", timeline.EventTypeUpdate, nil, "spec.source.targetRevision")
 	add("Deployment", "apps/v1", "db", "web", timeline.EventTypeUpdate, nil, "spec.replicas")
 
-	kinds, full, err := OmittedKinds(context.Background(), Query{})
-	if err != nil || full {
-		t.Fatalf("OmittedKinds: full=%v err=%v", full, err)
+	kinds, err := OmittedKinds(context.Background(), Query{})
+	if err != nil {
+		t.Fatalf("OmittedKinds: %v", err)
 	}
 	// Desired-state edits first: Node's one edit outranks BGPConfiguration's
 	// create.
@@ -69,29 +68,25 @@ func TestOmittedKindsNamesChangesTheDefaultFeedLeavesOut(t *testing.T) {
 
 	// A namespace query names only that namespace's kinds: no Node, and no
 	// count of what changed elsewhere.
-	kinds, _, _ = OmittedKinds(context.Background(), Query{Namespaces: []string{"db"}})
+	kinds, _ = OmittedKinds(context.Background(), Query{Namespaces: []string{"db"}})
 	if want := []string{"TidbCluster"}; !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("namespace kinds = %v, want %v", kinds, want)
 	}
 
 	// Kinds the caller may not read are not named.
-	kinds, _, _ = OmittedKinds(context.Background(), Query{Allow: func(c issuesapi.RecentChange) bool { return c.Kind != "Node" }})
+	kinds, _ = OmittedKinds(context.Background(), Query{Allow: func(c issuesapi.RecentChange) bool { return c.Kind != "Node" }})
 	if want := []string{"TidbCluster", "BGPConfiguration"}; !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("filtered kinds = %v, want %v", kinds, want)
 	}
 
-	if got := OmittedKindsGuidance(nil, false); got != "" {
-		t.Fatalf("guidance for a complete scan with no kinds = %q", got)
-	}
-	// A cut-short scan that named nothing says the check was partial.
-	if got := OmittedKindsGuidance(nil, true); !strings.Contains(got, "newest 4000 changes") || !strings.Contains(got, "found none") {
-		t.Fatalf("guidance for a partial scan with no kinds = %q", got)
+	if got := OmittedKindsGuidance(nil); got != "" {
+		t.Fatalf("guidance for no kinds = %q", got)
 	}
 }
 
 func TestOmittedKindsGuidanceCapsNames(t *testing.T) {
-	got := OmittedKindsGuidance([]string{"A", "B", "C", "D", "E", "F", "G"}, true)
-	if !strings.Contains(got, "leaves out: A, B, C, D, E and 2 more. Pass kind=<Kind>") || !strings.Contains(got, "newest 4000 changes") {
-		t.Fatalf("guidance = %q", got)
+	got := OmittedKindsGuidance([]string{"A", "B", "C", "D", "E", "F", "G"})
+	if want := "This window also has changes to kinds the default feed leaves out: A, B, C, D, E and 2 more. Pass kind=<Kind> to list them."; got != want {
+		t.Fatalf("guidance = %q, want %q", got, want)
 	}
 }
