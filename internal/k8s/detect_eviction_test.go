@@ -37,8 +37,11 @@ func TestEvictedPodProblem(t *testing.T) {
 	if want := "Evicted by the kubelet on node ip-10-0-17-33.ec2.internal: Pod ephemeral local storage usage exceeds the total limit of containers 2Mi."; got.message != want {
 		t.Errorf("message = %q, want %q", got.message, want)
 	}
-	if got.cause != "The kubelet evicted this pod because it exceeded its own ephemeral-storage limit; the node itself was not under pressure." {
+	if got.cause != "The kubelet evicted this pod because it exceeded its own ephemeral-storage limit; the eviction was triggered by that limit, not by node pressure." {
 		t.Errorf("cause = %q", got.cause)
+	}
+	if got.fingerprint != "evicted/local_storage_limit/ephemeral-storage" {
+		t.Errorf("fingerprint = %q", got.fingerprint)
 	}
 	// Ready=False kept an older timestamp; the container kill is the eviction.
 	if !got.onset.Equal(killedAt) {

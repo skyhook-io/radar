@@ -68,6 +68,7 @@ func TestCompose_EvictedPodsCategorizedGroupedAndLinkedToNode(t *testing.T) {
 		evictedPod("web-1", "node-a", diskEvictionMessage, evictedAt, rsOwner),
 		evictedPod("web-2", "node-a", diskEvictionMessage, evictedAt, rsOwner),
 		evictedPod("web-3", "node-b", diskEvictionMessage, evictedAt, rsOwner),
+		evictedPod("web-mem", "node-b", memoryEvictionMessage, evictedAt, rsOwner),
 		evictedPod("solo", "node-b", memoryEvictionMessage, evictedAt, nil),
 	)
 	if err := k8s.InitTestResourceCache(client); err != nil {
@@ -76,7 +77,7 @@ func TestCompose_EvictedPodsCategorizedGroupedAndLinkedToNode(t *testing.T) {
 	provider := &CacheProvider{cache: k8s.GetResourceCache()}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(provider.DetectProblems(nil)) >= 5 {
+		if len(provider.DetectProblems(nil)) >= 6 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -84,24 +85,36 @@ func TestCompose_EvictedPodsCategorizedGroupedAndLinkedToNode(t *testing.T) {
 
 	got := Compose(provider, Filters{Grouped: true, Limit: NoLimit})
 	byName := map[string]Issue{}
+	var webRows []Issue
 	for _, i := range got {
 		byName[i.Kind+"/"+i.Name+"/"+string(i.Category)] = i
+		if i.Kind == "Deployment" && i.Name == "web" && i.Category == issuesapi.CategoryPodEvicted {
+			webRows = append(webRows, i)
+		}
 	}
 
-	web, ok := byName["Deployment/web/pod_evicted"]
-	if !ok {
-		t.Fatalf("issues = %+v, want one pod_evicted row for Deployment web", got)
+	// One row per eviction cause: the memory eviction does not fold into the
+	// disk row, whose message and diagnosis it would contradict.
+	if len(webRows) != 2 {
+		t.Fatalf("web pod_evicted rows = %+v, want one for disk and one for memory", webRows)
+	}
+	web, mem := webRows[0], webRows[1]
+	if !strings.Contains(web.Message, "disk space") {
+		web, mem = mem, web
+	}
+	if mem.Count != 1 || !strings.Contains(mem.Message, "low on memory") || web.ID == mem.ID {
+		t.Errorf("memory row = %+v, want its own row for web-mem", mem)
 	}
 	if web.Severity != SeverityWarning || web.Count != 3 || web.CategoryGroup != issuesapi.GroupRuntime {
 		t.Errorf("web row = severity %q count %d group %q, want warning / 3 / runtime", web.Severity, web.Count, web.CategoryGroup)
 	}
-	if web.MessageSource != issuesapi.MessageSourceRadar || !strings.Contains(web.Message, "the node was low on ephemeral-storage (eviction threshold 3.7Gi, available 3.6Gi)") {
+	if web.MessageSource != issuesapi.MessageSourceRadar || !strings.Contains(web.Message, "the node was low on disk space (ephemeral-storage) (eviction threshold 3.7Gi, available 3.6Gi)") {
 		t.Errorf("web message = %q (source %q), want Radar's parsed eviction summary", web.Message, web.MessageSource)
 	}
 	if web.RawMessage != diskEvictionMessage {
 		t.Errorf("web raw message = %q, want the kubelet's message", web.RawMessage)
 	}
-	if web.Cause != "The kubelet evicted this pod because its node ran low on ephemeral-storage." || web.Action == "" {
+	if web.Cause != "The kubelet evicted this pod because its node ran low on disk space (ephemeral-storage)." || !strings.Contains(web.Action, "leftover records") {
 		t.Errorf("web cause/action = %q / %q, want the agreed disk-pressure diagnosis", web.Cause, web.Action)
 	}
 	if want := evictedAt.UTC(); !web.FirstSeen.Equal(want) {
@@ -136,7 +149,7 @@ func TestCompose_EvictedPodsCategorizedGroupedAndLinkedToNode(t *testing.T) {
 			continue
 		}
 		want := "node-a"
-		if i.Name == "web-3" || i.Name == "solo" {
+		if i.Name == "web-3" || i.Name == "web-mem" || i.Name == "solo" {
 			want = "node-b"
 		}
 		f := findFact(i.DiagnosticContext, factEvictedFromNode)

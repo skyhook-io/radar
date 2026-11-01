@@ -624,7 +624,7 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 			var evictedAt time.Time
 			if reason == health.PodEvictedReason && health.IsEvictedPod(pod) {
 				ev := evictedPodProblem(pod, ownerKind)
-				severity, message, rawMessage = ev.severity, ev.message, ev.raw
+				severity, message, rawMessage, fingerprint = ev.severity, ev.message, ev.raw, ev.fingerprint
 				cause, action, evictedAt = ev.cause, ev.action, ev.onset
 				messageSource = issuesapi.MessageSourceRadar
 				evictedFrom = pod.Spec.NodeName
