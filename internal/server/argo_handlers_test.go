@@ -239,7 +239,7 @@ func TestHandleArgoResumeNeverAutomatedLeavesPruneOff(t *testing.T) {
 		t.Fatalf("get app: %v", err)
 	}
 	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
-	if !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": true}) {
-		t.Fatalf("automated = %#v, want prune off and selfHeal on", automated)
+	if !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": false}) {
+		t.Fatalf("automated = %#v, want prune and selfHeal off", automated)
 	}
 }

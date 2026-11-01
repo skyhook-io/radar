@@ -865,7 +865,7 @@ func TestArgoResourceValidationResultCorrelatesAndReturnsTarget(t *testing.T) {
 // annotation lookup on resume. Older Radar builds wrote skyhook.io/* keys;
 // the current writer uses radarhq.io/*. Resume must read either, prefer
 // the current key when both are present, and fall back to defaults when
-// neither is (prune off, selfHeal on) — and clear all the keys regardless.
+// neither is (prune and selfHeal off) — and clear all the keys regardless.
 func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 	cases := []struct {
 		name         string
