@@ -1,0 +1,210 @@
+suite: rbac.namespaces limits Radar to listed namespaces
+release:
+  namespace: radar
+tests:
+  - it: binds Radar's ClusterRole in each listed namespace instead of cluster-wide
+    template: clusterrolebinding.yaml
+    set:
+      rbac.namespaces: [app, billing]
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: billing
+        documentIndex: 1
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: RELEASE-NAME-radar
+
+  - it: keeps one ClusterRoleBinding without a list
+    template: clusterrolebinding.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ClusterRoleBinding
+
+  - it: keeps only access reviews cluster-wide without auth
+    template: clusterrole-cluster.yaml
+    set:
+      rbac.namespaces: [app]
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["authorization.k8s.io"]
+              resources: ["selfsubjectaccessreviews"]
+              verbs: ["create"]
+
+  - it: adds impersonation and SubjectAccessReviews in cloud mode
+    template: clusterrole-cluster.yaml
+    set:
+      rbac.namespaces: [app]
+      cloud: {enabled: true, token: dummy, url: "wss://cloud.example", clusterName: test-cluster}
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["users", "groups"]
+            verbs: ["impersonate"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["authorization.k8s.io"]
+            resources: ["subjectaccessreviews"]
+            verbs: ["create"]
+
+  - it: keeps SubjectAccessReviews but not impersonation in user-token mode
+    template: clusterrole-cluster.yaml
+    set:
+      rbac.namespaces: [app]
+      auth.kubernetesCredentials: user-token
+      cloud: {enabled: true, token: dummy, url: "wss://cloud.example", clusterName: test-cluster, defaultRbac: {create: false}}
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["users", "groups"]
+            verbs: ["impersonate"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["authorization.k8s.io"]
+            resources: ["subjectaccessreviews"]
+            verbs: ["create"]
+
+  - it: renders no cluster role without a list
+    template: clusterrole-cluster.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: grants Cloud tiers their roles only in the listed namespaces
+    template: cloud-rbac.yaml
+    set:
+      rbac.namespaces: [app, billing]
+      cloud: {enabled: true, token: dummy, url: "wss://cloud.example", clusterName: test-cluster}
+    asserts:
+      - hasDocuments:
+          count: 6
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: app
+        documentIndex: 0
+      - equal:
+          path: roleRef.name
+          value: admin
+        documentIndex: 0
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:owner
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: cloud:owner
+              apiGroup: rbac.authorization.k8s.io
+        documentIndex: 0
+
+  - it: limits the alerts identity, including its Secret read, to the listed namespaces
+    template: cloud-rbac-system.yaml
+    set:
+      rbac.namespaces: [app]
+      cloud: {enabled: true, token: dummy, url: "wss://cloud.example", clusterName: test-cluster}
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: app
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-radar-system-secrets-read
+
+  - it: drops integration bindings that only carry cluster-scoped rules
+    template: cloud-rbac-integration-read.yaml
+    set:
+      rbac.namespaces: [app]
+      cloud: {enabled: true, token: dummy, url: "wss://cloud.example", clusterName: test-cluster}
+    asserts:
+      - notMatchRegex:
+          path: metadata.name
+          pattern: -cluster$
+
+  - it: passes the list to Radar
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [app, billing]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --rbac-namespaces=app,billing
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --max-scope-candidates=2
+
+  - it: raises the probe cap for long lists
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19, n20, n21]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --max-scope-candidates=21
+
+  - it: refuses Radar's own namespace with Radar Cloud
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [app, radar]
+      cloud: {enabled: true, token: dummy, url: "wss://cloud.example", clusterName: test-cluster}
+    asserts:
+      - failedTemplate:
+          errorPattern: must not include Radar's own namespace radar
+
+  - it: allows Radar's own namespace without auth
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [app, radar]
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: refuses node operations
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [app]
+      cloud: {enabled: true, token: dummy, url: "wss://cloud.example", clusterName: test-cluster, defaultRbac: {nodeOps: true}}
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeOps cannot be used with rbac.namespaces
+
+  - it: refuses extraArgs that would override the list
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [app]
+      extraArgs: ["--namespace-scope"]
+    asserts:
+      - failedTemplate:
+          errorPattern: extraArgs --namespace-scope conflicts with rbac.namespaces
+
+  - it: refuses an image older than the flag
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [app]
+      image.tag: 1.18.3
+    asserts:
+      - failedTemplate:
+          errorPattern: requires Radar 1.19.0 or later

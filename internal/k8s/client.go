@@ -73,6 +73,10 @@ var (
 	contextNamespace   string   // Default namespace from kubeconfig context
 	fallbackNamespace  string   // Explicit namespace from --namespace flag
 	fallbackNamespaces []string // Explicit namespace candidates from --namespaces flag
+	// rbacNamespaces is the --rbac-namespaces list: every namespace this
+	// install's ServiceAccount is granted. When the cluster-wide namespace LIST
+	// is denied, it is the complete namespace set rather than a best-effort one.
+	rbacNamespaces []string
 	// fallbackNamespacesExplicit distinguishes SetFallbackNamespaces (the
 	// plural --namespaces flag, which also seeds the per-user picker) from
 	// SetFallbackNamespace (--namespace, which only steers RBAC probing).
@@ -1261,6 +1265,14 @@ func SetFallbackNamespaces(namespaces []string) {
 	fallbackNamespaceContext = contextName
 }
 
+// SetRBACNamespaces sets the --rbac-namespaces list. Unlike --namespaces it
+// seeds no picks: it describes the install's RBAC, not a view filter.
+func SetRBACNamespaces(namespaces []string) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	rbacNamespaces = dedupeNamespacesLocked(namespaces)
+}
+
 // ConfiguredNamespacesForCurrentContext returns the --namespaces list when
 // the current kubeconfig context is still the one the flag was configured
 // against. --namespaces is an *initial* value: after a context switch the
@@ -1309,8 +1321,9 @@ func dedupeNamespacesLocked(namespaces []string) []string {
 }
 
 func fallbackNamespaceCandidatesLocked() []string {
-	candidates := make([]string, 0, len(fallbackNamespaces)+1)
+	candidates := make([]string, 0, len(fallbackNamespaces)+len(rbacNamespaces)+1)
 	candidates = append(candidates, fallbackNamespaces...)
+	candidates = append(candidates, rbacNamespaces...)
 	if fallbackNamespace != "" {
 		candidates = append(candidates, fallbackNamespace)
 	}
@@ -1420,6 +1433,23 @@ func GetEffectiveNamespace() string {
 	return fallbackNamespace
 }
 
+// capabilityProbeNamespace is where a capability check that is denied
+// cluster-wide is retried: the effective namespace, or for an install limited
+// by --rbac-namespaces, the first listed namespace.
+func capabilityProbeNamespace() string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	switch {
+	case contextNamespace != "":
+		return contextNamespace
+	case fallbackNamespace != "":
+		return fallbackNamespace
+	case len(rbacNamespaces) > 0:
+		return rbacNamespaces[0]
+	}
+	return ""
+}
+
 // HasNamespaceFallback reports whether the current kubeconfig/context provides
 // a namespace fallback (kubeconfig context namespace or --namespace flag).
 func HasNamespaceFallback() bool {
@@ -1441,7 +1471,7 @@ func HasNamespaceFallback() bool {
 //     surfaces in diagnostics rather than silently degrading the UI.
 func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
 	namespaces, source := GetAccessibleNamespacesWithSource(ctx)
-	return namespaces, source == NamespaceListCluster
+	return namespaces, source.Complete()
 }
 
 // NamespaceListSource records how GetAccessibleNamespacesWithSource built its
@@ -1458,7 +1488,16 @@ const (
 	// NamespaceListFailed: the LIST failed for another reason (timeout, network,
 	// no client); the list is the same seeds, but RBAC is not the cause.
 	NamespaceListFailed NamespaceListSource = "list-failed"
+	// NamespaceListRBAC: the LIST was denied and --rbac-namespaces names every
+	// namespace the install is granted, so the list is complete for this install.
+	NamespaceListRBAC NamespaceListSource = "rbac-namespaces"
 )
+
+// Complete reports whether the list holds every namespace Radar can be
+// granted, rather than a best-effort short list.
+func (s NamespaceListSource) Complete() bool {
+	return s == NamespaceListCluster || s == NamespaceListRBAC
+}
 
 // GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
 // the list is or isn't complete.
@@ -1485,6 +1524,15 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 	if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
 		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
+	}
+	if source == NamespaceListSeeded {
+		clientMu.RLock()
+		granted := slices.Clone(rbacNamespaces)
+		clientMu.RUnlock()
+		if len(granted) > 0 {
+			sort.Strings(granted)
+			return granted, NamespaceListRBAC
+		}
 	}
 
 	// Cluster-wide list denied (or transient). Best-effort fallback so

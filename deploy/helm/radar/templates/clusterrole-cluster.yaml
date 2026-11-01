@@ -1,0 +1,44 @@
+{{- /*
+With rbac.namespaces, Radar's ClusterRole is bound only in the listed
+namespaces, where cluster-scoped rules have no effect. This role keeps the
+cluster-scoped verbs Radar needs to run: access reviews, and impersonation of
+the people it acts for. Impersonation cannot be limited to the listed
+namespaces; each impersonated request is still bounded by that person's RBAC.
+*/}}
+{{- if and .Values.rbac.create .Values.rbac.namespaces -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-cluster
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["selfsubjectaccessreviews"]
+    verbs: ["create"]
+  {{- if or (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  {{- if include "radar.userTokenMode" . | eq "false" }}
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+  {{- end }}
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cluster
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-cluster
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "radar.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
