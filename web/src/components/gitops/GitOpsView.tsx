@@ -29,6 +29,7 @@ import {
   isDestinationRef,
   isArgoAutoSyncEnabled,
   isArgoAutoSyncSwitchedOff,
+  argoAutoSyncController,
   argoResumeSettings,
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
@@ -434,6 +435,15 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   // app is in Manual mode or suspended via Radar's annotations.
   const argoAutoSyncEnabled = isArgoApp && isArgoAutoSyncEnabled(resourceQ.data)
   const appSyncOptions = argoApplicationSyncOptions(resourceQ.data)
+  // What a sync of this Application would deploy: its source(s), and the
+  // revision(s) Argo last compared with the source(s) compared, which decide
+  // whether the sync pins them. A dry-run result describes the value it was
+  // run against.
+  const deployTargetKey = JSON.stringify([
+    kind, namespace, name,
+    resourceQ.data?.spec?.source, resourceQ.data?.spec?.sources, resourceQ.data?.spec?.sourceHydrator,
+    resourceQ.data?.status?.sync?.revision, resourceQ.data?.status?.sync?.revisions, resourceQ.data?.status?.sync?.comparedTo,
+  ])
   // Radar-driven Argo suspension is signaled by annotations that record the
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
   // the app is in a deliberately-paused state (vs. Manual mode, which is a
@@ -494,6 +504,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const fluxResume = useFluxResume()
 
   const [syncDialogTarget, setSyncDialogTarget] = useState<ArgoSyncDialogTarget | null>(null)
+  const [validatedTargetKey, setValidatedTargetKey] = useState<string | null>(null)
+  const validationStale = validatedTargetKey !== null && validatedTargetKey !== deployTargetKey
   // Doubles as the "open" flag (truthy = dialog open) and the data carrier
   // for which history entry to roll back to.
   const [rollbackTarget, setRollbackTarget] = useState<GitOpsHistoryItem | null>(null)
@@ -701,6 +713,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     isRunning,
     operationInProgress,
     resumeUpgrade: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeUpgrade : null,
+    autoSyncController: argoAutoSyncController(resourceQ.relationships, { namespace, name }),
     resumeSettings: argoResumeSettings(resourceQ.data, argoInheritanceSupport === 'unknown' ? undefined : argoInheritanceSupport === 'supported'),
     resumeBlockedReason: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeBlockedReason : undefined,
   } : undefined
@@ -939,11 +952,12 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             autoSyncEnabled={argoAutoSyncEnabled}
             validationPending={argoResourceValidation.isPending}
             operationInProgress={operationInProgress}
-            validationResult={argoResourceValidation.data}
-            validationError={argoResourceValidation.error?.message}
+            validationResult={validationStale ? null : argoResourceValidation.data}
+            validationError={validationStale ? undefined : argoResourceValidation.error?.message}
             onCancel={closeArgoSyncDialog}
             onValidationReset={() => argoResourceValidation.reset()}
             onValidate={syncDialogTarget?.scope === 'resource' ? (opts) => {
+              setValidatedTargetKey(deployTargetKey)
               argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions))
             } : undefined}
             onConfirm={(opts) => {

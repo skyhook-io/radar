@@ -45,6 +45,11 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
     ),
   }
 })
+const toast = vi.hoisted(() => ({ success: vi.fn() }))
+vi.mock('../ui/Toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ui/Toast')>()),
+  showApiSuccess: toast.success,
+}))
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>()
   const idle = () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false })
@@ -151,6 +156,29 @@ describe('a Radar that advertises argoSyncInheritance', () => {
     expect(requests[0].body).toMatchObject({ prune: false, syncOptions: ['CreateNamespace=true'] })
   })
 
+  it.each([
+    { change: 'the compared revision', apply: () => { app.status.sync.revision = 'new-sha' } },
+    { change: 'the source', apply: () => { app.spec.source = { repoURL: 'https://example.com/other', targetRevision: 'main' } } },
+    { change: 'the comparison', apply: () => { app.status.sync.comparedTo = { source: app.spec.source } } },
+  ])('drops a dry-run pass once $change changes', async ({ apply }) => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    expect(document.body.textContent).toContain('Dry-run passed')
+    apply()
+    await renderView('/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io')
+    await settle()
+    expect(document.body.textContent).toContain('Sync resource')
+    expect(document.body.textContent).not.toContain('Dry-run passed')
+  })
+
+  it('keeps a dry-run pass while what it checked is unchanged', async () => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    await renderView('/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io')
+    await settle()
+    expect(document.body.textContent).toContain('Dry-run passed')
+  })
+
   it('validates and syncs one resource with the inherited options', async () => {
     await click(button('Open resource sync'))
     await click(button('Dry-run'))
@@ -188,6 +216,21 @@ describe('an older Radar, without argoSyncInheritance', () => {
     expect(requests[0].body.syncOptions).toEqual(APP_OPTIONS)
     expect(requests[1].body).toMatchObject({ prune: false, syncOptions: APP_OPTIONS })
   })
+})
+
+it.each([
+  { dryRun: false, message: 'Sync initiated' },
+  { dryRun: true, message: 'Dry run started' },
+])('confirms a sync with dryRun $dryRun as "$message"', async ({ dryRun, message }) => {
+  toast.success.mockClear()
+  await click(button('Open sync'))
+  if (dryRun) {
+    const label = [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith('Dry run'))!
+    await click(label.querySelector('input')!)
+  }
+  await click(button(dryRun ? 'Run dry-run' : 'Sync now'))
+  expect(requests[0].body).toMatchObject({ dryRun })
+  expect(toast.success).toHaveBeenCalledWith(message)
 })
 
 it('treats a Radar whose capabilities have not loaded as older', async () => {
