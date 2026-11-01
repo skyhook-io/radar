@@ -208,7 +208,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'search',
-    desc: 'Find resources by content/term match — config keys, env refs, images, label values, ConfigMap data, CRD fields, status messages. Secret values are never indexed.',
+    desc: 'Find resources by content/term match — config keys, env refs, images, label values, ConfigMap data, CRD fields, status messages, or an IP/ip:port to find the Pod, Service or Node holding it. Secret values are never indexed.',
     params: [
       { arg: 'query', required: true, desc: 'tokens AND\'d; modifiers kind:, ns:, label:, image:' },
       { arg: 'limit', desc: 'max hits (default 50, max 500)' },

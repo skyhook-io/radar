@@ -1,6 +1,7 @@
 package search
 
 import (
+	"net/netip"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -36,6 +37,7 @@ type candidate struct {
 	Labels      map[string]string
 	Annotations map[string]string
 	Images      []string
+	IPs         []ipField // addresses the object holds (Pod, Service, Node)
 	Content     []ContentField
 	// report is a Trivy Operator report's findings, matched in place by
 	// scoreToken rather than copied into Content, within findings' limits.
@@ -69,7 +71,15 @@ func match(q Query, c candidate) (int, []MatchedField, []MatchSnippet, bool) {
 	var matched []MatchedField
 	var snippets []MatchSnippet
 	for _, tok := range q.Tokens {
-		best, site, snippet, ok := scoreToken(tok, c)
+		var best int
+		var site string
+		var snippet *MatchSnippet
+		var ok bool
+		if addr, isIP := q.ips[tok]; isIP {
+			best, site, snippet, ok = scoreIPToken(tok, addr, c)
+		} else {
+			best, site, snippet, ok = scoreToken(tok, c)
+		}
 		if !ok {
 			return 0, nil, nil, false
 		}
@@ -212,6 +222,54 @@ func scoreToken(tok string, c candidate) (int, string, *MatchSnippet, bool) {
 		}
 	}
 
+	if best == 0 {
+		return 0, "", nil, false
+	}
+	return best, bestSite, bestSnippet, true
+}
+
+// scoreIPToken matches an IP token: an address the object holds scores
+// highest, under site ip:<role>; otherwise the name, a label, annotation or
+// content value must mention the address whole, so 10.0.1.2 never matches
+// 10.0.1.23.
+func scoreIPToken(tok string, addr netip.Addr, c candidate) (int, string, *MatchSnippet, bool) {
+	for _, f := range c.IPs {
+		if f.Addr == addr {
+			return f.Score, "ip:" + f.Role, nil, true
+		}
+	}
+	v6 := addr.Is6()
+	if strings.EqualFold(c.Name, tok) {
+		return scoreNameExact, "name", nil, true
+	}
+	best := 0
+	bestSite := ""
+	var bestSnippet *MatchSnippet
+	consider := func(score int, site string, snip *MatchSnippet) {
+		if score > best {
+			best, bestSite, bestSnippet = score, site, snip
+		}
+	}
+	for k, v := range c.Labels {
+		if containsIP(v, tok, v6) {
+			consider(scoreLabelValSubstr, "label:"+k, nil)
+		}
+	}
+	for k, v := range c.Annotations {
+		if containsIP(v, tok, v6) {
+			consider(scoreAnnoSubstr, "annotation:"+k, nil)
+		}
+	}
+	for _, cf := range c.Content {
+		if !containsIP(cf.Value, tok, v6) {
+			continue
+		}
+		score := scoreContentSubstr
+		if strings.EqualFold(cf.Value, tok) {
+			score = scoreContentExact
+		}
+		consider(score, "content:"+cf.Path, &MatchSnippet{Token: tok, Path: cf.Path, Snippet: snippetForToken(cf.Value, tok)})
+	}
 	if best == 0 {
 		return 0, "", nil, false
 	}
