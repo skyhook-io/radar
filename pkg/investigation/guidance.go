@@ -38,8 +38,8 @@ WHICH TOOL
 - Helm: list_helm_releases, get_helm_release.
 `
 
-const guidanceWriteTools = "- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node"
-const guidanceFixDiscipline = ". Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.\n"
+const guidanceWriteTools = "- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_gitops, manage_cronjob, manage_node"
+const guidanceFixDiscipline = ". Fix the diagnosed cause, ideally by undoing what broke it; stopgaps only if a fix must wait.\n"
 
 // GuidanceWriteRouting routes fixes to the write tools. A proxy in front of a
 // full server can hide its write tools (Radar Hub does for read-only
