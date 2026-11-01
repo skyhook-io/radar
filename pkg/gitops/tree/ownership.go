@@ -2,6 +2,7 @@ package tree
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 
@@ -46,6 +47,9 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 	// An inactive ReplicaSet maps to its owner, which stands in as the parent
 	// of Pods it still has, such as terminating ones, as in topology.
 	hiddenRevisions := map[resourceid.Ref]ResourceRef{}
+	// Topology groups Pods by app label, so a group can hold another
+	// workload's Pods; each group shows only the Pods this tree reached.
+	groupPods := map[string]map[string]bool{}
 	takeStep := func() bool {
 		if steps >= maxExpansionSteps {
 			truncated = true
@@ -77,6 +81,12 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 			if !b.canEmit(ref) {
 				omitted = true
 				return
+			}
+			if shownRef != ref {
+				if groupPods[id] == nil {
+					groupPods[id] = map[string]bool{}
+				}
+				groupPods[id][refKey(ref)] = true
 			}
 			if !retained {
 				// Keep topology's inactive-ReplicaSet display policy, while still
@@ -212,6 +222,9 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 			}
 		}
 	}
+	for id, reached := range groupPods {
+		nodes[id] = scopePodGroup(nodes[id], reached)
+	}
 	var warnings []string
 	if incomplete {
 		warnings = append(warnings, "Some generated resources could not be checked; the resource tree may be incomplete.")
@@ -229,6 +242,53 @@ func (b *Builder) addGenerated(ctx context.Context, view *ownership.View, roots 
 		warnings = append(warnings, limitedHelmProjectionWarning)
 	}
 	return warnings, omitted
+}
+
+// scopePodGroup narrows a display PodGroup to the reached Pods, recounting
+// its health the way topology counts a group.
+func scopePodGroup(node Node, reached map[string]bool) Node {
+	pods, _ := node.Data["pods"].([]map[string]any)
+	kept := make([]map[string]any, 0, len(reached))
+	healthy, degraded, unhealthy, restarts, issue := 0, 0, 0, int32(0), ""
+	for _, pod := range pods {
+		name, _ := pod["name"].(string)
+		namespace, _ := pod["namespace"].(string)
+		if !reached[refKey(ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})] {
+			continue
+		}
+		kept = append(kept, pod)
+		status, _ := pod["status"].(string)
+		switch topology.HealthStatus(status) {
+		case topology.StatusHealthy, topology.StatusNeutral:
+			healthy++
+		case topology.StatusDegraded:
+			degraded++
+		default:
+			unhealthy++
+		}
+		r, _ := pod["restarts"].(int32)
+		restarts += r
+		if podIssue, _ := pod["statusIssue"].(string); issue == "" {
+			issue = podIssue
+		}
+	}
+	if len(kept) == len(pods) {
+		return node
+	}
+	status := topology.StatusHealthy
+	if unhealthy > 0 {
+		status = topology.StatusUnhealthy
+	} else if degraded > 0 {
+		status = topology.StatusDegraded
+	}
+	data := maps.Clone(node.Data)
+	data["pods"], data["podCount"], data["healthy"], data["degraded"], data["unhealthy"] = kept, len(kept), healthy, degraded, unhealthy
+	data["totalRestarts"], data["statusIssue"] = restarts, issue
+	node.Data = data
+	node.Health = healthFromTopology(status)
+	node.HealthSource = healthSourceFor(node.Health, HealthSourceRadar)
+	node.TopologyStatus = healthToTopology(node.Health)
+	return node
 }
 
 func ownershipReadFailed(subject ownership.Subject) bool {

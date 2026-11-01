@@ -418,6 +418,63 @@ func TestGeneratedTreeShowsDisplayPodGroupForGroupedPods(t *testing.T) {
 	}
 }
 
+// Topology groups Pods by app label, so one group can mix workloads: the tree
+// shows only this application's Pods and their health.
+func TestDisplayPodGroupShowsOnlyThisTreesPods(t *testing.T) {
+	app := operatorApplication()
+	dep := ownedObject("apps", "Deployment", "monitoring", "web", nil, false)
+	rs := ownedObject("apps", "ReplicaSet", "monitoring", "web-1", &dep, true)
+	other := ownedObject("apps", "Deployment", "monitoring", "web-canary", nil, false)
+	otherRS := ownedObject("apps", "ReplicaSet", "monitoring", "web-canary-1", &other, true)
+	objects := []ownershiptest.Object{dep, rs, other, otherRS}
+	var details []map[string]any
+	for i := range 6 {
+		owner, name, status := &rs, fmt.Sprintf("web-1-%d", i), string(topology.StatusHealthy)
+		if i >= 4 {
+			owner, name, status = &otherRS, fmt.Sprintf("web-canary-1-%d", i), string(topology.StatusUnhealthy)
+		}
+		pod := ownedObject("", "Pod", "monitoring", name, owner, true)
+		objects = append(objects, pod)
+		details = append(details, map[string]any{"name": name, "namespace": "monitoring", "restarts": int32(1), "status": status, "statusIssue": ""})
+	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "deployment/monitoring/web", Kind: topology.KindDeployment, Name: "web", Data: map[string]any{"namespace": "monitoring", "apiVersion": "apps/v1"}},
+			{ID: "replicaset/monitoring/web-1", Kind: topology.KindReplicaSet, Name: "web-1", Data: map[string]any{"namespace": "monitoring", "apiVersion": "apps/v1"}},
+			{ID: "podgroup-monitoring-app-web", Kind: topology.KindPodGroup, Name: "web", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "monitoring", "podCount": 6, "unhealthy": 2, "healthy": 4, "pods": details}},
+		},
+		Edges: []topology.Edge{
+			{ID: "d-rs", Source: "deployment/monitoring/web", Target: "replicaset/monitoring/web-1", Type: topology.EdgeManages},
+			{ID: "rs-pg", Source: "replicaset/monitoring/web-1", Target: "podgroup-monitoring-app-web", Type: topology.EdgeManages},
+		},
+	}
+	unstructured.SetNestedSlice(app.Object, []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "monitoring", "name": "web"}}, "status", "resources")
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	got, _, err := NewBuilder(getter, topo).WithOwnership(ownershipSession(t, objects...)).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range got.Nodes {
+		if node.Ref.Kind != "PodGroup" {
+			continue
+		}
+		pods, _ := node.Data["pods"].([]map[string]any)
+		if node.Health != "Healthy" || node.Data["podCount"] != 4 || node.Data["unhealthy"] != 0 || node.Data["totalRestarts"] != int32(4) || len(pods) != 4 {
+			t.Fatalf("group kept another workload's Pods: health=%q data=%v", node.Health, node.Data)
+		}
+		for _, pod := range pods {
+			if strings.HasPrefix(pod["name"].(string), "web-canary") {
+				t.Fatalf("foreign Pod shown: %v", pod)
+			}
+		}
+		if topo.Nodes[2].Data["podCount"] != 6 {
+			t.Fatal("shared topology node mutated")
+		}
+		return
+	}
+	t.Fatalf("no PodGroup in %+v", got.Nodes)
+}
+
 // A declared Pod is its own resource even when topology draws it in a group:
 // the group's verdict must not replace the Pod's.
 func TestDeclaredPodsInDisplayPodGroupKeepTheirIdentity(t *testing.T) {
