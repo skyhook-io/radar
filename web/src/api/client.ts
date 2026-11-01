@@ -508,6 +508,7 @@ export interface DashboardTopFlow {
 
 export interface DashboardTrafficSummary {
   source: string;
+  // Endpoint pairs that exchanged traffic, named the way topFlows names them.
   flowCount: number;
   topFlows: DashboardTopFlow[];
 }

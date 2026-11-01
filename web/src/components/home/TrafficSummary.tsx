@@ -82,6 +82,8 @@ function InternetNode({ x, y }: { x: number; y: number }) {
 export interface FlowNode {
   key: string
   name: string
+  // The name to show: namespace-qualified when another endpoint shares the name.
+  label: string
   namespace?: string
   x: number
   y: number
@@ -107,7 +109,9 @@ export function layoutTopFlows(flows: DashboardTopFlow[]): { nodes: FlowNode[]; 
   const out = new Map<string, string[]>()
   const incoming = new Set<string>()
   const order: string[] = []
-  const pairs = flows.map(f => {
+  // Radar servers that predate per-pair summing can name one pair twice.
+  const pairs = new Map<string, { src: string; dst: string; connections: number; directionUnknown: boolean }>()
+  for (const f of flows) {
     const src = endpointKey(f.src, f.srcNamespace)
     const dst = endpointKey(f.dst, f.dstNamespace)
     for (const [k, name, namespace] of [[src, f.src, f.srcNamespace], [dst, f.dst, f.dstNamespace]] as const) {
@@ -116,12 +120,19 @@ export function layoutTopFlows(flows: DashboardTopFlow[]): { nodes: FlowNode[]; 
         order.push(k)
       }
     }
+    const pairKey = `${src}>${dst}`
+    const pair = pairs.get(pairKey)
+    if (pair) {
+      pair.connections += f.connections
+      pair.directionUnknown ||= f.directionUnknown === true
+      continue
+    }
+    pairs.set(pairKey, { src, dst, connections: f.connections, directionUnknown: f.directionUnknown === true })
     if (src !== dst) {
       out.set(src, [...(out.get(src) ?? []), dst])
       incoming.add(dst)
     }
-    return { src, dst, f }
-  })
+  }
 
   // Breadth-first from endpoints nothing sends to, then from whatever a cycle
   // left unplaced. First visit wins, so a cycle cannot push columns outward.
@@ -146,24 +157,25 @@ export function layoutTopFlows(flows: DashboardTopFlow[]): { nodes: FlowNode[]; 
   for (const k of order) byColumn[column.get(k)!].push(k)
 
   const xAt = (c: number) => columns === 1 ? VIEW_W / 2 : MARGIN + (c * (VIEW_W - 2 * MARGIN)) / (columns - 1)
+  const nameUses = new Map<string, number>()
+  for (const { name } of info.values()) nameUses.set(name, (nameUses.get(name) ?? 0) + 1)
   const nodes = new Map<string, FlowNode>()
   byColumn.forEach((keys, c) => {
     const gap = Math.min(40, (VIEW_H - 24) / keys.length)
     keys.forEach((k, i) => {
       const { name, namespace } = info.get(k)!
       const y = VIEW_H / 2 - 6 + (i - (keys.length - 1) / 2) * gap
-      nodes.set(k, { key: k, name, namespace, x: xAt(c), y, column: c, columns })
+      const label = namespace && nameUses.get(name)! > 1 ? `${namespace}/${name}` : name
+      nodes.set(k, { key: k, name, label, namespace, x: xAt(c), y, column: c, columns })
     })
   })
 
-  const edges = pairs
-    .filter(p => p.src !== p.dst)
-    .map(p => ({
-      from: nodes.get(p.src)!,
-      to: nodes.get(p.dst)!,
-      connections: p.f.connections,
-      directionUnknown: p.f.directionUnknown === true,
-    }))
+  const edges = [...pairs.values()].map(p => ({
+    from: nodes.get(p.src)!,
+    to: nodes.get(p.dst)!,
+    connections: p.connections,
+    directionUnknown: p.directionUnknown,
+  }))
   return { nodes: [...nodes.values()], edges }
 }
 
@@ -181,7 +193,11 @@ export function fitLabel(name: string, node: Pick<FlowNode, 'column' | 'columns'
   return name.length <= max ? name : `${name.slice(0, max - 1)}…`
 }
 
+const fullName = (n: FlowNode) => n.namespace ? `${n.namespace}/${n.name}` : n.name
+
 function edgePath(a: FlowNode, b: FlowNode): string {
+  // Traffic between replicas of one workload: a loop over its circle.
+  if (a === b) return `M ${a.x - 5} ${a.y - 4} C ${a.x - 26} ${a.y - 36}, ${a.x + 26} ${a.y - 36}, ${a.x + 5} ${a.y - NODE_R - 1}`
   if (b.x > a.x) return curve(a.x + NODE_R, a.y, b.x - NODE_R - 2, b.y)
   // Backward or within a column: bow out so the line clears the circles.
   const mx = (a.x + b.x) / 2 + (a.x === b.x ? 26 : 0)
@@ -189,42 +205,25 @@ function edgePath(a: FlowNode, b: FlowNode): string {
   return `M ${a.x} ${a.y - NODE_R} Q ${mx} ${my}, ${b.x} ${b.y - NODE_R - 2}`
 }
 
-// The summary names only the busiest few pairs. When there are more, a faint
-// unlabelled line leaves the top endpoint of each column, standing for the
-// traffic not drawn. It never moves.
-function OtherTraffic({ nodes }: { nodes: FlowNode[] }) {
-  const top = new Map<number, FlowNode>()
-  for (const n of nodes) {
-    const t = top.get(n.column)
-    if (!t || n.y < t.y) top.set(n.column, n)
-  }
-  return [...top.values()].map(n => (
-    <g key={n.key} data-testid="other-traffic" opacity={0.35}>
-      <path d={curve(n.x + 4.5, n.y - 4.5, n.x + 17, n.y - 22, 8)} fill="none" stroke="var(--traffic-flow)"
-        strokeWidth={1} strokeLinecap="round" strokeDasharray="1.2 2.4" />
-      <circle cx={n.x + 19.5} cy={n.y - 22} r={2.3} fill="var(--bg-surface)" stroke="var(--traffic-flow)" strokeWidth={0.8} />
-    </g>
-  ))
-}
-
-function ObservedTraffic({ flows, flowCount }: { flows: DashboardTopFlow[]; flowCount: number }) {
+function ObservedTraffic({ flows }: { flows: DashboardTopFlow[] }) {
   const arrow = `${useId()}-arrow`
   const { nodes, edges } = layoutTopFlows(flows)
   const maxConnections = Math.max(1, ...edges.map(e => e.connections))
   return (
     <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="w-full h-full" preserveAspectRatio="xMidYMid meet" role="img"
-      aria-label={flows.map(f => `${f.src} to ${f.dst}`).join(', ')}>
+      aria-label={edges.map(e => e.directionUnknown
+        ? `between ${fullName(e.from)} and ${fullName(e.to)}, direction unknown`
+        : `${fullName(e.from)} to ${fullName(e.to)}`).join('; ')}>
       <defs>
         <marker id={arrow} viewBox="0 0 8 6" refX="6" refY="3" markerWidth="6" markerHeight="4.5" markerUnits="userSpaceOnUse" orient="auto">
           <path d="M 0 0 L 8 3 L 0 6 z" fill="var(--traffic-flow)" />
         </marker>
       </defs>
-      {flowCount > flows.length && <OtherTraffic nodes={nodes} />}
-      {edges.map(e => {
+      {edges.map((e, i) => {
         const d = edgePath(e.from, e.to)
         const width = 1.2 + 2.4 * Math.sqrt(e.connections / maxConnections)
         return (
-          <g key={`${e.from.key}>${e.to.key}`}>
+          <g key={i}>
             <path d={d} fill="none" stroke="var(--traffic-flow)" strokeOpacity={0.22} strokeWidth={width + 1.2}
               strokeLinecap="round" markerEnd={e.directionUnknown ? undefined : `url(#${arrow})`} />
             {!e.directionUnknown && (
@@ -239,12 +238,12 @@ function ObservedTraffic({ flows, flowCount }: { flows: DashboardTopFlow[]; flow
         const lx = anchor === 'start' ? n.x - LABEL_OUTSET : anchor === 'end' ? n.x + LABEL_OUTSET : n.x
         return (
           <g key={n.key}>
-            <title>{n.namespace ? `${n.namespace}/${n.name}` : n.name}</title>
+            <title>{fullName(n)}</title>
             <circle cx={n.x} cy={n.y} r={NODE_R} fill="var(--bg-surface)" stroke="var(--traffic-flow)" strokeWidth={1} />
             <circle cx={n.x} cy={n.y} r={2} fill="var(--traffic-flow)" />
             <text x={lx} y={n.y + NODE_R + LABEL_SIZE + 1} textAnchor={anchor} fontSize={LABEL_SIZE}
               fontFamily="var(--font-mono)" fill="var(--text-secondary)">
-              {fitLabel(n.name, n)}
+              {fitLabel(n.label, n)}
             </text>
           </g>
         )
@@ -285,7 +284,7 @@ export function TrafficSummary({ data, onNavigate }: TrafficSummaryProps) {
         <span>&middot; {source} &middot; {data.flowCount} {data.flowCount === 1 ? 'flow' : 'flows'}</span>
       </span>
     )
-    caption = `The busiest paths ${source} saw in the last 5 minutes.`
+    caption = `The busiest paths ${source} reports right now.`
   }
 
   return (
@@ -293,7 +292,7 @@ export function TrafficSummary({ data, onNavigate }: TrafficSummaryProps) {
       icon={Activity}
       title="Live Traffic"
       fact={fact}
-      drawing={observed ? <ObservedTraffic flows={data.topFlows} flowCount={data.flowCount} /> : <IllustrativeTraffic />}
+      drawing={observed ? <ObservedTraffic flows={data.topFlows} /> : <IllustrativeTraffic />}
       caption={caption}
       footer="Open Live Traffic"
       onNavigate={onNavigate}

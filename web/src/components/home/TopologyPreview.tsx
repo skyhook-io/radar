@@ -9,10 +9,9 @@ interface TopologyPreviewProps {
   onNavigate: () => void
 }
 
-// One node drawn like a Topology card: surface, border, a health bar on the
-// left, the kind as a caption and a bar standing in for the name. Topology
-// marks kind with an icon, not a color. Every bar is healthy: a made-up problem
-// next to this cluster's real counts would read as one of its own.
+// One node drawn like a Topology card: surface, border, the status bar on the
+// left, the kind as a caption and a bar standing in for the name. The bar is
+// neutral: health drawn here would read as this cluster's.
 function SchematicNode({ x, y, w = 46, label, dashed }: {
   x: number; y: number; w?: number; label: string; dashed?: boolean
 }) {
@@ -20,7 +19,7 @@ function SchematicNode({ x, y, w = 46, label, dashed }: {
     <g>
       <rect x={x} y={y} width={w} height={17} rx={3.5} fill="var(--bg-surface)"
         stroke="var(--border-light)" strokeWidth={0.7} strokeDasharray={dashed ? '2 1.5' : undefined} />
-      <rect x={x} y={y + 2.5} width={1.8} height={12} rx={0.9} fill="var(--color-success)" />
+      <rect x={x} y={y + 2.5} width={1.8} height={12} rx={0.9} fill="var(--text-tertiary)" opacity={0.6} />
       <rect x={x + 4.8} y={y + 4.4} width={3.6} height={3.6} rx={0.9} fill="var(--text-tertiary)" opacity={0.55} />
       <text x={x + 10.5} y={y + 7.8} fontSize={4.6} fontWeight={600} letterSpacing={0.3} fill="var(--text-tertiary)">{label}</text>
       <rect x={x + 4.8} y={y + 10.8} width={w * 0.55} height={2.4} rx={1.2} fill="var(--text-tertiary)" opacity={0.35} />

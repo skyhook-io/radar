@@ -244,7 +244,9 @@ type DashboardChange struct {
 }
 
 type DashboardTrafficSummary struct {
-	Source    string             `json:"source"`
+	Source string `json:"source"`
+	// FlowCount is how many endpoint pairs exchanged traffic, counted the way
+	// TopFlows names them.
 	FlowCount int                `json:"flowCount"`
 	TopFlows  []DashboardTopFlow `json:"topFlows"`
 }
@@ -1248,19 +1250,17 @@ func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []st
 		flows = kept
 	}
 
-	aggregated := traffic.AggregateFlows(flows)
-	topFlows := topDashboardFlows(aggregated, 3)
-
+	pairs := dashboardFlowPairs(traffic.AggregateFlows(flows))
 	return &DashboardTrafficSummary{
 		Source:    sourceName,
-		FlowCount: len(aggregated),
-		TopFlows:  topFlows,
+		FlowCount: len(pairs),
+		TopFlows:  pairs[:min(len(pairs), 3)],
 	}
 }
 
-// topDashboardFlows sums aggregated flows by the endpoint pair the dashboard
-// names and returns the n pairs with the most connections.
-func topDashboardFlows(aggregated []traffic.AggregatedFlow, n int) []DashboardTopFlow {
+// dashboardFlowPairs sums aggregated flows by the endpoint pair the dashboard
+// names, busiest first.
+func dashboardFlowPairs(aggregated []traffic.AggregatedFlow) []DashboardTopFlow {
 	type pairKey struct{ srcNS, src, dstNS, dst string }
 	byPair := make(map[pairKey]*DashboardTopFlow)
 	order := make([]pairKey, 0, len(aggregated))
@@ -1291,7 +1291,7 @@ func topDashboardFlows(aggregated []traffic.AggregatedFlow, n int) []DashboardTo
 	sort.SliceStable(pairs, func(i, j int) bool {
 		return pairs[i].Connections > pairs[j].Connections
 	})
-	return pairs[:min(len(pairs), n)]
+	return pairs
 }
 
 func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {

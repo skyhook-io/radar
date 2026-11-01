@@ -59,8 +59,7 @@ describe('TrafficSummary', () => {
     expect(container.querySelector('.animate-ping')).not.toBeNull()
     expect(labels().sort()).toEqual(['cart', 'catalog', 'frontend', 'redis'])
     expect(container.querySelectorAll('[data-testid="traffic-dash"]')).toHaveLength(3)
-    expect(container.textContent).toContain('The busiest paths Hubble saw in the last 5 minutes.')
-    expect(container.querySelectorAll('[data-testid="other-traffic"]').length).toBeGreaterThan(0)
+    expect(container.textContent).toContain('The busiest paths Hubble reports right now.')
   })
 
   it('truncates a long endpoint name and keeps the full name in its title', () => {
@@ -71,13 +70,21 @@ describe('TrafficSummary', () => {
     expect(shown.length).toBeLessThan(long.length)
     expect([...container.querySelectorAll('svg title')].map(t => t.textContent)).toContain(`billing/${long}`)
     expect(labels()).toContain('world')
-    // Every flow is drawn, so nothing stands for traffic left out.
-    expect(container.querySelector('[data-testid="other-traffic"]')).toBeNull()
   })
 
-  it('does not animate a flow whose direction is unknown', () => {
+  it('does not animate or announce a direction it does not know', () => {
     render({ source: 'caretta', flowCount: 1, topFlows: [{ src: 'a', dst: 'b', connections: 1, directionUnknown: true }] })
     expect(container.querySelector('[data-testid="traffic-dash"]')).toBeNull()
+    expect(container.querySelector('svg[role="img"]')!.getAttribute('aria-label')).toBe('between a and b, direction unknown')
+  })
+
+  it('qualifies a name shared by two namespaces', () => {
+    render({ source: 'hubble', flowCount: 2, topFlows: [
+      { src: 'web', srcNamespace: 'a', dst: 'db', dstNamespace: 'a', connections: 2 },
+      { src: 'web', srcNamespace: 'b', dst: 'db', dstNamespace: 'a', connections: 1 },
+    ] })
+    expect(labels().sort()).toEqual(['a/web', 'b/web', 'db'])
+    expect(container.querySelector('svg[role="img"]')!.getAttribute('aria-label')).toBe('a/web to a/db; b/web to a/db')
   })
 
   it('opens Live Traffic from anywhere on the card', () => {
@@ -111,10 +118,20 @@ describe('layoutTopFlows', () => {
     expect(cycle.edges).toHaveLength(2)
   })
 
-  it('draws no line for a flow from an endpoint to itself', () => {
+  it('keeps a flow from an endpoint to itself', () => {
     const { nodes, edges } = layoutTopFlows([{ src: 'a', dst: 'a', connections: 1 }])
     expect(nodes).toHaveLength(1)
-    expect(edges).toHaveLength(0)
+    expect(edges).toHaveLength(1)
+    expect(edges[0].from).toBe(edges[0].to)
+  })
+
+  it('sums a pair an older server names twice', () => {
+    const { edges } = layoutTopFlows([
+      { src: 'a', dst: 'b', connections: 3 },
+      { src: 'a', dst: 'b', connections: 2 },
+    ])
+    expect(edges).toHaveLength(1)
+    expect(edges[0].connections).toBe(5)
   })
 })
 

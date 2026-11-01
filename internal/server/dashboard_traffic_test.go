@@ -7,7 +7,7 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
-func TestTopDashboardFlowsSumsPairsAndKeepsTopN(t *testing.T) {
+func TestDashboardFlowPairsSumsByPairBusiestFirst(t *testing.T) {
 	ep := func(ns, name, workload string) traffic.Endpoint {
 		return traffic.Endpoint{Namespace: ns, Name: name, Workload: workload}
 	}
@@ -21,17 +21,18 @@ func TestTopDashboardFlowsSumsPairsAndKeepsTopN(t *testing.T) {
 		{Source: ep("shop", "api-1", "api"), Destination: ep("shop", "db-0", "db"), Connections: 1},
 	}
 
-	got := topDashboardFlows(aggregated, 3)
+	got := dashboardFlowPairs(aggregated)
 	want := []DashboardTopFlow{
 		{Src: "web", SrcNamespace: "shop", Dst: "api", DstNamespace: "shop", Connections: 7, DirectionUnknown: true},
 		{Src: "web", SrcNamespace: "other", Dst: "api", DstNamespace: "other", Connections: 6},
 		{Src: "world", Dst: "web", DstNamespace: "shop", Connections: 2},
+		{Src: "api", SrcNamespace: "shop", Dst: "db", DstNamespace: "shop", Connections: 1},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("topDashboardFlows:\n got %+v\nwant %+v", got, want)
+		t.Fatalf("dashboardFlowPairs:\n got %+v\nwant %+v", got, want)
 	}
 
-	if got := topDashboardFlows(nil, 3); len(got) != 0 {
-		t.Fatalf("no flows: got %+v", got)
+	if got := dashboardFlowPairs(nil); got == nil || len(got) != 0 {
+		t.Fatalf("no flows: want an empty list, got %#v", got)
 	}
 }

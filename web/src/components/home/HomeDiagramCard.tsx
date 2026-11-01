@@ -5,11 +5,8 @@ import { ArrowRight } from 'lucide-react'
 interface HomeDiagramCardProps {
   icon: LucideIcon
   title: string
-  // One fact about this cluster, right-aligned in the header.
   fact?: ReactNode
-  // The picture of the view behind the card. It fills the body.
   drawing: ReactNode
-  // One sentence saying what the view shows, under the drawing.
   caption: ReactNode
   footer: string
   onNavigate: () => void
