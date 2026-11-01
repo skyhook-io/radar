@@ -117,17 +117,52 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 
 | Operation | What it does |
 |---|---|
-| **Sync…** | Opens a dialog with prune / dry-run / apply-only / force / replace / server-side apply / sync-options. Force-only routes via `syncStrategy.hook.force` so PreSync / PostSync hooks still run; ApplyOnly uses `syncStrategy.apply` |
+| **Sync…** | Opens a dialog with prune / dry-run / apply-only / force / replace / server-side apply. Prune starts off. Replace and Server-side apply start from the Application's `syncPolicy.syncOptions`; changing one keeps the Application's other options, listed read-only under **Also used for this sync**. Force-only routes via `syncStrategy.hook.force` so PreSync / PostSync hooks still run; ApplyOnly uses `syncStrategy.apply` |
 | **Refresh** | Re-fetches the source repo |
 | **Hard refresh** | Sets `RefreshType=hard` to bypass repo-cache |
 | **Terminate** | Cancels an in-flight operation |
-| **Suspend / Enable auto-sync** | Toggles automated sync; remembers the prior `prune` / `selfHeal` settings on suspend so resume restores them. Resuming an app that still has an `automated` block (switched off in place with `enabled: false`, or already on) clears the flag and keeps that block's settings |
-| **Rollback** | Pick a prior history entry by ID (Argo numbers history from 0). Written the way argocd-server writes it: a sync operation pinned to that entry's revision(s) and source(s), apply strategy (hooks don't run), the app's sync options, Prune / DryRun off unless chosen. Refused with 409 while auto-sync is enabled; `automated.enabled: false` counts as off only on Argo CD 3.x controllers (2.x treats any automated block as on), while Radar’s suspend removes the block and works on both |
+| **Suspend / Enable auto-sync** | Suspend saves the whole `automated` block and removes it; Enable restores it. See [suspend and resume](#suspend-and-resume) |
+| **Rollback** | Pick a prior history entry by ID (Argo numbers history from 0). Written the way argocd-server writes it: a sync operation pinned to that entry's revision(s) and source(s), apply strategy (hooks don't run), the app's sync options and no retry strategy, Prune / DryRun off unless chosen. Refused with 409 while auto-sync is enabled, as Argo CD refuses it; `automated.enabled: false` counts as off only on Argo CD 3.x controllers (2.x treats any automated block as on), while Radar's suspend removes the block and works on both |
 | **Selective sync** | From the Topology tab, mark individual resources and sync only those |
 
 On Argo CD before 2.12, rolling back across a single-source/multi-source change or to a multi-source entry can deploy the wrong revisions or render nothing; with prune, it can delete resources. Radar cannot detect the controller version; the rollback confirmation warns when either the current Application uses `spec.sources` (even one source) or the history entry is multi-source. History exposes this as `rollbackMultiSourceWarning`; hosts pass it to `RollbackDialog.multiSourceWarning`. This remains a warning, not a refusal.
 
 Rollback and enabling auto-sync on an Application with `automated.enabled: false` require affirmative `argoRollbackSync` support from the connected Radar. While capabilities load, the controls say “Checking this cluster's Radar…”. If capabilities fail, they say support could not be checked and ask you to refresh. Only a known absent flag shows the upgrade note. Confirmation/execution rechecks support; other features keep their existing loading behavior.
+
+### How Radar performs Argo actions
+
+Radar writes Argo CD operations straight into the Application through the Kubernetes API, as the signed-in user (impersonated when auth is on, including Radar Cloud), the way Argo CD core and `kubectl` do. It doesn't go through argocd-server, so it needs no Argo CD account or token and works on core installs. Kubernetes RBAC decides who may act: `get` and `patch` on `applications.argoproj.io`, which also allows editing the Application's spec, its project included.
+
+**Still enforced**, by the Argo CD application controller when it runs the operation:
+
+- **Sync windows** (controller enforcement since 2.11). A sync a window denies isn't refused: it waits as Running, shown as a `SyncWindowBlocked` issue, and runs once allowed.
+- **AppProject limits** for the project the Application names: allowed destinations and the resource allow and deny lists. Source-repository restrictions apply to the spec, not to a source carried in the operation.
+- **Source integrity** rules for Git sources the project's policy covers.
+- **Controller events and `status.history`.**
+
+**Not enforced**, because they live in argocd-server:
+
+- **Argo CD RBAC**: local users, SSO groups and project roles.
+- **argocd-server's request checks**: refusing a sync a window blocks right now, refusing local manifests while auto-sync is on, the server-wide switch that disables `Replace`, and resolving revisions through repo-server when the request arrives.
+- **argocd-server's audit event** naming the user. The Kubernetes audit log records Radar's write under the impersonated user instead.
+
+How each operation is written:
+
+- **One conditional write, like argocd-server's `SetAppOperation`.** Radar refuses with 409 while another operation is queued or running. Otherwise one write installs the operation and clears the previous one's finished state, so a manual sync can't inherit an earlier automated sync's state. The write is conditional on `resourceVersion`; on a conflict Radar re-reads and repeats every check, up to three times.
+- **Prune is off** unless asked for, in the dialog, REST and MCP, as in Argo CD's UI and CLI.
+- **Sync options are inherited.** A sync that names none uses the Application's `syncPolicy.syncOptions`; a list replaces them for that sync (`[]` means none). Syncs also carry the Application's `syncPolicy.retry`.
+- **An omitted revision deploys the commit Argo last compared** (`status.sync.revision(s)`), when that comparison was for the Application's current source(s). Otherwise the controller resolves the target when the sync runs. Refresh first if you need a newer commit. Radar's resource dry-run pins the same way, so it checks what the selective sync deploys. A hydrated Application (`spec.sourceHydrator`) syncs the hydrator's sync source, which Radar names in the operation, and is never pinned.
+- **Revision overrides** are single-source only, and refused (409) while auto-sync is on unless it's a dry run, since auto-sync would revert them. The target compared against is the source's `targetRevision` (default `HEAD`), or `syncSource.targetBranch` for a hydrated Application.
+- **A queued sync** (behind a sync window, say) deploys the source(s) the Application had when you asked; later source edits don't update it. Terminating it shows Terminating until a window allows the controller to act; what was already applied stays.
+- **Attribution.** `operation.initiatedBy.username` is the user's email when Radar Cloud forwards one, otherwise the authenticated username, or `radar` without per-user auth; `operation.info` adds `Initiated via: Radar`. Anyone who may patch the Application can write any name there; the Kubernetes audit log is the authoritative record.
+
+**Argo CD before 2.12:** a multi-source controller doesn't reliably honor the sources and revisions an operation carries; it may sync the spec's current ones. Radar can't detect the controller version.
+
+#### Suspend and resume
+
+- **Suspend** saves the whole `automated` block (`prune`, `selfHeal`, `allowEmpty`, …) in the `radarhq.io/suspended-automated` annotation and removes it. Suspending an Application whose auto-sync is already off changes nothing, so the saved settings can't be overwritten.
+- **Enable** restores the newest settings it finds: a block switched off in place (`automated.enabled: false`, which it keeps minus `enabled`), else the saved block. An Application Radar never suspended gets `prune` off and `selfHeal` on (Argo's UI defaults self-heal off).
+- An Application generated by an ApplicationSet, or managed from Git by a parent with self-heal, gets its `syncPolicy` reconciled back, so a suspend lasts only until then. Suspend those in the template or in Git.
 
 ### Flux
 
@@ -351,8 +386,10 @@ The classification is `evaluateGitOpsWriteGuard` in k8s-ui (`utils/gitops-write-
 
 `manage_gitops` MCP tool exposes the same actions to AI agents with per-action input validation:
 
-- Argo: `sync`, `suspend`, `resume`
-- Flux: `reconcile`, `suspend`, `resume`
+- Argo: `sync`, `refresh`, `terminate`, `rollback`, `suspend`, `resume`
+- Flux: `reconcile`, `sync-with-source`, `suspend`, `resume`
+
+Argo `sync` doesn't prune unless `prune: true`, and uses the Application's own sync options unless `sync_options` names others. See [How Radar performs Argo actions](#how-radar-performs-argo-actions).
 
 `get_resource` Summary carries lifecycle signal (`terminating`, `finalizers`) so AI agents can distinguish a zombie from a live resource and won't suggest `Sync` on something pending deletion.
 
@@ -375,7 +412,7 @@ Fixtures cover healthy + drifted + broken-sync + broken-path + manual-sync + sus
 
 Reading status only needs the default ClusterRole's read access on `argoproj.io` / `*.toolkit.fluxcd.io` (enabled by default in the Helm chart's `rbac.crdGroups.argo` / `.flux`).
 
-Triggering Sync / Reconcile / Suspend / Rollback needs `patch` on the parent CRDs. The chart enables the right verbs when `rbac.helm: true` is set, or you can scope it more tightly via `rbac.additionalRules`.
+Triggering Sync / Reconcile / Suspend / Rollback needs `get` and `patch` on the parent CRDs. The chart enables the right verbs when `rbac.helm: true` is set, or you can scope it more tightly via `rbac.additionalRules`. Argo CD's own RBAC is not consulted; see [How Radar performs Argo actions](#how-radar-performs-argo-actions).
 
 The lifecycle controller-health probe (Home dashboard `GitOps Controllers` card, finalizer-owner attribution in lifecycle Issues) reads pods in `argocd` and `flux-system`. Operators with no access there still get the chip and the basic Issue; the controller-status enrichment is omitted gracefully.
 
