@@ -83,6 +83,12 @@ func NewHandler() http.Handler {
 	})
 }
 
+func NewHandlerWithoutApplicationEvidence() http.Handler {
+	server := newFullServer()
+	excludeApplicationEvidence(server)
+	return handlerForServer(server)
+}
+
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler {
 	return handlerForServer(newServer(false, false, serverInstructions(false)))
@@ -92,13 +98,18 @@ func NewReadOnlyHandler() http.Handler {
 // preview. Removing it here enforces the boundary for every agent client.
 func newApplyServer() *mcpsdk.Server {
 	server := newServer(true, false, investigation.GeneralGuidance(true))
-	server.RemoveTools("delete_resource", "collect_application_evidence")
+	server.RemoveTools("delete_resource")
+	excludeApplicationEvidence(server)
+	return server
+}
+
+func excludeApplicationEvidence(server *mcpsdk.Server) {
+	server.RemoveTools("collect_application_evidence")
 	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
 			return next(context.WithValue(ctx, applicationActionsDisabledKey{}, true), method, req)
 		}
 	})
-	return server
 }
 
 // NewApplyHandler is the built-in remediation transport for built-in agents.

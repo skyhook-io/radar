@@ -15,13 +15,14 @@ import (
 )
 
 func TestRuntimeCatalogUsesRequestEligibility(t *testing.T) {
+	enableExecToolsForTest(t)
 	defer k8s.SetTestLocalMode()()
 	t.Setenv("RADAR_CLOUD_MODE", "false")
-	handler := NewHandler()
 	existing := listRegisteredToolsWith(t, true)
 	for _, tc := range []struct {
 		name                                                     string
 		remote, authenticated, cloud, inCluster, tunnel, allowed bool
+		disableCollection                                        bool
 	}{
 		{name: "local", allowed: true},
 		{name: "remote", remote: true},
@@ -30,8 +31,13 @@ func TestRuntimeCatalogUsesRequestEligibility(t *testing.T) {
 		{name: "in-cluster", inCluster: true},
 		{name: "cloud-tunnel", tunnel: true},
 		{name: "local-after-denials", allowed: true},
+		{name: "collection-disabled-local-request", disableCollection: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			handler := NewHandler()
+			if tc.disableCollection {
+				handler = NewHandlerWithoutApplicationEvidence()
+			}
 			mode := "false"
 			if tc.cloud {
 				mode = "true"

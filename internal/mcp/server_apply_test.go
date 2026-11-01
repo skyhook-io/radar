@@ -8,9 +8,11 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
+	enableExecToolsForTest(t)
 	httpServer := httptest.NewServer(NewApplyHandler())
 	defer httpServer.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -21,7 +23,7 @@ func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
-	if got := session.InitializeResult().Instructions; got != serverInstructions(true) {
+	if got := session.InitializeResult().Instructions; got != investigation.GeneralGuidance(true) {
 		t.Fatalf("restricted catalog lost server guidance: got %q", got)
 	}
 	names := map[string]bool{}
@@ -39,11 +41,13 @@ func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 			break
 		}
 	}
-	if names["collect_application_evidence"] {
-		t.Fatal("operator-only tool listed on apply handler")
+	for _, name := range []string{"collect_application_evidence", "exec_pod", "delete_resource"} {
+		if names[name] {
+			t.Fatalf("%s listed on apply handler", name)
+		}
 	}
 	for _, tool := range listRegisteredToolsWith(t, true) {
-		if tool.Name != "collect_application_evidence" && !names[tool.Name] {
+		if tool.Name != "collect_application_evidence" && tool.Name != "exec_pod" && tool.Name != "delete_resource" && !names[tool.Name] {
 			t.Errorf("existing tool %s missing from apply handler", tool.Name)
 		}
 	}
