@@ -150,7 +150,7 @@ func TestInClusterParam_SelfExplanatory(t *testing.T) {
 	if found == "" {
 		t.Fatal("diagnoseInput must have an in_cluster field with a jsonschema description")
 	}
-	for _, kw := range []string{"INSIDE the cluster", "pod", "confidence:indirect", "create"} {
+	for _, kw := range []string{"inside the cluster", "pod", "confidence:indirect", "create"} {
 		if !strings.Contains(found, kw) {
 			t.Errorf("in_cluster schema should mention %q so an agent knows what/when; got: %s", kw, found)
 		}

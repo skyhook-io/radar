@@ -590,7 +590,7 @@ func TestDiagnoseContractMatchesServerMode(t *testing.T) {
 	if strict.Annotations == nil || !strict.Annotations.ReadOnlyHint {
 		t.Fatal("read-only MCP diagnose must advertise readOnlyHint")
 	}
-	if strings.Contains(strict.Description, "Read-only EXCEPT") || !strings.Contains(strict.Description, "strict read-only endpoint") {
+	if strings.Contains(strict.Description, "Read-only except") || !strings.Contains(strict.Description, "strict read-only endpoint") {
 		t.Fatalf("read-only diagnose description does not match its contract: %q", strict.Description)
 	}
 }
