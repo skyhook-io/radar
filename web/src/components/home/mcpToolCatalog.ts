@@ -67,7 +67,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     desc: 'Topology graph of relationships between resources — Services, workloads, Pods, Ingresses, owners. Use traffic view for network flow or resources view for ownership hierarchy.',
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
-      { arg: 'view', desc: 'traffic or resources' },
+      { arg: 'view', desc: 'resources (default) or traffic' },
       { arg: 'format', desc: 'graph (default) or summary (text)' },
     ],
   },
@@ -297,7 +297,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     name: 'get_workload_logs',
     desc: 'Aggregated logs across all pods of a workload. Without grep, filters for diagnostic relevance; grep returns only matching timestamp-prefixed lines instead.',
     params: [
-      { arg: 'kind', desc: 'deployment (default), statefulset, daemonset, job, or workflow' },
+      { arg: 'kind', desc: 'deployment (default), statefulset, daemonset, rollout, job, or workflow' },
       { arg: 'namespace', required: true, desc: 'workload namespace' },
       { arg: 'name', required: true, desc: 'workload name' },
       { arg: 'container', desc: 'specific container (defaults to all)' },
@@ -356,13 +356,13 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'manage_gitops',
     write: true,
-    desc: 'Operate on GitOps resources. ArgoCD: sync, refresh, terminate, rollback, suspend, resume. FluxCD: reconcile, sync-with-source, suspend, resume.',
+    desc: 'Operate on GitOps resources. Argo CD: sync, refresh, terminate, rollback, suspend, resume. Flux: reconcile, sync-with-source, suspend, resume.',
     params: [
       { arg: 'action', required: true, desc: 'sync/reconcile, refresh, terminate, rollback, suspend, or resume' },
       { arg: 'tool', required: true, desc: 'argocd or fluxcd' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
-      { arg: 'kind', desc: 'FluxCD resource kind (e.g. kustomization, helmrelease)' },
+      { arg: 'kind', desc: 'Flux resource kind (e.g. kustomization, helmrelease)' },
     ],
   },
   {
