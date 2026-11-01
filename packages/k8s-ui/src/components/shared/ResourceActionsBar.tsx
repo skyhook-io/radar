@@ -931,7 +931,7 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
   return (
     <>
       {onSync && (
-        <Tooltip preserveWords content={disabledReasons?.sync || 'Sync application'} delay={150}>
+        <Tooltip preserveWords content={disabledReasons?.sync || "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
           {disabledReasons?.sync && <span id={`${descriptionId}-sync`} className="sr-only">{disabledReasons.sync}</span>}
           <button
             onClick={() => !disabledReasons?.sync && onSync({

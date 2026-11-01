@@ -7220,7 +7220,7 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
   useRequestContext: useArgoSyncInheritance,
   getBody: argoSyncRequestBody,
   errorMessage: "Failed to trigger sync",
-  successMessage: "Sync initiated",
+  getSuccessMessage: (_data, v) => (v.dryRun ? "Dry run started" : "Sync initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
 
