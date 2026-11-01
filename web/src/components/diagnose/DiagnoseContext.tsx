@@ -40,6 +40,7 @@ import {
   type ExecutionProfile,
 } from "../../api/diagnose";
 import { isQuestionOnly, runTargetKey } from "./target";
+import { isExampleInvestigation } from "./exampleInvestigation";
 import { knownKindForPluralWithGroup } from "../../utils/navigation";
 
 export interface Target {
@@ -755,7 +756,11 @@ function RoutedDiagnoseProvider({
         : undefined;
       if (focusedID && listedFocusedRun) {
         unavailableRunIDsRef.current.delete(focusedID);
-      } else if (focusedID && !unavailableRunIDsRef.current.has(focusedID)) {
+      } else if (
+        focusedID &&
+        !isExampleInvestigation(focusedID) &&
+        !unavailableRunIDsRef.current.has(focusedID)
+      ) {
         try {
           // A stable deep link can target a retained run older than the bounded
           // history page. Refresh it directly too: its status and capabilities
@@ -960,6 +965,7 @@ function RoutedDiagnoseProvider({
       setView("investigation");
       setOpen(true);
       writeFocusedRunID(id, true);
+      if (isExampleInvestigation(id)) return;
       // A Fleet issue can point at a retained automatic run older than the
       // bounded history page. Resolve the exact id instead of waiting for list.
       getRun(id)
@@ -1054,6 +1060,7 @@ function RoutedDiagnoseProvider({
     setActiveRunId(id);
     setView("investigation");
     setOpen(true);
+    if (isExampleInvestigation(id)) return;
     getRun(id)
       .then(updateRunSummary)
       .catch((error) => {
