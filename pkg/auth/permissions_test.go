@@ -478,8 +478,11 @@ func TestSubjectCanI_WithGroups(t *testing.T) {
 
 	groups := []string{"devs", "admins"}
 	SubjectCanI(context.Background(), client, "alice", groups, "default", "", "pods", "list")
+	if len(groups) != 2 {
+		t.Fatalf("mutated caller groups: %v", groups)
+	}
 
-	if len(capturedGroups) != 2 || capturedGroups[0] != "devs" || capturedGroups[1] != "admins" {
+	if len(capturedGroups) != 3 || capturedGroups[0] != "devs" || capturedGroups[1] != "admins" || capturedGroups[2] != "system:authenticated" {
 		t.Errorf("groups not passed to SAR: got %v", capturedGroups)
 	}
 }

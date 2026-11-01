@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { GitOpsInsight } from '../../../types'
 import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
@@ -52,4 +55,24 @@ describe('GitOpsActivityInsightView rollback', () => {
       expect(render(insight('Manual'), null)).not.toContain('Argo CD rollbacks need')
     })
   })
+})
+
+// Without patch access the user can't disable auto-sync either, so the role
+// reason comes before the auto-sync advice.
+it('names a role denial ahead of the auto-sync advice on Rollback', async () => {
+  vi.useFakeTimers()
+  const element = document.createElement('div')
+  document.body.appendChild(element)
+  const root = createRoot(element)
+  const role = "Your role can't patch Argo CD Applications in argocd."
+  await act(async () => { root.render(<GitOpsActivityInsightView insight={insight('Auto · prune')} onRollback={() => {}} rollbackDisabledReason={role} />) })
+  const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Rollback')!
+  await act(async () => {
+    button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    vi.advanceTimersByTime(1000)
+  })
+  expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(role)
+  await act(async () => root.unmount())
+  element.remove()
+  vi.useRealTimers()
 })

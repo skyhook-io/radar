@@ -96,9 +96,31 @@ namespace RoleBinding does not restrict an existing cluster-wide default binding
 so disable the defaults first. Product organization roles and saved-investigation
 sharing are separate concerns; this chart change does not redefine them.
 
+## Write add-on
+
+A separate, owner-only add-on grants writes that Radar's integration actions need
+and stock vendor installs don't give the built-in roles. Its
+[reviewed write table](../deploy/helm/radar/files/integration-write-baseline.yaml)
+uses the read table's fields plus `verbs`, `capability` and `actions` (every HTTP
+route and MCP tool action that uses the row, including indirect targets). Only
+`grant` rows render; today that is `get`/`patch` on Argo CD Applications, bound to
+`radar:owner` and `cloud:owner`. Flux and Argo Rollouts writes are `existing`
+(vendor aggregation already grants them), and Velero `downloadrequests` are withheld.
+Each capability has one switch, `cloud.defaultRbac.integrationWrite.<capability>.owner`
+(`false | true | auto`); gitops defaults to `false` for every owner role, including
+when the key is absent on `--reuse-values`. The default owner role is `admin` bound
+cluster-wide, deliberately without cluster-scoped writes; Application patch access
+lets the Argo CD controller create cluster-scoped resources (the built-in `default`
+AppProject allows them), widening that boundary. For a `cluster-admin` owner it
+adds nothing. Set `true` to opt in; `auto` remains available to enable only when
+`ownerClusterRole` is named `admin` or `cluster-admin`. Tests fail when a new integration
+action route or MCP tool action has no row. The
+[chart README](../deploy/helm/radar/README.md#cloud-owner-integration-writes)
+describes what the Applications grant allows and how upgrades apply it.
+
 ## Rollout and verification
 
-The baseline is default-on for enabled default tiers. Upgrading an installed chart
+The read baseline is default-on for enabled default tiers. Upgrading an installed chart
 therefore expands deliberate read access, including inline configuration. Missing
 `integrationRead` maps/keys on `helm upgrade --reuse-values` follow the declared
 default; explicit `false` is preserved. Review/set opt-outs before the upgrade.

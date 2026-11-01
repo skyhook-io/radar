@@ -36,6 +36,11 @@ don't assume every discoverable resource has a CRD object.
   collection grant or renderer is not permission approval. See
   [the default read policy](cloud-rbac-baseline.md). Coverage tests compare the
   policy with backend catalogs and curated frontend identities.
+- [ ] If the integration adds actions, list each HTTP route and MCP tool action in
+  `deploy/helm/radar/files/integration-write-baseline.yaml` under a row with a
+  grant, existing, or withhold decision for every resource and verb it writes,
+  including indirect targets. Tests fail on an unlisted action route or MCP tool
+  action, not on a missing resource or verb.
 - [ ] Keep namespace filtering, per-user authorization and context-switch behavior
   intact. Missing, not-yet-watched and forbidden are not interchangeable. If adding
   a typed `ResourcePermissions` field, follow `capabilities_alignment_test.go` in

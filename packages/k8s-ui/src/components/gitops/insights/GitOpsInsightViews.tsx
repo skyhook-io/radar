@@ -1641,6 +1641,7 @@ interface GitOpsActivityInsightViewProps {
   // is true, history rows with an ID expose a Rollback button that fires this
   // with the target entry. The consumer is responsible for the confirmation
   // dialog + the actual mutation.
+  rollbackDisabledReason?: string
   onRollback?: (item: GitOpsHistoryItem) => void
   // Set when the connected Radar is too old to roll back: every Rollback
   // renders disabled, with the upgrade note above the history.
@@ -1648,7 +1649,7 @@ interface GitOpsActivityInsightViewProps {
   rollbackBlockedReason?: string
 }
 
-export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
+export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackDisabledReason, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <PaneLoader label="Loading GitOps activity…" className="h-full" />
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
@@ -1673,11 +1674,12 @@ export function GitOpsActivityInsightView({ insight, error, onRollback, rollback
         <HistoryRows
           items={insight.history ?? []}
           canRollback={canRollback}
+          // A newer Radar comes first, then the role: without patch access, disabling auto-sync is not an option either.
           rollbackBlockedReason={rollbackBlockedReason || (upgrade
             ? radarUpgradeNoteText(upgrade)
-            : autoSyncBlocksRollback
+            : rollbackDisabledReason || (autoSyncBlocksRollback
               ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.'
-              : undefined)}
+              : undefined))}
           onRollback={onRollback}
         />
       </section>

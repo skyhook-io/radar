@@ -30,6 +30,7 @@ export interface RadarFeatureSpec {
 }
 
 export const RADAR_FEATURES = {
+  gitopsActionCapabilities: { label: 'GitOps action permission checks', flag: 'gitopsActionCapabilities', flagShippedWithEndpoint: true },
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },

@@ -286,6 +286,7 @@ export interface GitOpsTableViewProps {
   // SyncOptionsDialog). When undefined the actions column is omitted
   // entirely — keeps Hub and other consumers' layout unchanged until they
   // opt in.
+  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   // In-flight action state, keyed by `row.id`. Drives the per-item
   // spinner so the user can tell which Sync/Refresh is still running.
@@ -335,6 +336,7 @@ export function GitOpsTableView({
   globalNamespaces,
   onClearNamespaces,
   onRowAction,
+  renderRowActions,
   pendingRowActions,
   argoResumeUpgrade,
   argoResumeBlockedReason,
@@ -864,6 +866,7 @@ export function GitOpsTableView({
               showDestination={showDestination}
               onDestinationClick={onDestinationClick}
               destinationHrefFor={destinationHrefFor}
+              renderRowActions={renderRowActions}
               onRowAction={onRowAction}
               pendingRowActions={pendingRowActions}
               argoResumeUpgrade={argoResumeUpgrade}
@@ -1301,6 +1304,7 @@ function GitOpsTable({
   onDestinationClick,
   destinationHrefFor,
   onRowAction,
+  renderRowActions,
   pendingRowActions,
   argoResumeUpgrade,
   argoResumeBlockedReason,
@@ -1313,6 +1317,7 @@ function GitOpsTable({
   showDestination?: boolean
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
+  renderRowActions?: (row: GitOpsRow, items: RowActionItem[]) => ReactNode
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
   argoResumeUpgrade?: RadarUpgradeRequirement | null
@@ -1423,7 +1428,7 @@ function GitOpsTable({
                   className="overflow-visible border-b border-theme-border px-2 py-2 text-right align-middle"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)} />
+                  {renderRowActions ? renderRowActions(row, buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)) : <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)} />}
                 </td>
               )}
             </tr>
