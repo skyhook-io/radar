@@ -123,16 +123,19 @@ describe('Enable auto-sync on the GitOps detail page', () => {
     })
 
     it.each([
-      { name: 'Sync is available', running: false, copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works.' },
+      { name: 'Sync is available', copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works.' },
       { name: 'an operation holds Sync', running: true, copy: 'Stop Argo from automatically syncing Git changes.' },
-      { name: 'the Application is suspended', running: false, suspended: true, copy: 'Stop Argo from automatically syncing Git changes.' },
-    ])('describes Disable auto-sync when $name', async ({ running, suspended, copy }) => {
+      { name: 'the Application is suspended', suspended: true, copy: 'Stop Argo from automatically syncing Git changes.' },
+      { name: 'an ApplicationSet owns it', controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. Manual Sync still works. ApplicationSet clusters can turn it back on; to keep it off, change the ApplicationSet's template." },
+      { name: 'a parent Application manages it', controller: { kind: 'Application' as const, name: 'apps' }, copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works. Application apps manages this one from Git and can turn it back on when it syncs; to keep it off, change it in Git.' },
+      { name: 'an operation holds Sync on an ApplicationSet-owned app', running: true, controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. ApplicationSet clusters can turn it back on; to keep it off, change the ApplicationSet's template." },
+    ] as Array<{ name: string; running?: boolean; suspended?: boolean; controller?: ArgoActionHandlers['autoSyncController']; copy: string }>)('describes Disable auto-sync when $name', async ({ running = false, suspended, controller, copy }) => {
       vi.useFakeTimers()
       const element = document.createElement('div')
       document.body.appendChild(element)
       const root = createRoot(element)
       try {
-        await act(async () => { root.render(layout(argo({ autoSyncEnabled: true, isRunning: running }), suspended ? { sync: 'Synced', health: 'Suspended', suspended: true } as GitOpsDetailStatus : null)) })
+        await act(async () => { root.render(layout(argo({ autoSyncEnabled: true, isRunning: running, autoSyncController: controller }), suspended ? { sync: 'Synced', health: 'Suspended', suspended: true } as GitOpsDetailStatus : null)) })
         const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Disable auto-sync')!
         await act(async () => {
           button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
