@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import type { Relationships } from '../types/core'
+import type { ManagerAnswer, Relationships } from '../types/core'
 
 import { argoAutoSyncController, gitOpsOwnerFromRelationships, managerListing } from './gitops-owner'
 
@@ -138,22 +138,25 @@ describe('managerListing', () => {
 describe('argoAutoSyncController', () => {
   const self = { namespace: 'argocd', name: 'guestbook' }
   const parent = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'apps' }
+  const managed = (state: ManagerAnswer['state'], lead = parent): Relationships => ({ ownership: { manager: { state, lead } } } as unknown as Relationships)
 
   it('names the owning ApplicationSet first', () => {
-    const rel: Relationships = {
-      owner: { kind: 'ApplicationSet', group: 'argoproj.io', namespace: 'argocd', name: 'clusters' },
-      managedBy: [parent],
-    }
+    const rel: Relationships = { ...managed('listed'), owner: { kind: 'ApplicationSet', group: 'argoproj.io', namespace: 'argocd', name: 'clusters' } }
     expect(argoAutoSyncController(rel, self)).toEqual({ kind: 'ApplicationSet', name: 'clusters' })
   })
 
-  it('names the Application that manages it from Git', () => {
-    expect(argoAutoSyncController({ managedBy: [parent] }, self)).toEqual({ kind: 'Application', name: 'apps' })
+  it.each(['agree', 'listed'] as const)('names a parent Application whose resources list it (%s)', (state) => {
+    expect(argoAutoSyncController(managed(state), self)).toEqual({ kind: 'Application', name: 'apps' })
   })
 
-  it('names nothing for an unmanaged Application, a non-Argo owner, or itself', () => {
+  it.each(['claimed', 'shared', 'disagree', 'unknown', 'none'] as const)('names no parent on a %s answer', (state) => {
+    expect(argoAutoSyncController(managed(state), self)).toBeNull()
+  })
+
+  it('names nothing without an answer, for a non-Argo owner, or for itself', () => {
     expect(argoAutoSyncController(undefined, self)).toBeNull()
+    expect(argoAutoSyncController({ managedBy: [parent] }, self)).toBeNull()
     expect(argoAutoSyncController({ owner: { kind: 'ApplicationSet', group: 'example.com', namespace: 'argocd', name: 'x' } }, self)).toBeNull()
-    expect(argoAutoSyncController({ managedBy: [{ ...parent, name: 'guestbook' }] }, self)).toBeNull()
+    expect(argoAutoSyncController(managed('listed', { ...parent, name: 'guestbook' }), self)).toBeNull()
   })
 })

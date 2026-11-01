@@ -42,7 +42,8 @@ export function gitOpsOwnerFromRelationships(
 /**
  * The Argo CD object that rewrites an Application's spec, and so can turn its
  * auto-sync back on after a suspend: the ApplicationSet that owns it, else the
- * Application that manages it from Git.
+ * Application whose recorded resources list it. A tracking claim alone can
+ * outlive a detached parent, so it names nothing.
  */
 export function argoAutoSyncController(
   rel: Relationships | undefined | null,
@@ -50,9 +51,10 @@ export function argoAutoSyncController(
 ): { kind: 'ApplicationSet' | 'Application'; name: string } | null {
   const appSet = [rel?.owner, ...(rel?.owners ?? [])].find(ref => ref?.kind === 'ApplicationSet' && ref.group === ARGO_APPLICATION_GROUP)
   if (appSet) return { kind: 'ApplicationSet', name: appSet.name }
-  const parent = gitOpsOwnerFromRelationships(rel)
-  return parent?.tool === 'argocd' && !(parent.namespace === self.namespace && parent.name === self.name)
-    ? { kind: 'Application', name: parent.name }
+  const answer = rel?.ownership?.manager
+  const lead = answer?.state === 'agree' || answer?.state === 'listed' ? answer.lead : undefined
+  return lead?.kind === 'Application' && lead.group === ARGO_APPLICATION_GROUP && !(lead.namespace === self.namespace && lead.name === self.name)
+    ? { kind: 'Application', name: lead.name }
     : null
 }
 
