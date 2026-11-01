@@ -80,8 +80,12 @@ func TestOmittedKindsNamesChangesTheDefaultFeedLeavesOut(t *testing.T) {
 		t.Fatalf("filtered kinds = %v, want %v", kinds, want)
 	}
 
-	if got := OmittedKindsGuidance(nil, true); got != "" {
-		t.Fatalf("guidance for no kinds = %q", got)
+	if got := OmittedKindsGuidance(nil, false); got != "" {
+		t.Fatalf("guidance for a complete scan with no kinds = %q", got)
+	}
+	// A cut-short scan that named nothing says the check was partial.
+	if got := OmittedKindsGuidance(nil, true); !strings.Contains(got, "newest 4000 changes") || !strings.Contains(got, "found none") {
+		t.Fatalf("guidance for a partial scan with no kinds = %q", got)
 	}
 }
 

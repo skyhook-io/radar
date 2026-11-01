@@ -87,7 +87,6 @@ func OmittedKinds(ctx context.Context, q Query) (kinds []string, scanFull bool, 
 		}
 	}
 	kinds = slices.Compact(slices.SortedFunc(slices.Values(kinds), strings.Compare))
-	// Kinds with desired-state edits first, then by how many rows they had.
 	sort.SliceStable(kinds, func(i, j int) bool {
 		a, b := kinds[i], kinds[j]
 		if (edits[a] > 0) != (edits[b] > 0) {
@@ -122,11 +121,15 @@ func isUntrackedCustomResource(e timeline.TimelineEvent) bool {
 	return isCustomResourceEvent(e) && !(TrackedKind(e.Kind) && eventGroupMatchesTracked(e.Kind, e.APIVersion))
 }
 
-// OmittedKindsGuidance is the narrowHint sentence for OmittedKinds' result,
-// or "" when it names no kind.
+// OmittedKindsGuidance is the narrowHint sentence for OmittedKinds' result:
+// the kinds it named, or, when the scan was cut short and named none, that
+// the check was partial. It is "" when a complete scan named no kind.
 func OmittedKindsGuidance(kinds []string, scanFull bool) string {
 	if len(kinds) == 0 {
-		return ""
+		if !scanFull {
+			return ""
+		}
+		return fmt.Sprintf("Radar checked only the newest %d changes in this window for kinds the default feed leaves out (Nodes, untracked custom kinds) and found none; pass kind=<Kind> to check one.", omittedKindsScanBound)
 	}
 	named := kinds
 	more := ""
@@ -139,4 +142,10 @@ func OmittedKindsGuidance(kinds []string, scanFull bool) string {
 		sentence += fmt.Sprintf(" Radar checked only the newest %d changes for these, so other kinds may have changes too.", omittedKindsScanBound)
 	}
 	return sentence
+}
+
+// OmittedKindsErrorGuidance is the narrowHint sentence when the omitted-kinds
+// scan failed.
+func OmittedKindsErrorGuidance(err error) string {
+	return "Radar could not check for changes to kinds the default feed leaves out (" + err.Error() + "); pass kind=<Kind> to check one."
 }

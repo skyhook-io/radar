@@ -1727,10 +1727,10 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	// A default query leaves out Nodes and untracked custom kinds; name the
 	// ones that changed so they stay discoverable.
 	if input.Kind == "" && input.Name == "" && (allowed == nil || len(allowed) > 0) {
-		if kinds, scanFull, err := meaningfulchanges.OmittedKinds(ctx, query); err == nil {
-			if hint := meaningfulchanges.OmittedKindsGuidance(kinds, scanFull); hint != "" {
-				hints = append(hints, hint)
-			}
+		if kinds, scanFull, err := meaningfulchanges.OmittedKinds(ctx, query); err != nil {
+			hints = append(hints, meaningfulchanges.OmittedKindsErrorGuidance(err))
+		} else if hint := meaningfulchanges.OmittedKindsGuidance(kinds, scanFull); hint != "" {
+			hints = append(hints, hint)
 		}
 	}
 	resp.NarrowHint = strings.Join(hints, " ")
