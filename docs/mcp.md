@@ -1290,6 +1290,21 @@ Optional write tool (off by default):
 | --- | --- | --- |
 | `exec_pod` | [One non-interactive container command](#exec_pod), enabled by `--mcp-exec-tools` | `namespace`, `name`, `command` (required argv array); `kind`, `container`, `timeout_seconds` (optional) |
 
+### Naming a new tool parameter
+
+A tool's arguments are what an agent has to get right to call it, so a new parameter follows these conventions:
+
+- **Object identity:** `kind`, `group`, `namespace`, `name`.
+- **Durations:** a deadline is an integer `timeout_seconds`; a lookback window is `since`, a duration string such as `1h`.
+- **`force`** only in the meaning `kubectl --force` has for that operation (replace for `manage_gitops`, evict unmanaged pods for `manage_node`). Taking server-side-apply field ownership is `force_conflicts`.
+- **`include`** is a comma-separated list of optional extras (`get_resource`, `get_helm_release`). A parameter that picks one of several modes gets its own name.
+- **Lists** are JSON arrays, not comma-separated strings.
+- **A closed set of values** is a schema `enum`, which needs a hand-written input schema (see `cost_rightsizing_schema.go`); the argument repair then fixes letter case before validation.
+- **`dry_run`** previews without changing anything and defaults to false, except where a preview is mandatory (`delete_resource`).
+- Names are snake_case (`TestParameterNamingStaysConsistent` enforces it).
+
+Older parameters that predate these conventions keep their names: `timeout` on `manage_node` and `query_prometheus`, `force` on `apply_resource`, `search`'s `include` (one of `summary`, `raw`, `none`, matching the REST search API), the comma-separated `kind` and `severity` of `issues` and `fixed_in` of `get_runtime_versions`, and `get_cost`'s `range` (an enum of windows, not `since`). Most closed sets described only in prose, such as `apply_resource`'s `mode` and `query_prometheus`'s `type`, still match exactly, case included. Renaming an existing parameter is not free even with an alias for the old name: Radar Hub serves one merged tool catalog across clusters that may run different Radar versions, so an agent that sees the new name can send it to a cluster whose older Radar rejects it.
+
 ## Strimzi connector evidence
 
 See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors) for the Issues/API/MCP coverage, required read access, and operator-snapshot limitations.

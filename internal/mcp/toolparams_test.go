@@ -810,3 +810,11 @@ func TestMiddlewareDeliversEnumCaseRepairToHandler(t *testing.T) {
 		}
 	}
 }
+
+func TestContextNoneMatchesGetResource(t *testing.T) {
+	for in, want := range map[string]bool{"none": true, "None": true, " NONE ": true, "": false, "basic": false, "Basic": false} {
+		if got := contextNone(in); got != want {
+			t.Errorf("contextNone(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
