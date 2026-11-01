@@ -681,10 +681,12 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "delete_resource",
-		Description: "Delete one Kubernetes object as the caller, in two calls: the first returns a server dry-run preview and a " +
-			"confirm token; after reviewing it, call again with dry_run=false and that token. The token is bound to you, the " +
-			"context and the previewed object (UID, spec, finalizers, policy) and fails if any changed; no preview, no token. " +
-			"The preview's dependents and GitOps finalizer cleanup cover only what you can read and are advisory. Deleting a " +
+		Description: "Delete one Kubernetes object as the caller, in two calls: the first returns a server dry-run preview and, " +
+			"when the ownership preview resolves the object, a confirm token; after reviewing it, call again with dry_run=false " +
+			"and that token. The token is bound to you, the context and the previewed object (UID, spec, finalizers, policy) and " +
+			"fails if any changed. The preview's dependents (observed owner references, possible dependents) and GitOps " +
+			"finalizer cleanup are advisory and may be incomplete: they cover only what Radar observes and you can read, so " +
+			"check their coverage. Deleting a " +
 			"Namespace or CRD removes all its contents or instances, even with orphan. Propagation defaults to background " +
 			"unless GC finalizers record a policy. Radar never edits finalizers, so an accepted deletion can stay pending: " +
 			"inspect what blocks it before removing a finalizer with patch_resource.",
