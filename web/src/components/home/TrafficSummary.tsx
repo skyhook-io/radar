@@ -205,16 +205,17 @@ export function layoutTopFlows(flows: DashboardTopFlow[], size: DrawingSize = { 
 
   const nameUses = new Map<string, number>()
   for (const { name } of info.values()) nameUses.set(name, (nameUses.get(name) ?? 0) + 1)
-  const placed: (FlowNode & { full: string })[] = []
+  const placed: FlowNode[] = []
+  const fullLabel = new Map<string, string>()
   byColumn.forEach((keys, c) => {
     keys.forEach((k, i) => {
       const { name, namespace } = info.get(k)!
       const x = xAt(c)
       const y = (i - (keys.length - 1) / 2) * rowGap
       const anchor = columns > 1 && c === 0 ? 'start' : columns > 1 && c === columns - 1 ? 'end' : 'middle'
+      fullLabel.set(k, namespace && nameUses.get(name)! > 1 ? `${namespace}/${name}` : name)
       placed.push({
         key: k, name, namespace, x, y, column: c, label: '',
-        full: namespace && nameUses.get(name)! > 1 ? `${namespace}/${name}` : name,
         labelX: anchor === 'start' ? x - outset : anchor === 'end' ? x + outset : x,
         labelY: labelAbove(c, i, k) ? y - radius - 5 : y + radius + labelSize + 1,
         labelAnchor: anchor,
@@ -236,12 +237,12 @@ export function layoutTopFlows(flows: DashboardTopFlow[], size: DrawingSize = { 
   // them. A second pass, one label at a time against the others' current
   // extents, lets a cut label take room a short neighbour left unused.
   const advance = labelSize * 0.6
-  const extent = (n: (typeof placed)[number]) => {
+  const extent = (n: FlowNode) => {
     const w = n.label.length * advance
     const left = n.labelAnchor === 'start' ? n.labelX : n.labelAnchor === 'end' ? n.labelX - w : n.labelX - w / 2
     return [left, left + w]
   }
-  const fit = (n: (typeof placed)[number], limit: (o: (typeof placed)[number], toRight: boolean) => number) => {
+  const fit = (n: FlowNode, limit: (o: FlowNode, toRight: boolean) => number) => {
     let left = 4
     let right = width - 4
     for (const o of placed) {
@@ -257,7 +258,7 @@ export function layoutTopFlows(flows: DashboardTopFlow[], size: DrawingSize = { 
     const room = n.labelAnchor === 'start' ? right - n.labelX
       : n.labelAnchor === 'end' ? n.labelX - left
         : 2 * Math.min(n.labelX - left, right - n.labelX)
-    return fitLabel(n.full, room, labelSize)
+    return fitLabel(fullLabel.get(n.key)!, room, labelSize)
   }
   for (const n of placed) {
     n.label = fit(n, (o, toRight) => (o.labelX + n.labelX) / 2 + (toRight ? -LABEL_GAP / 2 : LABEL_GAP / 2))
@@ -265,8 +266,7 @@ export function layoutTopFlows(flows: DashboardTopFlow[], size: DrawingSize = { 
   for (const n of placed) {
     n.label = fit(n, (o, toRight) => toRight ? extent(o)[0] - LABEL_GAP : extent(o)[1] + LABEL_GAP)
   }
-  const nodes: FlowNode[] = placed.map(({ full: _full, ...n }) => n)
-  const byKey = new Map(nodes.map(n => [n.key, n]))
+  const byKey = new Map(placed.map(n => [n.key, n]))
 
   const edges = [...pairs.values()].map(p => ({
     from: byKey.get(p.src)!,
@@ -274,7 +274,7 @@ export function layoutTopFlows(flows: DashboardTopFlow[], size: DrawingSize = { 
     connections: p.connections,
     directionUnknown: p.directionUnknown,
   }))
-  return { nodes, edges, radius, labelSize }
+  return { nodes: placed, edges, radius, labelSize }
 }
 
 const fullName = (n: FlowNode) => n.namespace ? `${n.namespace}/${n.name}` : n.name
