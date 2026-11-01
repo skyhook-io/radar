@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"k8s.io/client-go/kubernetes"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // fakeNamespaceAPIServer publishes a clientset whose namespace LIST and
@@ -69,6 +71,92 @@ func TestGetAccessibleNamespacesWithSource(t *testing.T) {
 			fakeNamespaceAPIServer(t, tc.listStatus, http.StatusForbidden, "alpha", "beta")
 			if _, got := k8s.GetAccessibleNamespacesWithSource(context.Background()); got != tc.want {
 				t.Errorf("source = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// --rbac-namespaces is the install's complete namespace set only when the
+// cluster-wide LIST is denied; a failed LIST stays a best-effort list.
+func TestGetAccessibleNamespacesWithSource_RBACNamespaces(t *testing.T) {
+	cases := []struct {
+		name       string
+		listStatus int
+		want       k8s.NamespaceListSource
+		wantNames  []string
+	}{
+		{"list succeeds", http.StatusOK, k8s.NamespaceListCluster, []string{"alpha", "beta", "other"}},
+		{"list forbidden", http.StatusForbidden, k8s.NamespaceListRBAC, []string{"alpha", "beta"}},
+		{"list errors", http.StatusInternalServerError, k8s.NamespaceListFailed, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeNamespaceAPIServer(t, tc.listStatus, http.StatusForbidden, "alpha", "beta", "other")
+			prevNs := k8s.SetTestContextNamespace("radar")
+			t.Cleanup(func() { k8s.SetTestContextNamespace(prevNs) })
+			k8s.SetRBACNamespaces([]string{"beta", "alpha"})
+			t.Cleanup(func() { k8s.SetRBACNamespaces(nil) })
+			names, got := k8s.GetAccessibleNamespacesWithSource(context.Background())
+			if got != tc.want {
+				t.Errorf("source = %q, want %q", got, tc.want)
+			}
+			if tc.wantNames != nil && !slices.Equal(names, tc.wantNames) {
+				t.Errorf("namespaces = %v, want %v", names, tc.wantNames)
+			}
+		})
+	}
+}
+
+// A ServiceAccount limited to --rbac-namespaces reports a complete list, so
+// callers that require full visibility (Radar Cloud's alert polling) accept it,
+// but only while Radar can read every listed namespace: a lost grant must not
+// let those callers treat the namespace's issues as gone.
+func TestNamespaceScope_RBACNamespacesAuthoritative(t *testing.T) {
+	cases := []struct {
+		name        string
+		readable    []string
+		statefulSet []string
+		want        bool
+	}{
+		{"every listed namespace readable", []string{"alpha", "beta"}, []string{"alpha", "beta"}, true},
+		{"grant missing in one namespace", []string{"alpha"}, []string{"alpha"}, false},
+		{"one cached kind missing in one namespace", []string{"alpha", "beta"}, []string{"alpha"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prevCtx := k8s.SetTestContextName("test-ctx")
+			t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+			fakeNamespaceAPIServer(t, http.StatusForbidden, http.StatusForbidden)
+			k8s.SetRBACNamespaces([]string{"alpha", "beta"})
+			t.Cleanup(func() { k8s.SetRBACNamespaces(nil) })
+			scopes := map[string]k8score.ResourceScope{}
+			fanout := map[string][]string{}
+			for _, kind := range []string{k8score.Pods, k8score.Deployments, k8score.Services} {
+				scopes[kind] = k8score.ResourceScope{Enabled: true, Namespace: tc.readable[0]}
+				fanout[kind] = tc.readable
+			}
+			scopes[k8score.StatefulSets] = k8score.ResourceScope{Enabled: true, Namespace: tc.statefulSet[0]}
+			fanout[k8score.StatefulSets] = tc.statefulSet
+			restore := k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}, Scopes: scopes, ScopeNamespaces: fanout})
+			t.Cleanup(restore)
+
+			srv := New(Config{DevMode: true})
+			ts := httptest.NewServer(srv.Handler())
+			t.Cleanup(func() {
+				ts.Close()
+				srv.Stop()
+			})
+			resp, err := http.Get(ts.URL + "/api/cluster/namespace-scope")
+			if err != nil {
+				t.Fatalf("GET namespace-scope: %v", err)
+			}
+			defer resp.Body.Close()
+			var body NamespaceScopeResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Authoritative != tc.want || !slices.Equal(body.AccessibleNamespaces, []string{"alpha", "beta"}) {
+				t.Errorf("authoritative = %v, accessible = %v; want %v, [alpha beta]", body.Authoritative, body.AccessibleNamespaces, tc.want)
 			}
 		})
 	}

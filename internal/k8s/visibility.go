@@ -88,6 +88,35 @@ func BuildVisibilitySummary(result *PermissionCheckResult, namespace string) *Vi
 	return out
 }
 
+// ReadableInEvery reports whether Radar's startup probe can read pods,
+// deployments and services, and every other kind it caches, in each of
+// namespaces. A kind cached in one of them but not another means a grant is
+// missing there, so the cache for that namespace is incomplete.
+func (r *PermissionCheckResult) ReadableInEvery(namespaces []string) bool {
+	if r == nil {
+		return false
+	}
+	readable := func(key string) bool {
+		for _, namespace := range namespaces {
+			if visibilityStatus(r, key, namespace) != "allowed" {
+				return false
+			}
+		}
+		return true
+	}
+	for key, scope := range r.Scopes {
+		if scope.Enabled && !readable(key) {
+			return false
+		}
+	}
+	for _, key := range []string{k8score.Pods, k8score.Deployments, k8score.Services} {
+		if !readable(key) {
+			return false
+		}
+	}
+	return true
+}
+
 func visibilityStatus(result *PermissionCheckResult, key string, namespace string) string {
 	scope, ok := result.Scopes[key]
 	if !ok || !scope.Enabled {

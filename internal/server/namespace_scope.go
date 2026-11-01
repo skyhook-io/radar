@@ -451,9 +451,18 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 
 	// What the SA / kubeconfig identity sees — used as the input set for
 	// per-user filtering below. authoritative=true means "we got a real
-	// list from the apiserver"; false means "best-effort short list".
+	// list from the apiserver", or the install's --rbac-namespaces list when
+	// that LIST is denied; false means "best-effort short list".
 	saAccessible, source := k8s.GetAccessibleNamespacesWithSource(r.Context())
-	authoritative := source == k8s.NamespaceListCluster
+	authoritative := source.Complete()
+	// The --rbac-namespaces list is configuration, not something the
+	// apiserver returned: it is complete only while Radar can actually read
+	// every listed namespace. Callers that resolve what they no longer see
+	// (Radar Cloud alerts) would otherwise close issues in a namespace whose
+	// grant was removed.
+	if source == k8s.NamespaceListRBAC && !k8s.GetCachedPermissionResult().ReadableInEvery(saAccessible) {
+		authoritative = false
+	}
 
 	// Intersect with the calling user's RBAC-allowed namespaces. For
 	// no-auth callers and cluster-admin users, this is a pass-through

@@ -18,61 +18,23 @@ is set, so the bindings are always meaningful here regardless of the
 chart-values auth.mode.
 */}}
 {{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create .Values.rbac.helm -}}
+{{- $fullname := include "radar.fullname" . }}
+{{- $bindings := list }}
 {{- if .Values.cloud.defaultRbac.owner }}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-owner-helm
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "radar.fullname" . }}-helm
-subjects:
-  - kind: Group
-    name: radar:owner
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:owner
-    apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-owner-helm-admin
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "radar.fullname" . }}-helm-admin
-subjects:
-  - kind: Group
-    name: radar:owner
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:owner
-    apiGroup: rbac.authorization.k8s.io
+{{- $bindings = append $bindings (list "owner" "helm") }}
+{{- $bindings = append $bindings (list "owner" "helm-admin") }}
 {{- end }}
 {{- if .Values.cloud.defaultRbac.member }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-member-helm
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "radar.fullname" . }}-helm
-subjects:
-  - kind: Group
-    name: radar:member
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:member
-    apiGroup: rbac.authorization.k8s.io
+{{- $bindings = append $bindings (list "member" "helm") }}
+{{- end }}
+{{- range $binding := $bindings }}
+{{- $tier := index $binding 0 }}
+{{- $role := index $binding 1 }}
+{{ include "radar.binding" (dict
+  "root" $
+  "name" (printf "%s-cloud-%s-%s" $fullname $tier $role)
+  "roleRef" (printf "%s-%s" $fullname $role)
+  "groups" (include "radar.tierGroups" $tier | fromJsonArray)
+) }}
 {{- end }}
 {{- end -}}

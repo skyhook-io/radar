@@ -118,3 +118,61 @@ func TestIsReleaseReadForbidden(t *testing.T) {
 		}
 	}
 }
+
+// Without auth Helm runs as Radar's ServiceAccount. One limited to some
+// namespaces (rbac.namespaces) can create Secrets only there, so the gate must
+// pass, for releases and for pod-local repository changes alike, even though
+// the cluster-wide check fails.
+func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
+			writeK8sStatus(t, w, http.StatusNotFound, "NotFound", "unexpected test request")
+			return
+		}
+		var review authv1.SelfSubjectAccessReview
+		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+			t.Fatalf("decode self subject access review: %v", err)
+		}
+		a := review.Spec.ResourceAttributes
+		allowed := a != nil && a.Namespace == "app" && a.Resource == "secrets" && a.Verb == "create"
+		w.Header().Set("Content-Type", "application/json")
+		writeTestJSON(t, w, authv1.SelfSubjectAccessReview{
+			TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SelfSubjectAccessReview"},
+			Status:   authv1.SubjectAccessReviewStatus{Allowed: allowed},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	if err != nil {
+		t.Fatalf("create test client: %v", err)
+	}
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() {
+		k8s.SetTestClient(prev)
+		k8s.SetRBACNamespaces(nil)
+		k8s.InvalidateCapabilitiesCache()
+	})
+
+	cases := []struct {
+		name           string
+		rbacNamespaces []string
+		namespace      string
+		want           int
+	}{
+		{"release in a listed namespace", []string{"app"}, "app", http.StatusOK},
+		{"repository change", []string{"app"}, "", http.StatusOK},
+		{"no list, no grant", nil, "app", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k8s.SetRBACNamespaces(tc.rbacNamespaces)
+			k8s.InvalidateCapabilitiesCache()
+			req := httptest.NewRequest(http.MethodPost, "/api/helm/releases", nil)
+			rec := httptest.NewRecorder()
+			ok := requireHelmWrite(rec, req, tc.namespace)
+			if got := map[bool]int{true: http.StatusOK, false: rec.Code}[ok]; got != tc.want {
+				t.Errorf("status = %d, want %d (body %s)", got, tc.want, rec.Body.String())
+			}
+		})
+	}
+}

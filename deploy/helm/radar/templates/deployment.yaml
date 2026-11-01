@@ -4,6 +4,23 @@
 {{- if and (eq .Values.timeline.storage "postgres") (not .Values.timeline.postgres.existingSecret) }}
 {{- fail "timeline.postgres.existingSecret is required when timeline.storage=postgres" }}
 {{- end }}
+{{- with .Values.rbac.namespaces }}
+{{- if and (has $.Release.Namespace .) (or $.Values.cloud.enabled (ne $.Values.auth.mode "none")) }}
+{{- fail (printf "rbac.namespaces must not include Radar's own namespace %s when auth or Radar Cloud is on: people with access there could use Radar's ServiceAccount, which can impersonate anyone. Install Radar in a namespace of its own." $.Release.Namespace) }}
+{{- end }}
+{{- if and $.Values.cloud.enabled (eq (toString $.Values.cloud.defaultRbac.nodeOps) "true") }}
+{{- fail "cloud.defaultRbac.nodeOps cannot be used with rbac.namespaces: node operations act on the whole cluster. Set nodeOps to false." }}
+{{- end }}
+{{- range $.Values.extraArgs }}
+{{- if regexMatch "^--?(namespace-scope|rbac-namespaces)(=|$)" (toString .) }}
+{{- fail (printf "extraArgs %s conflicts with rbac.namespaces, which sets Radar's namespaces. Remove it from extraArgs." (toString .)) }}
+{{- end }}
+{{- end }}
+{{- $tag := toString $.Values.image.tag }}
+{{- if and (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+" $tag) (semverCompare "<1.19.0-0" $tag) }}
+{{- fail (printf "rbac.namespaces requires Radar 1.19.0 or later, but image.tag pins %s. Unset image.tag to use the chart's version, or pin 1.19.0 or later." $tag) }}
+{{- end }}
+{{- end }}
 {{- $basePath := include "radar.basePath" . -}}
 {{- $enroll := include "radar.cloudEnrollmentMode" . | eq "true" -}}
 {{- $cloudCA := and $enroll (not (empty .Values.cloud.caBundle)) -}}
@@ -291,6 +308,12 @@ spec:
             {{- end }}
             {{- if $cloudCA }}
             - --cloud-ca-file=/etc/radar/cloud-ca/ca.crt
+            {{- end }}
+            {{- with .Values.rbac.namespaces }}
+            - {{ printf "--rbac-namespaces=%s" (join "," .) | quote }}
+            {{- if gt (len .) 20 }}
+            - --max-scope-candidates={{ len . }}
+            {{- end }}
             {{- end }}
             {{- /* extraArgs come last: a repeated scalar flag wins, a repeatable one is appended */}}
             {{- range .Values.extraArgs }}
