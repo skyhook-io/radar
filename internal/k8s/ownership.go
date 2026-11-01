@@ -31,6 +31,20 @@ var ownershipSource = cachesource.New(func() cachesource.Caches {
 	return c
 })
 
+// BeginOwnershipRead binds a request's captured cache to an ownership session.
+// The caller must validate the session before publishing its derived answer.
+func BeginOwnershipRead(cache *ResourceCache) (ownership.ReadSession, error) {
+	session, err := ownershipSource.Begin()
+	if err != nil {
+		return nil, err
+	}
+	typed, ok := cachesource.TypedCache(session)
+	if cache == nil || !ok || typed != cache.ResourceCache {
+		return nil, ownership.ErrCachesReplaced
+	}
+	return session, nil
+}
+
 // AnswerOwnership answers rel's ownership for fetched, the object the caller
 // fetched, from the caches, for the caller access describes once the
 // session's catalog is known. owner is the fetched object itself: when it is a

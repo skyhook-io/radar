@@ -2781,3 +2781,47 @@ func TestBuildIssuesRollbackWithoutAppliedRevisions(t *testing.T) {
 		t.Fatalf("missing verification warning: %+v", issues)
 	}
 }
+
+func TestBuildIssues_RemoteComparisonOffersNoLocalRemediationOrEventCause(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			root := argoApp(map[string]any{
+				"health":    map[string]any{"status": "Degraded"},
+				"sync":      map[string]any{"comparedTo": map[string]any{"destination": map[string]any{"server": "https://remote.example"}}},
+				"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "payments", "name": "web", "status": "Synced"}},
+			})
+			if failed {
+				unstructured.SetNestedMap(root.Object, map[string]any{"phase": "Failed", "message": `namespaces "payments" not found`}, "status", "operationState")
+				unstructured.SetNestedSlice(root.Object, []any{map[string]any{"type": "SyncError", "message": `namespaces "payments" not found`}}, "status", "conditions")
+			}
+			resolver := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "LOCAL object failure", Count: 3}}}}
+			issues := buildIssues(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", resolver)
+			for _, issue := range issues {
+				if issue.Remediation != nil || issue.Reason == "PossibleCause" {
+					t.Fatalf("remote comparison used local evidence: %+v", issues)
+				}
+			}
+			if failed && len(issues) == 0 {
+				t.Fatal("lost the recorded operation failure")
+			}
+		})
+	}
+}
+
+func TestDegradedRollupQualifiesIncompleteTree(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "app", "namespace": "team"}}}
+	for _, partial := range []bool{false, true} {
+		tree := &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 2}}
+		if partial {
+			tree.Warnings = []string{"Some generated resources could not be included; the resource tree is partial."}
+		}
+		issues := buildIssues(root, tree, "fluxcd", nil)
+		want := "2 managed resources are degraded"
+		if partial {
+			want += " among the resources shown"
+		}
+		if len(issues) != 1 || issues[0].Message != want {
+			t.Fatalf("partial=%t issues=%+v", partial, issues)
+		}
+	}
+}
