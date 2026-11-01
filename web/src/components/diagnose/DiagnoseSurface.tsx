@@ -576,9 +576,10 @@ export function DiagnoseSurface({
     ? EXAMPLE_INVESTIGATION_RUN
     : (d.runs.find((r) => r.id === d.activeRunId) ?? null);
   const openExample = exampleInvestigationOffered({
-    runs: d.runs.length,
+    runs: d.runs,
     runsLoaded: d.runsLoaded,
     setupPending,
+    needsConsent: d.needsConsent,
   })
     ? () => d.openRun(EXAMPLE_INVESTIGATION_ID)
     : undefined;
@@ -977,7 +978,12 @@ export function DiagnoseSurface({
               questions={d.questions}
               // Beside Home on the full page, Home already offers it.
               onOpenExample={
-                persistentHistory || exampleOpen ? undefined : openExample
+                persistentHistory || exampleOpen || !openExample
+                  ? undefined
+                  : () => {
+                      openExample();
+                      dismissHistory();
+                    }
               }
             />
           </aside>

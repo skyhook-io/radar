@@ -5,7 +5,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DiagnoseStreamEvent, Diagnosis } from "../../api/diagnose";
+import type {
+  DiagnoseStreamEvent,
+  Diagnosis,
+  RunSummary,
+} from "../../api/diagnose";
 import events from "./exampleInvestigation.events.json";
 import {
   EXAMPLE_INVESTIGATION_RUN,
@@ -104,28 +108,42 @@ describe("the bundled example's data", () => {
 });
 
 describe("exampleInvestigationOffered", () => {
-  it("is offered only while the user has no investigations", () => {
+  const run = (patch: Partial<RunSummary> = {}): RunSummary => ({
+    ...EXAMPLE_INVESTIGATION_RUN,
+    id: "run-1",
+    ...patch,
+  });
+  const offered = (
+    runs: RunSummary[],
+    { runsLoaded = true, setupPending = false, needsConsent = false } = {},
+  ) =>
+    exampleInvestigationOffered({ runs, runsLoaded, setupPending, needsConsent });
+
+  it("is offered only while the user has no investigations of their own", () => {
+    expect(offered([])).toBe(true);
+    expect(offered([run()])).toBe(false);
+    expect(offered([run({ ownedByMe: true })])).toBe(false);
+    expect(offered([run()], { runsLoaded: false, setupPending: true })).toBe(
+      false,
+    );
+  });
+
+  it("does not count automatic runs or runs others shared", () => {
     expect(
-      exampleInvestigationOffered({ runs: 0, runsLoaded: true, setupPending: false }),
+      offered([run({ trigger: "background" }), run({ ownedByMe: false })]),
     ).toBe(true);
-    expect(
-      exampleInvestigationOffered({ runs: 1, runsLoaded: true, setupPending: false }),
-    ).toBe(false);
-    expect(
-      exampleInvestigationOffered({ runs: 1, runsLoaded: false, setupPending: true }),
-    ).toBe(false);
   });
 
   it("waits for the history before claiming it is empty", () => {
-    expect(
-      exampleInvestigationOffered({ runs: 0, runsLoaded: false, setupPending: false }),
-    ).toBe(false);
+    expect(offered([], { runsLoaded: false })).toBe(false);
   });
 
   it("is offered on the setup step, where no history is fetched", () => {
-    expect(
-      exampleInvestigationOffered({ runs: 0, runsLoaded: false, setupPending: true }),
-    ).toBe(true);
+    expect(offered([], { runsLoaded: false, setupPending: true })).toBe(true);
+  });
+
+  it("is not offered while a start waits for consent", () => {
+    expect(offered([], { needsConsent: true })).toBe(false);
   });
 });
 

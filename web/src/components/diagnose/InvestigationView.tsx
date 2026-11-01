@@ -2004,7 +2004,17 @@ export function InvestigationView({
           </span>
         </div>
       ) : null}
-      {!stale && gone ? (
+      {example && gone ? (
+        <div
+          role="alert"
+          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+          <span className="min-w-0 flex-1">
+            Radar couldn&apos;t load the example. Close it and open it again.
+          </span>
+        </div>
+      ) : !stale && gone ? (
         <div className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
           <span className="min-w-0 flex-1">
@@ -2022,7 +2032,7 @@ export function InvestigationView({
           </button>
         </div>
       ) : null}
-      {!stale && !gone && endedEarly ? (
+      {!example && !stale && !gone && endedEarly ? (
         <div
           role="status"
           className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
@@ -2244,7 +2254,8 @@ export function InvestigationView({
                             turn.status === "error" &&
                             !turn.question &&
                             !turn.apply &&
-                            !stale
+                            !stale &&
+                            !example
                               ? retryDiagnosis
                               : undefined
                           }

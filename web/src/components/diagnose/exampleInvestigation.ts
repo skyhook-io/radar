@@ -17,14 +17,25 @@ export function isExampleInvestigation(id: string | null | undefined): boolean {
   return id === EXAMPLE_INVESTIGATION_ID;
 }
 
-// Offered only until the user has investigations of their own. On the setup
-// step no history is fetched, and with no agent there is none of theirs to show.
+// Offered only until the user has investigations of their own: automatic runs
+// and runs others shared with them don't count, as in the history list's
+// grouping. On the setup step no history is fetched, and with no agent there is
+// none of theirs to show. Not while a start waits for consent: that start owns
+// the pane.
 export function exampleInvestigationOffered(input: {
-  runs: number;
+  runs: readonly RunSummary[];
   runsLoaded: boolean;
   setupPending: boolean;
+  needsConsent: boolean;
 }): boolean {
-  return input.runs === 0 && (input.runsLoaded || input.setupPending);
+  const own = input.runs.filter(
+    (run) => run.trigger !== "background" && run.ownedByMe !== false,
+  );
+  return (
+    !input.needsConsent &&
+    own.length === 0 &&
+    (input.runsLoaded || input.setupPending)
+  );
 }
 
 export const EXAMPLE_INVESTIGATION_RUN: RunSummary = {
