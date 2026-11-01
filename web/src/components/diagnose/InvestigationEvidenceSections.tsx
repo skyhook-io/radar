@@ -68,7 +68,7 @@ export function RuledOutBlock({
                 aria-hidden
               />
               <div className="min-w-0">
-                <p className="text-theme-text-secondary [overflow-wrap:anywhere]">
+                <p className="font-medium text-theme-text-secondary [overflow-wrap:anywhere]">
                   <span className="sr-only">Ruled out: </span>
                   {entry.hypothesis}
                 </p>
