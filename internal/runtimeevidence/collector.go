@@ -85,6 +85,9 @@ func (c *Collector) Collect(ctx context.Context, client kubernetes.Interface, co
 func (c *Collector) CollectTarget(ctx context.Context, client kubernetes.Interface, config *rest.Config, adapter evidence.Adapter, target Target) Result {
 	namespace, pod := target.Namespace, target.Pod
 	result := Result{Adapter: adapter, Target: Target{Namespace: namespace, Pod: pod}, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Source: "selected_pod_endpoint", Outcome: "unavailable", Limitations: []string{"One selected Pod endpoint only; unavailable evidence is not absence of a problem.", "Image and Pod identity checks do not attest endpoint contents; a same-name Pod replacement can be contacted before the final identity check.", "Plaintext default endpoint only; credentials, custom ports and TLS endpoints are not supported."}}
+	if adapter == evidence.RabbitMQ {
+		result.Limitations = append(result.Limitations, "Alarms describe this node only; an alarm on another node can block publishers across the cluster.")
+	}
 	fail := func(reason string) Result { result.Reason = reason; return result }
 	ep, ok := endpointFor(adapter)
 	if !ok {
