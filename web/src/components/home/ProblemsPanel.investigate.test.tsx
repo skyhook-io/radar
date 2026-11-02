@@ -16,7 +16,10 @@ const diagnose = vi.hoisted(() => ({
   openInvestigation: vi.fn(),
   openHome: vi.fn(),
 }))
-vi.mock('../diagnose/DiagnoseContext', () => ({ useDiagnose: () => diagnose }))
+vi.mock('../diagnose/DiagnoseContext', () => ({
+  useDiagnose: () => diagnose,
+  useDiagnoseLayout: () => ({ runningRunIds: new Map(), lastInvestigations: new Map() }),
+}))
 vi.mock('../ui/Tooltip', () => ({ Tooltip: ({ children }: { children: ReactNode }) => children }))
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })

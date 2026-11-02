@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RunSummary } from "../../api/diagnose";
 import { DiagnoseProvider, useDiagnose } from "./DiagnoseContext";
-import { defaultDiagnoseAction } from "./LocalDiagnoseAction";
+import {
+  defaultDiagnoseAction,
+  IssueDiagnoseButton,
+} from "./LocalDiagnoseAction";
 
 const api = vi.hoisted(() => ({
   runs: [] as RunSummary[],
@@ -132,6 +135,17 @@ describe("a resource's last investigation", () => {
     expect(openInvestigation).not.toHaveBeenCalled();
     await act(async () => buttonNamed("Open investigation").click());
     expect(openRun).toHaveBeenCalledWith("run-cart");
+  });
+
+  it("marks the button with a filled sparkle only when there is history", async () => {
+    await renderButton("problem");
+    expect(trigger().querySelector("svg")?.getAttribute("fill")).toBe("none");
+    api.runs = [investigated()];
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await flush();
+    expect(trigger().querySelector("svg")?.getAttribute("fill")).toBe(
+      "currentColor",
+    );
   });
 
   it("keeps the usual action one click further on", async () => {
@@ -277,5 +291,134 @@ describe("a resource's last investigation", () => {
     await flush();
     await act(async () => trigger().click());
     expect(dialog()?.textContent).toContain("Pods crash on a bad flag");
+  });
+});
+
+describe("an issue row's Investigate action", () => {
+  const rowToggle = vi.fn();
+  async function renderIssueRow(size: "default" | "compact" = "default") {
+    rowToggle.mockReset();
+    await act(async () =>
+      root.render(
+        <DiagnoseProvider browserURLState={false}>
+          <Probe />
+          <div role="button" onClick={rowToggle} className="overflow-hidden">
+            <IssueDiagnoseButton
+              kind="Deployment"
+              group="apps"
+              namespace="shop"
+              name="cart"
+              size={size}
+            />
+          </div>
+        </DiagnoseProvider>,
+      ),
+    );
+    await flush();
+    await flush();
+  }
+  const issueButton = () =>
+    [...document.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Investigate"),
+    )!;
+
+  it.each(["default", "compact"] as const)(
+    "shows the last investigation outside the row, without toggling it (%s)",
+    async (size) => {
+      api.runs = [investigated()];
+      await renderIssueRow(size);
+      const openRun = vi.spyOn(probe.d, "openRun");
+      await act(async () => issueButton().click());
+      // Portaled out of the row, which clips its contents.
+      expect(dialog()?.parentElement).toBe(document.body);
+      expect(dialog()?.textContent).toContain("Pods crash on a bad flag");
+      await act(async () => buttonNamed("Open investigation").click());
+      expect(openRun).toHaveBeenCalledWith("run-cart");
+      expect(rowToggle).not.toHaveBeenCalled();
+    },
+  );
+
+  it("re-investigates from the panel", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    const openInvestigation = vi.spyOn(probe.d, "openInvestigation");
+    await act(async () => issueButton().click());
+    await act(async () => buttonNamed("Investigate again").click());
+    expect(openInvestigation).toHaveBeenCalledWith({
+      kind: "Deployment",
+      group: "apps",
+      namespace: "shop",
+      name: "cart",
+    });
+    expect(rowToggle).not.toHaveBeenCalled();
+  });
+
+  it("starts straight away when there's nothing recent", async () => {
+    api.runs = [];
+    await renderIssueRow();
+    const openInvestigation = vi.spyOn(probe.d, "openInvestigation");
+    await act(async () => issueButton().click());
+    expect(dialog()).toBeNull();
+    expect(openInvestigation).toHaveBeenCalled();
+  });
+
+  it("tabs out of the panel back to the button", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    const button = issueButton();
+    await act(async () => button.click());
+    await flush();
+    const last = buttonNamed("Investigate again");
+    last.focus();
+    await act(async () =>
+      last.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+      ),
+    );
+    expect(document.activeElement).toBe(button);
+    expect(dialog()?.getAttribute("inert")).not.toBeNull();
+    expect(rowToggle).not.toHaveBeenCalled();
+  });
+
+  it("opens above a button near the bottom of the screen", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    const button = issueButton();
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        top: 700,
+        bottom: 720,
+        left: 900,
+        right: 1000,
+        width: 100,
+        height: 20,
+        x: 900,
+        y: 700,
+        toJSON: () => ({}),
+      });
+    const height = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(150);
+    vi.stubGlobal("innerHeight", 768);
+    await act(async () => button.click());
+    await flush();
+    expect(dialog()!.getAttribute("style")).toContain("top: 544px");
+    rect.mockRestore();
+    height.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("closes when the list scrolls, keeping keyboard focus on the button", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    const button = issueButton();
+    await act(async () => button.click());
+    await flush();
+    expect(document.activeElement?.textContent).toBe("Open investigation");
+    await act(async () => document.dispatchEvent(new Event("scroll")));
+    await flush();
+    expect(dialog()?.getAttribute("inert")).not.toBeNull();
+    expect(document.activeElement).toBe(button);
   });
 });
