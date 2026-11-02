@@ -30,6 +30,9 @@ type FieldManagerWrite struct {
 type fieldManagerIndex struct {
 	mu      sync.Mutex
 	objects map[fieldManagerUID][]fieldManagerVersion
+	// closed is set when the watch stops; a transform still in flight then
+	// captures nothing.
+	closed bool
 }
 
 type fieldManagerUID [16]byte
@@ -106,6 +109,9 @@ func (index *fieldManagerIndex) capture(obj any) {
 	rv := fieldManagerRV(resourceVersion)
 	index.mu.Lock()
 	defer index.mu.Unlock()
+	if index.closed {
+		return
+	}
 	versions := index.objects[key]
 	for _, v := range versions {
 		if v.resourceVersion == rv {
@@ -166,11 +172,13 @@ func (index *fieldManagerIndex) update(oldObj, newObj metav1.Object) []FieldMana
 	return changedFieldManagers(prev, next)
 }
 
-func (index *fieldManagerIndex) clear() {
+// close drops every summary and stops further captures.
+func (index *fieldManagerIndex) close() {
 	if index == nil {
 		return
 	}
 	index.mu.Lock()
+	index.closed = true
 	clear(index.objects)
 	index.mu.Unlock()
 }

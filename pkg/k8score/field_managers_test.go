@@ -174,6 +174,12 @@ func TestFieldManagerIndexVersionOrdering(t *testing.T) {
 	if len(index.objects) != 0 {
 		t.Fatalf("forget left %d objects", len(index.objects))
 	}
+	// A stopped watch's index captures nothing more.
+	index.close()
+	index.capture(v1)
+	if len(index.objects) != 0 {
+		t.Fatalf("closed index captured %d objects", len(index.objects))
+	}
 }
 
 func TestFieldManagerIndexUnstructured(t *testing.T) {

@@ -631,7 +631,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 		// the index; release the summaries with the watch.
 		cancel: func() {
 			cancel()
-			fieldManagers.clear()
+			fieldManagers.close()
 		},
 		startedAt: time.Now().UTC(),
 	}
