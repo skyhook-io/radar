@@ -43,6 +43,13 @@ const maxIdentifierRunes = 253
 
 var verdictFields = []string{"root_cause", "summary", "healthy", "inconclusive", "steps", "evidence", "remediation", "revises_assessment"}
 
+// observationKinds are the evidence words the prompt offers for
+// subject.observation. Agents sometimes write one of them in subject.stream.
+var observationKinds = map[string]struct{}{
+	"resource": {}, "logs": {}, "events": {}, "changes": {}, "metrics": {},
+	"metrics:cpu": {}, "metrics:memory": {}, "metrics:restarts": {}, "alerts": {}, "issue": {},
+}
+
 // Parsed is the model's final text as read, before binding. Citations are the
 // untrusted part: the refs the agent asked to cite. They never cross an API
 // boundary; Bind replaces them with server-authored provenance.
@@ -95,8 +102,28 @@ type caseRequest struct {
 }
 
 func isVerdictBlock(block string) bool {
+	_, ok := verdictBlockJSON(block)
+	return ok
+}
+
+// verdictBlockJSON returns the block as JSON that carries a verdict field.
+// Valid JSON is returned unchanged. A block that does not parse gets one
+// repair, escaping quotes the agent left unescaped inside a string value,
+// and the repair counts only if it yields a verdict.
+func verdictBlockJSON(block string) ([]byte, bool) {
+	if raw := []byte(block); json.Valid(raw) {
+		return raw, hasVerdictField(raw)
+	}
+	repaired, ok := escapeStrayQuotes(block)
+	if !ok || !json.Valid([]byte(repaired)) {
+		return nil, false
+	}
+	return []byte(repaired), hasVerdictField([]byte(repaired))
+}
+
+func hasVerdictField(raw []byte) bool {
 	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(block), &fields) != nil {
+	if json.Unmarshal(raw, &fields) != nil {
 		return false
 	}
 	for _, field := range verdictFields {
@@ -105,6 +132,57 @@ func isVerdictBlock(block string) bool {
 		}
 	}
 	return false
+}
+
+// escapeStrayQuotes escapes quotes the agent left unescaped inside a string,
+// the shape of `"the "foo" Service"`. A quote is the string's end when it is
+// followed, past whitespace, by , } ] or :; any other is stray. Strays must
+// pair the way quotes do in prose, an opening one with text after it and a
+// closing one with text before it, so a missing comma (`["a" "b"]`, whose
+// first stray has a space after it, or `["a""b"]`, a quote beside a quote)
+// is refused rather than merged into one value. ok is false when there was
+// nothing to repair or the repair was refused.
+func escapeStrayQuotes(block string) (repaired string, ok bool) {
+	var out strings.Builder
+	out.Grow(len(block) + 8)
+	inString, escaped, opened := false, false, false
+	for i := 0; i < len(block); i++ {
+		c := block[i]
+		switch {
+		case !inString:
+			if c == '"' {
+				inString, opened = true, false
+			}
+		case escaped:
+			escaped = false
+		case c == '\\':
+			escaped = true
+		case c == '"' && closesString(block[i+1:]):
+			if opened {
+				return "", false
+			}
+			inString = false
+		case c == '"':
+			if !opened && (i+1 == len(block) || isJSONSpace(block[i+1]) || block[i+1] == '"') {
+				return "", false
+			}
+			if opened && (isJSONSpace(block[i-1]) || block[i-1] == '"') {
+				return "", false
+			}
+			opened = !opened
+			out.WriteByte('\\')
+			ok = true
+		}
+		out.WriteByte(c)
+	}
+	return out.String(), ok
+}
+
+func isJSONSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+
+func closesString(rest string) bool {
+	rest = strings.TrimLeft(rest, " \t\r\n")
+	return rest == "" || strings.ContainsRune(",}]:", rune(rest[0]))
 }
 
 // Parse assembles the verdict from the agent's final text. The last fenced
@@ -156,7 +234,7 @@ func Parse(text string) Parsed {
 		Steps             json.RawMessage `json:"steps"`
 		RevisesAssessment *bool           `json:"revises_assessment"`
 	}
-	block := []byte(text[last[2]:last[3]])
+	block, _ := verdictBlockJSON(text[last[2]:last[3]])
 	if json.Unmarshal(block, &parsed) != nil {
 		return p
 	}
@@ -491,9 +569,21 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 			return caseItemRequest{}
 		}
 	}
-	if subject.Kind == "" ||
-		(subject.Stream != "" && subject.Stream != "current" && subject.Stream != "previous") {
+	if subject.Kind == "" {
 		return caseItemRequest{}
+	}
+	// stream only distinguishes a container's current and previous logs. Any
+	// other word there is a slip that must not cost the citation: an evidence
+	// word is what the agent meant for observation, and anything else is
+	// dropped, leaving the card to resolve without that dimension.
+	switch word := strings.ToLower(strings.TrimSpace(subject.Stream)); word {
+	case "current", "previous":
+		subject.Stream = word
+	default:
+		if _, kind := observationKinds[word]; kind && subject.Observation == "" {
+			subject.Observation = word
+		}
+		subject.Stream = ""
 	}
 	item.subject = &subject
 	return item

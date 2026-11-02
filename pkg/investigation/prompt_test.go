@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -280,5 +281,26 @@ func TestSystemPromptUnchangedByExtractions(t *testing.T) {
 	}
 	if !strings.HasSuffix(SystemPrompt, " "+UntrustedClusterData) {
 		t.Fatal("SystemPrompt no longer ends with UntrustedClusterData verbatim")
+	}
+}
+
+// The ref shape in the prompt is an illustration; it must never be a ref a
+// model could copy and have parse.
+func TestPrompt_RefShapeExampleIsNotARef(t *testing.T) {
+	contract := verdictContract(CiteRun)
+	for _, want := range []string{"An index such as ev0, ev_1 or 0 is never a ref", "never in a ref field"} {
+		if !strings.Contains(contract+storyGuidance, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+	example := regexp.MustCompile(`shaped like (ev_[a-z0-9_]+)`).FindStringSubmatch(contract)
+	if example == nil {
+		t.Fatal("prompt shows no ref shape")
+	}
+	if ValidRef(example[1]) {
+		t.Fatalf("the example %q is a valid ref", example[1])
+	}
+	if !regexp.MustCompile(`^ev_[a-z0-9]{26,}_[a-z0-9]{26,}$`).MatchString(example[1]) {
+		t.Fatalf("the example %q does not have the ref's shape", example[1])
 	}
 }
