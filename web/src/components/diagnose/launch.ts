@@ -4,6 +4,7 @@
 // from the contained in-panel engine. The endpoint follows the server MCP mode.
 // In full mode, the client approval prompts gate changes.
 import { type RunSummary } from "../../api/diagnose";
+import { agentLabelFor } from "./DiagnoseContext";
 
 // sq POSIX-single-quotes a string so it's a safe single shell argument regardless
 // of content. Findings carry backticks, quotes, and newlines — inside single
@@ -17,22 +18,21 @@ function sq(s: string): string {
 // used it can be continued first. Unquoted so the shell expands ~.
 const AGENT_DIR = "~/.radar/agent";
 
+// A run with no recorded agent predates recording it, when Claude Code was
+// the only one. Any other agent is named by its own label, with no Claude
+// specifics, and gets no resume command it hasn't been taught.
+function isClaudeRun(run: RunSummary): boolean {
+  return !run.agent || run.agent === "claude";
+}
+
 export function launchAgentLabel(run: RunSummary): string {
-  if (run.agent === "codex") return "Codex";
-  if (run.agent === "opencode") return "OpenCode";
-  if (run.agent === "cursor-agent") return "Cursor";
-  return "Claude Code";
+  return isClaudeRun(run) ? "Claude Code" : agentLabelFor(run.agent ?? "");
 }
 
 // Claude Code asks once whether to trust the folder the resume runs in, and
 // its default answer exits, so a user who presses Enter loses the session.
 export function launchTrustHint(run: RunSummary): string | null {
-  if (
-    run.agent === "codex" ||
-    run.agent === "opencode" ||
-    run.agent === "cursor-agent"
-  )
-    return null;
+  if (!isClaudeRun(run)) return null;
   return "The first time, Claude Code may ask to trust Radar's agent folder. Select Yes before pressing Enter; the default exits.";
 }
 
@@ -81,6 +81,7 @@ export function buildLaunchCommand(
     }
     return `codex resume ${sq(run.sessionId)} -c ${sq(`mcp_servers.radar.url="${mcpUrl}"`)}`;
   }
+  if (!isClaudeRun(run)) return null;
   // Claude Code: resume from the folder Radar runs Claude turns in (claudeWorkDir
   // in agent_claude.go). Older versions find a session only from the folder it
   // was created in, and Claude Code remembers the folder-trust answer there,

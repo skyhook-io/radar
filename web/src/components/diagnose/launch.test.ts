@@ -110,3 +110,38 @@ describe("Claude Code resume command", () => {
     ).toBeNull();
   });
 });
+
+describe("an agent the hand-off doesn't know", () => {
+  const base: RunSummary = {
+    id: "run-x",
+    kind: "Deployment",
+    group: "apps",
+    namespace: "default",
+    name: "demo",
+    context: "test",
+    status: "done",
+    sessionId: "ses_1",
+    createdAt: "2026-09-21T00:00:00Z",
+    updatedAt: "2026-09-21T00:00:00Z",
+  };
+
+  it("is named by its own label, with no Claude warning and no command", () => {
+    const run = { ...base, agent: "gemini" };
+    expect(launchAgentLabel(run)).toBe("Gemini CLI");
+    expect(launchTrustHint(run)).toBeNull();
+    expect(
+      buildLaunchCommand(run, "http://localhost:9280/mcp", "posix"),
+    ).toBeNull();
+  });
+
+  it("falls back to the agent's own name when Radar has no label for it", () => {
+    expect(launchAgentLabel({ ...base, agent: "newagent" })).toBe("newagent");
+  });
+
+  it("still resumes a run from before Radar recorded the agent as Claude Code", () => {
+    expect(launchAgentLabel(base)).toBe("Claude Code");
+    expect(
+      buildLaunchCommand(base, "http://localhost:9280/mcp", "posix"),
+    ).toMatch(/claude --resume 'ses_1'/);
+  });
+});
