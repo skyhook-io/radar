@@ -22,12 +22,14 @@ const listStaleFailures = 3
 // twice the slowest gap between two failed lists that keep failing. The
 // reflector waits under a minute between attempts (backoff doubling from
 // 800ms, capped at 30s, then jittered up to 60s); a 403 fails at once, and a
-// 5xx within the API server's one-minute request timeout plus about ten
-// seconds of the client's Retry-After retries, so that gap stays under two
-// and a half minutes. Silence this long means a list got through, including
-// one that came back at the same resource version, which a quiet kind's
-// often does. A black-holed API server, whose watch-list requests run to
-// their 6-11 minute deadline, reports less often and so never goes stale.
+// 5xx within the API server's one-minute request timeout (it sends no
+// Retry-After then, so the client doesn't retry it), so that gap stays under
+// two and a half minutes. Silence this long means a list got through,
+// including one that came back at the same resource version, which a quiet
+// kind's often does. Failures that report less often never go stale: a
+// black-holed API server, whose watch-list requests run to their 6-11 minute
+// deadline, or a proxy whose 5xx asks for long Retry-After waits, which the
+// client honors up to ten times per request.
 const listQuietAfter = 5 * time.Minute
 
 // listProgress follows one informer's lists through its watch error handler,
