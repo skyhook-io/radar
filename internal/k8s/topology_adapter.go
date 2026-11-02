@@ -261,3 +261,11 @@ func (a *topologyDynamicProvider) IsCRD(kind string) bool {
 func (a *topologyDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
 	return a.discovery.IsCRDGVR(gvr)
 }
+
+func (a *topologyDynamicProvider) ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
+	return a.dynCache.ListWatchedReadOnly(gvr)
+}
+
+func (a *topologyDynamicProvider) Observation(gvr schema.GroupVersionResource) k8score.DynamicResourceObservation {
+	return a.dynCache.Observation(gvr)
+}
