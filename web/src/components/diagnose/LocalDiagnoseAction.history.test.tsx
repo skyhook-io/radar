@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RunSummary } from "../../api/diagnose";
 import { DiagnoseProvider, useDiagnose } from "./DiagnoseContext";
-import { defaultDiagnoseAction } from "./LocalDiagnoseAction";
+import {
+  defaultDiagnoseAction,
+  IssueDiagnoseButton,
+} from "./LocalDiagnoseAction";
 
 const api = vi.hoisted(() => ({
   runs: [] as RunSummary[],
@@ -277,5 +280,84 @@ describe("a resource's last investigation", () => {
     await flush();
     await act(async () => trigger().click());
     expect(dialog()?.textContent).toContain("Pods crash on a bad flag");
+  });
+});
+
+describe("an issue row's Investigate action", () => {
+  const rowToggle = vi.fn();
+  async function renderIssueRow(size: "default" | "compact" = "default") {
+    rowToggle.mockReset();
+    await act(async () =>
+      root.render(
+        <DiagnoseProvider browserURLState={false}>
+          <Probe />
+          <div role="button" onClick={rowToggle} className="overflow-hidden">
+            <IssueDiagnoseButton
+              kind="Deployment"
+              group="apps"
+              namespace="shop"
+              name="cart"
+              size={size}
+            />
+          </div>
+        </DiagnoseProvider>,
+      ),
+    );
+    await flush();
+    await flush();
+  }
+  const issueButton = () =>
+    [...document.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Investigate"),
+    )!;
+
+  it.each(["default", "compact"] as const)(
+    "shows the last investigation outside the row, without toggling it (%s)",
+    async (size) => {
+      api.runs = [investigated()];
+      await renderIssueRow(size);
+      const openRun = vi.spyOn(probe.d, "openRun");
+      await act(async () => issueButton().click());
+      // Portaled out of the row, which clips its contents.
+      expect(dialog()?.parentElement).toBe(document.body);
+      expect(dialog()?.textContent).toContain("Pods crash on a bad flag");
+      await act(async () => buttonNamed("Open investigation").click());
+      expect(openRun).toHaveBeenCalledWith("run-cart");
+      expect(rowToggle).not.toHaveBeenCalled();
+    },
+  );
+
+  it("re-investigates from the panel", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    const openInvestigation = vi.spyOn(probe.d, "openInvestigation");
+    await act(async () => issueButton().click());
+    await act(async () => buttonNamed("Investigate again").click());
+    expect(openInvestigation).toHaveBeenCalledWith({
+      kind: "Deployment",
+      group: "apps",
+      namespace: "shop",
+      name: "cart",
+    });
+    expect(rowToggle).not.toHaveBeenCalled();
+  });
+
+  it("starts straight away when there's nothing recent", async () => {
+    api.runs = [];
+    await renderIssueRow();
+    const openInvestigation = vi.spyOn(probe.d, "openInvestigation");
+    await act(async () => issueButton().click());
+    expect(dialog()).toBeNull();
+    expect(openInvestigation).toHaveBeenCalled();
+  });
+
+  it("closes when the list scrolls", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    await act(async () => issueButton().click());
+    expect(dialog()).not.toBeNull();
+    await act(async () => document.dispatchEvent(new Event("scroll")));
+    await flush();
+    expect(dialog()?.getAttribute("inert")).not.toBeNull();
   });
 });
