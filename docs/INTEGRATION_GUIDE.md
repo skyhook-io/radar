@@ -205,6 +205,12 @@ operator CR itself is a separate feature: check the tool's kind dispatch,
 schema and help before assuming support. Keep root selection and declared-target
 rules integration-owned; reuse the ordinary workload bundle beneath them.
 
+The OpenTelemetry Collector root is the worked example: kind dispatch and
+owned-workload selection in `internal/mcp/tools_diagnose_operator.go`, the
+shared children inventory in `internal/k8s/operator_children.go`, and the
+drawer section in
+`web/src/components/resources/renderers/OpenTelemetryCollectorRenderer.tsx`.
+
 - [ ] Select observed controller-owned workloads through the ownership view,
   checking current UID, API group and controller identity. Keep a configured
   target separate: Flagger's declared target can differ from its generated
