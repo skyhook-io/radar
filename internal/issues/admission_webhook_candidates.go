@@ -349,7 +349,7 @@ func (p *CacheProvider) createTimeoutFact(issue Issue, access podTemplateAccess)
 			slices.ContainsFunc(candidates[mutating+1:], func(c candidate) bool { return c.webhook.mutating }) {
 			msg.WriteString(" Mutating webhooks are called one after another, so several slow ones add up.")
 		}
-		msg.WriteString(" If creates in other namespaces also time out, suspect the API server or etcd instead. Find the slow or unreachable backend before removing or bypassing any webhook.")
+		msg.WriteString(" If creates that none of these webhooks match also time out, suspect the API server or etcd instead. Find the slow or unreachable backend before removing or bypassing any webhook.")
 	}
 	if selectorsUnknown {
 		fmt.Fprintf(&msg, " Webhooks with a namespaceSelector were not checked: namespace %s's labels are not readable.", issue.Namespace)

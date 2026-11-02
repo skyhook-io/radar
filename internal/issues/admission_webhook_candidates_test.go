@@ -131,7 +131,7 @@ func TestCreateTimeoutListsMatchingWebhooks(t *testing.T) {
 		"(2) mutating webhook open.example.com (MutatingWebhookConfiguration open): failurePolicy Ignore, timeout 12s; backend Service policy-system/open has 1 ready pod.",
 		"(3) validating webhook validate.example.com (ValidatingWebhookConfiguration policy): failurePolicy Fail, timeout 10s; backend Service policy-system/down has no ready pods.",
 		"Mutating webhooks are called one after another, so several slow ones add up.",
-		"If creates in other namespaces also time out, suspect the API server or etcd instead. Find the slow or unreachable backend before removing or bypassing any webhook.",
+		"If creates that none of these webhooks match also time out, suspect the API server or etcd instead. Find the slow or unreachable backend before removing or bypassing any webhook.",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message missing %q:\n%s", want, msg)
