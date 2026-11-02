@@ -477,9 +477,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"metadata, but data values won't appear in snippets to avoid leaking " +
 			"secret material through search results. " +
 			"Examples: `readinessProbe user-service`, `image:flagd`, `kind:Pod label:app=cart error`. " +
-			"An IP or ip:port (e.g. a client address from a log) matches that exact address: a hit with " +
-			"site ip:<role> holds it (ip:podIP, ip:hostNetworkPod, ip:exitedPodIP, ip:clusterIP, ip:externalIP, " +
-			"ip:loadBalancerIP, ip:nodeInternalIP...); other sites only mention it. A Pod hit's managedBy is where to inspect next. " +
+			"An IP or ip:port from a log matches only that whole address; site ip:<role> marks a Pod, Service or Node " +
+			"holding it (podIP, hostNetworkPod, clusterIP, nodeInternalIP...; exitedPodIP is a finished pod's old IP, " +
+			"possibly reused); other sites only mention it. " +
 			"Use the namespace parameter for structured namespace scoping. Modifiers such as " +
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
@@ -3547,7 +3547,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	}
 	response.CoverageHint = searchCoverageHint(result, len(parsed.KindFilter) > 0)
 	if ipOnlyQuery(parsed) && input.Filter == "" && result.TotalMatched == result.Total {
-		response.IPHint = searchIPHint(parsed.IPTokens(), result.Hits)
+		response.IPHint = searchIPHint(parsed.Tokens[0], result.Hits)
 	}
 	return toJSONResult(response)
 }
@@ -3564,34 +3564,29 @@ type searchResponseMCP struct {
 	search.Result
 }
 
-// ipOnlyQuery reports a query of IP addresses alone: no other term, modifier
-// or namespace scope that could hide the Pod, Service or Node holding one.
+// ipOnlyQuery reports a query of one IP address alone: no other term (tokens
+// are AND'd, so a second IP hides each one's holder), modifier or namespace
+// scope that could hide the Pod, Service or Node holding it.
 func ipOnlyQuery(q search.Query) bool {
-	return len(q.Tokens) > 0 && len(q.IPTokens()) == len(q.Tokens) &&
+	return len(q.Tokens) == 1 && len(q.IPTokens()) == 1 &&
 		len(q.KindFilter) == 0 && len(q.NSFilter) == 0 && len(q.LabelFilter) == 0 && len(q.ImageFilter) == 0
 }
 
-// searchIPHint says when no hit of an untruncated IP-only search holds a
-// searched IP, so a hit that only mentions the address (a ConfigMap, a Pod's
-// hostIP) isn't read as its holder. coverageHint qualifies it the same way it
-// qualifies any absence. Empty when every IP has a holder among the hits.
-func searchIPHint(ips []string, hits []search.Hit) string {
-	var missing []string
-	for _, ip := range ips {
-		held := slices.ContainsFunc(hits, func(h search.Hit) bool {
-			return slices.ContainsFunc(h.Matched, func(m search.MatchedField) bool {
-				return m.Token == ip && strings.HasPrefix(m.Site, "ip:")
-			})
+// searchIPHint says when no hit of an untruncated one-IP search currently
+// holds the address, so a hit that only mentions it (a ConfigMap, a Pod's
+// hostIP) or an exited pod that once held it isn't read as its holder.
+// coverageHint qualifies it the same way it qualifies any absence.
+func searchIPHint(ip string, hits []search.Hit) string {
+	held := slices.ContainsFunc(hits, func(h search.Hit) bool {
+		return slices.ContainsFunc(h.Matched, func(m search.MatchedField) bool {
+			return m.Token == ip && strings.HasPrefix(m.Site, "ip:") && m.Site != "ip:exitedPodIP"
 		})
-		if !held {
-			missing = append(missing, ip)
-		}
-	}
-	if len(missing) == 0 {
+	})
+	if held {
 		return ""
 	}
-	return fmt.Sprintf("no Pod, Service or Node in Radar's view holds %s; any hits only mention it. "+
-		"A deleted pod's IP no longer resolves, and the address may be outside the cluster", strings.Join(missing, ", "))
+	return fmt.Sprintf("no running Pod, Service or Node in Radar's view holds %s; other hits only mention it or held it "+
+		"before. Pod IPs are reused, a deleted pod's IP no longer resolves, and the address may be outside the cluster", ip)
 }
 
 // toJSONResult marshals data into a text content MCP result.

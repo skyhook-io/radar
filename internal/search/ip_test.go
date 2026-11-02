@@ -2,6 +2,7 @@ package search
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -32,7 +33,7 @@ func TestParse_IPTokensNormalized(t *testing.T) {
 	}
 }
 
-func TestContainsIP_WholeAddressOnly(t *testing.T) {
+func TestIndexIP_WholeAddressOnly(t *testing.T) {
 	cases := []struct {
 		s, ip string
 		v6    bool
@@ -51,8 +52,8 @@ func TestContainsIP_WholeAddressOnly(t *testing.T) {
 		{"fd00::1:5", "fd00::1", true, false},
 	}
 	for _, c := range cases {
-		if got := containsIP(c.s, c.ip, c.v6); got != c.want {
-			t.Errorf("containsIP(%q, %q) = %v, want %v", c.s, c.ip, got, c.want)
+		if got := indexIP(c.s, c.ip, c.v6) >= 0; got != c.want {
+			t.Errorf("indexIP(%q, %q) >= 0 is %v, want %v", c.s, c.ip, got, c.want)
 		}
 	}
 }
@@ -139,5 +140,14 @@ func TestMatch_IPNoPrefixOverlap(t *testing.T) {
 	_, matched, snippets, ok := match(Parse("10.244.1.2:41000"), cm)
 	if !ok || matched[0].Site != "content:data.url" || len(snippets) != 1 {
 		t.Fatalf("ConfigMap mention: ok=%v matched=%+v snippets=%+v", ok, matched, snippets)
+	}
+}
+
+func TestMatch_IPSnippetShowsTheWholeAddress(t *testing.T) {
+	long := "upstream 10.0.1.23:80 " + strings.Repeat("x", 300) + " fallback 10.0.1.2:80"
+	cm := candidate{Kind: "ConfigMap", Namespace: "prod", Name: "cfg", Content: []ContentField{{Path: "data.conf", Value: long}}}
+	_, _, snippets, ok := match(Parse("10.0.1.2"), cm)
+	if !ok || len(snippets) != 1 || !strings.Contains(snippets[0].Snippet, "fallback 10.0.1.2:80") {
+		t.Fatalf("ok=%v snippets=%+v", ok, snippets)
 	}
 }

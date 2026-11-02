@@ -8,25 +8,29 @@ import (
 )
 
 func TestSearchIPHint(t *testing.T) {
-	podHit := search.Hit{Kind: "Pod", Name: "redis-0", Matched: []search.MatchedField{{Token: "10.244.1.7", Site: "ip:podIP"}}}
-	mention := search.Hit{Kind: "ConfigMap", Name: "cfg", Matched: []search.MatchedField{{Token: "10.244.1.7", Site: "content:data.url"}}}
-
-	if h := searchIPHint([]string{"10.244.1.7"}, []search.Hit{podHit, mention}); h != "" {
-		t.Fatalf("holder present, got hint %q", h)
+	ip := "10.244.1.7"
+	hit := func(site string) search.Hit {
+		return search.Hit{Matched: []search.MatchedField{{Token: ip, Site: site}}}
 	}
-	h := searchIPHint([]string{"10.244.1.7"}, []search.Hit{mention})
-	if !strings.Contains(h, "10.244.1.7") || !strings.Contains(h, "only mention") {
-		t.Fatalf("mention-only hint = %q", h)
+	if h := searchIPHint(ip, []search.Hit{hit("ip:podIP"), hit("content:data.url")}); h != "" {
+		t.Fatalf("running holder present, got hint %q", h)
 	}
-	if h := searchIPHint([]string{"10.244.1.7"}, nil); !strings.Contains(h, "deleted pod") {
-		t.Fatalf("no-hit hint = %q", h)
+	for name, hits := range map[string][]search.Hit{
+		"mention only":    {hit("content:data.url")},
+		"exited pod only": {hit("ip:exitedPodIP")},
+		"no hits":         nil,
+	} {
+		if h := searchIPHint(ip, hits); !strings.Contains(h, "no running Pod, Service or Node") || !strings.Contains(h, ip) {
+			t.Errorf("%s: hint = %q", name, h)
+		}
 	}
 }
 
 func TestIPOnlyQuery(t *testing.T) {
 	for q, want := range map[string]bool{
-		"10.244.1.7:6379":        true,
-		"10.244.1.7 10.96.0.10":  true,
+		"10.244.1.7:6379": true,
+		// Tokens are AND'd: two IPs rarely share a holder, so no absence claim.
+		"10.244.1.7 10.96.0.10":  false,
 		"10.244.1.7 redis":       false,
 		"kind:Pod 10.244.1.7":    false,
 		"ns:prod 10.244.1.7":     false,

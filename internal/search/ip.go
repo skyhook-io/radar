@@ -89,22 +89,23 @@ func ipsForTyped(obj runtime.Object) []ipField {
 	return out
 }
 
-// containsIP reports whether s mentions ip as a whole address: 10.0.1.2
-// matches "10.0.1.2:80" and "addr=10.0.1.2," but not "10.0.1.23" or
-// "110.0.1.2". ip is canonical, so an IPv6 address is matched lowercase.
-func containsIP(s, ip string, v6 bool) bool {
+// indexIP returns the byte offset where s mentions ip as a whole address, or
+// -1: 10.0.1.2 matches "10.0.1.2:80" and "addr=10.0.1.2," but not
+// "10.0.1.23" or "110.0.1.2". ip is canonical, so an IPv6 address is matched
+// lowercase.
+func indexIP(s, ip string, v6 bool) int {
 	if v6 {
 		s = strings.ToLower(s)
 	}
 	for from := 0; ; {
 		i := strings.Index(s[from:], ip)
 		if i < 0 {
-			return false
+			return -1
 		}
 		start := from + i
 		end := start + len(ip)
 		if !ipContinues(s, start-1, -1, v6) && !ipContinues(s, end, 1, v6) {
-			return true
+			return start
 		}
 		from = start + 1
 	}

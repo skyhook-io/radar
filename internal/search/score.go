@@ -251,24 +251,25 @@ func scoreIPToken(tok string, addr netip.Addr, c candidate) (int, string, *Match
 		}
 	}
 	for k, v := range c.Labels {
-		if containsIP(v, tok, v6) {
+		if indexIP(v, tok, v6) >= 0 {
 			consider(scoreLabelValSubstr, "label:"+k, nil)
 		}
 	}
 	for k, v := range c.Annotations {
-		if containsIP(v, tok, v6) {
+		if indexIP(v, tok, v6) >= 0 {
 			consider(scoreAnnoSubstr, "annotation:"+k, nil)
 		}
 	}
 	for _, cf := range c.Content {
-		if !containsIP(cf.Value, tok, v6) {
+		at := indexIP(cf.Value, tok, v6)
+		if at < 0 {
 			continue
 		}
 		score := scoreContentSubstr
 		if strings.EqualFold(cf.Value, tok) {
 			score = scoreContentExact
 		}
-		consider(score, "content:"+cf.Path, &MatchSnippet{Token: tok, Path: cf.Path, Snippet: snippetForToken(cf.Value, tok)})
+		consider(score, "content:"+cf.Path, &MatchSnippet{Token: tok, Path: cf.Path, Snippet: snippetAt(cf.Value, at)})
 	}
 	if best == 0 {
 		return 0, "", nil, false
@@ -286,6 +287,15 @@ func snippetForToken(value, tok string) string {
 	byteIdx := strings.Index(valueLow, tokLow)
 	if byteIdx < 0 {
 		return string(runes[:maxSnippetRunes])
+	}
+	return snippetAt(value, byteIdx)
+}
+
+// snippetAt cuts a snippet of value centered on the byte offset byteIdx.
+func snippetAt(value string, byteIdx int) string {
+	runes := []rune(value)
+	if len(runes) <= maxSnippetRunes {
+		return value
 	}
 	prefixRunes := len([]rune(value[:byteIdx]))
 	half := maxSnippetRunes / 2
