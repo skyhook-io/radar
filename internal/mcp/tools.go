@@ -286,10 +286,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"often faster than reading " +
 			"ReplicaSet histories or audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Bound the window with since; narrow by " +
-			"namespace, kind or name. Without kind or name, it also lists desired-state edits, " +
-			"creates and deletes of custom resources not owned by another object, and of Nodes " +
-			"(cluster-scoped, so not in a namespace query), at most 3 rows per kind while other " +
-			"kinds compete for the page; narrowHint names kinds left out. Runs of 5+ plain creates are listed " +
+			"namespace, kind or name. Unfiltered, it adds unowned custom resources and Nodes " +
+			"(edits, creates, deletes; no Nodes with namespace). Runs of 5+ plain creates are listed " +
 			"in `created` as `+<seconds after first>s Kind/name` lines, counted in limit. " +
 			"A namespace query (no kind/name) adds clusterScopedChanges: webhook config " +
 			"changes that may affect it. Omit namespace for other changes outside it. " +
