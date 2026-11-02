@@ -1240,6 +1240,10 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 		return "WebhookUnavailable", true
 	}
 	switch {
+	case admissionCreateTimeoutPattern.MatchString(msg):
+		// The API server gave up on the create before answering. Admission
+		// webhooks are the usual cause, but the message names none.
+		return "CreateTimeout", true
 	case admissionWebhookDenialPattern.MatchString(msg):
 		return "WebhookDenied", true
 	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
@@ -1280,6 +1284,10 @@ var (
 	admissionNoEndpointsNamePattern    = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
 	admissionServiceNotFoundPattern    = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
 )
+
+// apierrors.NewTimeoutError from the create handler: "Timeout: request did
+// not complete within requested timeout - context deadline exceeded".
+var admissionCreateTimeoutPattern = regexp.MustCompile(`(?i)^(?:(?:error creating(?: job)?:|create pod \S+ in statefulset \S+ failed error:)\s*)?timeout: request did not complete within`)
 
 func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBackendFailure, bool) {
 	lower := strings.ToLower(message)

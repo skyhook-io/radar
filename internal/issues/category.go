@@ -39,7 +39,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			// Pod Security admission (built-in PSA) is NOT a webhook — don't
 			// mislabel it as such.
 			return issuesapi.CategoryPodSecurityViolation
-		case "WebhookDenied", "WebhookUnavailable":
+		case "WebhookDenied", "WebhookUnavailable", "CreateTimeout":
 			return issuesapi.CategoryAdmissionWebhookBlocking
 		case "RBACForbidden":
 			return issuesapi.CategoryRBACForbidden

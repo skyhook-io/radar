@@ -230,6 +230,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		groupedForContext = out
 	}
 	out = enrichDiagnosticContextAuthorized(out, flatForContext, groupedForContext, p, f.CanReadClusterScoped)
+	out = enrichAdmissionWebhookCandidates(out, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated})
 	if !f.SkipPodTemplateContext {
 		out = enrichPodTemplateContext(out, flatForContext, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated}, f.Grouped, Ref{})
 	}
