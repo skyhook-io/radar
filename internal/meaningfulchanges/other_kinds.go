@@ -358,7 +358,11 @@ func kindCountList(list []KindCount) string {
 	const named = 5
 	parts := make([]string, 0, named+1)
 	for _, k := range list[:min(len(list), named)] {
-		parts = append(parts, fmt.Sprintf("%d %s changes", k.Count, k.Kind))
+		noun := "changes"
+		if k.Count == 1 {
+			noun = "change"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s %s", k.Count, k.Kind, noun))
 	}
 	if len(list) > named {
 		parts = append(parts, fmt.Sprintf("%d more kinds", len(list)-named))
