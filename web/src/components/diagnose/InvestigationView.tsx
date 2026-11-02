@@ -41,6 +41,7 @@ import {
   investigationPaneCenteredScrollTop,
   canStopInvestigation,
   canContinueInvestigation,
+  canContinueInOwnAgent,
   readOnlyNotice,
   canInvestigateFurther,
 } from "./investigationState";
@@ -87,6 +88,10 @@ import {
   type RunSummary,
 } from "../../api/diagnose";
 import { useDiagnose } from "./DiagnoseContext";
+import {
+  ExampleInvestigationProvider,
+  replayExampleInvestigation,
+} from "./exampleInvestigation";
 import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
 import {
   TurnView,
@@ -329,16 +334,26 @@ export function InvestigationView({
   onOpenResource,
   onOpenTimeline,
   onRevealDestination,
+  example = false,
+  onCloseExample,
+  onHandoffAllowedChange,
 }: {
   run: RunSummary;
   agentLabel: string;
   maximized: boolean;
+  /** The bundled example: replayed from the bundle, with nothing that acts
+   *  on it or sends it anywhere. */
+  example?: boolean;
+  onCloseExample?: () => void;
   /** Opens an unambiguous evidence subject in Radar's native resource views. */
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
   /** Opens Radar's Timeline filtered to the resource a changes card is about. */
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
   /** Makes a page this view navigates to visible: restores or closes the panel. */
   onRevealDestination?: () => void;
+  /** Whether nothing is writing to the agent's session, so the header may
+   *  offer to continue it in the user's own agent. */
+  onHandoffAllowedChange?: (allowed: boolean) => void;
 }) {
   const { kind, namespace, name } = run;
   const {
@@ -353,9 +368,11 @@ export function InvestigationView({
   // Capabilities are the declared ones of the agent that ran this run, not
   // the picker's: a reopened run keeps the backend it was made with.
   const runAgent = agents.find((agent) => agent.name === run.agent);
-  const explanationEnabled = supportsAssessmentExplanation(runAgent);
+  const explanationEnabled =
+    !example && supportsAssessmentExplanation(runAgent);
   // A question-only run has no resource to bind a confirmed fix to.
-  const canApply = runAgent?.apply === true && !isQuestionOnly(run);
+  const canApply =
+    !example && runAgent?.apply === true && !isQuestionOnly(run);
   // Read through a ref by the stream callback, which lives as long as the
   // run and would otherwise keep the value from before the agents loaded.
   const verifiesAfterApplyRef = useRef(false);
@@ -616,7 +633,11 @@ export function InvestigationView({
     activityRevealRequestIdRef.current = 0;
     evidenceCardLayoutRef.current.clear();
     evidenceProjectionTurnsRef.current = [];
-    const cancel = subscribeRun(run.id, {
+    const subscribe = example
+      ? (_id: string, handlers: Parameters<typeof subscribeRun>[1]) =>
+          replayExampleInvestigation(handlers)
+      : subscribeRun;
+    const cancel = subscribe(run.id, {
       onEvent: (ev: DiagnoseStreamEvent, sequence?: number) => {
         const live = replayCompleteRef.current;
         switch (ev.type) {
@@ -1654,6 +1675,24 @@ export function InvestigationView({
     currentAssessment?.diagnosis &&
     (currentAssessment.diagnosis.remediation?.length ?? 0) > 0,
   );
+  const handoffAllowed =
+    !example &&
+    canContinueInOwnAgent({
+      run,
+      busy,
+      requestPending,
+      gone,
+      streamReady,
+      verificationPending,
+      latestTurnStatus: lastTurn?.status,
+    });
+  useEffect(() => {
+    onHandoffAllowedChange?.(handoffAllowed);
+  }, [handoffAllowed, onHandoffAllowedChange]);
+  useEffect(
+    () => () => onHandoffAllowedChange?.(false),
+    [onHandoffAllowedChange],
+  );
   const earlierPlan =
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
@@ -1801,7 +1840,7 @@ export function InvestigationView({
     setEvidenceUpdateAvailable(false);
   };
 
-  const composer = !unavailable ? (
+  const composer = example ? null : !unavailable ? (
     <div className="shrink-0 border-t border-theme-border px-3 py-2.5">
       {canStop ? (
         <button
@@ -1947,10 +1986,34 @@ export function InvestigationView({
     ) : undefined;
 
   return (
+    <ExampleInvestigationProvider value={example}>
     <div
       data-investigation-view
       className={`@container/investigation relative flex min-h-0 flex-1 flex-col bg-theme-surface ${maximized ? "investigation-split-enabled" : ""}`}
     >
+      {example ? (
+        <div
+          data-investigation-example
+          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
+        >
+          <Badge severity="info" size="sm">
+            Example
+          </Badge>
+          <span className="min-w-0 flex-1">
+            A sample investigation from a test cluster, not from yours. It is
+            read-only.
+          </span>
+          {onCloseExample ? (
+            <button
+              type="button"
+              onClick={onCloseExample}
+              className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
+            >
+              Close example
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {stale ? (
         <div className="flex items-center gap-2 border-b border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
@@ -1964,7 +2027,17 @@ export function InvestigationView({
           </span>
         </div>
       ) : null}
-      {!stale && gone ? (
+      {example && gone ? (
+        <div
+          role="alert"
+          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+          <span className="min-w-0 flex-1">
+            Radar couldn&apos;t load the example. Close it and open it again.
+          </span>
+        </div>
+      ) : !stale && gone ? (
         <div className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
           <span className="min-w-0 flex-1">
@@ -1982,7 +2055,7 @@ export function InvestigationView({
           </button>
         </div>
       ) : null}
-      {!stale && !gone && endedEarly ? (
+      {!example && !stale && !gone && endedEarly ? (
         <div
           role="status"
           className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
@@ -2204,7 +2277,8 @@ export function InvestigationView({
                             turn.status === "error" &&
                             !turn.question &&
                             !turn.apply &&
-                            !stale
+                            !stale &&
+                            !example
                               ? retryDiagnosis
                               : undefined
                           }
@@ -2749,5 +2823,6 @@ export function InvestigationView({
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
     </div>
+    </ExampleInvestigationProvider>
   );
 }

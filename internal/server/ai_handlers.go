@@ -578,14 +578,15 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            resourcecontext.TierBasic,
+		AccessChecker:   s.newRequestScopedChecker(r),
+		IssueSummary:    issueSum,
+		AuditSummary:    auditSum,
+		Scheduling:      schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
+		Execution:       executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -626,6 +627,13 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		// lookup returned nil (no edges): handler call returned nil, Build's
 		// `rel == nil && opts.Topology != nil` fallback re-ran the identical
 		// scan. Leaving opts.Relationships unset is the canonical path.
+	}
+	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
+		return (namespace == "" || len(s.getUserNamespaces(r, []string{namespace})) > 0) && s.canRead(r, group, resource, namespace, verb)
+	})
+	if children := k8s.OperatorChildrenForObject(obj, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }); children != nil {
+		opts.Children = children.Context
+		opts.ChildrenUnavailable = children.Unavailable != ""
 	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) })

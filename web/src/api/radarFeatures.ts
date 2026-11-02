@@ -50,6 +50,16 @@ export const RADAR_FEATURES = {
   // resume reports success while leaving automated.enabled: false in place.
   argoRollback: { label: 'Argo CD rollbacks', flag: 'argoRollbackSync', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   argoAutoSyncEnable: { label: 'Auto-sync controls for Applications with automated.enabled: false', flag: 'argoRollbackSync', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  // Never blocks a control. An older Radar's sync drops the Application's
+  // sync options when the request omits them, and prunes when it omits prune,
+  // so useArgoSync sends both explicitly unless this is supported. Also tells
+  // the UI that Enable auto-sync on a never-suspended Application starts with
+  // prune off.
+  argoSyncInheritance: { label: "Syncs that keep the Application's sync options", flag: 'argoSyncInheritance', flagShippedWithEndpoint: true },
+  // Never blocks a control: tells the UI that Enable auto-sync on a
+  // never-suspended Application starts with selfHeal off; an older Radar
+  // turns it on.
+  argoEnableSelfHealOff: { label: 'Auto-sync that starts without self-heal', flag: 'argoEnableSelfHealOff', flagShippedWithEndpoint: true },
   helmSourceIdentity: { label: 'Helm source selection', flag: 'helmSourceIdentity', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>

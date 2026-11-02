@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 type Severity string
@@ -889,4 +890,36 @@ var CELBindings = []CELBinding{
 	{Name: "issue_timing_basis", Type: BindingString},
 	{Name: "operation_retry_count", Type: BindingInt},
 	{Name: "stuck", Type: BindingBool},
+}
+
+// RelatedFindingsGroup carries current findings from one bounded local inventory.
+// Absence or an empty list of groups means no enrichment was supplied, not that
+// associations or issues are absent. Omitted findings never establish recovery.
+type RelatedFindingsGroup struct {
+	// AssociatedVia is the association anchor, not the finding subject.
+	AssociatedVia Ref `json:"associatedVia"`
+	// Kinds is a nonempty finite set of resource kinds selected for assessment.
+	// Extent is not used; names, when present, lists the whole set.
+	Kinds resourceapi.KindSet `json:"kinds"`
+	// Checked counts authorized candidate resource snapshots, not findings or API calls.
+	Checked int `json:"checked"`
+	// Unknown counts checked snapshots the producer could not assess. A known
+	// inactive state is not itself unknown. Checked-Unknown is not a healthy count.
+	Unknown int `json:"unknown"`
+	// Findings retain their original subjects and IDs; omission is not recovery.
+	Findings []Issue `json:"findings,omitempty"`
+	// Gaps describe limitations reading the associated inventory; encoded as [] when empty.
+	Gaps []resourceapi.Gap `json:"gaps"`
+	// Truncated means findings were omitted from output, not that inventory reads failed.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// MarshalJSON keeps the required gaps array non-null for every producer.
+func (g RelatedFindingsGroup) MarshalJSON() ([]byte, error) {
+	type wire RelatedFindingsGroup
+	w := wire(g)
+	if w.Gaps == nil {
+		w.Gaps = []resourceapi.Gap{}
+	}
+	return json.Marshal(w)
 }

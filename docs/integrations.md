@@ -2,6 +2,13 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
+Operational Issues in an open resource detail view refresh after observed root
+resource changes, coalesced to limit expensive checks. A once-per-minute visible-tab
+refresh covers Pod-only changes and findings that depend on elapsed time. Returning
+to a stale view refreshes it without requiring the detail view to be reopened.
+
+Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polling: their Issues request scans the whole cluster.
+
 ## OpenTelemetry Operator
 
 Radar provides native resource details for `opentelemetry.io` **OpenTelemetryCollector**
@@ -31,9 +38,17 @@ image upgrades are highlighted. This does not attribute injected Pods or infer
 collector relationships from endpoint strings.
 
 **REST and MCP:** existing resource list/get tools gain concise native summaries.
-Collector summaries include reconciliation state, mode, version and image; the
-reconciliation-time Pod count is confined to the labeled UI. Instrumentation summaries distinguish configuration from blocked upgrades.
-No new MCP tool or response field is introduced. Existing generic ownership remains;
+Collector summaries include reconciliation state, mode, version and image.
+The optional `openTelemetryCollector.reportedPodReadiness` is the operator's Pod-count snapshot,
+not current readiness; read failures or a switch to sidecar mode can retain an
+earlier value. `openTelemetryCollector.declaredPipelines` gives the declared count and
+up to five sorted names, with truncation reported. That block is omitted when
+configuration cannot be previewed; omission does not mean zero pipelines. Alpha
+YAML previews are limited to 64 KiB. Instrumentation summaries name up to ten
+languages under `openTelemetryInstrumentation.recordedUpgradeBlocks`, using the
+same `{count,names,namesTruncated}` preview as declared pipelines,
+without copying arbitrary status messages. These are additive summary fields;
+no new MCP tool is introduced. Existing generic ownership remains;
 no endpoint-derived topology edges, telemetry queries, or new Issues source are added.
 Existing condition Issues surface managed reconciliation failures and status-read
 errors with the operator's message; unmanaged and stale observations are suppressed.
@@ -52,6 +67,10 @@ customer-managed read permissions for caller-authorized tools when needed. This
 baseline exception is not a full-object UI/REST confidentiality guarantee; runtime
 response authorization remains separate. It does not revoke
 permissions already granted by other roles.
+
+### Instrumentation upgrade history
+
+The neutral “Upgrade block recorded” status describes `status.upgradeBlockedVersions`, written during an operator startup upgrade pass. A record can remain after a manual image change; it is not a current compatibility or runtime-health verdict. The drawer shows at most ten recorded languages, with shortened labels and a link to full YAML for remaining entries. Compact agent summaries retain their bounded language preview; detail reads retain native status without a duplicate context block.
 
 ## Flagger
 
@@ -89,6 +108,12 @@ cause. A failed new rollout does not imply the primary is down. Suspended failed
 rollouts remain visible; ordinary waiting/progress and `Promoted=False` remain quiet.
 No new workflow actions, topology edge types, traffic queries or MCP tools are added.
 
+Compact REST/MCP summaries also identify the configured strategy and carry the
+reported counters under `flaggerCanary`: weight percentage for weighted analysis, iteration
+for iteration-based analysis, and failed checks when reported. A reported zero
+is retained; an absent counter means unreported, not zero. These counters are
+controller snapshots, with the same freshness limits as the recorded phase.
+
 | Resource | Group | Topology | Detail View | AI Summary |
 |---|---|---|---|---|
 | Canary | flagger.app | No dedicated nodes or edges; primary navigation is in Related Resources | Recorded rollout, analysis and explicit refs | Recorded outcome, suspension and target |
@@ -107,6 +132,13 @@ kinds are unavailable. Locally, Radar uses the current Kubernetes identity's acc
 The Cloud integration-read baseline does not add these resources to generated
 caller-role grants. That baseline is not a deny rule for the response paths above.
 Default collector/caller access for existing integrations is unchanged.
+
+### Flagger dependency checks
+
+Issues reports missing declared Flagger targets, analysis MetricTemplates and provider Secrets used by those templates. These are warnings about release reconciliation/evaluation, not proof the stable primary is down. Suspended/deleting Canaries produce no reference warnings; skipped analysis suppresses only analysis-reference warnings; zero target replicas are valid.
+
+Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
+
 
 ## ConfigMap and Secret reflection (Reflector)
 
@@ -561,7 +593,7 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 ### What Radar Shows
 
-**Topology:** Certificate → Issuer/ClusterIssuer edges connect each certificate to its observed built-in issuer, including ownerless issuers. Omitted `issuerRef.kind` and `issuerRef.group` use cert-manager defaults. Only referenced issuers are added; external issuer groups are not inferred. ClusterIssuer visibility uses its exact cluster-scoped read permission. Resource details and MCP context distinguish issuer dependencies from autoscaling. The full provisioning chain (Certificate → CertificateRequest → Order → Challenge) is connected via owner references.
+**Topology:** Certificates, CertificateRequests, Orders and Challenges in the graph link to the observed Issuer or ClusterIssuer named by `spec.issuerRef`. Only issuers in `cert-manager.io` are linked; omitted kind and group default to `Issuer` and `cert-manager.io`. A ClusterIssuer appears only to callers allowed to read ClusterIssuers. Owner references connect the provisioning chain. Issuer links show dependencies, not issuance success.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-topology.png" alt="cert-manager Topology" width="800">
@@ -991,11 +1023,15 @@ They roll up under three categories, split by what you'd go and look at: `backup
 
 Radar surfaces failure evidence from `KafkaConnector` resources in `kafka.strimzi.io` through Issues, including the API and MCP. A connector can remain `RUNNING` while an individual task is `FAILED`; Radar checks both. Explicit connector/task failures and `NotReady=True` produce one warning per connector, attributed to Strimzi's operator snapshot. Task IDs are bounded; configurations, exception messages and stack traces are not included in the issue.
 
-This requires existing Kubernetes read access to the connector CRs, with no Kafka credentials or additional settings. Connectors managed only through the Connect REST API are outside this coverage. Radar does not connect to Connect or Kafka directly. Radar Cloud's default integration-read role does not add `kafkaconnectors` access because full connector objects can contain credentials; callers need an existing separately authorized read grant.
+Radar's collector needs Kubernetes read access to the connector CRs, with no Kafka credentials or additional settings. Connectors managed only through the Connect REST API are outside this coverage. Radar does not connect to Connect or Kafka directly. Radar Cloud's default integration-read role does not add `kafkaconnectors` access because full connector objects can contain credentials. Radar's resource views and curated findings follow its [namespace-level read policy](authentication.md#read-granularity-namespace-level); withholding a full-object Kubernetes grant does not independently restrict those views.
 
 Missing or malformed observations do not establish health. Radar suppresses these warnings when the observed generation is absent or differs from the resource generation, reconciliation is paused, or the resource is terminating. Matching generations only establishes that Strimzi processed that specification; runtime state can change before the next reconciliation. Intentional `PAUSED`/`STOPPED` states and task-count differences are not treated as failures. Failure onset is unknown because operator condition timestamps do not reliably establish when a task failed.
 
 The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaConnectorStatus-reference) and [connector management documentation](https://strimzi.io/docs/operators/1.2.0/deploying.html#con-switching-api-to-kafka-connector-str). Discovery uses the served preferred version; partial-discovery recovery probes `v1` and `v1beta2`.
+
+`diagnose` supports `KafkaConnector` and `KafkaConnect` using cached operator status. KafkaConnect and related resource details can show up to five connector findings, linked by connector labels and a verified ownership chain. Findings keep the connector as their subject and do not change the viewed resource’s health. Missing findings do not establish recovery.
+
+Unreadable owner links omit this context. MCP requires exact owner-object read permissions; the UI follows namespace-level Related Resources access, so their coverage may differ. Modern worker attribution also requires StrimziPodSet collection. See [MCP semantics and access requirements](mcp.md#strimzi-connector-evidence).
 
 ## CloudNativePG
 

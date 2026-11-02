@@ -15,19 +15,19 @@ import (
 // GitOps tool input types
 
 type manageGitOpsInput struct {
-	Action    string `json:"action" jsonschema:"action: sync, refresh, terminate, rollback (ArgoCD only), reconcile or sync-with-source (FluxCD), suspend, or resume"`
+	Action    string `json:"action" jsonschema:"action: sync, refresh, terminate, rollback (Argo CD only), reconcile or sync-with-source (Flux), suspend, or resume"`
 	Tool      string `json:"tool" jsonschema:"gitops tool: argocd or fluxcd"`
-	Kind      string `json:"kind,omitempty" jsonschema:"resource kind (FluxCD only): kustomization, helmrelease, gitrepository, etc."`
+	Kind      string `json:"kind,omitempty" jsonschema:"resource kind (Flux only): kustomization, helmrelease, gitrepository, etc."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 
 	// ArgoCD sync options (all optional; ignored for FluxCD).
-	Revision    string   `json:"revision,omitempty" jsonschema:"sync only — branch/tag/commit. Empty = use targetRevision."`
-	Prune       *bool    `json:"prune,omitempty" jsonschema:"sync/rollback — delete resources no longer in source. Default true for sync, false for rollback."`
+	Revision    string   `json:"revision,omitempty" jsonschema:"sync: single-source branch/tag/SHA. Omit: pin matching compared revisions, else resolve at run time. Branches float on retry."`
+	Prune       *bool    `json:"prune,omitempty" jsonschema:"sync/rollback — delete resources no longer in source. Default false."`
 	DryRun      *bool    `json:"dry_run,omitempty" jsonschema:"sync/rollback — preview only, do not apply."`
 	Force       *bool    `json:"force,omitempty" jsonschema:"sync only — kubectl --force; required for some immutable-field changes."`
 	ApplyOnly   *bool    `json:"apply_only,omitempty" jsonschema:"sync only — skip PreSync/PostSync/SyncFail hooks."`
-	SyncOptions []string `json:"sync_options,omitempty" jsonschema:"sync only — Argo SyncOption strings, e.g. Replace=true, ServerSideApply=true."`
+	SyncOptions []string `json:"sync_options,omitempty" jsonschema:"sync only — Argo SyncOption strings, e.g. Replace=true, ServerSideApply=true. Omit to use the Application's own syncPolicy.syncOptions; a list replaces them ([] = none). Include existing options you want to keep (e.g. CreateNamespace=true)."`
 
 	// ArgoCD rollback options (rollback only).
 	HistoryID *int64 `json:"history_id,omitempty" jsonschema:"rollback only — status.history[].id from get_resource Application (first is 0); auto-sync must be off; before Argo CD 2.12, rollback across a single-source/multi-source change or of a multi-source entry can deploy wrong revisions or render nothing; prune can delete resources."`
@@ -115,7 +115,7 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 	}
 
 	if err != nil {
-		if tool == "argocd" && action == "rollback" && errors.Is(err, gitops.ErrAutoSyncEnabled) {
+		if tool == "argocd" && errors.Is(err, gitops.ErrAutoSyncEnabled) {
 			return nil, nil, fmt.Errorf("%w (MCP: manage_gitops with tool=argocd and action=suspend)", err)
 		}
 		return nil, nil, err
@@ -176,7 +176,7 @@ func validateGitOpsActionInput(action string, in manageGitOpsInput) error {
 	if !u.applyOnly && in.ApplyOnly != nil {
 		rejected = append(rejected, "apply_only")
 	}
-	if !u.syncOptions && len(in.SyncOptions) > 0 {
+	if !u.syncOptions && in.SyncOptions != nil {
 		rejected = append(rejected, "sync_options")
 	}
 	if !u.historyID && in.HistoryID != nil {

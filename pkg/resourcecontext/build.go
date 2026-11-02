@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -35,11 +37,27 @@ import (
 // Hosts pre-compute issue, audit and policy summaries; Build never calls
 // internal services.
 type Options struct {
-	Reflections ReflectionLookup
-	Tier        ContextTier
+	// RelatedFindings is access-checked by the host and discarded on connection change.
+	RelatedFindings []issuesapi.RelatedFindingsGroup
+	// OpenTelemetryAutoInstrumentation was computed from access-checked cache reads by the
+	// host. A connection change discards the whole observation.
+	OpenTelemetryAutoInstrumentation *OpenTelemetryAutoInstrumentationContext
+	// OpenTelemetryAutoInstrumentationUnavailable requires nil OpenTelemetryAutoInstrumentation: the
+	// host discarded the observation. Nil/false means none was supplied.
+	OpenTelemetryAutoInstrumentationUnavailable bool
+	// Children is an access-aware direct-child preview, precomputed by hosts.
+	// Apply Get checks before capping so unreadable refs cannot displace readable ones.
+	Children *ChildrenContext
+	// ChildrenUnavailable requires nil Children: the whole host observation was
+	// discarded. With both nil/false, this host supplied no child observation.
+	ChildrenUnavailable bool
+	Reflections         ReflectionLookup
+	Tier                ContextTier
 
-	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
-	// as fully authorized — local-kubeconfig / tests).
+	// AccessChecker gates Build-projected references, including Children when
+	// supplied. Hosts authorize other precomputed blocks, including
+	// OpenTelemetryAutoInstrumentation and any declared but
+	// unresolved coordinates within it. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
 	// Topology supplies relationships when Relationships is nil. Without
@@ -171,12 +189,42 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		return &ResourceContext{Tier: opts.Tier}
 	}
 
-	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj)}
+	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj), Children: opts.Children}
+	if opts.OpenTelemetryAutoInstrumentation != nil {
+		rc.AutoInstrumentation = &AutoInstrumentationContext{OpenTelemetry: opts.OpenTelemetryAutoInstrumentation}
+	}
 	omitted := newOmittedTracker()
+	// Canonical context references still require Get access, even when a
+	// host's relationship view intentionally exposes namespace-readable names.
+	if opts.Children != nil {
+		children := *opts.Children
+		children.Items = filterRefs(ctx, opts.AccessChecker, opts.Children.Items, "children", nil)
+		if len(children.Items) != len(opts.Children.Items) {
+			children.Narrowed = true
+		}
+		if children.Items == nil {
+			children.Items = []ContextRef{}
+		}
+		rc.Children = &children
+	}
+	if opts.ChildrenUnavailable {
+		omitted.add("children", OmittedUnavailable)
+	}
+	if opts.OpenTelemetryAutoInstrumentationUnavailable {
+		omitted.add("autoInstrumentation.openTelemetry", OmittedUnavailable)
+	}
 
 	// Topology supplies networking, scaling and spec-declared relations;
 	// the caller's ownership answer supplies controllers and GitOps evidence.
 	rel := opts.Relationships
+	// A StorageClass's volumes and claims come from cache-wide reads, so say
+	// when those inventories were incomplete, even if nothing was found.
+	// Relationships a host supplies carry no inventory state to assess.
+	if rel == nil && opts.Topology != nil && ident.Group == "storage.k8s.io" && ident.Kind == "StorageClass" {
+		if gap := storageClassInventoryGap(opts.Provider); gap != "" {
+			omitted.add("dependents", gap)
+		}
+	}
 	if rel == nil && opts.Topology != nil {
 		// Resolve the topology-pseudo-kind so cross-group CRDs (Knative
 		// serving.knative.dev/Service, CAPI cluster.x-k8s.io/Cluster, …)
@@ -292,10 +340,15 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
 		rc.MonitorTargets = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
 
-		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependencies), "dependencies", omitted)
-		rc.Dependents = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependents), "dependents", omitted)
+		if dependencies, dependents, ok := storageChain(ident.Group, ident.Kind, rel); ok {
+			rc.Dependencies = filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted)
+			rc.Dependents = filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
+		} else {
+			rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
+				toContextRefs(rel.Dependencies), "dependencies", omitted)
+			rc.Dependents = filterRefs(ctx, opts.AccessChecker,
+				toContextRefs(rel.Dependents), "dependents", omitted)
+		}
 
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
@@ -366,6 +419,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	rc.WorkloadSummary = buildWorkloadSummary(obj)
 	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.ServiceAccountSummary = buildServiceAccountSummary(ctx, obj, opts.AccessChecker, omitted)
 	rc.NodeSummary = buildNodeSummary(obj)
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
@@ -384,6 +438,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.Serving = opts.Serving
 
 	// 4. Pre-computed summaries — pass-through.
+	rc.RelatedFindings = opts.RelatedFindings
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
 	rc.AppReferences = filterAppReferences(ctx, opts.AppReferences, opts.AccessChecker, omitted)
@@ -411,6 +466,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		}
 	}
 
+	addWebhookContext(ctx, obj, opts, rc, omitted)
 	rc.Omitted = omitted.collect()
 	return rc
 }
@@ -690,6 +746,31 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 						appendRef(ReferenceUse{Kind: "Ingress", Group: "networking.k8s.io", Namespace: ing.Namespace, Name: ing.Name, Paths: []string{"spec.tls[].secretName"}})
 					}
 				}
+			}
+		}
+		if accounts, ok := provider.(topology.ServiceAccountProvider); ok {
+			// Assess before reading: a sync that completes between the two
+			// must not make a partial snapshot look complete.
+			gap := inventoryGap(provider, string(k8score.ServiceAccounts), []string{target.namespace})
+			sas, err := accounts.ServiceAccounts()
+			if err != nil {
+				sas = nil
+				gap = OmittedUnavailable
+			}
+			if gap != "" {
+				omitted.add("referencedBy", gap)
+			}
+			for _, sa := range sas {
+				if sa == nil || sa.Namespace != target.namespace {
+					continue
+				}
+				var paths []string
+				for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+					if ref.Name == target.name {
+						paths = append(paths, ref.Path)
+					}
+				}
+				appendRef(ReferenceUse{Kind: "ServiceAccount", Namespace: sa.Namespace, Name: sa.Name, Paths: paths})
 			}
 		}
 	}
@@ -1119,6 +1200,75 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	return out
 }
 
+// inventoryCoverage is implemented by providers that can say whether a
+// namespace's inventory of a kind is complete. Without it an empty list can't
+// be told apart from a namespace Radar is still loading, failed to load or
+// doesn't collect.
+type inventoryCoverage interface {
+	AssessKindRead(resource string, namespaces []string) k8score.KindReadAssessment
+}
+
+// inventoryGap says why an empty read of resource in namespaces (nil for every
+// namespace) can't be taken as "none": still loading, or failed, uncollected
+// or unwatched. Call it before reading, so a sync that completes in between
+// can't make a partial read look complete.
+func inventoryGap(provider topology.ResourceProvider, resource string, namespaces []string) OmittedReason {
+	coverage, ok := provider.(inventoryCoverage)
+	if !ok {
+		return ""
+	}
+	assessment := coverage.AssessKindRead(resource, namespaces)
+	switch {
+	case assessment.Complete:
+		return ""
+	case assessment.TargetReadiness() == k8score.KindPending:
+		return OmittedCacheCold
+	default:
+		return OmittedUnavailable
+	}
+}
+
+// storageClassInventoryGap covers a StorageClass's volumes and its claims,
+// which can be in any namespace.
+func storageClassInventoryGap(provider topology.ResourceProvider) OmittedReason {
+	gaps := []OmittedReason{
+		inventoryGap(provider, string(k8score.PersistentVolumes), nil),
+		inventoryGap(provider, string(k8score.PersistentVolumeClaims), nil),
+	}
+	switch {
+	case slices.Contains(gaps, OmittedUnavailable):
+		return OmittedUnavailable
+	case slices.Contains(gaps, OmittedCacheCold):
+		return OmittedCacheCold
+	default:
+		return ""
+	}
+}
+
+func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *ServiceAccountSummary {
+	sa, ok := obj.(*corev1.ServiceAccount)
+	if !ok {
+		return nil
+	}
+	var secrets, pulls []ContextRef
+	for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+		target := ContextRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+		if ref.ImagePull {
+			pulls = append(pulls, target)
+		} else {
+			secrets = append(secrets, target)
+		}
+	}
+	summary := &ServiceAccountSummary{
+		SecretRefs:       filterBoundedRefs(ctx, ac, secrets, "serviceAccountSummary.secretRefs", omitted),
+		ImagePullSecrets: filterBoundedRefs(ctx, ac, pulls, "serviceAccountSummary.imagePullSecrets", omitted),
+	}
+	if len(summary.SecretRefs) == 0 && len(summary.ImagePullSecrets) == 0 {
+		return nil
+	}
+	return summary
+}
+
 func buildNodeSummary(obj runtime.Object) *NodeSummary {
 	node, ok := obj.(*corev1.Node)
 	if !ok || node == nil {
@@ -1188,6 +1338,38 @@ func compactResourceList(resources corev1.ResourceList) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// storageChain maps a claim, volume or class's storage relationships into
+// dependencies and dependents: a claim depends on its volume and class, a
+// volume on its class and is used by its claim, and a class is used by its
+// volumes and claims. A class can back thousands of volumes, so the caller
+// bounds both lists.
+func storageChain(group, kind string, rel *topology.Relationships) (dependencies, dependents []ContextRef, ok bool) {
+	pick := func(dst []ContextRef, refs []topology.ResourceRef, group, kind string) []ContextRef {
+		for _, ref := range refs {
+			if ref.Group == group && ref.Kind == kind {
+				dst = append(dst, ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name})
+			}
+		}
+		return dst
+	}
+	dependencies = toContextRefs(rel.Dependencies)
+	dependents = toContextRefs(rel.Dependents)
+	switch resourceid.ResourceKey(group, kind, "", "") {
+	case resourceid.ResourceKey("", "PersistentVolumeClaim", "", ""):
+		dependencies = pick(dependencies, rel.StorageRefs, "", "PersistentVolume")
+		dependencies = pick(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+	case resourceid.ResourceKey("", "PersistentVolume", "", ""):
+		dependencies = pick(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+	case resourceid.ResourceKey("storage.k8s.io", "StorageClass", "", ""):
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolume")
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+	default:
+		return nil, nil, false
+	}
+	return dependencies, dependents, true
 }
 
 func buildPVCSummary(obj runtime.Object) *PVCSummary {
@@ -1685,6 +1867,82 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 	if len(out) == 0 {
 		return nil
 	}
+	return out
+}
+
+// Denied namespaces must not make reference authorization unbounded.
+const maxReferenceAccessChecks = 4 * maxReferencedByItems
+
+// filterBoundedRefs dedupes refs and keeps the readable ones, taking one ref
+// per kind in turn so a kind with many matches cannot crowd out the others.
+// Access checks are cached per (group, kind, namespace) and capped, and the
+// result is capped at maxReferencedByItems; either cap records budget_exceeded.
+func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+	sorted := append([]ContextRef(nil), refs...)
+	less := func(a, b ContextRef) bool {
+		return resourceid.ResourceKey(a.Group, a.Kind, a.Namespace, a.Name) < resourceid.ResourceKey(b.Group, b.Kind, b.Namespace, b.Name)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
+	type bucket struct {
+		refs []ContextRef
+		next int
+	}
+	var buckets []bucket
+	var last, kindKey string
+	for _, ref := range sorted {
+		key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if key == last {
+			continue
+		}
+		last = key
+		kind := resourceid.ResourceKey(ref.Group, ref.Kind, "", "")
+		if len(buckets) == 0 || kind != kindKey {
+			buckets = append(buckets, bucket{})
+			kindKey = kind
+		}
+		buckets[len(buckets)-1].refs = append(buckets[len(buckets)-1].refs, ref)
+	}
+	decisions := make(map[string]bool)
+	var out []ContextRef
+	for {
+		advanced := false
+		for i := range buckets {
+			b := &buckets[i]
+			if b.next == len(b.refs) {
+				continue
+			}
+			ref := b.refs[b.next]
+			b.next++
+			advanced = true
+			allowed := true
+			if ac != nil {
+				key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, "")
+				var known bool
+				allowed, known = decisions[key]
+				if !known {
+					if len(decisions) == maxReferenceAccessChecks {
+						omitted.add(field, OmittedBudgetExceeded)
+						continue
+					}
+					allowed = checkRef(ctx, ac, &ref)
+					decisions[key] = allowed
+				}
+			}
+			if !allowed {
+				omitted.add(field, OmittedRBACDenied)
+				continue
+			}
+			out = append(out, ref)
+			if len(out) > maxReferencedByItems {
+				omitted.add(field, OmittedBudgetExceeded)
+				return out[:maxReferencedByItems]
+			}
+		}
+		if !advanced {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return less(out[i], out[j]) })
 	return out
 }
 

@@ -64,6 +64,11 @@ var recreateStashKinds = map[string]bool{
 	"UDPRoute":                       true,
 	"TLSRoute":                       true,
 	"ReferenceGrant":                 true,
+	// A binding's roleRef is immutable, so re-pointing one is a recreate.
+	"Role":               true,
+	"RoleBinding":        true,
+	"ClusterRole":        true,
+	"ClusterRoleBinding": true,
 }
 
 // RecreateJoinKind reports whether deletes of this kind are stashed for

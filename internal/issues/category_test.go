@@ -92,6 +92,7 @@ func TestClassify(t *testing.T) {
 		{"statefulset degraded", classifyInput{Source: SourceProblem, Kind: "StatefulSet", Reason: "2/3 ready"}, issuesapi.CategoryWorkloadDegraded},
 		{"daemonset degraded", classifyInput{Source: SourceProblem, Kind: "DaemonSet", Reason: "1 unavailable"}, issuesapi.CategoryWorkloadDegraded},
 		{"webhook backend unavailable", classifyInput{Source: SourceScheduling, Kind: "Deployment", Reason: "WebhookUnavailable"}, issuesapi.CategoryAdmissionWebhookBlocking},
+		{"pod create timed out", classifyInput{Source: SourceScheduling, Kind: "ReplicaSet", Reason: "CreateTimeout"}, issuesapi.CategoryAdmissionWebhookBlocking},
 
 		// problem / service
 		{"service no pods", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "Selector matches no pods"}, issuesapi.CategoryServiceNoEndpoints},

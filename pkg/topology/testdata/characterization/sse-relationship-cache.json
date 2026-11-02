@@ -3223,6 +3223,9 @@
     {
       "root": "|PersistentVolumeClaim|team|data-db-0",
       "relationships": {
+        "configRefs": [
+          {"kind": "StorageClass", "namespace": "", "name": "standard", "group": "storage.k8s.io"}
+        ],
         "consumers": [
           {"kind": "Pod", "namespace": "team", "name": "db-0"}
         ],

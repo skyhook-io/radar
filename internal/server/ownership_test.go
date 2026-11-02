@@ -461,11 +461,11 @@ func TestDirectLookupsWithholdWhatTheUserMayNotList(t *testing.T) {
 		pods, volumes []string
 	}{
 		{"alice", []string{"Pod alpha/a"}, []string{"PersistentVolumeClaim alpha/claim"}},
-		{"bob", []string{"Pod alpha/a", "Pod beta/b"}, []string{"PersistentVolume /pv-1", "PersistentVolumeClaim alpha/claim"}},
+		{"bob", []string{"Pod alpha/a", "Pod beta/b"}, []string{"PersistentVolume /pv-1", "PersistentVolumeClaim alpha/claim", "PersistentVolumeClaim beta/other"}},
 	} {
 		rel := &topology.Relationships{
 			Pods:      []topology.ResourceRef{{Kind: "Pod", Namespace: "alpha", Name: "a"}, {Kind: "Pod", Namespace: "beta", Name: "b"}},
-			Consumers: []topology.ResourceRef{{Kind: "PersistentVolume", Name: "pv-1"}, {Kind: "PersistentVolumeClaim", Namespace: "alpha", Name: "claim"}},
+			Consumers: []topology.ResourceRef{{Kind: "PersistentVolume", Name: "pv-1"}, {Kind: "PersistentVolumeClaim", Namespace: "alpha", Name: "claim"}, {Kind: "PersistentVolumeClaim", Namespace: "beta", Name: "other"}},
 		}
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		env.srv.withholdDirectLookups(r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: tc.user})), rel)
@@ -474,6 +474,36 @@ func TestDirectLookupsWithholdWhatTheUserMayNotList(t *testing.T) {
 		}
 		if got := ownershipRefNames(rel.Consumers); !slices.Equal(got, tc.volumes) {
 			t.Errorf("%s: consumers = %v, want %v", tc.user, got, tc.volumes)
+		}
+	}
+}
+
+func TestDirectLookupsWithholdClusterScopedStorageTheUserMayNotList(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("dev", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	env.srv.permCache.Get("dev", nil).SetCanI("list", "", "persistentvolumes", "", false)
+	env.srv.permCache.Get("dev", nil).SetCanI("list", "storage.k8s.io", "storageclasses", "", false)
+	env.srv.permCache.Set("admin", nil, &auth.UserPermissions{})
+	env.srv.permCache.Get("admin", nil).SetCanI("list", "", "persistentvolumes", "", true)
+	env.srv.permCache.Get("admin", nil).SetCanI("list", "storage.k8s.io", "storageclasses", "", true)
+	for _, tc := range []struct {
+		user           string
+		volumes, class []string
+	}{
+		{"dev", nil, nil},
+		{"admin", []string{"PersistentVolume /disk"}, []string{"StorageClass /fast"}},
+	} {
+		rel := &topology.Relationships{
+			StorageRefs: []topology.ResourceRef{{Kind: "PersistentVolume", Name: "disk"}},
+			ConfigRefs:  []topology.ResourceRef{{Kind: "StorageClass", Group: "storage.k8s.io", Name: "fast"}},
+		}
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		env.srv.withholdDirectLookups(r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: tc.user})), rel)
+		if got := ownershipRefNames(rel.StorageRefs); !slices.Equal(got, tc.volumes) {
+			t.Errorf("%s: storageRefs = %v, want %v", tc.user, got, tc.volumes)
+		}
+		if got := ownershipRefNames(rel.ConfigRefs); !slices.Equal(got, tc.class) {
+			t.Errorf("%s: configRefs = %v, want %v", tc.user, got, tc.class)
 		}
 	}
 }

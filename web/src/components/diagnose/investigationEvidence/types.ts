@@ -109,6 +109,7 @@ export interface InvestigationResourceContext extends DiagnosisResourceContext {
     highestSeverity?: string;
     topFinding?: string;
   };
+  relatedFindings?: unknown;
   policySummary?: unknown;
   podSummary?: unknown;
   templateDivergence?: {
@@ -381,6 +382,8 @@ export type InvestigationEvidenceData =
   | {
       type: "issue";
       issue: Issue;
+      /** Association anchor; parent verification cannot establish recovery of this issue. */
+      associatedVia?: DiagnosisResourceRef;
       /**
        * A broad `issues` query can return failures from other resources. Keep
        * those factual observations, but do not let agent selection alone imply

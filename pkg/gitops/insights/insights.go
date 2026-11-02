@@ -77,8 +77,8 @@ type Summary struct {
 	// verdicts are not in the CR and per-resource health below, if any, is
 	// Radar's own read — the UI says so.
 	ResourceHealthMode string `json:"resourceHealthMode,omitempty"`
-	// RemoteDestination: the Application or Flux object deploys to another
-	// cluster. Radar derives nothing about its resources from here.
+	// RemoteDestination: the current destination or recorded Argo comparison
+	// is elsewhere. Radar derives nothing from same-named local resources.
 	RemoteDestination bool `json:"remoteDestination,omitempty"`
 	// ResourceHealthFromAPI: per-resource health came from the controller's
 	// API server, so in appTree mode the verdicts shown are still Argo's.
@@ -588,7 +588,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 			parsed := diagnose.ParseArgoOperationError(msg)
 			action := fallback(parsed.Action, "Open Activity for operation details.")
-			if !gitops.IsInClusterDestination(root) {
+			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
 				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed); remoteAction != "" {
 					action = remoteAction
@@ -632,6 +632,8 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				suppressedNamespaces[parsed.RemediationTarget] = true
 			}
 			out = append(out, issue)
+		} else if blocked := argoSyncWindowBlockedIssue(phase, root); blocked != nil {
+			out = append(out, *blocked)
 		} else if phase == "Running" {
 			out = append(out, Issue{Severity: SeverityInfo, Scope: ScopeOperation, Reason: "Running", Message: "A sync operation is currently running.", Action: "Wait for completion or terminate if it is stuck."})
 		} else if mismatch := DetectArgoRollbackRevisionMismatch(root); mismatch != nil {
@@ -738,7 +740,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// or a per-resource Issue is. A warning-tier per-resource finding
 		// doesn't count as explained either, but it already names a resource;
 		// stacking an events lead about the same app on top of it is noise.
-		if !degradedResourcesExplained(out) && !hasResourceFinding(out) && gitops.IsInClusterDestination(root) {
+		if !degradedResourcesExplained(out) && !hasResourceFinding(out) && gitops.IsInClusterDestination(root) && !gitops.ArgoAppliesElsewhere(root) {
 			if health, _, _ := unstructured.NestedString(root.Object, "status", "health", "status"); health == "Degraded" {
 				if iss := degradedResourceFromEvents(root, resolver); iss != nil {
 					out = append(out, *iss)
@@ -770,7 +772,11 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			degraded = unexplainedFluxDegraded(resourceTree, out)
 		}
 		if degraded > 0 {
-			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
+			message := fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded))
+			if len(resourceTree.Warnings) > 0 {
+				message += " among the resources shown"
+			}
+			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: message, Action: "Use the graph or Resources tab to inspect affected resources."})
 		}
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure
@@ -976,6 +982,37 @@ func WorstResourceProblem(problems []ResourceProblem) (ResourceProblem, bool) {
 		}
 	}
 	return best, true
+}
+
+// argoSyncWindowBlockedIssue reports an operation the Argo CD controller is
+// holding for a sync window: it stays Running, with the message "Sync
+// operation blocked by sync window", until a window allows it, so "currently
+// running" would misdescribe it. A termination requested meanwhile waits for
+// the window too, since the controller only acts on the operation then.
+func argoSyncWindowBlockedIssue(phase string, root *unstructured.Unstructured) *Issue {
+	if phase != "Running" && phase != "Terminating" {
+		return nil
+	}
+	message, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
+	if !strings.Contains(message, "blocked by sync window") {
+		return nil
+	}
+	if phase == "Terminating" {
+		return &Issue{
+			Severity: SeverityWarning,
+			Scope:    ScopeOperation,
+			Reason:   "SyncWindowBlocked",
+			Message:  "This operation was terminated while a sync window held it. Argo CD completes the termination when a window allows syncing. It applies nothing more; changes already applied stay.",
+			Action:   "Wait for the window to open, or change the AppProject's sync windows.",
+		}
+	}
+	return &Issue{
+		Severity: SeverityWarning,
+		Scope:    ScopeOperation,
+		Reason:   "SyncWindowBlocked",
+		Message:  "A sync window is holding this sync. Argo CD continues it when the AppProject's sync windows allow syncing.",
+		Action:   "Wait for the window, or terminate the operation to drop it. Termination also waits for a window; changes already applied stay.",
+	}
 }
 
 // dedupeIssues removes Issues that share the same (scope, reason, message,
@@ -2371,7 +2408,7 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 				rawMsg = fallback(rawMsg, msg)
 				msg = parsed.Summary
 			}
-			if !gitops.IsInClusterDestination(root) {
+			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
 				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
 				if remoteAction != "" {

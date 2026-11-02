@@ -404,17 +404,15 @@ func (m *Manager) detectCNI(ctx context.Context, platform string) (string, bool)
 		}
 	}
 
-	// Check for Calico
-	_, err = m.k8sClient.AppsV1().DaemonSets("kube-system").Get(ctx, "calico-node", metav1.GetOptions{})
-	if err == nil {
-		log.Printf("[traffic] Found calico-node DaemonSet")
+	// The Tigera operator, the install Calico's docs recommend, runs calico-node
+	// in calico-system; the plain manifest keeps it in kube-system.
+	if m.daemonSetExists(ctx, "calico-node", "kube-system", "calico-system") {
 		return "calico", false
 	}
 
-	// Check for Flannel
-	_, err = m.k8sClient.AppsV1().DaemonSets("kube-system").Get(ctx, "kube-flannel-ds", metav1.GetOptions{})
-	if err == nil {
-		log.Printf("[traffic] Found kube-flannel-ds DaemonSet")
+	// The current upstream kube-flannel.yml installs into its own kube-flannel
+	// namespace; older manifests used kube-system.
+	if m.daemonSetExists(ctx, "kube-flannel-ds", "kube-system", "kube-flannel") {
 		return "flannel", false
 	}
 
@@ -447,6 +445,16 @@ func (m *Manager) detectCNI(ctx context.Context, platform string) (string, bool)
 
 	log.Printf("[traffic] No known CNI detected, platform: %s", platform)
 	return "unknown", false
+}
+
+func (m *Manager) daemonSetExists(ctx context.Context, name string, namespaces ...string) bool {
+	for _, ns := range namespaces {
+		if _, err := m.k8sClient.AppsV1().DaemonSets(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			log.Printf("[traffic] Found %s/%s DaemonSet", ns, name)
+			return true
+		}
+	}
+	return false
 }
 
 // generateRecommendation creates a recommendation based on cluster info

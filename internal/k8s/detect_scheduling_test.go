@@ -362,6 +362,12 @@ func TestClassifyAdmissionFailure(t *testing.T) {
 		{`Error creating job: admission webhook "jobs.example.com" denied the request: nope`, "WebhookDenied", true},
 		{`Error creating job: Internal error occurred: failed calling webhook "jobs.example.com": context deadline exceeded`, "WebhookUnavailable", true},
 		{`some unrelated message`, "", false},
+		{`Error creating: Timeout: request did not complete within requested timeout - context deadline exceeded`, "CreateTimeout", true},
+		{`Timeout: request did not complete within requested timeout 34s`, "CreateTimeout", true},
+		{`Error creating job: Timeout: request did not complete within requested timeout - context deadline exceeded`, "CreateTimeout", true},
+		{`(combined from similar events): Error creating: Timeout: request did not complete within requested timeout - context deadline exceeded`, "CreateTimeout", true},
+		{`Error creating: pods "x" is forbidden: Timeout waiting for quota evaluation`, "", false},
+		{`application log: Timeout: request did not complete within requested timeout`, "", false},
 		// client-go's event aggregation prefixes a burst of similar events.
 		{`(combined from similar events): Error creating: admission webhook "vpod.example.com" denied the request: nope`, "WebhookDenied", true},
 		{`(combined from similar events): Error creating: admission webhook "policy.example.com" denied the request: exceeded quota`, "WebhookDenied", true},

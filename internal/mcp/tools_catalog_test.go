@@ -244,6 +244,15 @@ func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
 	}
 }
 
+func TestAutoInstrumentationContractIsDiscoverableOnDetailTools(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		has := strings.Contains(tool.Description, "autoInstrumentation.openTelemetry checks per-language refs for NEW Pods, never existing injection")
+		if (tool.Name == "get_resource" || tool.Name == "diagnose") != has {
+			t.Errorf("%s prospective request contract present=%v", tool.Name, has)
+		}
+	}
+}
+
 func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
@@ -254,6 +263,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// get_resource's result shapes, with "only object_not_found means it is
 	// absent", a third, and get_resource's "manager: none is not unmanaged" a
 	// fourth.
+	// OTel request evaluation must distinguish NEW Pod configuration from existing
+	// admission history. Its concise native contract appears on both detail tools.
 	// Annotation pause intent and stored acknowledgement need distinct source
 	// semantics in the catalog so agents do not infer fresh external health
 	// or treat absence as ruling out another pause mechanism.
@@ -261,8 +272,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Rollback guidance and its source-mode warning: 66,669 bytes without exec.
-		maxCatalogBytes         = 66700
+		// Main uses 67,317 bytes; application evidence adds 864 and Strimzi
+		// routing adds 208. Preserve main's 33-byte headroom.
+		maxCatalogBytes         = 68422
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -341,7 +353,8 @@ func TestToolsEmittingApplicationConfigurationMarkerDocumentRankingBoundary(t *t
 		}
 		for _, want := range []string{
 			"application_configuration_change",
-			"not a causal or universal relevance verdict",
+			"ranking hint, not proof of cause",
+			"unflagged changes may still matter",
 		} {
 			if !strings.Contains(description, want) {
 				t.Errorf("%s tool description does not document %q", name, want)
@@ -588,7 +601,7 @@ func TestDiagnoseContractMatchesServerMode(t *testing.T) {
 	if strict.Annotations == nil || !strict.Annotations.ReadOnlyHint {
 		t.Fatal("read-only MCP diagnose must advertise readOnlyHint")
 	}
-	if strings.Contains(strict.Description, "Read-only EXCEPT") || !strings.Contains(strict.Description, "strict read-only endpoint") {
+	if strings.Contains(strict.Description, "Read-only except") || !strings.Contains(strict.Description, "strict read-only endpoint") {
 		t.Fatalf("read-only diagnose description does not match its contract: %q", strict.Description)
 	}
 }
@@ -739,4 +752,62 @@ func TestSearchDescriptionNamesCoverageStatus(t *testing.T) {
 		}
 	}
 	t.Fatal("search tool missing")
+}
+
+// The generator gives *int32 fields int32 bounds; a replica count is never
+// negative, so the published schema must not advertise it.
+func TestManageWorkloadReplicasSchemaIsNonNegative(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name != "manage_workload" {
+			continue
+		}
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatalf("marshal schema: %v", err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Minimum *float64 `json:"minimum"`
+				Maximum *float64 `json:"maximum"`
+				Type    any      `json:"type"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("unmarshal schema: %v", err)
+		}
+		replicas, ok := schema.Properties["replicas"]
+		if !ok {
+			t.Fatal("manage_workload has no replicas property")
+		}
+		if replicas.Minimum == nil || *replicas.Minimum != 0 {
+			t.Fatalf("replicas minimum = %v, want 0", replicas.Minimum)
+		}
+		if replicas.Maximum == nil || *replicas.Maximum != 2147483647 {
+			t.Fatalf("replicas maximum = %v, want the int32 maximum", replicas.Maximum)
+		}
+		if !strings.Contains(fmt.Sprint(replicas.Type), "null") {
+			t.Fatalf("replicas type = %v, want nullable so scale can tell an omitted count from 0", replicas.Type)
+		}
+		return
+	}
+	t.Fatal("manage_workload is not registered")
+}
+
+// The issues filter example is copied by agents; getSeconds() is the seconds
+// field (0-59), so a date example built on it compiles and matches nothing.
+func TestIssuesFilterDateExampleUsesEpochSeconds(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name != "issues" {
+			continue
+		}
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(schema), "getSeconds()") || !strings.Contains(string(schema), "int(timestamp(") {
+			t.Fatalf("issues filter date example must compare against int(timestamp(...)), not getSeconds(): %s", schema)
+		}
+		return
+	}
+	t.Fatal("issues is not registered")
 }

@@ -77,6 +77,8 @@ type mockResourceProvider struct {
 	jobs         []*batchv1.Job
 	cronJobs     []*batchv1.CronJob
 	hpas         []*autoscalingv2.HorizontalPodAutoscaler
+	pvcs         []*corev1.PersistentVolumeClaim
+	pvs          []*corev1.PersistentVolume
 }
 
 func (m mockResourceProvider) Pods() ([]*corev1.Pod, error)               { return m.pods, nil }
@@ -93,10 +95,10 @@ func (m mockResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) { ret
 func (m mockResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error)    { return nil, nil }
 func (m mockResourceProvider) Secrets() ([]*corev1.Secret, error)          { return nil, nil }
 func (m mockResourceProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
-	return nil, nil
+	return m.pvcs, nil
 }
 func (m mockResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
-	return nil, nil
+	return m.pvs, nil
 }
 func (m mockResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
 	return m.hpas, nil

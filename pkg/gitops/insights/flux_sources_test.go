@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -26,7 +27,11 @@ func fluxIssueTree(t *testing.T, root *unstructured.Unstructured, sources []*uns
 		parts := strings.SplitN(obj.GetAPIVersion(), "/", 2)
 		g[gitopstree.ResourceRef{Group: parts[0], Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName()}] = obj
 	}
-	tree, _, err := gitopstree.NewBuilder(g, nil).WithReadCheck(func(ref gitopstree.ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), root.GetKind(), root.GetNamespace(), root.GetName(), strings.SplitN(root.GetAPIVersion(), "/", 2)[0])
+	session, err := ownershiptest.Scan(ownershiptest.World{}).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, _, err := gitopstree.NewBuilder(g, nil).WithOwnership(session).WithReadCheck(func(ref gitopstree.ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), root.GetKind(), root.GetNamespace(), root.GetName(), strings.SplitN(root.GetAPIVersion(), "/", 2)[0])
 	if err != nil {
 		t.Fatal(err)
 	}

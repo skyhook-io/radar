@@ -4,6 +4,9 @@ import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { MCP_TOOL_CATALOG } from './mcpToolCatalog'
 import { Tooltip } from '../ui/Tooltip'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
+
+const MCP_EXAMPLE_PROMPT ="Use Radar to find what's broken in my cluster and why."
 
 interface MCPSetupDialogProps {
   open: boolean
@@ -11,21 +14,28 @@ interface MCPSetupDialogProps {
   readOnly?: boolean
   execTools?: boolean
   mcpUrl: string
+  /** Opens Radar's own investigation composer. Omit where investigations can't run. */
+  onInvestigate?: () => void
 }
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    // Plain-HTTP origins and denied permission reject the async Clipboard API;
+    // copyText falls back, and the tick must not claim a copy that didn't happen.
+    void copyText(text).then((ok) => {
+      if (!ok) return
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
   }
 
   return (
     <Tooltip content="Copy to clipboard" position="left" wrapperClassName="absolute top-2 right-2">
     <button
       onClick={handleCopy}
+      aria-label={copied ? 'Copied' : 'Copy to clipboard'}
       className="p-1.5 rounded-md bg-theme-elevated/50 hover:bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
     >
       {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
@@ -45,7 +55,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, onInvestigate }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -321,6 +331,20 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
                 </div>
               </Disclosure>
             ))}
+
+            <p className="pt-1 text-xs text-theme-text-tertiary leading-relaxed">
+              <span className="font-medium text-theme-text-secondary">Tip:</span> name Radar in your prompt so your
+              agent uses Radar instead of kubectl, e.g. <code className="inline-code">{MCP_EXAMPLE_PROMPT}</code>
+            </p>
+            {onInvestigate && (
+              <button
+                type="button"
+                onClick={() => { onClose(); onInvestigate() }}
+                className="text-xs text-accent-text hover:underline underline-offset-2"
+              >
+                Or investigate from Radar itself →
+              </button>
+            )}
           </div>
 
           {/* Available tools */}
