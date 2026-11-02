@@ -119,6 +119,8 @@ export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
+  /** Shell family where a hand-off command runs; absent from older Radars. */
+  localShell?: 'powershell' | 'posix'
   logs: boolean           // Log viewer (pods/log)
   portForward: boolean    // Port forwarding (pods/portforward)
   secrets: boolean        // List secrets

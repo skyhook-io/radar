@@ -1511,6 +1511,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
+	caps.LocalShell = "posix"
+	if runtime.GOOS == "windows" {
+		caps.LocalShell = "powershell"
+	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
 	}

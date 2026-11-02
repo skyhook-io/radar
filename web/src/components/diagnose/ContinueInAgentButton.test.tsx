@@ -91,7 +91,8 @@ describe("canContinueInOwnAgent", () => {
 });
 
 describe("ContinueInAgentButton", () => {
-  const command = "cd ~ && claude --resume 'ses_1'";
+  const command =
+    "mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume 'ses_1'";
 
   it("is one button that opens a dialog, named for the agent", () => {
     const html = renderToStaticMarkup(

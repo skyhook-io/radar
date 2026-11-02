@@ -31,8 +31,10 @@ const TERMINAL_TITLE = "Radar Investigation";
 export function useContinueInAgentCommand(
   run: RunSummary | null,
 ): string | null {
-  const { mcpReadOnly } = useCapabilitiesContext();
-  return run ? buildLaunchCommand(run, mcpEndpointUrl(mcpReadOnly)) : null;
+  const { mcpReadOnly, localShell } = useCapabilitiesContext();
+  return run
+    ? buildLaunchCommand(run, mcpEndpointUrl(mcpReadOnly), localShell)
+    : null;
 }
 
 export function ContinueInAgentButton({
