@@ -921,12 +921,14 @@ type ReflectionContext struct {
 // not an operator's runtime set. An absent block is not an empty inventory.
 type ChildrenContext struct {
 	Items []ContextRef `json:"items"`
-	// Complete: every direct child in the caller-readable scope is included.
+	// Complete means every direct child in the caller-readable scope is included.
+	// False means this was not established, not necessarily that children are missing.
 	// Uncollected kinds, loading/read/unresolved inventory gaps or truncation
 	// make this false, without implying a runtime failure.
 	Complete bool `json:"complete"`
 	// Narrowed means permissions may exclude children, not that hidden children exist.
 	Narrowed bool `json:"narrowed,omitempty"`
-	// Truncated marks the preview's response limit, independently of inventory gaps.
+	// Truncated means known children were omitted by the response cap.
+	// When true, Complete is false; false does not rule out inventory gaps.
 	Truncated bool `json:"truncated,omitempty"`
 }

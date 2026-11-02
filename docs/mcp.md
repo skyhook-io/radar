@@ -1569,9 +1569,9 @@ Collector and Canary detail context can include `children`: up to 25 current
 | Field | Meaning |
 |---|---|
 | `items` | Followable resource references; no grandchildren or guessed names. |
-| `complete` | Every direct child in the caller-readable scope is included. Uncollected kinds, loading/read/unresolved inventory gaps or truncation make this false. |
+| `complete` | Every direct child in the caller-readable scope is included. False means this was not established (inventory gaps or truncation), not necessarily that children are missing. |
 | `narrowed` | Permissions may exclude children; this does not assert hidden children exist. |
-| `truncated` | The preview reached its response limit. |
+| `truncated` | Known children were omitted by the response cap, so `complete` is false. |
 
 An absent block is not an empty inventory. A discarded observation is reported
 through `omitted`. Child coverage is separate from runtime health and the apps
@@ -1582,7 +1582,7 @@ returns root configuration, Issues, current-UID Warning events and up to three
 `ownedWorkloads` bundles for directly controlled Deployments, StatefulSets or
 DaemonSets. Each entry contains `ref` and either ordinary workload `diagnosis` or
 a collection `error`. `ownedWorkloadsTruncated` marks the three-bundle cap;
-inventory gaps are qualified separately. Follow child references or use
+apps workload inventory gaps are qualified separately in `warnings`. Follow child references or use
 `list_resources` for apps Deployments, StatefulSets or DaemonSets in the namespace.
 Inspect selected candidates with `get_resource`/`diagnose`; these are leads, not
 exhaustive operator membership. Retry loading inventories; request access only

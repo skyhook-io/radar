@@ -307,7 +307,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 func diagnoseWorkload(ctx context.Context, input diagnoseInput, expectedOwner *ownership.Observation) (*diagnoseResponse, error) {
 	kindNorm := normalizeDiagnoseKind(input.Kind)
 	if kindNorm == "" {
-		return nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, Argo Rollout, application, kustomization, Flux HelmRelease, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
+		return nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, Argo Rollout, OpenTelemetryCollector, application, kustomization, Flux HelmRelease, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
 	}
 	expectedGroup := workloadDiagnoseGroup(kindNorm)
 	if input.Group != "" && !strings.EqualFold(input.Group, expectedGroup) {

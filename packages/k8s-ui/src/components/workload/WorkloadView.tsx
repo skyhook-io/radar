@@ -125,8 +125,8 @@ interface WorkloadViewProps {
   onCollapseToDrawer?: () => void
   /** false = collapsed drawer mode, true (default) = full expanded mode */
   expanded?: boolean
-  /** false on the outgoing layer during an expand/collapse crossfade — suspend
-   *  keyboard shortcuts so the invisible layer doesn't capture them (default true) */
+  /** false on the outgoing layer during an expand/collapse crossfade: suspend
+   *  keyboard shortcuts and let hosted renderers pause their reads (default true). */
   active?: boolean
   /** Close the drawer (collapsed mode) */
   onClose?: () => void

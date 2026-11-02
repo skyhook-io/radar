@@ -16,10 +16,13 @@ import (
 // selection for Collector/Canary roots. Unrelated CRD gaps do not make the
 // supported apps inventory unknown; non-workloads cannot displace runtime slots.
 type OperatorChildren struct {
-	Context       *resourcecontext.ChildrenContext
-	AppsWorkloads []resourcecontext.ContextRef // first four: diagnose shows three
-	// AppsWorkloadsComplete means all three apps workload inventories were readable
-	// and checked. AppsWorkloads itself remains a bounded sample.
+	Context *resourcecontext.ChildrenContext
+	// AppsWorkloads contains up to four directly controller-owned apps workloads;
+	// the fourth lets diagnose detect truncation of its three-bundle response.
+	AppsWorkloads []resourcecontext.ContextRef
+	// AppsWorkloadsComplete is meaningful only when Context is nonnil. It means
+	// all three apps workload inventories were readable and checked;
+	// AppsWorkloads itself remains a bounded sample.
 	AppsWorkloadsComplete bool
 	// Unavailable is a readreason code for a discarded observation; consumers
 	// project it as the generic omitted reason unavailable. Empty means usable.
