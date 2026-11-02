@@ -423,12 +423,7 @@ export function DiagnoseSurface({
     ],
   );
   const revealDestination = useCallback(
-    () =>
-      revealInvestigationDestination(
-        setMaximized,
-        d.dismissForNavigation,
-        narrow,
-      ),
+    () => revealInvestigationDestination(setMaximized, d.dismissForNavigation, narrow),
     [d.dismissForNavigation, narrow, setMaximized],
   );
   const openEvidenceTimeline = useCallback(
@@ -486,7 +481,8 @@ export function DiagnoseSurface({
     : undefined;
   // Consent replaces the detail pane even if goHome retained an older run id.
   // Header identity and actions must describe what is actually visible.
-  const visibleRunDetail = d.needsConsent || d.startCapacity ? null : activeRun;
+  const visibleRunDetail =
+    d.needsConsent || d.startCapacity ? null : activeRun;
   // The investigation view knows when its agent session is quiet; the header
   // offers the hand-off only then.
   const [handoffAllowed, setHandoffAllowed] = useState(false);
@@ -797,21 +793,21 @@ export function DiagnoseSurface({
           {visibleRunDetail &&
             !exampleOpen &&
             headerPresentation.runActionsClass !== null && (
-              <div
-                className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
-              >
-                {renderRunActions?.({
-                  run: visibleRunDetail,
-                  onRunUpdated: d.updateRunSummary,
-                })}
-                {handoffAllowed && handoffCommand && (
-                  <ContinueInAgentButton
-                    run={visibleRunDetail}
-                    command={handoffCommand}
-                  />
-                )}
-              </div>
-            )}
+            <div
+              className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
+            >
+              {renderRunActions?.({
+                run: visibleRunDetail,
+                onRunUpdated: d.updateRunSummary,
+              })}
+              {handoffAllowed && handoffCommand && (
+                <ContinueInAgentButton
+                  run={visibleRunDetail}
+                  command={handoffCommand}
+                />
+              )}
+            </div>
+          )}
           {!fullWidthForced && (!maximized || d.canRestoreWorkspace) && (
             <Tooltip
               content={maximized ? "Restore" : "Expand"}
