@@ -36,6 +36,7 @@ import (
 // Hosts pre-compute issue, audit and policy summaries; Build never calls
 // internal services.
 type Options struct {
+	// RelatedApplicationFindings is access-checked by the host and discarded on connection change.
 	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings
 	// OpenTelemetryAutoInstrumentation was computed from access-checked cache reads by the
 	// host. A connection change discards the whole observation.

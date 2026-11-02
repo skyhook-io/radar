@@ -892,13 +892,25 @@ var CELBindings = []CELBinding{
 	{Name: "stuck", Type: BindingBool},
 }
 
-// RelatedApplicationFindings links canonical source findings without changing the subject's health.
+// RelatedApplicationFindings carries findings associated through one local resource.
+// Absence means no bundle was provided, not that an association or issue is absent.
+// Neither an empty bundle nor omitted findings prove health or recovery.
 type RelatedApplicationFindings struct {
-	Gaps      []resourceapi.Gap `json:"gaps"`
-	Checked   int               `json:"checked"`
-	Unknown   int               `json:"unknown"`
-	Source    Ref               `json:"source"`
-	Findings  []Issue           `json:"findings,omitempty"`
-	Coverage  string            `json:"coverage"`
-	Truncated bool              `json:"truncated,omitempty"`
+	// Gaps describe limitations reading the associated inventory.
+	Gaps []resourceapi.Gap `json:"gaps"`
+	// Checked counts authorized associated resource snapshots, not findings.
+	Checked int `json:"checked"`
+	// Unknown counts checked snapshots without an actionable finding or positive
+	// active-state assessment; inactive resources can be included. The difference
+	// Checked-Unknown is not a healthy-resource count.
+	Unknown int `json:"unknown"`
+	// Source is the association anchor. Each finding identifies its own subject.
+	Source Ref `json:"source"`
+	// Findings retain their original subjects and IDs; omission is not recovery.
+	Findings []Issue `json:"findings,omitempty"`
+	// Coverage explains the bounded assessment; it is not a machine-readable health verdict.
+	Coverage string `json:"coverage"`
+	// Truncated means the inventory scan or returned findings were capped.
+	// Gaps and Coverage distinguish the limitation; false does not prove completeness.
+	Truncated bool `json:"truncated,omitempty"`
 }

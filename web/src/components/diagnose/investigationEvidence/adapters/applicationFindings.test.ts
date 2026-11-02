@@ -44,6 +44,203 @@ const context = {
 };
 
 describe("cached application findings", () => {
+  const relatedCases = [
+    {
+      label: "cert-manager issuance",
+      anchor: {
+        group: "cert-manager.io",
+        kind: "Certificate",
+        namespace: "shop",
+        name: "tls",
+      },
+      subject: {
+        group: "acme.cert-manager.io",
+        kind: "Challenge",
+        namespace: "shop",
+        name: "http-01",
+      },
+    },
+    {
+      label: "External Secrets cluster store",
+      anchor: {
+        group: "external-secrets.io",
+        kind: "ExternalSecret",
+        namespace: "shop",
+        name: "credentials",
+      },
+      subject: {
+        group: "external-secrets.io",
+        kind: "ClusterSecretStore",
+        namespace: "",
+        name: "shared",
+      },
+    },
+    {
+      label: "Crossplane composition",
+      anchor: {
+        group: "platform.example.org",
+        kind: "Database",
+        namespace: "",
+        name: "orders",
+      },
+      subject: {
+        group: "aws.example.org",
+        kind: "Bucket",
+        namespace: "shop",
+        name: "storage",
+      },
+    },
+    {
+      label: "CloudNativePG backup",
+      anchor: {
+        group: "postgresql.cnpg.io",
+        kind: "Cluster",
+        namespace: "shop",
+        name: "orders",
+      },
+      subject: {
+        group: "postgresql.cnpg.io",
+        kind: "Backup",
+        namespace: "shop",
+        name: "nightly",
+      },
+    },
+    {
+      label: "Flux dependency",
+      anchor: {
+        group: "kustomize.toolkit.fluxcd.io",
+        kind: "Kustomization",
+        namespace: "shop",
+        name: "frontend",
+      },
+      subject: {
+        group: "kustomize.toolkit.fluxcd.io",
+        kind: "Kustomization",
+        namespace: "infra",
+        name: "database",
+      },
+    },
+    {
+      label: "Argo local managed resource",
+      anchor: {
+        group: "argoproj.io",
+        kind: "Application",
+        namespace: "argocd",
+        name: "store",
+      },
+      subject: {
+        group: "apps",
+        kind: "Deployment",
+        namespace: "shop",
+        name: "worker",
+      },
+    },
+  ];
+
+  it.each(relatedCases)(
+    "preserves subject identity and partial coverage for $label",
+    ({ anchor, subject }) => {
+      const findings = ["NotReady", "SyncFailed"].map((reason) => ({
+        ...criticalIssue,
+        ...subject,
+        id: `${subject.group}:${subject.kind}:${subject.namespace}:${subject.name}:${reason}`,
+        reason,
+      }));
+      const result = project([
+        tool("read", "get_resource", {
+          resource: deployment,
+          resourceContext: {
+            ...context,
+            relatedApplicationFindings: {
+              source: anchor,
+              checked: 1,
+              unknown: 0,
+              findings,
+              gaps: [{ code: "user_forbidden", action: "request_access" }],
+              coverage:
+                "One associated resource assessed; other inventory was inaccessible.",
+            },
+          },
+        }),
+      ]);
+      const issues = groupsOf(result.groups, "issue");
+      expect(issues).toHaveLength(2);
+      for (const group of issues) {
+        const { namespace, ...identity } = subject;
+        const ref = investigationEvidenceSubjectRef(group.latest.data);
+        expect(ref).toMatchObject(identity);
+        expect(ref?.namespace).toBe(namespace || undefined);
+        expect(group.latest.data).toMatchObject({ applicationSource: anchor });
+      }
+      expect(groupsOf(result.groups, "resource")[0].latest).toMatchObject({
+        tier: "context",
+        tone: "neutral",
+        summary: "1/1 replicas ready",
+      });
+      expect(
+        result.limitations.some((item) =>
+          item.message.includes("inaccessible"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each(relatedCases)(
+    "does not retire $label findings from an empty parent verification",
+    ({ anchor, subject }) => {
+      const finding = {
+        ...criticalIssue,
+        ...subject,
+        id: `${subject.group}:${subject.kind}:${subject.namespace}:${subject.name}:NotReady`,
+        reason: "NotReady",
+      };
+      const relatedApplicationFindings = {
+        source: anchor,
+        checked: 1,
+        unknown: 0,
+        findings: [finding],
+        gaps: [],
+        coverage:
+          "Selected associated resource snapshots; not an application health verdict.",
+      };
+      const result = projectInvestigationEvidence(
+        [
+          {
+            timeline: [
+              tool("read", "diagnose", {
+                resource: deployment,
+                resourceContext: { ...context, relatedApplicationFindings },
+              }),
+            ],
+          },
+          {
+            verify: true,
+            status: "done",
+            timeline: [
+              tool("verify", "diagnose", {
+                resource: deployment,
+                relatedIssues: [],
+                resourceContext: {
+                  ...context,
+                  relatedApplicationFindings: {
+                    ...relatedApplicationFindings,
+                    findings: [],
+                  },
+                },
+              }),
+            ],
+          },
+        ],
+        target,
+      );
+      expect(
+        groupsOf(result.groups, "issue").find(
+          (group) => group.identity === `issue:${finding.id}`,
+        )?.historical,
+      ).toBe(false);
+    },
+  );
+
   it.each(["diagnose", "get_resource"])(
     "keeps connector identity and citation separate from healthy parent in %s",
     (name) => {

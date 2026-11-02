@@ -29,6 +29,11 @@ describe('Related connector findings coverage', () => {
     expect(html).toContain(explanation)
     expect(html).not.toContain('Operational issues')
   })
+  it('retains read-gap explanations when output is also truncated', () => {
+    const html = renderToString(<RelatedConnectorFindingsSection data={{ ...cached, truncated: true, gaps: [{ code: 'kind_sync_pending' }] }} />)
+    expect(html).toContain('still loading')
+    expect(html).not.toContain('Additional connector evidence may be omitted')
+  })
   it('keeps unavailable and over-budget coverage visible without inventing issues', () => {
     for (const data of [{ ...cached, gaps: [{ code: 'radar_kind_not_collected' }] }, { ...cached, truncated: true }]) {
       const html = renderToString(<RelatedConnectorFindingsSection data={data} />)

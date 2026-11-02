@@ -788,10 +788,11 @@ type MembersCoverage struct {
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships
 type ResourceWithRelationships struct {
-	Resource                   any                                   `json:"resource"`
-	Relationships              *Relationships                        `json:"relationships,omitempty"`
-	CertificateInfo            *SecretCertificateInfo                `json:"certificateInfo,omitempty"`
-	HPADiagnosis               *hpadiag.Diagnosis                    `json:"hpaDiagnosis,omitempty"`
+	Resource        any                    `json:"resource"`
+	Relationships   *Relationships         `json:"relationships,omitempty"`
+	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
+	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
+	// RelatedApplicationFindings does not affect parent health; absence is not an all-clear.
 	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
 }
 

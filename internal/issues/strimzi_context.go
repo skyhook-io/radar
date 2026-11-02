@@ -26,6 +26,10 @@ type strimziContextReader struct {
 	list  func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code)
 }
 
+// CachedStrimziEvidence accepts a cached runtime.Object and returns nil when the
+// association cannot be established or read consistently, never an all-clear.
+// canRead applies the host's curated-issue policy (nil allows all); ownerAccess
+// must provide the host's separate ownership-read policy.
 func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ownership.Catalog) ownership.Access) *issuesapi.RelatedApplicationFindings {
 	typed, dynamic, discovery := k8s.GetResourceCache(), k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()
 	if dynamic == nil || discovery == nil || obj == nil {

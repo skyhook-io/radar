@@ -16,9 +16,8 @@ export function RelatedConnectorFindingsSection({ data, onResourceClick }: {
       <p className="text-xs text-theme-text-secondary">
         Associated with {data.source.kind} {data.source.name}; these are connector-level findings. This resource's status is reported separately.
         {' '}{data.coverage}
-        {data.truncated && ' Additional connector evidence may be omitted.'}
       </p>
-      {data.gaps.length > 0 && !data.truncated && (
+      {data.gaps.length > 0 && (
         <ul className="text-xs text-theme-text-secondary">
           {data.gaps.map(gap => <li key={gap.code}>Connector inventory: {gapReasonText(gap.code)}.</li>)}
         </ul>

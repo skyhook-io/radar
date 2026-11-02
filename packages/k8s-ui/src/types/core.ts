@@ -881,18 +881,29 @@ export interface HPAMetricSummary {
   status: string
 }
 
-// Resource with computed relationships and optional certificate info (API response wrapper)
+/** Findings associated through one local resource, independent of the parent's health.
+ * Absence or an empty bundle does not establish health, recovery, or no association. */
 export interface RelatedApplicationFindings {
+  /** Limitations reading the associated inventory. */
   gaps: ReadGap[]
+  /** Authorized associated resource snapshots assessed, not finding count. */
   checked: number
+  /** Checked snapshots without a finding or positive active-state assessment;
+   * can include inactive resources. checked - unknown is not a healthy count. */
   unknown: number
+  /** Association anchor; each finding identifies its own subject. */
   source: IssueResourceRef
+  /** Original finding subjects and IDs; omission is not recovery. */
   findings?: Issue[]
+  /** Human-readable scope and limitations, not a health verdict. */
   coverage: string
+  /** Inventory or finding output was capped; false does not prove completeness. */
   truncated?: boolean
 }
 
+// Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
+  /** Optional association bundle; absence is not an all-clear. */
   relatedApplicationFindings?: RelatedApplicationFindings
   resource: T
   relationships?: Relationships

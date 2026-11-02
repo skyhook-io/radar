@@ -327,6 +327,12 @@ export function projectInvestigationEvidence(
           observation.data.issue.kind === "KafkaConnector"
         )
           return connectorCoverageKey(observation.data.issue);
+        // A clean parent diagnosis cannot prove an associated resource recovered.
+        if (
+          observation.data.type === "issue" &&
+          observation.data.applicationSource
+        )
+          return undefined;
         return semanticCoverageKey(group.kind);
       case "startup":
       case "crash":

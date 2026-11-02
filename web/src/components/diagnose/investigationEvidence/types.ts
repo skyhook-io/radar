@@ -382,6 +382,7 @@ export type InvestigationEvidenceData =
   | {
       type: "issue";
       issue: Issue;
+      /** Association anchor; parent verification cannot establish recovery of this issue. */
       applicationSource?: DiagnosisResourceRef;
       /**
        * A broad `issues` query can return failures from other resources. Keep
