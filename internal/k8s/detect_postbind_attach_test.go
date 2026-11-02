@@ -441,11 +441,23 @@ func TestDetectPostBindProblems_MultiAttachTerminatingHolderNotStuck(t *testing.
 
 // Without surge the old pod is deleted first, so a holder still terminating is
 // not the rolling update's doing; a holder from the same ReplicaSet is not a
-// rollout. None gets a cause.
+// rollout; a Deployment scaled to zero has neither. None gets a cause.
 func TestDetectPostBindProblems_MultiAttachOneReplicaNoSurgeCause(t *testing.T) {
+	controller := true
 	for name, objs := range map[string][]runtime.Object{
 		"maxSurge 0": rolloutClaimDeployment(rollingUpdate(intstr.FromInt32(0), intstr.FromInt32(1))),
 		"recreate":   rolloutClaimDeployment(appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}),
+		// Scaled to zero: no replicas share the claim, and no rollout runs.
+		"scaled to zero": func() []runtime.Object {
+			zero := int32(0)
+			objs := sharedClaimDeployment(metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", Controller: &controller})
+			for _, o := range objs {
+				if d, ok := o.(*appsv1.Deployment); ok {
+					d.Spec.Replicas = &zero
+				}
+			}
+			return objs
+		}(),
 		"same ReplicaSet": func() []runtime.Object {
 			objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
 			holder := rolloutPod(objs, "web-a")

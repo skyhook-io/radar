@@ -1704,9 +1704,11 @@ func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, dep
 		}
 		// Pod and node names stay in the message: the cause must read the same
 		// for every blocked replica so grouping keeps it.
-		if replicas == 1 {
-			if cause := rollingUpdateMultiAttachCause(cache, d, claim, pod, holder); cause != "" {
-				return cause, rollingUpdateRWOFix
+		if replicas < 2 {
+			if replicas == 1 {
+				if cause := rollingUpdateMultiAttachCause(cache, d, claim, pod, holder); cause != "" {
+					return cause, rollingUpdateRWOFix
+				}
 			}
 			continue
 		}
