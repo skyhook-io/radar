@@ -51,39 +51,40 @@ type ResourceContext struct {
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
 	// controller's when its own doesn't settle it.
-	Manager         *ManagerContext    `json:"manager,omitempty"`
-	Exposes         []ContextRef       `json:"exposes,omitempty"`        // Union of upstream routing resources and backends; retained for compatibility.
-	ExposedBy       []ContextRef       `json:"exposedBy,omitempty"`      // Upstream resources routing to this resource.
-	Backends        []ContextRef       `json:"backends,omitempty"`       // Resources this routes to.
-	Monitors        []ContextRef       `json:"monitors,omitempty"`       // Prometheus Operator monitors scraping this resource.
-	MonitorTargets  []ContextRef       `json:"monitorTargets,omitempty"` // Targets scraped by this monitor.
-	Protects        []ContextRef       `json:"protects,omitempty"`       // Targets selected by this budget or policy.
-	HealthChecks    []ContextRef       `json:"healthChecks,omitempty"`   // MachineHealthChecks associated with this Cluster.
-	StagedPolicies  []ContextRef       `json:"stagedPolicies,omitempty"` // Non-enforcing staged policy selectors.
-	SelectedBy      []ContextRef       `json:"selectedBy,omitempty"`
-	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
-	Uses            *UsesBlock         `json:"uses,omitempty"`
-	RunsOn          *ContextRef        `json:"runsOn,omitempty"`
-	Dependencies    []ContextRef       `json:"dependencies,omitempty"`
-	Dependents      []ContextRef       `json:"dependents,omitempty"`
-	ScaledBy        []ScalerRef        `json:"scaledBy,omitempty"`
-	StatusSummary   *StatusSummary     `json:"statusSummary,omitempty"`
-	Scheduling      *SchedulingSummary `json:"scheduling,omitempty"`
-	Execution       *ExecutionSummary  `json:"execution,omitempty"`
-	Serving         *ServingSummary    `json:"serving,omitempty"`
-	PodSummary      *PodSummary        `json:"podSummary,omitempty"`
-	WorkloadSummary *WorkloadSummary   `json:"workloadSummary,omitempty"`
-	ServiceSummary  *ServiceSummary    `json:"serviceSummary,omitempty"`
-	IngressSummary  *IngressSummary    `json:"ingressSummary,omitempty"`
-	NodeSummary     *NodeSummary       `json:"nodeSummary,omitempty"`
-	PVCSummary      *PVCSummary        `json:"pvcSummary,omitempty"`
-	JobSummary      *JobSummary        `json:"jobSummary,omitempty"`
-	CronJobSummary  *CronJobSummary    `json:"cronJobSummary,omitempty"`
-	HPASummary      *HPASummary        `json:"hpaSummary,omitempty"`
-	IssueSummary    *IssueSummary      `json:"issueSummary,omitempty"`
-	AuditSummary    *AuditSummary      `json:"auditSummary,omitempty"`
-	PolicySummary   *PolicySummary     `json:"policySummary,omitempty"`
-	AppReferences   *AppReferences     `json:"appReferences,omitempty"`
+	Manager               *ManagerContext        `json:"manager,omitempty"`
+	Exposes               []ContextRef           `json:"exposes,omitempty"`        // Union of upstream routing resources and backends; retained for compatibility.
+	ExposedBy             []ContextRef           `json:"exposedBy,omitempty"`      // Upstream resources routing to this resource.
+	Backends              []ContextRef           `json:"backends,omitempty"`       // Resources this routes to.
+	Monitors              []ContextRef           `json:"monitors,omitempty"`       // Prometheus Operator monitors scraping this resource.
+	MonitorTargets        []ContextRef           `json:"monitorTargets,omitempty"` // Targets scraped by this monitor.
+	Protects              []ContextRef           `json:"protects,omitempty"`       // Targets selected by this budget or policy.
+	HealthChecks          []ContextRef           `json:"healthChecks,omitempty"`   // MachineHealthChecks associated with this Cluster.
+	StagedPolicies        []ContextRef           `json:"stagedPolicies,omitempty"` // Non-enforcing staged policy selectors.
+	SelectedBy            []ContextRef           `json:"selectedBy,omitempty"`
+	ReferencedBy          *ReferencedBy          `json:"referencedBy,omitempty"`
+	Uses                  *UsesBlock             `json:"uses,omitempty"`
+	RunsOn                *ContextRef            `json:"runsOn,omitempty"`
+	Dependencies          []ContextRef           `json:"dependencies,omitempty"`
+	Dependents            []ContextRef           `json:"dependents,omitempty"`
+	ScaledBy              []ScalerRef            `json:"scaledBy,omitempty"`
+	StatusSummary         *StatusSummary         `json:"statusSummary,omitempty"`
+	Scheduling            *SchedulingSummary     `json:"scheduling,omitempty"`
+	Execution             *ExecutionSummary      `json:"execution,omitempty"`
+	Serving               *ServingSummary        `json:"serving,omitempty"`
+	PodSummary            *PodSummary            `json:"podSummary,omitempty"`
+	WorkloadSummary       *WorkloadSummary       `json:"workloadSummary,omitempty"`
+	ServiceSummary        *ServiceSummary        `json:"serviceSummary,omitempty"`
+	IngressSummary        *IngressSummary        `json:"ingressSummary,omitempty"`
+	ServiceAccountSummary *ServiceAccountSummary `json:"serviceAccountSummary,omitempty"`
+	NodeSummary           *NodeSummary           `json:"nodeSummary,omitempty"`
+	PVCSummary            *PVCSummary            `json:"pvcSummary,omitempty"`
+	JobSummary            *JobSummary            `json:"jobSummary,omitempty"`
+	CronJobSummary        *CronJobSummary        `json:"cronJobSummary,omitempty"`
+	HPASummary            *HPASummary            `json:"hpaSummary,omitempty"`
+	IssueSummary          *IssueSummary          `json:"issueSummary,omitempty"`
+	AuditSummary          *AuditSummary          `json:"auditSummary,omitempty"`
+	PolicySummary         *PolicySummary         `json:"policySummary,omitempty"`
+	AppReferences         *AppReferences         `json:"appReferences,omitempty"`
 	// TemplateDivergence compares live Pods with their owner's current
 	// template. It is context, not proof: it says what differs and what could
 	// have changed it, never who did.
@@ -999,4 +1000,11 @@ type ChildrenContext struct {
 	// Truncated means known children were omitted by the response cap.
 	// When true, Complete is false; false does not rule out inventory gaps.
 	Truncated bool `json:"truncated,omitempty"`
+}
+
+// ServiceAccountSummary distinguishes declared Secret associations from pull
+// credentials. Neither list asserts that an existing Pod reads those Secrets.
+type ServiceAccountSummary struct {
+	SecretRefs       []ContextRef `json:"secretRefs,omitempty"`
+	ImagePullSecrets []ContextRef `json:"imagePullSecrets,omitempty"`
 }

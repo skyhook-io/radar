@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -402,6 +403,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	rc.WorkloadSummary = buildWorkloadSummary(obj)
 	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.ServiceAccountSummary = buildServiceAccountSummary(ctx, obj, opts.AccessChecker, omitted)
 	rc.NodeSummary = buildNodeSummary(obj)
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
@@ -727,6 +729,31 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 						appendRef(ReferenceUse{Kind: "Ingress", Group: "networking.k8s.io", Namespace: ing.Namespace, Name: ing.Name, Paths: []string{"spec.tls[].secretName"}})
 					}
 				}
+			}
+		}
+		if accounts, ok := provider.(topology.ServiceAccountProvider); ok {
+			// Assess before reading: a sync that completes between the two
+			// must not make a partial snapshot look complete.
+			gap := serviceAccountCoverageGap(provider, target.namespace)
+			sas, err := accounts.ServiceAccounts()
+			if err != nil {
+				sas = nil
+				gap = OmittedUnavailable
+			}
+			if gap != "" {
+				omitted.add("referencedBy", gap)
+			}
+			for _, sa := range sas {
+				if sa == nil || sa.Namespace != target.namespace {
+					continue
+				}
+				var paths []string
+				for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+					if ref.Name == target.name {
+						paths = append(paths, ref.Path)
+					}
+				}
+				appendRef(ReferenceUse{Kind: "ServiceAccount", Namespace: sa.Namespace, Name: sa.Name, Paths: paths})
 			}
 		}
 	}
@@ -1154,6 +1181,54 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 		return nil
 	}
 	return out
+}
+
+// inventoryCoverage is implemented by providers that can say whether a
+// namespace's inventory of a kind is complete. Without it an empty list can't
+// be told apart from a namespace Radar is still loading, failed to load or
+// doesn't collect.
+type inventoryCoverage interface {
+	AssessKindRead(resource string, namespaces []string) k8score.KindReadAssessment
+}
+
+func serviceAccountCoverageGap(provider topology.ResourceProvider, namespace string) OmittedReason {
+	coverage, ok := provider.(inventoryCoverage)
+	if !ok {
+		return ""
+	}
+	assessment := coverage.AssessKindRead(k8score.ServiceAccounts, []string{namespace})
+	switch {
+	case assessment.Complete:
+		return ""
+	case len(assessment.Loading) > 0:
+		return OmittedCacheCold
+	default:
+		return OmittedUnavailable
+	}
+}
+
+func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *ServiceAccountSummary {
+	sa, ok := obj.(*corev1.ServiceAccount)
+	if !ok {
+		return nil
+	}
+	var secrets, pulls []ContextRef
+	for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+		target := ContextRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+		if ref.ImagePull {
+			pulls = append(pulls, target)
+		} else {
+			secrets = append(secrets, target)
+		}
+	}
+	summary := &ServiceAccountSummary{
+		SecretRefs:       filterBoundedRefs(ctx, ac, secrets, "serviceAccountSummary.secretRefs", omitted),
+		ImagePullSecrets: filterBoundedRefs(ctx, ac, pulls, "serviceAccountSummary.imagePullSecrets", omitted),
+	}
+	if len(summary.SecretRefs) == 0 && len(summary.ImagePullSecrets) == 0 {
+		return nil
+	}
+	return summary
 }
 
 func buildNodeSummary(obj runtime.Object) *NodeSummary {

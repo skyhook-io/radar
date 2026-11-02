@@ -136,6 +136,13 @@ func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, 
 	return lister.List(labels.Everything())
 }
 
+// AssessKindRead lets a reader tell a loading, failed or uncollected
+// namespace from one Radar holds completely, before it reads an empty list as
+// "none".
+func (a *topologyResourceProvider) AssessKindRead(resource string, namespaces []string) k8score.KindReadAssessment {
+	return a.cache.AssessKindRead(resource, namespaces)
+}
+
 func (a *topologyResourceProvider) Namespaces() ([]*corev1.Namespace, error) {
 	lister := a.cache.Namespaces()
 	if lister == nil {
