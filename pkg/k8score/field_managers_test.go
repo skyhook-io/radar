@@ -160,7 +160,17 @@ func TestFieldManagerIndexVersionOrdering(t *testing.T) {
 	if got := index.update(mfDeployment("9"), v3); got != nil {
 		t.Fatalf("uncaptured old version: got %+v", got)
 	}
-	index.forget("uid-1")
+	// A recreate missed in a watch gap arrives as an update across UIDs.
+	recreated := mfDeployment("4", mfEntry("helm", metav1.ManagedFieldsOperationApply, "", at(9)))
+	recreated.UID = "uid-2"
+	index.capture(recreated)
+	if got := index.update(v3, recreated); got != nil {
+		t.Fatalf("update across UIDs: got %+v", got)
+	}
+	if _, kept := index.objects[fieldManagerKeyOf("uid-1")]; kept {
+		t.Fatal("old UID kept after an update across UIDs")
+	}
+	index.forget("uid-2")
 	if len(index.objects) != 0 {
 		t.Fatalf("forget left %d objects", len(index.objects))
 	}

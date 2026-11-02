@@ -1120,7 +1120,11 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 			}
 			return
 		}
-		diff.FieldManagers = fieldManagers
+		// Kinds without a differ record an update with no diff; their
+		// managers have nowhere to go.
+		if diff != nil {
+			diff.FieldManagers = fieldManagers
+		}
 	}
 	if op == "add" || op == "delete" {
 		diff = toTimelineDiff(rbacBindingLifecycleDiff(kind, op, obj))

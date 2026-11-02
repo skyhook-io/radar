@@ -72,6 +72,30 @@ func TestRecordToTimelineStore_KeepsFieldManagers(t *testing.T) {
 	}
 }
 
+// Kinds without a differ record updates with no diff, managers or not.
+func TestRecordToTimelineStore_FieldManagersOnUndiffedKind(t *testing.T) {
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	t.Cleanup(timeline.ResetStore)
+	oldSA := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "shop", UID: "sa-1", ResourceVersion: "1"}}
+	newSA := oldSA.DeepCopy()
+	newSA.ResourceVersion = "2"
+	newSA.Labels = map[string]string{"team": "a"}
+	if diff, recordable := timelineUpdateDiff("ServiceAccount", oldSA, newSA, nil, false); diff != nil || !recordable {
+		t.Fatalf("this test needs a kind with no differ; ServiceAccount now gives diff=%v, recordable=%v", diff, recordable)
+	}
+	recordToTimelineStore(ActiveClusterContext(), "ServiceAccount", "shop", "app", "sa-1", "update", oldSA, newSA, nil, false, []k8score.FieldManagerWrite{{Manager: "kubectl-label", Operation: "Update"}})
+	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"ServiceAccount"}})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("recorded %d events, want the update", len(events))
+	}
+}
+
 func TestRecordToTimelineStore_PreservesDNSFieldPath(t *testing.T) {
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {

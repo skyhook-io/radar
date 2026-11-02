@@ -125,6 +125,12 @@ func (index *fieldManagerIndex) update(oldObj, newObj metav1.Object) []FieldMana
 	if index == nil || oldObj == nil || newObj == nil {
 		return nil
 	}
+	// A delete and recreate missed in a watch gap arrives as an update
+	// across UIDs; the old object's delete never will.
+	if oldObj.GetUID() != newObj.GetUID() {
+		index.forget(string(oldObj.GetUID()))
+		return nil
+	}
 	key := fieldManagerKeyOf(string(newObj.GetUID()))
 	oldRV := fieldManagerRV(oldObj.GetResourceVersion())
 	newRV := fieldManagerRV(newObj.GetResourceVersion())
