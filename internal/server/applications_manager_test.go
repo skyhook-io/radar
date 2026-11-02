@@ -96,6 +96,22 @@ func TestWorkloadSourceRefReadsTemplateRows(t *testing.T) {
 	}
 }
 
+// A row listed from one incarnation of a workload doesn't take the source of
+// the incarnation that replaced it.
+func TestWorkloadSourceRefRequiresTheListedIncarnation(t *testing.T) {
+	current := appTestObject("apps", "Deployment", "prod", "api")
+	current.Annotations = map[string]string{"meta.helm.sh/release-name": "next", "meta.helm.sh/release-namespace": "prod"}
+	view := appManagerView(t, current)
+	listed := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api", UID: "replaced",
+		Annotations: map[string]string{"meta.helm.sh/release-name": "previous", "meta.helm.sh/release-namespace": "prod"}}}
+	if got := workloadSourceRef(view, current.Ref, listed); got != nil {
+		t.Fatalf("source = %+v, want none for a replaced incarnation", got)
+	}
+	if got := workloadSourceRef(view, current.Ref, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api", UID: current.UID, Annotations: current.Annotations}}); got == nil || got.Name != "next" {
+		t.Fatalf("source = %+v, want the current incarnation's release", got)
+	}
+}
+
 // A workload's source is the manager its recorded membership and claims
 // lead with, through its nearest controller ancestor, not whatever its labels
 // name: a manager elsewhere that records it counts, and a label its manager

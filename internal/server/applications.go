@@ -2022,8 +2022,14 @@ func workloadSourceRef(managers *ownership.View, ref resourceid.Ref, obj any) *a
 	if !ok {
 		return nil
 	}
-	managers.Seed(ownership.Observe(ref, meta))
-	return sourceRefFromManager(managers.Manager(ref))
+	observed := ownership.Observe(ref, meta)
+	managers.Seed(observed)
+	answer := managers.Manager(ref)
+	// The session may hold a newer incarnation than the listed row describes.
+	if answer.Subject.Read.Object.UID != observed.UID {
+		return nil
+	}
+	return sourceRefFromManager(answer)
 }
 
 // sourceRefFromManager is the source system object a workload's manager answer
