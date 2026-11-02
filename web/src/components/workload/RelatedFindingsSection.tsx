@@ -48,9 +48,20 @@ export function RelatedFindingsSection({
               </h3>
             )}
             <p className="text-xs text-theme-text-secondary">
-              {`Via ${anchor.kind} ${anchor.namespace ? `${anchor.namespace}/` : ""}${anchor.name}${anchor.group ? ` (${anchor.group})` : ""}.`}{" "}
-              These findings concern related resources; this workload's status
-              is unchanged.
+              Via{" "}
+              {onResourceClick ? (
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => onResourceClick(anchor)}
+                >
+                  {`${anchor.kind} ${anchor.namespace ? `${anchor.namespace}/` : ""}${anchor.name}${anchor.group ? ` (${anchor.group})` : ""}`}
+                </button>
+              ) : (
+                `${anchor.kind} ${anchor.namespace ? `${anchor.namespace}/` : ""}${anchor.name}${anchor.group ? ` (${anchor.group})` : ""}`
+              )}
+              . These findings concern the linked resources; this resource's
+              status is reported separately.
             </p>
             {limits.length > 0 && (
               <ul className="text-xs text-theme-text-secondary">

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import type { RelatedFindingsGroup } from "@skyhook-io/k8s-ui";
 import { RelatedFindingsSection } from "./RelatedFindingsSection";
@@ -20,6 +23,31 @@ const cached: RelatedFindingsGroup = {
 };
 
 describe("Related findings coverage", () => {
+  it("opens the association anchor using the host's resource navigation", () => {
+    const onResourceClick = vi.fn();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      act(() =>
+        root.render(
+          <RelatedFindingsSection
+            data={[{ ...cached, unknown: 1 }]}
+            onResourceClick={onResourceClick}
+          />,
+        ),
+      );
+      const button = host.querySelector("button")!;
+      expect(button.textContent).toBe(
+        "KafkaConnect app/connect (kafka.strimzi.io)",
+      );
+      act(() => button.click());
+      expect(onResourceClick).toHaveBeenCalledWith(cached.associatedVia);
+    } finally {
+      act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
   it("hides absent, empty and assessed groups without findings or limitations", () => {
     for (const data of [undefined, [], [cached]])
       expect(renderToString(<RelatedFindingsSection data={data} />)).toBe("");
@@ -31,7 +59,7 @@ describe("Related findings coverage", () => {
     expect(html).toContain("1 of 1 checked resources");
     expect(html).toContain("could not be assessed");
     expect(html).toContain("KafkaConnector (kafka.strimzi.io)");
-    expect(html).toContain("status is unchanged");
+    expect(html).toContain("status is reported separately");
     expect(html).not.toContain("Operational issues");
   });
   it.each([

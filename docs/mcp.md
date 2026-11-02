@@ -1315,7 +1315,7 @@ Resource context can include `relatedFindings`: independently scoped groups of c
 
 See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors) for the Issues/API/MCP coverage, required read access, and operator-snapshot limitations.
 
-`diagnose` accepts `KafkaConnector` and `KafkaConnect` in `kafka.strimzi.io`. For a connector, `operatorSnapshot.state` is `failing`, `recovered` or `unknown`; `reason` explains unknown or failing observations. Recovery requires a current Ready snapshot with the connector and a nonempty task list all `RUNNING`. KafkaConnect reports operator readiness separately. Diagnosis does not collect Pods, logs or live application evidence. Unavailable cached reads return a coded error; only a miss from a synchronized namespace cache returns `object_not_found`. A context switch during collection discards the result.
+`diagnose` accepts `KafkaConnector` and `KafkaConnect` in `kafka.strimzi.io`. For a connector, `operatorSnapshot.state` is `failing`, `recovered` or `unknown`; `reason` explains unknown or failing observations. Recovery requires a current Ready snapshot with the connector and a nonempty task list all `RUNNING`. KafkaConnect reports operator readiness separately; use `issues` to recheck its own condition findings. Diagnosis does not collect Pods, logs or live application evidence. Unavailable cached reads return a coded error; only a miss from a synchronized namespace cache returns `object_not_found`. A context switch during collection discards the result.
 
 The Strimzi producer returns at most five findings and inspects at most 500 namespace inventory entries. Exceeding the inventory budget returns a `list_too_large` gap with no assessed snapshots; it does not return a sample.
 

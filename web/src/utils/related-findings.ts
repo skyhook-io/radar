@@ -26,7 +26,7 @@ export function relatedFindingLimitations(
         : action === "user_access"
           ? " Ask an administrator for read access."
           : action === "retry" || action === "wait"
-            ? " Retry after the cache has loaded."
+            ? " Retry this read."
             : "";
     const reason =
       gap.code === "list_too_large"
