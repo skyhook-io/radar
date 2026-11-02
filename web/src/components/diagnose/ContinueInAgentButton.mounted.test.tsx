@@ -5,8 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunSummary } from "../../api/diagnose";
 import { ContinueInAgentButton } from "./ContinueInAgentButton";
 
+const caps = vi.hoisted(() => ({ localTerminal: true }));
 vi.mock("../../contexts/CapabilitiesContext", () => ({
-  useCapabilitiesContext: () => ({ localTerminal: true, mcpReadOnly: false }),
+  useCapabilitiesContext: () => ({
+    localTerminal: caps.localTerminal,
+    mcpReadOnly: false,
+  }),
+}));
+const launch = vi.hoisted(() => ({ openInTerminal: vi.fn() }));
+vi.mock("./launch", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  openInTerminal: launch.openInTerminal,
 }));
 const clipboard = vi.hoisted(() => ({ copyText: vi.fn() }));
 vi.mock("@skyhook-io/k8s-ui/utils/clipboard", () => clipboard);
@@ -31,21 +40,23 @@ const flush = () =>
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 const caret = () =>
-  document.querySelector<HTMLButtonElement>(
-    'button[aria-label="More ways to continue"]',
-  )!;
+  document.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
 const panel = () => document.querySelector('[role="dialog"]');
+
+async function mount(r: RunSummary = run) {
+  await act(async () =>
+    root.render(<ContinueInAgentButton run={r} command="claude --resume x" />),
+  );
+}
 
 beforeEach(async () => {
   clipboard.copyText.mockReset();
+  launch.openInTerminal.mockReset();
+  caps.localTerminal = true;
   const el = document.createElement("div");
   document.body.appendChild(el);
   root = createRoot(el);
-  await act(async () =>
-    root.render(
-      <ContinueInAgentButton run={run} command="claude --resume x" />,
-    ),
-  );
+  await mount();
 });
 
 afterEach(async () => {
@@ -84,7 +95,9 @@ describe("the continue panel", () => {
   it("says so when the copy fails", async () => {
     clipboard.copyText.mockResolvedValue(false);
     await openPanel();
-    const copy = panel()!.querySelector<HTMLButtonElement>("button")!;
+    const copy = panel()!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy command"]',
+    )!;
     await act(async () => copy.click());
     await flush();
     expect(copy.getAttribute("aria-label")).toBe("Copy failed");
@@ -116,10 +129,10 @@ describe("the continue panel", () => {
 
   it("tabs between its buttons, and back to the caret past the last", async () => {
     await openPanel();
-    const [copy, runHere] = Array.from(
+    const [runHere, copy] = Array.from(
       panel()!.querySelectorAll<HTMLButtonElement>("button"),
     );
-    expect(document.activeElement).toBe(copy);
+    expect(document.activeElement).toBe(runHere);
     const tab = (shiftKey = false) =>
       act(async () =>
         document.activeElement!.dispatchEvent(
@@ -129,9 +142,41 @@ describe("the continue panel", () => {
     await tab();
     // Not the last button: the panel stays open and the browser moves focus.
     expect(caret().getAttribute("aria-expanded")).toBe("true");
-    runHere.focus();
+    copy.focus();
     await tab();
     expect(caret().getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(caret());
+  });
+
+  it("leads with the trust warning and Run in Radar terminal, focused", async () => {
+    await openPanel();
+    // Described by the explanation and the warning, so a screen reader reads
+    // them when focus lands on the button below.
+    const described = (panel()!.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(described).toContain("Resumes this session");
+    expect(described).toContain("Select Yes before pressing Enter");
+    const runHere = panel()!.querySelector<HTMLButtonElement>("button")!;
+    expect(runHere.textContent).toBe("Run in Radar terminal");
+    expect(document.activeElement).toBe(runHere);
+    await act(async () => runHere.click());
+    expect(launch.openInTerminal).toHaveBeenCalledWith(
+      "claude --resume x",
+      "Radar Investigation",
+    );
+    expect(caret().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("offers copy first without a terminal, and no trust warning for Codex", async () => {
+    caps.localTerminal = false;
+    await mount({ ...run, agent: "codex" });
+    await openPanel();
+    expect(panel()!.textContent).not.toContain("Run in Radar terminal");
+    expect(panel()!.textContent).not.toContain("Select Yes");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Copy command",
+    );
   });
 });
