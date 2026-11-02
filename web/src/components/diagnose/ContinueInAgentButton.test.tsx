@@ -121,7 +121,7 @@ describe("ContinueInAgentButton", () => {
     );
     expect(html).toContain("data-continue-trust-hint");
     expect(html).toContain("agent folder");
-    // Announced with the button, not only shown under it.
+    // Announced with the button; the tooltip and the panel show it.
     const hintId = html.match(/id="([^"]+)" data-continue-trust-hint/)?.[1];
     expect(hintId).toBeTruthy();
     expect(html).toContain(`aria-describedby="${hintId}"`);
@@ -147,7 +147,9 @@ describe("ContinueInAgentButton", () => {
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).not.toContain("More ways to continue");
     expect(html.match(/<button/g)).toHaveLength(1);
-    // The hint for the copied command lives in the menu instead.
-    expect(html).not.toContain("data-continue-trust-hint");
+    // No visible line under the button: only the screen-reader copy, until
+    // the panel it opens shows the hint.
+    expect(html.match(/Select Yes before pressing Enter/g)).toHaveLength(1);
+    expect(html).toMatch(/data-continue-trust-hint[^>]*class="sr-only"/);
   });
 });

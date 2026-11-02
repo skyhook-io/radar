@@ -61,7 +61,12 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Badge, gitOpsRouteForOwner, type GitOpsOwnerRef, type GitOpsWrite } from "@skyhook-io/k8s-ui";
+import {
+  Badge,
+  gitOpsRouteForOwner,
+  type GitOpsOwnerRef,
+  type GitOpsWrite,
+} from "@skyhook-io/k8s-ui";
 import { useResource } from "../../api/client";
 import { getApiBase } from "../../api/config";
 import { kindToPluralWithGroup } from "../../utils/navigation";
@@ -93,10 +98,6 @@ import {
   replayExampleInvestigation,
 } from "./exampleInvestigation";
 import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
-import {
-  ContinueInAgentButton,
-  useContinueInAgentCommand,
-} from "./ContinueInAgentButton";
 import {
   TurnView,
   ResultCard,
@@ -288,7 +289,9 @@ function captureEvidenceCardLayout(container: HTMLElement) {
   );
 }
 
-const APPLY_WRITES: GitOpsWrite[] = [{ scope: "spec", description: "The proposed change" }];
+const APPLY_WRITES: GitOpsWrite[] = [
+  { scope: "spec", description: "The proposed change" },
+];
 
 // The card that ends a finished turn in Activity says what was found, so the
 // reader learns the answer before deciding to open Findings. It carries the
@@ -340,6 +343,7 @@ export function InvestigationView({
   onRevealDestination,
   example = false,
   onCloseExample,
+  onHandoffAllowedChange,
 }: {
   run: RunSummary;
   agentLabel: string;
@@ -354,6 +358,9 @@ export function InvestigationView({
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
   /** Makes a page this view navigates to visible: restores or closes the panel. */
   onRevealDestination?: () => void;
+  /** Whether nothing is writing to the agent's session, so the header may
+   *  offer to continue it in the user's own agent. */
+  onHandoffAllowedChange?: (allowed: boolean) => void;
 }) {
   const { kind, namespace, name } = run;
   const {
@@ -371,8 +378,7 @@ export function InvestigationView({
   const explanationEnabled =
     !example && supportsAssessmentExplanation(runAgent);
   // A question-only run has no resource to bind a confirmed fix to.
-  const canApply =
-    !example && runAgent?.apply === true && !isQuestionOnly(run);
+  const canApply = !example && runAgent?.apply === true && !isQuestionOnly(run);
   // Read through a ref by the stream callback, which lives as long as the
   // run and would otherwise keep the value from before the agents loaded.
   const verifiesAfterApplyRef = useRef(false);
@@ -1070,9 +1076,18 @@ export function InvestigationView({
         );
     }
     return undefined;
-  }, [applyOwner, applyOwnerVerified, applyHelmOwner, openFromApply, onOpenResource]);
+  }, [
+    applyOwner,
+    applyOwnerVerified,
+    applyHelmOwner,
+    openFromApply,
+    onOpenResource,
+  ]);
   const openApplyManager = useMemo(
-    () => (onOpenResource ? (owner: GitOpsOwnerRef) => openFromApply(gitOpsRouteForOwner(owner)) : undefined),
+    () =>
+      onOpenResource
+        ? (owner: GitOpsOwnerRef) => openFromApply(gitOpsRouteForOwner(owner))
+        : undefined,
     [openFromApply, onOpenResource],
   );
   const [pendingFix, setPendingFix] = useState("");
@@ -1675,9 +1690,8 @@ export function InvestigationView({
     currentAssessment?.diagnosis &&
     (currentAssessment.diagnosis.remediation?.length ?? 0) > 0,
   );
-  const continueCommand = useContinueInAgentCommand(run);
-  const showContinueInAgent =
-    !!continueCommand &&
+  const handoffAllowed =
+    !example &&
     canContinueInOwnAgent({
       run,
       busy,
@@ -1687,6 +1701,13 @@ export function InvestigationView({
       verificationPending,
       latestTurnStatus: lastTurn?.status,
     });
+  useEffect(() => {
+    onHandoffAllowedChange?.(handoffAllowed);
+  }, [handoffAllowed, onHandoffAllowedChange]);
+  useEffect(
+    () => () => onHandoffAllowedChange?.(false),
+    [onHandoffAllowedChange],
+  );
   const earlierPlan =
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
@@ -1981,853 +2002,847 @@ export function InvestigationView({
 
   return (
     <ExampleInvestigationProvider value={example}>
-    <div
-      data-investigation-view
-      className={`@container/investigation relative flex min-h-0 flex-1 flex-col bg-theme-surface ${maximized ? "investigation-split-enabled" : ""}`}
-    >
-      {example ? (
-        <div
-          data-investigation-example
-          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
-        >
-          <Badge severity="info" size="sm">
-            Example
-          </Badge>
-          <span className="min-w-0 flex-1">
-            A sample investigation from a test cluster, not from yours. It is
-            read-only.
-          </span>
-          {onCloseExample ? (
-            <button
-              type="button"
-              onClick={onCloseExample}
-              className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
-            >
-              Close example
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-      {stale ? (
-        <div className="flex items-center gap-2 border-b border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-theme-text-secondary">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
-          <span className="min-w-0 flex-1">
-            This investigation ran on{" "}
-            <span className="font-medium text-theme-text-primary">
-              {parseContextName(run.context).clusterName}
-            </span>
-            . It is read-only because its agent session was closed after a
-            cluster switch.
-          </span>
-        </div>
-      ) : null}
-      {example && gone ? (
-        <div
-          role="alert"
-          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
-        >
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
-          <span className="min-w-0 flex-1">
-            Radar couldn&apos;t load the example. Close it and open it again.
-          </span>
-        </div>
-      ) : !stale && gone ? (
-        <div className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
-          <span className="min-w-0 flex-1">
-            This investigation is closed and read-only.{" "}
-            {turns.length > 0
-              ? "Evidence already loaded in this view is preserved, but Radar can no longer continue the run."
-              : "It may be private, your access may have changed, or its history may have been cleared. Check your account and organization, or ask the creator for access."}
-          </span>
-          <button
-            type="button"
-            onClick={retryDiagnosis}
-            className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
-          >
-            Investigate again
-          </button>
-        </div>
-      ) : null}
-      {!example && !stale && !gone && endedEarly ? (
-        <div
-          role="status"
-          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
-        >
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
-          <span className="min-w-0 flex-1">
-            {run.status === "stopped"
-              ? "This investigation was stopped before it reached a conclusion."
-              : "This investigation ended before it reached a complete conclusion."}
-            <span className="ml-1">
-              Evidence collected so far is preserved. See Activity for the final
-              error or stopped state.
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={retryDiagnosis}
-            className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
-          >
-            Investigate again
-          </button>
-        </div>
-      ) : null}
-
-      {startError ? (
-        <InvestigationStartErrorAlert
-          error={startError}
-          refusal={startRefusal}
-          onDismiss={dismissError}
-        />
-      ) : null}
-
-      {!gone && historyUnavailablePresentation ? (
-        <div
-          role={historyUnavailablePresentation.loading ? "status" : "alert"}
-          className={`flex items-start gap-2 border-b px-3 py-2.5 text-xs text-theme-text-secondary ${
-            historyUnavailablePresentation.loading
-              ? "border-amber-500/35 bg-amber-500/10"
-              : "border-red-500/30 bg-red-500/10"
-          }`}
-        >
-          {historyUnavailablePresentation.loading ? (
-            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-500" />
-          ) : (
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          )}
-          <span className="min-w-0">
-            <span className="block font-medium text-theme-text-primary">
-              {historyUnavailablePresentation.title}
-            </span>
-            <span>{historyUnavailablePresentation.detail}</span>
-          </span>
-        </div>
-      ) : null}
-
       <div
-        role="group"
-        aria-label="Investigation view"
-        className={`grid grid-cols-2 border-b border-theme-border bg-theme-base/40 p-1 ${splitTabClass}`}
+        data-investigation-view
+        className={`@container/investigation relative flex min-h-0 flex-1 flex-col bg-theme-surface ${maximized ? "investigation-split-enabled" : ""}`}
       >
-        <button
-          type="button"
-          id={activityTabId}
-          aria-controls={activityPaneId}
-          aria-pressed={narrowPane === "activity"}
-          aria-label="Activity: agent reasoning and tool calls"
-          onKeyDown={onTabKeyDown}
-          onClick={() => selectPane("activity")}
-          className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium ${
-            narrowPane === "activity"
-              ? "selection-strong selection-text selection-ring"
-              : "text-theme-text-secondary hover:bg-theme-hover"
-          }`}
-        >
-          <Activity className="h-3.5 w-3.5" />
-          Activity
-        </button>
-        <button
-          type="button"
-          id={findingsTabId}
-          aria-controls={findingsPaneId}
-          aria-pressed={narrowPane === "evidence"}
-          aria-label={findingsTabAccessibleLabel}
-          onKeyDown={onTabKeyDown}
-          onClick={() => selectPane("evidence")}
-          className={`relative flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium ${
-            narrowPane === "evidence"
-              ? "selection-strong selection-text selection-ring"
-              : "text-theme-text-secondary hover:bg-theme-hover"
-          }`}
-        >
-          <Files className="h-3.5 w-3.5" />
-          Findings
-          {unreadEvidence && narrowPane !== "evidence" ? (
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
-          ) : null}
-        </button>
-        <span className="sr-only" role="status" aria-live="polite">
-          {investigationEvidenceAnnouncement({
-            unreadEvidence,
-            evidenceUpdateAvailable,
-          })}
-        </span>
-      </div>
-
-      <div className={`grid min-h-0 flex-1 ${splitGridClass}`}>
-        <section
-          id={activityPaneId}
-          tabIndex={-1}
-          aria-label="Activity: agent reasoning and tool calls"
-          aria-busy={busy || requestPending || rebuildingReplay}
-          className={`${
-            narrowPane === "activity" ? "flex" : "hidden"
-          } relative min-h-0 min-w-0 flex-col outline-none ${splitPaneClass} ${splitActivityBorderClass}`}
-        >
+        {example ? (
           <div
-            className={`hidden items-center justify-between border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
+            data-investigation-example
+            className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
           >
-            <div className="flex min-w-0 items-center gap-2">
-              <Activity className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              <div className="min-w-0">
-                <h2 className="truncate text-sm font-semibold text-theme-text-primary">
-                  Activity
-                </h2>
-                <p className="truncate text-[11px] text-theme-text-tertiary">
-                  Agent reasoning and tool calls
-                </p>
-              </div>
-            </div>
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
-              {toolCallCount > 0
-                ? `${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`
-                : turns.length > 0
-                  ? `${turns.length} ${turns.length === 1 ? "turn" : "turns"}`
-                  : null}
+            <Badge severity="info" size="sm">
+              Example
+            </Badge>
+            <span className="min-w-0 flex-1">
+              A sample investigation from a test cluster, not from yours. It is
+              read-only.
             </span>
-          </div>
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <div
-              ref={scrollRef}
-              data-investigation-activity-scroll
-              onScroll={onScroll}
-              className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-gutter:stable]"
-            >
-              <div>
-                <div className="space-y-4">
-                  {turns.length === 0 && !gone ? (
-                    <div className="flex min-h-36 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
-                      {historyUnavailablePresentation &&
-                      !historyUnavailablePresentation.loading ? (
-                        <AlertTriangle className="h-5 w-5 text-red-400" />
-                      ) : !streamReady || busy ? (
-                        <Loader2 className="h-5 w-5 animate-spin text-accent" />
-                      ) : (
-                        <Activity className="h-5 w-5 text-theme-text-tertiary" />
-                      )}
-                      <p className="mt-2 text-sm font-medium text-theme-text-secondary">
-                        {!streamReady
-                          ? historyUnavailablePresentation?.loading
-                            ? "Retrying saved activity"
-                            : historyUnavailablePresentation
-                              ? "Saved activity unavailable"
-                              : "Loading saved activity"
-                          : busy
-                            ? "Starting the investigation"
-                            : "No activity recorded"}
-                      </p>
-                      <p className="mt-1 text-xs text-theme-text-tertiary">
-                        {!streamReady
-                          ? historyUnavailablePresentation?.loading
-                            ? "Radar will continue when saved history is available."
-                            : historyUnavailablePresentation
-                              ? "Radar could not restore this run from saved history."
-                              : "Restoring this run from saved history."
-                          : busy
-                            ? "Reasoning and tool activity will appear here."
-                            : "No saved activity is available for this run."}
-                      </p>
-                    </div>
-                  ) : null}
-                  {turns.map((turn, index) => {
-                    const isLast = index === turns.length - 1;
-                    const verifiedHealthy =
-                      turn.verify &&
-                      turn.diagnosis?.healthy === true &&
-                      !currentAssessmentCoverageLimited &&
-                      !currentAssessmentEvidenceConflict;
-                    const canCheck =
-                      isLast &&
-                      (turn.status === "done" || turn.status === "error") &&
-                      !!turn.apply &&
-                      !readOnly;
-                    return (
-                      <Fragment key={index}>
-                        <TurnView
-                          turn={turn}
-                          agentLabel={agentLabel}
-                          turnIndex={index}
-                          openingQuestion={
-                            index === 0 && !turn.question
-                              ? run.question
-                              : undefined
-                          }
-                          evidenceStepIds={evidenceStepIdsByTurn.get(index)}
-                          onViewEvidence={viewEvidenceSource}
-                          sourceRevealRequest={activityRevealRequest}
-                          onViewExplanation={
-                            turn.explainAssessment
-                              ? () => viewExplanation(turn.explainAssessment!)
-                              : undefined
-                          }
-                          onCheckStatus={
-                            canCheck && !interactionsBlocked
-                              ? checkStatus
-                              : undefined
-                          }
-                          onRetryDiagnosis={
-                            isLast &&
-                            turn.status === "error" &&
-                            !turn.question &&
-                            !turn.apply &&
-                            !stale &&
-                            !example
-                              ? retryDiagnosis
-                              : undefined
-                          }
-                          assessment={assessmentIndexes.includes(index)}
-                          // The current assessment is Findings; Activity
-                          // keeps a pointer to it and the full verdict of
-                          // every earlier one, so a revision never erases
-                          // what was said before.
-                          hideConclusion={index === currentAssessmentIdx}
-                          explanation={
-                            assessmentIndexes.includes(index) &&
-                            index !== currentAssessmentIdx
-                              ? explanationFor(turn)
-                              : undefined
-                          }
-                          assessmentSources={(() => {
-                            // Every turn with a case shows what it cited;
-                            // only the current assessment's notes annotate
-                            // Findings, the rest are read-only here.
-                            if (
-                              turn.apply ||
-                              turn.status !== "done" ||
-                              !turn.diagnosis ||
-                              index === currentAssessmentIdx
-                            )
-                              return undefined;
-                            const turnCase = resolveInvestigationCase(
-                              projection,
-                              turn.diagnosis,
-                              index,
-                            );
-                            const turnResolution = turn.diagnosis.rootCause
-                              ? resolveInvestigationRootCauseEvidence(
-                                  projection,
-                                  turn.diagnosis.rootCauseEvidence,
-                                  index,
-                                )
-                              : undefined;
-                            return turnCase.items.length ||
-                              turnResolution?.links.length ||
-                              turn.diagnosis.unlinkedEvidence ||
-                              turn.diagnosis.evidenceMalformed ||
-                              turn.diagnosis.omittedEntries ? (
-                              <AssessmentSources
-                                renderedGroupIds={visibleEvidenceGroupIds}
-                                resolution={turnResolution}
-                                investigationCase={turnCase}
-                                unlinkedEvidence={
-                                  turn.diagnosis.unlinkedEvidence
-                                }
-                                evidenceMalformed={
-                                  turn.diagnosis.evidenceMalformed
-                                }
-                                omittedEntries={turn.diagnosis.omittedEntries}
-                                readOnly
-                                onViewSource={viewActivitySource}
-                              />
-                            ) : undefined;
-                          })()}
-                        />
-                        {showSidePanes &&
-                        index === currentAssessmentIdx &&
-                        turn.timeline.length === 0 ? (
-                          <p className="hidden text-sm text-theme-text-tertiary @min-[1000px]/investigation:block">
-                            No reasoning or tool activity was recorded for this
-                            assessment. See Findings.
-                          </p>
-                        ) : null}
-                        {index === currentAssessmentIdx ? (
-                          <button
-                            type="button"
-                            onClick={() => selectPane("evidence")}
-                            className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                              verifiedHealthy
-                                ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
-                                : "border-accent/30 bg-accent/5 hover:bg-accent/10"
-                            } ${splitTabClass}`}
-                          >
-                            <span
-                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
-                                verifiedHealthy
-                                  ? "bg-emerald-500/15 text-emerald-500"
-                                  : "bg-accent/10 text-accent-text"
-                              }`}
-                            >
-                              {verifiedHealthy ? (
-                                <CheckCircle2 className="h-4 w-4" />
-                              ) : (
-                                <Files className="h-4 w-4" />
-                              )}
-                            </span>
-                            <CompletionSummary
-                              label={
-                                assessmentNeedsCurrentStateVerification
-                                  ? "Assessment before apply"
-                                  : hasEvidenceCollectedAfterAssessment
-                                    ? "Earlier assessment"
-                                    : turn.verify
-                                      ? "Verification complete"
-                                      : "Assessment ready"
-                              }
-                              state={
-                                assessmentNeedsCurrentStateVerification
-                                  ? {
-                                      text: "Current state unverified",
-                                      warn: true,
-                                    }
-                                  : turn.diagnosis
-                                    ? assessmentStateLabel(
-                                        turn.diagnosis,
-                                        currentAssessmentEvidenceConflict,
-                                      )
-                                    : undefined
-                              }
-                              sentence={
-                                turn.diagnosis
-                                  ? verdictSentence(turn.diagnosis)
-                                  : ""
-                              }
-                            />
-                            <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
-                              View Findings
-                              <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                            </span>
-                          </button>
-                        ) : null}
-                      </Fragment>
-                    );
-                  })}
-                  {shownFailure && (
-                    <InvestigationFailureNotice
-                      message={shownFailure}
-                      refusal={shownActionRefusal}
-                      statusCheck={
-                        displayedStatusCheckError
-                          ? {
-                              label:
-                                applyOutcomeUncertain &&
-                                !displayedVerificationError
-                                  ? "Check current status"
-                                  : "Check current status again",
-                              onCheck: checkStatus,
-                              disabled: interactionsBlocked,
-                            }
-                          : null
-                      }
-                      followUp={shownFollowUp}
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
-            {showJump ? (
+            {onCloseExample ? (
               <button
                 type="button"
-                onClick={jumpToBottom}
-                className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs font-medium text-theme-text-secondary shadow-theme-md hover:bg-theme-hover hover:text-theme-text-primary"
+                onClick={onCloseExample}
+                className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
               >
-                <ArrowDown className="h-3.5 w-3.5" />
-                {busy ? "Jump to latest" : "Scroll to bottom"}
+                Close example
               </button>
             ) : null}
           </div>
-          {composer}
-        </section>
-        <section
-          id={findingsPaneId}
-          aria-label="Findings: current assessment, Radar evidence, and next steps"
-          aria-busy={
-            busy || requestPending || verificationPending || rebuildingReplay
-          }
-          className={`${
-            narrowPane === "evidence" ? "flex" : "hidden"
-          } relative min-h-0 min-w-0 flex-col ${splitPaneClass}`}
-        >
+        ) : null}
+        {stale ? (
+          <div className="flex items-center gap-2 border-b border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-theme-text-secondary">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1">
+              This investigation ran on{" "}
+              <span className="font-medium text-theme-text-primary">
+                {parseContextName(run.context).clusterName}
+              </span>
+              . It is read-only because its agent session was closed after a
+              cluster switch.
+            </span>
+          </div>
+        ) : null}
+        {example && gone ? (
           <div
-            className={`hidden items-center justify-between gap-3 border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
+            role="alert"
+            className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
           >
-            <div className="flex min-w-0 items-center gap-2">
-              <Files className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              <div className="min-w-0">
-                <h2 className="truncate text-sm font-semibold text-theme-text-primary">
-                  Findings
-                </h2>
-                <p className="truncate text-[11px] text-theme-text-tertiary">
-                  Current assessment, evidence, and next steps
-                </p>
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1">
+              Radar couldn&apos;t load the example. Close it and open it again.
+            </span>
+          </div>
+        ) : !stale && gone ? (
+          <div className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1">
+              This investigation is closed and read-only.{" "}
+              {turns.length > 0
+                ? "Evidence already loaded in this view is preserved, but Radar can no longer continue the run."
+                : "It may be private, your access may have changed, or its history may have been cleared. Check your account and organization, or ask the creator for access."}
+            </span>
+            <button
+              type="button"
+              onClick={retryDiagnosis}
+              className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
+            >
+              Investigate again
+            </button>
+          </div>
+        ) : null}
+        {!example && !stale && !gone && endedEarly ? (
+          <div
+            role="status"
+            className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1">
+              {run.status === "stopped"
+                ? "This investigation was stopped before it reached a conclusion."
+                : "This investigation ended before it reached a complete conclusion."}
+              <span className="ml-1">
+                Evidence collected so far is preserved. See Activity for the
+                final error or stopped state.
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={retryDiagnosis}
+              className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
+            >
+              Investigate again
+            </button>
+          </div>
+        ) : null}
+
+        {startError ? (
+          <InvestigationStartErrorAlert
+            error={startError}
+            refusal={startRefusal}
+            onDismiss={dismissError}
+          />
+        ) : null}
+
+        {!gone && historyUnavailablePresentation ? (
+          <div
+            role={historyUnavailablePresentation.loading ? "status" : "alert"}
+            className={`flex items-start gap-2 border-b px-3 py-2.5 text-xs text-theme-text-secondary ${
+              historyUnavailablePresentation.loading
+                ? "border-amber-500/35 bg-amber-500/10"
+                : "border-red-500/30 bg-red-500/10"
+            }`}
+          >
+            {historyUnavailablePresentation.loading ? (
+              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-500" />
+            ) : (
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+            )}
+            <span className="min-w-0">
+              <span className="block font-medium text-theme-text-primary">
+                {historyUnavailablePresentation.title}
+              </span>
+              <span>{historyUnavailablePresentation.detail}</span>
+            </span>
+          </div>
+        ) : null}
+
+        <div
+          role="group"
+          aria-label="Investigation view"
+          className={`grid grid-cols-2 border-b border-theme-border bg-theme-base/40 p-1 ${splitTabClass}`}
+        >
+          <button
+            type="button"
+            id={activityTabId}
+            aria-controls={activityPaneId}
+            aria-pressed={narrowPane === "activity"}
+            aria-label="Activity: agent reasoning and tool calls"
+            onKeyDown={onTabKeyDown}
+            onClick={() => selectPane("activity")}
+            className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium ${
+              narrowPane === "activity"
+                ? "selection-strong selection-text selection-ring"
+                : "text-theme-text-secondary hover:bg-theme-hover"
+            }`}
+          >
+            <Activity className="h-3.5 w-3.5" />
+            Activity
+          </button>
+          <button
+            type="button"
+            id={findingsTabId}
+            aria-controls={findingsPaneId}
+            aria-pressed={narrowPane === "evidence"}
+            aria-label={findingsTabAccessibleLabel}
+            onKeyDown={onTabKeyDown}
+            onClick={() => selectPane("evidence")}
+            className={`relative flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium ${
+              narrowPane === "evidence"
+                ? "selection-strong selection-text selection-ring"
+                : "text-theme-text-secondary hover:bg-theme-hover"
+            }`}
+          >
+            <Files className="h-3.5 w-3.5" />
+            Findings
+            {unreadEvidence && narrowPane !== "evidence" ? (
+              <span
+                className="h-1.5 w-1.5 rounded-full bg-accent"
+                aria-hidden
+              />
+            ) : null}
+          </button>
+          <span className="sr-only" role="status" aria-live="polite">
+            {investigationEvidenceAnnouncement({
+              unreadEvidence,
+              evidenceUpdateAvailable,
+            })}
+          </span>
+        </div>
+
+        <div className={`grid min-h-0 flex-1 ${splitGridClass}`}>
+          <section
+            id={activityPaneId}
+            tabIndex={-1}
+            aria-label="Activity: agent reasoning and tool calls"
+            aria-busy={busy || requestPending || rebuildingReplay}
+            className={`${
+              narrowPane === "activity" ? "flex" : "hidden"
+            } relative min-h-0 min-w-0 flex-col outline-none ${splitPaneClass} ${splitActivityBorderClass}`}
+          >
+            <div
+              className={`hidden items-center justify-between border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <Activity className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
+                <div className="min-w-0">
+                  <h2 className="truncate text-sm font-semibold text-theme-text-primary">
+                    Activity
+                  </h2>
+                  <p className="truncate text-[11px] text-theme-text-tertiary">
+                    Agent reasoning and tool calls
+                  </p>
+                </div>
+              </div>
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-theme-text-tertiary">
+                {toolCallCount > 0
+                  ? `${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`
+                  : turns.length > 0
+                    ? `${turns.length} ${turns.length === 1 ? "turn" : "turns"}`
+                    : null}
+              </span>
+            </div>
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              <div
+                ref={scrollRef}
+                data-investigation-activity-scroll
+                onScroll={onScroll}
+                className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-gutter:stable]"
+              >
+                <div>
+                  <div className="space-y-4">
+                    {turns.length === 0 && !gone ? (
+                      <div className="flex min-h-36 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
+                        {historyUnavailablePresentation &&
+                        !historyUnavailablePresentation.loading ? (
+                          <AlertTriangle className="h-5 w-5 text-red-400" />
+                        ) : !streamReady || busy ? (
+                          <Loader2 className="h-5 w-5 animate-spin text-accent" />
+                        ) : (
+                          <Activity className="h-5 w-5 text-theme-text-tertiary" />
+                        )}
+                        <p className="mt-2 text-sm font-medium text-theme-text-secondary">
+                          {!streamReady
+                            ? historyUnavailablePresentation?.loading
+                              ? "Retrying saved activity"
+                              : historyUnavailablePresentation
+                                ? "Saved activity unavailable"
+                                : "Loading saved activity"
+                            : busy
+                              ? "Starting the investigation"
+                              : "No activity recorded"}
+                        </p>
+                        <p className="mt-1 text-xs text-theme-text-tertiary">
+                          {!streamReady
+                            ? historyUnavailablePresentation?.loading
+                              ? "Radar will continue when saved history is available."
+                              : historyUnavailablePresentation
+                                ? "Radar could not restore this run from saved history."
+                                : "Restoring this run from saved history."
+                            : busy
+                              ? "Reasoning and tool activity will appear here."
+                              : "No saved activity is available for this run."}
+                        </p>
+                      </div>
+                    ) : null}
+                    {turns.map((turn, index) => {
+                      const isLast = index === turns.length - 1;
+                      const verifiedHealthy =
+                        turn.verify &&
+                        turn.diagnosis?.healthy === true &&
+                        !currentAssessmentCoverageLimited &&
+                        !currentAssessmentEvidenceConflict;
+                      const canCheck =
+                        isLast &&
+                        (turn.status === "done" || turn.status === "error") &&
+                        !!turn.apply &&
+                        !readOnly;
+                      return (
+                        <Fragment key={index}>
+                          <TurnView
+                            turn={turn}
+                            agentLabel={agentLabel}
+                            turnIndex={index}
+                            openingQuestion={
+                              index === 0 && !turn.question
+                                ? run.question
+                                : undefined
+                            }
+                            evidenceStepIds={evidenceStepIdsByTurn.get(index)}
+                            onViewEvidence={viewEvidenceSource}
+                            sourceRevealRequest={activityRevealRequest}
+                            onViewExplanation={
+                              turn.explainAssessment
+                                ? () => viewExplanation(turn.explainAssessment!)
+                                : undefined
+                            }
+                            onCheckStatus={
+                              canCheck && !interactionsBlocked
+                                ? checkStatus
+                                : undefined
+                            }
+                            onRetryDiagnosis={
+                              isLast &&
+                              turn.status === "error" &&
+                              !turn.question &&
+                              !turn.apply &&
+                              !stale &&
+                              !example
+                                ? retryDiagnosis
+                                : undefined
+                            }
+                            assessment={assessmentIndexes.includes(index)}
+                            // The current assessment is Findings; Activity
+                            // keeps a pointer to it and the full verdict of
+                            // every earlier one, so a revision never erases
+                            // what was said before.
+                            hideConclusion={index === currentAssessmentIdx}
+                            explanation={
+                              assessmentIndexes.includes(index) &&
+                              index !== currentAssessmentIdx
+                                ? explanationFor(turn)
+                                : undefined
+                            }
+                            assessmentSources={(() => {
+                              // Every turn with a case shows what it cited;
+                              // only the current assessment's notes annotate
+                              // Findings, the rest are read-only here.
+                              if (
+                                turn.apply ||
+                                turn.status !== "done" ||
+                                !turn.diagnosis ||
+                                index === currentAssessmentIdx
+                              )
+                                return undefined;
+                              const turnCase = resolveInvestigationCase(
+                                projection,
+                                turn.diagnosis,
+                                index,
+                              );
+                              const turnResolution = turn.diagnosis.rootCause
+                                ? resolveInvestigationRootCauseEvidence(
+                                    projection,
+                                    turn.diagnosis.rootCauseEvidence,
+                                    index,
+                                  )
+                                : undefined;
+                              return turnCase.items.length ||
+                                turnResolution?.links.length ||
+                                turn.diagnosis.unlinkedEvidence ||
+                                turn.diagnosis.evidenceMalformed ||
+                                turn.diagnosis.omittedEntries ? (
+                                <AssessmentSources
+                                  renderedGroupIds={visibleEvidenceGroupIds}
+                                  resolution={turnResolution}
+                                  investigationCase={turnCase}
+                                  unlinkedEvidence={
+                                    turn.diagnosis.unlinkedEvidence
+                                  }
+                                  evidenceMalformed={
+                                    turn.diagnosis.evidenceMalformed
+                                  }
+                                  omittedEntries={turn.diagnosis.omittedEntries}
+                                  readOnly
+                                  onViewSource={viewActivitySource}
+                                />
+                              ) : undefined;
+                            })()}
+                          />
+                          {showSidePanes &&
+                          index === currentAssessmentIdx &&
+                          turn.timeline.length === 0 ? (
+                            <p className="hidden text-sm text-theme-text-tertiary @min-[1000px]/investigation:block">
+                              No reasoning or tool activity was recorded for
+                              this assessment. See Findings.
+                            </p>
+                          ) : null}
+                          {index === currentAssessmentIdx ? (
+                            <button
+                              type="button"
+                              onClick={() => selectPane("evidence")}
+                              className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                                verifiedHealthy
+                                  ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
+                                  : "border-accent/30 bg-accent/5 hover:bg-accent/10"
+                              } ${splitTabClass}`}
+                            >
+                              <span
+                                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                                  verifiedHealthy
+                                    ? "bg-emerald-500/15 text-emerald-500"
+                                    : "bg-accent/10 text-accent-text"
+                                }`}
+                              >
+                                {verifiedHealthy ? (
+                                  <CheckCircle2 className="h-4 w-4" />
+                                ) : (
+                                  <Files className="h-4 w-4" />
+                                )}
+                              </span>
+                              <CompletionSummary
+                                label={
+                                  assessmentNeedsCurrentStateVerification
+                                    ? "Assessment before apply"
+                                    : hasEvidenceCollectedAfterAssessment
+                                      ? "Earlier assessment"
+                                      : turn.verify
+                                        ? "Verification complete"
+                                        : "Assessment ready"
+                                }
+                                state={
+                                  assessmentNeedsCurrentStateVerification
+                                    ? {
+                                        text: "Current state unverified",
+                                        warn: true,
+                                      }
+                                    : turn.diagnosis
+                                      ? assessmentStateLabel(
+                                          turn.diagnosis,
+                                          currentAssessmentEvidenceConflict,
+                                        )
+                                      : undefined
+                                }
+                                sentence={
+                                  turn.diagnosis
+                                    ? verdictSentence(turn.diagnosis)
+                                    : ""
+                                }
+                              />
+                              <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
+                                View Findings
+                                <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                              </span>
+                            </button>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })}
+                    {shownFailure && (
+                      <InvestigationFailureNotice
+                        message={shownFailure}
+                        refusal={shownActionRefusal}
+                        statusCheck={
+                          displayedStatusCheckError
+                            ? {
+                                label:
+                                  applyOutcomeUncertain &&
+                                  !displayedVerificationError
+                                    ? "Check current status"
+                                    : "Check current status again",
+                                onCheck: checkStatus,
+                                disabled: interactionsBlocked,
+                              }
+                            : null
+                        }
+                        followUp={shownFollowUp}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+              {showJump ? (
+                <button
+                  type="button"
+                  onClick={jumpToBottom}
+                  className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs font-medium text-theme-text-secondary shadow-theme-md hover:bg-theme-hover hover:text-theme-text-primary"
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                  {busy ? "Jump to latest" : "Scroll to bottom"}
+                </button>
+              ) : null}
+            </div>
+            {composer}
+          </section>
+          <section
+            id={findingsPaneId}
+            aria-label="Findings: current assessment, Radar evidence, and next steps"
+            aria-busy={
+              busy || requestPending || verificationPending || rebuildingReplay
+            }
+            className={`${
+              narrowPane === "evidence" ? "flex" : "hidden"
+            } relative min-h-0 min-w-0 flex-col ${splitPaneClass}`}
+          >
+            <div
+              className={`hidden items-center justify-between gap-3 border-b border-theme-border/60 px-3 py-2 ${splitPaneClass}`}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <Files className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
+                <div className="min-w-0">
+                  <h2 className="truncate text-sm font-semibold text-theme-text-primary">
+                    Findings
+                  </h2>
+                  <p className="truncate text-[11px] text-theme-text-tertiary">
+                    Current assessment, evidence, and next steps
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {evidenceUpdateAvailable ? (
+                  <button
+                    type="button"
+                    onClick={revealLatestEvidenceUpdate}
+                    className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/5 px-2 py-1 text-[11px] font-medium text-accent-text hover:bg-accent/10"
+                  >
+                    <Files className="h-3 w-3" />
+                    See new evidence
+                  </button>
+                ) : null}
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {evidenceUpdateAvailable ? (
+            {evidenceUpdateAvailable ? (
+              <div className={`absolute right-4 top-2 z-20 ${splitTabClass}`}>
                 <button
                   type="button"
                   onClick={revealLatestEvidenceUpdate}
-                  className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/5 px-2 py-1 text-[11px] font-medium text-accent-text hover:bg-accent/10"
+                  className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-theme-elevated px-2 py-1 text-[11px] font-medium text-accent-text shadow-theme-sm hover:bg-theme-hover"
                 >
                   <Files className="h-3 w-3" />
                   See new evidence
                 </button>
-              ) : null}
-            </div>
-          </div>
-          {evidenceUpdateAvailable ? (
-            <div className={`absolute right-4 top-2 z-20 ${splitTabClass}`}>
-              <button
-                type="button"
-                onClick={revealLatestEvidenceUpdate}
-                className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-theme-elevated px-2 py-1 text-[11px] font-medium text-accent-text shadow-theme-sm hover:bg-theme-hover"
-              >
-                <Files className="h-3 w-3" />
-                See new evidence
-              </button>
-            </div>
-          ) : null}
-          <div
-            ref={evidenceScrollRef}
-            data-investigation-findings-scroll
-            onScroll={(event) => {
-              if (event.currentTarget.offsetParent === null) return;
-              evidenceScrollTopRef.current = event.currentTarget.scrollTop;
-              if (event.currentTarget.scrollTop <= 40) {
-                setEvidenceUpdateAvailable(false);
-                latestEvidenceUpdateSourceIdRef.current = undefined;
-              }
-            }}
-            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
-          >
-            <div ref={evidenceContentRef} className="min-w-0 space-y-4">
-              {rebuildingReplay ? (
-                <div className="flex min-h-28 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
-                  {historyUnavailablePresentation &&
-                  !historyUnavailablePresentation.loading ? (
-                    <AlertTriangle className="h-5 w-5 text-red-400" />
-                  ) : (
-                    <Loader2 className="h-5 w-5 animate-spin text-accent" />
-                  )}
-                  <p className="mt-2 text-sm font-medium text-theme-text-secondary">
-                    {historyUnavailablePresentation?.loading
-                      ? "Retrying saved evidence"
-                      : historyUnavailablePresentation
-                        ? "Saved evidence unavailable"
-                        : "Loading saved evidence"}
-                  </p>
-                  <p className="mt-1 text-xs text-theme-text-tertiary">
-                    {historyUnavailablePresentation?.loading
-                      ? "Radar will continue when saved history is available."
-                      : historyUnavailablePresentation
-                        ? "Radar could not restore evidence from saved history."
-                        : "Restoring the assessment and evidence from saved history."}
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {/* One column, one reading order: assessment, analysis, next
+              </div>
+            ) : null}
+            <div
+              ref={evidenceScrollRef}
+              data-investigation-findings-scroll
+              onScroll={(event) => {
+                if (event.currentTarget.offsetParent === null) return;
+                evidenceScrollTopRef.current = event.currentTarget.scrollTop;
+                if (event.currentTarget.scrollTop <= 40) {
+                  setEvidenceUpdateAvailable(false);
+                  latestEvidenceUpdateSourceIdRef.current = undefined;
+                }
+              }}
+              className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
+            >
+              <div ref={evidenceContentRef} className="min-w-0 space-y-4">
+                {rebuildingReplay ? (
+                  <div className="flex min-h-28 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
+                    {historyUnavailablePresentation &&
+                    !historyUnavailablePresentation.loading ? (
+                      <AlertTriangle className="h-5 w-5 text-red-400" />
+                    ) : (
+                      <Loader2 className="h-5 w-5 animate-spin text-accent" />
+                    )}
+                    <p className="mt-2 text-sm font-medium text-theme-text-secondary">
+                      {historyUnavailablePresentation?.loading
+                        ? "Retrying saved evidence"
+                        : historyUnavailablePresentation
+                          ? "Saved evidence unavailable"
+                          : "Loading saved evidence"}
+                    </p>
+                    <p className="mt-1 text-xs text-theme-text-tertiary">
+                      {historyUnavailablePresentation?.loading
+                        ? "Radar will continue when saved history is available."
+                        : historyUnavailablePresentation
+                          ? "Radar could not restore evidence from saved history."
+                          : "Restoring the assessment and evidence from saved history."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* One column, one reading order: assessment, analysis, next
                       steps. The page already holds four columns; Findings is
                       not a fifth, and it fills the pane it is given. */}
-                  <div className="space-y-3">
-                    <section
-                      aria-labelledby={`${viewId}-assessment-heading`}
-                      className="investigation-assessment rounded-xl border p-3"
-                    >
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {/* A label for the block, not its headline: the
-                            verdict sentence below is what a reader looks for. */}
-                        <h2
-                          id={`${viewId}-assessment-heading`}
-                          className="text-sm font-medium text-theme-text-secondary"
-                        >
-                          {assessmentNeedsCurrentStateVerification
-                            ? "Assessment before apply"
-                            : hasEvidenceCollectedAfterAssessment
-                              ? "Earlier assessment"
-                              : !currentAssessment
-                                ? "Assessment"
-                                : currentAssessment.verify
-                                  ? "Verification result"
-                                  : currentAssessmentIdx ===
-                                        initialAssessmentIdx &&
-                                      hasMultipleAssessments
-                                    ? "Initial assessment"
-                                    : "Assessment"}
-                        </h2>
-                        {assessmentNeedsCurrentStateVerification ? (
-                          <Badge severity="warning" size="sm">
-                            Current state unverified
-                          </Badge>
-                        ) : null}
-                        {hasEvidenceCollectedAfterAssessment &&
-                        !assessmentNeedsCurrentStateVerification ? (
-                          <Badge severity="info" size="sm">
-                            Newer evidence below
-                          </Badge>
-                        ) : null}
-                        {verificationRunning || verificationPending ? (
-                          <Badge severity="info" size="sm">
-                            Verifying…
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {assessmentNeedsCurrentStateVerification ? (
-                        <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                          {verificationRunning || verificationPending
-                            ? "This assessment predates the apply attempt. Radar is checking the current state now."
-                            : "This assessment predates the apply attempt; cluster state after it has not been verified."}
-                        </p>
-                      ) : hasEvidenceCollectedAfterAssessment ? (
-                        <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                          Some evidence below was collected after this
-                          assessment. Validate the conclusion against it before
-                          acting.
-                        </p>
-                      ) : null}
-                      {currentAssessment?.diagnosis ? (
-                        <ResultCard
-                          key={
-                            currentAssessment.resultSequence ??
-                            currentAssessmentIdx
-                          }
-                          diagnosis={currentAssessment.diagnosis}
-                          assessmentLimits={
-                            storyShape ? assessmentLimits : undefined
-                          }
-                          assessmentRoutineLimits={
-                            storyShape ? assessmentRoutineLimits : undefined
-                          }
-                          assessmentCopy={assessmentCopy}
-                          healthSignals={storyShape ? healthSignals : undefined}
-                          onRevealSource={viewEvidenceSource}
-                          assessmentSources={
-                            storyShape ? undefined : assessmentSourcesNode
-                          }
-                          assessmentAction={
-                            hasNextSteps || showContinueInAgent ? (
-                              <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
-                                {hasNextSteps ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const section = nextStepsRef.current;
-                                      const scroller =
-                                        evidenceScrollRef.current;
-                                      if (!section || !scroller) return;
-                                      section.focus({ preventScroll: true });
-                                      scroller.scrollTo({
-                                        top:
-                                          scroller.scrollTop +
-                                          section.getBoundingClientRect().top -
-                                          scroller.getBoundingClientRect().top -
-                                          12,
-                                        behavior: prefersReducedMotion()
-                                          ? "auto"
-                                          : "smooth",
-                                      });
-                                    }}
-                                    className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                                  >
-                                    {earlierPlan
-                                      ? "Earlier proposed steps ↓"
-                                      : nextStepLabel}
-                                  </button>
-                                ) : null}
-                                {showContinueInAgent && continueCommand ? (
-                                  <ContinueInAgentButton
-                                    run={run}
-                                    command={continueCommand}
-                                  />
-                                ) : null}
-                              </div>
-                            ) : null
-                          }
-                          explanation={explanationFor(currentAssessment)}
-                          section="conclusion"
-                          animate={currentAssessment.animateResult !== false}
-                          showDisclaimer={false}
-                          revisedAfter={
-                            currentAssessment.question &&
-                            !currentAssessment.verify &&
-                            hasMultipleAssessments
-                              ? currentAssessment.question
-                              : undefined
-                          }
-                          coverageLimited={currentAssessmentCoverageLimited}
-                          evidenceConflict={currentAssessmentEvidenceConflict}
-                          evidenceConflictExplainedBy={
-                            currentAssessmentEvidenceConflictExplainedBy
-                          }
-                        />
-                      ) : (
-                        <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
-                          {busy || requestPending ? (
-                            <span
-                              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
-                              aria-hidden
-                            />
-                          ) : (
-                            <Activity
-                              className="h-3.5 w-3.5 shrink-0"
-                              aria-hidden
-                            />
-                          )}
-                          {busy || requestPending ? (
-                            <>
-                              <span className="min-w-0 flex-1 truncate">
-                                {investigatingLabel.current}
-                              </span>
-                              {investigatingLabel.meta ? (
-                                <span className="shrink-0 tabular-nums text-theme-text-tertiary/80">
-                                  {investigatingLabel.meta}
-                                </span>
-                              ) : null}
-                            </>
-                          ) : (
-                            <span>
-                              The agent did not provide a final assessment.
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {displayedStatusCheckError ? (
-                        <InvestigationStatusCheckNotice
-                          message={displayedStatusCheckError}
-                          uncertainOnly={
-                            !!applyOutcomeUncertain &&
-                            !displayedVerificationError
-                          }
-                          refusal={shownActionRefusal}
-                          onCheck={checkStatus}
-                          disabled={interactionsBlocked}
-                        />
-                      ) : null}
-                    </section>
-
-                    {questionOnly && investigationCase ? (
-                      <QuestionFocus
-                        focus={questionFocus}
-                        stale={stale}
-                        onOpenResource={onOpenResource}
-                        // These start a new investigation, so a run that can
-                        // no longer take follow-ups doesn't block them.
-                        disabled={investigationInteractionsBlocked({
-                          streamReady,
-                          busy,
-                          requestPending,
-                          readOnly: false,
-                          verificationPending,
-                        })}
-                        onChooseResource={() =>
-                          openQuestion({
-                            text: run.question,
-                            namespaces: run.namespaces,
-                            lookBack: run.lookBack,
-                            askedAt: questionAskedAt(run),
-                            pickResource: true,
-                          })
-                        }
-                        onInvestigate={(resource) =>
-                          openInvestigation({
-                            ...resource,
-                            question: run.question,
-                            lookBack: run.lookBack,
-                            askedAt: questionAskedAt(run),
-                          })
-                        }
-                      />
-                    ) : null}
-
-                    {hasMultipleAssessments ? (
-                      <button
-                        type="button"
-                        data-investigation-earlier-assessments
-                        onClick={viewActivity}
-                        className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                    <div className="space-y-3">
+                      <section
+                        aria-labelledby={`${viewId}-assessment-heading`}
+                        className="investigation-assessment rounded-xl border p-3"
                       >
-                        <FileClock className="h-3.5 w-3.5" aria-hidden />
-                        {assessmentIndexes.length - 1 === 1
-                          ? "1 earlier assessment"
-                          : `${assessmentIndexes.length - 1} earlier assessments`}
-                        <span className="text-theme-text-tertiary">
-                          · in Activity
-                        </span>
-                      </button>
-                    ) : null}
-                  </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {/* A label for the block, not its headline: the
+                            verdict sentence below is what a reader looks for. */}
+                          <h2
+                            id={`${viewId}-assessment-heading`}
+                            className="text-sm font-medium text-theme-text-secondary"
+                          >
+                            {assessmentNeedsCurrentStateVerification
+                              ? "Assessment before apply"
+                              : hasEvidenceCollectedAfterAssessment
+                                ? "Earlier assessment"
+                                : !currentAssessment
+                                  ? "Assessment"
+                                  : currentAssessment.verify
+                                    ? "Verification result"
+                                    : currentAssessmentIdx ===
+                                          initialAssessmentIdx &&
+                                        hasMultipleAssessments
+                                      ? "Initial assessment"
+                                      : "Assessment"}
+                          </h2>
+                          {assessmentNeedsCurrentStateVerification ? (
+                            <Badge severity="warning" size="sm">
+                              Current state unverified
+                            </Badge>
+                          ) : null}
+                          {hasEvidenceCollectedAfterAssessment &&
+                          !assessmentNeedsCurrentStateVerification ? (
+                            <Badge severity="info" size="sm">
+                              Newer evidence below
+                            </Badge>
+                          ) : null}
+                          {verificationRunning || verificationPending ? (
+                            <Badge severity="info" size="sm">
+                              Verifying…
+                            </Badge>
+                          ) : null}
+                        </div>
+                        {assessmentNeedsCurrentStateVerification ? (
+                          <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                            {verificationRunning || verificationPending
+                              ? "This assessment predates the apply attempt. Radar is checking the current state now."
+                              : "This assessment predates the apply attempt; cluster state after it has not been verified."}
+                          </p>
+                        ) : hasEvidenceCollectedAfterAssessment ? (
+                          <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                            Some evidence below was collected after this
+                            assessment. Validate the conclusion against it
+                            before acting.
+                          </p>
+                        ) : null}
+                        {currentAssessment?.diagnosis ? (
+                          <ResultCard
+                            key={
+                              currentAssessment.resultSequence ??
+                              currentAssessmentIdx
+                            }
+                            diagnosis={currentAssessment.diagnosis}
+                            assessmentLimits={
+                              storyShape ? assessmentLimits : undefined
+                            }
+                            assessmentRoutineLimits={
+                              storyShape ? assessmentRoutineLimits : undefined
+                            }
+                            assessmentCopy={assessmentCopy}
+                            healthSignals={
+                              storyShape ? healthSignals : undefined
+                            }
+                            onRevealSource={viewEvidenceSource}
+                            assessmentSources={
+                              storyShape ? undefined : assessmentSourcesNode
+                            }
+                            assessmentAction={
+                              hasNextSteps ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const section = nextStepsRef.current;
+                                    const scroller = evidenceScrollRef.current;
+                                    if (!section || !scroller) return;
+                                    section.focus({ preventScroll: true });
+                                    scroller.scrollTo({
+                                      top:
+                                        scroller.scrollTop +
+                                        section.getBoundingClientRect().top -
+                                        scroller.getBoundingClientRect().top -
+                                        12,
+                                      behavior: prefersReducedMotion()
+                                        ? "auto"
+                                        : "smooth",
+                                    });
+                                  }}
+                                  className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                                >
+                                  {earlierPlan
+                                    ? "Earlier proposed steps ↓"
+                                    : nextStepLabel}
+                                </button>
+                              ) : null
+                            }
+                            explanation={explanationFor(currentAssessment)}
+                            section="conclusion"
+                            animate={currentAssessment.animateResult !== false}
+                            showDisclaimer={false}
+                            revisedAfter={
+                              currentAssessment.question &&
+                              !currentAssessment.verify &&
+                              hasMultipleAssessments
+                                ? currentAssessment.question
+                                : undefined
+                            }
+                            coverageLimited={currentAssessmentCoverageLimited}
+                            evidenceConflict={currentAssessmentEvidenceConflict}
+                            evidenceConflictExplainedBy={
+                              currentAssessmentEvidenceConflictExplainedBy
+                            }
+                          />
+                        ) : (
+                          <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
+                            {busy || requestPending ? (
+                              <span
+                                className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
+                                aria-hidden
+                              />
+                            ) : (
+                              <Activity
+                                className="h-3.5 w-3.5 shrink-0"
+                                aria-hidden
+                              />
+                            )}
+                            {busy || requestPending ? (
+                              <>
+                                <span className="min-w-0 flex-1 truncate">
+                                  {investigatingLabel.current}
+                                </span>
+                                {investigatingLabel.meta ? (
+                                  <span className="shrink-0 tabular-nums text-theme-text-tertiary/80">
+                                    {investigatingLabel.meta}
+                                  </span>
+                                ) : null}
+                              </>
+                            ) : (
+                              <span>
+                                The agent did not provide a final assessment.
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {displayedStatusCheckError ? (
+                          <InvestigationStatusCheckNotice
+                            message={displayedStatusCheckError}
+                            uncertainOnly={
+                              !!applyOutcomeUncertain &&
+                              !displayedVerificationError
+                            }
+                            refusal={shownActionRefusal}
+                            onCheck={checkStatus}
+                            disabled={interactionsBlocked}
+                          />
+                        ) : null}
+                      </section>
 
-                  <InvestigationEvidencePane
-                    projection={projection}
-                    withoutTarget={questionOnly}
-                    assessmentPending={assessmentPending}
-                    showUncited={showUncited}
-                    rootCauseEvidence={paneResolution}
-                    investigationCase={investigationCase}
-                    story={
-                      storyShape && currentAssessment?.diagnosis
-                        ? {
-                            summary: currentAssessment.diagnosis.summary,
-                            report: currentAssessment.diagnosis.report,
-                            evidence: currentAssessment.diagnosis.evidence,
+                      {questionOnly && investigationCase ? (
+                        <QuestionFocus
+                          focus={questionFocus}
+                          stale={stale}
+                          onOpenResource={onOpenResource}
+                          // These start a new investigation, so a run that can
+                          // no longer take follow-ups doesn't block them.
+                          disabled={investigationInteractionsBlocked({
+                            streamReady,
+                            busy,
+                            requestPending,
+                            readOnly: false,
+                            verificationPending,
+                          })}
+                          onChooseResource={() =>
+                            openQuestion({
+                              text: run.question,
+                              namespaces: run.namespaces,
+                              lookBack: run.lookBack,
+                              askedAt: questionAskedAt(run),
+                              pickResource: true,
+                            })
                           }
-                        : undefined
-                    }
-                    storyShell={storyShell}
-                    summarizedLimits={
-                      storyShape
-                        ? [...assessmentLimits, ...assessmentRoutineLimits]
-                        : undefined
-                    }
-                    collecting={
-                      explanationRequest?.status !== "running" &&
-                      (requestPending ||
-                        (busy &&
-                          (!lastTurn?.explainAssessment ||
-                            lastTurn.timeline.some(
-                              (item) => item.kind === "tool",
-                            ))))
-                    }
-                    animateGroupIds={animateEvidenceGroupIds}
-                    onViewSource={viewActivitySource}
-                    onViewActivity={viewActivity}
-                    onOpenResource={stale ? undefined : onOpenResource}
-                    onOpenTimeline={stale ? undefined : onOpenTimeline}
-                    revealRequest={evidenceRevealRequest}
-                    onRevealReady={revealEvidenceSource}
-                    afterEvidence={nextStepsSection}
-                    recordNotes={recordNotes}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-      </div>
+                          onInvestigate={(resource) =>
+                            openInvestigation({
+                              ...resource,
+                              question: run.question,
+                              lookBack: run.lookBack,
+                              askedAt: questionAskedAt(run),
+                            })
+                          }
+                        />
+                      ) : null}
 
-      <ApplyDialog
-        open={confirmApply}
-        onClose={() => setConfirmApply(false)}
-        onConfirm={runApply}
-        agentLabel={agentLabel}
-        resourceLabel={formatInvestigationTarget(run)}
-        context={run.context}
-        fix={pendingFix}
-        reason={currentAssessment?.diagnosis?.recommendedReason}
-        precondition={
-          currentAssessment?.diagnosis?.recommendedIndex
-            ? currentAssessment.diagnosis.steps?.[
-                currentAssessment.diagnosis.recommendedIndex - 1
-              ]?.precondition
-            : undefined
-        }
-        resourceData={applyTarget.data}
-        gitOpsGuard={applyGitOpsGuard}
-        onOpenGitOpsOwner={openApplyOwner}
-        onOpenGitOpsManager={openApplyManager}
-        confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
-      />
-    </div>
+                      {hasMultipleAssessments ? (
+                        <button
+                          type="button"
+                          data-investigation-earlier-assessments
+                          onClick={viewActivity}
+                          className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                        >
+                          <FileClock className="h-3.5 w-3.5" aria-hidden />
+                          {assessmentIndexes.length - 1 === 1
+                            ? "1 earlier assessment"
+                            : `${assessmentIndexes.length - 1} earlier assessments`}
+                          <span className="text-theme-text-tertiary">
+                            · in Activity
+                          </span>
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <InvestigationEvidencePane
+                      projection={projection}
+                      withoutTarget={questionOnly}
+                      assessmentPending={assessmentPending}
+                      showUncited={showUncited}
+                      rootCauseEvidence={paneResolution}
+                      investigationCase={investigationCase}
+                      story={
+                        storyShape && currentAssessment?.diagnosis
+                          ? {
+                              summary: currentAssessment.diagnosis.summary,
+                              report: currentAssessment.diagnosis.report,
+                              evidence: currentAssessment.diagnosis.evidence,
+                            }
+                          : undefined
+                      }
+                      storyShell={storyShell}
+                      summarizedLimits={
+                        storyShape
+                          ? [...assessmentLimits, ...assessmentRoutineLimits]
+                          : undefined
+                      }
+                      collecting={
+                        explanationRequest?.status !== "running" &&
+                        (requestPending ||
+                          (busy &&
+                            (!lastTurn?.explainAssessment ||
+                              lastTurn.timeline.some(
+                                (item) => item.kind === "tool",
+                              ))))
+                      }
+                      animateGroupIds={animateEvidenceGroupIds}
+                      onViewSource={viewActivitySource}
+                      onViewActivity={viewActivity}
+                      onOpenResource={stale ? undefined : onOpenResource}
+                      onOpenTimeline={stale ? undefined : onOpenTimeline}
+                      revealRequest={evidenceRevealRequest}
+                      onRevealReady={revealEvidenceSource}
+                      afterEvidence={nextStepsSection}
+                      recordNotes={recordNotes}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <ApplyDialog
+          open={confirmApply}
+          onClose={() => setConfirmApply(false)}
+          onConfirm={runApply}
+          agentLabel={agentLabel}
+          resourceLabel={formatInvestigationTarget(run)}
+          context={run.context}
+          fix={pendingFix}
+          reason={currentAssessment?.diagnosis?.recommendedReason}
+          precondition={
+            currentAssessment?.diagnosis?.recommendedIndex
+              ? currentAssessment.diagnosis.steps?.[
+                  currentAssessment.diagnosis.recommendedIndex - 1
+                ]?.precondition
+              : undefined
+          }
+          resourceData={applyTarget.data}
+          gitOpsGuard={applyGitOpsGuard}
+          onOpenGitOpsOwner={openApplyOwner}
+          onOpenGitOpsManager={openApplyManager}
+          confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
+        />
+      </div>
     </ExampleInvestigationProvider>
   );
 }
