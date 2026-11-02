@@ -719,8 +719,8 @@ truncation that keeps only the head of a long result:
 - **`status`** is relative to `scope`: `complete` means Radar's watch of every
   namespace in it has loaded, so missing rows are absent from what Radar
   observes *within that scope*; `partial` means `gaps` names what it did not
-  read. A watch whose lists have kept failing for minutes no longer counts as
-  read (`kind_stale`). A complete list with `narrowedBy` is still not the
+  read. A watch whose lists keep failing no longer counts as read
+  (`kind_stale`). A complete list with `narrowedBy` is still not the
   cluster. `status` keeps this meaning: watch lag or paging, if added, get
   fields of their own.
 - **`read`** is what Radar read within `scope`. `read` and the gaps don't
@@ -823,7 +823,7 @@ a miss needs a complete read.
 | `radar_namespace_not_collected` | The namespace is outside what Radar collects. | Radar's collection (`--namespaces`, `--max-scope-candidates`, or its RBAC) |
 | `kind_sync_pending` | The kind is still loading. | Retry shortly |
 | `kind_sync_timed_out` | The kind's initial load missed its deadline; Radar keeps trying. | Retry later; if it persists, Radar's connection or list/watch access |
-| `kind_stale` | The kind had loaded, but Radar's lists of it have kept failing for three minutes with no sign of progress (Radar's access to it was revoked, say), so its copy stopped updating. Until a list succeeds, lists leave that scope out and a miss there isn't `object_not_found`; a get that finds its object still returns it. | Retry later; if it persists, Radar's access to the kind or its connection |
+| `kind_stale` | The kind had loaded, but Radar's lists of it keep failing (Radar's access to it was revoked, say), so Radar can't confirm its copy is current: at least three failed lists spanning three minutes or more, none five or more minutes apart, with no sign of progress. It clears as soon as the copy's resource version moves, or once no list has failed for five minutes. Meanwhile lists leave that scope out, and a miss there isn't `object_not_found` (while Namespaces is stale, an unknown namespace isn't `namespace_not_found` either); a get that finds its object still returns it. | Retry later; if it persists, Radar's access to the kind or its connection |
 | `radar_kind_not_collected` | Radar's setup leaves the kind out. | Radar's collection configuration |
 | `kind_not_watchable` | The API can't be list/watched. | Use another tool; retrying won't help |
 | `kind_unknown` | The kind isn't in the catalog or discovery. Before answering this, Radar refreshes discovery (at most every 30 seconds), so a custom resource installed since the last refresh resolves. When discovery failed for the group the request named, or Radar's last discovery refresh failed outright, the answer is `read_error` instead: the kind may exist behind an API that isn't answering. | Check spelling, `group`, and installation |
