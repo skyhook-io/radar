@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/gkedisk"
@@ -1666,18 +1667,19 @@ func attachEventVolume(message string) string {
 var multiAttachEventRE = regexp.MustCompile(`(?:Multi-Attach error|Waiting for detach) for volume "([^"]+)" Volume is already used by pod\(s\) (.+?)(?: and \d+ pod\(s\) in different namespaces)?$`)
 
 // multiAttachSharedVolumeDiagnosis names the root cause of a Multi-Attach
-// failure on a Deployment pod when the volume is a ReadWriteOnce claim the
-// Deployment's replicas share and the pod holding it is another replica of the
-// same Deployment on a different node. Returns "" otherwise: a holder from
-// another workload, or a one-replica rollout surge (which the stuck-rollout
-// row explains), is not this cause.
+// failure on a Deployment pod whose volume is a ReadWriteOnce claim the
+// Deployment mounts, when the pod holding it is another pod of the same
+// Deployment on a different node. With one replica, a holder from an older
+// revision means a RollingUpdate surge started the new pod before the old one
+// let go; with more, the replicas share the claim across nodes. Returns ""
+// otherwise: a holder from another workload is not this cause.
 func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (cause, action string) {
 	m := multiAttachEventRE.FindStringSubmatch(eventMessage)
 	if m == nil || cache == nil || cache.Deployments() == nil || cache.Pods() == nil {
 		return "", ""
 	}
 	d, err := cache.Deployments().Deployments(pod.Namespace).Get(deployment)
-	if err != nil || d == nil || schedDesiredReplicas(d.Spec.Replicas) < 2 {
+	if err != nil || d == nil {
 		return "", ""
 	}
 	var claim *corev1.PersistentVolumeClaim
@@ -1691,6 +1693,7 @@ func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, dep
 	if claim == nil {
 		return "", ""
 	}
+	replicas := schedDesiredReplicas(d.Spec.Replicas)
 	for _, name := range strings.Split(m[2], ",") {
 		holder, err := cache.Pods().Pods(pod.Namespace).Get(strings.TrimSpace(name))
 		if err != nil || holder == nil || holder.Spec.NodeName == "" || holder.Spec.NodeName == pod.Spec.NodeName {
@@ -1701,11 +1704,50 @@ func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, dep
 		}
 		// Pod and node names stay in the message: the cause must read the same
 		// for every blocked replica so grouping keeps it.
+		if replicas == 1 {
+			if cause := rollingUpdateMultiAttachCause(cache, d, claim, pod, holder); cause != "" {
+				return cause, rollingUpdateRWOFix
+			}
+			continue
+		}
 		return fmt.Sprintf("Deployment %s runs %d replicas that share ReadWriteOnce PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
-				d.Name, schedDesiredReplicas(d.Spec.Replicas), claim.Name),
+				d.Name, replicas, claim.Name),
 			sharedRWOVolumeFix
 	}
 	return "", ""
+}
+
+const rollingUpdateRWOFix = "Set strategy: Recreate, or maxSurge: 0 with maxUnavailable: 1, so the rollout removes the old pod first."
+
+// rollingUpdateMultiAttachCause explains a one-replica Deployment's new pod
+// blocked by its old pod: the blocked pod is from the current revision, the
+// holder from an older one, and the RollingUpdate surges, so both run at once
+// on different nodes. With maxUnavailable at 0 a live old pod waits for the
+// new one to be ready, so the rollout can't finish on its own.
+func rollingUpdateMultiAttachCause(cache *ResourceCache, d *appsv1.Deployment, claim *corev1.PersistentVolumeClaim, pod, holder *corev1.Pod) string {
+	strategy := d.Spec.Strategy
+	if strategy.Type != appsv1.RollingUpdateDeploymentStrategyType || strategy.RollingUpdate == nil || strategy.RollingUpdate.MaxSurge == nil {
+		return ""
+	}
+	if cache.ReplicaSets() == nil {
+		return ""
+	}
+	replicaSets, _ := cache.ReplicaSets().ReplicaSets(d.Namespace).List(labels.Everything())
+	current := k8score.CurrentDeploymentRevisionPodHashes(replicaSets)[d.UID]
+	if current == "" || pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey] != current || holder.Labels[appsv1.DefaultDeploymentUniqueLabelKey] == current {
+		return ""
+	}
+	replicas := int(schedDesiredReplicas(d.Spec.Replicas))
+	surge, err := intstr.GetScaledValueFromIntOrPercent(strategy.RollingUpdate.MaxSurge, replicas, true)
+	if err != nil || surge == 0 {
+		return ""
+	}
+	cause := fmt.Sprintf("Deployment %s uses RollingUpdate with maxSurge %s, so it starts the new pod before the old one stops. The old pod holds ReadWriteOnce PVC %s on another node, and only one node can mount it.",
+		d.Name, strategy.RollingUpdate.MaxSurge.String(), claim.Name)
+	if unavailable, err := intstr.GetScaledValueFromIntOrPercent(strategy.RollingUpdate.MaxUnavailable, replicas, false); err == nil && unavailable == 0 && holder.DeletionTimestamp == nil {
+		cause += " The old pod stays until the new one is ready, so the rollout is stuck."
+	}
+	return cause
 }
 
 // attachFailureDiagnosis explains an attach failure the cloud rejected
