@@ -57,12 +57,14 @@ var churnKinds = []resourceid.GroupKind{
 	{Group: "chaos-mesh.org", Kind: "PodHttpChaos"},
 }
 
-// readinessTaints mirror state the Node row records elsewhere: its
-// conditions, spec.unschedulable, or cloud-provider initialization. Rows that
-// change only these taints stay in history but not in the default feed.
-// Autoscaler and Karpenter removal taints are not here: they mark a removal
-// in progress.
-var readinessTaints = map[string]bool{
+// controllerTaints are taints controllers add and remove on their own:
+// those mirroring state the Node row records elsewhere (its conditions,
+// spec.unschedulable, cloud-provider initialization) and the autoscaler and
+// Karpenter removal taints, which Karpenter re-applies every few minutes
+// while a consolidation keeps failing. Rows that change only these stay in
+// history and kind=Node but not in the default feed; a Node actually removed
+// shows as its delete.
+var controllerTaints = map[string]bool{
 	"node.kubernetes.io/not-ready":                   true,
 	"node.kubernetes.io/unreachable":                 true,
 	"node.kubernetes.io/memory-pressure":             true,
@@ -71,6 +73,9 @@ var readinessTaints = map[string]bool{
 	"node.kubernetes.io/network-unavailable":         true,
 	"node.kubernetes.io/unschedulable":               true,
 	"node.cloudprovider.kubernetes.io/uninitialized": true,
+	"karpenter.sh/disrupted":                         true,
+	"ToBeDeletedByClusterAutoscaler":                 true,
+	"DeletionCandidateOfClusterAutoscaler":           true,
 }
 
 // otherKindsCandidates reads the default feed's rows outside the curated
@@ -114,7 +119,7 @@ func otherKindsCandidates(ctx context.Context, store timeline.EventStore, q Quer
 			got = got[:bound]
 		}
 		for _, e := range got {
-			if isNodeEvent(e) && e.EventType == timeline.EventTypeUpdate && onlyReadinessTaintChanges(e) {
+			if isNodeEvent(e) && e.EventType == timeline.EventTypeUpdate && onlyControllerTaintChanges(e) {
 				continue
 			}
 			events = append(events, e)
@@ -136,10 +141,10 @@ func trackedCustomGroupKinds() []resourceid.GroupKind {
 	return out
 }
 
-// onlyReadinessTaintChanges reports a Node row whose every desired-state
-// field adds, removes or re-values readinessTaints. A field it can't read as
+// onlyControllerTaintChanges reports a Node row whose every desired-state
+// field adds, removes or re-values controllerTaints. A field it can't read as
 // taint keys counts as a change, rather than hide one.
-func onlyReadinessTaintChanges(e timeline.TimelineEvent) bool {
+func onlyControllerTaintChanges(e timeline.TimelineEvent) bool {
 	if e.Diff == nil {
 		return false
 	}
@@ -149,7 +154,7 @@ func onlyReadinessTaintChanges(e timeline.TimelineEvent) bool {
 			continue
 		}
 		if key, ok := strings.CutPrefix(f.Path, "spec.taints["); ok {
-			if !readinessTaints[strings.TrimSuffix(key, "]")] {
+			if !controllerTaints[strings.TrimSuffix(key, "]")] {
 				return false
 			}
 			taintFields++
@@ -164,7 +169,7 @@ func onlyReadinessTaintChanges(e timeline.TimelineEvent) bool {
 			return false
 		}
 		for _, key := range changed {
-			if !readinessTaints[key] {
+			if !controllerTaints[key] {
 				return false
 			}
 		}

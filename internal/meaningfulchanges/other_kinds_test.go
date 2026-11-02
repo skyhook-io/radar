@@ -262,7 +262,7 @@ func TestSelectFeedChurnGuard(t *testing.T) {
 	}
 }
 
-func TestOnlyReadinessTaintChanges(t *testing.T) {
+func TestOnlyControllerTaintChanges(t *testing.T) {
 	node := func(fields ...timeline.FieldChange) timeline.TimelineEvent {
 		return timeline.TimelineEvent{Kind: "Node", APIVersion: "v1", EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: fields}}
 	}
@@ -277,14 +277,15 @@ func TestOnlyReadinessTaintChanges(t *testing.T) {
 		{"not-ready added", node(keys([]any{}, []any{"node.kubernetes.io/not-ready"}), timeline.FieldChange{Path: "status.conditions[Ready]"}), true},
 		{"unreachable re-valued", node(timeline.FieldChange{Path: "spec.taints[node.kubernetes.io/unreachable]"}), true},
 		{"custom taint beside not-ready", node(keys([]any{"node.kubernetes.io/not-ready"}, []any{"dedicated"})), false},
-		{"karpenter disrupted", node(keys([]any{}, []any{"karpenter.sh/disrupted"})), false},
-		{"autoscaler removal", node(keys([]any{}, []any{"ToBeDeletedByClusterAutoscaler"})), false},
+		{"karpenter disrupted", node(keys([]any{}, []any{"karpenter.sh/disrupted"})), true},
+		{"autoscaler removal", node(keys([]any{}, []any{"ToBeDeletedByClusterAutoscaler"})), true},
+		{"karpenter disrupted beside a custom taint", node(keys([]any{"dedicated"}, []any{"karpenter.sh/disrupted"})), false},
 		{"cordon with its taint", node(timeline.FieldChange{Path: "spec.unschedulable"}, keys([]any{}, []any{"node.kubernetes.io/unschedulable"})), false},
 		{"label", node(timeline.FieldChange{Path: "metadata.labels[team]"}), false},
 		{"unreadable keys", node(timeline.FieldChange{Path: "spec.taints", OldValue: "x", NewValue: "y"}), false},
 		{"status only", node(timeline.FieldChange{Path: "status.conditions[Ready]"}), false},
 	} {
-		if got := onlyReadinessTaintChanges(tt.e); got != tt.want {
+		if got := onlyControllerTaintChanges(tt.e); got != tt.want {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
 	}

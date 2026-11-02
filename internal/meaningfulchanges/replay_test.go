@@ -45,8 +45,16 @@ func TestReplayDefaultFeed(t *testing.T) {
 	ctx := context.Background()
 	store := timeline.GetStore()
 	all, err := store.Query(ctx, timeline.QueryOptions{Limit: 1, Sources: []timeline.EventSource{timeline.SourceInformer}, IncludeManaged: true, SequenceOrder: timeline.SequenceOrderAscending})
-	if err != nil || len(all) == 0 {
-		t.Fatalf("first event: %v %v", all, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) == 0 {
+		// Nothing changed while recording: no step has a row to place.
+		if err := os.WriteFile(outPath, []byte(`{"steps":[]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("no informer rows recorded")
+		return
 	}
 	first := all[0].Timestamp
 	// The feed reads the active context's rows; replay the recorded one.
