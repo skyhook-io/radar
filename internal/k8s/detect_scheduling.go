@@ -1671,16 +1671,45 @@ var multiAttachEventRE = regexp.MustCompile(`(?:Multi-Attach error|Waiting for d
 // Deployment mounts, when the pod holding it is another pod of the same
 // Deployment on a different node. With one replica, a holder from an older
 // revision means a RollingUpdate surge started the new pod before the old one
-// let go; with more, the replicas share the claim across nodes. Returns ""
-// otherwise: a holder from another workload is not this cause.
+// let go (see rolloutMultiAttachCause); with more, the replicas share the claim
+// across nodes. Returns "" otherwise: a holder from another workload is not
+// this cause.
 func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (cause, action string) {
+	d, claim, holders := multiAttachDeploymentHolders(cache, pod, deployment, eventMessage)
+	if len(holders) == 0 {
+		return "", ""
+	}
+	replicas := schedDesiredReplicas(d.Spec.Replicas)
+	if replicas == 1 {
+		for _, holder := range holders {
+			if cause := rollingUpdateMultiAttachCause(cache, d, claim, pod, holder); cause != "" {
+				return cause, rollingUpdateRWOFix
+			}
+		}
+		return "", ""
+	}
+	if replicas < 2 {
+		return "", ""
+	}
+	// Pod and node names stay in the message: the cause must read the same
+	// for every blocked replica so grouping keeps it.
+	return fmt.Sprintf("Deployment %s runs %d replicas that share ReadWriteOnce PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
+			d.Name, replicas, claim.Name),
+		sharedRWOVolumeFix
+}
+
+// multiAttachDeploymentHolders resolves a Multi-Attach event on a pod of the
+// named Deployment: the Deployment, the ReadWriteOnce claim it mounts that the
+// event names, and the event's holder pods that belong to the same Deployment
+// and are still running on another node. Holders are nil when any of that doesn't hold.
+func multiAttachDeploymentHolders(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (*appsv1.Deployment, *corev1.PersistentVolumeClaim, []*corev1.Pod) {
 	m := multiAttachEventRE.FindStringSubmatch(eventMessage)
 	if m == nil || cache == nil || cache.Deployments() == nil || cache.Pods() == nil {
-		return "", ""
+		return nil, nil, nil
 	}
 	d, err := cache.Deployments().Deployments(pod.Namespace).Get(deployment)
 	if err != nil || d == nil {
-		return "", ""
+		return nil, nil, nil
 	}
 	var claim *corev1.PersistentVolumeClaim
 	for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
@@ -1691,32 +1720,55 @@ func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, dep
 		}
 	}
 	if claim == nil {
-		return "", ""
+		return nil, nil, nil
 	}
-	replicas := schedDesiredReplicas(d.Spec.Replicas)
+	var holders []*corev1.Pod
 	for _, name := range strings.Split(m[2], ",") {
 		holder, err := cache.Pods().Pods(pod.Namespace).Get(strings.TrimSpace(name))
-		if err != nil || holder == nil || holder.Spec.NodeName == "" || holder.Spec.NodeName == pod.Spec.NodeName {
+		// A finished pod no longer holds the volume, though an old event names it.
+		if err != nil || holder == nil || holder.Spec.NodeName == "" || holder.Spec.NodeName == pod.Spec.NodeName ||
+			holder.Status.Phase == corev1.PodSucceeded || holder.Status.Phase == corev1.PodFailed {
 			continue
 		}
 		if _, kind, owner := podOwnerKindName(cache, holder); kind != "Deployment" || owner != d.Name {
 			continue
 		}
-		// Pod and node names stay in the message: the cause must read the same
-		// for every blocked replica so grouping keeps it.
-		if replicas < 2 {
-			if replicas == 1 {
-				if cause := rollingUpdateMultiAttachCause(cache, d, claim, pod, holder); cause != "" {
-					return cause, rollingUpdateRWOFix
-				}
-			}
+		holders = append(holders, holder)
+	}
+	return d, claim, holders
+}
+
+// rolloutMultiAttachCause returns the RollingUpdate cause for a stuck
+// Deployment rollout: one of its pending pods has a Multi-Attach event that the
+// pod's own row explains with rollingUpdateMultiAttachCause. Both rows run the
+// same check, so they can't disagree.
+func rolloutMultiAttachCause(cache *ResourceCache, d *appsv1.Deployment) string {
+	if schedDesiredReplicas(d.Spec.Replicas) != 1 || cache == nil || cache.Events() == nil || cache.Pods() == nil {
+		return ""
+	}
+	events, _ := cache.Events().Events(d.Namespace).List(labels.Everything())
+	for _, e := range events {
+		if e.InvolvedObject.Kind != "Pod" {
 			continue
 		}
-		return fmt.Sprintf("Deployment %s runs %d replicas that share ReadWriteOnce PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
-				d.Name, replicas, claim.Name),
-			sharedRWOVolumeFix
+		if reason, ok := classifyPostBindFailure(e.Reason, e.Message); !ok || reason != "VolumeMultiAttach" {
+			continue
+		}
+		pod, err := cache.Pods().Pods(d.Namespace).Get(e.InvolvedObject.Name)
+		if err != nil || pod == nil || pod.Status.Phase != corev1.PodPending || (e.InvolvedObject.UID != "" && e.InvolvedObject.UID != pod.UID) {
+			continue
+		}
+		if _, kind, owner := podOwnerKindName(cache, pod); kind != "Deployment" || owner != d.Name {
+			continue
+		}
+		dep, claim, holders := multiAttachDeploymentHolders(cache, pod, d.Name, e.Message)
+		for _, holder := range holders {
+			if cause := rollingUpdateMultiAttachCause(cache, dep, claim, pod, holder); cause != "" {
+				return cause
+			}
+		}
 	}
-	return "", ""
+	return ""
 }
 
 const rollingUpdateRWOFix = "Set strategy: Recreate, or maxSurge: 0 with maxUnavailable: 1, so the rollout removes the old pod first."

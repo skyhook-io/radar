@@ -465,6 +465,13 @@ func TestDetectPostBindProblems_MultiAttachOneReplicaNoSurgeCause(t *testing.T) 
 			holder.Labels[appsv1.DefaultDeploymentUniqueLabelKey] = "1"
 			return objs
 		}(),
+		// The old pod was evicted (Failed, no deletion timestamp); its event
+		// remains but it no longer holds the volume.
+		"holder failed": func() []runtime.Object {
+			objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
+			rolloutPod(objs, "web-a").Status.Phase = corev1.PodFailed
+			return objs
+		}(),
 		// The old ReplicaSet recreated a pod while the current revision holds
 		// the volume: the blocked pod is not the rollout's new pod.
 		"blocked pod from an older revision": func() []runtime.Object {
@@ -481,4 +488,58 @@ func TestDetectPostBindProblems_MultiAttachOneReplicaNoSurgeCause(t *testing.T) 
 			}
 		})
 	}
+}
+
+// After the progress deadline the Deployment's "Rollout stuck" row gives the
+// same cause and fix as the pod row, in place of the generic advice; without
+// the Multi-Attach evidence it keeps the generic row.
+func TestDetectProblems_RolloutStuckNamesRollingUpdateSurge(t *testing.T) {
+	stuckRollout := func(withEvent bool) []runtime.Object {
+		objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
+		out := objs[:0]
+		for _, o := range objs {
+			if d, ok := o.(*appsv1.Deployment); ok {
+				d.Status.Conditions = []appsv1.DeploymentCondition{{
+					Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+					Message: `ReplicaSet "web-1" has timed out progressing.`, LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Minute)),
+				}}
+			}
+			if _, isEvent := o.(*corev1.Event); isEvent && !withEvent {
+				continue
+			}
+			out = append(out, o)
+		}
+		return out
+	}
+	rolloutRow := func(t *testing.T, objs []runtime.Object) Detection {
+		t.Helper()
+		if err := InitTestResourceCache(fake.NewClientset(objs...)); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		p, ok := lookupProblem(DetectProblems(GetResourceCache(), "redis"), "Deployment", "web", "Rollout stuck")
+		if !ok {
+			t.Fatal("want a Rollout stuck row for web")
+		}
+		return p
+	}
+
+	t.Run("multi-attach evidence", func(t *testing.T) {
+		defer ResetTestState()
+		objs := stuckRollout(true)
+		row := rolloutRow(t, objs)
+		pod := multiAttachProblem(t, objs)
+		if row.Cause == "" || row.Cause != pod.Cause || row.Action != pod.Action {
+			t.Errorf("rows disagree:\nrollout %q / %q\npod     %q / %q", row.Cause, row.Action, pod.Cause, pod.Action)
+		}
+		if strings.Contains(row.Message, "ReadWriteMany") {
+			t.Errorf("message keeps the old RWO detail: %q", row.Message)
+		}
+	})
+	t.Run("no multi-attach evidence", func(t *testing.T) {
+		defer ResetTestState()
+		row := rolloutRow(t, stuckRollout(false))
+		if row.Cause != "" || !strings.Contains(row.Action, "Inspect the new pods") || !strings.Contains(row.Message, "strategy: Recreate") {
+			t.Errorf("want the generic row: cause %q, action %q, message %q", row.Cause, row.Action, row.Message)
+		}
+	})
 }
