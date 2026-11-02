@@ -1,3 +1,4 @@
+import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -1306,6 +1307,13 @@ export function WorkloadView({
           <>
             {diagnoseInline}
             {diagnoseHint}
+            <RelatedFindingsSection
+              data={resourceResponse?.relatedFindings}
+              onResourceClick={rest.onNavigateToResource ? (ref) => rest.onNavigateToResource?.({
+                kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+                namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '',
+              }) : undefined}
+            />
             <AuditOverviewSection
               findings={auditFindings ?? []}
               onViewAll={() => navigateRouter('/checks')}

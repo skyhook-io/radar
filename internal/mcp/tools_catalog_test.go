@@ -272,8 +272,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Includes rollback/sync_options guidance and search IP lookup routing.
-		maxCatalogBytes         = 67350
+		// Main uses 67,317 bytes; application evidence adds 864 and Strimzi
+		// routing adds 208. Preserve main's 33-byte headroom.
+		maxCatalogBytes         = 68422
 		maxToolDescriptionBytes = 3200
 	)
 

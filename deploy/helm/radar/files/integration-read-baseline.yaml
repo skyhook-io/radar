@@ -17,6 +17,13 @@ entries:
     decision: withhold
     reason: "Canary webhooks and MetricTemplate provider headers can contain inline credentials. Native visibility adds no caller grants."
     source: "https://github.com/fluxcd/flagger/tree/c781cdc199d44cf84e21e90aedd8ff14c1df450e/pkg/apis/flagger/v1beta1"
+  - group: "core.strimzi.io"
+    resources: ["strimzipodsets"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Pod templates can contain credentials; cached ownership discovery adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-StrimziPodSet-reference"
   - group: "scheduling.k8s.io"
     resources: ["priorityclasses"]
     scope: Cluster
@@ -24,6 +31,13 @@ entries:
     decision: existing
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "internal/k8s/dynamic_cache.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "kafka.strimzi.io"
+    resources: ["kafkaconnects"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Kafka Connect configuration can contain credentials; cached relationship discovery adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaConnect-reference"
   - group: "kafka.strimzi.io"
     resources: ["kafkaconnectors"]
     scope: Namespaced

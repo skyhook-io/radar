@@ -1,4 +1,6 @@
+import type { Issue, IssueResourceRef } from '../components/issues/types'
 import type { CapacityIntegrationState } from './capacity'
+import type { ReadGap, ReadKindRef } from './read-coverage'
 
 // Topology types matching the Go backend
 
@@ -881,8 +883,29 @@ export interface HPAMetricSummary {
   status: string
 }
 
+/** Current findings from one bounded local inventory, independent of parent health.
+ * No groups or no findings never establishes absence of associations or recovery. */
+export interface RelatedFindingsGroup {
+  /** Association anchor; each finding identifies its own subject. */
+  associatedVia: IssueResourceRef
+  /** Nonempty finite set of resource kinds selected for assessment; names, when present, lists all. */
+  kinds: { count: number; names?: ReadKindRef[] }
+  /** Authorized candidate resource snapshots, not findings or API calls. */
+  checked: number
+  /** Checked snapshots the producer could not assess, not known inactive states.
+   * checked - unknown is not a healthy count. */
+  unknown: number
+  findings?: Issue[]
+  /** Inventory-read limitations; always an array, including when empty. */
+  gaps: ReadGap[]
+  /** Findings were omitted from output; inventory read failures use gaps. */
+  truncated?: boolean
+}
+
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
+  /** Optional association bundle; absence is not an all-clear. */
+  relatedFindings?: RelatedFindingsGroup[]
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo

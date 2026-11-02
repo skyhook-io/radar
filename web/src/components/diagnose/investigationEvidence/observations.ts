@@ -1,6 +1,8 @@
+import { relatedFindingLimitations } from "../../../utils/related-findings";
 import {
   type HPADiagnosisState,
   type Issue,
+  type RelatedFindingsGroup,
   type IssueRecentChange,
   type Topology,
   defaultConditionTone,
@@ -13,6 +15,7 @@ import {
   type DiagnosisChangeContext,
   type DiagnosisEvidenceLimitationBase,
   type DiagnosisPodLogEntry,
+  type DiagnosisResourceRef,
   diagnosisSeverityTone,
 } from "../diagnoseEvidenceTypes";
 import { getCrossplaneConditionTone } from "@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane";
@@ -20,7 +23,15 @@ import { investigationResourceEvidenceSummary } from "../investigationResourceEv
 import { kindToPluralWithGroup } from "../../../utils/navigation";
 import { pluralToKind } from "@skyhook-io/k8s-ui";
 import { stableHash } from "./identity";
-import { nonEmptyString, parseJSON, record, stringArray } from "./parse";
+import {
+  issue,
+  nonEmptyString,
+  nonNegativeInteger,
+  parseJSON,
+  record,
+  resourceRef,
+  stringArray,
+} from "./parse";
 import {
   type InvestigationEventEvidence,
   type InvestigationEvidenceGroup,
@@ -287,6 +298,8 @@ export class ProjectionBuilder {
   readonly projectedSources = new Set<string>();
   readonly checkedSources = new Set<string>();
   readonly limitedSources = new Set<string>();
+  readonly connectorRecoveryBySource = new Map<string, DiagnosisResourceRef>();
+
   readonly semanticCoverageBySource = new Map<
     string,
     Set<InvestigationSemanticDomain>
@@ -673,7 +686,9 @@ export function addResourceObservation(
       (available !== undefined && available < desired) ||
       (replicas?.unavailable ?? 0) > 0);
   const adverseCondition = (context?.statusSummary?.conditions ?? []).some(
-    (condition) => (getCrossplaneConditionTone(resource, condition) ?? defaultConditionTone(condition)) === "fail",
+    (condition) =>
+      (getCrossplaneConditionTone(resource, condition) ??
+        defaultConditionTone(condition)) === "fail",
   );
   const gitOpsAdverse = Boolean(
     gitOpsDiagnosis &&
@@ -734,6 +749,7 @@ export function addResourceObservation(
     },
   });
   addResourceContextLimitations(builder, source, context);
+  addRelatedFindings(builder, source, context, relevance);
 }
 // The live Pod spec differing from its template is context, not a fault, so
 // it reads as a line on the resource card rather than a finding of its own.
@@ -755,6 +771,7 @@ export function addIssueObservation(
   value: Issue,
   producerRelevance: InvestigationEvidenceRelevance = "broader",
   pods?: string[],
+  associatedVia?: DiagnosisResourceRef,
 ): void {
   const matchesTarget = resourceMatchesTarget(builder.target, {
     kind: value.kind,
@@ -777,6 +794,7 @@ export function addIssueObservation(
     data: {
       type: "issue",
       issue: value,
+      ...(associatedVia ? { associatedVia } : {}),
       relevance,
       ...(pods && pods.length > 0 ? { pods } : {}),
     },
@@ -1016,4 +1034,81 @@ export function invalidPayload(
     "Radar couldn't summarize this investigation step. Review it in Activity.",
     "unknown",
   );
+}
+
+function addRelatedFindings(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  context: InvestigationResourceContext | undefined,
+  relevance: InvestigationEvidenceRelevance,
+): void {
+  const raw = context?.relatedFindings;
+  if (raw === undefined) return;
+  if (!Array.isArray(raw)) {
+    invalidPayload(builder, source, "Related findings");
+    return;
+  }
+  for (const entry of raw) {
+    const value = record(entry);
+    const associatedVia = resourceRef(value?.associatedVia);
+    const kinds = record(value?.kinds);
+    const findingsRaw = value?.findings;
+    const findings = Array.isArray(findingsRaw)
+      ? findingsRaw.map(issue).filter((item): item is Issue => Boolean(item))
+      : [];
+    if (
+      !value ||
+      !associatedVia ||
+      !kinds ||
+      !nonNegativeInteger(kinds.count) ||
+      kinds.count === 0 ||
+      kinds.extent !== undefined ||
+      (kinds.names !== undefined &&
+        (!Array.isArray(kinds.names) ||
+          kinds.names.length !== kinds.count ||
+          !kinds.names.every((item) => {
+            const ref = record(item);
+            return (
+              ref &&
+              nonEmptyString(ref.kind) &&
+              (ref.group === undefined || typeof ref.group === "string")
+            );
+          }))) ||
+      !Array.isArray(value.gaps) ||
+      !value.gaps.every((gap) => nonEmptyString(record(gap)?.code)) ||
+      !nonNegativeInteger(value.checked) ||
+      !nonNegativeInteger(value.unknown) ||
+      value.unknown > value.checked ||
+      (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+      (findingsRaw !== undefined &&
+        (!Array.isArray(findingsRaw) || findings.length !== findingsRaw.length))
+    ) {
+      invalidPayload(builder, source, "Related findings group");
+      continue;
+    }
+    for (const finding of findings) {
+      addIssueObservation(
+        builder,
+        source,
+        finding,
+        relevance === "target" ? "producer-related" : "broader",
+        undefined,
+        associatedVia,
+      );
+    }
+    const group = {
+      ...value,
+      associatedVia,
+      findings,
+    } as unknown as RelatedFindingsGroup;
+    const anchor = `${associatedVia.kind} ${associatedVia.namespace ? associatedVia.namespace + "/" : ""}${associatedVia.name}${associatedVia.group ? " (" + associatedVia.group + ")" : ""}`;
+    for (const limit of relatedFindingLimitations(group)) {
+      builder.limit(
+        source,
+        `Related findings via ${anchor}`,
+        limit.message,
+        limit.kind,
+      );
+    }
+  }
 }

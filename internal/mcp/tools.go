@@ -237,7 +237,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins high|medium), posture-remediation priority " +
 		"on a separate scale from live `issueSummary` critical|warning. `application_configuration_change: true` marks " +
 		"an application configuration edit; it is a ranking hint, not proof of cause, and unflagged changes may still matter. Application, Kustomization and Flux HelmRelease return " +
-		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
+		"status and parsed issues; no logs. " +
+		"KafkaConnector and KafkaConnect (group=kafka.strimzi.io) return cached curated operator findings, not configuration, logs or application endpoint reads. " +
+		"Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
 		"API-server proxy reached it, not the live path. Point-in-time freezes this call's result, " +
 		"not that every source was read atomically; preserve limits, errors, timestamps and confidence. " +
@@ -1364,14 +1366,15 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          tier,
-		AccessChecker: newMCPRequestScopedChecker(ctx),
-		IssueSummary:  issueSummary,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, tier),
-		Execution:     executioninsight.ForResource(obj, tier),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            tier,
+		AccessChecker:   newMCPRequestScopedChecker(ctx),
+		IssueSummary:    issueSummary,
+		AuditSummary:    auditSum,
+		Scheduling:      schedulinginsight.ForResource(obj, tier),
+		Execution:       executioninsight.ForResource(obj, tier),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),

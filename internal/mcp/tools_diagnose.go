@@ -37,7 +37,7 @@ import (
 // endpoints. Workloads resolve to a pod set for log fan-out; GitOps reconcilers
 // take a no-pods status path.
 type diagnoseCommonInput struct {
-	Kind      string `json:"kind" jsonschema:"pod/deployment/statefulset/daemonset/Argo Rollout: logs, events and startup blockers; OpenTelemetryCollector/Canary: reconciliation and owned workloads (Canary also shows target); application/kustomization/Flux HelmRelease: sync/health and failure cause; service/ingress/httproute/grpcroute/gateway: network path"`
+	Kind      string `json:"kind" jsonschema:"pod/deployment/statefulset/daemonset/Argo Rollout: logs, events and startup blockers; OpenTelemetryCollector/Canary: reconciliation and owned workloads (Canary also shows target); application/kustomization/Flux HelmRelease: sync/health and failure cause; KafkaConnector/KafkaConnect: cached operator evidence; service/ingress/httproute/grpcroute/gateway: network path"`
 	Group     string `json:"group,omitempty" jsonschema:"target API group; set for CRDs or kind collisions (argoproj.io for Rollout); built-ins are inferred"`
 	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes as applicable. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. Uses direct TCP when Radar is in-cluster, K8s API server proxy from a laptop - the same call works either way. Probes can escalate the static verdict when failures are unanimous on a hop, but never soften broken or unknown. Probe failures attributable to the vantage (e.g. NetworkPolicy blocking Radar's path) can produce false-positive escalations; the per-hop chip carries the granular signal. Costs 0-3s wall time. No effect for non-network kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
@@ -263,6 +263,9 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if input.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
+	if kind, ok := strimziDiagnoseKind(input.Kind); ok {
+		return handleStrimziDiagnose(ctx, input, kind)
+	}
 	// GitOps reconcilers (Argo Application / Flux Kustomization / HelmRelease)
 	// have no pods, so they take a dedicated path: reconciler status summary +
 	// the parsed failure issue (via RelatedIssues), no log/pod fan-out.
@@ -307,7 +310,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 func diagnoseWorkload(ctx context.Context, input diagnoseInput, expectedOwner *ownership.Observation) (*diagnoseResponse, error) {
 	kindNorm := normalizeDiagnoseKind(input.Kind)
 	if kindNorm == "" {
-		return nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, Argo Rollout, OpenTelemetryCollector, Canary, application, kustomization, Flux HelmRelease, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
+		return nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, Argo Rollout, OpenTelemetryCollector, Canary, application, kustomization, Flux HelmRelease, Strimzi KafkaConnector or KafkaConnect, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
 	}
 	expectedGroup := workloadDiagnoseGroup(kindNorm)
 	if input.Group != "" && !strings.EqualFold(input.Group, expectedGroup) {

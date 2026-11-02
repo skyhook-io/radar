@@ -1341,9 +1341,19 @@ A tool's arguments are what an agent has to get right to call it, so a new param
 
 Older parameters that predate these conventions keep their names: `timeout` on `manage_node` and `query_prometheus`, `force` on `apply_resource`, `search`'s `include` (one of `summary`, `raw`, `none`, matching the REST search API), the comma-separated `kind` and `severity` of `issues` and `fixed_in` of `get_runtime_versions`, and `get_cost`'s `range` (an enum of windows, not `since`). Most closed sets described only in prose, such as `apply_resource`'s `mode` and `query_prometheus`'s `type`, still match exactly, case included. Renaming an existing parameter is not free even with an alias for the old name: Radar Hub serves one merged tool catalog across clusters that may run different Radar versions, so an agent that sees the new name can send it to a cluster whose older Radar rejects it.
 
+## Related findings in resource context
+
+Resource context can include `relatedFindings`: independently scoped groups of current findings, separate from the parent's health and issue count. Each group's `associatedVia` is its local association anchor and `kinds` identifies the selected resource kinds; each finding keeps its own subject and ID. `checked` counts authorized resource snapshots, not findings; `unknown` counts snapshots the producer could not assess. Neither count implies health. `gaps` describes inventory-read limitations; `truncated` means findings were omitted from output. No prose field is required. An absent or empty list means no groups were supplied; absent findings never establish recovery. Neutral operator facts, resource management and explicit endpoint observations retain their own existing contracts.
+
 ## Strimzi connector evidence
 
 See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors) for the Issues/API/MCP coverage, required read access, and operator-snapshot limitations.
+
+`diagnose` accepts `KafkaConnector` and `KafkaConnect` in `kafka.strimzi.io`. For a connector, `operatorSnapshot.state` is `failing`, `recovered` or `unknown`; `reason` explains unknown or failing observations. Recovery requires a current Ready snapshot with the connector and a nonempty task list all `RUNNING`. KafkaConnect reports operator readiness separately; use `issues` to recheck its own condition findings. Diagnosis does not collect Pods, logs or live application evidence. Unavailable cached reads return a coded error; only a miss from a synchronized namespace cache returns `object_not_found`. A context switch during collection discards the result.
+
+The Strimzi producer returns at most five findings and inspects at most 500 namespace inventory entries. Exceeding the inventory budget returns a `list_too_large` gap with no assessed snapshots; it does not return a sample.
+
+Modern worker attribution requires cached `StrimziPodSet` objects (`core.strimzi.io`); the chart’s Strimzi toggle grants Radar collection access. Pod templates remain cached for resource details, with corresponding memory/timeline cost. MCP owner attribution checks exact object access; REST uses its namespace-level Related Resources policy. Direct Strimzi diagnosis and curated Issues follow the namespace-level read policy; the stricter owner check applies to attribution from another resource. To verify recovery of a previously observed connector failure, diagnose that connector directly. A clean parent recheck leaves its earlier related finding unresolved.
 
 ## Available Resources
 
