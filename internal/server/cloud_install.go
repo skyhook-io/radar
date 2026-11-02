@@ -1099,27 +1099,6 @@ func (m *cloudInstallManager) statusLocked() cloudInstallStatus {
 // kubeconfig, which the detection heuristic reads as in-cluster.
 var cloudConnectDeploymentMode = deploymentMode
 
-// cloudConnectDriverEnabled is the security boundary for the driver lane: a
-// local process, no auth, and no existing tunnel. Anyone who can reach an
-// unauthenticated Radar already wields the server's kubeconfig through
-// /api/resources/apply and pods/exec — strictly more power than installing a
-// chart — so gating this lane on the listener address too would hold the
-// weaker capability to a higher bar than the stronger ones. A non-loopback
-// listener is surfaced as an exposure note on the plan card instead; mutating
-// endpoints still require a same-origin request.
-func (s *Server) cloudConnectDriverEnabled() bool {
-	return !cloudMode() &&
-		cloudConnectDeploymentMode() == k8s.DeploymentModeLocal &&
-		!s.authConfig.Enabled() &&
-		!s.cloudConnectCfg.CloudTunnelConfigured
-}
-
-// sharedListener reports whether Radar answers beyond loopback, meaning
-// someone other than the operator could reach the approval flow.
-func (s *Server) sharedListener() bool {
-	return !cloud.IsLoopbackHostname(s.listenAddress)
-}
-
 func (s *Server) requireCloudConnectDriver(w http.ResponseWriter) bool {
 	if s.cloudInstall == nil || !s.cloudConnectDriverEnabled() {
 		s.writeError(w, http.StatusNotFound, "Cloud connect is not available on this deployment")

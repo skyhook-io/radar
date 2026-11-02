@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -53,15 +52,6 @@ func (s *Server) startUsageData() {
 		InstalledAt: version.LocalInstalledAt,
 	}
 	usagedata.Start(ctx, opts)
-}
-
-// usageShared reports whether several people use this Radar: in-cluster,
-// behind sign-in, or on a listener others can reach. Its configuration then
-// decides for everyone, and nobody is asked.
-func (s *Server) usageShared() bool {
-	return deploymentMode() != k8s.DeploymentModeLocal ||
-		s.configManagement() != "local" ||
-		!cloud.IsLoopbackHostname(s.listenAddress)
 }
 
 // clusterSample describes the connected cluster by shape only. The key is the

@@ -552,10 +552,10 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 		}
-		if !srv.sharedListener() {
+		if !srv.cloudConnectNeedsSharedAck() {
 			t.Fatal("0.0.0.0 not reported as a shared listener")
 		}
-		if loopback := newSrv("127.0.0.1"); loopback.sharedListener() {
+		if loopback := newSrv("127.0.0.1"); loopback.cloudConnectNeedsSharedAck() {
 			t.Fatal("127.0.0.1 reported as a shared listener")
 		}
 	})
