@@ -256,7 +256,8 @@ export interface RunSummary {
   sessionId?: string;
   preview?: string;
   /** When the turn behind preview finished. Set only when preview is an
-   *  assessment Findings shows; absent before any, and on older Radars. */
+   *  assessment Findings shows; absent before any, or when the server
+   *  doesn't record it. */
   assessedAt?: string;
   createdAt: string;
   updatedAt: string;

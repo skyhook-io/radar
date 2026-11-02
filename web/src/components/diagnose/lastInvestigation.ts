@@ -9,8 +9,6 @@ export interface LastInvestigation {
   id: string;
   preview: string;
   assessedAt: string;
-  /** When the run started; an object created after it is a different object. */
-  createdAt: string;
 }
 
 // The newest assessment of each resource on the cluster in use. Only runs the
@@ -43,20 +41,18 @@ export function lastInvestigations(
       id: r.id,
       preview: r.preview,
       assessedAt: r.assessedAt,
-      createdAt: r.createdAt,
     });
   }
   return out;
 }
 
-// Whether the object on screen is the one the run investigated. Without a UID
-// the creation time is the only tell: an object created after the run started
-// was recreated since. Unknown creation time can't rule it out.
+// Whether the object on screen is the one the assessment describes. Without a
+// UID the creation time is the only tell: an object created after the
+// assessment was recreated since. Unknown creation time can't rule it out.
 export function sameObject(
   last: LastInvestigation,
   objectCreatedAt: string | undefined,
 ): boolean {
   if (!objectCreatedAt) return true;
-  const created = Date.parse(objectCreatedAt);
-  return !(created > Date.parse(last.createdAt));
+  return !(Date.parse(objectCreatedAt) > Date.parse(last.assessedAt));
 }

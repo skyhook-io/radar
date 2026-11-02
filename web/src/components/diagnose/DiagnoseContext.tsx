@@ -751,10 +751,17 @@ function RoutedDiagnoseProvider({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // Fetches overlap (polling, focus, a cluster switch). One that started
+  // before the list last changed is dropped, or an older snapshot could
+  // restore cleared runs; a slow fetch still lands if nothing newer did.
+  const listSeqRef = useRef(0);
+  const appliedListSeqRef = useRef(0);
   const refreshRuns = useCallback(async () => {
     if (!available) return;
+    const seq = ++listSeqRef.current;
     try {
       const r = await listRuns();
+      if (seq < appliedListSeqRef.current) return;
       const focusedID = activeRunIdRef.current;
       let focusedRun: RunSummary | null = null;
       let retainFocusedSnapshot = false;
@@ -783,6 +790,8 @@ function RoutedDiagnoseProvider({
           retainFocusedSnapshot = !unavailable;
         }
       }
+      if (seq < appliedListSeqRef.current) return;
+      appliedListSeqRef.current = seq;
       setListedAt(Date.now());
       setRuns((prev) => {
         let nextRuns = r.runs;
@@ -810,6 +819,7 @@ function RoutedDiagnoseProvider({
       setRunsLoadFailed(false);
       setHistoryDegraded(!!r.historyDegraded);
     } catch {
+      if (seq < appliedListSeqRef.current) return;
       // Leave runsLoaded false (a missing-run verdict needs a real list) but
       // record the failure so the panel can say "retrying" instead of
       // pretending nothing happened. The 4s poll keeps retrying while open.

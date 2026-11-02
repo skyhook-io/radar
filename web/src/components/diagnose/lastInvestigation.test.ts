@@ -81,14 +81,12 @@ describe("lastInvestigations", () => {
 });
 
 describe("sameObject", () => {
-  const last = {
-    id: "r1",
-    preview: "x",
-    assessedAt: hoursAgo(2),
-    createdAt: hoursAgo(3),
-  };
-  it("rejects an object created after the run started", () => {
+  const last = { id: "r1", preview: "x", assessedAt: hoursAgo(2) };
+  it("rejects an object created after the assessment", () => {
     expect(sameObject(last, hoursAgo(1))).toBe(false);
+  });
+  it("accepts an object recreated mid-run that the assessment saw", () => {
+    expect(sameObject(last, hoursAgo(2.5))).toBe(true);
   });
   it("accepts an older object, or one whose creation time is unknown", () => {
     expect(sameObject(last, hoursAgo(48))).toBe(true);

@@ -15,11 +15,17 @@ describe("describeToolCall", () => {
   });
 
   it("scopes the runtime inventory to its namespace", () => {
-    expect(describeToolCall("get_runtime_versions", JSON.stringify({ runtime: "php" }))).toBe(
-      "Reading runtime versions of running images",
-    );
     expect(
-      describeToolCall("get_runtime_versions", JSON.stringify({ namespace: "shop", runtime: "php" })),
+      describeToolCall(
+        "get_runtime_versions",
+        JSON.stringify({ runtime: "php" }),
+      ),
+    ).toBe("Reading runtime versions of running images");
+    expect(
+      describeToolCall(
+        "get_runtime_versions",
+        JSON.stringify({ namespace: "shop", runtime: "php" }),
+      ),
     ).toBe("Reading runtime versions of running images in shop");
   });
 

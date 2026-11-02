@@ -231,6 +231,44 @@ describe("a resource's last investigation", () => {
     expect(openRun).toHaveBeenCalledWith("run-cart");
   });
 
+  it("ignores a list that resolves after a newer one", async () => {
+    api.runs = [investigated()];
+    await renderButton("problem");
+    let resolveOld!: (v: { runs: RunSummary[] }) => void;
+    api.listRuns.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveOld = resolve)),
+    );
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    api.runs = [];
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await flush();
+    await act(async () => resolveOld({ runs: [investigated()] }));
+    await flush();
+    await act(async () => trigger().click());
+    expect(dialog()).toBeNull();
+  });
+
+  it("doesn't reopen the panel by itself after a new run finishes", async () => {
+    api.runs = [investigated()];
+    await renderButton("problem");
+    await act(async () => trigger().click());
+    expect(dialog()).not.toBeNull();
+    api.runs = [
+      investigated({ id: "run-new", status: "running", assessedAt: undefined }),
+      investigated(),
+    ];
+    await act(async () => probe.d.refreshRuns());
+    await flush();
+    api.runs = [
+      investigated({ id: "run-new", assessedAt: new Date().toISOString() }),
+      investigated(),
+    ];
+    await act(async () => probe.d.refreshRuns());
+    await flush();
+    await flush();
+    expect(dialog()).toBeNull();
+  });
+
   it("catches up when the window regains focus", async () => {
     await renderButton("problem");
     expect(dialog()).toBeNull();

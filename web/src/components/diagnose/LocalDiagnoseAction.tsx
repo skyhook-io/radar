@@ -77,6 +77,8 @@ function DiagnoseResourceButton({
     ready && !running && !d.hosted && lastRun && sameObject(lastRun, createdAt)
       ? lastRun
       : undefined;
+  // A live run hides the panel; it shouldn't come back by itself afterwards.
+  if (historyOpen && !last) setHistoryOpen(false);
   const tooltip = !ready
     ? notReadyTooltip(d)
     : running
@@ -220,11 +222,14 @@ function LastInvestigationPopover({
       onClose();
       ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
     };
+    // Its position is measured once on open, so a resize closes it instead.
     document.addEventListener("mousedown", onPointer, true);
     window.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", onClose);
     return () => {
       document.removeEventListener("mousedown", onPointer, true);
       window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", onClose);
     };
   }, [open, onClose]);
   useEffect(() => {
@@ -257,10 +262,7 @@ function LastInvestigationPopover({
             right: shift,
           }}
         >
-          <div
-            className="text-xs text-theme-text-tertiary"
-            title={new Date(last.assessedAt).toLocaleString()}
-          >
+          <div className="text-xs text-theme-text-tertiary">
             Investigated {formatRelativeAgeTime(last.assessedAt)}
           </div>
           <p className="mt-1 line-clamp-4 text-sm text-theme-text-primary">
