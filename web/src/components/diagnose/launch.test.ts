@@ -67,7 +67,7 @@ describe("Claude Code resume command", () => {
 
   it("resumes from the folder Radar runs Claude in", () => {
     expect(buildLaunchCommand(run, "http://localhost:9280/mcp", "posix")).toBe(
-      'mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
+      'mkdir -p -m 700 ~/.radar/agent && cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
     );
   });
 
@@ -77,7 +77,23 @@ describe("Claude Code resume command", () => {
     expect(
       buildLaunchCommand(run, "http://localhost:9280/mcp", "powershell"),
     ).toBe(
-      'New-Item -ItemType Directory -Force "$HOME\\.radar\\agent" | Out-Null; Set-Location "$HOME\\.radar\\agent"; claude --% --resume ses_1 --mcp-config "{\\"mcpServers\\":{\\"radar\\":{\\"type\\":\\"http\\",\\"url\\":\\"http://localhost:9280/mcp\\"}}}"',
+      'New-Item -ItemType Directory -Force -Path "$HOME\\.radar\\agent" -ErrorAction Stop | Out-Null; ' +
+        'Set-Location -LiteralPath "$HOME\\.radar\\agent" -ErrorAction Stop; ' +
+        "& (Get-Command claude -CommandType Application -ErrorAction Stop)[0].Source --% " +
+        '--resume ses_1 --mcp-config "{\\"mcpServers\\":{\\"radar\\":{\\"type\\":\\"http\\",\\"url\\":\\"http://localhost:9280/mcp\\"}}}"',
+    );
+  });
+
+  it("gives Codex the same pass-through under PowerShell", () => {
+    expect(
+      buildLaunchCommand(
+        { ...run, agent: "codex", sessionId: "019a-b2" },
+        "http://localhost:9280/mcp",
+        "powershell",
+      ),
+    ).toBe(
+      "& (Get-Command codex -CommandType Application -ErrorAction Stop)[0].Source --% " +
+        'resume 019a-b2 -c "mcp_servers.radar.url=\\"http://localhost:9280/mcp\\""',
     );
   });
 

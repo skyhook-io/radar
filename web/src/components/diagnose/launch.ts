@@ -3,7 +3,6 @@
 // full agent (their config, their other MCPs, interactive approvals) — distinct
 // from the contained in-panel engine. The endpoint follows the server MCP mode.
 // In full mode, the client approval prompts gate changes.
-import { isWindows } from "@skyhook-io/k8s-ui/utils/platform";
 import { type RunSummary } from "../../api/diagnose";
 
 // sq POSIX-single-quotes a string so it's a safe single shell argument regardless
@@ -57,7 +56,7 @@ export function openInTerminal(command: string, title: string) {
 export function buildLaunchCommand(
   run: RunSummary,
   mcpUrl: string,
-  shell: "posix" | "powershell" = isWindows() ? "powershell" : "posix",
+  shell: "posix" | "powershell" = "posix",
 ): string | null {
   if (!run.sessionId || run.status === "stale") return null;
 
@@ -73,6 +72,13 @@ export function buildLaunchCommand(
   }
   if (run.agent === "codex") {
     // Codex threads are stored globally by id (cwd-independent); -c re-attaches MCP.
+    if (shell === "powershell") {
+      if (!psSafe(run.sessionId, mcpUrl)) return null;
+      return psNative(
+        "codex",
+        `resume ${run.sessionId} -c "mcp_servers.radar.url=\\"${mcpUrl}\\""`,
+      );
+    }
     return `codex resume ${sq(run.sessionId)} -c ${sq(`mcp_servers.radar.url="${mcpUrl}"`)}`;
   }
   // Claude Code: resume from the folder Radar runs Claude turns in (claudeWorkDir
@@ -83,22 +89,27 @@ export function buildLaunchCommand(
   const cfg = JSON.stringify({
     mcpServers: { radar: { type: "http", url: mcpUrl } },
   });
-  if (shell === "powershell")
-    return powerShellClaudeCommand(run.sessionId, mcpUrl, cfg);
-  return `mkdir -p ${AGENT_DIR} && cd ${AGENT_DIR} && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
+  if (shell === "powershell") {
+    if (!psSafe(run.sessionId, mcpUrl)) return null;
+    const dir = '"$HOME\\.radar\\agent"';
+    return `New-Item -ItemType Directory -Force -Path ${dir} -ErrorAction Stop | Out-Null; Set-Location -LiteralPath ${dir} -ErrorAction Stop; ${psNative("claude", `--resume ${run.sessionId} --mcp-config "${cfg.replace(/"/g, '\\"')}"`)}`;
+  }
+  return `mkdir -p -m 700 ${AGENT_DIR} && cd ${AGENT_DIR} && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
 }
 
-// Radar's terminal on Windows is Windows PowerShell 5.1, which has no `&&`,
-// no `mkdir -p`, and drops the double quotes inside an argument it passes to a
-// program. `--%` hands the rest of the line to claude unparsed, where the C
-// runtime turns \" back into ". That text can't carry a quote or a %, so a
-// session id or URL holding one gets no command rather than a broken one.
-function powerShellClaudeCommand(
-  sessionId: string,
-  mcpUrl: string,
-  cfg: string,
-): string | null {
-  if (!/^[\w-]+$/.test(sessionId) || /["%\\]/.test(mcpUrl)) return null;
-  const dir = '"$HOME\\.radar\\agent"';
-  return `New-Item -ItemType Directory -Force ${dir} | Out-Null; Set-Location ${dir}; claude --% --resume ${sessionId} --mcp-config "${cfg.replace(/"/g, '\\"')}"`;
+// Radar's terminal on Windows is Windows PowerShell 5.1, which has no `&&`
+// or `mkdir -p`, and drops the double quotes inside an argument it passes to a
+// program. `--%` hands the rest of the line to the program unparsed, where the
+// C runtime turns \" back into ". It applies to programs, not to npm's .ps1
+// shims, so the program is found as an application (.exe or .cmd). A failing
+// step stops the line (-ErrorAction Stop), so the agent never starts in the
+// wrong folder.
+function psNative(program: string, rawArgs: string): string {
+  return `& (Get-Command ${program} -CommandType Application -ErrorAction Stop)[0].Source --% ${rawArgs}`;
+}
+
+// The --% text can't carry a quote, a % or a backslash, so a session id or URL
+// holding one gets no command rather than a broken one.
+function psSafe(sessionId: string, mcpUrl: string): boolean {
+  return /^[\w-]+$/.test(sessionId) && !/["%\\]/.test(mcpUrl);
 }

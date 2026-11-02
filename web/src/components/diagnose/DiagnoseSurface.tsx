@@ -107,11 +107,12 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { localTerminal, mcpReadOnly } = useCapabilitiesContext();
+  const { localTerminal, mcpReadOnly, localShell } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
   const command = buildLaunchCommand(
     run,
     mcpEndpointUrl(mcpReadOnly),
+    localShell,
   );
 
   // The diagnose root is a CSS container, so a position:fixed click-away layer
@@ -521,7 +522,12 @@ export function DiagnoseSurface({
     ],
   );
   const revealDestination = useCallback(
-    () => revealInvestigationDestination(setMaximized, d.dismissForNavigation, narrow),
+    () =>
+      revealInvestigationDestination(
+        setMaximized,
+        d.dismissForNavigation,
+        narrow,
+      ),
     [d.dismissForNavigation, narrow, setMaximized],
   );
   const openEvidenceTimeline = useCallback(
@@ -568,8 +574,7 @@ export function DiagnoseSurface({
   const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
   // Consent replaces the detail pane even if goHome retained an older run id.
   // Header identity and actions must describe what is actually visible.
-  const visibleRunDetail =
-    d.needsConsent || d.startCapacity ? null : activeRun;
+  const visibleRunDetail = d.needsConsent || d.startCapacity ? null : activeRun;
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
   const activeAgentLabel = visibleRunDetail?.agent
     ? agentLabelFor(visibleRunDetail.agent)
