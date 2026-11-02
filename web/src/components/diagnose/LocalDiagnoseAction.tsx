@@ -1,4 +1,5 @@
 import {
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -220,25 +221,36 @@ function LastInvestigationPopover({
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const closeToTrigger = useCallback(() => {
+    onClose();
+    anchorRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [onClose]);
   // Below the button, ending at its right edge, shifted to stay on screen: a
   // phone's wrapped header can put the button anywhere along the row.
+  const { shouldRender, isOpen } = useAnimatedUnmount(
+    open,
+    overlayExitMs("menu"),
+  );
+  // Opens above the button when there isn't room below it (a bottom row).
   const [position, setPosition] = useState({ top: 0, left: 0 });
   useLayoutEffect(() => {
-    if (!open || !anchorRef.current) return;
+    if (!open || !shouldRender || !anchorRef.current) return;
     const anchor = anchorRef.current.getBoundingClientRect();
     const width = Math.min(POPOVER_WIDTH, window.innerWidth - 2 * GUTTER);
+    const height = panelRef.current?.offsetHeight ?? 0;
+    const below = anchor.bottom + 6;
+    const above = anchor.top - 6 - height;
     setPosition({
-      top: anchor.bottom + 6,
+      top:
+        below + height > window.innerHeight - GUTTER && above >= GUTTER
+          ? above
+          : below,
       left: Math.min(
         Math.max(anchor.right - width, GUTTER),
         window.innerWidth - GUTTER - width,
       ),
     });
-  }, [open]);
-  const { shouldRender, isOpen } = useAnimatedUnmount(
-    open,
-    overlayExitMs("menu"),
-  );
+  }, [open, shouldRender]);
   useEffect(() => {
     if (!open) return;
     const inside = (target: EventTarget | null) =>
@@ -253,8 +265,7 @@ function LastInvestigationPopover({
       if (e.key !== "Escape") return;
       e.stopPropagation();
       e.preventDefault();
-      onClose();
-      anchorRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      closeToTrigger();
     };
     // Its position is measured once on open, so moving the page closes it.
     const onScroll = (e: Event) => {
@@ -270,11 +281,23 @@ function LastInvestigationPopover({
       window.removeEventListener("resize", onClose);
       window.removeEventListener("scroll", onScroll, true);
     };
-  }, [open, onClose]);
+  }, [open, onClose, closeToTrigger]);
   useEffect(() => {
     if (open && shouldRender)
       panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [open, shouldRender]);
+  // The panel sits at the end of the page in DOM order, so tabbing out of it
+  // goes back to the button rather than to wherever the portal landed.
+  const onPanelKeyDown = (e: ReactKeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key !== "Tab") return;
+    const buttons = panelRef.current?.querySelectorAll("button");
+    if (!buttons?.length) return;
+    const edge = e.shiftKey ? buttons[0] : buttons[buttons.length - 1];
+    if (document.activeElement !== edge) return;
+    e.preventDefault();
+    closeToTrigger();
+  };
   const choose = (fn: () => void) => () => {
     onClose();
     fn();
@@ -290,7 +313,7 @@ function LastInvestigationPopover({
             aria-label="Last investigation"
             inert={!open || undefined}
             onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
+            onKeyDown={onPanelKeyDown}
             className={clsx(
               "fixed z-50 w-80 max-w-[calc(100vw-2rem)] origin-top-right rounded-lg border border-theme-border bg-theme-surface p-3 text-left shadow-theme-lg",
               TRANSITION_MENU,

@@ -351,6 +351,53 @@ describe("an issue row's Investigate action", () => {
     expect(openInvestigation).toHaveBeenCalled();
   });
 
+  it("tabs out of the panel back to the button", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    const button = issueButton();
+    await act(async () => button.click());
+    await flush();
+    const last = buttonNamed("Investigate again");
+    last.focus();
+    await act(async () =>
+      last.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+      ),
+    );
+    expect(document.activeElement).toBe(button);
+    expect(dialog()?.getAttribute("inert")).not.toBeNull();
+    expect(rowToggle).not.toHaveBeenCalled();
+  });
+
+  it("opens above a button near the bottom of the screen", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    const button = issueButton();
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        top: 700,
+        bottom: 720,
+        left: 900,
+        right: 1000,
+        width: 100,
+        height: 20,
+        x: 900,
+        y: 700,
+        toJSON: () => ({}),
+      });
+    const height = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(150);
+    vi.stubGlobal("innerHeight", 768);
+    await act(async () => button.click());
+    await flush();
+    expect(dialog()!.getAttribute("style")).toContain("top: 544px");
+    rect.mockRestore();
+    height.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("closes when the list scrolls", async () => {
     api.runs = [investigated()];
     await renderIssueRow();
