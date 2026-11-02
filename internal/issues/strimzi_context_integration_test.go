@@ -99,7 +99,7 @@ func TestCachedStrimziEvidenceReadsCurrentAuthorizedOwnerChain(t *testing.T) {
 				return ownership.Unrestricted()
 			}
 			uncollected := CachedStrimziEvidence(pod, nil, access)
-			if uncollected == nil || len(uncollected.Gaps) != 1 || uncollected.Gaps[0].Code != readreason.RadarKindNotCollected || uncollected.Checked != 0 {
+			if len(uncollected) != 1 || len(uncollected[0].Gaps) != 1 || uncollected[0].Gaps[0].Code != readreason.RadarKindNotCollected || uncollected[0].Checked != 0 {
 				t.Fatalf("uncollected inventory looked inspected: %+v", uncollected)
 			}
 			wire, err := json.Marshal(uncollected)
@@ -116,7 +116,7 @@ func TestCachedStrimziEvidenceReadsCurrentAuthorizedOwnerChain(t *testing.T) {
 				t.Fatal("connector cache not synchronized")
 			}
 			accessCalls = 0
-			if got := CachedStrimziEvidence(pod, nil, access); got == nil || len(got.Findings) != 1 || got.Source.Name != "connect" {
+			if got := CachedStrimziEvidence(pod, nil, access); len(got) != 1 || len(got[0].Findings) != 1 || got[0].AssociatedVia.Name != "connect" {
 				t.Fatalf("cached owner chain lost: %+v", got)
 			}
 			if accessCalls != 1 {

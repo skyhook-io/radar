@@ -792,8 +792,8 @@ type ResourceWithRelationships struct {
 	Relationships   *Relationships         `json:"relationships,omitempty"`
 	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
 	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
-	// RelatedApplicationFindings does not affect parent health; absence is not an all-clear.
-	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
+	// RelatedFindings does not affect parent health; absence is not an all-clear.
+	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.

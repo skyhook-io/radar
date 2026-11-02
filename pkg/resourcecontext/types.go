@@ -33,8 +33,8 @@ import (
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
-	// RelatedApplicationFindings is an optional association bundle; absence is not an all-clear.
-	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
+	// RelatedFindings is an optional association bundle; absence is not an all-clear.
+	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
 	// AutoInstrumentation contains provider-specific declared injection evidence,
 	// not successful injection or telemetry delivery. Absence is not an all-clear.
 	AutoInstrumentation *AutoInstrumentationContext `json:"autoInstrumentation,omitempty"`

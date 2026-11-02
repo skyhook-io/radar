@@ -101,7 +101,7 @@ func TestStrimziContextOwnerUIDAndMissing(t *testing.T) {
 	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, connect), list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
 		return nil, schema.GroupVersionResource{}, false, readreason.RadarKindNotCollected
 	}}
-	if out := strimziEvidence(pod, nil, reader); out == nil || out.Coverage == "" {
+	if out := strimziEvidence(pod, nil, reader); out == nil || len(out.Gaps) != 1 {
 		t.Fatal("valid UID path lost")
 	}
 	connect.SetUID("replacement")
@@ -144,7 +144,7 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 		rows = append(rows, contextConnector("app", fmt.Sprintf("c%d", n), "connect"))
 	}
 	out = strimziEvidence(connect, nil, reader)
-	if !out.Truncated || len(out.Findings) != 0 || len(out.Gaps) != 1 || out.Gaps[0].Code != readreason.ListTooLarge {
+	if out.Truncated || len(out.Findings) != 0 || len(out.Gaps) != 1 || out.Gaps[0].Code != readreason.ListTooLarge {
 		t.Fatal("scan cap missed")
 	}
 }
@@ -179,7 +179,7 @@ func TestStrimziCandidateBudgetPrecedesAuthorizationAndRelevance(t *testing.T) {
 				}
 				return false
 			}, reader)
-			if !out.Truncated || len(out.Findings) != 0 || strings.Contains(out.Coverage, "500") || !strings.Contains(out.Coverage, "were not checked") {
+			if out.Truncated || len(out.Findings) != 0 || out.Checked != 0 || len(out.Gaps) != 1 || out.Gaps[0].Code != readreason.ListTooLarge {
 				t.Fatalf("unauthorized count leaked: %+v", out)
 			}
 			if calls != 0 {
@@ -225,5 +225,60 @@ func TestStrimziContextModernOwnerChain(t *testing.T) {
 	connector := contextConnector("app", "sink", "connect")
 	if got := strimziEvidence(connector, nil, reader); got != nil {
 		t.Fatalf("direct connector invented unavailable related evidence: %+v", got)
+	}
+}
+
+func TestStrimziRelatedFindingsInactiveVersusUnassessable(t *testing.T) {
+	for _, tc := range []struct {
+		name, state                      string
+		paused, stale, missingConditions bool
+		unknown                          int
+	}{
+		{name: "current paused runtime", state: "PAUSED"},
+		{name: "current stopped runtime", state: "STOPPED"},
+		{name: "reconciliation paused", state: "PAUSED", paused: true, unknown: 1},
+		{name: "stale inactive", state: "STOPPED", stale: true, unknown: 1},
+		{name: "malformed inactive", state: "PAUSED", missingConditions: true, unknown: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			connect := contextStrimzi("KafkaConnect", "app", "connect")
+			row := contextConnector("app", "sink", "connect")
+			row.Object["status"] = map[string]any{"observedGeneration": int64(1), "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}, "connectorStatus": map[string]any{"connector": map[string]any{"state": tc.state}, "tasks": []any{}}}
+			if tc.paused {
+				row.SetAnnotations(map[string]string{"strimzi.io/pause-reconciliation": "true"})
+			}
+			if tc.stale {
+				row.SetGeneration(2)
+			}
+			if tc.missingConditions {
+				unstructured.RemoveNestedField(row.Object, "status", "conditions")
+			}
+			reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, readreason.Code) {
+				return []*unstructured.Unstructured{row}, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, ""
+			}}
+			got := strimziEvidence(connect, nil, reader)
+			if got.Checked != 1 || got.Unknown != tc.unknown || len(got.Findings) != 0 || len(got.Gaps) != 0 {
+				t.Fatalf("unexpected assessment: %+v", got)
+			}
+			if got.AssociatedVia.Name != "connect" || got.Kinds.Count != 1 || got.Kinds.Names[0].Kind != "KafkaConnector" {
+				t.Fatalf("missing scope: %+v", got)
+			}
+			if StrimziConnectorRecoveryObserved(row) {
+				t.Fatal("inactive state invented recovery")
+			}
+			wire, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(wire, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"coverage", "note", "source"} {
+				if _, ok := fields[key]; ok {
+					t.Fatalf("obsolete wire field %s", key)
+				}
+			}
+		})
 	}
 }

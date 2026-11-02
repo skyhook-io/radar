@@ -1,6 +1,8 @@
+import { relatedFindingLimitations } from "../../../utils/related-findings";
 import {
   type HPADiagnosisState,
   type Issue,
+  type RelatedFindingsGroup,
   type IssueRecentChange,
   type Topology,
   defaultConditionTone,
@@ -684,7 +686,9 @@ export function addResourceObservation(
       (available !== undefined && available < desired) ||
       (replicas?.unavailable ?? 0) > 0);
   const adverseCondition = (context?.statusSummary?.conditions ?? []).some(
-    (condition) => (getCrossplaneConditionTone(resource, condition) ?? defaultConditionTone(condition)) === "fail",
+    (condition) =>
+      (getCrossplaneConditionTone(resource, condition) ??
+        defaultConditionTone(condition)) === "fail",
   );
   const gitOpsAdverse = Boolean(
     gitOpsDiagnosis &&
@@ -745,7 +749,7 @@ export function addResourceObservation(
     },
   });
   addResourceContextLimitations(builder, source, context);
-  addRelatedApplicationFindings(builder, source, context, relevance);
+  addRelatedFindings(builder, source, context, relevance);
 }
 // The live Pod spec differing from its template is context, not a fault, so
 // it reads as a line on the resource card rather than a finding of its own.
@@ -767,7 +771,7 @@ export function addIssueObservation(
   value: Issue,
   producerRelevance: InvestigationEvidenceRelevance = "broader",
   pods?: string[],
-  applicationSource?: DiagnosisResourceRef,
+  associatedVia?: DiagnosisResourceRef,
 ): void {
   const matchesTarget = resourceMatchesTarget(builder.target, {
     kind: value.kind,
@@ -790,7 +794,7 @@ export function addIssueObservation(
     data: {
       type: "issue",
       issue: value,
-      ...(applicationSource ? { applicationSource } : {}),
+      ...(associatedVia ? { associatedVia } : {}),
       relevance,
       ...(pods && pods.length > 0 ? { pods } : {}),
     },
@@ -1032,49 +1036,79 @@ export function invalidPayload(
   );
 }
 
-function addRelatedApplicationFindings(
+function addRelatedFindings(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   context: InvestigationResourceContext | undefined,
   relevance: InvestigationEvidenceRelevance,
 ): void {
-  const raw = context?.relatedApplicationFindings;
+  const raw = context?.relatedFindings;
   if (raw === undefined) return;
-  const value = record(raw);
-  const applicationSource = resourceRef(value?.source);
-  const findingsRaw = value?.findings;
-  const findings = Array.isArray(findingsRaw)
-    ? findingsRaw.map(issue).filter((item): item is Issue => Boolean(item))
-    : [];
-  if (
-    !value ||
-    !applicationSource ||
-    !Array.isArray(value.gaps) ||
-    !value.gaps.every((gap) => nonEmptyString(record(gap)?.code)) ||
-    !nonNegativeInteger(value.checked) ||
-    !nonNegativeInteger(value.unknown) ||
-    !nonEmptyString(value.coverage) ||
-    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
-    (findingsRaw !== undefined &&
-      (!Array.isArray(findingsRaw) || findings.length !== findingsRaw.length))
-  ) {
-    invalidPayload(builder, source, "Related application findings");
+  if (!Array.isArray(raw)) {
+    invalidPayload(builder, source, "Related findings");
     return;
   }
-  for (const finding of findings) {
-    addIssueObservation(
-      builder,
-      source,
-      finding,
-      relevance === "target" ? "producer-related" : "broader",
-      undefined,
-      applicationSource,
-    );
+  for (const entry of raw) {
+    const value = record(entry);
+    const associatedVia = resourceRef(value?.associatedVia);
+    const kinds = record(value?.kinds);
+    const findingsRaw = value?.findings;
+    const findings = Array.isArray(findingsRaw)
+      ? findingsRaw.map(issue).filter((item): item is Issue => Boolean(item))
+      : [];
+    if (
+      !value ||
+      !associatedVia ||
+      !kinds ||
+      !nonNegativeInteger(kinds.count) ||
+      kinds.count === 0 ||
+      kinds.extent !== undefined ||
+      (kinds.names !== undefined &&
+        (!Array.isArray(kinds.names) ||
+          kinds.names.length !== kinds.count ||
+          !kinds.names.every((item) => {
+            const ref = record(item);
+            return (
+              ref &&
+              nonEmptyString(ref.kind) &&
+              (ref.group === undefined || typeof ref.group === "string")
+            );
+          }))) ||
+      !Array.isArray(value.gaps) ||
+      !value.gaps.every((gap) => nonEmptyString(record(gap)?.code)) ||
+      !nonNegativeInteger(value.checked) ||
+      !nonNegativeInteger(value.unknown) ||
+      value.unknown > value.checked ||
+      (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+      (findingsRaw !== undefined &&
+        (!Array.isArray(findingsRaw) || findings.length !== findingsRaw.length))
+    ) {
+      invalidPayload(builder, source, "Related findings group");
+      continue;
+    }
+    for (const finding of findings) {
+      addIssueObservation(
+        builder,
+        source,
+        finding,
+        relevance === "target" ? "producer-related" : "broader",
+        undefined,
+        associatedVia,
+      );
+    }
+    const group = {
+      ...value,
+      associatedVia,
+      findings,
+    } as unknown as RelatedFindingsGroup;
+    const anchor = `${associatedVia.kind} ${associatedVia.namespace ? associatedVia.namespace + "/" : ""}${associatedVia.name}${associatedVia.group ? " (" + associatedVia.group + ")" : ""}`;
+    for (const limit of relatedFindingLimitations(group)) {
+      builder.limit(
+        source,
+        `Related findings via ${anchor}`,
+        limit.message,
+        limit.kind,
+      );
+    }
   }
-  builder.limit(
-    source,
-    "Related application findings",
-    value.coverage,
-    value.truncated === true ? "truncated" : "unknown",
-  );
 }

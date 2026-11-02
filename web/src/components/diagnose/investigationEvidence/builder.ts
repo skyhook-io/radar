@@ -330,7 +330,7 @@ export function projectInvestigationEvidence(
         // A clean parent diagnosis cannot prove an associated resource recovered.
         if (
           observation.data.type === "issue" &&
-          observation.data.applicationSource
+          observation.data.associatedVia
         )
           return undefined;
         return semanticCoverageKey(group.kind);

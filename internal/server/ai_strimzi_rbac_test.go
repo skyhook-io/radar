@@ -69,9 +69,9 @@ func TestAIResourceContextStrimziSeparatesOwnerAndIssueReadGrants(t *testing.T) 
 			env.srv.permCache.Set("reader", nil, perms)
 			req := httptest.NewRequest("GET", "/api/ai/resources/pods/app/worker", nil)
 			req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "reader"}))
-			got := env.srv.buildAIResourceContext(req, pod, "Pod", "app", "worker").RelatedApplicationFindings
+			got := env.srv.buildAIResourceContext(req, pod, "Pod", "app", "worker").RelatedFindings
 			if denied == "" || denied == "kafkaconnectors" {
-				if got == nil || len(got.Findings) != 1 {
+				if len(got) != 1 || len(got[0].Findings) != 1 {
 					t.Fatalf("authorized findings missing: %+v", got)
 				}
 			} else if got != nil {

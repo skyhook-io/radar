@@ -1,7 +1,6 @@
 package issues
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -30,7 +29,7 @@ type strimziContextReader struct {
 // association cannot be established or read consistently, never an all-clear.
 // canRead applies the host's curated-issue policy (nil allows all); ownerAccess
 // must provide the host's separate ownership-read policy.
-func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ownership.Catalog) ownership.Access) *issuesapi.RelatedApplicationFindings {
+func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ownership.Catalog) ownership.Access) []issuesapi.RelatedFindingsGroup {
 	typed, dynamic, discovery := k8s.GetResourceCache(), k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()
 	if dynamic == nil || discovery == nil || obj == nil {
 		return nil
@@ -97,10 +96,13 @@ func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ow
 	if session.ValidateCaches() != nil || dynamic != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() || dynamic.IsStopped() {
 		return nil
 	}
-	return out
+	if out == nil {
+		return nil
+	}
+	return []issuesapi.RelatedFindingsGroup{*out}
 }
 
-func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziContextReader) *issuesapi.RelatedApplicationFindings {
+func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziContextReader) *issuesapi.RelatedFindingsGroup {
 	current, ok := k8s.OwnershipObservation(obj)
 	if !ok || current.UID == "" {
 		return nil
@@ -124,12 +126,10 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	if connect.Name == "" || canRead != nil && !canRead(connect) {
 		return nil
 	}
-	out := &issuesapi.RelatedApplicationFindings{Gaps: []resourceapi.Gap{}, Source: connect, Coverage: "Connector status could not be read from the cache; missing findings do not establish application health."}
+	out := &issuesapi.RelatedFindingsGroup{Gaps: []resourceapi.Gap{}, AssociatedVia: connect, Kinds: *resourceapi.Kinds([]resourceapi.KindRef{{Group: strimziGroup, Kind: "KafkaConnector"}}, resourceapi.RESTSetLimit)}
 	rows, gvr, truncated, code := reader.list(connect.Namespace)
 	if truncated || len(rows) > maxStrimziContextScan {
-		out.Truncated = true
 		code = readreason.ListTooLarge
-		out.Coverage = "Connector findings were not checked because this namespace exceeds the inspection budget; missing findings do not establish application health."
 	}
 	if code != "" {
 		out.Gaps = []resourceapi.Gap{{
@@ -156,22 +156,22 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		checked++
 		findings := StrimziConnectorIssues(gvr, row)
 		findings, _ = filterShapedIssues(findings, Filters{})
-		if len(findings) == 0 && !StrimziConnectorRecoveryObserved(row) {
-			unknown++
+		if len(findings) == 0 {
+			assessment := AssessStrimziSnapshot(gvr, row)
+			if assessment.State != "recovered" && !(assessment.Reason == "inactive" && assessment.Readiness == "ready") {
+				unknown++
+			}
 		}
 		if len(findings) == 0 {
 			continue
 		}
-		if len(out.Findings) == maxStrimziContextFindings {
+		remaining := maxStrimziContextFindings - len(out.Findings)
+		if len(findings) > remaining {
 			out.Truncated = true
-			continue
+			findings = findings[:remaining]
 		}
 		out.Findings = append(out.Findings, findings...)
 	}
 	out.Checked, out.Unknown = checked, unknown
-	out.Coverage = fmt.Sprintf("Checked %d authorized cached connector snapshots; %d were unverifiable or inactive. Missing findings do not establish application health.", checked, unknown)
-	if out.Truncated {
-		out.Coverage += " The five-finding limit was reached; additional findings may be omitted."
-	}
 	return out
 }

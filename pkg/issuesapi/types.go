@@ -892,25 +892,34 @@ var CELBindings = []CELBinding{
 	{Name: "stuck", Type: BindingBool},
 }
 
-// RelatedApplicationFindings carries findings associated through one local resource.
-// Absence means no bundle was provided, not that an association or issue is absent.
-// Neither an empty bundle nor omitted findings prove health or recovery.
-type RelatedApplicationFindings struct {
-	// Gaps describe limitations reading the associated inventory.
-	Gaps []resourceapi.Gap `json:"gaps"`
-	// Checked counts authorized associated resource snapshots, not findings.
+// RelatedFindingsGroup carries current findings from one bounded local inventory.
+// Absence or an empty list of groups means no enrichment was supplied, not that
+// associations or issues are absent. Omitted findings never establish recovery.
+type RelatedFindingsGroup struct {
+	// AssociatedVia is the association anchor, not the finding subject.
+	AssociatedVia Ref `json:"associatedVia"`
+	// Kinds is a nonempty finite set of resource kinds selected for assessment.
+	// Extent is not used; names, when present, lists the whole set.
+	Kinds resourceapi.KindSet `json:"kinds"`
+	// Checked counts authorized candidate resource snapshots, not findings or API calls.
 	Checked int `json:"checked"`
-	// Unknown counts checked snapshots without an actionable finding or positive
-	// active-state assessment; inactive resources can be included. The difference
-	// Checked-Unknown is not a healthy-resource count.
+	// Unknown counts checked snapshots the producer could not assess. A known
+	// inactive state is not itself unknown. Checked-Unknown is not a healthy count.
 	Unknown int `json:"unknown"`
-	// Source is the association anchor. Each finding identifies its own subject.
-	Source Ref `json:"source"`
 	// Findings retain their original subjects and IDs; omission is not recovery.
 	Findings []Issue `json:"findings,omitempty"`
-	// Coverage explains the bounded assessment; it is not a machine-readable health verdict.
-	Coverage string `json:"coverage"`
-	// Truncated means the inventory scan or returned findings were capped.
-	// Gaps and Coverage distinguish the limitation; false does not prove completeness.
+	// Gaps describe limitations reading the associated inventory; encoded as [] when empty.
+	Gaps []resourceapi.Gap `json:"gaps"`
+	// Truncated means findings were omitted from output, not that inventory reads failed.
 	Truncated bool `json:"truncated,omitempty"`
+}
+
+// MarshalJSON keeps the required gaps array non-null for every producer.
+func (g RelatedFindingsGroup) MarshalJSON() ([]byte, error) {
+	type wire RelatedFindingsGroup
+	w := wire(g)
+	if w.Gaps == nil {
+		w.Gaps = []resourceapi.Gap{}
+	}
+	return json.Marshal(w)
 }

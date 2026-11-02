@@ -32,18 +32,169 @@ const source = {
 const context = {
   tier: "basic",
   workloadSummary: { replicas: { desired: 1, ready: 1, available: 1 } },
-  relatedApplicationFindings: {
-    source,
-    gaps: [],
-    checked: 1,
-    unknown: 0,
-    findings: [connector],
-    coverage:
-      "Checked 1 authorized cached connector snapshots; missing findings do not establish application health.",
-  },
+  relatedFindings: [
+    {
+      kinds: {
+        count: 1,
+        names: [{ kind: "KafkaConnector", group: "kafka.strimzi.io" }],
+      },
+      associatedVia: source,
+      gaps: [],
+      checked: 1,
+      unknown: 0,
+      findings: [connector],
+    },
+  ],
 };
 
 describe("cached application findings", () => {
+  it("accepts an empty group list and does not invent a limitation", () => {
+    const result = project([
+      tool("read", "diagnose", {
+        resource: deployment,
+        relatedIssues: [],
+        resourceContext: { ...context, relatedFindings: [] },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "issue")).toHaveLength(0);
+    expect(result.limitations).toHaveLength(0);
+    expect(
+      groupsOf(result.groups, "receipt").some(
+        (group) =>
+          group.latest.data.type === "receipt" &&
+          group.latest.data.checked === "issues",
+      ),
+    ).toBe(true);
+  });
+
+  it("retains good groups around a malformed group and preserves both anchors for one issue", () => {
+    const first = context.relatedFindings[0];
+    const second = {
+      ...first,
+      associatedVia: {
+        group: "argoproj.io",
+        kind: "Application",
+        namespace: "ops",
+        name: "store",
+      },
+      unknown: 1,
+    };
+    const result = project([
+      tool("read", "get_resource", {
+        resource: deployment,
+        resourceContext: {
+          ...context,
+          relatedFindings: [
+            first,
+            { ...first, kinds: { count: 2, names: [] } },
+            second,
+          ],
+        },
+      }),
+    ]);
+    const groups = groupsOf(result.groups, "issue");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].observations).toHaveLength(2);
+    expect(
+      groups[0].observations.map(
+        (item) => item.data.type === "issue" && item.data.associatedVia,
+      ),
+    ).toEqual([source, second.associatedVia]);
+    expect(
+      result.limitations.some(
+        (item) => item.source === "Related findings group",
+      ),
+    ).toBe(true);
+    expect(
+      result.limitations.some(
+        (item) =>
+          item.source.includes("Application ops/store") &&
+          item.kind === "unknown",
+      ),
+    ).toBe(true);
+  });
+
+  it("retains distinct issue IDs on one subject across repeated anchors", () => {
+    const first = context.relatedFindings[0];
+    const other = {
+      ...connector,
+      id: `${connector.id}:other`,
+      reason: "OtherFailure",
+    };
+    const result = project([
+      tool("read", "get_resource", {
+        resource: deployment,
+        resourceContext: {
+          ...context,
+          relatedFindings: [
+            { ...first, findings: [connector, other] },
+            {
+              ...first,
+              associatedVia: { ...source, name: "second" },
+              findings: [connector, other],
+            },
+          ],
+        },
+      }),
+    ]);
+    const groups = groupsOf(result.groups, "issue");
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.observations.length)).toEqual([2, 2]);
+  });
+
+  it.each([
+    { checked: -1 },
+    { unknown: 2 },
+    { kinds: { count: 0 } },
+    { kinds: { count: 1, names: [{ kind: "" }] } },
+    { gaps: [{ code: "" }] },
+  ])("withholds invalid group fields without an all-clear: %j", (invalid) => {
+    const result = project([
+      tool("read", "diagnose", {
+        resource: deployment,
+        relatedIssues: [],
+        resourceContext: {
+          ...context,
+          relatedFindings: [{ ...context.relatedFindings[0], ...invalid }],
+        },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "issue")).toHaveLength(0);
+    expect(
+      result.limitations.some(
+        (item) => item.source === "Related findings group",
+      ),
+    ).toBe(true);
+    expect(
+      groupsOf(result.groups, "receipt").filter(
+        (group) =>
+          group.latest.data.type === "receipt" &&
+          group.latest.data.checked === "issues",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("distinguishes output truncation without requiring explanatory prose", () => {
+    const result = project([
+      tool("read", "get_resource", {
+        resource: deployment,
+        resourceContext: {
+          ...context,
+          relatedFindings: [{ ...context.relatedFindings[0], truncated: true }],
+        },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "issue")).toHaveLength(1);
+    expect(result.limitations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "truncated",
+          message: "Additional related findings were omitted.",
+        }),
+      ]),
+    );
+  });
+
   const relatedCases = [
     {
       label: "cert-manager issuance",
@@ -151,15 +302,19 @@ describe("cached application findings", () => {
           resource: deployment,
           resourceContext: {
             ...context,
-            relatedApplicationFindings: {
-              source: anchor,
-              checked: 1,
-              unknown: 0,
-              findings,
-              gaps: [{ code: "user_forbidden", action: "request_access" }],
-              coverage:
-                "One associated resource assessed; other inventory was inaccessible.",
-            },
+            relatedFindings: [
+              {
+                kinds: {
+                  count: 1,
+                  names: [{ kind: subject.kind, group: subject.group }],
+                },
+                associatedVia: anchor,
+                checked: 1,
+                unknown: 0,
+                findings,
+                gaps: [{ code: "user_forbidden", action: "request_access" }],
+              },
+            ],
           },
         }),
       ]);
@@ -170,18 +325,16 @@ describe("cached application findings", () => {
         const ref = investigationEvidenceSubjectRef(group.latest.data);
         expect(ref).toMatchObject(identity);
         expect(ref?.namespace).toBe(namespace || undefined);
-        expect(group.latest.data).toMatchObject({ applicationSource: anchor });
+        expect(group.latest.data).toMatchObject({ associatedVia: anchor });
       }
       expect(groupsOf(result.groups, "resource")[0].latest).toMatchObject({
         tier: "context",
         tone: "neutral",
         summary: "1/1 replicas ready",
       });
-      expect(
-        result.limitations.some((item) =>
-          item.message.includes("inaccessible"),
-        ),
-      ).toBe(true);
+      expect(result.limitations.some((item) => item.kind === "unknown")).toBe(
+        true,
+      );
     },
   );
 
@@ -194,14 +347,16 @@ describe("cached application findings", () => {
         id: `${subject.group}:${subject.kind}:${subject.namespace}:${subject.name}:NotReady`,
         reason: "NotReady",
       };
-      const relatedApplicationFindings = {
-        source: anchor,
+      const relatedFindings = {
+        kinds: {
+          count: 1,
+          names: [{ kind: subject.kind, group: subject.group }],
+        },
+        associatedVia: anchor,
         checked: 1,
         unknown: 0,
         findings: [finding],
         gaps: [],
-        coverage:
-          "Selected associated resource snapshots; not an application health verdict.",
       };
       const result = projectInvestigationEvidence(
         [
@@ -209,7 +364,10 @@ describe("cached application findings", () => {
             timeline: [
               tool("read", "diagnose", {
                 resource: deployment,
-                resourceContext: { ...context, relatedApplicationFindings },
+                resourceContext: {
+                  ...context,
+                  relatedFindings: [relatedFindings],
+                },
               }),
             ],
           },
@@ -222,10 +380,12 @@ describe("cached application findings", () => {
                 relatedIssues: [],
                 resourceContext: {
                   ...context,
-                  relatedApplicationFindings: {
-                    ...relatedApplicationFindings,
-                    findings: [],
-                  },
+                  relatedFindings: [
+                    {
+                      ...relatedFindings,
+                      findings: [],
+                    },
+                  ],
                 },
               }),
             ],
@@ -258,7 +418,7 @@ describe("cached application findings", () => {
         tier: "supporting",
         relevance: "producer-related",
         source: { evidenceRef: ref },
-        data: { issue: connector, applicationSource: source },
+        data: { issue: connector, associatedVia: source },
       });
       expect(
         investigationEvidenceSubjectRef(finding.latest.data),
@@ -273,11 +433,7 @@ describe("cached application findings", () => {
         tone: "neutral",
         summary: "1/1 replicas ready",
       });
-      expect(
-        result.limitations.some((item) =>
-          item.message.includes("do not establish application health"),
-        ),
-      ).toBe(true);
+      expect(result.limitations).toHaveLength(0);
       expect(
         groupsOf(result.groups, "receipt").filter(
           (group) =>
@@ -321,15 +477,18 @@ describe("cached application findings", () => {
         resource: deployment,
         resourceContext: {
           tier: "basic",
-          relatedApplicationFindings: {
-            source,
-            gaps: [{ code: "list_too_large", action: "change_request" }],
-            checked: 0,
-            unknown: 0,
-            truncated: true,
-            coverage:
-              "Connector findings were not checked because this namespace exceeds the inspection budget.",
-          },
+          relatedFindings: [
+            {
+              kinds: {
+                count: 1,
+                names: [{ kind: "KafkaConnector", group: "kafka.strimzi.io" }],
+              },
+              associatedVia: source,
+              gaps: [{ code: "list_too_large", action: "change_request" }],
+              checked: 0,
+              unknown: 0,
+            },
+          ],
         },
       }),
     ]);
@@ -342,7 +501,7 @@ describe("cached application findings", () => {
       ),
     ).toHaveLength(0);
     expect(result.limitations).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "truncated" })]),
+      expect.arrayContaining([expect.objectContaining({ kind: "unknown" })]),
     );
   });
 
@@ -386,10 +545,12 @@ describe("cached application findings", () => {
               relatedIssues: [],
               resourceContext: {
                 ...context,
-                relatedApplicationFindings: {
-                  ...context.relatedApplicationFindings,
-                  findings: [],
-                },
+                relatedFindings: [
+                  {
+                    ...context.relatedFindings[0],
+                    findings: [],
+                  },
+                ],
               },
             }),
           ],
@@ -559,17 +720,19 @@ describe("cached application findings", () => {
         resource: deployment,
         resourceContext: {
           ...context,
-          relatedApplicationFindings: {
-            ...context.relatedApplicationFindings,
-            findings: [connector, { id: "bad" }],
-          },
+          relatedFindings: [
+            {
+              ...context.relatedFindings[0],
+              findings: [connector, { id: "bad" }],
+            },
+          ],
         },
       }),
     ]);
     expect(groupsOf(result.groups, "issue")).toHaveLength(0);
     expect(
       result.limitations.some(
-        (item) => item.source === "Related application findings",
+        (item) => item.source === "Related findings group",
       ),
     ).toBe(true);
   });

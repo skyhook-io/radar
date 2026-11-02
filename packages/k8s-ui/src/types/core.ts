@@ -1,6 +1,6 @@
 import type { Issue, IssueResourceRef } from '../components/issues/types'
 import type { CapacityIntegrationState } from './capacity'
-import type { ReadGap } from './read-coverage'
+import type { ReadGap, ReadKindRef } from './read-coverage'
 
 // Topology types matching the Go backend
 
@@ -881,30 +881,29 @@ export interface HPAMetricSummary {
   status: string
 }
 
-/** Findings associated through one local resource, independent of the parent's health.
- * Absence or an empty bundle does not establish health, recovery, or no association. */
-export interface RelatedApplicationFindings {
-  /** Limitations reading the associated inventory. */
-  gaps: ReadGap[]
-  /** Authorized associated resource snapshots assessed, not finding count. */
-  checked: number
-  /** Checked snapshots without a finding or positive active-state assessment;
-   * can include inactive resources. checked - unknown is not a healthy count. */
-  unknown: number
+/** Current findings from one bounded local inventory, independent of parent health.
+ * No groups or no findings never establishes absence of associations or recovery. */
+export interface RelatedFindingsGroup {
   /** Association anchor; each finding identifies its own subject. */
-  source: IssueResourceRef
-  /** Original finding subjects and IDs; omission is not recovery. */
+  associatedVia: IssueResourceRef
+  /** Nonempty finite set of resource kinds selected for assessment; names, when present, lists all. */
+  kinds: { count: number; names?: ReadKindRef[] }
+  /** Authorized candidate resource snapshots, not findings or API calls. */
+  checked: number
+  /** Checked snapshots the producer could not assess, not known inactive states.
+   * checked - unknown is not a healthy count. */
+  unknown: number
   findings?: Issue[]
-  /** Human-readable scope and limitations, not a health verdict. */
-  coverage: string
-  /** Inventory or finding output was capped; false does not prove completeness. */
+  /** Inventory-read limitations; always an array, including when empty. */
+  gaps: ReadGap[]
+  /** Findings were omitted from output; inventory read failures use gaps. */
   truncated?: boolean
 }
 
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
   /** Optional association bundle; absence is not an all-clear. */
-  relatedApplicationFindings?: RelatedApplicationFindings
+  relatedFindings?: RelatedFindingsGroup[]
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo

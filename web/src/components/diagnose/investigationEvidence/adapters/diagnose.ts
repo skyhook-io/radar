@@ -330,7 +330,9 @@ export function adaptDiagnose(
     source.confirmedSuccess &&
     related.length === 0 &&
     relatedValid &&
-    context?.relatedApplicationFindings === undefined &&
+    (context?.relatedFindings === undefined ||
+      (Array.isArray(context.relatedFindings) &&
+        context.relatedFindings.length === 0)) &&
     isDiagnosableWorkloadKind(resource.kind)
   ) {
     const scope = scopeFromArgs(source);

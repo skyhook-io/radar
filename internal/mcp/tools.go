@@ -1366,15 +1366,15 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }),
-		Reflections:                k8s.ReflectionLookup{Cache: cache},
-		Tier:                       tier,
-		AccessChecker:              newMCPRequestScopedChecker(ctx),
-		IssueSummary:               issueSummary,
-		AuditSummary:               auditSum,
-		Scheduling:                 schedulinginsight.ForResource(obj, tier),
-		Execution:                  executioninsight.ForResource(obj, tier),
-		Serving:                    servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            tier,
+		AccessChecker:   newMCPRequestScopedChecker(ctx),
+		IssueSummary:    issueSummary,
+		AuditSummary:    auditSum,
+		Scheduling:      schedulinginsight.ForResource(obj, tier),
+		Execution:       executioninsight.ForResource(obj, tier),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
