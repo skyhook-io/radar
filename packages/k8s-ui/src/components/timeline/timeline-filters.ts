@@ -92,7 +92,8 @@ export function activityKeysToSelection(keys: readonly ActivityFilterKey[]): Act
 }
 
 // Free-text search predicate. Matches name, kind, namespace, reason, message,
-// and diff summary. Shared so the list and swimlane views match identically.
+// diff summary and the field managers that wrote it. Shared so the list and
+// swimlane views match identically.
 export function matchesTimelineSearch(event: TimelineEvent, term: string): boolean {
   if (!term) return true
   const t = term.toLowerCase()
@@ -102,7 +103,8 @@ export function matchesTimelineSearch(event: TimelineEvent, term: string): boole
     (event.namespace?.toLowerCase().includes(t) ?? false) ||
     (event.reason?.toLowerCase().includes(t) ?? false) ||
     (event.message?.toLowerCase().includes(t) ?? false) ||
-    (event.diff?.summary?.toLowerCase().includes(t) ?? false)
+    (event.diff?.summary?.toLowerCase().includes(t) ?? false) ||
+    (event.diff?.fieldManagers?.some((m) => m.manager.toLowerCase().includes(t)) ?? false)
   )
 }
 

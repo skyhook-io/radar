@@ -7,9 +7,11 @@ import { Tooltip } from '../ui/Tooltip'
 interface DiffViewerProps {
   diff: DiffInfo
   compact?: boolean
+  // For hosts that already show the field managers next to the row.
+  hideFieldManagers?: boolean
 }
 
-export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: DiffViewerProps) {
+export const DiffViewer = memo(function DiffViewer({ diff, compact = false, hideFieldManagers = false }: DiffViewerProps) {
   if (!diff || diff.fields.length === 0) {
     return null
   }
@@ -33,7 +35,7 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
         </div>
       )}
 
-      <FieldManagersLine labels={diff.fieldManagers?.map(fieldManagerLabel)} />
+      {!hideFieldManagers && <FieldManagersLine labels={fieldManagerLabels(diff)} />}
 
       {/* Field changes */}
       <div className="space-y-1.5">
@@ -51,6 +53,10 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
 
 function fieldManagerLabel(manager: FieldManagerWrite): string {
   return manager.subresource ? `${manager.manager} (${manager.subresource})` : manager.manager
+}
+
+export function fieldManagerLabels(diff: DiffInfo | undefined): string[] {
+  return diff?.fieldManagers?.map(fieldManagerLabel) ?? []
 }
 
 const FIELD_MANAGERS_INFO =
