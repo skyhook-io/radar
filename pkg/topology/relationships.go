@@ -609,30 +609,55 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if provider != nil && builtinKind && resourceGroup == builtinGroup {
 		switch kindLower {
 		case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-			pvcs, _ := provider.PersistentVolumeClaims()
-			for _, pvc := range pvcs {
-				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
+			// Prefer the object the caller fetched: the claim list can be
+			// empty while claims in another namespace are still loading.
+			pvc, _ := obj.(*corev1.PersistentVolumeClaim)
+			if pvc == nil || pvc.Namespace != namespace || pvc.Name != name {
+				pvc = nil
+				pvcs, _ := provider.PersistentVolumeClaims()
+				for _, candidate := range pvcs {
+					if candidate != nil && candidate.Namespace == namespace && candidate.Name == name {
+						pvc = candidate
+						break
+					}
+				}
+			}
+			if pvc != nil {
+				if pvc.Spec.VolumeName != "" {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
 					enrichRef(&pvRef, dp)
 					rel.StorageRefs = append(rel.StorageRefs, pvRef)
-					break
+				}
+				// A claim names its class before it binds, so a Pending claim
+				// still leads to the class that should provision it.
+				if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
+					scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: *pvc.Spec.StorageClassName}
+					enrichRef(&scRef, dp)
+					rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 				}
 			}
 		case "persistentvolume", "persistentvolumes", "pv", "pvs":
-			pvs, _ := provider.PersistentVolumes()
-			for _, pv := range pvs {
-				if pv.Name == name {
-					if pv.Spec.ClaimRef != nil {
-						claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}
-						enrichRef(&claimRef, dp)
-						rel.Consumers = append(rel.Consumers, claimRef)
+			pv, _ := obj.(*corev1.PersistentVolume)
+			if pv == nil || pv.Name != name {
+				pv = nil
+				pvs, _ := provider.PersistentVolumes()
+				for _, candidate := range pvs {
+					if candidate != nil && candidate.Name == name {
+						pv = candidate
+						break
 					}
-					if pv.Spec.StorageClassName != "" {
-						scRef := ResourceRef{Kind: "StorageClass", Name: pv.Spec.StorageClassName}
-						enrichRef(&scRef, dp)
-						rel.ConfigRefs = append(rel.ConfigRefs, scRef)
-					}
-					break
+				}
+			}
+			if pv != nil {
+				if pv.Spec.ClaimRef != nil {
+					claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}
+					enrichRef(&claimRef, dp)
+					rel.Consumers = append(rel.Consumers, claimRef)
+				}
+				if pv.Spec.StorageClassName != "" {
+					scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: pv.Spec.StorageClassName}
+					enrichRef(&scRef, dp)
+					rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 				}
 			}
 		case "storageclass", "storageclasses", "sc":
@@ -642,6 +667,16 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
 					rel.Consumers = append(rel.Consumers, pvRef)
+				}
+			}
+			// Claims name their class in any namespace; a Pending claim has
+			// no volume yet, so only the claim shows which class it waits on.
+			pvcs, _ := provider.PersistentVolumeClaims()
+			for _, pvc := range pvcs {
+				if pvc != nil && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == name {
+					claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name}
+					enrichRef(&claimRef, dp)
+					rel.Consumers = append(rel.Consumers, claimRef)
 				}
 			}
 		case "node", "nodes":
