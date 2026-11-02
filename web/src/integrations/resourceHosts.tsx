@@ -14,6 +14,7 @@ import {
 import { RayJobRenderer } from '../components/resources/renderers/RayJobRenderer'
 import { JobRenderer, JobSetRenderer } from '../components/resources/renderers/JobAdmissionRenderers'
 import { RayClusterRenderer } from '../components/resources/renderers/RayClusterRenderer'
+import { OpenTelemetryCollectorRenderer } from '../components/resources/renderers/OpenTelemetryCollectorRenderer'
 import { RayServiceRenderer } from '../components/resources/renderers/RayServiceRenderer'
 import { KueueWorkloadRenderer } from '../components/resources/renderers/KueueWorkloadRenderer'
 import { PodRenderer } from '../components/resources/renderers/PodRenderer'
@@ -41,6 +42,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
+  { id: 'opentelemetry', renderers: { OpenTelemetryCollectorRenderer } },
   { id: 'ray', renderers: { RayJobRenderer, RayServiceRenderer, RayClusterRenderer } },
   { id: 'capacity', renderers: { KarpenterNodePoolRenderer } },
   { id: 'capi', renderers: { CAPIClusterRenderer } },

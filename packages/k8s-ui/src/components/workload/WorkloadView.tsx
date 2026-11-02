@@ -125,8 +125,8 @@ interface WorkloadViewProps {
   onCollapseToDrawer?: () => void
   /** false = collapsed drawer mode, true (default) = full expanded mode */
   expanded?: boolean
-  /** false on the outgoing layer during an expand/collapse crossfade — suspend
-   *  keyboard shortcuts so the invisible layer doesn't capture them (default true) */
+  /** false on the outgoing layer during an expand/collapse crossfade: suspend
+   *  keyboard shortcuts and let hosted renderers pause their reads (default true). */
   active?: boolean
   /** Close the drawer (collapsed mode) */
   onClose?: () => void
@@ -1132,6 +1132,7 @@ export function WorkloadView({
               )}
               {overviewIntro && <div className="px-4 pt-4">{overviewIntro}</div>}
               <ResourceRendererDispatch
+                active={active}
                 resource={selectedResource}
                 data={resource}
                 relationships={rendererRelationships}
@@ -1358,6 +1359,7 @@ export function WorkloadView({
           <div className="h-full min-h-0 overflow-y-auto">{specTab.render()}</div>
         ) : (effectiveTab === 'overview' || effectiveTab === 'spec') && (
             <InfoTab
+              active={active}
               resource={resource}
               selectedResource={selectedResource}
               relationships={rendererRelationships}
@@ -1998,6 +2000,7 @@ function EventsTab({
 // ============================================================================
 
 function InfoTab({
+  active,
   resource,
   selectedResource,
   relationships,
@@ -2035,6 +2038,7 @@ function InfoTab({
   onEvaluateCapacity,
   recentImageSave,
 }: {
+  active: boolean
   resource: any
   selectedResource: SelectedResource
   relationships?: Relationships
@@ -2090,6 +2094,7 @@ function InfoTab({
           </div>
         )}
         <ResourceRendererDispatch
+          active={active}
           resource={selectedResource}
           data={resource}
           relationships={relationships}

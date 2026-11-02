@@ -139,23 +139,19 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
-		Description: "Use after narrowing to one resource. Returns the resource's " +
-			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
-			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
-			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
+		Description: "Get Kubernetes spec/status/metadata and available resourceContext " +
+			"(include=issues adds bounded failures and diagnostic facts; diagnose gives a bundle; " +
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
 			"auditSummary.highestSeverity uses critical|high|medium|low (current built-ins are high|medium) and " +
 			"issueSummary critical|warning; these are separate scales: audit is posture-remediation priority, issues are " +
 			"live failures, though some audit findings (expired certificates, dangling references) can be live failures; " +
 			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
 			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
-			"check both). This is the drill-down " +
-			"tool, not the best first call for broad incidents. Start with issues, " +
-			"get_dashboard, search, or list_resources to rank candidates; then call " +
-			"get_resource for the exact object. If you are looking for a string across " +
-			"ConfigMaps, CRD specs, env refs, or object content, use search instead of " +
-			"fetching resources one by one. Use the group parameter for ambiguous " +
-			"kinds such as Knative Service vs core Service. In recentChanges, " +
+			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
+			"Absent is not empty; coverage is not health. " +
+			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
+			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
+			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +
 			"`application_configuration_change: true` marks an application configuration edit; it is a ranking hint, " +
 			"not proof of cause, and unflagged changes may still matter. " +
 			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent. " +
@@ -223,13 +219,13 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
-	diagnoseDescription := "Get a bounded, point-in-time evidence bundle for one narrowed workload, " +
-		"GitOps reconciler or network entry. Combines signals in one round-trip; " +
-		"it does not run an agent and is not an authoritative root-cause verdict or an exhaustive account. " +
+	diagnoseDescription := "Get a bounded, point-in-time evidence bundle in one round-trip; " +
+		"it does not run an agent and is not an authoritative root-cause verdict. " +
 		"Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, GitOps sync/health, " +
 		"or traffic not reaching a service, route or ingress. Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout " +
 		"bundle resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
-		"related issues and recent workload/ConfigMap changes. " +
+		"related issues and recent workload/ConfigMap changes. OpenTelemetryCollector returns root reconciliation and owned-workload evidence. " +
+		"In sidecar mode, diagnose application Pods. " +
 		"Warning events are a capped sample for the observed resource and Pods; an event without a UID may belong to an earlier object of the same name. Use get_events for a broader, dedicated event read, including history. " +
 		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
@@ -240,8 +236,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"an application configuration edit; it is a ranking hint, not proof of cause, and unflagged changes may still matter. Application, Kustomization and Flux HelmRelease return " +
 		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
-		"API-server proxy reached it, not the live path. Point-in-time means frozen from this call, " +
-		"not that every source was read atomically; preserve collection limits, errors, timestamps, and confidence. " +
+		"API-server proxy reached it, not the live path. Point-in-time freezes this call's result, " +
+		"not that every source was read atomically; preserve limits, errors, timestamps and confidence. " +
 		"For one facet, prefer resource/log/event tools; use get_resource for other kinds."
 	if includeWrites {
 		tool := &mcp.Tool{
@@ -1346,6 +1342,10 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 }
 
 func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
+	return buildMCPResourceContextWithOperatorChildren(ctx, obj, kind, namespace, name, tier, staleChecks, issueSummary, nil)
+}
+
+func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary, children *k8s.OperatorChildren) *resourcecontext.ResourceContext {
 	if obj == nil {
 		return nil
 	}
@@ -1400,6 +1400,13 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn
+	}
+	if children == nil {
+		children = k8s.OperatorChildrenForObject(obj, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
+	}
+	if children != nil {
+		opts.Children = children.Context
+		opts.ChildrenUnavailable = children.Unavailable != ""
 	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
