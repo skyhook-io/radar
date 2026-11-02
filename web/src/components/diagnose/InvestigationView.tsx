@@ -41,6 +41,7 @@ import {
   investigationPaneCenteredScrollTop,
   canStopInvestigation,
   canContinueInvestigation,
+  canContinueInOwnAgent,
   readOnlyNotice,
   canInvestigateFurther,
 } from "./investigationState";
@@ -335,6 +336,7 @@ export function InvestigationView({
   onRevealDestination,
   example = false,
   onCloseExample,
+  onHandoffAllowedChange,
 }: {
   run: RunSummary;
   agentLabel: string;
@@ -349,6 +351,9 @@ export function InvestigationView({
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
   /** Makes a page this view navigates to visible: restores or closes the panel. */
   onRevealDestination?: () => void;
+  /** Whether nothing is writing to the agent's session, so the header may
+   *  offer to continue it in the user's own agent. */
+  onHandoffAllowedChange?: (allowed: boolean) => void;
 }) {
   const { kind, namespace, name } = run;
   const {
@@ -1669,6 +1674,24 @@ export function InvestigationView({
   const hasNextSteps = Boolean(
     currentAssessment?.diagnosis &&
     (currentAssessment.diagnosis.remediation?.length ?? 0) > 0,
+  );
+  const handoffAllowed =
+    !example &&
+    canContinueInOwnAgent({
+      run,
+      busy,
+      requestPending,
+      gone,
+      streamReady,
+      verificationPending,
+      latestTurnStatus: lastTurn?.status,
+    });
+  useEffect(() => {
+    onHandoffAllowedChange?.(handoffAllowed);
+  }, [handoffAllowed, onHandoffAllowedChange]);
+  useEffect(
+    () => () => onHandoffAllowedChange?.(false),
+    [onHandoffAllowedChange],
   );
   const earlierPlan =
     assessmentNeedsCurrentStateVerification ||
