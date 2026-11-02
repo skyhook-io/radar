@@ -151,3 +151,24 @@ func TestMatch_IPSnippetShowsTheWholeAddress(t *testing.T) {
 		t.Fatalf("ok=%v snippets=%+v", ok, snippets)
 	}
 }
+
+func TestMatch_IPMentionsBelowHolders(t *testing.T) {
+	named := candidate{Kind: "ConfigMap", Namespace: "prod", Name: "10.0.1.2"}
+	if score, _, _, ok := match(Parse("10.0.1.2"), named); !ok || score >= scoreIPExact {
+		t.Fatalf("name mention: ok=%v score=%d, want below %d", ok, score, scoreIPExact)
+	}
+	registry := candidate{Kind: "Deployment", Namespace: "prod", Name: "app", Images: []string{"10.0.1.2:5000/app:v1"}}
+	if _, matched, _, ok := match(Parse("10.0.1.2"), registry); !ok || matched[0].Site != "image" {
+		t.Fatalf("registry image: ok=%v matched=%+v", ok, matched)
+	}
+}
+
+func TestMatch_IPv6SnippetAfterNonASCII(t *testing.T) {
+	// "İ" lowercases to a longer byte sequence; offsets must stay in the original.
+	long := strings.Repeat("İ", 200) + " peer [FD00::1]:80"
+	cm := candidate{Kind: "ConfigMap", Namespace: "prod", Name: "cfg", Content: []ContentField{{Path: "data.conf", Value: long}}}
+	_, _, snippets, ok := match(Parse("fd00::1"), cm)
+	if !ok || len(snippets) != 1 || !strings.Contains(snippets[0].Snippet, "[FD00::1]:80") {
+		t.Fatalf("ok=%v snippets=%+v", ok, snippets)
+	}
+}

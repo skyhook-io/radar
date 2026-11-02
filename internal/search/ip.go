@@ -95,7 +95,7 @@ func ipsForTyped(obj runtime.Object) []ipField {
 // lowercase.
 func indexIP(s, ip string, v6 bool) int {
 	if v6 {
-		s = strings.ToLower(s)
+		s = lowerASCII(s)
 	}
 	for from := 0; ; {
 		i := strings.Index(s[from:], ip)
@@ -109,6 +109,17 @@ func indexIP(s, ip string, v6 bool) int {
 		}
 		from = start + 1
 	}
+}
+
+// lowerASCII lowercases ASCII letters only, so byte offsets into the result
+// are offsets into s (strings.ToLower can change a non-ASCII rune's length).
+func lowerASCII(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, s)
 }
 
 // ipContinues reports whether the byte at i extends the address next to it:

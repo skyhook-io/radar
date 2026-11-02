@@ -229,9 +229,9 @@ func scoreToken(tok string, c candidate) (int, string, *MatchSnippet, bool) {
 }
 
 // scoreIPToken matches an IP token: an address the object holds scores
-// highest, under site ip:<role>; otherwise the name, a label, annotation or
-// content value must mention the address whole, so 10.0.1.2 never matches
-// 10.0.1.23.
+// highest, under site ip:<role>; otherwise the name, an image, a label,
+// annotation or content value must mention the address whole, so 10.0.1.2
+// never matches 10.0.1.23.
 func scoreIPToken(tok string, addr netip.Addr, c candidate) (int, string, *MatchSnippet, bool) {
 	for _, f := range c.IPs {
 		if f.Addr == addr {
@@ -239,15 +239,21 @@ func scoreIPToken(tok string, addr netip.Addr, c candidate) (int, string, *Match
 		}
 	}
 	v6 := addr.Is6()
-	if strings.EqualFold(c.Name, tok) {
-		return scoreNameExact, "name", nil, true
-	}
 	best := 0
 	bestSite := ""
 	var bestSnippet *MatchSnippet
 	consider := func(score int, site string, snip *MatchSnippet) {
 		if score > best {
 			best, bestSite, bestSnippet = score, site, snip
+		}
+	}
+	// A name spelled as the address only mentions it, below any holder.
+	if strings.EqualFold(c.Name, tok) {
+		consider(scoreLabelValExact, "name", nil)
+	}
+	for _, img := range c.Images {
+		if indexIP(img, tok, v6) >= 0 {
+			consider(scoreImageSubstr, "image", nil)
 		}
 	}
 	for k, v := range c.Labels {
