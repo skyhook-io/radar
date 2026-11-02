@@ -93,18 +93,27 @@ export function ContinueInAgentButton({
       setOpen(false);
       triggerRef.current?.focus();
     };
+    // Placement is measured on open, so moving the pane closes the menu.
+    const close = () => setOpen(false);
+    const onScroll = (event: Event) => {
+      if (!menuRef.current?.contains(event.target as Node)) close();
+    };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
     };
   }, [open]);
 
   useEffect(() => {
     if (open && isOpen) {
       menuRef.current
-        ?.querySelector<HTMLElement>('[role="menuitem"]')
+        ?.querySelector<HTMLElement>("button")
         ?.focus({ preventScroll: true });
     }
   }, [open, isOpen]);
@@ -146,7 +155,7 @@ export function ContinueInAgentButton({
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
+      menuRef.current?.querySelectorAll<HTMLElement>("button") ?? [],
     );
     if (items.length === 0) return;
     event.preventDefault();
@@ -192,7 +201,7 @@ export function ContinueInAgentButton({
                 ref={triggerRef}
                 type="button"
                 onClick={toggle}
-                aria-haspopup="menu"
+                aria-haspopup="dialog"
                 aria-expanded={open}
                 aria-controls={shouldRender ? menuId : undefined}
                 aria-label="More ways to continue"
@@ -212,7 +221,7 @@ export function ContinueInAgentButton({
               ref={triggerRef}
               type="button"
               onClick={toggle}
-              aria-haspopup="menu"
+              aria-haspopup="dialog"
               aria-expanded={open}
               aria-controls={shouldRender ? menuId : undefined}
               className={clsx(segment, "rounded-md px-2")}
@@ -233,7 +242,7 @@ export function ContinueInAgentButton({
           <div
             ref={menuRef}
             id={menuId}
-            role="menu"
+            role="dialog"
             aria-label={`Continue in ${label}`}
             inert={!open}
             onKeyDown={onMenuKeyDown}
@@ -271,7 +280,6 @@ export function ContinueInAgentButton({
                 </code>
                 <button
                   type="button"
-                  role="menuitem"
                   onClick={copyCommand}
                   aria-describedby={trustHint ? menuTrustHintId : undefined}
                   aria-label={
@@ -293,10 +301,7 @@ export function ContinueInAgentButton({
                 >
                   {copy === "copied" ? (
                     <>
-                      <Check
-                        className="h-3.5 w-3.5 text-emerald-500"
-                        aria-hidden
-                      />
+                      <Check className="h-3.5 w-3.5 text-success" aria-hidden />
                       Copied
                     </>
                   ) : copy === "failed" ? (
@@ -312,7 +317,6 @@ export function ContinueInAgentButton({
                 <div className="my-1 border-t border-theme-border" />
                 <button
                   type="button"
-                  role="menuitem"
                   onClick={runInTerminal}
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-theme-text-primary hover:bg-theme-hover focus-visible:outline-none focus-visible:bg-theme-hover"
                 >

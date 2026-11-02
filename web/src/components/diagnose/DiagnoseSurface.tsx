@@ -3,6 +3,7 @@
 //  - expanded: the investigations page, a master-detail layout that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
+import { copyText } from "@skyhook-io/k8s-ui/utils/clipboard";
 import {
   useCallback,
   useEffect,
@@ -115,10 +116,7 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const { localTerminal, mcpReadOnly } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
-  const command = buildLaunchCommand(
-    run,
-    mcpEndpointUrl(mcpReadOnly),
-  );
+  const command = buildLaunchCommand(run, mcpEndpointUrl(mcpReadOnly));
 
   // The diagnose root is a CSS container, so a position:fixed click-away layer
   // inside it is panel-bound rather than viewport-bound. Dismiss from the
@@ -146,12 +144,14 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
     setOpen((v) => !v);
   };
   const copy = () => {
-    void navigator.clipboard?.writeText(command);
-    setCopied(true);
-    setTimeout(() => {
-      setCopied(false);
-      setOpen(false);
-    }, 1100);
+    void copyText(command).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      setTimeout(() => {
+        setCopied(false);
+        setOpen(false);
+      }, 1100);
+    });
   };
 
   return (
@@ -527,7 +527,12 @@ export function DiagnoseSurface({
     ],
   );
   const revealDestination = useCallback(
-    () => revealInvestigationDestination(setMaximized, d.dismissForNavigation, narrow),
+    () =>
+      revealInvestigationDestination(
+        setMaximized,
+        d.dismissForNavigation,
+        narrow,
+      ),
     [d.dismissForNavigation, narrow, setMaximized],
   );
   const openEvidenceTimeline = useCallback(
@@ -585,8 +590,7 @@ export function DiagnoseSurface({
     : undefined;
   // Consent replaces the detail pane even if goHome retained an older run id.
   // Header identity and actions must describe what is actually visible.
-  const visibleRunDetail =
-    d.needsConsent || d.startCapacity ? null : activeRun;
+  const visibleRunDetail = d.needsConsent || d.startCapacity ? null : activeRun;
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
   const activeAgentLabel = visibleRunDetail?.agent
     ? agentLabelFor(visibleRunDetail.agent)
@@ -892,16 +896,16 @@ export function DiagnoseSurface({
           {visibleRunDetail &&
             !exampleOpen &&
             headerPresentation.runActionsClass !== null && (
-            <div
-              className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
-            >
-              {renderRunActions?.({
-                run: visibleRunDetail,
-                onRunUpdated: d.updateRunSummary,
-              })}
-              <InvestigationMenu run={visibleRunDetail} />
-            </div>
-          )}
+              <div
+                className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
+              >
+                {renderRunActions?.({
+                  run: visibleRunDetail,
+                  onRunUpdated: d.updateRunSummary,
+                })}
+                <InvestigationMenu run={visibleRunDetail} />
+              </div>
+            )}
           {!fullWidthForced && (!maximized || d.canRestoreWorkspace) && (
             <Tooltip
               content={maximized ? "Restore" : "Expand"}
