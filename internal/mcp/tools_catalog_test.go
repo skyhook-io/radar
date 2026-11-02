@@ -781,3 +781,22 @@ func TestManageWorkloadReplicasSchemaIsNonNegative(t *testing.T) {
 	}
 	t.Fatal("manage_workload is not registered")
 }
+
+// The issues filter example is copied by agents; getSeconds() is the seconds
+// field (0-59), so a date example built on it compiles and matches nothing.
+func TestIssuesFilterDateExampleUsesEpochSeconds(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name != "issues" {
+			continue
+		}
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(schema), "getSeconds()") || !strings.Contains(string(schema), "int(timestamp(") {
+			t.Fatalf("issues filter date example must compare against int(timestamp(...)), not getSeconds(): %s", schema)
+		}
+		return
+	}
+	t.Fatal("issues is not registered")
+}
