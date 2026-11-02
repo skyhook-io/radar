@@ -139,20 +139,18 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
-		Description: "Use after narrowing to one resource. Returns the resource's " +
-			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
-			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
-			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
+		Description: "Get Kubernetes spec/status/metadata and available resourceContext " +
+			"(include=issues adds bounded failures and diagnostic facts; diagnose gives a bundle; " +
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
 			"auditSummary.highestSeverity uses critical|high|medium|low (current built-ins are high|medium) and " +
 			"issueSummary critical|warning; these are separate scales: audit is posture-remediation priority, issues are " +
 			"live failures, though some audit findings (expired certificates, dangling references) can be live failures; " +
 			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
 			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
-			"check both). children previews direct owner-reference children; complete covers readable scope, not all runtime. " +
+			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
 			"Absent is not empty; coverage is not health. " +
-			"For broad incidents start with issues, get_dashboard, search or list_resources; " +
-			"drill into ranked candidates here. Search ConfigMaps, CRD specs, env refs or object content with search. " +
+			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
+			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
 			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +
 			"`application_configuration_change: true` marks an application configuration edit; it is a ranking hint, " +
 			"not proof of cause, and unflagged changes may still matter. " +
@@ -227,7 +225,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"or traffic not reaching a service, route or ingress. Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout " +
 		"bundle resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
 		"related issues and recent workload/ConfigMap changes. OpenTelemetryCollector returns root reconciliation and owned-workload evidence. " +
-		"In sidecar mode, diagnose the application's Pods for runtime evidence. " +
+		"In sidecar mode, diagnose application Pods. " +
 		"Warning events are a capped sample for the observed resource and Pods; an event without a UID may belong to an earlier object of the same name. Use get_events for a broader, dedicated event read, including history. " +
 		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
