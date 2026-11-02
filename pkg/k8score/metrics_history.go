@@ -3,6 +3,7 @@ package k8score
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
