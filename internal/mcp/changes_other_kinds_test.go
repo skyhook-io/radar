@@ -46,7 +46,7 @@ func TestGetChangesListsCustomResourceBesideBusyKind(t *testing.T) {
 	if !found {
 		t.Fatalf("DestinationRule edit missing or without its field: %+v", response.Changes)
 	}
-	if !strings.Contains(response.NarrowHint, "41 ConfigMap") || !strings.Contains(response.NarrowHint, "kind=<Kind>") {
+	if !strings.Contains(response.NarrowHint, "41 ConfigMap changes") || !strings.Contains(response.NarrowHint, "kind=ConfigMap") || strings.Contains(response.NarrowHint, "highest-ranked") {
 		t.Fatalf("narrowHint = %q, want the ConfigMaps left out named", response.NarrowHint)
 	}
 

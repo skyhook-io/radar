@@ -1785,7 +1785,7 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		hints = append(hints, meaningfulchanges.FetchSaturatedGuidance+
 			" Narrow with namespace=, kind= or name=. limit changes how many rows are returned, not the fetch bound."+
 			" Shorten since= only if the shorter window still covers the incident.")
-	} else if recentResult.OutputCapped || totalMatched > len(changes) {
+	} else if recentResult.OutputCapped || totalMatched-selection.LeftOut() > len(changes) {
 		hints = append(hints, "Radar fetched every recorded change in this window but returned only the highest-ranked; lower-ranked changes were omitted."+
 			" Narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50).")
 	}

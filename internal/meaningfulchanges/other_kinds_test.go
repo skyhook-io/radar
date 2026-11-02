@@ -163,7 +163,7 @@ func TestSelectFeedKeepsOtherKindsBesideABusyKind(t *testing.T) {
 	if len(sel.Crowded) != 1 || sel.Crowded[0].Kind != "ConfigMap" || sel.Crowded[0].Count != 31 {
 		t.Fatalf("crowded = %+v, want 31 ConfigMap", sel.Crowded)
 	}
-	if hint := FeedSelectionGuidance(sel); !strings.Contains(hint, "31 ConfigMap") || !strings.Contains(hint, "kind=") {
+	if hint := FeedSelectionGuidance(sel); !strings.Contains(hint, "31 ConfigMap changes") || !strings.Contains(hint, "kind=") {
 		t.Fatalf("hint = %q", hint)
 	}
 }
@@ -231,7 +231,7 @@ func TestSelectFeedChurnGuard(t *testing.T) {
 	if !slices.Contains(got, "DestinationRule/dr-3") || !slices.Contains(got, "NodePool/pool-3") || !slices.Contains(got, "ConfigMap/cfg-0") {
 		t.Fatalf("page = %v, want the other kinds", got)
 	}
-	if hint := FeedSelectionGuidance(sel); !strings.Contains(hint, "200 Widget") {
+	if hint := FeedSelectionGuidance(sel); !strings.Contains(hint, "200 Widget changes") {
 		t.Fatalf("hint = %q", hint)
 	}
 

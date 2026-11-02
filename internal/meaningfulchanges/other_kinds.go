@@ -253,19 +253,24 @@ func SelectFeed(changes []issuesapi.RecentChange, limit int) FeedSelection {
 			lastKept = i
 		}
 	}
-	// A row left out while a lower-ranked row was kept made room for
-	// another kind; the rows after lastKept fell to the page limit alone.
-	crowded := map[resourceid.GroupKind]int{}
+	// A kind with a row left out while a lower-ranked row was kept made
+	// room for another kind; past lastKept, rows fell to the page limit
+	// alone. A crowded kind counts all its rows left out.
+	crowded := map[resourceid.GroupKind]bool{}
+	left := map[resourceid.GroupKind]int{}
 	for i, c := range candidates {
-		switch {
-		case keep[i]:
+		if keep[i] {
 			sel.Changes = append(sel.Changes, c)
-		case i < lastKept:
-			crowded[changeGroupKind(c)]++
+			continue
 		}
+		key := changeGroupKind(c)
+		left[key]++
+		crowded[key] = crowded[key] || i < lastKept
 	}
-	for key, n := range crowded {
-		sel.Crowded = append(sel.Crowded, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
+	for key, isCrowded := range crowded {
+		if isCrowded {
+			sel.Crowded = append(sel.Crowded, KindCount{Kind: key.Kind, Group: key.Group, Count: left[key]})
+		}
 	}
 	sortKindCounts(sel.Crowded)
 	return sel
@@ -316,24 +321,44 @@ func sortKindCounts(list []KindCount) {
 	})
 }
 
+// LeftOut is how many rows the selection left out and FeedSelectionGuidance
+// names: Churn's and Crowded's.
+func (sel FeedSelection) LeftOut() int {
+	n := 0
+	for _, list := range [][]KindCount{sel.Churn, sel.Crowded} {
+		for _, k := range list {
+			n += k.Count
+		}
+	}
+	return n
+}
+
 // FeedSelectionGuidance is the narrowHint text naming the kinds SelectFeed
 // left rows out of, or "".
 func FeedSelectionGuidance(sel FeedSelection) string {
+	if len(sel.Churn) == 0 && len(sel.Crowded) == 0 {
+		return ""
+	}
 	var parts []string
 	if len(sel.Churn) > 0 {
-		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, with far more changes than other kinds in this window: %s. Pass kind=<Kind> to list them.", kindCountList(sel.Churn)))
+		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, far more changes than other kinds in this window: %s.", kindCountList(sel.Churn)))
 	}
 	if len(sel.Crowded) > 0 {
-		parts = append(parts, fmt.Sprintf("At most %d changes per kind are shown so more kinds fit; not shown: %s. Pass kind=<Kind> to list them.", perKindShown, kindCountList(sel.Crowded)))
+		parts = append(parts, fmt.Sprintf("Left out so more kinds fit on the page: %s.", kindCountList(sel.Crowded)))
 	}
-	return strings.Join(parts, " ")
+	all := append(slices.Clone(sel.Churn), sel.Crowded...)
+	pass := "kind=<Kind>"
+	if len(all) == 1 {
+		pass = "kind=" + all[0].Kind
+	}
+	return strings.Join(parts, " ") + " Pass " + pass + " to list them."
 }
 
 func kindCountList(list []KindCount) string {
 	const named = 5
 	parts := make([]string, 0, named+1)
 	for _, k := range list[:min(len(list), named)] {
-		parts = append(parts, fmt.Sprintf("%d %s", k.Count, k.Kind))
+		parts = append(parts, fmt.Sprintf("%d %s changes", k.Count, k.Kind))
 	}
 	if len(list) > named {
 		parts = append(parts, fmt.Sprintf("%d more kinds", len(list)-named))
