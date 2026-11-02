@@ -135,13 +135,16 @@ func hasVerdictField(raw []byte) bool {
 }
 
 // escapeStrayQuotes escapes quotes the agent left unescaped inside a string,
-// the shape of `"the "foo" Service"`. A quote is the string's end when it is
-// followed, past whitespace, by , } ] or :; any other is stray. Strays must
-// pair the way quotes do in prose, an opening one with text after it and a
-// closing one with text before it, so a missing comma (`["a" "b"]`, whose
-// first stray has a space after it, or `["a""b"]`, a quote beside a quote)
-// is refused rather than merged into one value. ok is false when there was
-// nothing to repair or the repair was refused.
+// the shape of `"the "foo" Service"`. A quote followed, past whitespace, by
+// , } ] or : ends the string; any other is stray. Strays must sit the way
+// quotes do in prose: an opening one has text right after it and no letter,
+// digit or JSON punctuation before it, a closing one has text right before it
+// and no letter or digit after it, and every opened quote closes before the
+// string ends. A missing comma between entries (`["a" "b"]`, `["a""b"]`,
+// `["a"1,"b"]`) breaks that and is refused rather than merged into one
+// value. So is a quote beside JSON punctuation (`"the "api", "web" pods"`):
+// in a list those bytes are also two entries with a missing quote. ok is
+// false when there was nothing to repair or the repair was refused.
 func escapeStrayQuotes(block string) (repaired string, ok bool) {
 	var out strings.Builder
 	out.Grow(len(block) + 8)
@@ -163,10 +166,12 @@ func escapeStrayQuotes(block string) (repaired string, ok bool) {
 			}
 			inString = false
 		case c == '"':
-			if !opened && (i+1 == len(block) || isJSONSpace(block[i+1]) || block[i+1] == '"') {
+			prev := block[i-1]
+			if !opened && (isWordByte(prev) || isJSONPunct(lastNonSpace(block[:i])) ||
+				isJSONSpace(block[i+1]) || block[i+1] == '"') {
 				return "", false
 			}
-			if opened && (isJSONSpace(block[i-1]) || block[i-1] == '"') {
+			if opened && (isJSONSpace(prev) || prev == '"' || isJSONPunct(prev) || isWordByte(block[i+1])) {
 				return "", false
 			}
 			opened = !opened
@@ -178,7 +183,23 @@ func escapeStrayQuotes(block string) (repaired string, ok bool) {
 	return out.String(), ok
 }
 
+func lastNonSpace(text string) byte {
+	text = strings.TrimRight(text, " \t\r\n")
+	if text == "" {
+		return 0
+	}
+	return text[len(text)-1]
+}
+
+func isJSONPunct(c byte) bool { return c != 0 && strings.IndexByte(",:[]{}", c) >= 0 }
+
 func isJSONSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+
+// isWordByte counts any non-ASCII byte as a letter, so a quote beside one is
+// never read as prose punctuation.
+func isWordByte(c byte) bool {
+	return c >= 0x80 || c == '_' || (c >= '0' && c <= '9') || (c|0x20 >= 'a' && c|0x20 <= 'z')
+}
 
 func closesString(rest string) bool {
 	rest = strings.TrimLeft(rest, " \t\r\n")

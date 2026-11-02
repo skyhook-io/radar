@@ -771,20 +771,36 @@ func TestParse_RepairsUnescapedQuotes(t *testing.T) {
 	}
 }
 
+// A prose quote may sit beside punctuation that is not JSON's.
+func TestParse_RepairsQuotesBesideProsePunctuation(t *testing.T) {
+	cases := map[string]string{
+		`{"root_cause": "pods (see "app"), all down"}`: `pods (see "app"), all down`,
+		`{"root_cause": "the "api"-"web" link"}`:       `the "api"-"web" link`,
+	}
+	for block, want := range cases {
+		if got := Parse("```json\n" + block + "\n```").Verdict.RootCause; got != want {
+			t.Errorf("root cause = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestParse_QuoteRepairStaysConservative(t *testing.T) {
 	cases := map[string]string{
-		// A stray quote that looks like a string's end: no repair is safe.
-		"quote before a colon": `{"root_cause": "set "key": value"}`,
 		// Broken in a way quotes do not explain.
 		"missing comma":  `{"root_cause": "x" "summary": "y"}`,
 		"trailing comma": `{"root_cause": "x",}`,
 		// A missing comma must not merge two entries into one action.
-		"missing comma in an array":          `{"root_cause": "x", "remediation": ["cmd1" "cmd2"]}`,
-		"missing comma across lines":         "{\"root_cause\": \"x\", \"remediation\": [\"cmd1\"\n\"cmd2\"]}",
-		"missing comma before a number":      `{"root_cause": "x", "remediation": ["a" 1, "b"]}`,
-		"missing comma, no space":            `{"root_cause": "x", "remediation": ["cmd1""cmd2","cmd3"], "recommended_index": 2}`,
-		"unpaired stray quote":               `{"root_cause": "the "foo Service is missing"}`,
-		"stray quote after a space, closing": `{"root_cause": "the "foo " Service"}`,
+		"missing comma in an array":     `{"root_cause": "x", "remediation": ["cmd1" "cmd2"]}`,
+		"missing comma across lines":    "{\"root_cause\": \"x\", \"remediation\": [\"cmd1\"\n\"cmd2\"]}",
+		"missing comma before a number": `{"root_cause": "x", "remediation": ["a" 1, "b"]}`,
+		// In a list these bytes are also two entries with a missing quote.
+		"quote beside a comma":                    `{"root_cause": "x", "remediation": ["the "api", "web" pods"]}`,
+		"quote before a colon":                    `{"root_cause": "set "key": value"}`,
+		"missing comma after a formatted command": "{\"root_cause\": \"x\", \"remediation\": [\"`cmd1`\"1,\"`cmd2`\"], \"recommended_index\": 1}",
+		"missing comma before a glued number":     `{"root_cause": "x", "remediation": ["cmd1"1,"cmd2"], "recommended_index": 1}`,
+		"missing comma, no space":                 `{"root_cause": "x", "remediation": ["cmd1""cmd2","cmd3"], "recommended_index": 2}`,
+		"unpaired stray quote":                    `{"root_cause": "the "foo Service is missing"}`,
+		"stray quote after a space, closing":      `{"root_cause": "the "foo " Service"}`,
 		// Repairs, but carries no verdict field.
 		"no verdict field": `{"note": "the "foo" thing"}`,
 	}
