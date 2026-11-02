@@ -336,11 +336,15 @@ func TestScaleSyntheticWindow(t *testing.T) {
 		t.Fatalf("mix sums to %d%%", len(shares))
 	}
 	batch := make([]timeline.TimelineEvent, 0, 1000)
+	made := make([]int, len(mix))
 	for i := range total {
 		if len(existing) > 0 {
 			break
 		}
-		e := mix[shares[(i*37)%100]].make(i)
+		// Each generator counts its own rows, so its i%N cases all occur.
+		k := shares[(i*37)%100]
+		e := mix[k].make(made[k])
+		made[k]++
 		e.ID = fmt.Sprintf("ev-%d", i)
 		e.Timestamp = start.Add(time.Duration(i) * 3 * time.Hour / time.Duration(total))
 		e.Source, e.ClusterContext = timeline.SourceInformer, cluster
