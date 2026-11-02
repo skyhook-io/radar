@@ -225,13 +225,13 @@ function LastInvestigationPopover({
     onClose();
     anchorRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [onClose]);
-  // Below the button, ending at its right edge, shifted to stay on screen: a
-  // phone's wrapped header can put the button anywhere along the row.
   const { shouldRender, isOpen } = useAnimatedUnmount(
     open,
     overlayExitMs("menu"),
   );
-  // Opens above the button when there isn't room below it (a bottom row).
+  // Below the button, ending at its right edge, shifted to stay on screen: a
+  // phone's wrapped header can put the button anywhere along the row. Above
+  // it when there isn't room below (a bottom row).
   const [position, setPosition] = useState({ top: 0, left: 0 });
   useLayoutEffect(() => {
     if (!open || !shouldRender || !anchorRef.current) return;
@@ -268,17 +268,26 @@ function LastInvestigationPopover({
       closeToTrigger();
     };
     // Its position is measured once on open, so moving the page closes it.
+    // Keyboard focus inside it goes back to the button, which stays put.
+    const dismiss = () => {
+      if (panelRef.current?.contains(document.activeElement)) {
+        onClose();
+        anchorRef.current
+          ?.querySelector<HTMLButtonElement>("button")
+          ?.focus({ preventScroll: true });
+      } else onClose();
+    };
     const onScroll = (e: Event) => {
-      if (!inside(e.target)) onClose();
+      if (!inside(e.target)) dismiss();
     };
     document.addEventListener("mousedown", onPointer, true);
     window.addEventListener("keydown", onKey, true);
-    window.addEventListener("resize", onClose);
+    window.addEventListener("resize", dismiss);
     window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onPointer, true);
       window.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("resize", onClose);
+      window.removeEventListener("resize", dismiss);
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [open, onClose, closeToTrigger]);

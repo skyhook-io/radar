@@ -398,13 +398,16 @@ describe("an issue row's Investigate action", () => {
     vi.unstubAllGlobals();
   });
 
-  it("closes when the list scrolls", async () => {
+  it("closes when the list scrolls, keeping keyboard focus on the button", async () => {
     api.runs = [investigated()];
     await renderIssueRow();
-    await act(async () => issueButton().click());
-    expect(dialog()).not.toBeNull();
+    const button = issueButton();
+    await act(async () => button.click());
+    await flush();
+    expect(document.activeElement?.textContent).toBe("Open investigation");
     await act(async () => document.dispatchEvent(new Event("scroll")));
     await flush();
     expect(dialog()?.getAttribute("inert")).not.toBeNull();
+    expect(document.activeElement).toBe(button);
   });
 });
