@@ -263,7 +263,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Rollback guidance, its source-mode warning and sync_options
 		// inheritance: 66,869 bytes without exec.
-		maxCatalogBytes         = 66900
+		// search's IP lookup routing (an ip:port from a log, ip:<role> holders vs
+		// mentions, exitedPodIP reuse): 66,903 bytes without exec.
+		maxCatalogBytes         = 66910
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -342,7 +344,8 @@ func TestToolsEmittingApplicationConfigurationMarkerDocumentRankingBoundary(t *t
 		}
 		for _, want := range []string{
 			"application_configuration_change",
-			"not a causal or universal relevance verdict",
+			"ranking hint, not proof of cause",
+			"unflagged changes may still matter",
 		} {
 			if !strings.Contains(description, want) {
 				t.Errorf("%s tool description does not document %q", name, want)
@@ -589,7 +592,7 @@ func TestDiagnoseContractMatchesServerMode(t *testing.T) {
 	if strict.Annotations == nil || !strict.Annotations.ReadOnlyHint {
 		t.Fatal("read-only MCP diagnose must advertise readOnlyHint")
 	}
-	if strings.Contains(strict.Description, "Read-only EXCEPT") || !strings.Contains(strict.Description, "strict read-only endpoint") {
+	if strings.Contains(strict.Description, "Read-only except") || !strings.Contains(strict.Description, "strict read-only endpoint") {
 		t.Fatalf("read-only diagnose description does not match its contract: %q", strict.Description)
 	}
 }
@@ -779,4 +782,23 @@ func TestManageWorkloadReplicasSchemaIsNonNegative(t *testing.T) {
 		return
 	}
 	t.Fatal("manage_workload is not registered")
+}
+
+// The issues filter example is copied by agents; getSeconds() is the seconds
+// field (0-59), so a date example built on it compiles and matches nothing.
+func TestIssuesFilterDateExampleUsesEpochSeconds(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name != "issues" {
+			continue
+		}
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(schema), "getSeconds()") || !strings.Contains(string(schema), "int(timestamp(") {
+			t.Fatalf("issues filter date example must compare against int(timestamp(...)), not getSeconds(): %s", schema)
+		}
+		return
+	}
+	t.Fatal("issues is not registered")
 }

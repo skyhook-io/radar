@@ -14,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
 func TestApplyMCPTerminalJobEmptyState(t *testing.T) {
@@ -232,5 +233,28 @@ func TestDescribeNodeDrainExpectedExclusionsAndUnknownState(t *testing.T) {
 	status, message = describeNodeDrain("worker", &k8s.DrainResult{EvictedPods: []string{"shop/web"}})
 	if status != "ok" || !strings.HasPrefix(message, "Evictions started") || strings.Contains(message, "Drain complete") {
 		t.Fatalf("admission-only result overclaims: %s %s", status, message)
+	}
+}
+
+func TestRollbackResult(t *testing.T) {
+	unchanged := fmt.Errorf("revision 2 of Deployment ns/web: %w", rollouts.ErrTemplateUnchanged)
+	resp, err := rollbackResult("deployments", "ns", "web", 2, unchanged)
+	if err != nil {
+		t.Fatalf("a no-op rollback must not be an error, got %v", err)
+	}
+	if resp["status"] != "unchanged" || resp["next"] != nil {
+		t.Fatalf("no-op result = %v, want status unchanged and no next step", resp)
+	}
+	if msg, _ := resp["message"].(string); !strings.Contains(msg, "already matches revision 2") {
+		t.Fatalf("no-op message = %q", msg)
+	}
+
+	if _, err := rollbackResult("deployments", "ns", "web", 2, k8score.ErrWorkloadPaused); err == nil || !strings.Contains(err.Error(), "rollback failed") {
+		t.Fatalf("paused rollback error = %v, want a failure", err)
+	}
+
+	resp, err = rollbackResult("deployments", "ns", "web", 2, nil)
+	if err != nil || resp["status"] != "ok" || resp["next"] == nil {
+		t.Fatalf("success result = %v, %v", resp, err)
 	}
 }

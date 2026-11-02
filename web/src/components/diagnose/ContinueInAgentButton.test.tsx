@@ -100,7 +100,7 @@ describe("ContinueInAgentButton", () => {
     );
     expect(html).toContain("Continue in Claude Code");
     expect(html).toContain('aria-label="More ways to continue"');
-    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain('aria-haspopup="dialog"');
     expect(html).toContain('aria-expanded="false"');
     expect(html.match(/<button/g)).toHaveLength(2);
   });
@@ -144,7 +144,7 @@ describe("ContinueInAgentButton", () => {
       <ContinueInAgentButton run={run()} command={command} />,
     );
     expect(html).toContain("Continue in Claude Code");
-    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain('aria-haspopup="dialog"');
     expect(html).not.toContain("More ways to continue");
     expect(html.match(/<button/g)).toHaveLength(1);
     // The hint for the copied command lives in the menu instead.

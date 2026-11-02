@@ -362,7 +362,13 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 
 			if stuck != nil && replicaFailure == nil {
 				message := stuck.Message
-				if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
+				action := "Inspect the new pods (image, readiness probe, resources) — the rollout is waiting on them to become ready."
+				// The pod row's RollingUpdate Multi-Attach cause, when it holds,
+				// replaces the generic advice so both rows say the same thing.
+				cause := rolloutMultiAttachCause(cache, d)
+				if cause != "" {
+					action = rollingUpdateRWOFix
+				} else if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
 					if message != "" {
 						message += " " + detail
 					} else {
@@ -396,7 +402,8 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 					Group:             "apps",
 					Severity:          "critical",
 					Reason:            "Rollout stuck",
-					Action:            "Inspect the new pods (image, readiness probe, resources) — the rollout is waiting on them to become ready.",
+					Cause:             cause,
+					Action:            action,
 					Message:           message,
 					Age:               timeutil.FormatAgeShort(now.Sub(d.CreationTimestamp.Time)),
 					AgeSeconds:        int64(now.Sub(d.CreationTimestamp.Time).Seconds()),
