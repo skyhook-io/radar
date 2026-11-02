@@ -91,7 +91,7 @@ func TestReplayDefaultFeed(t *testing.T) {
 	}
 	// Windows ending in the first hour start before the recording, like a
 	// query against a Radar that started recently.
-	for at := first.Add(step); !at.After(last); at = at.Add(step) {
+	for at := first.Add(step); at.Before(last.Add(step)); at = at.Add(step) {
 		q := Query{Since: time.Hour, Limit: 50, start: at.Add(-time.Hour), end: at}
 		wq := q
 		wq.OtherKinds, wq.Uncapped = true, true
