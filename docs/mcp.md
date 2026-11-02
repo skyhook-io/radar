@@ -1207,6 +1207,19 @@ Issue `hazard`, when present, warns what the suggested or most obvious action co
 
 For `issues`, `unchecked_sources` lists the issue sources Radar couldn't check for this answer, so their issues may be missing; don't read the response as healthy for them. Sources: `helm` (failed or stuck Helm releases), `resources` (built-in kinds such as Pods, workloads, PVCs, HPAs and Nodes), `custom_resources` (failing conditions on custom resources) and `karpenter` (NodePools, NodeClasses, NodeClaims). Reasons: `read_failed`, `kind_sync_pending` (still loading, for example right after Radar starts; ask again shortly), `kind_sync_failed` (loading stalled), and `collector_access_denied` (Kubernetes refused Radar's own identity, so the caller's permissions can't fix it). An entry may carry `kinds` (only those kinds went unchecked) and `namespaces` (only those namespaces failed; the rest are complete). Treat any other source or reason as unchecked too. Read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
+Admission webhook configurations list declared in-cluster Service backends in
+`dependencies`, even when a readable target is absent. A core Service lists
+readable `MutatingWebhookConfiguration` and `ValidatingWebhookConfiguration`
+consumers from `admissionregistration.k8s.io` in `dependents`. URL targets and
+CRD conversion webhooks are excluded. These references do not establish
+reachability, TLS validity or webhook health.
+
+Incomplete admission webhook inventories mark `dependents` in `omitted` with
+`cache_cold` (loading or not yet observed), `rbac_denied` (access denied) or
+`unavailable` (failed or unsupported reads). Available matches remain listed;
+an empty result with an omission does not establish that no webhook uses the
+Service.
+
 Resource context distinguishes observed dependency references (`dependencies` and
 `dependents`) from autoscalers (`scaledBy`). A Certificate depends on its issuer;
 it does not scale it. These references carry API group and namespace identity,
