@@ -135,6 +135,12 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
         "Pod creation was blocked because an admission webhook call failed.",
       action: "Check the reported error, webhook connectivity, TLS, and backend health.",
     },
+    CreateTimeout: {
+      title: "Pod Creation Timed Out",
+      description:
+        "The API server timed out creating pods; slow or unreachable admission webhooks are the usual cause.",
+      action: "Check the admission webhooks that match these pods and their backends.",
+    },
     Evicted: {
       title: "Pod Evicted",
       description:
