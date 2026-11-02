@@ -196,6 +196,41 @@ describe("a resource's last investigation", () => {
     expect(openRun).not.toHaveBeenCalled();
   });
 
+  it("takes focus, and gives Escape back to the button without closing what's under it", async () => {
+    api.runs = [investigated()];
+    await renderButton("problem");
+    const underneath = vi.fn();
+    document.addEventListener("keydown", underneath);
+    const button = trigger();
+    await act(async () => button.click());
+    await flush();
+    expect(document.activeElement?.textContent).toBe("Open investigation");
+    await act(async () =>
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    expect(underneath).not.toHaveBeenCalled();
+    expect(button.isConnected).toBe(true);
+    expect(document.activeElement).toBe(button);
+    document.removeEventListener("keydown", underneath);
+  });
+
+  it("still opens a hosted agent's live run, whose cluster label differs", async () => {
+    api.hosted = true;
+    api.runs = [
+      investigated({
+        status: "running",
+        context: "Prod cluster",
+        assessedAt: undefined,
+      }),
+    ];
+    await renderButton("healthy");
+    const openRun = vi.spyOn(probe.d, "openRun");
+    await act(async () => trigger().click());
+    expect(openRun).toHaveBeenCalledWith("run-cart");
+  });
+
   it("catches up when the window regains focus", async () => {
     await renderButton("problem");
     expect(dialog()).toBeNull();

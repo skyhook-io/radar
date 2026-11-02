@@ -847,11 +847,15 @@ function RoutedDiagnoseProvider({
   // change.
   // A plain resource run sorts after a question about the same resource, so
   // it is the one a key maps to when both are live.
-  // Until the cluster in use is known, a live run can't be ruled out by it.
+  // A local run names the kubeconfig context it ran in, so a same-named
+  // resource on another cluster isn't it. A hosted list is already one
+  // cluster's and labels it differently. Until the cluster in use is known, a
+  // live run can't be ruled out by it.
+  const scopeByContext = !hosted && !!currentContext;
   const runningSig = runningRuns
     .filter(
       (r) =>
-        !isQuestionOnly(r) && (!currentContext || r.context === currentContext),
+        !isQuestionOnly(r) && (!scopeByContext || r.context === currentContext),
     )
     .map(
       (r) =>
@@ -879,9 +883,15 @@ function RoutedDiagnoseProvider({
   const hasRunning = runningCount > 0;
   // Serialized so the buttons re-render only when an entry changes, not on
   // every poll that returns a fresh array.
-  const lastSig = JSON.stringify([
-    ...lastInvestigations(runs, currentContext, Date.now()),
-  ]);
+  // Re-rendering hourly lets an entry age past the cutoff while nothing polls.
+  const [, setAgeTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setAgeTick((n) => n + 1), 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+  const lastSig = JSON.stringify(
+    hosted ? [] : [...lastInvestigations(runs, currentContext, Date.now())],
+  );
   const lastInvestigationsByKey = useMemo(
     () => new Map<string, LastInvestigation>(JSON.parse(lastSig)),
     [lastSig],

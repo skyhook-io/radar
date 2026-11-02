@@ -976,11 +976,13 @@ func (r *Run) recordAssessmentLocked(diag Diagnosis, apply bool) {
 		return
 	}
 	preview := diag.Preview()
-	if preview == "" && diag.Inconclusive {
+	switch {
+	case preview != "":
+	case diag.Inconclusive:
 		preview = "Inconclusive"
-	}
-	if preview == "" {
-		return
+	default:
+		// Structured with only remediation: its first step is the assessment.
+		preview = diag.Remediation[0]
 	}
 	r.preview = preview
 	r.assessedAt = r.updatedAt

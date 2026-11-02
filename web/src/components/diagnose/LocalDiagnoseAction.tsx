@@ -114,6 +114,7 @@ function DiagnoseResourceButton({
       }
       position="bottom"
       disabled={historyOpen}
+      preserveWrapperWhenDisabled
     >
       <button
         onClick={() => (last ? setHistoryOpen((o) => !o) : act())}
@@ -194,16 +195,27 @@ function LastInvestigationPopover({
     const onPointer = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
+    // Captured on window so Escape closes only this, not the drawer under it.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      onClose();
+      ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
     };
     document.addEventListener("mousedown", onPointer, true);
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onPointer, true);
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [open, onClose]);
+  useEffect(() => {
+    if (open && shouldRender)
+      ref.current
+        ?.querySelector<HTMLButtonElement>('[role="dialog"] button')
+        ?.focus();
+  }, [open, shouldRender]);
   const choose = (fn: () => void) => () => {
     onClose();
     fn();

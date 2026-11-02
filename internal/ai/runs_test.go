@@ -2524,6 +2524,7 @@ func TestPreviewFollowsTheAssessmentFindingsShows(t *testing.T) {
 		{"opening turn", StreamEvent{Type: "turn"}, false, cause, "Pods crash on a bad flag", true},
 		{"healthy", StreamEvent{Type: "turn"}, false, investigation.Verdict{Healthy: true}, "Healthy", true},
 		{"inconclusive without a headline", StreamEvent{Type: "turn"}, false, investigation.Verdict{Inconclusive: true}, "Inconclusive", true},
+		{"remediation-only verification", StreamEvent{Type: "turn", Question: "check", Verify: true}, false, investigation.Verdict{Remediation: []string{"Roll back to v1"}}, "Roll back to v1", true},
 		{"verification", StreamEvent{Type: "turn", Question: "check again", Verify: true}, false, investigation.Verdict{Summary: "Fixed", Healthy: true}, "Fixed", true},
 		{"revising question", StreamEvent{Type: "turn", Question: "what about the probe?"}, false, investigation.Verdict{Summary: "The probe", RootCause: "probe path", RevisesAssessment: true}, "The probe", true},
 		{"answer", StreamEvent{Type: "turn", Question: "what is a probe?"}, false, investigation.Verdict{RootCause: "an answer"}, "Earlier", false},
@@ -2531,12 +2532,13 @@ func TestPreviewFollowsTheAssessmentFindingsShows(t *testing.T) {
 		{"unstructured opening", StreamEvent{Type: "turn"}, false, investigation.Verdict{Report: "prose"}, "Earlier", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := &Run{status: "running", inFlight: true, preview: "Earlier", subs: map[int]chan RunEvent{}}
+			earlier := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+			r := &Run{status: "running", inFlight: true, preview: "Earlier", assessedAt: earlier, subs: map[int]chan RunEvent{}}
 			r.append(tc.turn)
 			r.finishTurn(Diagnosis{Verdict: tc.verdict}, nil, tc.apply, time.Minute)
 			sum := r.Summary()
-			if sum.Preview != tc.wantPreview || (sum.AssessedAt != nil) != tc.assessed {
-				t.Fatalf("preview %q assessedAt %v, want %q assessed=%v", sum.Preview, sum.AssessedAt, tc.wantPreview, tc.assessed)
+			if sum.Preview != tc.wantPreview || sum.AssessedAt == nil || sum.AssessedAt.Equal(earlier) == tc.assessed {
+				t.Fatalf("preview %q assessedAt %v, want %q newly assessed=%v", sum.Preview, sum.AssessedAt, tc.wantPreview, tc.assessed)
 			}
 		})
 	}
