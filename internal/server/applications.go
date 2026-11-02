@@ -908,12 +908,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 			group = resourceid.GroupFromAPIVersion(resource.GetAPIVersion())
 		}
 		rootKey, rootKind, rootGroup, rootIdentity := g.rootOf(group, kind, ns, name)
-		var source *appSourceRef
-		if m, ok := obj.(metav1.Object); ok {
-			ref := resourceid.NewRef(group, kind, ns, name)
-			managers.Seed(ownership.Observe(ref, m))
-			source = sourceRefFromManager(managers.Manager(ref))
-		}
+		source := workloadSourceRef(managers, resourceid.NewRef(group, kind, ns, name), obj)
 		rels := g.relationshipsFor(kind, ns, name, obj)
 		addon, why := packages.ClassifyAddon(lbls["helm.sh/chart"], lbls["app.kubernetes.io/name"], lbls["app.kubernetes.io/part-of"], name, lbls["addonmanager.kubernetes.io/mode"], image)
 		out = append(out, appWorkloadInput{
@@ -2017,11 +2012,26 @@ func managerTier(kind, group string) (tier int, confidence string, ok bool) {
 	return 0, "", false
 }
 
+// workloadSourceRef answers ref's source from the managers' evidence. Workflow
+// template rows carry their object as its raw map.
+func workloadSourceRef(managers *ownership.View, ref resourceid.Ref, obj any) *appSourceRef {
+	meta, ok := obj.(metav1.Object)
+	if raw, isMap := obj.(map[string]any); isMap {
+		meta, ok = &unstructured.Unstructured{Object: raw}, true
+	}
+	if !ok {
+		return nil
+	}
+	managers.Seed(ownership.Observe(ref, meta))
+	return sourceRefFromManager(managers.Manager(ref))
+}
+
 // sourceRefFromManager is the source system object a workload's manager answer
 // leads with, by the rule list and search summaries apply to a manager lead:
 // a manager whose list names the workload or its nearest controller ancestor,
-// a claim its manager's list doesn't contradict, or a native Helm release
-// named by its annotations.
+// a claim naming a manager that exists here (whose list may name it, lag
+// behind it or be unreadable), or a native Helm release named by its
+// annotations.
 func sourceRefFromManager(answer ownership.ManagerAnswer) *appSourceRef {
 	if resourcecontext.ManagerSummary(answer) == nil {
 		return nil

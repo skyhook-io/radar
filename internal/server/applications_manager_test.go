@@ -77,6 +77,25 @@ func TestListApplicationsReadsSourceFromManagerEvidence(t *testing.T) {
 	}
 }
 
+// Workflow template rows pass their object as a raw map; their source is still
+// read from the managers' evidence.
+func TestWorkloadSourceRefReadsTemplateRows(t *testing.T) {
+	template := appTestObject("argoproj.io", "WorkflowTemplate", "jobs", "nightly")
+	app := appTestObject("argoproj.io", "Application", "argocd", "jobs")
+	app.Membership, app.Members = ownership.MembersRecorded, []resourceid.Ref{template.Ref}
+	view := appManagerView(t, template, app)
+	raw := map[string]any{
+		"apiVersion": template.APIVersion,
+		"kind":       template.Ref.Kind,
+		"metadata":   map[string]any{"namespace": "jobs", "name": "nightly", "uid": string(template.UID)},
+	}
+	got := workloadSourceRef(view, template.Ref, raw)
+	want := &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "jobs"}
+	if got == nil || !sameSourceRef(got, want) {
+		t.Fatalf("template source = %+v, want %+v", got, want)
+	}
+}
+
 // A workload's source is the manager its recorded membership and claims
 // lead with, through its nearest controller ancestor, not whatever its labels
 // name: a manager elsewhere that records it counts, and a label its manager
