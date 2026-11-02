@@ -349,7 +349,7 @@ func (p *CacheProvider) createTimeoutFact(issue Issue, access podTemplateAccess)
 			slices.ContainsFunc(candidates[mutating+1:], func(c candidate) bool { return c.webhook.mutating }) {
 			msg.WriteString(" Mutating webhooks are called one after another, so several slow ones add up.")
 		}
-		msg.WriteString(" Find the slow or unreachable backend before removing or bypassing any webhook.")
+		msg.WriteString(" If creates in other namespaces also time out, suspect the API server or etcd instead. Find the slow or unreachable backend before removing or bypassing any webhook.")
 	}
 	if selectorsUnknown {
 		fmt.Fprintf(&msg, " Webhooks with a namespaceSelector were not checked: namespace %s's labels are not readable.", issue.Namespace)
@@ -419,7 +419,7 @@ func (p *CacheProvider) describeAdmissionWebhook(w admissionWebhook, timedOut, s
 		names = append(names, np.Name)
 		refs = append(refs, Ref{Group: "networking.k8s.io", Kind: "NetworkPolicy", Namespace: np.Namespace, Name: np.Name})
 	}
-	line += fmt.Sprintf("; NetworkPolicy %s selects those pods and admits ingress only from pod or namespace selectors, so it may block the API server, which usually calls webhooks from outside the pod network", strings.Join(names, ", "))
+	line += fmt.Sprintf("; NetworkPolicy %s selects those pods and admits ingress only from pod or namespace selectors; if the cluster's network plugin enforces NetworkPolicies, it may block the API server, which usually calls webhooks from outside the pod network", strings.Join(names, ", "))
 	return line, refs, true
 }
 
