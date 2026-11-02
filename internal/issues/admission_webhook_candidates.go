@@ -259,10 +259,20 @@ func (p *CacheProvider) namedWebhookFact(issue Issue, access podTemplateAccess) 
 	}
 	return &issuesapi.DiagnosticFact{
 		Type:       factAdmissionWebhookCandidates,
-		Message:    fmt.Sprintf("Failing call: %s.", strings.Join(lines, ". ")),
+		Message:    namedWebhookMessage(blocker.WebhookName, lines),
 		Confidence: issuesapi.ConfidenceHigh,
 		Refs:       limitRefs(dedupeRefs(refs), maxDiagnosticRefs),
 	}
+}
+
+// namedWebhookMessage presents the named webhook. Webhook names are unique
+// only within a configuration, so when several declare the name the error
+// does not say which one was called.
+func namedWebhookMessage(name string, lines []string) string {
+	if len(lines) == 1 {
+		return "Failing call: " + lines[0] + "."
+	}
+	return fmt.Sprintf("The error names webhook %s, which %d configurations declare; it does not say which one was called: %s.", name, len(lines), strings.Join(lines, ". "))
 }
 
 // createTimeoutFact lists the webhooks that match Pod creation in the
@@ -391,7 +401,7 @@ func (p *CacheProvider) describeAdmissionWebhook(w admissionWebhook, timedOut, s
 	if !access.canRead(svcRef) {
 		return line, refs, false
 	}
-	backend, pods, known := p.webhookBackendState(w.service)
+	backend, pods, known := p.webhookBackendState(w.service, access)
 	if !known {
 		return line + fmt.Sprintf("; backend Service %s/%s was not checked", w.service.Namespace, w.service.Name), refs, false
 	}
@@ -415,8 +425,9 @@ func (p *CacheProvider) describeAdmissionWebhook(w admissionWebhook, timedOut, s
 
 // webhookBackendState describes a webhook's backend Service from the cache.
 // known=false when Services or Pods are not fully collected for its namespace,
-// so an empty answer would prove nothing.
-func (p *CacheProvider) webhookBackendState(svc *admissionv1.ServiceReference) (string, []*corev1.Pod, bool) {
+// so an empty answer would prove nothing, or when the caller cannot read every
+// selected Pod.
+func (p *CacheProvider) webhookBackendState(svc *admissionv1.ServiceReference, access podTemplateAccess) (string, []*corev1.Pod, bool) {
 	name := svc.Namespace + "/" + svc.Name
 	if p.cache.Services() == nil || !p.cache.AssessKindRead("services", []string{svc.Namespace}).Complete {
 		return "", nil, false
@@ -434,6 +445,9 @@ func (p *CacheProvider) webhookBackendState(svc *admissionv1.ServiceReference) (
 	}
 	var ready []*corev1.Pod
 	for _, pod := range pods {
+		if !access.canRead(Ref{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}) {
+			return "", nil, false
+		}
 		for _, c := range pod.Status.Conditions {
 			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue && pod.DeletionTimestamp == nil {
 				ready = append(ready, pod)

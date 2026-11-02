@@ -203,6 +203,11 @@ func TestNamedWebhookFailureDescribesBackend(t *testing.T) {
 	if fact == nil || !strings.HasPrefix(fact.Message, want) || fact.Confidence != issuesapi.ConfidenceHigh {
 		t.Fatalf("fact=%+v", fact)
 	}
+	// Pods the caller cannot read are not counted.
+	fact = NewCacheProvider().admissionWebhookCandidatesFact(issue, podTemplateAccess{related: func(ref Ref) bool { return ref.Kind != "Pod" }})
+	if fact == nil || strings.Contains(fact.Message, "ready pod") || !strings.Contains(fact.Message, "backend Service policy-system/isolated was not checked") {
+		t.Fatalf("unreadable pods fact=%+v", fact)
+	}
 	// A TLS failure is not a reachability problem: no NetworkPolicy hedge.
 	issue.Message = `pod creation blocked: Error creating: Internal error occurred: failed calling webhook "inject.example.com": failed to call webhook: Post "https://isolated.policy-system.svc:443/inject?timeout=5s": tls: failed to verify certificate: x509: certificate signed by unknown authority`
 	fact = NewCacheProvider().admissionWebhookCandidatesFact(issue, podTemplateAccess{})
@@ -271,5 +276,11 @@ func TestCreateTimeoutRanksRecentConfigurationsFirst(t *testing.T) {
 		strings.Index(msg, "(3) mutating webhook addon.example.com (MutatingWebhookConfiguration addon): failurePolicy Ignore, timeout 30s")
 	if first < 0 || second < first || third < second {
 		t.Fatalf("order:\n%s", msg)
+	}
+}
+
+func TestNamedWebhookDeclaredTwice(t *testing.T) {
+	if got := namedWebhookMessage("hook.example.com", []string{"a", "b"}); !strings.HasPrefix(got, "The error names webhook hook.example.com, which 2 configurations declare; it does not say which one was called: a. b.") {
+		t.Fatal(got)
 	}
 }
