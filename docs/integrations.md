@@ -1931,11 +1931,9 @@ When Radar runs locally, MCP clients can use `collect_application_evidence` to r
 
 Requires Pod-read/port-forward permissions, a recognized application image and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must already be enabled. Credentials, TLS, custom ports, authenticated/remote/hosted/in-cluster deployments and built-in investigations are unsupported.
 
-Collection is available through full local MCP and a local resource-detail action, outside built-in investigations and Apply. Authenticated, remote, hosted and in-cluster deployments are unsupported.
+In local resource details, **Collect application evidence** lets you select a Pod and collect explicitly after a permission check. **Retry permission check** does not contact the application; neither does opening or refreshing a resource. Results show the target, observation time and selected-Pod scope. **Collection limits** expands the qualifications; **Copy observation** always includes them. If a Pod is missing from discovery, open it directly. Resource or cluster changes clear results; a replaced Pod requires a new selection and explicit collection.
 
-In local resource details, use the application evidence button to open **Collect application evidence**, select a Pod and collect explicitly. The action appears when Radar identifies a supported endpoint and verifies Pod-read and port-forward permissions. If that check times out or cannot be completed, use **Retry permission check**; it does not contact the application. Opening or refreshing a resource does not collect evidence. Results show the observation time, target and selected-Pod scope. Expand **Collection limits** for full qualifications; **Copy observation** always includes them. If discovery omits a Pod, open that Pod directly to check for supported evidence collection. Results clear when the resource or cluster changes. If a selected Pod is replaced or stops running while viewing its Service or workload, the dialog keeps the refusal and refreshes its Pod choices; select a current Pod and collect again explicitly. Replacing the Pod being viewed directly closes its dialog because the resource identity changed.
-
-Results describe the selected endpoint at collection time. Unavailable evidence does not establish health or absence of problems. See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation and result interpretation.
+These are selected-endpoint observations, not automatic Issues or an application health verdict. See [MCP collection and result semantics](mcp.md#explicit-local-runtime-evidence).
 
 ## Any Other CRD
 
