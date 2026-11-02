@@ -55,6 +55,8 @@ export function ContinueInAgentButton({
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
+  const introId = useId();
+  const hintId = useId();
   const copyingRef = useRef(false);
   // The menu lives inside the Findings scroller, which clips it: open toward
   // the side with room, and cap the height when neither side has enough.
@@ -206,6 +208,7 @@ export function ContinueInAgentButton({
           id={menuId}
           role="dialog"
           aria-label={`Continue in ${label}`}
+          aria-describedby={trustHint ? `${introId} ${hintId}` : introId}
           inert={!open}
           onKeyDown={onMenuKeyDown}
           className={clsx(
@@ -227,11 +230,12 @@ export function ContinueInAgentButton({
             maxHeight: placement.maxHeight,
           }}
         >
-          <p className="text-xs text-theme-text-secondary">
+          <p id={introId} className="text-xs text-theme-text-secondary">
             Resumes this session in {label} with Radar&apos;s MCP attached.
           </p>
           {trustHint && (
             <p
+              id={hintId}
               data-continue-trust-hint
               className="mt-1 text-xs text-theme-text-tertiary"
             >

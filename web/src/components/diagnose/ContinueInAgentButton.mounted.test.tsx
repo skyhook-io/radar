@@ -150,7 +150,14 @@ describe("the continue panel", () => {
 
   it("leads with the trust warning and Run in Radar terminal, focused", async () => {
     await openPanel();
-    expect(panel()!.textContent).toContain("Select Yes before pressing Enter");
+    // Described by the explanation and the warning, so a screen reader reads
+    // them when focus lands on the button below.
+    const described = (panel()!.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(described).toContain("Resumes this session");
+    expect(described).toContain("Select Yes before pressing Enter");
     const runHere = panel()!.querySelector<HTMLButtonElement>("button")!;
     expect(runHere.textContent).toBe("Run in Radar terminal");
     expect(document.activeElement).toBe(runHere);
