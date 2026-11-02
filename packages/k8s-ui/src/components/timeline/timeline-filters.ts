@@ -1,6 +1,7 @@
 import type { TimelineEvent } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { pluralize } from '../../utils/pluralize'
+import { fieldManagerLabels } from './DiffViewer'
 
 // Legacy single-value activity filter. Retained for the home-page deep-link
 // (`initialFilter`) compat path that seeds the multi-select from one preset.
@@ -104,7 +105,7 @@ export function matchesTimelineSearch(event: TimelineEvent, term: string): boole
     (event.reason?.toLowerCase().includes(t) ?? false) ||
     (event.message?.toLowerCase().includes(t) ?? false) ||
     (event.diff?.summary?.toLowerCase().includes(t) ?? false) ||
-    (event.diff?.fieldManagers?.some((m) => m.manager.toLowerCase().includes(t)) ?? false)
+    fieldManagerLabels(event.diff).some((label) => label.toLowerCase().includes(t))
   )
 }
 

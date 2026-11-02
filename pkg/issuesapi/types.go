@@ -357,7 +357,8 @@ type RecentChange struct {
 	// They are labels the writing client chose, naming a tool or controller,
 	// not a user. When several are listed, each wrote some of the change; which
 	// field each wrote is not recorded. Absent means unknown, not that nothing
-	// wrote.
+	// wrote. A row merging several updates (updates_in_window) lists the
+	// managers of the updates Radar could attribute.
 	FieldManagers   []string `json:"field_managers,omitempty"`
 	UpdatesInWindow int      `json:"updates_in_window,omitempty"`
 	FirstUpdateAt   string   `json:"first_update_at,omitempty"`

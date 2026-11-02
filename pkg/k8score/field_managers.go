@@ -166,6 +166,15 @@ func (index *fieldManagerIndex) update(oldObj, newObj metav1.Object) []FieldMana
 	return changedFieldManagers(prev, next)
 }
 
+func (index *fieldManagerIndex) clear() {
+	if index == nil {
+		return
+	}
+	index.mu.Lock()
+	clear(index.objects)
+	index.mu.Unlock()
+}
+
 func (index *fieldManagerIndex) forget(uid string) {
 	if index == nil {
 		return

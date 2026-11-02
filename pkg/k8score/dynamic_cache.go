@@ -626,8 +626,13 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	}()
 	d.informerGeneration++
 	d.informers[key] = &informerEntry{
-		informer:  informer,
-		cancel:    cancel,
+		informer: informer,
+		// The factory keeps a stopped informer, and through its transform
+		// the index; release the summaries with the watch.
+		cancel: func() {
+			cancel()
+			fieldManagers.clear()
+		},
 		startedAt: time.Now().UTC(),
 	}
 	delete(d.observations, gvr)
