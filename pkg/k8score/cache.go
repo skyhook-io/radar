@@ -421,7 +421,11 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		if cfg.OnTransform != nil {
 			cfg.OnTransform(obj)
 		}
-		fieldManagers.capture(obj)
+		// Events take a handler path that never consumes or forgets a
+		// summary, so capturing them would only accumulate.
+		if _, isEvent := obj.(*corev1.Event); !isEvent {
+			fieldManagers.capture(obj)
+		}
 		return DropManagedFields(obj)
 	}
 	clusterFactory := informers.NewSharedInformerFactoryWithOptions(

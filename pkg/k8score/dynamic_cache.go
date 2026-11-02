@@ -587,7 +587,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	// Each informer gets its own field-manager index so a reaped or replaced
 	// informer takes its summaries with it.
 	var fieldManagers *fieldManagerIndex
-	if d.config.TrackFieldManagers {
+	if d.config.TrackFieldManagers && !isEventResource(gvr) {
 		fieldManagers = newFieldManagerIndex()
 	}
 	transform := func(obj any) (any, error) {
