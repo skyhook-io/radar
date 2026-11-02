@@ -1607,11 +1607,32 @@ A recorded `Failed` phase describes Flagger's last rollout result. Current-UID W
 
 ## Auto-instrumentation reference context
 
-Pod and supported workload detail reads can include `resourceContext.autoInstrumentation.openTelemetry`. This describes declared OTel injection requests, not proof of successful injection, running application health or telemetry delivery. `requestsIfPodCreatedNow` evaluates current configuration for a hypothetical new Pod, including when the subject is an existing Pod. It is neither an admission record nor a prediction of the combined webhook outcome: annotations, Namespace defaults and Instrumentation objects can change after creation. Each `resolution` checks only that language's reference. A failing selection for another requested language can prevent injection of all languages, even when this reference resolves. Container-targeting rules can also prevent mutation, sometimes without a Warning event; inspect the operator logs as well as the Pod. Inspect the actual Pod spec/init-container status and events to investigate observed mutation; this context does not infer injector identity.
+Pod and supported workload detail reads can include `resourceContext.autoInstrumentation.openTelemetry`. It evaluates declared injection requests for a hypothetical new Pod, even when the subject is an existing Pod. It does not establish observed injection, application health or telemetry delivery.
 
-`namespaceDefaultsUnknown: true` explicitly qualifies unreadable Namespace inheritance, including when no Pod annotation is present. Each request names the native injection component in `language` (the exact `instrumentation.opentelemetry.io/inject-` annotation suffix: `apache-httpd`, `dotnet`, `go`, `java`, `nginx`, `nodejs`, `php`, `python`, `ruby` or `sdk`; SDK selects environment-variable injection rather than a language auto-instrumentation library), the effective annotation's `source` and `annotationPath` JSON pointer, and a `resolution`. Template paths distinguish workload metadata from the Pod template. `resolved` and `missing` concern a named Instrumentation reference; `missing` requires a synced inventory and caller access. `unknown` means the reference or inherited Namespace annotation could not be established, not absence. `disabled` is an explicit false, and `invalid_reference` is an invalid name or namespace. A declared reference can remain visible with `unknown` because its coordinates came from the caller-readable annotation, without disclosing whether the target exists.
+### Fields and resolution states
 
-The three `unknown` cases have different follow-ups, without changing the reference-lookup meaning:
+| Field | Meaning |
+|---|---|
+| `requestsIfPodCreatedNow` | Per-component requests evaluated against current annotations, Namespace defaults and Instrumentation objects. These may have changed since an existing Pod was created. |
+| `language` | The exact `instrumentation.opentelemetry.io/inject-` annotation suffix: `apache-httpd`, `dotnet`, `go`, `java`, `nginx`, `nodejs`, `php`, `python`, `ruby` or `sdk`. SDK selects environment-variable injection rather than a language auto-instrumentation library. |
+| `source`, `annotationPath` | The effective annotation's source and JSON pointer. Template paths distinguish workload metadata from the Pod template. |
+| `namespaceDefaultsUnknown` | Namespace inheritance could not be read, including when no Pod annotation is present. |
+| `assumesOperatorCRDMode` | Default selection assumes Instrumentation CRs; an operator using inline instrumentation can behave differently. |
+| `ignoredWorkloadMetadataAnnotations` | Injection keys on workload metadata, where the mutator does not read them. Use Pod/template or Namespace annotations instead. |
+
+Each request's `resolution` concerns only that component's reference lookup:
+
+| Resolution | Meaning |
+|---|---|
+| `resolved`, `missing` | A named Instrumentation reference was found or absent. `missing` requires synced inventory and caller access. |
+| `unknown` | The reference or inherited Namespace annotation could not be established; this is not absence. Coordinates from a caller-readable annotation may remain visible without disclosing whether the target exists. |
+| `disabled` | An explicit false annotation. |
+| `invalid_reference` | An invalid name or namespace. |
+| `default_resolved`, `default_missing`, `default_ambiguous` | Default selection found one, no, or multiple Instrumentation CRs in the readable namespace, with `assumesOperatorCRDMode: true`. |
+
+### Selection and unknown results
+
+A named or false Pod annotation wins. Pod=true can inherit a named Namespace annotation; true/default selection uses the operator's CRD-mode rules.
 
 | Available qualifiers | What remains unknown | Next evidence |
 |---|---|---|
@@ -1619,10 +1640,12 @@ The three `unknown` cases have different follow-ups, without changing the refere
 | `instrumentation` coordinates present with `resolution: unknown` | The caller-readable named reference could not be checked | Read that Instrumentation, or check its cache coverage/access |
 | `assumesOperatorCRDMode: true`, `resolution: unknown` | Default-selection inventory could not be checked | List Instrumentations in the Pod's namespace with an authorized identity, or confirm the CRD is installed and its cache is collected/synced |
 
-The CRD-mode flag is absent for unreadable Namespace inheritance: Pod=true could inherit a named reference, so Radar has not established default selection.
+The CRD-mode flag is absent for unreadable Namespace inheritance: Pod=true could inherit a named reference, so default selection has not been established.
 
-The operator's precedence applies: a named or false Pod annotation wins; Pod=true can inherit a named Namespace annotation. For true/default selection, `default_resolved`, `default_missing` and `default_ambiguous` describe the readable namespace's CR inventory **assuming CRD mode**, explicitly marked `assumesOperatorCRDMode: true`. Operators configured to use inline instrumentation instead can differ. Language feature gates can also disable injection even when a reference resolves.
+### Limits and inspection
 
-`ignoredWorkloadMetadataAnnotations` lists injection keys placed on workload metadata; the mutator reads Pod/template or Namespace annotations instead. This is configuration context, not a global Issue. Supported sources are Pods, apps workloads, Jobs/CronJobs and inline Argo Rollout Pod templates. An absent block is not proof there are no injection requests: unreadable Namespace defaults and unresolved templates may be outside the evidence. Native Warning events, including observed `InstrumentationRequestRejected`, remain available through the existing UID-filtered Pod diagnosis/event paths.
+Reference resolution is not admission success or a prediction of the combined webhook outcome. A failing selection for another requested language can prevent all injection. Language feature gates can disable injection even when a reference resolves. Container-targeting rules can also prevent mutation, sometimes without a Warning event. Inspect the actual Pod spec, init-container status, events and operator logs; this context does not infer injector identity. Native Warning events, including observed `InstrumentationRequestRejected`, remain available through existing UID-filtered Pod diagnosis/event paths.
 
-Native provider blocks retain their own selection rules; the outer `autoInstrumentation` object is not an exhaustive inventory of injectors. An unavailable OTel observation is reported as `omitted.field=autoInstrumentation.openTelemetry`, without claiming other providers are unavailable. The REST AI and MCP detail surfaces share this projection. Basic list summaries do not perform related-object lookups. Existing UI annotations/YAML/events remain the detailed inspection surface; no additional Pod warning banner or outage classification is added.
+Supported sources are Pods, apps workloads, Jobs/CronJobs and inline Argo Rollout Pod templates. An absent block does not establish that no requests exist: unreadable Namespace defaults or unresolved templates may be outside the evidence. The outer `autoInstrumentation` object is not an exhaustive injector inventory; native provider blocks retain their own selection rules. An unavailable OTel observation records field `autoInstrumentation.openTelemetry` in `omitted`, without declaring other providers unavailable.
+
+REST AI and MCP detail reads share this projection. Basic list summaries do not perform related-object lookups. UI inspection uses existing annotations, YAML and events; this configuration context creates no global Issue, additional Pod warning banner or outage classification.
