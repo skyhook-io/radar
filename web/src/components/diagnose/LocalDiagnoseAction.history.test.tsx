@@ -137,6 +137,17 @@ describe("a resource's last investigation", () => {
     expect(openRun).toHaveBeenCalledWith("run-cart");
   });
 
+  it("marks the button with a filled sparkle only when there is history", async () => {
+    await renderButton("problem");
+    expect(trigger().querySelector("svg")?.getAttribute("fill")).toBe("none");
+    api.runs = [investigated()];
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await flush();
+    expect(trigger().querySelector("svg")?.getAttribute("fill")).toBe(
+      "currentColor",
+    );
+  });
+
   it("keeps the usual action one click further on", async () => {
     api.runs = [investigated()];
     await renderButton("problem");

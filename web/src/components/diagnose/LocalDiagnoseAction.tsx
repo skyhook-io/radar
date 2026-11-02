@@ -40,9 +40,9 @@ import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 // the BYO framing (the user's OWN agent, locally) — unless the agent is hosted,
 // where those claims would be false.
 //
-// When the resource was investigated recently, a dot marks the button and a
-// click first shows what that investigation found, with the usual action
-// beside it. Hosted agents keep their own shared history, so they skip this.
+// When the resource was investigated recently, the button shows it (filled
+// sparkle, light tint) and a click first shows what that investigation found,
+// with the usual action beside it. Hosted agents keep their own shared history, so they skip this.
 function DiagnoseResourceButton({
   kind,
   group,
@@ -129,17 +129,26 @@ function DiagnoseResourceButton({
                 : "Ask AI about this resource"
         }
         className={clsx(
-          "relative",
+          "inline-flex items-center rounded-lg border",
           showLabel
-            ? "inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/5 px-2.5 py-1.5 text-sm font-medium text-accent hover:bg-accent/10"
-            : "inline-flex items-center rounded-lg border border-theme-border p-1.5 text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary",
+            ? "gap-1.5 px-2.5 py-1.5 text-sm font-medium text-accent"
+            : "p-1.5 text-theme-text-secondary",
+          showLabel
+            ? last
+              ? "border-accent/50 bg-accent/10 hover:bg-accent/15"
+              : "border-accent/40 bg-accent/5 hover:bg-accent/10"
+            : last
+              ? HISTORY_TINT
+              : "border-theme-border hover:bg-theme-hover hover:text-theme-text-primary",
         )}
       >
-        {last && <LastInvestigationDot />}
         {running ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
         ) : (
-          <Sparkles className="h-3.5 w-3.5 text-accent" />
+          <Sparkles
+            className="h-3.5 w-3.5 text-accent"
+            fill={last ? "currentColor" : "none"}
+          />
         )}
         {running ? "Investigating…" : problem && "Investigate"}
       </button>
@@ -184,17 +193,11 @@ function useRecentInvestigation(
     : undefined;
 }
 
-function LastInvestigationDot({ compact }: { compact?: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={clsx(
-        "absolute rounded-full border border-theme-surface bg-accent",
-        compact ? "-right-1 -top-1 h-1.5 w-1.5" : "-right-0.5 -top-0.5 h-2 w-2",
-      )}
-    />
-  );
-}
+// A resource with a recent investigation shows it the way a toggle shows it's
+// on: a filled sparkle on a light accent tint, rather than a badge that would
+// read as something unread.
+const HISTORY_TINT =
+  "border-accent/30 bg-accent/5 hover:bg-accent/10 hover:text-theme-text-primary";
 
 const POPOVER_WIDTH = 320;
 const GUTTER = 16;
@@ -390,7 +393,7 @@ export function useIssueDiagnoseShown(): boolean {
 // stopPropagation so it doesn't toggle the issue row it lives in. `compact`
 // fits a single line of a dense list (Home's Active Issues); without hover it
 // keeps a finger-sized target. A resource investigated recently gets the same
-// dot and panel as the resource view's button.
+// marking and panel as the resource view's button.
 export function IssueDiagnoseButton({
   kind,
   group,
@@ -441,19 +444,27 @@ export function IssueDiagnoseButton({
         aria-haspopup={last ? "dialog" : undefined}
         aria-expanded={last ? historyOpen : undefined}
         className={clsx(
-          "relative",
+          "flex shrink-0 items-center gap-1 border text-theme-text-secondary",
           size === "compact"
-            ? "flex h-4 shrink-0 items-center gap-1 rounded border border-theme-border px-1.5 text-[10.5px] leading-none text-theme-text-secondary hover:bg-theme-surface hover:text-theme-text-primary [@media(hover:none)]:h-7 [@media(hover:none)]:rounded-md [@media(hover:none)]:px-2.5 [@media(hover:none)]:text-xs"
-            : "flex shrink-0 items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary",
+            ? "h-4 rounded px-1.5 text-[10.5px] leading-none [@media(hover:none)]:h-7 [@media(hover:none)]:rounded-md [@media(hover:none)]:px-2.5 [@media(hover:none)]:text-xs"
+            : "rounded-md px-2 py-1 text-xs",
+          last
+            ? HISTORY_TINT
+            : clsx(
+                "border-theme-border hover:text-theme-text-primary",
+                size === "compact"
+                  ? "hover:bg-theme-surface"
+                  : "hover:bg-theme-hover",
+              ),
         )}
       >
-        {last && <LastInvestigationDot compact={size === "compact"} />}
         <Sparkles
           className={
             size === "compact"
               ? "h-2.5 w-2.5 text-accent"
               : "h-3 w-3 text-accent"
           }
+          fill={last ? "currentColor" : "none"}
         />
         Investigate
       </button>
