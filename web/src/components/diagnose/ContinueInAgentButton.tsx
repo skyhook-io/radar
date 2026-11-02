@@ -7,10 +7,9 @@ import {
   type FocusEvent,
   type KeyboardEvent,
 } from "react";
-import { Check, ChevronDown, Copy, TerminalSquare } from "lucide-react";
+import { Check, Copy, TerminalSquare } from "lucide-react";
 import { clsx } from "clsx";
 import { copyText } from "@skyhook-io/k8s-ui/utils/clipboard";
-import { Tooltip } from "../ui/Tooltip";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import {
   TRANSITION_MENU,
@@ -46,8 +45,6 @@ export function ContinueInAgentButton({
   const { localTerminal } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
   const trustHint = launchTrustHint(run);
-  const trustHintId = useId();
-  const menuTrustHintId = useId();
   const [open, setOpen] = useState(false);
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
   const { shouldRender, isOpen } = useAnimatedUnmount(
@@ -172,91 +169,37 @@ export function ContinueInAgentButton({
     items[(at + step + items.length) % items.length].focus();
   };
 
-  const segment =
-    "inline-flex items-center gap-1.5 py-1 text-xs font-medium text-theme-text-primary hover:bg-theme-hover focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50";
-
-  // In the investigation header, which is narrow when docked: the label
-  // shortens to "Continue" there, and the trust hint rides in the tooltip and
-  // the panel rather than taking a line of its own.
-  const labelText = (
-    <span className="whitespace-nowrap">
-      Continue
-      <span className="hidden @min-[640px]/diagnose-surface:inline">
-        {` in ${label}`}
-      </span>
-    </span>
-  );
+  // One button that always opens the panel: the hand-off is rare and
+  // deliberate, so the panel can say what happens (and warn about Claude
+  // Code's trust prompt) before anything runs. Docked, the header is narrow
+  // and the label keeps only where it goes.
   return (
     <div
       ref={rootRef}
       onBlur={onFocusLeave}
       className="relative inline-flex shrink-0"
     >
-      <div className="inline-flex rounded-md border border-theme-border bg-theme-surface">
-        {localTerminal ? (
-          <>
-            <Tooltip
-              content={`Resume this session in ${label} with Radar's MCP, in Radar's terminal.${trustHint ? ` ${trustHint}` : ""}`}
-              position="bottom"
-              wrapperClassName="inline-flex"
-            >
-              <button
-                type="button"
-                onClick={runInTerminal}
-                aria-label={`Continue in ${label}`}
-                aria-describedby={trustHint ? trustHintId : undefined}
-                className={clsx(segment, "rounded-l-md px-2")}
-              >
-                <TerminalSquare
-                  className="h-3.5 w-3.5 text-theme-text-tertiary"
-                  aria-hidden
-                />
-                {labelText}
-              </button>
-            </Tooltip>
-            <button
-              ref={triggerRef}
-              type="button"
-              onClick={toggle}
-              aria-haspopup="dialog"
-              aria-expanded={open}
-              aria-controls={shouldRender ? menuId : undefined}
-              aria-label="More ways to continue"
-              className={clsx(
-                segment,
-                "rounded-r-md border-l border-theme-border px-1",
-              )}
-            >
-              <ChevronDown
-                className="h-3.5 w-3.5 text-theme-text-tertiary"
-                aria-hidden
-              />
-            </button>
-          </>
-        ) : (
-          <button
-            ref={triggerRef}
-            type="button"
-            onClick={toggle}
-            aria-haspopup="dialog"
-            aria-expanded={open}
-            aria-controls={shouldRender ? menuId : undefined}
-            aria-label={`Continue in ${label}`}
-            aria-describedby={trustHint ? trustHintId : undefined}
-            className={clsx(segment, "rounded-md px-2")}
-          >
-            <TerminalSquare
-              className="h-3.5 w-3.5 text-theme-text-tertiary"
-              aria-hidden
-            />
-            {labelText}
-            <ChevronDown
-              className="h-3.5 w-3.5 text-theme-text-tertiary"
-              aria-hidden
-            />
-          </button>
-        )}
-      </div>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggle}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={shouldRender ? menuId : undefined}
+        aria-label={`Continue in ${label}`}
+        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-theme-border bg-theme-surface px-2 py-1 text-xs font-medium text-theme-text-primary hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <TerminalSquare
+          className="h-3.5 w-3.5 text-theme-text-tertiary"
+          aria-hidden
+        />
+        <span>
+          <span className="hidden @min-[640px]/diagnose-surface:inline">
+            Continue in{" "}
+          </span>
+          {label}…
+        </span>
+      </button>
       {shouldRender && (
         <div
           ref={menuRef}
@@ -266,7 +209,7 @@ export function ContinueInAgentButton({
           inert={!open}
           onKeyDown={onMenuKeyDown}
           className={clsx(
-            "absolute right-0 z-30 w-[min(22rem,calc(100cqw-2rem))] rounded-lg border border-theme-border bg-theme-surface p-1 shadow-theme-lg",
+            "absolute right-0 z-30 w-[min(22rem,calc(100cqw-2rem))] rounded-lg border border-theme-border bg-theme-surface p-3 shadow-theme-lg",
             placement.maxHeight !== undefined && "overflow-y-auto",
             placement.up
               ? "bottom-full mb-1 origin-bottom-right"
@@ -284,75 +227,70 @@ export function ContinueInAgentButton({
             maxHeight: placement.maxHeight,
           }}
         >
-          <div className="px-2 pb-1.5 pt-1">
-            <p className="text-[11px] text-theme-text-tertiary">
-              Paste where you run {label}. It resumes this session with
-              Radar&apos;s MCP attached.
-              {trustHint && <span id={menuTrustHintId}> {trustHint}</span>}
+          <p className="text-xs text-theme-text-secondary">
+            Resumes this session in {label} with Radar&apos;s MCP attached.
+          </p>
+          {trustHint && (
+            <p
+              data-continue-trust-hint
+              className="mt-1 text-xs text-theme-text-tertiary"
+            >
+              {trustHint}
             </p>
-            <div className="mt-1.5 flex items-start gap-1 rounded-md border border-theme-border bg-theme-base py-1 pl-2 pr-1">
-              <code
-                data-continue-command
-                className="max-h-24 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-all py-0.5 font-mono text-[11px] leading-snug text-theme-text-secondary"
-              >
-                {command}
-              </code>
-              <button
-                type="button"
-                onClick={copyCommand}
-                aria-describedby={trustHint ? menuTrustHintId : undefined}
-                aria-label={
-                  copy === "copied"
-                    ? "Command copied"
-                    : copy === "failed"
-                      ? "Copy failed"
-                      : "Copy command"
-                }
-                aria-live="polite"
-                className={clsx(
-                  "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[11px] font-medium hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
-                  copy === "copied"
-                    ? "text-theme-text-primary"
-                    : copy === "failed"
-                      ? "text-warning-text"
-                      : "text-theme-text-tertiary hover:text-theme-text-primary",
-                )}
-              >
-                {copy === "copied" ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-success" aria-hidden />
-                    Copied
-                  </>
-                ) : copy === "failed" ? (
-                  "Copy failed"
-                ) : (
-                  <Copy className="h-3.5 w-3.5" aria-hidden />
-                )}
-              </button>
-            </div>
-          </div>
-          {localTerminal && (
-            <>
-              <div className="my-1 border-t border-theme-border" />
-              <button
-                type="button"
-                onClick={runInTerminal}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-theme-text-primary hover:bg-theme-hover focus-visible:outline-none focus-visible:bg-theme-hover"
-              >
-                <TerminalSquare
-                  className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary"
-                  aria-hidden
-                />
-                Run in Radar terminal
-              </button>
-            </>
           )}
+          {localTerminal && (
+            <button
+              type="button"
+              onClick={runInTerminal}
+              className="btn-brand mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <TerminalSquare className="h-3.5 w-3.5" aria-hidden />
+              Run in Radar terminal
+            </button>
+          )}
+          <p className="mt-3 text-[11px] text-theme-text-tertiary">
+            {localTerminal ? "Or paste it" : "Paste it"} where you run {label}:
+          </p>
+          <div className="mt-1 flex items-start gap-1 rounded-md border border-theme-border bg-theme-base py-1 pl-2 pr-1">
+            <code
+              data-continue-command
+              className="max-h-24 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-all py-0.5 font-mono text-[11px] leading-snug text-theme-text-secondary"
+            >
+              {command}
+            </code>
+            <button
+              type="button"
+              onClick={copyCommand}
+              aria-label={
+                copy === "copied"
+                  ? "Command copied"
+                  : copy === "failed"
+                    ? "Copy failed"
+                    : "Copy command"
+              }
+              aria-live="polite"
+              className={clsx(
+                "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[11px] font-medium hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+                copy === "copied"
+                  ? "text-theme-text-primary"
+                  : copy === "failed"
+                    ? "text-warning-text"
+                    : "text-theme-text-tertiary hover:text-theme-text-primary",
+              )}
+            >
+              {copy === "copied" ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-success" aria-hidden />
+                  Copied
+                </>
+              ) : copy === "failed" ? (
+                "Copy failed"
+              ) : (
+                <Copy className="h-3.5 w-3.5" aria-hidden />
+              )}
+            </button>
+          </div>
         </div>
-      )}
-      {trustHint && (
-        <span id={trustHintId} data-continue-trust-hint className="sr-only">
-          {trustHint}
-        </span>
       )}
     </div>
   );

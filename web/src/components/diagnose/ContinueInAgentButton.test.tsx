@@ -93,15 +93,17 @@ describe("canContinueInOwnAgent", () => {
 describe("ContinueInAgentButton", () => {
   const command = "cd ~ && claude --resume 'ses_1'";
 
-  it("splits a labelled terminal action from a menu of other ways", () => {
+  it("is one button that opens a dialog, named for the agent", () => {
     const html = renderToStaticMarkup(
       <ContinueInAgentButton run={run()} command={command} />,
     );
-    expect(html).toContain("Continue in Claude Code");
-    expect(html).toContain('aria-label="More ways to continue"');
+    expect(html).toContain('aria-label="Continue in Claude Code"');
+    expect(html).toContain("Claude Code…");
     expect(html).toContain('aria-haspopup="dialog"');
     expect(html).toContain('aria-expanded="false"');
-    expect(html.match(/<button/g)).toHaveLength(2);
+    expect(html.match(/<button/g)).toHaveLength(1);
+    // Nothing about the trust prompt until the panel opens and shows it.
+    expect(html).not.toContain("Select Yes");
   });
 
   it("names the agent that ran the investigation", () => {
@@ -111,44 +113,15 @@ describe("ContinueInAgentButton", () => {
         command="codex resume 'ses_1'"
       />,
     );
-    expect(html).toContain("Continue in Codex");
+    expect(html).toContain('aria-label="Continue in Codex"');
   });
 
-  it("warns that Claude Code's trust prompt exits on Enter", () => {
-    const html = renderToStaticMarkup(
-      <ContinueInAgentButton run={run()} command={command} />,
-    );
-    expect(html).toContain("data-continue-trust-hint");
-    expect(html).toContain("Select Yes before pressing Enter");
-    // Announced with the button; the tooltip and the panel show it.
-    const hintId = html.match(/id="([^"]+)" data-continue-trust-hint/)?.[1];
-    expect(hintId).toBeTruthy();
-    expect(html).toContain(`aria-describedby="${hintId}"`);
-  });
-
-  it("does not show the trust hint for Codex", () => {
-    const html = renderToStaticMarkup(
-      <ContinueInAgentButton
-        run={run({ agent: "codex" })}
-        command="codex resume 'ses_1'"
-      />,
-    );
-    expect(html).not.toContain("data-continue-trust-hint");
-    expect(html).not.toContain("trust your home folder");
-  });
-
-  it("opens the command menu from one button when Radar has no terminal", () => {
+  it("is the same button when Radar has no terminal", () => {
     mockLocalTerminal = false;
     const html = renderToStaticMarkup(
       <ContinueInAgentButton run={run()} command={command} />,
     );
-    expect(html).toContain("Continue in Claude Code");
     expect(html).toContain('aria-haspopup="dialog"');
-    expect(html).not.toContain("More ways to continue");
     expect(html.match(/<button/g)).toHaveLength(1);
-    // No visible line under the button: only the screen-reader copy, until
-    // the panel it opens shows the hint.
-    expect(html.match(/Select Yes before pressing Enter/g)).toHaveLength(1);
-    expect(html).toMatch(/data-continue-trust-hint[^>]*class="sr-only"/);
   });
 });
