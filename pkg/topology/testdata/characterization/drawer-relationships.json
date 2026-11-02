@@ -484,9 +484,6 @@
   {
     "root": "apps|Deployment|shop|redis-legacy",
     "relationships": {
-      "managers": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ],
       "ownership": {
         "children": {
           "complete": false,
@@ -531,10 +528,7 @@
             "object": {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"}
           }
         }
-      },
-      "managedBy": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ]
+      }
     }
   },
   {
@@ -1674,9 +1668,6 @@
   {
     "root": "batch|Job|shop|redis-migrate",
     "relationships": {
-      "managers": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ],
       "ownership": {
         "children": {
           "complete": false,
@@ -2876,11 +2867,9 @@
         {"kind": "Service", "namespace": "shop", "name": "redis"},
         {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
         {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
-        {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
         {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
         {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
-        {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
-        {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+        {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"}
       ],
       "ownership": {
         "children": {

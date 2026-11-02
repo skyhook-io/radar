@@ -30,9 +30,11 @@ and scope; it never proves that no external controller or writer exists.
 | Where to inspect a list row or search hit next | `summaryContext.managedBy` | One controller-first lead, with `source` identifying its evidence and `omitted` qualifying incomplete reads. See [selection rules](#the-top-controller). |
 | Source hints for request changes | rightsizing `managedBy: {tool, signal}` | Controller owner, GitOps/Helm metadata, `addonmanager` mode ([rightsizing](mcp.md#managedby--source-hints-for-request-changes)) |
 
-The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager".
+The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager". The Applications view's `sourceRef` is each workload's `View.Manager` lead under the summary rules below, read with Radar's own access because its rows are shared by every caller with the same namespaces.
 
-The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, with a namespace-scoped private view and separate per-kind output checks. It can traverse cached hidden intermediates without emitting their identity or metadata. Display topology supplies presentation, observed spec links, and label-based roots for HelmReleases without inventory. Owner-reference truth comes from the ownership view. The traversal rules (work budget, destination checks, display Pod groups, hidden parents, which gaps raise a notice) live in `pkg/gitops/tree` (`builder.go`, `ownership.go`) and their tests.
+Topology draws a manages edge from a GitOps manager to what its status records: an Application's `status.resources`, a Kustomization's or HelmRelease's inventory. A HelmRelease that records no inventory draws them by the same origin-label rule the resource tree uses.
+
+The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, with a namespace-scoped private view and separate per-kind output checks. It can traverse cached hidden intermediates without emitting their identity or metadata. Display topology supplies presentation, observed spec links, and label-based roots for HelmReleases without inventory (`gitops.FluxHelmLabelledRelease`: both origin labels, no hooks, nothing a controller generated). Owner-reference truth comes from the ownership view. The traversal rules (work budget, destination checks, display Pod groups, hidden parents, which gaps raise a notice) live in `pkg/gitops/tree` (`builder.go`, `ownership.go`) and their tests.
 
 ## Layers
 

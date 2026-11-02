@@ -68,9 +68,9 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	// The GitOps managers whose member lists name the subject manage it,
 	// whether or not the graph draws the edge. A GitOps manager's edge counts
 	// only where the search couldn't read its list; a list it read says
-	// itself. The graph draws a HelmRelease's edges from its members' labels,
-	// and an Application's or Kustomization's from the same status list, for
-	// the workload and network kinds it draws.
+	// itself. The graph draws a manager's edges from the same status list, for
+	// the workload and network kinds it draws, and a HelmRelease's that
+	// records none from its members' origin labels.
 	cov.Manager = managerAnswer(v.Manager(subject))
 	managers := v.RecordingManagers(subject)
 	if len(managers.Unreadable)+len(managers.Remote)+len(managers.Gaps) > 0 {
@@ -120,8 +120,8 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 			return
 		}
 		// With no list to read, the graph's edges are all there is: by the
-		// members' labels for a HelmRelease, from the same status list for an
-		// Application or Kustomization.
+		// members' origin labels for a HelmRelease that records none, from the
+		// same status list otherwise.
 	}
 	gitops := ownership.IsRecordingManager(subject.GroupKind())
 	listed := map[resourceid.Ref]bool{}
