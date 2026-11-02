@@ -115,9 +115,12 @@ type Run struct {
 	mu        sync.Mutex
 	status    string // running | done | error | stopped | stale
 	sessionID string
-	preview   string // last root cause, for the list
-	updatedAt time.Time
-	events    []RunEvent
+	preview   string // the latest assessment's one line, for the list
+	// assessedAt is when the turn behind preview finished; zero until a turn
+	// produced an assessment Findings shows.
+	assessedAt time.Time
+	updatedAt  time.Time
+	events     []RunEvent
 	// hydrated marks that r.events holds the run's full log. Runs created live
 	// are born hydrated; runs loaded from the store hydrate lazily on first
 	// read/mutation (ensureHydrated) so startup doesn't pay for old transcripts.
@@ -157,6 +160,7 @@ type RunSummary struct {
 	SessionID  string     `json:"sessionId,omitempty"`
 	OwnerPID   int        `json:"ownerPid,omitempty"`
 	Preview    string     `json:"preview,omitempty"`
+	AssessedAt *time.Time `json:"assessedAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
 }
@@ -310,8 +314,9 @@ func (m *RunManager) loadPersisted() {
 			CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
 			store:  m.store,
 			status: s.Status, sessionID: s.SessionID, preview: s.Preview,
-			updatedAt: s.UpdatedAt,
-			subs:      map[int]chan RunEvent{},
+			assessedAt: derefTime(s.AssessedAt),
+			updatedAt:  s.UpdatedAt,
+			subs:       map[int]chan RunEvent{},
 		}
 		if s.Status == "running" {
 			// Interrupted by the restart. Terminal statuses are written in the
@@ -865,13 +870,6 @@ func (r *Run) finishApplyAndBeginVerification(terminal StreamEvent, verifyQuesti
 		r.inFlight = false
 		return false
 	}
-	if terminal.Diag != nil {
-		if terminal.Diag.RootCause != "" {
-			r.preview = terminal.Diag.RootCause
-		} else if terminal.Diag.Healthy {
-			r.preview = "Healthy"
-		}
-	}
 	r.updatedAt = nowUTC()
 	r.cancel = verifyCancel
 	// Keep status=running before appending the batch: the done event and the
@@ -958,15 +956,36 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 	if diag.SettleRevision() {
 		log.Printf("[ai] run %s: revises_assessment set without a complete verdict; treating the turn as an answer", r.ID)
 	}
-	if preview := diag.Preview(); preview != "" {
-		r.preview = preview
-	}
+	r.recordAssessmentLocked(diag, apply)
 	r.status = "done"
 	if beforeTerminalAppend != nil {
 		beforeTerminalAppend()
 	}
 	r.appendLocked(StreamEvent{Type: "done", Diag: &diag})
 	r.inFlight = false
+}
+
+// recordAssessmentLocked keeps preview and assessedAt on the assessment
+// Findings shows, so an answer or an apply never replaces the list's line.
+// The caller holds r.mu while the finishing turn is still in flight.
+func (r *Run) recordAssessmentLocked(diag Diagnosis, apply bool) {
+	turn := r.activeTurnLocked()
+	if !diag.Structured() || !diag.Assesses(investigation.Turn{
+		Question: turn.Question, Apply: apply || turn.Apply, Verify: turn.Verify, Explanation: turn.ExplainAssessment != 0,
+	}) {
+		return
+	}
+	preview := diag.Preview()
+	switch {
+	case preview != "":
+	case diag.Inconclusive:
+		preview = "Inconclusive"
+	default:
+		// Structured with only remediation: its first step is the assessment.
+		preview = diag.Remediation[0]
+	}
+	r.preview = preview
+	r.assessedAt = r.updatedAt
 }
 
 // bindRootCauseEvidenceLocked promotes the model's private reference request
@@ -1357,7 +1376,8 @@ func (r *Run) summaryLocked() RunSummary {
 		Health: r.Health, Question: r.Question, Namespaces: r.Namespaces, LookBack: r.LookBack,
 		AskedAt: optionalTime(r.AskedAt),
 		Status:  r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,
-		Preview: r.preview, CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,
+		Preview: r.preview, AssessedAt: optionalTime(r.assessedAt),
+		CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,
 	}
 }
 

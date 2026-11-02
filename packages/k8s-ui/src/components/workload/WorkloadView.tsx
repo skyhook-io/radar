@@ -896,7 +896,7 @@ export function WorkloadView({
   // prominent "Diagnose" on a problem, a quiet icon when fine. Rendered via the host
   // slot (DiagnoseCustomization); standalone Radar injects it, Hub overrides it.
   const renderDiagnose = actionsBarProps?.renderDiagnose as
-    | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
+    | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint; createdAt?: string }) => ReactNode)
     | undefined
   const headerActions = resource && !resourceGone && renderHeaderActions?.({ resource, context: expanded ? 'expanded' : 'drawer', onNavigate: onNavigateToResource })
   const diagnoseAction = resourceGone ? null : renderDiagnose?.({
@@ -905,6 +905,7 @@ export function WorkloadView({
     namespace,
     name,
     health: diagnoseHealthHint(apiKind, resource),
+    createdAt: resource?.metadata?.creationTimestamp,
   })
 
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false

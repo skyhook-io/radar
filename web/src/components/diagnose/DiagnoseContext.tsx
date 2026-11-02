@@ -40,6 +40,10 @@ import {
   type ExecutionProfile,
 } from "../../api/diagnose";
 import { isQuestionOnly, runTargetKey } from "./target";
+import {
+  type LastInvestigation,
+  lastInvestigations,
+} from "./lastInvestigation";
 import { isExampleInvestigation } from "./exampleInvestigation";
 import { knownKindForPluralWithGroup } from "../../utils/navigation";
 
@@ -201,6 +205,8 @@ interface DiagnoseLayoutCtx {
   // doesn't stand in for a fresh resource start.
   runningRunIds: ReadonlyMap<string, string>;
   runningCount: number;
+  // The newest recent assessment of each resource on the cluster in use.
+  lastInvestigations: ReadonlyMap<string, LastInvestigation>;
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -538,6 +544,7 @@ function RoutedDiagnoseProvider({
   );
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
+  const [listedAt, setListedAt] = useState(() => Date.now());
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
   const [historyDegraded, setHistoryDegraded] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
@@ -744,10 +751,17 @@ function RoutedDiagnoseProvider({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // Fetches overlap (polling, focus, a cluster switch). One that started
+  // before the list last changed is dropped, or an older snapshot could
+  // restore cleared runs; a slow fetch still lands if nothing newer did.
+  const listSeqRef = useRef(0);
+  const appliedListSeqRef = useRef(0);
   const refreshRuns = useCallback(async () => {
     if (!available) return;
+    const seq = ++listSeqRef.current;
     try {
       const r = await listRuns();
+      if (seq < appliedListSeqRef.current) return;
       const focusedID = activeRunIdRef.current;
       let focusedRun: RunSummary | null = null;
       let retainFocusedSnapshot = false;
@@ -776,6 +790,9 @@ function RoutedDiagnoseProvider({
           retainFocusedSnapshot = !unavailable;
         }
       }
+      if (seq < appliedListSeqRef.current) return;
+      appliedListSeqRef.current = seq;
+      setListedAt(Date.now());
       setRuns((prev) => {
         let nextRuns = r.runs;
         if (focusedRun) nextRuns = [focusedRun, ...nextRuns];
@@ -802,6 +819,7 @@ function RoutedDiagnoseProvider({
       setRunsLoadFailed(false);
       setHistoryDegraded(!!r.historyDegraded);
     } catch {
+      if (seq < appliedListSeqRef.current) return;
       // Leave runsLoaded false (a missing-run verdict needs a real list) but
       // record the failure so the panel can say "retrying" instead of
       // pretending nothing happened. The 4s poll keeps retrying while open.
@@ -841,8 +859,16 @@ function RoutedDiagnoseProvider({
   // change.
   // A plain resource run sorts after a question about the same resource, so
   // it is the one a key maps to when both are live.
+  // A local run names the kubeconfig context it ran in, so a same-named
+  // resource on another cluster isn't it. A hosted list is already one
+  // cluster's and labels it differently. Until the cluster in use is known, a
+  // live run can't be ruled out by it.
+  const scopeByContext = !hosted && !!currentContext;
   const runningSig = runningRuns
-    .filter((r) => !isQuestionOnly(r))
+    .filter(
+      (r) =>
+        !isQuestionOnly(r) && (!scopeByContext || r.context === currentContext),
+    )
     .map(
       (r) =>
         `${runTargetKey(r.kind, r.namespace, r.name, r.group)}\t${r.question ? 0 : 1}\t${r.id}`,
@@ -867,6 +893,21 @@ function RoutedDiagnoseProvider({
   );
   const runningCount = runningRuns.length;
   const hasRunning = runningCount > 0;
+  // The clock the cutoff reads moves on each fetch and hourly, so an entry
+  // ages out while nothing polls.
+  useEffect(() => {
+    const t = setInterval(() => setListedAt(Date.now()), 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+  // Serialized so the buttons re-render only when an entry changes, not on
+  // every poll that returns a fresh array.
+  const lastSig = JSON.stringify(
+    hosted ? [] : [...lastInvestigations(runs, currentContext, listedAt)],
+  );
+  const lastInvestigationsByKey = useMemo(
+    () => new Map<string, LastInvestigation>(JSON.parse(lastSig)),
+    [lastSig],
+  );
 
   // Keep the run list (statuses, new background runs) fresh while the surface is open
   // OR while any investigation is still running — so the button indicator stays live
@@ -879,6 +920,22 @@ function RoutedDiagnoseProvider({
     const t = setInterval(refreshRuns, 4000);
     return () => clearInterval(t);
   }, [open, available, hasRunning, refreshRuns]);
+
+  // A resource shows its last investigation without the panel open, so the
+  // list also catches up when the window comes back (another tab's run, a
+  // cleared history, a failed first fetch) and when the cluster changes.
+  useEffect(() => {
+    if (!available) return;
+    window.addEventListener("focus", refreshRuns);
+    return () => window.removeEventListener("focus", refreshRuns);
+  }, [available, refreshRuns]);
+  const listedContextRef = useRef(currentContext);
+  useEffect(() => {
+    if (listedContextRef.current === currentContext) return;
+    const switched = listedContextRef.current !== undefined;
+    listedContextRef.current = currentContext;
+    if (switched) refreshRuns();
+  }, [currentContext, refreshRuns]);
 
   const consentedRef = useRef(consented);
   consentedRef.current = consented;
@@ -1364,6 +1421,7 @@ function RoutedDiagnoseProvider({
       runningKeys,
       runningRunIds,
       runningCount,
+      lastInvestigations: lastInvestigationsByKey,
     }),
     [
       open,
@@ -1377,6 +1435,7 @@ function RoutedDiagnoseProvider({
       runningKeys,
       runningRunIds,
       runningCount,
+      lastInvestigationsByKey,
       setMaximized,
       setWidth,
     ],
