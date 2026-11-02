@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
@@ -257,6 +258,28 @@ func TestCanReadWorkloadRefSourceFollowsTheDeniedRead(t *testing.T) {
 
 			if got := srv.canReadWorkloadRefSource(req, workloadRef, "prod"); got != tc.allowed {
 				t.Errorf("canReadWorkloadRefSource() = %v, want %v", got, tc.allowed)
+			}
+		})
+	}
+}
+
+func TestWorkloadRollbackErrorStatus(t *testing.T) {
+	conflict := apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "deployments"}, "web", errors.New("the object has been modified"))
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"workload changed mid-rollback", fmt.Errorf("Deployment ns/web changed while rolling back: %w", conflict), http.StatusConflict},
+		{"already at the revision", fmt.Errorf("revision 2 of Deployment ns/web: %w", rollouts.ErrTemplateUnchanged), http.StatusConflict},
+		{"paused", fmt.Errorf("Deployment ns/web: %w", k8score.ErrWorkloadPaused), http.StatusConflict},
+		{"missing revision", errors.New("revision 9 not found"), http.StatusNotFound},
+		{"unexpected", errors.New("boom"), http.StatusInternalServerError},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := workloadRollbackErrorStatus(tc.err); got != tc.want {
+				t.Errorf("status = %d, want %d", got, tc.want)
 			}
 		})
 	}

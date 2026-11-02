@@ -75,6 +75,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/rbac"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
@@ -1502,6 +1503,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		GitOpsWriteEvidence:      true,
 		ArgoRollbackSync:         true,
 		ArgoSyncInheritance:      true,
+		ArgoEnableSelfHealOff:    true,
 		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,
@@ -4798,30 +4800,37 @@ func (s *Server) handleRollbackWorkload(w http.ResponseWriter, r *http.Request) 
 			s.writeRolloutError(w, err, "rollback", namespace, name)
 			return
 		}
-		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
+		status := workloadRollbackErrorStatus(err)
+		if status == http.StatusInternalServerError {
+			log.Printf("[rollback] Failed to rollback %s %s/%s to revision %d: %v", kind, namespace, name, req.Revision, err)
 		}
-		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "not found") {
-			s.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "not supported") {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		log.Printf("[rollback] Failed to rollback %s %s/%s to revision %d: %v", kind, namespace, name, req.Revision, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(w, status, err.Error())
 		return
 	}
 
 	s.writeJSON(w, map[string]string{
 		"message": fmt.Sprintf("Rollback to revision %d initiated", req.Revision),
 	})
+}
+
+// workloadRollbackErrorStatus maps a Deployment/StatefulSet/DaemonSet rollback
+// error to its HTTP status. 409 covers the refusals the caller can act on: the
+// workload changed mid-rollback, already runs the revision, or is paused.
+func workloadRollbackErrorStatus(err error) int {
+	switch {
+	case apierrors.IsNotFound(err), errors.Is(err, k8score.ErrResourceNotFound):
+		return http.StatusNotFound
+	case apierrors.IsForbidden(err):
+		return http.StatusForbidden
+	case apierrors.IsConflict(err), errors.Is(err, rollouts.ErrTemplateUnchanged), errors.Is(err, k8score.ErrWorkloadPaused):
+		return http.StatusConflict
+	case strings.Contains(err.Error(), "not found"):
+		return http.StatusNotFound
+	case strings.Contains(err.Error(), "not supported"):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 // Session management handlers

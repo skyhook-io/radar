@@ -38,6 +38,7 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// carries the representative's DiagnosticContext, never the reverse pointer.
 	grouped = enrichDiagnosticContextAuthorized(grouped, flat, grouped, p, opts.CanReadClusterScoped)
 	matched := RelatedIssuesFrom(flat, grouped, opts, group, kind, namespace, name)
+	matched = enrichAdmissionWebhookCandidates(matched, p, podTemplateAccess{opts.CanReadClusterScoped, opts.CanReadRelated})
 	if !opts.SkipPodTemplateContext {
 		matched = enrichPodTemplateContext(matched, flat, p, podTemplateAccess{opts.CanReadClusterScoped, opts.CanReadRelated}, true,
 			Ref{Group: group, Kind: kind, Namespace: namespace, Name: name})

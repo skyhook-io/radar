@@ -95,11 +95,13 @@ describe('argoResumeSettings', () => {
     expect(argoResumeSettings(app({ automated: { enabled: false, prune: true } }), undefined)).toEqual({ prune: true, selfHeal: false })
   })
   it.each([
-    ['a Radar with the new default', true, { prune: false, selfHeal: true }],
-    ['an older Radar', false, { prune: true, selfHeal: true }],
-    ['an unknown Radar', undefined, null],
-  ])('without a block, follows %s', (_label, serverStartsPruneOff, expected) => {
-    expect(argoResumeSettings(app({}), serverStartsPruneOff)).toEqual(expected)
+    ['a Radar starting both off', true, true, { prune: false, selfHeal: false }],
+    ['a Radar starting only prune off', true, false, { prune: false, selfHeal: true }],
+    ['a host that passes no self-heal answer', true, undefined, { prune: false, selfHeal: true }],
+    ['an older Radar', false, false, { prune: true, selfHeal: true }],
+    ['an unknown Radar', undefined, undefined, null],
+  ])('without a block, follows %s', (_label, serverStartsPruneOff, serverStartsSelfHealOff, expected) => {
+    expect(argoResumeSettings(app({}), serverStartsPruneOff, serverStartsSelfHealOff)).toEqual(expected)
   })
 })
 

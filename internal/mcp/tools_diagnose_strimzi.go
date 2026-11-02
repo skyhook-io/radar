@@ -14,7 +14,7 @@ import (
 )
 
 func strimziDiagnoseKind(kind string) (string, bool) {
-	switch strings.ToLower(kind) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "kafkaconnector", "kafkaconnectors":
 		return "KafkaConnector", true
 	case "kafkaconnect", "kafkaconnects":

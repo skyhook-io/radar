@@ -19,7 +19,7 @@ import (
 )
 
 func TestStrimziDiagnoseDispatch(t *testing.T) {
-	for _, kind := range []string{"KafkaConnector", "kafkaconnectors", "KafkaConnect", "kafkaconnects"} {
+	for _, kind := range []string{"KafkaConnector", "kafkaconnectors", "KafkaConnect", "kafkaconnects", " KAFKACONNECT ", " KafkaConnector "} {
 		if _, ok := strimziDiagnoseKind(kind); !ok {
 			t.Fatalf("not supported %s", kind)
 		}

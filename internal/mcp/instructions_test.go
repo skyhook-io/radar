@@ -274,8 +274,8 @@ func TestExecServerInstructions(t *testing.T) {
 	if off != investigation.GeneralGuidanceFull {
 		t.Fatal("flag-off instructions changed")
 	}
-	if n := len([]rune(off)); n != 3404 {
-		t.Fatalf("exec=false instructions=%d characters, want 3404", n)
+	if n := len([]rune(off)); n != 3402 {
+		t.Fatalf("exec=false instructions=%d characters, want 3402", n)
 	}
 	TestServerInstructionsFitClientLimits(t)
 	t.Logf("exec=false instructions=%d characters", len([]rune(off)))
@@ -284,8 +284,8 @@ func TestExecServerInstructions(t *testing.T) {
 	if on != investigation.GeneralGuidanceExec || !strings.Contains(on, "each only if listed:") || !strings.Contains(on, "Pod checks: exec_pod if listed.") {
 		t.Fatal("missing conditional exec routing")
 	}
-	if n := len([]rune(on)); n != 3438 {
-		t.Fatalf("exec=true instructions=%d characters, want 3438", n)
+	if n := len([]rune(on)); n != 3436 {
+		t.Fatalf("exec=true instructions=%d characters, want 3436", n)
 	}
 	if serverInstructions(false) != investigation.GeneralGuidanceReadOnly {
 		t.Fatal("exec changed read-only instructions")
@@ -294,4 +294,31 @@ func TestExecServerInstructions(t *testing.T) {
 	TestServerInstructionsNameOnlyRegisteredTools(t)
 	TestServerInstructionsClaimsMatchToolContracts(t)
 	t.Logf("exec=true instructions=%d characters", len([]rune(on)))
+}
+
+// unroutedWriteTools are write tools the fixes line deliberately leaves out,
+// each with the reason. Every other write tool must be named, or an agent that
+// loads tools on demand never learns it can fix through it.
+var unroutedWriteTools = map[string]string{
+	"delete_resource": "deletion is never a routine fix; it takes a reviewed preview and an explicit ask",
+	"exec_pod":        "routed on its own Pod checks line",
+}
+
+func TestServerInstructionsRouteEveryWriteTool(t *testing.T) {
+	enableExecToolsForTest(t)
+	text := serverInstructions(true)
+	for _, tool := range listRegisteredToolsWith(t, true) {
+		if tool.Annotations == nil || tool.Annotations.ReadOnlyHint {
+			continue
+		}
+		if tool.Name == "diagnose" {
+			continue // a read tool whose optional in-cluster probe creates pods
+		}
+		if _, ok := unroutedWriteTools[tool.Name]; ok {
+			continue
+		}
+		if !strings.Contains(text, tool.Name) {
+			t.Errorf("write tool %s is not named in the server instructions' fixes line; add it to guidanceWriteTools in pkg/investigation/guidance.go or to unroutedWriteTools with a reason", tool.Name)
+		}
+	}
 }

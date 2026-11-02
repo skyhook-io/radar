@@ -2,6 +2,13 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
+Operational Issues in an open resource detail view refresh after observed root
+resource changes, coalesced to limit expensive checks. A once-per-minute visible-tab
+refresh covers Pod-only changes and findings that depend on elapsed time. Returning
+to a stale view refreshes it without requiring the detail view to be reopened.
+
+Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polling: their Issues request scans the whole cluster.
+
 ## OpenTelemetry Operator
 
 Radar provides native resource details for `opentelemetry.io` **OpenTelemetryCollector**
@@ -31,9 +38,17 @@ image upgrades are highlighted. This does not attribute injected Pods or infer
 collector relationships from endpoint strings.
 
 **REST and MCP:** existing resource list/get tools gain concise native summaries.
-Collector summaries include reconciliation state, mode, version and image; the
-reconciliation-time Pod count is confined to the labeled UI. Instrumentation summaries distinguish configuration from blocked upgrades.
-No new MCP tool or response field is introduced. Existing generic ownership remains;
+Collector summaries include reconciliation state, mode, version and image.
+The optional `openTelemetryCollector.reportedPodReadiness` is the operator's Pod-count snapshot,
+not current readiness; read failures or a switch to sidecar mode can retain an
+earlier value. `openTelemetryCollector.declaredPipelines` gives the declared count and
+up to five sorted names, with truncation reported. That block is omitted when
+configuration cannot be previewed; omission does not mean zero pipelines. Alpha
+YAML previews are limited to 64 KiB. Instrumentation summaries name up to ten
+languages under `openTelemetryInstrumentation.recordedUpgradeBlocks`, using the
+same `{count,names,namesTruncated}` preview as declared pipelines,
+without copying arbitrary status messages. These are additive summary fields;
+no new MCP tool is introduced. Existing generic ownership remains;
 no endpoint-derived topology edges, telemetry queries, or new Issues source are added.
 Existing condition Issues surface managed reconciliation failures and status-read
 errors with the operator's message; unmanaged and stale observations are suppressed.
@@ -52,6 +67,10 @@ customer-managed read permissions for caller-authorized tools when needed. This
 baseline exception is not a full-object UI/REST confidentiality guarantee; runtime
 response authorization remains separate. It does not revoke
 permissions already granted by other roles.
+
+### Instrumentation upgrade history
+
+The neutral “Upgrade block recorded” status describes `status.upgradeBlockedVersions`, written during an operator startup upgrade pass. A record can remain after a manual image change; it is not a current compatibility or runtime-health verdict. The drawer shows at most ten recorded languages, with shortened labels and a link to full YAML for remaining entries. Compact agent summaries retain their bounded language preview; detail reads retain native status without a duplicate context block.
 
 ## Flagger
 
@@ -89,6 +108,12 @@ cause. A failed new rollout does not imply the primary is down. Suspended failed
 rollouts remain visible; ordinary waiting/progress and `Promoted=False` remain quiet.
 No new workflow actions, topology edge types, traffic queries or MCP tools are added.
 
+Compact REST/MCP summaries also identify the configured strategy and carry the
+reported counters under `flaggerCanary`: weight percentage for weighted analysis, iteration
+for iteration-based analysis, and failed checks when reported. A reported zero
+is retained; an absent counter means unreported, not zero. These counters are
+controller snapshots, with the same freshness limits as the recorded phase.
+
 | Resource | Group | Topology | Detail View | AI Summary |
 |---|---|---|---|---|
 | Canary | flagger.app | No dedicated nodes or edges; primary navigation is in Related Resources | Recorded rollout, analysis and explicit refs | Recorded outcome, suspension and target |
@@ -107,6 +132,13 @@ kinds are unavailable. Locally, Radar uses the current Kubernetes identity's acc
 The Cloud integration-read baseline does not add these resources to generated
 caller-role grants. That baseline is not a deny rule for the response paths above.
 Default collector/caller access for existing integrations is unchanged.
+
+### Flagger dependency checks
+
+Issues reports missing declared Flagger targets, analysis MetricTemplates and provider Secrets used by those templates. These are warnings about release reconciliation/evaluation, not proof the stable primary is down. Suspended/deleting Canaries produce no reference warnings; skipped analysis suppresses only analysis-reference warnings; zero target replicas are valid.
+
+Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
+
 
 ## ConfigMap and Secret reflection (Reflector)
 

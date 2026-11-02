@@ -317,9 +317,8 @@ const ISSUE_ROW_ACTION_HIT_CLASS = clsx(HOVER_REVEAL_HIT, 'flex [@media(hover:no
 // Without hover the action isn't in line 1, so nothing there swaps out (the
 // keyboard-focus half of the reveal would otherwise still hide it).
 const ISSUE_ROW_META_TOUCH_CLASS = '[@media(hover:none)]:opacity-100! [@media(hover:none)]:translate-none!'
-// Line 1 is as tall as its tallest badge (the timing chip outgrows the kind
-// badge). Invisible zero-width copies of those badges give the overlaid action
-// the same height, so it centers on line 1 whichever badges the row has.
+// Line 1 is as tall as its kind badge. An invisible zero-width copy of it gives
+// the overlaid action the same height, so it centers on line 1.
 const ISSUE_ROW_STRUT = 'invisible w-0 overflow-hidden px-0 border-x-0 [@media(hover:none)]:hidden'
 
 interface ProblemsPanelProps {
@@ -479,7 +478,7 @@ export function ProblemsPanel({
                             <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                             <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
                             {(age || timing) && (
-                              <span className={clsx('ml-auto flex shrink-0 items-center gap-1', canInvestigate && [HOVER_REVEAL_REST, ISSUE_ROW_META_TOUCH_CLASS])}>
+                              <span className={clsx('ml-auto flex shrink-0 items-center gap-2', canInvestigate && [HOVER_REVEAL_REST, ISSUE_ROW_META_TOUCH_CLASS])}>
                                 {age && (
                                   <Tooltip content={issueFirstSeenTitle(issue)} delay={100} disabled={canInvestigate}>
                                     <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
@@ -487,7 +486,7 @@ export function ProblemsPanel({
                                 )}
                                 {timing && (
                                   <Tooltip content={timing.tooltip} delay={100} disabled={canInvestigate}>
-                                    <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
+                                    <span className="text-[10px] text-theme-text-secondary">{timing.chip}</span>
                                   </Tooltip>
                                 )}
                               </span>
@@ -510,7 +509,6 @@ export function ProblemsPanel({
                       {canInvestigate && (
                         <div className={ISSUE_ROW_ACTION_CLASS}>
                           <span aria-hidden className={clsx(ISSUE_ROW_STRUT, 'text-[10px] py-0.5')}>{'\u200b'}</span>
-                          {timing && <span aria-hidden className={clsx(ISSUE_ROW_STRUT, 'badge-sm text-[10px]')}>{'\u200b'}</span>}
                           <span className={ISSUE_ROW_ACTION_HIT_CLASS}>
                             <IssueDiagnoseButton size="compact" kind={ref.kind} group={ref.group} namespace={ref.namespace ?? ''} name={ref.name} />
                           </span>

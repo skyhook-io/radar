@@ -51,6 +51,12 @@ import {
   statusWord,
 } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
+import {
+  EXAMPLE_INVESTIGATION_ID,
+  EXAMPLE_INVESTIGATION_RUN,
+  exampleInvestigationOffered,
+  isExampleInvestigation,
+} from "./exampleInvestigation";
 import { AgentSigninNotice } from "./AgentSigninNotice";
 import {
   useAgentSignin,
@@ -565,7 +571,18 @@ export function DiagnoseSurface({
   const setupPending =
     d.setupState === "needs-install" || d.setupState === "needs-restart";
 
-  const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
+  const exampleOpen = isExampleInvestigation(d.activeRunId);
+  const activeRun = exampleOpen
+    ? EXAMPLE_INVESTIGATION_RUN
+    : (d.runs.find((r) => r.id === d.activeRunId) ?? null);
+  const openExample = exampleInvestigationOffered({
+    runs: d.runs,
+    runsLoaded: d.runsLoaded,
+    setupPending,
+    needsConsent: d.needsConsent,
+  })
+    ? () => d.openRun(EXAMPLE_INVESTIGATION_ID)
+    : undefined;
   // Consent replaces the detail pane even if goHome retained an older run id.
   // Header identity and actions must describe what is actually visible.
   const visibleRunDetail =
@@ -642,9 +659,16 @@ export function DiagnoseSurface({
       run={activeRun}
       agentLabel={activeAgentLabel}
       maximized={maximized}
-      onOpenResource={onOpenResource ? openEvidenceResource : undefined}
-      onOpenTimeline={onOpenTimeline ? openEvidenceTimeline : undefined}
+      // The example's resources are on a test cluster, not this one.
+      onOpenResource={
+        onOpenResource && !exampleOpen ? openEvidenceResource : undefined
+      }
+      onOpenTimeline={
+        onOpenTimeline && !exampleOpen ? openEvidenceTimeline : undefined
+      }
       onRevealDestination={revealDestination}
+      example={exampleOpen}
+      onCloseExample={exampleOpen ? d.goHome : undefined}
     />
   ) : d.activeRunId && !d.runsLoaded ? (
     // Deep-linked to a run before the list has ever loaded: show the load
@@ -699,6 +723,7 @@ export function DiagnoseSurface({
         checkingAgents={d.checkingAgents}
         agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
+        onOpenExample={openExample}
       />
     </div>
   ) : (
@@ -730,12 +755,14 @@ export function DiagnoseSurface({
         checkingAgents={d.checkingAgents}
         agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
+        onOpenExample={openExample}
       />
     </div>
   ) : (
     <InvestigationHome
       agentLabel={d.agentLabel}
       questions={d.questions}
+      onOpenExample={openExample}
       onBrowseIssues={
         d.questions || (d.runsLoaded && d.runs.length === 0)
           ? onBrowseIssues
@@ -847,6 +874,7 @@ export function DiagnoseSurface({
         <div className="flex shrink-0 items-center gap-1">
           {activeRun &&
             visibleRunDetail &&
+            !exampleOpen &&
             canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
                 content="Re-run this investigation from scratch"
@@ -861,7 +889,9 @@ export function DiagnoseSurface({
                 </button>
               </Tooltip>
             )}
-          {visibleRunDetail && headerPresentation.runActionsClass !== null && (
+          {visibleRunDetail &&
+            !exampleOpen &&
+            headerPresentation.runActionsClass !== null && (
             <div
               className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
             >
@@ -946,6 +976,15 @@ export function DiagnoseSurface({
               loadFailed={d.runsLoadFailed}
               onRetry={d.refreshRuns}
               questions={d.questions}
+              // Beside Home on the full page, Home already offers it.
+              onOpenExample={
+                persistentHistory || exampleOpen || !openExample
+                  ? undefined
+                  : () => {
+                      openExample();
+                      dismissHistory();
+                    }
+              }
             />
           </aside>
         )}

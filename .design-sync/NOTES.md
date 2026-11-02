@@ -12,7 +12,8 @@ node .ds-sync/resync.mjs --config .design-sync/config.json --node-modules ./node
   --remote .design-sync/.cache/remote-sync.json
 ```
 
-Last synced 2026-09-28: 414 components (37 from web/), 89 authored previews, bundle ~7.3 MB.
+Last synced 2026-10-28: 461 components (37 from web/), 96 authored previews, bundle ~7.7 MB.
+Previous: 2026-09-28, 414 components, 89 previews, ~7.3 MB.
 
 ## Build
 
@@ -73,6 +74,11 @@ Last synced 2026-09-28: 414 components (37 from web/), 89 authored previews, bun
   `InvestigationEvidencePane`): standalone cards render collapsed; expanded bodies show in the pane.
 - Tall Diagnose cells (ResultCard, AnalysisStory) trim content to fit the default cell height;
   ResultCard uses `compactActions` as InvestigationView does.
+- GitOpsGraphFilterRail caps itself at `max-lg:h-48` (scrolls) below 1024px; the preview lifts the cap
+  with a scoped `<style>` so the card shows the desktop rail. Its viewport override alone did not help:
+  review captures render each story in a narrow cell.
+- Fixtures that render ages must build timestamps from `Date.now()` (frozen clock) — a fixed ISO
+  string renders "for 0s" or an absolute date.
 - ManifestViewer's CodeViewer caps at `calc(100vh - 300px)`, so YAML scrolls inside short cards.
 
 ## Re-sync risks
@@ -88,6 +94,14 @@ Last synced 2026-09-28: 414 components (37 from web/), 89 authored previews, bun
   `inline-flex`, inline bar row isn't `w-full`) — product bug; the preview omits the tooltip.
 - Previous sync (2026-07) never committed its config or previews; the 42 previews here were
   ported back from the project's compiled `_preview/*.js`.
+
+- New components land in group `general` unless their file sits in a feature dir the converter
+  recognizes. CNPG summaries/primitives and the Flagger/OpenTelemetry renderers live in
+  multi-component files, so they are pinned in `componentSrcMap` (2026-10-28). Check the
+  `general/` dir of every build for new feature components and pin them the same way.
+- Tiny primitives (`ToneDot`, `CNPGDimensionMark`, `CNPGServingStatus`) render as a few pixels
+  on the floor card and trip `[RENDER_BLANK]`; they need an authored preview with surrounding
+  context, not a bare instance.
 
 ## Known render warns
 

@@ -46,7 +46,7 @@ func OpenTelemetryInstrumentation(u *unstructured.Unstructured) Verdict {
 	}
 	blocked, _, _ := unstructured.NestedMap(u.Object, "status", "upgradeBlockedVersions")
 	if len(blocked) > 0 {
-		return Verdict{Level: LevelNeutral, Reason: "Upgrade blocked"}
+		return Verdict{Level: LevelNeutral, Reason: "Upgrade block recorded"}
 	}
 	return Verdict{Level: LevelNeutral, Reason: "Configured"}
 }

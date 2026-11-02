@@ -189,9 +189,11 @@ type FeatureCapabilities struct {
 	// .../validate-resource) with syncOptions omitted uses the Application's
 	// spec.syncPolicy.syncOptions, and an omitted prune does not prune. An
 	// older Radar syncs with no options and prunes. Also signals that enabling
-	// auto-sync on a never-suspended Application starts with prune off and
-	// selfHeal on.
+	// auto-sync on a never-suspended Application starts with prune off.
 	ArgoSyncInheritance bool `json:"argoSyncInheritance"`
+	// Enabling auto-sync on a never-suspended Application starts with selfHeal
+	// off, as in Argo CD. An older Radar turns it on.
+	ArgoEnableSelfHealOff bool `json:"argoEnableSelfHealOff"`
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`

@@ -61,6 +61,8 @@ export interface SyncOptionsDialogProps {
   operationInProgress?: boolean
   validationResult?: ResourceValidationResult | null
   validationError?: string | null
+  // Why the last confirm failed, for a host that keeps the dialog open to retry.
+  syncError?: string | null
   onCancel: () => void
   onConfirm: (opts: ArgoSyncOpts) => void
   onValidate?: (opts: ArgoSyncOpts) => void
@@ -76,7 +78,7 @@ export interface ResourceValidationResult {
   }
 }
 
-export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, syncError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const titleId = useId()
   const syncOptionsUnknown = applicationSyncOptions === undefined
   const liveAppOptions = applicationSyncOptions ?? EMPTY_OPTIONS
@@ -255,6 +257,12 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
             </div>
           )}
         </fieldset>
+        {syncError && !pending && (
+          <p role="alert" className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.error}`}>
+            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span className="max-h-20 min-w-0 overflow-auto break-words">Sync failed: {syncError}</span>
+          </p>
+        )}
         {disruptive.length > 0 && (
           <p className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.warning}`}>
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

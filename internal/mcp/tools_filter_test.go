@@ -858,6 +858,9 @@ func TestNormalizeWorkloadLogsKind_DefaultsToDeployment(t *testing.T) {
 	if got := normalizeWorkloadLogsKind("Workflow"); got != "workflows" {
 		t.Fatalf("Workflow workload-log kind = %q, want workflows", got)
 	}
+	if got := normalizeWorkloadLogsKind("rollout"); got != "rollouts" {
+		t.Fatalf("rollout workload-log kind = %q, want rollouts", got)
+	}
 }
 
 func TestParseLogsSince(t *testing.T) {

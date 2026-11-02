@@ -20,7 +20,7 @@ export function getOpenTelemetryCollectorStatus(data: any): StatusBadge {
 export function getOpenTelemetryInstrumentationStatus(data: any): StatusBadge {
   const blocked = Object.keys(data.status?.upgradeBlockedVersions ?? {}).length > 0
   const level = 'neutral'
-  return { text: blocked ? 'Upgrade blocked' : 'Configured', level, color: healthColors[level] }
+  return { text: blocked ? 'Upgrade block recorded' : 'Configured', level, color: healthColors[level] }
 }
 
 export interface CollectorPipeline {

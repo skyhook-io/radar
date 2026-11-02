@@ -12,6 +12,13 @@ import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
+function argoAutoSyncControllerNote(controller: ArgoActionHandlers['autoSyncController']): string {
+  if (!controller) return ''
+  return controller.kind === 'ApplicationSet'
+    ? ` ApplicationSet ${controller.name} can turn it back on; to keep it off, change the ApplicationSet's template.`
+    : ` Application ${controller.name} manages this one from Git and can turn it back on when it syncs; to keep it off, change it in Git.`
+}
+
 function argoResumeDescription(suspended: boolean, settings: ArgoActionHandlers['resumeSettings']): string {
   if (suspended) return 'Turn auto-sync back on with its current or saved settings.'
   if (!settings) return 'Turn on automated sync, so Argo applies new commits from Git.'
@@ -98,6 +105,9 @@ export interface ArgoActionHandlers {
   // (argoResumeSettings). Without it the tooltip makes no prune claim.
   resumeSettings?: { prune: boolean; selfHeal: boolean } | null
   resumeBlockedReason?: string
+  // The Argo CD object that can turn auto-sync back on after Disable
+  // (argoAutoSyncController); its tooltip names it.
+  autoSyncController?: { kind: 'ApplicationSet' | 'Application'; name: string } | null
 }
 
 export interface FluxActionHandlers {
@@ -300,6 +310,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
 
   const effectiveSuspended = status?.suspended ?? false
   const argoOperationInProgress = argo?.operationInProgress ?? argo?.isRunning ?? false
+  const argoSyncDisabled = effectiveSuspended || terminating || argoOperationInProgress
   const resumeUpgrade = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeUpgrade ?? null : null
   const resumeBlockedReason = isArgoApp && argo && !argo.autoSyncEnabled ? argo.resumeBlockedReason : undefined
   // graphFullscreen hides everything chrome-side; the body region expands.
@@ -400,7 +411,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     icon={ArrowDownUp}
                     loading={argo.syncing}
                     onClick={argo.onSyncRequested}
-                    disabled={effectiveSuspended || terminating || argoOperationInProgress}
+                    disabled={argoSyncDisabled}
                     disabledReason={terminating
                       ? terminatingActionTooltip
                       : argoOperationInProgress
@@ -435,7 +446,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   {argo.autoSyncEnabled ? (
                     <ActionButton
                       label="Disable auto-sync"
-                      description="Stop Argo from automatically syncing Git changes. Manual Sync still works."
+                      description={`Stop Argo from automatically syncing Git changes.${argoSyncDisabled ? '' : ' Manual Sync still works.'}${argoAutoSyncControllerNote(argo.autoSyncController)}`}
                       icon={Pause}
                       loading={argo.suspending}
                       onClick={argo.onSuspend}

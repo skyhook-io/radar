@@ -34,7 +34,7 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
       <button type="button" onClick={() => props.onRowAction(props.rows[0], 'sync')}>Open sync</button>
     ),
     GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => (
-      <div>
+      <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
         <button type="button" onClick={() => props.argo?.onSyncRequested()}>Open sync</button>
         {props.renderTabBody({ tab: 'changes', fullscreen: false })}
         {props.children}
@@ -45,6 +45,11 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
     ),
   }
 })
+const toast = vi.hoisted(() => ({ success: vi.fn() }))
+vi.mock('../ui/Toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ui/Toast')>()),
+  showApiSuccess: toast.success,
+}))
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>()
   const idle = () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false })
@@ -151,6 +156,29 @@ describe('a Radar that advertises argoSyncInheritance', () => {
     expect(requests[0].body).toMatchObject({ prune: false, syncOptions: ['CreateNamespace=true'] })
   })
 
+  it.each([
+    { change: 'the compared revision', apply: () => { app.status.sync.revision = 'new-sha' } },
+    { change: 'the source', apply: () => { app.spec.source = { repoURL: 'https://example.com/other', targetRevision: 'main' } } },
+    { change: 'the comparison', apply: () => { app.status.sync.comparedTo = { source: app.spec.source } } },
+  ])('drops a dry-run pass once $change changes', async ({ apply }) => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    expect(document.body.textContent).toContain('Dry-run passed')
+    apply()
+    await renderView('/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io')
+    await settle()
+    expect(document.body.textContent).toContain('Sync resource')
+    expect(document.body.textContent).not.toContain('Dry-run passed')
+  })
+
+  it('keeps a dry-run pass while what it checked is unchanged', async () => {
+    await click(button('Open resource sync'))
+    await click(button('Dry-run'))
+    await renderView('/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io')
+    await settle()
+    expect(document.body.textContent).toContain('Dry-run passed')
+  })
+
   it('validates and syncs one resource with the inherited options', async () => {
     await click(button('Open resource sync'))
     await click(button('Dry-run'))
@@ -188,6 +216,21 @@ describe('an older Radar, without argoSyncInheritance', () => {
     expect(requests[0].body.syncOptions).toEqual(APP_OPTIONS)
     expect(requests[1].body).toMatchObject({ prune: false, syncOptions: APP_OPTIONS })
   })
+})
+
+it.each([
+  { dryRun: false, message: 'Sync initiated' },
+  { dryRun: true, message: 'Dry run started' },
+])('confirms a sync with dryRun $dryRun as "$message"', async ({ dryRun, message }) => {
+  toast.success.mockClear()
+  await click(button('Open sync'))
+  if (dryRun) {
+    const label = [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith('Dry run'))!
+    await click(label.querySelector('input')!)
+  }
+  await click(button(dryRun ? 'Run dry-run' : 'Sync now'))
+  expect(requests[0].body).toMatchObject({ dryRun })
+  expect(toast.success).toHaveBeenCalledWith(message)
 })
 
 it('treats a Radar whose capabilities have not loaded as older', async () => {
@@ -314,4 +357,13 @@ it('refreshes auto-sync status in the table sync dialog', async () => {
   await replaceTableApplication(APP_OPTIONS, true)
   expect(revision.disabled).toBe(true)
   expect(document.body.textContent).toContain('Turn off auto-sync to deploy another revision')
+})
+
+it.each([
+  { label: 'starts self-heal off', features: { argoRollbackSync: true, argoSyncInheritance: true, argoEnableSelfHealOff: true }, expected: { prune: false, selfHeal: false } },
+  { label: 'still starts self-heal on', features: { argoRollbackSync: true, argoSyncInheritance: true, argoEnableSelfHealOff: false }, expected: { prune: false, selfHeal: true } },
+])('predicts what a first-time Enable auto-sync turns on for a Radar that $label', async ({ features, expected }) => {
+  await advertise(features)
+  const settings = document.querySelector('[data-resume-settings]')!.getAttribute('data-resume-settings')!
+  expect(JSON.parse(settings)).toEqual(expected)
 })

@@ -15,9 +15,9 @@ import (
 // GitOps tool input types
 
 type manageGitOpsInput struct {
-	Action    string `json:"action" jsonschema:"action: sync, refresh, terminate, rollback (ArgoCD only), reconcile or sync-with-source (FluxCD), suspend, or resume"`
+	Action    string `json:"action" jsonschema:"action: sync, refresh, terminate, rollback (Argo CD only), reconcile or sync-with-source (Flux), suspend, or resume"`
 	Tool      string `json:"tool" jsonschema:"gitops tool: argocd or fluxcd"`
-	Kind      string `json:"kind,omitempty" jsonschema:"resource kind (FluxCD only): kustomization, helmrelease, gitrepository, etc."`
+	Kind      string `json:"kind,omitempty" jsonschema:"resource kind (Flux only): kustomization, helmrelease, gitrepository, etc."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 
