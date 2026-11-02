@@ -252,6 +252,26 @@ func TestSelectFeedChurnGuard(t *testing.T) {
 		t.Fatalf("short page: %d rows, churn %+v; want 20 rows and 42 Widget left out", len(sel.Changes), sel.Churn)
 	}
 
+	// Objects created only to be deleted are churn too; objects created
+	// and kept are a bulk apply.
+	var runs []issuesapi.RecentChange
+	for i := range 40 {
+		c := change("KafkaConnector", "kafka.strimzi.io/v1beta2", fmt.Sprintf("load-%d", i), i)
+		c.ChangeType = "add"
+		d := c
+		d.ChangeType = "delete"
+		runs = append(runs, c, d)
+	}
+	for i := range 60 {
+		c := change("VirtualService", "networking.istio.io/v1", fmt.Sprintf("vs-%d", i), 30)
+		c.ChangeType = "add"
+		runs = append(runs, c)
+	}
+	sel = SelectFeed(append(runs, change("Deployment", "apps/v1", "web", 1)), 20)
+	if len(sel.Churn) != 1 || sel.Churn[0].Kind != "KafkaConnector" {
+		t.Fatalf("churn = %+v, want KafkaConnector only", sel.Churn)
+	}
+
 	// Below the floor, repeated changes are not churn.
 	var small []issuesapi.RecentChange
 	for i := range churnMinRows - 1 {
@@ -262,7 +282,7 @@ func TestSelectFeedChurnGuard(t *testing.T) {
 	}
 }
 
-func TestOnlyControllerTaintChanges(t *testing.T) {
+func TestOnlyControllerNodeChanges(t *testing.T) {
 	node := func(fields ...timeline.FieldChange) timeline.TimelineEvent {
 		return timeline.TimelineEvent{Kind: "Node", APIVersion: "v1", EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: fields}}
 	}
@@ -280,12 +300,15 @@ func TestOnlyControllerTaintChanges(t *testing.T) {
 		{"karpenter disrupted", node(keys([]any{}, []any{"karpenter.sh/disrupted"})), true},
 		{"autoscaler removal", node(keys([]any{}, []any{"ToBeDeletedByClusterAutoscaler"})), true},
 		{"karpenter disrupted beside a custom taint", node(keys([]any{"dedicated"}, []any{"karpenter.sh/disrupted"})), false},
+		{"cilium startup taint", node(keys([]any{"node.cilium.io/agent-not-ready"}, []any{})), true},
+		{"karpenter registration", node(keys([]any{"karpenter.sh/unregistered"}, []any{})), true},
 		{"cordon with its taint", node(timeline.FieldChange{Path: "spec.unschedulable"}, keys([]any{}, []any{"node.kubernetes.io/unschedulable"})), false},
 		{"label", node(timeline.FieldChange{Path: "metadata.labels[team]"}), false},
+		{"removal label with removal taint", node(keys([]any{}, []any{"karpenter.sh/disrupted"}), timeline.FieldChange{Path: "metadata.labels[node.kubernetes.io/exclude-from-external-load-balancers]"}), true},
 		{"unreadable keys", node(timeline.FieldChange{Path: "spec.taints", OldValue: "x", NewValue: "y"}), false},
 		{"status only", node(timeline.FieldChange{Path: "status.conditions[Ready]"}), false},
 	} {
-		if got := onlyControllerTaintChanges(tt.e); got != tt.want {
+		if got := onlyControllerNodeChanges(tt.e); got != tt.want {
 			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
 	}

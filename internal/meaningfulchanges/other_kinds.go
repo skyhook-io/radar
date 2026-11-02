@@ -59,8 +59,9 @@ var churnKinds = []resourceid.GroupKind{
 
 // controllerTaints are taints controllers add and remove on their own:
 // those mirroring state the Node row records elsewhere (its conditions,
-// spec.unschedulable, cloud-provider initialization) and the autoscaler and
-// Karpenter removal taints, which Karpenter re-applies every few minutes
+// spec.unschedulable, cloud-provider and Karpenter registration, and any
+// "<agent>/agent-not-ready" startup taint a node agent such as Cilium
+// removes once it runs) and the autoscaler and Karpenter removal taints, which Karpenter re-applies every few minutes
 // while a consolidation keeps failing. Rows that change only these stay in
 // history and kind=Node but not in the default feed; a Node actually removed
 // shows as its delete.
@@ -74,6 +75,7 @@ var controllerTaints = map[string]bool{
 	"node.kubernetes.io/unschedulable":               true,
 	"node.cloudprovider.kubernetes.io/uninitialized": true,
 	"karpenter.sh/disrupted":                         true,
+	"karpenter.sh/unregistered":                      true,
 	"ToBeDeletedByClusterAutoscaler":                 true,
 	"DeletionCandidateOfClusterAutoscaler":           true,
 }
@@ -119,7 +121,7 @@ func otherKindsCandidates(ctx context.Context, store timeline.EventStore, q Quer
 			got = got[:bound]
 		}
 		for _, e := range got {
-			if isNodeEvent(e) && e.EventType == timeline.EventTypeUpdate && onlyControllerTaintChanges(e) {
+			if isNodeEvent(e) && e.EventType == timeline.EventTypeUpdate && onlyControllerNodeChanges(e) {
 				continue
 			}
 			events = append(events, e)
@@ -141,23 +143,41 @@ func trackedCustomGroupKinds() []resourceid.GroupKind {
 	return out
 }
 
-// onlyControllerTaintChanges reports a Node row whose every desired-state
-// field adds, removes or re-values controllerTaints. A field it can't read as
-// taint keys counts as a change, rather than hide one.
-func onlyControllerTaintChanges(e timeline.TimelineEvent) bool {
+// controllerNodeLabels are labels Karpenter and the cluster autoscaler set
+// on a Node they are removing.
+var controllerNodeLabels = map[string]bool{
+	"node.kubernetes.io/exclude-from-external-load-balancers": true,
+}
+
+func controllerTaint(key string) bool {
+	return controllerTaints[key] || strings.HasSuffix(key, "/agent-not-ready")
+}
+
+// onlyControllerNodeChanges reports a Node row whose every desired-state
+// field adds, removes or re-values controllerTaints or controllerNodeLabels.
+// A field it can't read as taint keys counts as a change, rather than hide
+// one.
+func onlyControllerNodeChanges(e timeline.TimelineEvent) bool {
 	if e.Diff == nil {
 		return false
 	}
-	taintFields := 0
+	controllerFields := 0
 	for _, f := range e.Diff.Fields {
 		if !timeline.IsDesiredStatePath(f.Path) {
 			continue
 		}
-		if key, ok := strings.CutPrefix(f.Path, "spec.taints["); ok {
-			if !controllerTaints[strings.TrimSuffix(key, "]")] {
+		if key, ok := strings.CutPrefix(f.Path, "metadata.labels["); ok {
+			if !controllerNodeLabels[strings.TrimSuffix(key, "]")] {
 				return false
 			}
-			taintFields++
+			controllerFields++
+			continue
+		}
+		if key, ok := strings.CutPrefix(f.Path, "spec.taints["); ok {
+			if !controllerTaint(strings.TrimSuffix(key, "]")) {
+				return false
+			}
+			controllerFields++
 			continue
 		}
 		if f.Path != "spec.taints" {
@@ -169,13 +189,13 @@ func onlyControllerTaintChanges(e timeline.TimelineEvent) bool {
 			return false
 		}
 		for _, key := range changed {
-			if !controllerTaints[key] {
+			if !controllerTaint(key) {
 				return false
 			}
 		}
-		taintFields++
+		controllerFields++
 	}
-	return taintFields > 0
+	return controllerFields > 0
 }
 
 const (
@@ -183,9 +203,11 @@ const (
 	// while other kinds' rows are left out to make room.
 	perKindShown = 3
 	// Churn guard: a kind outside the curated set with at least
-	// churnMinRows rows in the window, at least churnRowsPerObject per
-	// object on average, is controller churn: a controller rewriting the
-	// same objects. A bulk apply of many objects, once each, is not.
+	// churnMinRows rows in the window is controller churn when a controller
+	// rewrites the same objects (churnRowsPerObject rows per object on
+	// average) or creates objects only to delete them (most of its objects
+	// both created and deleted in the window). A bulk apply of many
+	// objects, once each, is neither.
 	churnMinRows       = 50
 	churnRowsPerObject = 5
 )
@@ -300,8 +322,9 @@ func SelectFeed(changes []issuesapi.RecentChange, limit int) FeedSelection {
 // churnGuard returns the kinds outside the curated set whose rows mark them
 // as controller churn, with their counts.
 func churnGuard(changes []issuesapi.RecentChange) map[resourceid.GroupKind]int {
+	type object struct{ created, deleted bool }
 	counts := map[resourceid.GroupKind]int{}
-	objects := map[resourceid.GroupKind]map[string]bool{}
+	objects := map[resourceid.GroupKind]map[string]*object{}
 	for _, c := range changes {
 		key := changeGroupKind(c)
 		if curatedGroupKind(key) {
@@ -309,13 +332,30 @@ func churnGuard(changes []issuesapi.RecentChange) map[resourceid.GroupKind]int {
 		}
 		counts[key]++
 		if objects[key] == nil {
-			objects[key] = map[string]bool{}
+			objects[key] = map[string]*object{}
 		}
-		objects[key][c.Namespace+"/"+c.Name] = true
+		id := c.Namespace + "/" + c.Name
+		o := objects[key][id]
+		if o == nil {
+			o = &object{}
+			objects[key][id] = o
+		}
+		switch c.ChangeType {
+		case string(timeline.EventTypeAdd):
+			o.created = true
+		case string(timeline.EventTypeDelete):
+			o.deleted = true
+		}
 	}
 	out := map[resourceid.GroupKind]int{}
 	for key, n := range counts {
-		if n >= churnMinRows && n >= churnRowsPerObject*len(objects[key]) {
+		shortLived := 0
+		for _, o := range objects[key] {
+			if o.created && o.deleted {
+				shortLived++
+			}
+		}
+		if n >= churnMinRows && (n >= churnRowsPerObject*len(objects[key]) || 2*shortLived > len(objects[key])) {
 			out[key] = n
 		}
 	}
@@ -359,7 +399,7 @@ func FeedSelectionGuidance(sel FeedSelection) string {
 	}
 	var parts []string
 	if len(sel.Churn) > 0 {
-		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, the same objects changed over and over: %s.", kindCountList(sel.Churn)))
+		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, objects rewritten or created and deleted over and over: %s.", kindCountList(sel.Churn)))
 	}
 	if len(sel.Crowded) > 0 {
 		parts = append(parts, fmt.Sprintf("Left out so more kinds fit on the page: %s.", kindCountList(sel.Crowded)))
