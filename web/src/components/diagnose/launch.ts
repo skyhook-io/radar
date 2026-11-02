@@ -3,6 +3,7 @@
 // full agent (their config, their other MCPs, interactive approvals) — distinct
 // from the contained in-panel engine. The endpoint follows the server MCP mode.
 // In full mode, the client approval prompts gate changes.
+import { isWindows } from "@skyhook-io/k8s-ui/utils/platform";
 import { type RunSummary } from "../../api/diagnose";
 
 // sq POSIX-single-quotes a string so it's a safe single shell argument regardless
@@ -56,6 +57,7 @@ export function openInTerminal(command: string, title: string) {
 export function buildLaunchCommand(
   run: RunSummary,
   mcpUrl: string,
+  shell: "posix" | "powershell" = isWindows() ? "powershell" : "posix",
 ): string | null {
   if (!run.sessionId || run.status === "stale") return null;
 
@@ -81,5 +83,22 @@ export function buildLaunchCommand(
   const cfg = JSON.stringify({
     mcpServers: { radar: { type: "http", url: mcpUrl } },
   });
+  if (shell === "powershell")
+    return powerShellClaudeCommand(run.sessionId, mcpUrl, cfg);
   return `mkdir -p ${AGENT_DIR} && cd ${AGENT_DIR} && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
+}
+
+// Radar's terminal on Windows is Windows PowerShell 5.1, which has no `&&`,
+// no `mkdir -p`, and drops the double quotes inside an argument it passes to a
+// program. `--%` hands the rest of the line to claude unparsed, where the C
+// runtime turns \" back into ". That text can't carry a quote or a %, so a
+// session id or URL holding one gets no command rather than a broken one.
+function powerShellClaudeCommand(
+  sessionId: string,
+  mcpUrl: string,
+  cfg: string,
+): string | null {
+  if (!/^[\w-]+$/.test(sessionId) || /["%\\]/.test(mcpUrl)) return null;
+  const dir = '"$HOME\\.radar\\agent"';
+  return `New-Item -ItemType Directory -Force ${dir} | Out-Null; Set-Location ${dir}; claude --% --resume ${sessionId} --mcp-config "${cfg.replace(/"/g, '\\"')}"`;
 }

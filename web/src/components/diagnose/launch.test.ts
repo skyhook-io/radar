@@ -51,22 +51,46 @@ describe("launchTrustHint", () => {
 });
 
 describe("Claude Code resume command", () => {
+  const run: RunSummary = {
+    id: "run-test",
+    kind: "Deployment",
+    group: "apps",
+    namespace: "default",
+    name: "demo",
+    context: "test",
+    agent: "claude",
+    status: "done",
+    sessionId: "ses_1",
+    createdAt: "2026-09-21T00:00:00Z",
+    updatedAt: "2026-09-21T00:00:00Z",
+  };
+
   it("resumes from the folder Radar runs Claude in", () => {
-    const run: RunSummary = {
-      id: "run-test",
-      kind: "Deployment",
-      group: "apps",
-      namespace: "default",
-      name: "demo",
-      context: "test",
-      agent: "claude",
-      status: "done",
-      sessionId: "ses_1",
-      createdAt: "2026-09-21T00:00:00Z",
-      updatedAt: "2026-09-21T00:00:00Z",
-    };
-    expect(buildLaunchCommand(run, "http://localhost:9280/mcp")).toBe(
+    expect(buildLaunchCommand(run, "http://localhost:9280/mcp", "posix")).toBe(
       'mkdir -p ~/.radar/agent && cd ~/.radar/agent && claude --resume \'ses_1\' --mcp-config \'{"mcpServers":{"radar":{"type":"http","url":"http://localhost:9280/mcp"}}}\'',
     );
+  });
+
+  // Windows PowerShell 5.1 has no && and strips the quotes inside a native
+  // argument; --% passes the JSON through with C-runtime escaping instead.
+  it("uses a form Windows PowerShell 5.1 runs", () => {
+    expect(
+      buildLaunchCommand(run, "http://localhost:9280/mcp", "powershell"),
+    ).toBe(
+      'New-Item -ItemType Directory -Force "$HOME\\.radar\\agent" | Out-Null; Set-Location "$HOME\\.radar\\agent"; claude --% --resume ses_1 --mcp-config "{\\"mcpServers\\":{\\"radar\\":{\\"type\\":\\"http\\",\\"url\\":\\"http://localhost:9280/mcp\\"}}}"',
+    );
+  });
+
+  it("offers no PowerShell command it can't pass through intact", () => {
+    expect(
+      buildLaunchCommand(
+        { ...run, sessionId: 'a"b' },
+        "http://localhost:9280/mcp",
+        "powershell",
+      ),
+    ).toBeNull();
+    expect(
+      buildLaunchCommand(run, "http://localhost:9280/%41/mcp", "powershell"),
+    ).toBeNull();
   });
 });
