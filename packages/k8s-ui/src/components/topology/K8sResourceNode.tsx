@@ -138,7 +138,7 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
     CreateTimeout: {
       title: "Pod Creation Timed Out",
       description:
-        "The API server timed out creating pods; slow or unreachable admission webhooks are the usual cause.",
+        "The API server timed out creating pods, for example while waiting on slow or unreachable admission webhooks.",
       action: "Check the admission webhooks that match these pods and their backends.",
     },
     Evicted: {

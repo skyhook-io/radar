@@ -34,12 +34,30 @@ const (
 var admissionWebhookCallTimedOut = regexp.MustCompile(`(?i)context deadline exceeded|i/o timeout|Client\.Timeout|TLS handshake timeout`)
 
 // admissionPodCreators are the kinds whose FailedCreate is a Pod create.
+// A CronJob row is a Job's failure folded into its CronJob, unless the
+// CronJob controller failed creating the Job itself ("Error creating job:").
 var admissionPodCreators = map[string]string{
 	"ReplicaSet":  "apps",
 	"Deployment":  "apps",
 	"StatefulSet": "apps",
 	"DaemonSet":   "apps",
 	"Job":         "batch",
+	"CronJob":     "batch",
+}
+
+func isPodCreateAdmissionFailure(i Issue) bool {
+	if i.Category != issuesapi.CategoryAdmissionWebhookBlocking || (i.Reason != "WebhookUnavailable" && i.Reason != "CreateTimeout") ||
+		i.Namespace == "" || admissionPodCreators[i.Kind] != i.Group {
+		return false
+	}
+	if i.Kind == "CronJob" && strings.Contains(strings.ToLower(i.Message), "error creating job:") {
+		return false
+	}
+	// RelatedIssues composes (and so enriches) before grouping, and a grouped
+	// row can keep its representative's context.
+	return i.DiagnosticContext == nil || !slices.ContainsFunc(i.DiagnosticContext.Facts, func(f issuesapi.DiagnosticFact) bool {
+		return f.Type == factAdmissionWebhookCandidates
+	})
 }
 
 type admissionWebhookCandidateProvider interface {
@@ -54,8 +72,7 @@ func enrichAdmissionWebhookCandidates(shaped []Issue, p Provider, access podTemp
 	var out []Issue
 	for idx := range shaped {
 		i := shaped[idx]
-		if i.Category != issuesapi.CategoryAdmissionWebhookBlocking || (i.Reason != "WebhookUnavailable" && i.Reason != "CreateTimeout") ||
-			admissionPodCreators[i.Kind] != i.Group || i.Namespace == "" {
+		if !isPodCreateAdmissionFailure(i) {
 			continue
 		}
 		fact := provider.admissionWebhookCandidatesFact(i, access)
@@ -123,12 +140,17 @@ func (p *CacheProvider) admissionWebhooks(access podTemplateAccess) admissionWeb
 			set.unchecked = append(set.unchecked, kind+"s were not checked: Radar has not cached them.")
 			continue
 		}
+		unreadable := false
 		for _, item := range items {
 			ref := Ref{Group: group, Kind: kind, Name: item.GetName()}
 			if !access.canRead(ref) {
+				unreadable = true
 				continue
 			}
 			set.webhooks = append(set.webhooks, compileAdmissionWebhooks(ref, item.Object)...)
+		}
+		if unreadable {
+			set.unchecked = append(set.unchecked, "Some "+kind+"s are not readable by the caller and were not checked.")
 		}
 	}
 	return set
@@ -274,14 +296,14 @@ func (p *CacheProvider) createTimeoutFact(issue Issue, access podTemplateAccess)
 	})
 
 	var msg strings.Builder
-	msg.WriteString("The API server timed out creating Pods, and the error names no webhook.")
+	msg.WriteString("The API server timed out creating Pods; the error does not say where the time went.")
 	var refs []Ref
 	if len(candidates) == 0 {
 		if len(set.unchecked) == 0 && !selectorsUnknown {
 			fmt.Fprintf(&msg, " No admission webhook matches Pod creation in namespace %s, so the API server or etcd is the more likely source of the delay.", issue.Namespace)
 		}
 	} else {
-		fmt.Fprintf(&msg, " Slow or unreachable admission webhooks are the usual cause. Webhooks that match Pod creation in namespace %s:", issue.Namespace)
+		fmt.Fprintf(&msg, " Admission webhooks that match Pod creation in namespace %s, any of which may have been slow or unreachable:", issue.Namespace)
 		for idx, c := range candidates {
 			if idx == maxAdmissionWebhookCandidates {
 				fmt.Fprintf(&msg, " (and %d more)", len(candidates)-idx)

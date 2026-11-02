@@ -126,7 +126,7 @@ func TestCreateTimeoutListsMatchingWebhooks(t *testing.T) {
 	}
 	msg := fact.Message
 	for _, want := range []string{
-		"the error names no webhook",
+		"the error does not say where the time went",
 		"(1) mutating webhook isolated.example.com (MutatingWebhookConfiguration isolated): failurePolicy Ignore, timeout 8s; backend Service policy-system/isolated has 1 ready pod; NetworkPolicy allow-observe selects those pods and admits ingress only from pod or namespace selectors, so it may block the API server",
 		"(2) mutating webhook open.example.com (MutatingWebhookConfiguration open): failurePolicy Ignore, timeout 12s; backend Service policy-system/open has 1 ready pod.",
 		"(3) validating webhook validate.example.com (ValidatingWebhookConfiguration policy): failurePolicy Fail, timeout 10s; backend Service policy-system/down has no ready pods.",
@@ -224,13 +224,25 @@ func TestAdmissionWebhookCandidatesOnlyOnPodCreateFailures(t *testing.T) {
 	initAdmissionWebhooks(t, mutatingPodWebhook("open", "open.example.com", "open", 10, admissionv1.Ignore))
 	denied := timeoutIssue()
 	denied.Reason = "WebhookDenied"
-	cronJob := timeoutIssue()
-	cronJob.Kind, cronJob.Group = "CronJob", "batch"
-	out := enrichAdmissionWebhookCandidates([]Issue{timeoutIssue(), denied, cronJob}, NewCacheProvider(), podTemplateAccess{})
-	if out[0].DiagnosticContext == nil || out[0].DiagnosticContext.Facts[0].Type != factAdmissionWebhookCandidates || out[0].DiagnosticContext.Role != issuesapi.DiagnosticRoleCandidate {
-		t.Fatalf("timeout issue context=%+v", out[0].DiagnosticContext)
+	// A Job's pod-create failure folded into its CronJob keeps the fact; the
+	// CronJob controller failing to create the Job does not.
+	cronJobPods := timeoutIssue()
+	cronJobPods.Kind, cronJobPods.Group = "CronJob", "batch"
+	cronJobJobs := cronJobPods
+	cronJobJobs.Message = "pod creation blocked: Error creating job: Timeout: request did not complete within requested timeout - context deadline exceeded"
+	out := enrichAdmissionWebhookCandidates([]Issue{timeoutIssue(), denied, cronJobPods, cronJobJobs}, NewCacheProvider(), podTemplateAccess{})
+	for _, idx := range []int{0, 2} {
+		if out[idx].DiagnosticContext == nil || out[idx].DiagnosticContext.Facts[0].Type != factAdmissionWebhookCandidates || out[idx].DiagnosticContext.Role != issuesapi.DiagnosticRoleCandidate {
+			t.Fatalf("issue %d context=%+v", idx, out[idx].DiagnosticContext)
+		}
 	}
-	if out[1].DiagnosticContext != nil || out[2].DiagnosticContext != nil {
-		t.Fatalf("unexpected context: %+v / %+v", out[1].DiagnosticContext, out[2].DiagnosticContext)
+	if out[1].DiagnosticContext != nil || out[3].DiagnosticContext != nil {
+		t.Fatalf("unexpected context: %+v / %+v", out[1].DiagnosticContext, out[3].DiagnosticContext)
+	}
+	// A second pass (RelatedIssues enriches flat rows, then the grouped
+	// match) does not repeat the fact.
+	again := enrichAdmissionWebhookCandidates(out, NewCacheProvider(), podTemplateAccess{})
+	if len(again[0].DiagnosticContext.Facts) != 1 {
+		t.Fatalf("facts=%+v", again[0].DiagnosticContext.Facts)
 	}
 }
