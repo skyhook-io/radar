@@ -665,6 +665,19 @@ func (s *SQLiteStore) OwnedUIDs(ctx context.Context, clusterContext string, owne
 // the scanner sets Owner exactly when owner_kind is non-empty.
 const unmanagedRowsSQL = "COALESCE(owner_kind, '') = '' AND kind NOT IN ('ReplicaSet', 'Pod', 'Event')"
 
+// desiredStatePathSQL is IsDesiredStatePath for both SQL stores, over a
+// lowercased path expression.
+func desiredStatePathSQL(path string) string {
+	return "(" + path + " IS NOT NULL AND " + path + " <> 'status' AND " + path + " NOT LIKE 'status.%' AND " + path + " NOT LIKE 'status[%'" +
+		" AND " + path + " NOT IN ('resource', 'metadata.generation')" +
+		" AND (" + path + " NOT LIKE 'metadata.%' OR " + path + " LIKE 'metadata.labels%' OR " + path + " LIKE 'metadata.annotations%'))"
+}
+
+// sqliteDesiredStateUpdatesSQL is QueryOptions.DesiredStateUpdates; its one
+// argument is the update event type.
+var sqliteDesiredStateUpdatesSQL = " AND (event_type <> ? OR (json_valid(diff_json) AND EXISTS (SELECT 1 FROM json_each(diff_json, '$.fields') WHERE " +
+	desiredStatePathSQL("lower(json_extract(value, '$.path'))") + ")))"
+
 // Query retrieves events matching the given options
 func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error) {
 	// Resolve the preset first: whether it admits managed rows decides the
@@ -728,6 +741,28 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 			args = append(args, group)
 		}
 		query.WriteString("))")
+	}
+
+	// Exclusions match known versions only; an unknown version is no evidence
+	// of the excluded group.
+	if len(opts.ExcludeAPIGroups) > 0 {
+		query.WriteString(" AND (COALESCE(api_version, '') = '' OR " + sqliteAPIGroupExpr + " NOT IN (")
+		for i, group := range opts.ExcludeAPIGroups {
+			if i > 0 {
+				query.WriteString(",")
+			}
+			query.WriteString("?")
+			args = append(args, group)
+		}
+		query.WriteString("))")
+	}
+	for _, gk := range opts.ExcludeGroupKinds {
+		query.WriteString(" AND (COALESCE(api_version, '') = '' OR NOT (kind = ? AND " + sqliteAPIGroupExpr + " = ?))")
+		args = append(args, gk.Kind, gk.Group)
+	}
+	if opts.DesiredStateUpdates {
+		query.WriteString(sqliteDesiredStateUpdatesSQL)
+		args = append(args, string(EventTypeUpdate))
 	}
 
 	if len(opts.Names) > 0 {

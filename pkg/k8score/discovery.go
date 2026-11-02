@@ -5,6 +5,7 @@ import (
 	"log"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,19 @@ var dynamicallyWatchedBuiltInAPIGroups = map[string]bool{
 // dynamic cache can observe them.
 func IsBuiltInAPIGroup(group string) bool {
 	return coreAPIGroups[group] || dynamicallyWatchedBuiltInAPIGroups[group]
+}
+
+// BuiltInAPIGroups returns the groups IsBuiltInAPIGroup reports, sorted.
+func BuiltInAPIGroups() []string {
+	out := make([]string, 0, len(coreAPIGroups)+len(dynamicallyWatchedBuiltInAPIGroups))
+	for group := range coreAPIGroups {
+		out = append(out, group)
+	}
+	for group := range dynamicallyWatchedBuiltInAPIGroups {
+		out = append(out, group)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // versionStability returns a score for API version stability.

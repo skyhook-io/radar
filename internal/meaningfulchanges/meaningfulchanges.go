@@ -261,9 +261,20 @@ type Query struct {
 	// don't overlap Groups is skipped.
 	Groups []string
 
+	// OtherKinds adds, to a query with no kind or name, the rows of kinds
+	// outside the curated ones that otherKindsCandidates reads: custom
+	// resources and Nodes.
+	OtherKinds bool
+	// Uncapped returns every ranked candidate and leaves the page to the
+	// caller (SelectFeed); OutputCapped is then never set.
+	Uncapped bool
+
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
 	start time.Time
+	// end, when set, is the window's upper bound; tests replaying recorded
+	// history set it.
+	end time.Time
 }
 
 // Viewer gates the Pod and workload names a row carries beyond its own
@@ -348,6 +359,14 @@ func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	}
 	events = append(events, got...)
 	saturated = saturated || full
+	if q.OtherKinds && len(q.Kinds) == 0 && q.Name == "" {
+		got, full, err := otherKindsCandidates(ctx, store, q, bound)
+		if err != nil {
+			return RecentResult{}, err
+		}
+		events = append(events, got...)
+		saturated = saturated || full
+	}
 
 	changes, capped := rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
 	return RecentResult{
@@ -677,6 +696,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		// Groups are matched against the recorded apiVersion.
 		RequireAPIVersion: len(q.Groups) > 0,
 		Since:             q.start,
+		Until:             q.end,
 		Sources:           []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:        eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the
@@ -839,6 +859,10 @@ func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query
 	annotateRunningPreviousValue(ctx, out, pods, q.Viewer)
 	if len(q.Kinds) == 0 && q.Name == "" {
 		out = collapseSecretUpdates(out)
+	}
+	if q.Uncapped {
+		RankAndCap(&out, 0)
+		return out, false
 	}
 	capped := len(out) > q.Limit
 	RankAndCap(&out, q.Limit)
@@ -1237,9 +1261,10 @@ func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {
 			}
 			return "", ""
 		}
-		// Candidate queries restrict the default feed's kinds; explicit kind
-		// or name queries also admit custom-resource lifecycle rows.
-		if !isConfigKind(e.Kind) && !isSpecKind(e.Kind) && !isCustomResourceEvent(e) {
+		// Candidate queries restrict the default feed's kinds; custom
+		// resources and Nodes come from the other-kinds read or an explicit
+		// kind or name query.
+		if !isConfigKind(e.Kind) && !isSpecKind(e.Kind) && !isCustomResourceEvent(e) && !isNodeEvent(e) {
 			return "", ""
 		}
 		if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated && e.Diff != nil && len(e.Diff.Fields) > 0 {
@@ -1273,7 +1298,7 @@ func hasSpecConfigField(e timeline.TimelineEvent) bool {
 		if isNodeEvent(e) && (strings.HasPrefix(p, "metadata.labels") || strings.HasPrefix(p, "metadata.annotations")) {
 			return true
 		}
-		if strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || (trackedGroup && (p == "immutable" || strings.HasPrefix(p, "data"))) {
+		if p == "spec" || strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || (trackedGroup && (p == "immutable" || strings.HasPrefix(p, "data"))) {
 			return true
 		}
 	}

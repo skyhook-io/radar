@@ -286,8 +286,10 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"often faster than reading " +
 			"ReplicaSet histories or audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Bound the window with since; narrow by " +
-			"namespace, kind or name; custom-resource kinds outside Argo CD, Flux, Rollouts and " +
-			"Gateway API appear only with kind or name. Runs of 5+ plain creates are listed " +
+			"namespace, kind or name. Without kind or name, it also lists desired-state edits, " +
+			"creates and deletes of custom resources not owned by another object, and of Nodes " +
+			"(cluster-scoped, so not in a namespace query), at most 3 rows per kind while other " +
+			"kinds compete for the page; narrowHint names kinds left out. Runs of 5+ plain creates are listed " +
 			"in `created` as `+<seconds after first>s Kind/name` lines, counted in limit. " +
 			"A namespace query (no kind/name) adds clusterScopedChanges: webhook config " +
 			"changes that may affect it. Omit namespace for other changes outside it. " +
@@ -1710,6 +1712,11 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if input.Kind != "" {
 		query.Kinds = []string{input.Kind}
 	}
+	// Without kind or name, the feed also reads custom resources and Nodes
+	// and picks its page once, below, from every candidate.
+	if input.Kind == "" && input.Name == "" && meaningfulchanges.OtherKindsEnabled() {
+		query.OtherKinds, query.Uncapped = true, true
+	}
 
 	var recentResult meaningfulchanges.RecentResult
 	if allowed == nil || len(allowed) > 0 {
@@ -1746,7 +1753,13 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		changes = append(changes, helmChanges...)
 	}
 	totalMatched := len(changes)
-	meaningfulchanges.RankAndCap(&changes, limit)
+	var selection meaningfulchanges.FeedSelection
+	if query.Uncapped {
+		selection = meaningfulchanges.SelectFeed(changes, limit)
+		changes = selection.Changes
+	} else {
+		meaningfulchanges.RankAndCap(&changes, limit)
+	}
 
 	// Always wrap so capped + uncapped agree on wire shape
 	// ({changes: [...], narrowHint?: "..."}).
@@ -1775,6 +1788,9 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	} else if recentResult.OutputCapped || totalMatched > len(changes) {
 		hints = append(hints, "Radar fetched every recorded change in this window but returned only the highest-ranked; lower-ranked changes were omitted."+
 			" Narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50).")
+	}
+	if guidance := meaningfulchanges.FeedSelectionGuidance(selection); guidance != "" {
+		hints = append(hints, guidance)
 	}
 	if resp.HistoryCoverage != nil {
 		hints = append(hints, meaningfulchanges.HistoryCoverageGuidance(*resp.HistoryCoverage))

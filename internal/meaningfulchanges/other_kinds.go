@@ -1,0 +1,342 @@
+package meaningfulchanges
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+	"sync/atomic"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
+
+var otherKindsDisabled atomic.Bool
+
+// SetOtherKinds turns the default feed's other-kinds read (see
+// Query.OtherKinds) on or off; it is on unless the operator turns it off.
+func SetOtherKinds(enabled bool) { otherKindsDisabled.Store(!enabled) }
+
+// OtherKindsEnabled reports whether callers should set Query.OtherKinds.
+func OtherKindsEnabled() bool { return !otherKindsDisabled.Load() }
+
+// churnKinds are custom kinds controllers create, delete or rewrite as
+// routine bookkeeping without owner references, so their rows say nothing
+// about an incident. The other-kinds read leaves them out before its limit;
+// a kind= query still lists them.
+var churnKinds = []resourceid.GroupKind{
+	// Cilium allocates identities and endpoints as pods come and go.
+	{Group: "cilium.io", Kind: "CiliumIdentity"},
+	{Group: "cilium.io", Kind: "CiliumEndpoint"},
+	{Group: "cilium.io", Kind: "CiliumEndpointSlice"},
+	// Calico IPAM allocations, through its CRDs or its API server.
+	{Group: "crd.projectcalico.org", Kind: "IPAMBlock"},
+	{Group: "crd.projectcalico.org", Kind: "IPAMHandle"},
+	{Group: "crd.projectcalico.org", Kind: "BlockAffinity"},
+	{Group: "projectcalico.org", Kind: "IPAMBlock"},
+	{Group: "projectcalico.org", Kind: "BlockAffinity"},
+	// Policy engine reports and requests.
+	{Group: "wgpolicyk8s.io", Kind: "PolicyReport"},
+	{Group: "wgpolicyk8s.io", Kind: "ClusterPolicyReport"},
+	{Group: "reports.kyverno.io", Kind: "EphemeralReport"},
+	{Group: "reports.kyverno.io", Kind: "ClusterEphemeralReport"},
+	{Group: "kyverno.io", Kind: "UpdateRequest"},
+	// cert-manager issues these per renewal; the Certificate is the config.
+	{Group: "cert-manager.io", Kind: "CertificateRequest"},
+	{Group: "acme.cert-manager.io", Kind: "Order"},
+	{Group: "acme.cert-manager.io", Kind: "Challenge"},
+	// Provisioned per snapshot.
+	{Group: "snapshot.storage.k8s.io", Kind: "VolumeSnapshotContent"},
+	// Chaos Mesh's per-pod working state for a chaos experiment.
+	{Group: "chaos-mesh.org", Kind: "PodNetworkChaos"},
+	{Group: "chaos-mesh.org", Kind: "PodIOChaos"},
+	{Group: "chaos-mesh.org", Kind: "PodHttpChaos"},
+}
+
+// readinessTaints mirror state the Node row records elsewhere: its
+// conditions, spec.unschedulable, or cloud-provider initialization. Rows that
+// change only these taints stay in history but not in the default feed.
+// Autoscaler and Karpenter removal taints are not here: they mark a removal
+// in progress.
+var readinessTaints = map[string]bool{
+	"node.kubernetes.io/not-ready":                   true,
+	"node.kubernetes.io/unreachable":                 true,
+	"node.kubernetes.io/memory-pressure":             true,
+	"node.kubernetes.io/disk-pressure":               true,
+	"node.kubernetes.io/pid-pressure":                true,
+	"node.kubernetes.io/network-unavailable":         true,
+	"node.kubernetes.io/unschedulable":               true,
+	"node.cloudprovider.kubernetes.io/uninitialized": true,
+}
+
+// otherKindsCandidates reads the default feed's rows outside the curated
+// kinds: desired-state edits, creates and deletes of unowned custom resources
+// outside churnKinds, and of Nodes. Status-only updates are dropped in the
+// store, before its limit, so a controller's status writes cannot use up the
+// read; a burst of desired-state edits still can, which saturation reports.
+func otherKindsCandidates(ctx context.Context, store timeline.EventStore, q Query, bound int) ([]timeline.TimelineEvent, bool, error) {
+	base := timeline.QueryOptions{
+		Namespaces:          q.Namespaces,
+		Since:               q.start,
+		Until:               q.end,
+		Sources:             []timeline.EventSource{timeline.SourceInformer},
+		ClusterContext:      k8s.ActiveClusterContext(),
+		DesiredStateUpdates: true,
+		Limit:               bound + 1,
+	}
+	custom := base
+	custom.RequireAPIVersion = true
+	custom.ExcludeAPIGroups = k8score.BuiltInAPIGroups()
+	custom.ExcludeGroupKinds = append(trackedCustomGroupKinds(), churnKinds...)
+	reads := []timeline.QueryOptions{custom, custom}
+	reads[0].EventTypes, reads[1].EventTypes = updateEventTypes, lifecycleEventTypes
+	// A Node's owner (Karpenter's NodeClaim) manages the machine; the Node's
+	// taints and labels are its own configuration. Nodes are cluster-scoped.
+	if len(q.Namespaces) == 0 || slices.Contains(q.Namespaces, "") {
+		nodes := base
+		nodes.Kinds, nodes.APIGroups, nodes.IncludeManaged = []string{"Node"}, []string{""}, true
+		reads = append(reads, nodes)
+	}
+	var events []timeline.TimelineEvent
+	saturated := false
+	for _, opts := range reads {
+		got, err := store.Query(ctx, opts)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(got) > bound {
+			saturated = true
+			got = got[:bound]
+		}
+		for _, e := range got {
+			if isNodeEvent(e) && e.EventType == timeline.EventTypeUpdate && onlyReadinessTaintChanges(e) {
+				continue
+			}
+			events = append(events, e)
+		}
+	}
+	return events, saturated, nil
+}
+
+// trackedCustomGroupKinds are the custom kinds the curated reads already
+// list, by the group they are recorded from.
+func trackedCustomGroupKinds() []resourceid.GroupKind {
+	var out []resourceid.GroupKind
+	for kind, group := range trackedKindGroups {
+		if !k8score.IsBuiltInAPIGroup(group) {
+			out = append(out, resourceid.GroupKind{Group: group, Kind: kind})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Group+"/"+out[i].Kind < out[j].Group+"/"+out[j].Kind })
+	return out
+}
+
+// onlyReadinessTaintChanges reports a Node row whose every desired-state
+// field adds, removes or re-values readinessTaints. A field it can't read as
+// taint keys counts as a change, rather than hide one.
+func onlyReadinessTaintChanges(e timeline.TimelineEvent) bool {
+	if e.Diff == nil {
+		return false
+	}
+	taintFields := 0
+	for _, f := range e.Diff.Fields {
+		if !timeline.IsDesiredStatePath(f.Path) {
+			continue
+		}
+		if key, ok := strings.CutPrefix(f.Path, "spec.taints["); ok {
+			if !readinessTaints[strings.TrimSuffix(key, "]")] {
+				return false
+			}
+			taintFields++
+			continue
+		}
+		if f.Path != "spec.taints" {
+			return false
+		}
+		oldKeys, newKeys := stringList(f.OldValue), stringList(f.NewValue)
+		changed := append(subtract(oldKeys, newKeys), subtract(newKeys, oldKeys)...)
+		if len(changed) == 0 {
+			return false
+		}
+		for _, key := range changed {
+			if !readinessTaints[key] {
+				return false
+			}
+		}
+		taintFields++
+	}
+	return taintFields > 0
+}
+
+const (
+	// perKindShown is how many rows of one kind the default feed shows
+	// while other kinds' rows are left out to make room.
+	perKindShown = 3
+	// Churn guard: a kind outside the curated set with at least
+	// churnMinRows eligible rows in the window, and at least churnFactor
+	// times the median kind's count, is controller churn.
+	churnMinRows = 50
+	churnFactor  = 10
+)
+
+// KindCount names a kind and how many of its rows a selection left out.
+type KindCount struct {
+	Kind  string
+	Group string
+	Count int
+}
+
+// FeedSelection is SelectFeed's result.
+type FeedSelection struct {
+	Changes []issuesapi.RecentChange
+	// Churn lists kinds whose every row was left out as controller churn.
+	Churn []KindCount
+	// Crowded lists kinds with rows left out so other kinds' rows fit.
+	Crowded []KindCount
+}
+
+// SelectFeed picks the default feed's page from every ranked candidate. A
+// kind outside the curated set whose row count marks it as controller churn
+// is left out whole. Then each kind shows at most perKindShown rows while
+// rows of other kinds are left out; slots no other kind fills go back to
+// those kinds in rank order, so a window with one busy kind still fills the
+// page.
+func SelectFeed(changes []issuesapi.RecentChange, limit int) FeedSelection {
+	RankAndCap(&changes, 0)
+	var sel FeedSelection
+	churn := churnGuard(changes)
+	candidates := changes[:0:0]
+	for _, c := range changes {
+		if _, ok := churn[changeGroupKind(c)]; !ok {
+			candidates = append(candidates, c)
+		}
+	}
+	for key, n := range churn {
+		sel.Churn = append(sel.Churn, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
+	}
+	sortKindCounts(sel.Churn)
+
+	if limit <= 0 || len(candidates) <= limit {
+		sel.Changes = candidates
+		return sel
+	}
+	shown := map[resourceid.GroupKind]int{}
+	keep := make([]bool, len(candidates))
+	kept := 0
+	for i, c := range candidates {
+		if kept == limit {
+			break
+		}
+		key := changeGroupKind(c)
+		if shown[key] < perKindShown {
+			shown[key]++
+			keep[i] = true
+			kept++
+		}
+	}
+	for i := range candidates {
+		if kept == limit {
+			break
+		}
+		if !keep[i] {
+			keep[i] = true
+			kept++
+		}
+	}
+	lastKept := 0
+	for i := range candidates {
+		if keep[i] {
+			lastKept = i
+		}
+	}
+	// A row left out while a lower-ranked row was kept made room for
+	// another kind; the rows after lastKept fell to the page limit alone.
+	crowded := map[resourceid.GroupKind]int{}
+	for i, c := range candidates {
+		switch {
+		case keep[i]:
+			sel.Changes = append(sel.Changes, c)
+		case i < lastKept:
+			crowded[changeGroupKind(c)]++
+		}
+	}
+	for key, n := range crowded {
+		sel.Crowded = append(sel.Crowded, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
+	}
+	sortKindCounts(sel.Crowded)
+	return sel
+}
+
+// churnGuard returns the kinds outside the curated set whose candidate count
+// marks them as controller churn, with their counts.
+func churnGuard(changes []issuesapi.RecentChange) map[resourceid.GroupKind]int {
+	counts := map[resourceid.GroupKind]int{}
+	for _, c := range changes {
+		counts[changeGroupKind(c)]++
+	}
+	if len(counts) < 2 {
+		return nil
+	}
+	values := make([]int, 0, len(counts))
+	for _, n := range counts {
+		values = append(values, n)
+	}
+	sort.Ints(values)
+	median := values[len(values)/2]
+	if len(values)%2 == 0 {
+		median = (values[len(values)/2-1] + values[len(values)/2]) / 2
+	}
+	out := map[resourceid.GroupKind]int{}
+	for key, n := range counts {
+		if n >= churnMinRows && n >= churnFactor*median && !curatedGroupKind(key) {
+			out[key] = n
+		}
+	}
+	return out
+}
+
+func curatedGroupKind(key resourceid.GroupKind) bool {
+	return (key.Kind == "Secret" && key.Group == "") || TrackedKindForGroup(key.Kind, key.Group)
+}
+
+func changeGroupKind(c issuesapi.RecentChange) resourceid.GroupKind {
+	return resourceid.GroupKind{Group: resourceid.GroupFromAPIVersion(c.APIVersion), Kind: c.Kind}
+}
+
+func sortKindCounts(list []KindCount) {
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Count != list[j].Count {
+			return list[i].Count > list[j].Count
+		}
+		return list[i].Kind+"."+list[i].Group < list[j].Kind+"."+list[j].Group
+	})
+}
+
+// FeedSelectionGuidance is the narrowHint text naming the kinds SelectFeed
+// left rows out of, or "".
+func FeedSelectionGuidance(sel FeedSelection) string {
+	var parts []string
+	if len(sel.Churn) > 0 {
+		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, with far more changes than other kinds in this window: %s. Pass kind=<Kind> to list them.", kindCountList(sel.Churn)))
+	}
+	if len(sel.Crowded) > 0 {
+		parts = append(parts, fmt.Sprintf("At most %d changes per kind are shown so more kinds fit; not shown: %s. Pass kind=<Kind> to list them.", perKindShown, kindCountList(sel.Crowded)))
+	}
+	return strings.Join(parts, " ")
+}
+
+func kindCountList(list []KindCount) string {
+	const named = 5
+	parts := make([]string, 0, named+1)
+	for _, k := range list[:min(len(list), named)] {
+		parts = append(parts, fmt.Sprintf("%d %s", k.Count, k.Kind))
+	}
+	if len(list) > named {
+		parts = append(parts, fmt.Sprintf("%d more kinds", len(list)-named))
+	}
+	return strings.Join(parts, ", ")
+}
