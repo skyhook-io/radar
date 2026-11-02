@@ -1709,20 +1709,3 @@ Reference resolution is not admission success or a prediction of the combined we
 Supported sources are Pods, apps workloads, Jobs/CronJobs and inline Argo Rollout Pod templates. An absent block does not establish that no requests exist: unreadable Namespace defaults or unresolved templates may be outside the evidence. The outer `autoInstrumentation` object is not an exhaustive injector inventory; native provider blocks retain their own selection rules. An unavailable OTel observation records field `autoInstrumentation.openTelemetry` in `omitted`, without declaring other providers unavailable.
 
 REST AI and MCP detail reads share this projection. Basic list summaries do not perform related-object lookups. UI inspection uses existing annotations, YAML and events; this configuration context creates no global Issue, additional Pod warning banner or outage classification.
-## Explicit local runtime evidence
-
-`collect_application_evidence` reads one Pod endpoint for `rabbitmq`, `nats`, or `vault`. After operator approval, call it with `application`, `namespace`, `pod`, and `confirm_network_access: true`. Include `pod_uid` when using a diagnosis suggestion. Radar checks the confirmation argument; the client must obtain approval. Collection opens a temporary localhost-only Kubernetes port-forward using the current kubeconfig identity and requires Pod-read and port-forward permissions.
-
-The tool is available only through full local MCP, outside built-in investigations and Apply. Remote, authenticated, hosted and in-cluster deployments are unsupported. The Pod must have one recognized application container (`rabbitmq`, `nats`, or `hashicorp/vault`) with the default port declared. Host-network Pods, ambiguous targets, custom ports, TLS and endpoints requiring application credentials are unsupported.
-
-| Adapter | Source | What observations mean |
-|---|---|---|
-| RabbitMQ | Pod port 15692 `/metrics` | Source-reported disk and memory alarms for that node. Both samples must exist and be unambiguous. Metrics responses above 256 KiB, including large per-object metrics payloads, are unavailable; no partial scrape is interpreted. False alarms do not establish cluster health: an alarm on another node can block publishers across the cluster. This limitation is also included in each RabbitMQ collection result. |
-| NATS | Pod port 8222 `/jsz` with stream/consumer details | Account-scoped pending, acknowledgement-pending and redelivery counts, capped at 20 consumer rows with explicit coverage. A backlog is not necessarily a stuck consumer. JetStream disabled is distinct from zero pending messages. |
-| Vault | Pod port 8200 `/v1/sys/health` | Source HTTP code plus initialized/sealed/standby booleans. A standby is not necessarily a fault, and HTTP 200 alone is not a health conclusion. |
-
-`outcome: observed` carries facts; `outcome: unavailable` carries a `reason` and no facts. Unavailable evidence does not establish health or absence of problems. NATS can return observed facts with `coverage: partial`; missing consumer rows then do not imply zero activity. Results describe the selected endpoint at `observedAt`, not the whole application. If the Pod or container changes during collection, the result is discarded, though a same-name replacement may briefly be contacted. Image and Pod identity checks do not attest endpoint contents.
-
-RabbitMQ metrics and NATS monitoring must be enabled and accessible without application credentials. Collection does not support TLS endpoints.
-
-Local `diagnose` may return `applicationEvidenceActions` for Vault readiness failures or RabbitMQ alarm-check readiness failures. These suggestions identify a Pod and expected evidence; they do not authorize or perform collection. At most three candidates are returned; returned suggestions indicate limited or truncated discovery. When none are returned, discovery coverage is not reported. A missing suggestion does not establish endpoint health or availability. NATS collection must be requested explicitly.
