@@ -10,6 +10,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -351,4 +352,194 @@ func TestDetectPostBindProblems_MultiAttachForeignHolderHasNoCause(t *testing.T)
 	if p.Cause != "" || p.Action != "" {
 		t.Errorf("no cause expected for a foreign holder: %q / %q", p.Cause, p.Action)
 	}
+}
+
+// rolloutClaimDeployment is sharedClaimDeployment at one replica mid-rollout:
+// the holder web-a belongs to the old ReplicaSet web-0 (revision 1) and the
+// stuck web-b to the current web-1 (revision 2).
+func rolloutClaimDeployment(strategy appsv1.DeploymentStrategy) []runtime.Object {
+	controller := true
+	one := int32(1)
+	depOwner := []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "web-uid", Controller: &controller}}
+	revision := func(rs *appsv1.ReplicaSet, hash, rev string) {
+		rs.OwnerReferences = depOwner
+		rs.Labels = map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: hash}
+		rs.Annotations = map[string]string{"deployment.kubernetes.io/revision": rev}
+	}
+	oldRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "redis"}}
+	revision(oldRS, "0", "1")
+	objs := sharedClaimDeployment(metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-0", Controller: &controller})
+	for _, o := range objs {
+		switch o := o.(type) {
+		case *appsv1.Deployment:
+			o.UID = "web-uid"
+			o.Spec.Replicas = &one
+			o.Spec.Strategy = strategy
+		case *appsv1.ReplicaSet:
+			revision(o, "1", "2")
+		case *corev1.Pod:
+			o.Labels = map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: map[string]string{"web-a": "0", "web-b": "1"}[o.Name]}
+		}
+	}
+	return append(objs, oldRS)
+}
+
+func rolloutPod(objs []runtime.Object, name string) *corev1.Pod {
+	for _, o := range objs {
+		if pod, ok := o.(*corev1.Pod); ok && pod.Name == name {
+			return pod
+		}
+	}
+	return nil
+}
+
+func rollingUpdate(surge, unavailable intstr.IntOrString) appsv1.DeploymentStrategy {
+	return appsv1.DeploymentStrategy{
+		Type:          appsv1.RollingUpdateDeploymentStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateDeployment{MaxSurge: &surge, MaxUnavailable: &unavailable},
+	}
+}
+
+// The default strategy on one replica: the surge pod lands on another node
+// while the old pod holds the volume, and the old pod waits for it forever.
+func TestDetectPostBindProblems_MultiAttachNamesRollingUpdateSurge(t *testing.T) {
+	defer ResetTestState()
+	p := multiAttachProblem(t, rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%"))))
+	for _, want := range []string{"Deployment web uses RollingUpdate with maxSurge 25%", "ReadWriteOnce PVC data", "rollout is stuck"} {
+		if !strings.Contains(p.Cause, want) {
+			t.Errorf("cause missing %q: %q", want, p.Cause)
+		}
+	}
+	if !strings.Contains(p.Action, "strategy: Recreate") || !strings.Contains(p.Action, "maxSurge: 0") {
+		t.Errorf("action = %q", p.Action)
+	}
+}
+
+// maxUnavailable 1 lets the old pod stop, so the attach clears on its own: the
+// surge is still the cause, but the rollout isn't called stuck.
+func TestDetectPostBindProblems_MultiAttachSurgeWithUnavailableNotStuck(t *testing.T) {
+	defer ResetTestState()
+	p := multiAttachProblem(t, rolloutClaimDeployment(rollingUpdate(intstr.FromInt32(1), intstr.FromInt32(1))))
+	if !strings.Contains(p.Cause, "maxSurge 1") || strings.Contains(p.Cause, "stuck") {
+		t.Errorf("cause = %q", p.Cause)
+	}
+}
+
+// The old pod is already terminating, so the rollout isn't waiting on it.
+func TestDetectPostBindProblems_MultiAttachTerminatingHolderNotStuck(t *testing.T) {
+	defer ResetTestState()
+	objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
+	deleted := metav1.Now()
+	holder := rolloutPod(objs, "web-a")
+	holder.DeletionTimestamp = &deleted
+	holder.Finalizers = []string{"test/hold"}
+	p := multiAttachProblem(t, objs)
+	if !strings.Contains(p.Cause, "maxSurge 25%") || strings.Contains(p.Cause, "stuck") {
+		t.Errorf("cause = %q", p.Cause)
+	}
+}
+
+// Without surge the old pod is deleted first, so a holder still terminating is
+// not the rolling update's doing; a holder from the same ReplicaSet is not a
+// rollout; a Deployment scaled to zero has neither. None gets a cause.
+func TestDetectPostBindProblems_MultiAttachOneReplicaNoSurgeCause(t *testing.T) {
+	controller := true
+	for name, objs := range map[string][]runtime.Object{
+		"maxSurge 0": rolloutClaimDeployment(rollingUpdate(intstr.FromInt32(0), intstr.FromInt32(1))),
+		"recreate":   rolloutClaimDeployment(appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}),
+		// Scaled to zero: no replicas share the claim, and no rollout runs.
+		"scaled to zero": func() []runtime.Object {
+			zero := int32(0)
+			objs := sharedClaimDeployment(metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", Controller: &controller})
+			for _, o := range objs {
+				if d, ok := o.(*appsv1.Deployment); ok {
+					d.Spec.Replicas = &zero
+				}
+			}
+			return objs
+		}(),
+		"same ReplicaSet": func() []runtime.Object {
+			objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
+			holder := rolloutPod(objs, "web-a")
+			holder.OwnerReferences[0].Name = "web-1"
+			holder.Labels[appsv1.DefaultDeploymentUniqueLabelKey] = "1"
+			return objs
+		}(),
+		// The old pod was evicted (Failed, no deletion timestamp); its event
+		// remains but it no longer holds the volume.
+		"holder failed": func() []runtime.Object {
+			objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
+			rolloutPod(objs, "web-a").Status.Phase = corev1.PodFailed
+			return objs
+		}(),
+		// The old ReplicaSet recreated a pod while the current revision holds
+		// the volume: the blocked pod is not the rollout's new pod.
+		"blocked pod from an older revision": func() []runtime.Object {
+			objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
+			rolloutPod(objs, "web-a").Labels[appsv1.DefaultDeploymentUniqueLabelKey] = "1"
+			rolloutPod(objs, "web-b").Labels[appsv1.DefaultDeploymentUniqueLabelKey] = "0"
+			return objs
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer ResetTestState()
+			if p := multiAttachProblem(t, objs); p.Cause != "" || p.Action != "" {
+				t.Errorf("no cause expected: %q / %q", p.Cause, p.Action)
+			}
+		})
+	}
+}
+
+// After the progress deadline the Deployment's "Rollout stuck" row gives the
+// same cause and fix as the pod row, in place of the generic advice; without
+// the Multi-Attach evidence it keeps the generic row.
+func TestDetectProblems_RolloutStuckNamesRollingUpdateSurge(t *testing.T) {
+	stuckRollout := func(withEvent bool) []runtime.Object {
+		objs := rolloutClaimDeployment(rollingUpdate(intstr.FromString("25%"), intstr.FromString("25%")))
+		out := objs[:0]
+		for _, o := range objs {
+			if d, ok := o.(*appsv1.Deployment); ok {
+				d.Status.Conditions = []appsv1.DeploymentCondition{{
+					Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded",
+					Message: `ReplicaSet "web-1" has timed out progressing.`, LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Minute)),
+				}}
+			}
+			if _, isEvent := o.(*corev1.Event); isEvent && !withEvent {
+				continue
+			}
+			out = append(out, o)
+		}
+		return out
+	}
+	rolloutRow := func(t *testing.T, objs []runtime.Object) Detection {
+		t.Helper()
+		if err := InitTestResourceCache(fake.NewClientset(objs...)); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		p, ok := lookupProblem(DetectProblems(GetResourceCache(), "redis"), "Deployment", "web", "Rollout stuck")
+		if !ok {
+			t.Fatal("want a Rollout stuck row for web")
+		}
+		return p
+	}
+
+	t.Run("multi-attach evidence", func(t *testing.T) {
+		defer ResetTestState()
+		objs := stuckRollout(true)
+		row := rolloutRow(t, objs)
+		pod := multiAttachProblem(t, objs)
+		if row.Cause == "" || row.Cause != pod.Cause || row.Action != pod.Action {
+			t.Errorf("rows disagree:\nrollout %q / %q\npod     %q / %q", row.Cause, row.Action, pod.Cause, pod.Action)
+		}
+		if strings.Contains(row.Message, "ReadWriteMany") {
+			t.Errorf("message keeps the old RWO detail: %q", row.Message)
+		}
+	})
+	t.Run("no multi-attach evidence", func(t *testing.T) {
+		defer ResetTestState()
+		row := rolloutRow(t, stuckRollout(false))
+		if row.Cause != "" || !strings.Contains(row.Action, "Inspect the new pods") || !strings.Contains(row.Message, "strategy: Recreate") {
+			t.Errorf("want the generic row: cause %q, action %q, message %q", row.Cause, row.Action, row.Message)
+		}
+	})
 }
