@@ -5,6 +5,7 @@ import { copyText } from "@skyhook-io/k8s-ui/utils/clipboard";
 import { SUPPORTED_AGENTS, type AgentInstall } from "./agentCatalog";
 import { type DiagnoseSetup } from "./DiagnoseContext";
 import { openExternal } from "../../utils/navigation";
+import { ExampleInvestigationLink } from "./ExampleInvestigationLink";
 
 const REPORT_URL =
   "https://github.com/skyhook-io/radar/issues/new?labels=bug&template=bug_report.md";
@@ -101,12 +102,15 @@ export function AgentSetupNotice({
   checkingAgents,
   agentsCheckFailed,
   recheckAgents,
+  onOpenExample,
 }: {
   setupState: DiagnoseSetup;
   cliOverride: boolean;
   checkingAgents: boolean;
   agentsCheckFailed: boolean;
   recheckAgents: () => Promise<void>;
+  /** Shows what an investigation produces before anything is set up. */
+  onOpenExample?: () => void;
 }) {
   // The state the panel was in when a check started. "Still…" is only true when
   // the finished check left it there.
@@ -123,7 +127,10 @@ export function AgentSetupNotice({
 
   if (cliOverride) {
     return (
-      <SetupFrame title="Radar can't run your RADAR_AI_CLI_BIN">
+      <SetupFrame
+        title="Radar can't run your RADAR_AI_CLI_BIN"
+        onOpenExample={onOpenExample}
+      >
         <p className="mt-1 text-sm text-theme-text-secondary">
           Fix the path, or remove it and restart Radar.
         </p>
@@ -139,7 +146,10 @@ export function AgentSetupNotice({
   }
   if (setupState === "needs-restart") {
     return (
-      <SetupFrame title="AI investigations aren't available right now">
+      <SetupFrame
+        title="AI investigations aren't available right now"
+        onOpenExample={onOpenExample}
+      >
         <p className="mt-1 text-sm text-theme-text-secondary">
           Try again in a moment.
         </p>
@@ -154,7 +164,7 @@ export function AgentSetupNotice({
     );
   }
   return (
-    <SetupFrame title="Set up AI investigations">
+    <SetupFrame title="Set up AI investigations" onOpenExample={onOpenExample}>
       <p className="mt-1 text-sm text-theme-text-secondary">
         Radar runs investigations through a coding agent CLI on your own
         machine, with no Radar cloud and no API key. Install one of these:
@@ -186,9 +196,11 @@ export function AgentSetupNotice({
 function SetupFrame({
   title,
   children,
+  onOpenExample,
 }: {
   title: string;
   children: ReactNode;
+  onOpenExample?: () => void;
 }) {
   return (
     <div className="mx-auto max-w-md px-1 py-6">
@@ -199,6 +211,12 @@ function SetupFrame({
         {title}
       </h3>
       {children}
+      {onOpenExample && (
+        <p className="mt-4 text-sm text-theme-text-secondary">
+          Not sure yet?{" "}
+          <ExampleInvestigationLink onOpen={onOpenExample} />
+        </p>
+      )}
       <p className="mt-4 text-xs text-theme-text-tertiary">
         Your agent runs locally. Resource details and logs are sent to its model
         provider under your account, not to Radar.

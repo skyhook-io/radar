@@ -352,6 +352,32 @@ describe("InvestigationHome", () => {
     expect(text).toContain("Browse issues");
     expect(html).not.toContain("textarea");
   });
+
+  it("links to the example only when the surface offers it", () => {
+    const link = "See an example investigation";
+    expect(
+      visible(renderToStaticMarkup(<InvestigationHome agentLabel="Codex" />)),
+    ).not.toContain(link);
+    expect(
+      visible(
+        renderToStaticMarkup(
+          <InvestigationHome agentLabel="Codex" onOpenExample={() => {}} />,
+        ),
+      ),
+    ).toContain(link);
+    expect(
+      visible(
+        renderToStaticMarkup(
+          <RecentList
+            agentLabel="Codex"
+            runs={[]}
+            onSelect={() => {}}
+            onOpenExample={() => {}}
+          />,
+        ),
+      ),
+    ).toContain(link);
+  });
 });
 
 describe("RecentList question runs", () => {

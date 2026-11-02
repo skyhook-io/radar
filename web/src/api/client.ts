@@ -496,17 +496,8 @@ export interface DashboardChange {
   timestamp: string;
 }
 
-export interface DashboardTopFlow {
-  src: string;
-  dst: string;
-  requestsPerSec?: number;
-  connections: number;
-}
-
 export interface DashboardTrafficSummary {
   source: string;
-  flowCount: number;
-  topFlows: DashboardTopFlow[];
 }
 
 export interface DashboardHelmRelease {
