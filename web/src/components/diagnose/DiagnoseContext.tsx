@@ -544,6 +544,7 @@ function RoutedDiagnoseProvider({
   );
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
+  const [listedAt, setListedAt] = useState(() => Date.now());
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
   const [historyDegraded, setHistoryDegraded] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
@@ -782,6 +783,7 @@ function RoutedDiagnoseProvider({
           retainFocusedSnapshot = !unavailable;
         }
       }
+      setListedAt(Date.now());
       setRuns((prev) => {
         let nextRuns = r.runs;
         if (focusedRun) nextRuns = [focusedRun, ...nextRuns];
@@ -881,16 +883,16 @@ function RoutedDiagnoseProvider({
   );
   const runningCount = runningRuns.length;
   const hasRunning = runningCount > 0;
-  // Serialized so the buttons re-render only when an entry changes, not on
-  // every poll that returns a fresh array.
-  // Re-rendering hourly lets an entry age past the cutoff while nothing polls.
-  const [, setAgeTick] = useState(0);
+  // The clock the cutoff reads moves on each fetch and hourly, so an entry
+  // ages out while nothing polls.
   useEffect(() => {
-    const t = setInterval(() => setAgeTick((n) => n + 1), 60 * 60 * 1000);
+    const t = setInterval(() => setListedAt(Date.now()), 60 * 60 * 1000);
     return () => clearInterval(t);
   }, []);
+  // Serialized so the buttons re-render only when an entry changes, not on
+  // every poll that returns a fresh array.
   const lastSig = JSON.stringify(
-    hosted ? [] : [...lastInvestigations(runs, currentContext, Date.now())],
+    hosted ? [] : [...lastInvestigations(runs, currentContext, listedAt)],
   );
   const lastInvestigationsByKey = useMemo(
     () => new Map<string, LastInvestigation>(JSON.parse(lastSig)),
