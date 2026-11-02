@@ -602,7 +602,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name:        "collect_application_evidence",
-		Description: "Collect bounded application-state observations from one selected Pod through a temporary Kubernetes port-forward. Use for questions Kubernetes status and logs cannot answer. Requires operator authorization and Pod-read/port-forward access. Local only; unavailable evidence does not establish health.",
+		Description: "Read RabbitMQ node alarms, NATS JetStream counters or Vault initialization/seal state from one Pod. Requires operator approval and Pod-read/port-forward permissions; opens a temporary port-forward. Local only. Unavailable evidence is not a health verdict.",
 		InputSchema: applicationEvidenceInputSchema(),
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
 	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))

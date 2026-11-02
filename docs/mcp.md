@@ -1595,6 +1595,22 @@ values are omitted from ordinary tool-argument logs.
 
 Confirmation tokens are process-local. Use a single Radar replica or session affinity so preview and confirmation reach the same process; a restart invalidates outstanding tokens. `/mcp-apply` is an authenticated subset of writable `/mcp`, intended for built-in agents, not a private network endpoint.
 
+## Explicit local runtime evidence
+
+After operator approval, call `collect_application_evidence` with `application`, `namespace`, `pod` and `confirm_network_access: true`. Include the suggested `pod_uid` to reject replacements. Radar checks the flag; the client obtains approval. Collection uses a temporary localhost-only Kubernetes port-forward and requires Pod-read/port-forward permissions.
+
+Available through connected full local MCP, outside built-in investigations and Apply. Requires one recognized application container with its default plaintext port declared. Host-network Pods, ambiguous targets, custom ports, credentials, TLS and remote/authenticated/hosted/in-cluster use are unsupported. RabbitMQ metrics and NATS monitoring must be enabled.
+
+| Application | Source | Interpretation |
+|---|---|---|
+| RabbitMQ | Port 15692 `/metrics` | Node-local disk/memory alarms; another node’s alarm can still block publishers. Both samples must be unambiguous; payloads over 256 KiB are unavailable. |
+| NATS | Port 8222 `/jsz` | JetStream counters, capped at 20 consumer rows with coverage. Backlog is not necessarily a fault; disabled differs from zero activity. |
+| Vault | Port 8200 `/v1/sys/health` | HTTP status and initialization/seal/standby facts; standby or HTTP 200 alone does not establish health. |
+
+`outcome: observed` carries facts; `unavailable` carries a reason without facts. NATS `coverage: partial` means omitted rows cannot be treated as zero. Results describe one endpoint at `observedAt`, not application health. Identity or in-flight context changes discard results, though a replaced Pod may briefly be contacted. Image/identity checks do not attest contents. A manual call without `pod_uid` uses the cluster current at invocation; MCP results do not include its name.
+
+`diagnose` suggests collection only for recognized Vault readiness or RabbitMQ alarm-check failures. Suggestions do not authorize collection. Returned suggestions use `coverageLimited` and `candidatesTruncated` to describe discovery limits; at most three candidates are returned. A missing suggestion is not an all-clear. NATS collection is explicit-only.
+
 ## Native operator summaries
 
 Collector, Flagger Canary and Instrumentation rows in `list_resources`, REST AI lists and search summaries include bounded integration-specific facts, without fetching related resources. Full objects remain available through `get_resource`.
