@@ -1287,6 +1287,15 @@ same image, and a workload that declares no ports is not evidence. In the MCP `i
 the warning's `correlated_changes` show recent edits to the Service, such as a
 selector change.
 
+ServiceAccount `serviceAccountSummary.secretRefs` and
+`serviceAccountSummary.imagePullSecrets` list declared Secret associations,
+filtered by the caller's permissions and capped at 20 references per field.
+A Secret's `referencedBy` includes declaring ServiceAccounts with `secrets[]`
+and `imagePullSecrets[]` paths. When Radar is still loading the Secret's
+namespace's ServiceAccounts, failed to, or doesn't collect them there,
+`referencedBy` is marked in `omitted` with `cache_cold` or `unavailable`. These declarations do not establish Pod use. Projected bound
+tokens are not Secret references.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
