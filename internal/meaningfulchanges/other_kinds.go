@@ -99,7 +99,8 @@ func otherKindsCandidates(ctx context.Context, store timeline.EventStore, q Quer
 	if len(q.Namespaces) == 0 || slices.Contains(q.Namespaces, "") {
 		nodes := base
 		nodes.Kinds, nodes.APIGroups, nodes.IncludeManaged = []string{"Node"}, []string{""}, true
-		reads = append(reads, nodes)
+		reads = append(reads, nodes, nodes)
+		reads[len(reads)-2].EventTypes, reads[len(reads)-1].EventTypes = updateEventTypes, lifecycleEventTypes
 	}
 	var events []timeline.TimelineEvent
 	saturated := false
@@ -194,7 +195,7 @@ type KindCount struct {
 // FeedSelection is SelectFeed's result.
 type FeedSelection struct {
 	Changes []issuesapi.RecentChange
-	// Churn lists kinds whose every row was left out as controller churn.
+	// Churn lists kinds left out as controller churn, with the rows left out.
 	Churn []KindCount
 	// Crowded lists kinds with rows left out so other kinds' rows fit.
 	Crowded []KindCount
@@ -202,7 +203,7 @@ type FeedSelection struct {
 
 // SelectFeed picks the default feed's page from every ranked candidate. A
 // kind outside the curated set whose rows mark it as controller churn (see
-// churnGuard) is left out whole. Then each kind shows at most perKindShown rows while
+// churnGuard) is left out, except from slots no other row needs. Then each kind shows at most perKindShown rows while
 // rows of other kinds are left out; slots no other kind fills go back to
 // those kinds in rank order, so a window with one busy kind still fills the
 // page.
@@ -211,13 +212,27 @@ func SelectFeed(changes []issuesapi.RecentChange, limit int) FeedSelection {
 	var sel FeedSelection
 	churn := churnGuard(changes)
 	candidates := changes[:0:0]
+	var churned []issuesapi.RecentChange
 	for _, c := range changes {
-		if _, ok := churn[changeGroupKind(c)]; !ok {
+		if _, ok := churn[changeGroupKind(c)]; ok {
+			churned = append(churned, c)
+		} else {
 			candidates = append(candidates, c)
 		}
 	}
+	// Slots no other row needs go to churn rows, best first.
+	if spare := limit - len(candidates); limit > 0 && spare > 0 && len(churned) > 0 {
+		shown := churned[:min(spare, len(churned))]
+		for _, c := range shown {
+			churn[changeGroupKind(c)]--
+		}
+		candidates = append(candidates, shown...)
+		RankAndCap(&candidates, 0)
+	}
 	for key, n := range churn {
-		sel.Churn = append(sel.Churn, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
+		if n > 0 {
+			sel.Churn = append(sel.Churn, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
+		}
 	}
 	sortKindCounts(sel.Churn)
 

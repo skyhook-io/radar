@@ -241,6 +241,17 @@ func TestSelectFeedChurnGuard(t *testing.T) {
 		t.Fatalf("hint = %q", hint)
 	}
 
+	// Churn rows take slots no other row needs; the hint counts the rest.
+	var short []issuesapi.RecentChange
+	for i := range 60 {
+		short = append(short, change("Widget", "example.com/v1", fmt.Sprintf("w-%d", i%3), i))
+	}
+	short = append(short, change("Deployment", "apps/v1", "web", 1), change("ConfigMap", "v1", "cfg", 1))
+	sel = SelectFeed(short, 20)
+	if len(sel.Changes) != 20 || len(sel.Churn) != 1 || sel.Churn[0].Count != 42 {
+		t.Fatalf("short page: %d rows, churn %+v; want 20 rows and 42 Widget left out", len(sel.Changes), sel.Churn)
+	}
+
 	// Below the floor, repeated changes are not churn.
 	var small []issuesapi.RecentChange
 	for i := range churnMinRows - 1 {
