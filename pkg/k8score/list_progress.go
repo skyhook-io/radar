@@ -76,7 +76,6 @@ func isListPhaseError(err error) bool {
 		strings.HasPrefix(msg, "unable to sync list result")
 }
 
-// observe records one error from the informer's watch error handler.
 func (p *listProgress) observe(err error, now time.Time) {
 	if p == nil || err == nil {
 		return

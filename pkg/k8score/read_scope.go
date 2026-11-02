@@ -29,7 +29,6 @@ func (st kindStore) stale(now time.Time) bool {
 	return st.synced() && st.progress.stale(now)
 }
 
-// current reports a store that is complete now.
 func (st kindStore) current(now time.Time) bool {
 	return st.synced() && !st.progress.stale(now)
 }
