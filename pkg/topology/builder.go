@@ -5749,7 +5749,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 17. Add generic CRD nodes connected via owner references
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {
-		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
+		var issuance []declaredDependency
+		nodes, edges, issuance = b.enrollGenericCRDNodes(nodes, edges, opts)
+		var issuerWarnings []string
+		nodes, edges, issuerWarnings = addObservedDependencyEdges(nodes, edges, issuance, b.dynamic, opts)
+		warnings = append(warnings, issuerWarnings...)
 	}
 	edges = addKnativeReferenceEdges(nodes, edges, knativeTriggerResources, knativeSourceResources, knativeChannelResources)
 	edges = addGitOpsManagedResourceEdges(
@@ -8724,10 +8728,18 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 // multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
 // intermediate nodes only become resolvable after their parents are added.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
+	nodes, edges, _ = b.enrollGenericCRDNodes(nodes, edges, opts)
+	return nodes, edges
+}
+
+// enrollGenericCRDNodes is addGenericCRDNodes that also returns the issuer
+// dependencies of the cert-manager issuance stages it admitted, parsed from
+// the objects enrollment already read so the issuer join lists nothing again.
+func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge, []declaredDependency) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
 	if dynamicCache == nil || resourceDiscovery == nil {
-		return nodes, edges
+		return nodes, edges, nil
 	}
 
 	// Build indexes for both graph IDs and exact Kubernetes resource identities.
@@ -8771,8 +8783,10 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		resourceKey string
 		typeKey     string
 		existing    bool
+		issuer      *declaredDependency
 	}
 	var candidates []candidate
+	var issuance []declaredDependency
 
 	type watchedCRD struct {
 		gvr  schema.GroupVersionResource
@@ -8876,6 +8890,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				resourceKey: resourceKey,
 				typeKey:     typeKey,
 				existing:    existing,
+				issuer:      issuanceIssuerDependency(resource),
 			})
 		}
 	}
@@ -8912,6 +8927,9 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 					existingResourceIDs[c.resourceKey] = c.nodeID
 					crdCounts[c.typeKey]++
 				}
+				if c.issuer != nil {
+					issuance = append(issuance, *c.issuer)
+				}
 				for _, edge := range ownerEdges {
 					key := ownerPair{edge.Source, edge.Target}
 					if !existingOwnerEdges[key] {
@@ -8930,7 +8948,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		}
 	}
 
-	return nodes, edges
+	return nodes, edges, issuance
 }
 
 // annotateNodePolicyCoverage adds "policyStatus" to workload node Data
