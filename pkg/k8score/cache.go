@@ -518,7 +518,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		return s.setup(factory)
 	}
 
-	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int) error {
+	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int, namespace string) (*listProgress, error) {
 		var err error
 		if s.isEvent {
 			err = rc.addEventHandlers(inf, changes)
@@ -526,13 +526,18 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			err = rc.addChangeHandlers(inf, s.kind, changes)
 		}
 		if err != nil {
-			return fmt.Errorf("failed to register %s event handler: %w", s.kind, err)
+			return nil, fmt.Errorf("failed to register %s event handler: %w", s.kind, err)
 		}
 		if !s.isEvent {
 			if err := inf.AddIndexers(ownerUIDIndexers); err != nil {
-				return fmt.Errorf("failed to index %s by owner: %w", s.kind, err)
+				return nil, fmt.Errorf("failed to index %s by owner: %w", s.kind, err)
 			}
 		}
+		label := s.key
+		if namespace != "" {
+			label += " in namespace " + namespace
+		}
+		progress := newListProgress(label, inf.LastSyncResourceVersion, stdlog)
 
 		// Wire a WatchErrorHandler so reflector-level failures (most
 		// notably 403/Unauthorized that the probe didn't predict — e.g.
@@ -544,12 +549,13 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		kind := s.kind
 		if hErr := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 			rc.recordWatchError(idx, key, kind, err)
+			progress.observe(err, time.Now())
 		}); hErr != nil {
 			// SetWatchErrorHandler only errors after the informer has
 			// started, which can't happen here — log and continue.
 			stdlog.Printf("Warning: failed to set watch error handler for %s: %v", s.kind, hErr)
 		}
-		return nil
+		return progress, nil
 	}
 
 	for _, s := range setups {
@@ -569,13 +575,14 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			for _, namespace := range scopeNamespaces {
 				factory := nsFactories[namespace]
 				inf := buildInformer(s, factory, namespace)
-				if err := wireInformer(inf, s, idx); err != nil {
+				progress, err := wireInformer(inf, s, idx, namespace)
+				if err != nil {
 					close(stopCh)
 					return nil, err
 				}
 				informersForKind = append(informersForKind, inf)
 				stores = append(stores, inf.GetIndexer())
-				rc.addKindStore(s.key, namespace, inf)
+				rc.addKindStore(s.key, namespace, inf, progress)
 			}
 			rc.indexerByKind[s.key] = &unionIndexer{indexers: stores}
 			synced = func() bool {
@@ -604,11 +611,12 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				// (the factory's informer for this kind is never started).
 				rc.pagedInformers[s.key] = inf
 			}
-			if err := wireInformer(inf, s, idx); err != nil {
+			progress, err := wireInformer(inf, s, idx, "")
+			if err != nil {
 				close(stopCh)
 				return nil, err
 			}
-			rc.addKindStore(s.key, "", inf)
+			rc.addKindStore(s.key, "", inf, progress)
 			synced = inf.HasSynced
 			run = inf.Run
 		}
@@ -1435,11 +1443,7 @@ func (rc *ResourceCache) recordWatchError(idx int, key, kind string, err error) 
 	if err == nil {
 		return
 	}
-	msg := err.Error()
-	const maxLen = 256
-	if len(msg) > maxLen {
-		msg = msg[:maxLen] + "…"
-	}
+	msg := errorForLog(err)
 	forbidden := isWatchForbiddenErr(err)
 
 	rc.informerMu.Lock()

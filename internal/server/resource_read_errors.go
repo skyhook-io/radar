@@ -32,6 +32,7 @@ var readStatus = map[readreason.Code]int{
 	readreason.RadarNamespaceNotCollected: http.StatusConflict,
 	readreason.KindSyncPending:            http.StatusServiceUnavailable,
 	readreason.KindSyncTimedOut:           http.StatusServiceUnavailable,
+	readreason.KindStale:                  http.StatusServiceUnavailable,
 	readreason.RadarKindNotCollected:      http.StatusServiceUnavailable,
 	readreason.KindUnknown:                http.StatusBadRequest,
 	readreason.KindNotWatchable:           http.StatusBadRequest,

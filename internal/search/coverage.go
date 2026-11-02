@@ -33,7 +33,7 @@ func classify(reason readreason.Code) reasonClass {
 	switch reason {
 	case readreason.KindSyncPending:
 		return classTransient
-	case readreason.KindSyncTimedOut, readreason.ReadError, readreason.UserPermissionCheckFailed, readreason.RadarCredentialsRejected:
+	case readreason.KindSyncTimedOut, readreason.KindStale, readreason.ReadError, readreason.UserPermissionCheckFailed, readreason.RadarCredentialsRejected:
 		return classFailure
 	}
 	return classScope

@@ -3,7 +3,7 @@ import { ShieldOff, AlertTriangle, ServerCrash, LogIn, Copy, Check, RefreshCw, t
 import { clsx } from 'clsx'
 import { PaneLoader } from './PaneLoader'
 import { isFetchError } from '../../types/fetch-error'
-import { readActionFor, canonicalReadCode } from '../../utils/read-actions'
+import { readActionFor } from '../../utils/read-actions'
 
 // FetchResult collapses (loading, error, no-data) into one rendered outcome:
 // loader while loading, a typed error surface when the fetch threw, or the
@@ -119,8 +119,9 @@ function classify(error: unknown, notFoundMessage: string): Classified {
         return { headline: 'Sign-in required', detail: error.message, icon: LogIn }
       case 503:
         // The cluster is connected; one kind's informer missed its sync
-        // deadline, so "Cluster unavailable" would send the reader the wrong way.
-        if (canonicalReadCode(errorCodeOf(error)) === 'kind_sync_timed_out') {
+        // deadline or stopped updating, so "Cluster unavailable" would send
+        // the reader the wrong way.
+        if (readActionFor(errorCodeOf(error)) === 'wait') {
           return { headline: "Couldn't load this view", detail: error.message, icon: AlertTriangle }
         }
         // Shares the collector's action, but it is the cluster connection

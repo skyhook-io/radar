@@ -10,7 +10,7 @@ import type { OmnibarNote, OmnibarNotePart } from './Omnibar'
 export const PENDING_RETRY_MS = 5000
 export const PENDING_RETRY_BUDGET_MS = 60000
 
-const FAILURE_REASONS = new Set(['kind_sync_timed_out', 'read_error', 'radar_credentials_rejected'])
+const FAILURE_REASONS = new Set(['kind_sync_timed_out', 'kind_stale', 'read_error', 'radar_credentials_rejected'])
 const MAX_SENTENCES = 2
 const MAX_NAMES = 3
 const MAX_TARGET_NAMES = 5

@@ -136,14 +136,16 @@ func WebhookBackendFingerprint(namespace, name string) string {
 // target namespace (KindCoversNamespace): a namespace-scoped informer answers
 // NotFound for every namespace it doesn't watch — indistinguishable from true
 // absence — so a miss outside its coverage is "couldn't verify", never
-// "missing". Non-NotFound errors are likewise unverifiable. resource is the
+// "missing". So is a miss in a store whose lists keep failing (StoreStale):
+// the target may have been created since it last updated. Non-NotFound
+// errors are likewise unverifiable. resource is the
 // plural lowercase informer key ("services", "configmaps"); ns is "" for
 // cluster-scoped kinds.
 func refLookupResult(cache *ResourceCache, resource, ns string, err error) (verifiable, exists bool) {
 	if err == nil {
 		return true, true
 	}
-	if apierrors.IsNotFound(err) && cache.KindCoversNamespace(resource, ns) {
+	if apierrors.IsNotFound(err) && cache.KindCoversNamespace(resource, ns) && !cache.StoreStale(resource, ns) {
 		return true, false
 	}
 	return false, false

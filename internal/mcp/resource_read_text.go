@@ -224,6 +224,8 @@ func gapReason(ctx context.Context, resource string, code readreason.Code) (why,
 		return fmt.Sprintf("Radar is still loading %s there", resource), ""
 	case readreason.KindSyncTimedOut:
 		return fmt.Sprintf("Radar's load of %s there didn't finish in time", resource), "if it keeps failing, whoever runs Radar should check its cluster connection and list/watch permissions"
+	case readreason.KindStale:
+		return fmt.Sprintf("Radar's copy of %s there stopped updating: its lists keep failing", resource), "if it persists, whoever runs Radar should check its access to them and its connection to the API server"
 	case readreason.UserForbidden:
 		return fmt.Sprintf("your Kubernetes access doesn't allow listing %s there", resource), withCloudRole(ctx, "a cluster admin can grant it")
 	case readreason.UserPermissionCheckFailed:

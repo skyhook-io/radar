@@ -6,6 +6,7 @@
   "findings_scan_incomplete": "change_request",
   "kind_not_searchable": "change_request",
   "kind_not_watchable": "change_request",
+  "kind_stale": "wait",
   "kind_sync_pending": "retry",
   "kind_sync_timed_out": "wait",
   "kind_unknown": "change_request",

@@ -6,7 +6,7 @@ import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/ut
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
-import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
+import { readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
 import type {
@@ -299,14 +299,14 @@ export function isStillLoadingError(error: unknown): boolean {
   return isKindSyncPending(error) || isClusterConnecting(error);
 }
 
-// isKindSyncFailed matches a kind that missed its sync deadline. Radar keeps
-// loading it, so a later reload may succeed, but retrying at once won't —
-// show the error. Older Radars spelled the code kind_sync_failed.
+// isKindSyncFailed matches a kind Radar can't serve until its own retries
+// succeed: its load missed the sync deadline, or its copy stopped updating.
+// A later reload may succeed, but retrying at once won't — show the error.
 export function isKindSyncFailed(error: unknown): boolean {
   return (
     error instanceof ApiError &&
     error.status === 503 &&
-    canonicalReadCode(error.data?.error_code) === "kind_sync_timed_out"
+    readActionFor(error.data?.error_code) === "wait"
   );
 }
 

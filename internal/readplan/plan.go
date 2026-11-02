@@ -121,7 +121,11 @@ func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, res
 		case k8s.KindReady:
 			p.add(extent, target, Readable, "")
 		case k8s.KindFailed:
-			p.add(extent, target, Gap, readreason.KindSyncTimedOut)
+			code := readreason.KindSyncTimedOut
+			if a.KindStale {
+				code = readreason.KindStale
+			}
+			p.add(extent, target, Gap, code)
 		default:
 			p.add(extent, target, Gap, readreason.KindSyncPending)
 		}
@@ -142,7 +146,12 @@ func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, res
 	p.add(NamespaceSet, rejected, Gap, readreason.RadarCredentialsRejected)
 	p.add(NamespaceSet, outside, OutsideCollection, readreason.RadarNamespaceNotCollected)
 	p.add(NamespaceSet, a.Loading, Gap, readreason.KindSyncPending)
-	p.add(NamespaceSet, a.Failed, Gap, readreason.KindSyncTimedOut)
+	stale := make(map[string]bool, len(a.Stale))
+	for _, ns := range a.Stale {
+		stale[ns] = true
+	}
+	p.add(NamespaceSet, slices.DeleteFunc(slices.Clone(a.Failed), func(ns string) bool { return stale[ns] }), Gap, readreason.KindSyncTimedOut)
+	p.add(NamespaceSet, a.Stale, Gap, readreason.KindStale)
 	return p
 }
 
