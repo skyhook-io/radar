@@ -6,9 +6,11 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -26,6 +28,9 @@ import (
 const (
 	factAdmissionWebhookCandidates = "admission_webhook_candidates"
 	maxAdmissionWebhookCandidates  = 5
+	// recentWebhookConfiguration is how new a configuration must be for its
+	// age to be stated and to rank it ahead of long-standing ones.
+	recentWebhookConfiguration = 24 * time.Hour
 )
 
 // admissionWebhookCallTimedOut matches a webhook call that waited out its
@@ -100,6 +105,7 @@ func enrichAdmissionWebhookCandidates(shaped []Issue, p Provider, access podTemp
 // admissionWebhook is one webhook's Pod CREATE scope and call settings.
 type admissionWebhook struct {
 	configuration   Ref
+	created         time.Time
 	name            string
 	mutating        bool
 	podCreate       bool
@@ -147,7 +153,11 @@ func (p *CacheProvider) admissionWebhooks(access podTemplateAccess) admissionWeb
 				unreadable = true
 				continue
 			}
-			set.webhooks = append(set.webhooks, compileAdmissionWebhooks(ref, item.Object)...)
+			webhooks := compileAdmissionWebhooks(ref, item.Object)
+			for idx := range webhooks {
+				webhooks[idx].created = item.GetCreationTimestamp().Time
+			}
+			set.webhooks = append(set.webhooks, webhooks...)
 		}
 		if unreadable {
 			set.unchecked = append(set.unchecked, "Some "+kind+"s are not readable by the caller and were not checked.")
@@ -240,7 +250,7 @@ func (p *CacheProvider) namedWebhookFact(issue Issue, access podTemplateAccess) 
 		if w.name != blocker.WebhookName {
 			continue
 		}
-		line, lineRefs, _ := p.describeAdmissionWebhook(w, timedOut, access)
+		line, lineRefs, _ := p.describeAdmissionWebhook(w, timedOut, false, access)
 		lines = append(lines, line)
 		refs = append(refs, lineRefs...)
 	}
@@ -261,11 +271,14 @@ func (p *CacheProvider) createTimeoutFact(issue Issue, access podTemplateAccess)
 	set := p.admissionWebhooks(access)
 	nsLabels, nsKnown := p.namespaceLabels(issue.Namespace, access)
 	type candidate struct {
-		webhook admissionWebhook
-		suspect bool
-		line    string
-		refs    []Ref
+		webhook   admissionWebhook
+		suspect   bool
+		recent    bool
+		uncertain bool
+		line      string
+		refs      []Ref
 	}
+	now := time.Now()
 	var candidates []candidate
 	selectorsUnknown := false
 	for _, w := range set.webhooks {
@@ -281,18 +294,28 @@ func (p *CacheProvider) createTimeoutFact(issue Issue, access podTemplateAccess)
 				continue
 			}
 		}
-		line, refs, policyBlocked := p.describeAdmissionWebhook(w, true, access)
-		if w.objectSelector || w.matchConditions {
-			line += " (its objectSelector or matchConditions may exclude these Pods)"
-		}
-		candidates = append(candidates, candidate{webhook: w, suspect: policyBlocked, line: line, refs: refs})
+		line, refs, policyBlocked := p.describeAdmissionWebhook(w, true, true, access)
+		candidates = append(candidates, candidate{webhook: w, suspect: policyBlocked, line: line, refs: refs,
+			recent:    !w.created.IsZero() && now.Sub(w.created) < recentWebhookConfiguration,
+			uncertain: w.objectSelector || w.matchConditions})
 	}
-	// Webhooks a NetworkPolicy may cut off first, then the longest waits.
+	// A cluster can have a dozen webhooks matching every Pod. Put first those
+	// a NetworkPolicy may cut off, then configurations created recently
+	// (newest first), then those whose scope certainly covers these Pods, then
+	// the longest waits.
 	sort.SliceStable(candidates, func(a, b int) bool {
-		if candidates[a].suspect != candidates[b].suspect {
-			return candidates[a].suspect
+		ca, cb := candidates[a], candidates[b]
+		switch {
+		case ca.suspect != cb.suspect:
+			return ca.suspect
+		case ca.recent != cb.recent:
+			return ca.recent
+		case ca.recent && !ca.webhook.created.Equal(cb.webhook.created):
+			return ca.webhook.created.After(cb.webhook.created)
+		case ca.uncertain != cb.uncertain:
+			return !ca.uncertain
 		}
-		return candidates[a].webhook.timeoutSeconds > candidates[b].webhook.timeoutSeconds
+		return ca.webhook.timeoutSeconds > cb.webhook.timeoutSeconds
 	})
 
 	var msg strings.Builder
@@ -306,23 +329,17 @@ func (p *CacheProvider) createTimeoutFact(issue Issue, access podTemplateAccess)
 		fmt.Fprintf(&msg, " Admission webhooks that match Pod creation in namespace %s, any of which may have been slow or unreachable:", issue.Namespace)
 		for idx, c := range candidates {
 			if idx == maxAdmissionWebhookCandidates {
-				fmt.Fprintf(&msg, " (and %d more)", len(candidates)-idx)
+				fmt.Fprintf(&msg, " %d more matching webhooks are not listed.", len(candidates)-idx)
 				break
 			}
 			fmt.Fprintf(&msg, " (%d) %s.", idx+1, c.line)
 			refs = append(refs, c.refs[0])
 		}
-		var mutating int
-		var total int32
-		for _, c := range candidates {
-			if c.webhook.mutating {
-				mutating++
-				total += c.webhook.timeoutSeconds
-			}
+		if mutating := slices.IndexFunc(candidates, func(c candidate) bool { return c.webhook.mutating }); mutating >= 0 &&
+			slices.ContainsFunc(candidates[mutating+1:], func(c candidate) bool { return c.webhook.mutating }) {
+			msg.WriteString(" Mutating webhooks are called one after another, so several slow ones add up.")
 		}
-		if mutating > 1 {
-			fmt.Fprintf(&msg, " Mutating webhooks are called one after another; if each of the %d matching ones waited its full timeout, the create would take %ds.", mutating, total)
-		}
+		msg.WriteString(" Find the slow or unreachable backend before removing or bypassing any webhook.")
 	}
 	if selectorsUnknown {
 		fmt.Fprintf(&msg, " Webhooks with a namespaceSelector were not checked: namespace %s's labels are not readable.", issue.Namespace)
@@ -351,13 +368,21 @@ func (p *CacheProvider) namespaceLabels(namespace string, access podTemplateAcce
 
 // describeAdmissionWebhook returns one webhook's settings and backend state,
 // the refs it rests on (the configuration first), and whether it names
-// NetworkPolicies that may block the API server.
-func (p *CacheProvider) describeAdmissionWebhook(w admissionWebhook, timedOut bool, access podTemplateAccess) (string, []Ref, bool) {
+// NetworkPolicies that may block the API server. scopeUnsure notes selectors
+// Radar did not evaluate against the Pods.
+func (p *CacheProvider) describeAdmissionWebhook(w admissionWebhook, timedOut, scopeUnsure bool, access podTemplateAccess) (string, []Ref, bool) {
 	kind := "validating"
 	if w.mutating {
 		kind = "mutating"
 	}
-	line := fmt.Sprintf("%s webhook %s (%s %s): failurePolicy %s, timeout %ds", kind, w.name, w.configuration.Kind, w.configuration.Name, w.failurePolicy, w.timeoutSeconds)
+	config := w.configuration.Kind + " " + w.configuration.Name
+	if age := time.Since(w.created); !w.created.IsZero() && age >= 0 && age < recentWebhookConfiguration {
+		config += ", created " + timeutil.FormatAgeShort(age) + " ago"
+	}
+	if scopeUnsure && (w.objectSelector || w.matchConditions) {
+		config += "; its objectSelector or matchConditions may exclude these Pods"
+	}
+	line := fmt.Sprintf("%s webhook %s (%s): failurePolicy %s, timeout %ds", kind, w.name, config, w.failurePolicy, w.timeoutSeconds)
 	refs := []Ref{w.configuration}
 	if w.service == nil {
 		return line + "; it calls a URL, which Radar does not check", refs, false

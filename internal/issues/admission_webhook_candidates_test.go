@@ -130,7 +130,8 @@ func TestCreateTimeoutListsMatchingWebhooks(t *testing.T) {
 		"(1) mutating webhook isolated.example.com (MutatingWebhookConfiguration isolated): failurePolicy Ignore, timeout 8s; backend Service policy-system/isolated has 1 ready pod; NetworkPolicy allow-observe selects those pods and admits ingress only from pod or namespace selectors, so it may block the API server",
 		"(2) mutating webhook open.example.com (MutatingWebhookConfiguration open): failurePolicy Ignore, timeout 12s; backend Service policy-system/open has 1 ready pod.",
 		"(3) validating webhook validate.example.com (ValidatingWebhookConfiguration policy): failurePolicy Fail, timeout 10s; backend Service policy-system/down has no ready pods.",
-		"if each of the 2 matching ones waited its full timeout, the create would take 20s",
+		"Mutating webhooks are called one after another, so several slow ones add up.",
+		"Find the slow or unreachable backend before removing or bypassing any webhook.",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message missing %q:\n%s", want, msg)
@@ -244,5 +245,31 @@ func TestAdmissionWebhookCandidatesOnlyOnPodCreateFailures(t *testing.T) {
 	again := enrichAdmissionWebhookCandidates(out, NewCacheProvider(), podTemplateAccess{})
 	if len(again[0].DiagnosticContext.Facts) != 1 {
 		t.Fatalf("facts=%+v", again[0].DiagnosticContext.Facts)
+	}
+}
+
+// On a real cluster a dozen long-standing webhooks match every Pod; one
+// created minutes ago with a certain scope is listed ahead of them.
+func TestCreateTimeoutRanksRecentConfigurationsFirst(t *testing.T) {
+	defer k8s.ResetTestState()
+	defer k8s.ResetTestDynamicState()
+	if err := k8s.InitTestResourceCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})); err != nil {
+		t.Fatal(err)
+	}
+	old := mutatingPodWebhook("addon", "addon.example.com", "addon", 30, admissionv1.Ignore)
+	old.CreationTimestamp = metav1.NewTime(time.Now().Add(-90 * 24 * time.Hour))
+	scoped := mutatingPodWebhook("scoped-new", "scoped.example.com", "scoped", 10, admissionv1.Ignore)
+	scoped.CreationTimestamp = metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	scoped.Webhooks[0].ObjectSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"inject": "true"}}
+	fresh := mutatingPodWebhook("fresh", "fresh.example.com", "fresh", 5, admissionv1.Ignore)
+	fresh.CreationTimestamp = metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	initAdmissionWebhooks(t, old, scoped, fresh)
+
+	msg := NewCacheProvider().admissionWebhookCandidatesFact(timeoutIssue(), podTemplateAccess{}).Message
+	first, second, third := strings.Index(msg, "(1) mutating webhook fresh.example.com (MutatingWebhookConfiguration fresh, created 5m ago)"),
+		strings.Index(msg, "(2) mutating webhook scoped.example.com (MutatingWebhookConfiguration scoped-new, created 10m ago; its objectSelector or matchConditions may exclude these Pods)"),
+		strings.Index(msg, "(3) mutating webhook addon.example.com (MutatingWebhookConfiguration addon): failurePolicy Ignore, timeout 30s")
+	if first < 0 || second < first || third < second {
+		t.Fatalf("order:\n%s", msg)
 	}
 }
