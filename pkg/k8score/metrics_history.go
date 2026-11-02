@@ -8,9 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
@@ -121,6 +123,11 @@ type MetricsHistoryStore struct {
 	dynClient  dynamic.Interface
 	resolveGVR MetricsGVRResolver
 
+	// Namespaces, when it returns a non-empty list, limits pod metrics
+	// collection to those namespaces, one LIST each. An install whose RBAC is
+	// granted per namespace cannot list pod metrics cluster-wide.
+	Namespaces func() []string
+
 	podMetrics  map[string]*podMetricsBuffer
 	nodeMetrics map[string]*nodeMetricsBuffer
 
@@ -129,6 +136,7 @@ type MetricsHistoryStore struct {
 	lastCollectionAttempt        time.Time
 	totalCollections             int64
 	consecutivePodErrors         int
+	partialPodErrors             int // collections where some, not all, namespaces failed
 	consecutiveNodeErrors        int
 	lastPodError                 string
 	lastNodeError                string
@@ -282,15 +290,17 @@ func (s *MetricsHistoryStore) pollLoop() {
 }
 
 func (s *MetricsHistoryStore) collectMetrics() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	now := time.Now()
 	s.mu.Lock()
 	s.lastCollectionAttempt = now
 	s.totalCollections++
 	s.mu.Unlock()
-	s.collectPodMetrics(ctx, now)
-	s.collectNodeMetrics(ctx, now)
+	podCtx, cancelPods := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelPods()
+	s.collectPodMetrics(podCtx, now)
+	nodeCtx, cancelNodes := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelNodes()
+	s.collectNodeMetrics(nodeCtx, now)
 }
 
 func (s *MetricsHistoryStore) metricsGVR(resource string) (schema.GroupVersionResource, bool) {
@@ -316,6 +326,21 @@ func (s *MetricsHistoryStore) recordPodCollectionError(err error) {
 		log.Printf("[metrics] Pod metrics collection failed (count=%d): %v", count, err)
 		if s.OnError != nil {
 			s.OnError("metrics", metricsCollectionErrorLevel(err), "pod metrics collection failed (count=%d): %v", count, err)
+		}
+	}
+}
+
+func (s *MetricsHistoryStore) recordPartialPodCollectionError(err error) {
+	s.mu.Lock()
+	s.partialPodErrors++
+	count := s.partialPodErrors
+	s.mu.Unlock()
+	if count == 1 || count%20 == 0 {
+		log.Printf("[metrics] Pod metrics collection failed in some namespaces (count=%d): %v", count, err)
+		// Diagnostics are readable by every signed-in user, so they get no
+		// namespace names; the server log above has the detail.
+		if s.OnError != nil {
+			s.OnError("metrics", metricsCollectionErrorLevel(err), "pod metrics collection failed in some namespaces (count=%d); see the Radar log", count)
 		}
 	}
 }
@@ -360,10 +385,17 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 		return
 	}
 
-	result, err := s.dynClient.Resource(podMetricsGVR).List(ctx, metav1.ListOptions{})
-	if err != nil {
+	items, listed, err := s.listPodMetrics(ctx, podMetricsGVR)
+	if !listed {
 		s.recordPodCollectionError(err)
 		return
+	}
+	if err != nil {
+		// Some namespaces failed. The ones that answered are still recorded,
+		// and the failure goes to the Radar log only: the collection error is
+		// shown with any pod's history, and must not name another namespace
+		// to someone who can read only theirs.
+		s.recordPartialPodCollectionError(err)
 	}
 
 	s.mu.Lock()
@@ -376,7 +408,7 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 	s.lastPodError = ""
 	s.lastSuccessfulPodCollection = now
 
-	for _, item := range result.Items {
+	for _, item := range items {
 		namespace := item.GetNamespace()
 		name := item.GetName()
 		key := namespace + "/" + name
@@ -432,6 +464,44 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 			delete(s.podMetrics, key)
 		}
 	}
+}
+
+// listPodMetrics lists pod metrics cluster-wide, or per namespace when
+// Namespaces is set. listed reports whether any LIST succeeded; err joins the
+// failures.
+func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, gvr schema.GroupVersionResource) (items []unstructured.Unstructured, listed bool, err error) {
+	var namespaces []string
+	if s.Namespaces != nil {
+		namespaces = s.Namespaces()
+	}
+	if len(namespaces) == 0 {
+		result, err := s.dynClient.Resource(gvr).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, false, err
+		}
+		return result.Items, true, nil
+	}
+	results := make([]*unstructured.UnstructuredList, len(namespaces))
+	errs := make([]error, len(namespaces))
+	var lists errgroup.Group
+	lists.SetLimit(8)
+	for i, namespace := range namespaces {
+		lists.Go(func() error {
+			results[i], errs[i] = s.dynClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+			if errs[i] != nil {
+				errs[i] = fmt.Errorf("namespace %s: %w", namespace, errs[i])
+			}
+			return nil
+		})
+	}
+	_ = lists.Wait()
+	for _, result := range results {
+		if result != nil {
+			listed = true
+			items = append(items, result.Items...)
+		}
+	}
+	return items, listed, errors.Join(errs...)
 }
 
 func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.Time) {

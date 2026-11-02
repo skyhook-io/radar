@@ -179,3 +179,56 @@ func TestGetAllNodeMetricsLatestPreservesSampleTimestamp(t *testing.T) {
 		t.Fatalf("latest node metrics = %+v, want CPU=300 Memory=400", got[0])
 	}
 }
+
+func TestMetricsHistoryListsPodMetricsPerNamespace(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: MetricsAPIGroup, Version: "v1beta1", Resource: "pods"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "PodMetricsList"},
+	)
+	dyn.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		namespace := action.GetNamespace()
+		if namespace == "" || namespace == "denied" {
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("list denied"))
+		}
+		item := unstructured.Unstructured{Object: map[string]any{
+			"containers": []any{map[string]any{"name": "app", "usage": map[string]any{"cpu": "5m", "memory": "1Mi"}}},
+		}}
+		item.SetNamespace(namespace)
+		item.SetName("web")
+		return true, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{item}}, nil
+	})
+	store := NewMetricsHistoryStoreWithResolver(dyn, func(string) (schema.GroupVersionResource, bool) { return gvr, true })
+
+	store.collectPodMetrics(context.Background(), time.Now())
+	if store.consecutivePodErrors != 1 {
+		t.Fatalf("cluster-wide collection: errors=%d, want the forbidden list to fail", store.consecutivePodErrors)
+	}
+
+	store.Namespaces = func() []string { return []string{"app", "billing"} }
+	store.collectPodMetrics(context.Background(), time.Now())
+	if store.consecutivePodErrors != 0 || store.lastPodError != "" {
+		t.Fatalf("per-namespace collection failed: errors=%d last=%q", store.consecutivePodErrors, store.lastPodError)
+	}
+	for _, key := range []string{"app/web", "billing/web"} {
+		if store.podMetrics[key] == nil {
+			t.Errorf("no metrics collected for %s", key)
+		}
+	}
+	if len(store.podMetrics) != 2 {
+		t.Errorf("collected %d pods, want 2", len(store.podMetrics))
+	}
+
+	store.Namespaces = func() []string { return []string{"app", "denied"} }
+	later := time.Now().Add(time.Minute)
+	store.collectPodMetrics(context.Background(), later)
+	if store.consecutivePodErrors != 0 || store.lastPodError != "" {
+		t.Fatalf("one failed namespace: errors=%d last=%q, want it kept out of the shared collection error", store.consecutivePodErrors, store.lastPodError)
+	}
+	if store.partialPodErrors != 1 {
+		t.Errorf("partial failures = %d, want 1", store.partialPodErrors)
+	}
+	if !store.podMetrics["app/web"].lastSeen.Equal(later) {
+		t.Errorf("app/web was not recorded when another namespace failed")
+	}
+}

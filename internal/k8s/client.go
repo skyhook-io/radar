@@ -1273,6 +1273,13 @@ func SetRBACNamespaces(namespaces []string) {
 	rbacNamespaces = dedupeNamespacesLocked(namespaces)
 }
 
+// RBACNamespaces returns the --rbac-namespaces list, or nil when it is unset.
+func RBACNamespaces() []string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return slices.Clone(rbacNamespaces)
+}
+
 // ConfiguredNamespacesForCurrentContext returns the --namespaces list when
 // the current kubeconfig context is still the one the flag was configured
 // against. --namespaces is an *initial* value: after a context switch the
