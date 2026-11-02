@@ -844,33 +844,15 @@ func admissionWebhookServiceReferences(dynamicCache *DynamicResourceCache, disco
 			continue
 		}
 		for _, item := range items {
-			webhooks, found, err := unstructured.NestedSlice(item.Object, "webhooks")
-			if err != nil || !found {
-				continue
-			}
-			for _, webhook := range webhooks {
-				wm, ok := webhook.(map[string]any)
-				if !ok {
-					continue
-				}
-				service, found, err := unstructured.NestedMap(wm, "clientConfig", "service")
-				if err != nil || !found {
-					continue
-				}
-				serviceName, _ := service["name"].(string)
-				serviceNamespace, _ := service["namespace"].(string)
-				if serviceName == "" || serviceNamespace == "" {
-					continue
-				}
-				webhookName, _ := wm["name"].(string)
+			for _, ref := range configrefs.AdmissionWebhookServices(item) {
 				refs = append(refs, AdmissionWebhookServiceReference{
 					ConfigurationKind:  webhookType.kind,
 					ConfigurationGroup: webhookType.group,
 					ConfigurationName:  item.GetName(),
-					WebhookName:        webhookName,
-					ServiceNamespace:   serviceNamespace,
-					ServiceName:        serviceName,
-					FailurePolicy:      webhookFailurePolicy(wm),
+					WebhookName:        ref.WebhookName,
+					ServiceNamespace:   ref.Service.Namespace,
+					ServiceName:        ref.Service.Name,
+					FailurePolicy:      ref.FailurePolicy,
 					CreationTimestamp:  item.GetCreationTimestamp().Time,
 				})
 			}
@@ -1046,14 +1028,6 @@ func (m *webhookMissingBackend) policySummary() string {
 		return "failurePolicy=Fail"
 	}
 	return "failurePolicy=Ignore"
-}
-
-func webhookFailurePolicy(wm map[string]any) string {
-	policy, _, _ := unstructured.NestedString(wm, "failurePolicy")
-	if strings.EqualFold(policy, "Ignore") {
-		return "Ignore"
-	}
-	return "Fail"
 }
 
 func webhookFailurePolicySeverity(policy string) string {

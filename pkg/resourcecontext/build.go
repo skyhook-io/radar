@@ -35,6 +35,12 @@ import (
 // Hosts pre-compute issue, audit and policy summaries; Build never calls
 // internal services.
 type Options struct {
+	// OpenTelemetryAutoInstrumentation was computed from access-checked cache reads by the
+	// host. A connection change discards the whole observation.
+	OpenTelemetryAutoInstrumentation *OpenTelemetryAutoInstrumentationContext
+	// OpenTelemetryAutoInstrumentationUnavailable requires nil OpenTelemetryAutoInstrumentation: the
+	// host discarded the observation. Nil/false means none was supplied.
+	OpenTelemetryAutoInstrumentationUnavailable bool
 	// Children is an access-aware direct-child preview, precomputed by hosts.
 	// Apply Get checks before capping so unreadable refs cannot displace readable ones.
 	Children *ChildrenContext
@@ -44,8 +50,10 @@ type Options struct {
 	Reflections         ReflectionLookup
 	Tier                ContextTier
 
-	// AccessChecker gates Build-projected references, including Children.
-	// Hosts authorize other precomputed blocks. Nil skips Build's access checks.
+	// AccessChecker gates Build-projected references, including Children when
+	// supplied. Hosts authorize other precomputed blocks, including
+	// OpenTelemetryAutoInstrumentation and any declared but
+	// unresolved coordinates within it. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
 	// Topology supplies relationships when Relationships is nil. Without
@@ -178,6 +186,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 
 	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj), Children: opts.Children}
+	if opts.OpenTelemetryAutoInstrumentation != nil {
+		rc.AutoInstrumentation = &AutoInstrumentationContext{OpenTelemetry: opts.OpenTelemetryAutoInstrumentation}
+	}
 	omitted := newOmittedTracker()
 	// Canonical context references still require Get access, even when a
 	// host's relationship view intentionally exposes namespace-readable names.
@@ -194,6 +205,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	if opts.ChildrenUnavailable {
 		omitted.add("children", OmittedUnavailable)
+	}
+	if opts.OpenTelemetryAutoInstrumentationUnavailable {
+		omitted.add("autoInstrumentation.openTelemetry", OmittedUnavailable)
 	}
 
 	// Topology supplies networking, scaling and spec-declared relations;
@@ -433,6 +447,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		}
 	}
 
+	addWebhookContext(ctx, obj, opts, rc, omitted)
 	rc.Omitted = omitted.collect()
 	return rc
 }
@@ -1707,6 +1722,82 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 	if len(out) == 0 {
 		return nil
 	}
+	return out
+}
+
+// Denied namespaces must not make reference authorization unbounded.
+const maxReferenceAccessChecks = 4 * maxReferencedByItems
+
+// filterBoundedRefs dedupes refs and keeps the readable ones, taking one ref
+// per kind in turn so a kind with many matches cannot crowd out the others.
+// Access checks are cached per (group, kind, namespace) and capped, and the
+// result is capped at maxReferencedByItems; either cap records budget_exceeded.
+func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+	sorted := append([]ContextRef(nil), refs...)
+	less := func(a, b ContextRef) bool {
+		return resourceid.ResourceKey(a.Group, a.Kind, a.Namespace, a.Name) < resourceid.ResourceKey(b.Group, b.Kind, b.Namespace, b.Name)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
+	type bucket struct {
+		refs []ContextRef
+		next int
+	}
+	var buckets []bucket
+	var last, kindKey string
+	for _, ref := range sorted {
+		key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if key == last {
+			continue
+		}
+		last = key
+		kind := resourceid.ResourceKey(ref.Group, ref.Kind, "", "")
+		if len(buckets) == 0 || kind != kindKey {
+			buckets = append(buckets, bucket{})
+			kindKey = kind
+		}
+		buckets[len(buckets)-1].refs = append(buckets[len(buckets)-1].refs, ref)
+	}
+	decisions := make(map[string]bool)
+	var out []ContextRef
+	for {
+		advanced := false
+		for i := range buckets {
+			b := &buckets[i]
+			if b.next == len(b.refs) {
+				continue
+			}
+			ref := b.refs[b.next]
+			b.next++
+			advanced = true
+			allowed := true
+			if ac != nil {
+				key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, "")
+				var known bool
+				allowed, known = decisions[key]
+				if !known {
+					if len(decisions) == maxReferenceAccessChecks {
+						omitted.add(field, OmittedBudgetExceeded)
+						continue
+					}
+					allowed = checkRef(ctx, ac, &ref)
+					decisions[key] = allowed
+				}
+			}
+			if !allowed {
+				omitted.add(field, OmittedRBACDenied)
+				continue
+			}
+			out = append(out, ref)
+			if len(out) > maxReferencedByItems {
+				omitted.add(field, OmittedBudgetExceeded)
+				return out[:maxReferencedByItems]
+			}
+		}
+		if !advanced {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return less(out[i], out[j]) })
 	return out
 }
 
