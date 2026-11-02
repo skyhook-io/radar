@@ -1604,3 +1604,48 @@ workloads; other direct children remain followable through Related Resources.
 `diagnose(kind=Canary, group=flagger.app, ...)` uses the same root event/Issue and owned-workload path. `declaredTarget` is the explicit Flagger target reference, **not** an owned child or the stable primary. It has a workload bundle for supported apps Deployments/DaemonSets, or an explicit collection error/follow-up. The stable primary appears only when currently observed as a direct owned workload; Radar never fabricates `-primary` names. This keeps the parked canary target (often zero replicas) separate from the serving primary.
 
 A recorded `Failed` phase describes Flagger's last rollout result. Current-UID Warning events may explain it, while an empty event sample does not prove no prior failure. Neither the phase nor configured weight establishes live availability or traffic distribution. Provider endpoints, live traffic and telemetry delivery are not probed.
+
+## Auto-instrumentation reference context
+
+Pod and supported workload detail reads can include `resourceContext.autoInstrumentation.openTelemetry`. It evaluates declared injection requests for a hypothetical new Pod, even when the subject is an existing Pod. It does not establish observed injection, application health or telemetry delivery.
+
+### Fields and resolution states
+
+| Field | Meaning |
+|---|---|
+| `requestsIfPodCreatedNow` | Per-component requests evaluated against current annotations, Namespace defaults and Instrumentation objects. These may have changed since an existing Pod was created. |
+| `language` | The exact `instrumentation.opentelemetry.io/inject-` annotation suffix: `apache-httpd`, `dotnet`, `go`, `java`, `nginx`, `nodejs`, `php`, `python`, `ruby` or `sdk`. SDK selects environment-variable injection rather than a language auto-instrumentation library. |
+| `source`, `annotationPath` | The effective annotation's source and JSON pointer. Template paths distinguish workload metadata from the Pod template. |
+| `namespaceDefaultsUnknown` | Namespace inheritance could not be read, including when no Pod annotation is present. |
+| `assumesOperatorCRDMode` | Default selection assumes Instrumentation CRs; an operator using inline instrumentation can behave differently. |
+| `ignoredWorkloadMetadataAnnotations` | Injection keys on workload metadata, where the mutator does not read them. Use Pod/template or Namespace annotations instead. |
+
+Each request's `resolution` concerns only that component's reference lookup:
+
+| Resolution | Meaning |
+|---|---|
+| `resolved`, `missing` | A named Instrumentation reference was found or absent. `missing` requires synced inventory and caller access. |
+| `unknown` | The reference or inherited Namespace annotation could not be established; this is not absence. Coordinates from a caller-readable annotation may remain visible without disclosing whether the target exists. |
+| `disabled` | An explicit false annotation. |
+| `invalid_reference` | An invalid name or namespace. |
+| `default_resolved`, `default_missing`, `default_ambiguous` | Default selection found one, no, or multiple Instrumentation CRs in the readable namespace, with `assumesOperatorCRDMode: true`. |
+
+### Selection and unknown results
+
+A named or false Pod annotation wins. Pod=true can inherit a named Namespace annotation; true/default selection uses the operator's CRD-mode rules.
+
+| Available qualifiers | What remains unknown | Next evidence |
+|---|---|---|
+| `namespaceDefaultsUnknown: true`, Pod `true`, no selected ref | A hidden Namespace might supply a named selection | Read this Namespace's annotations with an authorized identity |
+| `instrumentation` coordinates present with `resolution: unknown` | The caller-readable named reference could not be checked | Read that Instrumentation, or check its cache coverage/access |
+| `assumesOperatorCRDMode: true`, `resolution: unknown` | Default-selection inventory could not be checked | List Instrumentations in the Pod's namespace with an authorized identity, or confirm the CRD is installed and its cache is collected/synced |
+
+The CRD-mode flag is absent for unreadable Namespace inheritance: Pod=true could inherit a named reference, so default selection has not been established.
+
+### Limits and inspection
+
+Reference resolution is not admission success or a prediction of the combined webhook outcome. A failing selection for another requested language can prevent all injection. Language feature gates can disable injection even when a reference resolves. Container-targeting rules can also prevent mutation, sometimes without a Warning event. Inspect the actual Pod spec, init-container status, events and operator logs; this context does not infer injector identity. Native Warning events, including observed `InstrumentationRequestRejected`, remain available through existing UID-filtered Pod diagnosis/event paths.
+
+Supported sources are Pods, apps workloads, Jobs/CronJobs and inline Argo Rollout Pod templates. An absent block does not establish that no requests exist: unreadable Namespace defaults or unresolved templates may be outside the evidence. The outer `autoInstrumentation` object is not an exhaustive injector inventory; native provider blocks retain their own selection rules. An unavailable OTel observation records field `autoInstrumentation.openTelemetry` in `omitted`, without declaring other providers unavailable.
+
+REST AI and MCP detail reads share this projection. Basic list summaries do not perform related-object lookups. UI inspection uses existing annotations, YAML and events; this configuration context creates no global Issue, additional Pod warning banner or outage classification.
