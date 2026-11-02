@@ -1226,6 +1226,18 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
+Storage context uses the drawer's cached relationships. A PVC depends on its
+declared PV and StorageClass, including a Pending claim with no volume yet; a PV
+depends on its StorageClass and lists its claim as a dependent; a StorageClass
+lists its PVs and the claims that declare it. For these three kinds the lists
+are deduplicated and capped at 20 readable references, filled round-robin across
+kinds so a StorageClass with hundreds of claims still lists its volumes; a
+capped or partially checked list carries `omitted: budget_exceeded`. When Radar
+is still loading volumes or claims, or doesn't collect claims in every namespace,
+a StorageClass's `dependents` are marked `cache_cold` or `unavailable`: an empty
+list then doesn't mean the class is unused. These are declarations, not proof
+that provisioning, binding or mounting succeeded.
+
 A KEDA ScaledObject summary's `target` includes its API group, for example `Deployment (apps)/web`. Missing or empty target kind and API version default to `Deployment` and `apps/v1`; a `Rollout` target without an API version is reported as `Rollout (apps)/worker`.
 
 HPA `hpaSummary.metrics` matches current values to targets by source and selector. Targets without a current value have `status: missing`; unmatched observations have `status: status_only`. Core Namespace metric names use the HPA's namespace.

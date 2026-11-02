@@ -214,6 +214,14 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// Topology supplies networking, scaling and spec-declared relations;
 	// the caller's ownership answer supplies controllers and GitOps evidence.
 	rel := opts.Relationships
+	// A StorageClass's volumes and claims come from cache-wide reads, so say
+	// when those inventories were incomplete, even if nothing was found.
+	// Relationships a host supplies carry no inventory state to assess.
+	if rel == nil && opts.Topology != nil && ident.Group == "storage.k8s.io" && ident.Kind == "StorageClass" {
+		if gap := storageClassInventoryGap(opts.Provider); gap != "" {
+			omitted.add("dependents", gap)
+		}
+	}
 	if rel == nil && opts.Topology != nil {
 		// Resolve the topology-pseudo-kind so cross-group CRDs (Knative
 		// serving.knative.dev/Service, CAPI cluster.x-k8s.io/Cluster, …)
@@ -329,10 +337,15 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
 		rc.MonitorTargets = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
 
-		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependencies), "dependencies", omitted)
-		rc.Dependents = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependents), "dependents", omitted)
+		if dependencies, dependents, ok := storageChain(ident.Group, ident.Kind, rel); ok {
+			rc.Dependencies = filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted)
+			rc.Dependents = filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
+		} else {
+			rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
+				toContextRefs(rel.Dependencies), "dependencies", omitted)
+			rc.Dependents = filterRefs(ctx, opts.AccessChecker,
+				toContextRefs(rel.Dependents), "dependents", omitted)
+		}
 
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
@@ -734,7 +747,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		if accounts, ok := provider.(topology.ServiceAccountProvider); ok {
 			// Assess before reading: a sync that completes between the two
 			// must not make a partial snapshot look complete.
-			gap := serviceAccountCoverageGap(provider, target.namespace)
+			gap := inventoryGap(provider, string(k8score.ServiceAccounts), []string{target.namespace})
 			sas, err := accounts.ServiceAccounts()
 			if err != nil {
 				sas = nil
@@ -1191,19 +1204,40 @@ type inventoryCoverage interface {
 	AssessKindRead(resource string, namespaces []string) k8score.KindReadAssessment
 }
 
-func serviceAccountCoverageGap(provider topology.ResourceProvider, namespace string) OmittedReason {
+// inventoryGap says why an empty read of resource in namespaces (nil for every
+// namespace) can't be taken as "none": still loading, or failed, uncollected
+// or unwatched. Call it before reading, so a sync that completes in between
+// can't make a partial read look complete.
+func inventoryGap(provider topology.ResourceProvider, resource string, namespaces []string) OmittedReason {
 	coverage, ok := provider.(inventoryCoverage)
 	if !ok {
 		return ""
 	}
-	assessment := coverage.AssessKindRead(k8score.ServiceAccounts, []string{namespace})
+	assessment := coverage.AssessKindRead(resource, namespaces)
 	switch {
 	case assessment.Complete:
 		return ""
-	case len(assessment.Loading) > 0:
+	case assessment.TargetReadiness() == k8score.KindPending:
 		return OmittedCacheCold
 	default:
 		return OmittedUnavailable
+	}
+}
+
+// storageClassInventoryGap covers a StorageClass's volumes and its claims,
+// which can be in any namespace.
+func storageClassInventoryGap(provider topology.ResourceProvider) OmittedReason {
+	gaps := []OmittedReason{
+		inventoryGap(provider, string(k8score.PersistentVolumes), nil),
+		inventoryGap(provider, string(k8score.PersistentVolumeClaims), nil),
+	}
+	switch {
+	case slices.Contains(gaps, OmittedUnavailable):
+		return OmittedUnavailable
+	case slices.Contains(gaps, OmittedCacheCold):
+		return OmittedCacheCold
+	default:
+		return ""
 	}
 }
 
@@ -1300,6 +1334,38 @@ func compactResourceList(resources corev1.ResourceList) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// storageChain maps a claim, volume or class's storage relationships into
+// dependencies and dependents: a claim depends on its volume and class, a
+// volume on its class and is used by its claim, and a class is used by its
+// volumes and claims. A class can back thousands of volumes, so the caller
+// bounds both lists.
+func storageChain(group, kind string, rel *topology.Relationships) (dependencies, dependents []ContextRef, ok bool) {
+	pick := func(dst []ContextRef, refs []topology.ResourceRef, group, kind string) []ContextRef {
+		for _, ref := range refs {
+			if ref.Group == group && ref.Kind == kind {
+				dst = append(dst, ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name})
+			}
+		}
+		return dst
+	}
+	dependencies = toContextRefs(rel.Dependencies)
+	dependents = toContextRefs(rel.Dependents)
+	switch resourceid.ResourceKey(group, kind, "", "") {
+	case resourceid.ResourceKey("", "PersistentVolumeClaim", "", ""):
+		dependencies = pick(dependencies, rel.StorageRefs, "", "PersistentVolume")
+		dependencies = pick(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+	case resourceid.ResourceKey("", "PersistentVolume", "", ""):
+		dependencies = pick(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+	case resourceid.ResourceKey("storage.k8s.io", "StorageClass", "", ""):
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolume")
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+	default:
+		return nil, nil, false
+	}
+	return dependencies, dependents, true
 }
 
 func buildPVCSummary(obj runtime.Object) *PVCSummary {
