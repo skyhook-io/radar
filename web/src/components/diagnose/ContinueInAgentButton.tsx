@@ -149,15 +149,21 @@ export function ContinueInAgentButton({
       setOpen(false);
   };
   const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Tab") {
-      setOpen(false);
-      return;
-    }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const items = Array.from(
       menuRef.current?.querySelectorAll<HTMLElement>("button") ?? [],
     );
     if (items.length === 0) return;
+    // Tab moves between the panel's buttons; leaving either end closes it
+    // and goes back to the button that opened it.
+    if (event.key === "Tab") {
+      const edge = event.shiftKey ? items[0] : items[items.length - 1];
+      if (document.activeElement !== edge) return;
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     const at = items.indexOf(document.activeElement as HTMLElement);
     const step = event.key === "ArrowDown" ? 1 : -1;

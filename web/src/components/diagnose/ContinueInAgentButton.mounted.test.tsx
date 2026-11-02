@@ -56,9 +56,13 @@ afterEach(async () => {
 async function openPanel() {
   await act(async () => caret().click());
   await flush();
-  await act(async () => {
-    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-  });
+  // The panel animates in over two frames, then takes focus.
+  for (let i = 0; i < 2; i++)
+    await act(async () => {
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => resolve(null)),
+      );
+    });
   await flush();
 }
 
@@ -108,5 +112,26 @@ describe("the continue panel", () => {
     await openPanel();
     await act(async () => window.dispatchEvent(new Event("resize")));
     expect(caret().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("tabs between its buttons, and back to the caret past the last", async () => {
+    await openPanel();
+    const [copy, runHere] = Array.from(
+      panel()!.querySelectorAll<HTMLButtonElement>("button"),
+    );
+    expect(document.activeElement).toBe(copy);
+    const tab = (shiftKey = false) =>
+      act(async () =>
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true }),
+        ),
+      );
+    await tab();
+    // Not the last button: the panel stays open and the browser moves focus.
+    expect(caret().getAttribute("aria-expanded")).toBe("true");
+    runHere.focus();
+    await tab();
+    expect(caret().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(caret());
   });
 });
