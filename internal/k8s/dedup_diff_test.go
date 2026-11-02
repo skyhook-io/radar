@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,7 +34,7 @@ func TestRecordToTimelineStore_PrecomputedDiffMatchesRecompute(t *testing.T) {
 		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
 			t.Fatalf("InitStore: %v", err)
 		}
-		recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDep, newDep, precomputed, diffPrecomputed)
+		recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDep, newDep, precomputed, diffPrecomputed, nil)
 		events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Deployment"}})
 		if err != nil {
 			t.Fatalf("Query: %v", err)
@@ -53,6 +54,24 @@ func TestRecordToTimelineStore_PrecomputedDiffMatchesRecompute(t *testing.T) {
 	}
 }
 
+func TestRecordToTimelineStore_KeepsFieldManagers(t *testing.T) {
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	t.Cleanup(timeline.ResetStore)
+	now := time.Now()
+	managers := []k8score.FieldManagerWrite{{Manager: "kubectl-set", Operation: "Update"}}
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", testDeployment("uid-1", "nginx:1.0", now), testDeployment("uid-1", "nginx:2.0", now), nil, false, managers)
+	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Deployment"}})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 1 || events[0].Diff == nil || !reflect.DeepEqual(events[0].Diff.FieldManagers, managers) {
+		t.Fatalf("recorded events = %+v", events)
+	}
+}
+
 func TestRecordToTimelineStore_PreservesDNSFieldPath(t *testing.T) {
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
@@ -63,7 +82,7 @@ func TestRecordToTimelineStore_PreservesDNSFieldPath(t *testing.T) {
 	oldDep := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{DNSPolicy: corev1.DNSClusterFirst}}}}
 	newDep := oldDep.DeepCopy()
 	newDep.Spec.Template.Spec.DNSPolicy = corev1.DNSNone
-	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDep, newDep, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDep, newDep, nil, false, nil)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Deployment"}})
 	if err != nil {
@@ -124,7 +143,7 @@ func TestRecordToTimelineStore_DeploymentGenerationFallbackRequiresSpecChange(t 
 			}
 			t.Cleanup(timeline.ResetStore)
 
-			recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDeployment, newDeployment, nil, false)
+			recordToTimelineStore(ActiveClusterContext(), "Deployment", "shop", "web", "uid-1", "update", oldDeployment, newDeployment, nil, false, nil)
 			events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Deployment"}})
 			if err != nil {
 				t.Fatalf("Query: %v", err)
@@ -191,7 +210,7 @@ func TestRecordToTimelineStore_DeletionStartIsNotSpecChange(t *testing.T) {
 			}
 			t.Cleanup(timeline.ResetStore)
 
-			recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-1", "uid-1", "update", oldPod, newPod, nil, false)
+			recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-1", "uid-1", "update", oldPod, newPod, nil, false, nil)
 			events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Pod"}, IncludeManaged: true})
 			if err != nil {
 				t.Fatalf("Query: %v", err)

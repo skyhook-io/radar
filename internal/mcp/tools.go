@@ -293,7 +293,10 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"If `sourcesErrored` includes helm, treat the result as partial rather than proof " +
 			"that no Helm deployment happened. Use get_helm_release include=history,operations " +
 			"for the full Helm revision trail. Other edited fields list under `other spec " +
-			"changes`; hidden values: `(value hidden)`/`(set)`.",
+			"changes`; hidden values: `(value hidden)`/`(set)`. Update rows may carry " +
+			"`field_managers`: the managedFields labels of the clients that wrote it, such as " +
+			"kubectl-edit, helm or `kube-controller-manager (status)`. A label names a tool or " +
+			"controller, never a user; absent means unknown.",
 		Annotations: readOnly,
 	}, logToolCall("get_changes", handleGetChanges))
 

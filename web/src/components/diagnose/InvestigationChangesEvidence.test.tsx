@@ -156,6 +156,16 @@ describe("Secret and ConfigMap change evidence", () => {
     expect(render(secretChange)).not.toContain("(first 5)");
   });
 
+  it("names the field managers that wrote the change, and drops malformed ones", () => {
+    expect(render({ ...secretChange, field_managers: ["kubectl-edit"] })).toContain(
+      "kubectl-edit",
+    );
+    expect(recentChange({ ...secretChange, field_managers: [3] })).not.toHaveProperty(
+      "field_managers",
+    );
+    expect(render(secretChange)).not.toContain(">via ");
+  });
+
   it("renders references as text when the row has no namespace", () => {
     render({ ...secretChange, namespace: undefined });
     expect(

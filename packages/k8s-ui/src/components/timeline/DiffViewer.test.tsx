@@ -4,6 +4,32 @@ import { describe, expect, it } from "vitest";
 import { DiffViewer } from "./DiffViewer";
 
 describe("DiffViewer", () => {
+  it("names the field managers that wrote the change", () => {
+    const html = renderToStaticMarkup(
+      <DiffViewer
+        diff={{
+          summary: "replicas 2 → 3",
+          fields: [{ path: "spec.replicas", oldValue: 2, newValue: 3 }],
+          fieldManagers: [
+            { manager: "kubectl-edit", operation: "Update" },
+            { manager: "kube-controller-manager", operation: "Update", subresource: "scale" },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain("via");
+    expect(html).toContain("kubectl-edit, kube-controller-manager (scale)");
+  });
+
+  it("omits the line when the writer is unknown", () => {
+    const html = renderToStaticMarkup(
+      <DiffViewer diff={{ summary: "replicas 2 → 3", fields: [{ path: "spec.replicas", oldValue: 2, newValue: 3 }] }} />,
+    );
+
+    expect(html).not.toContain("via");
+  });
+
   it("labels added, removed, and changed values without relying on color", () => {
     const html = renderToStaticMarkup(
       <DiffViewer

@@ -193,6 +193,7 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
     first_update_at,
     consumed_by,
     consumed_by_withheld,
+    field_managers,
     ...change
   } = candidate;
   const running = record(running_previous_value);
@@ -200,6 +201,7 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
     running?.workloads === null ? [] : stringArray(running?.workloads);
   const keys = stringArray(running?.keys);
   const consumers = stringArray(consumed_by);
+  const managers = stringArray(field_managers);
   const runningWithheld = withheld(running?.withheld);
   const consumersWithheld = withheld(consumed_by_withheld);
   return {
@@ -227,6 +229,7 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
       ? { first_update_at }
       : {}),
     ...(consumers ? { consumed_by: consumers } : {}),
+    ...(managers?.length ? { field_managers: managers } : {}),
     ...(consumersWithheld ? { consumed_by_withheld: consumersWithheld } : {}),
   } as unknown as IssueRecentChange;
 }

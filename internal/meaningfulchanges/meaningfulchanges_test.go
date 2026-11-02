@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func TestShouldAttachIssueChanges(t *testing.T) {
@@ -1562,6 +1563,23 @@ func TestFromEventClassifiesApplicationConfigurationBeforeFieldDisplayCap(t *tes
 	}
 	if got := changes[0].Fields[0].Path; got != "spec.template.spec.containers[frontend].env[CART_ADDR]" {
 		t.Fatalf("displayed field = %q, want the evidence supporting the classification", got)
+	}
+}
+
+func TestFromEventLabelsFieldManagers(t *testing.T) {
+	change := fromEvent(timeline.TimelineEvent{
+		Source: timeline.SourceInformer, Kind: "Deployment", Namespace: "shop", Name: "frontend",
+		EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{
+			Fields: []timeline.FieldChange{{Path: "spec.replicas", OldValue: 2, NewValue: 3}},
+			FieldManagers: []k8score.FieldManagerWrite{
+				{Manager: "kubectl-edit", Operation: "Update"},
+				{Manager: "kube-controller-manager", Operation: "Update", Subresource: "scale"},
+			},
+		},
+	}, 0)
+	if want := []string{"kubectl-edit", "kube-controller-manager (scale)"}; !reflect.DeepEqual(change.FieldManagers, want) {
+		t.Fatalf("field_managers = %v, want %v", change.FieldManagers, want)
 	}
 }
 

@@ -96,7 +96,7 @@ func TestK8sEvent_TombstoneEnrichesAfterDelete(t *testing.T) {
 	pod := tombstoneTestPod("web-abc", created)
 
 	// Informer delete: production passes the deleted object as newObj, oldObj=nil.
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false, nil)
 
 	// Late K8s event; live cache is empty (GetResourceCache()==nil), so
 	// enrichment must come from the tombstone.
@@ -142,7 +142,7 @@ func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
 
 	created := time.Now() // fresh add (age <= 30s so it is recorded, not treated as sync)
 	pod := tombstoneTestPod("web-new", created)
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-new", string(pod.UID), "add", nil, pod, nil, false, nil)
 
 	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-new", "Started"))
 
@@ -163,11 +163,11 @@ func TestK8sEvent_FailedExtractDoesNotClobberTombstone(t *testing.T) {
 
 	created := time.Now().Add(-45 * time.Minute)
 	pod := tombstoneTestPod("web-abc", created)
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, pod, nil, false, nil)
 
 	// Same resource identity, but a payload ExtractTombstoneEntry can't
 	// unwrap (not a metav1.Object, not a DeletedFinalStateUnknown).
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-abc", string(pod.UID), "delete", nil, "not-an-object", nil, false, nil)
 
 	recordK8sEventToTimeline(ActiveClusterContext(), k8sEventPod("web-abc", "Killing"))
 
@@ -242,7 +242,7 @@ func TestInformerAdd_RecordsOwnerEvidence(t *testing.T) {
 	pod := tombstoneTestPod("web-ev", time.Now())
 	pod.OwnerReferences[0].APIVersion = "apps/v1"
 	pod.OwnerReferences[0].UID = types.UID("rs-uid")
-	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-ev", string(pod.UID), "add", nil, pod, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-ev", string(pod.UID), "add", nil, pod, nil, false, nil)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Pod"}, IncludeManaged: true,

@@ -473,7 +473,7 @@ func InitResourceCache(ctx context.Context) error {
 				}
 
 				// Record to timeline store
-				recordToTimelineStore(recordClusterContext, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true)
+				recordToTimelineStore(recordClusterContext, change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj, change.Diff, true, change.FieldManagers)
 			},
 
 			OnEventChange: func(obj any, op string) {
@@ -497,6 +497,8 @@ func InitResourceCache(ctx context.Context) error {
 			},
 
 			IsNoisyResource: isNoisyResource,
+
+			TrackFieldManagers: true,
 		}
 
 		wrapped := &ResourceCache{
@@ -999,7 +1001,7 @@ func timelineUpdateDiff(kind string, oldObj, newObj any, precomputedDiff *DiffIn
 // diffPrecomputed=true so we don't recompute the identical diff on the hottest
 // per-update path; callers without one (tests, non-cache paths) pass nil +
 // false and the diff is computed here.
-func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
+func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool, fieldManagers []k8score.FieldManagerWrite) {
 	obj := newObj
 	if obj == nil {
 		obj = oldObj
@@ -1118,6 +1120,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 			}
 			return
 		}
+		diff.FieldManagers = fieldManagers
 	}
 	if op == "add" || op == "delete" {
 		diff = toTimelineDiff(rbacBindingLifecycleDiff(kind, op, obj))

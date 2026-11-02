@@ -136,6 +136,11 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 		}
 		newest.UpdatesInWindow++
 		newest.FirstUpdateAt = change.Timestamp
+		for _, manager := range change.FieldManagers {
+			if !slices.Contains(newest.FieldManagers, manager) {
+				newest.FieldManagers = append(newest.FieldManagers, manager)
+			}
+		}
 		// Key lists merge; other fields (type, immutable) keep the newest
 		// value, and an older one is kept only when the newer rows lack it.
 		for _, field := range change.Fields {

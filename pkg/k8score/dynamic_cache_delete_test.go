@@ -34,6 +34,7 @@ func TestDynamicDeleteTombstonePassesUnwrappedObjectToCallbacks(t *testing.T) {
 		cache.DeletedFinalStateUnknown{Key: "shop/checkout", Obj: deleted},
 		nil,
 		OpDelete,
+		nil,
 	)
 
 	if callbackObject != deleted {

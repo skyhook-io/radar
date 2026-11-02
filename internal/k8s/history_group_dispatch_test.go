@@ -137,7 +137,7 @@ func TestRecordToTimelineStore_CollidingCRDUpdateSurvives(t *testing.T) {
 	newJob.SetResourceVersion("2")
 
 	diff := ComputeDiff("Job", oldJob, newJob)
-	recordToTimelineStore(ActiveClusterContext(), "Job", "gpu-demo", "collision-demo", "volcano-job-uid", "update", oldJob, newJob, diff, true)
+	recordToTimelineStore(ActiveClusterContext(), "Job", "gpu-demo", "collision-demo", "volcano-job-uid", "update", oldJob, newJob, diff, true, nil)
 
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
 		Kinds: []string{"Job"}, Namespaces: []string{"gpu-demo"},

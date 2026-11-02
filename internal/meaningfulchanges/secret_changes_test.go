@@ -185,6 +185,17 @@ func TestSecretCollapseKeepsNonKeyFields(t *testing.T) {
 	}
 }
 
+func TestSecretCollapseMergesFieldManagers(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	write := func(ago time.Duration, managers ...string) issuesapi.RecentChange {
+		return issuesapi.RecentChange{Kind: "Secret", Namespace: "shop", Name: "db", ChangeType: "update", Timestamp: now.Add(-ago).Format(time.RFC3339), FieldManagers: managers, Fields: []issuesapi.ChangeField{{Path: "data (modified keys)", OldValue: []string{"A"}, NewValue: []string{"A"}}}}
+	}
+	rows := collapseSecretUpdates([]issuesapi.RecentChange{write(time.Minute, "external-secrets"), write(2 * time.Minute), write(3*time.Minute, "kubectl-edit", "external-secrets")})
+	if len(rows) != 1 || !reflect.DeepEqual(rows[0].FieldManagers, []string{"external-secrets", "kubectl-edit"}) {
+		t.Fatalf("collapsed row=%+v", rows)
+	}
+}
+
 // rank_reason claims references only when consumed_by names them.
 func TestSecretRankReasonStatesOnlyEstablishedFacts(t *testing.T) {
 	store := secretFeedFixture(t, feedSecret("loose"))

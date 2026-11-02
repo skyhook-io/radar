@@ -50,6 +50,7 @@ type ResourceCache struct {
 	syncComplete     atomic.Bool
 	config           CacheConfig
 	stdlog           *log.Logger
+	fieldManagers    *fieldManagerIndex // nil unless CacheConfig.TrackFieldManagers
 
 	// Per-informer sync tracking for diagnostics
 	informerStatuses []InformerSyncStatus
@@ -412,10 +413,15 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	// Build one factory per unique scope. The cluster-wide factory is
 	// always created so cluster-scoped kinds (nodes, namespaces, PV…)
 	// have a home; namespace-scoped factories are created on demand.
+	var fieldManagers *fieldManagerIndex
+	if cfg.TrackFieldManagers {
+		fieldManagers = newFieldManagerIndex()
+	}
 	transform := func(obj any) (any, error) {
 		if cfg.OnTransform != nil {
 			cfg.OnTransform(obj)
 		}
+		fieldManagers.capture(obj)
 		return DropManagedFields(obj)
 	}
 	clusterFactory := informers.NewSharedInformerFactoryWithOptions(
@@ -483,6 +489,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	enabledCount := 0
 
 	rc := &ResourceCache{
+		fieldManagers:    fieldManagers,
 		factory:          clusterFactory,
 		nsFactories:      nsFactories,
 		factoryByKind:    map[string]informers.SharedInformerFactory{},
@@ -1340,6 +1347,14 @@ func (rc *ResourceCache) enqueueChange(ch chan<- ResourceChange, kind string, ob
 		UID:       uid,
 		Operation: op,
 		Diff:      diff,
+	}
+	switch op {
+	case OpUpdate:
+		if oldMeta, ok := oldObj.(metav1.Object); ok {
+			change.FieldManagers = rc.fieldManagers.update(oldMeta, meta)
+		}
+	case OpDelete:
+		rc.fieldManagers.forget(uid)
 	}
 
 	if rc.config.OnObservedChange != nil {

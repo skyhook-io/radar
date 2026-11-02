@@ -1,7 +1,8 @@
 import { memo } from 'react'
 import { clsx } from 'clsx'
 import { ArrowRight, EyeOff, Plus, Minus, RefreshCw } from 'lucide-react'
-import type { DiffInfo, FieldChange } from '../../types'
+import type { DiffInfo, FieldChange, FieldManagerWrite } from '../../types'
+import { Tooltip } from '../ui/Tooltip'
 
 interface DiffViewerProps {
   diff: DiffInfo
@@ -32,6 +33,8 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
         </div>
       )}
 
+      <FieldManagersLine labels={diff.fieldManagers?.map(fieldManagerLabel)} />
+
       {/* Field changes */}
       <div className="space-y-1.5">
         {diffRows(diff.fields).map((row, idx) =>
@@ -45,6 +48,28 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
     </div>
   )
 })
+
+function fieldManagerLabel(manager: FieldManagerWrite): string {
+  return manager.subresource ? `${manager.manager} (${manager.subresource})` : manager.manager
+}
+
+const FIELD_MANAGERS_INFO =
+  'The field managers Kubernetes recorded for this write (metadata.managedFields): the tool or controller that sent it, not a user.'
+
+// Managers are labels the writing client chose (kubectl-edit, helm, a
+// controller's name), never a person, so the line names a tool, not an author.
+export function FieldManagersLine({ labels, className }: { labels?: string[]; className?: string }) {
+  if (!labels?.length) return null
+  return (
+    <div className={clsx('text-xs text-theme-text-tertiary', className)}>
+      <Tooltip content={FIELD_MANAGERS_INFO} delay={150} position="bottom">
+        <span>
+          via <span className="font-mono text-theme-text-secondary">{[...new Set(labels)].join(', ')}</span>
+        </span>
+      </Tooltip>
+    </div>
+  )
+}
 
 // Secret and ConfigMap diffs report which keys changed as name lists, under
 // paths like "data (modified keys)", never values. Rendered as an old→new
