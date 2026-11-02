@@ -2,6 +2,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -168,6 +169,9 @@ function DiagnoseResourceButton({
   );
 }
 
+const POPOVER_WIDTH = 320;
+const GUTTER = 16;
+
 function LastInvestigationPopover({
   last,
   open,
@@ -186,6 +190,19 @@ function LastInvestigationPopover({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Ends at the button's right edge, shifted to stay on screen: a phone's
+  // wrapped header can put the button anywhere along the row.
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open || !ref.current) return;
+    const anchor = ref.current.getBoundingClientRect();
+    const width = Math.min(POPOVER_WIDTH, window.innerWidth - 2 * GUTTER);
+    const left = Math.min(
+      Math.max(anchor.right - width, GUTTER),
+      window.innerWidth - GUTTER - width,
+    );
+    setShift(anchor.right - width - left);
+  }, [open]);
   const { shouldRender, isOpen } = useAnimatedUnmount(
     open,
     overlayExitMs("menu"),
@@ -229,12 +246,16 @@ function LastInvestigationPopover({
           aria-label="Last investigation"
           inert={!open || undefined}
           className={clsx(
-            "absolute right-0 top-full z-50 mt-1.5 w-80 origin-top-right rounded-lg border border-theme-border bg-theme-surface p-3 text-left shadow-theme-lg",
+            "absolute top-full z-50 mt-1.5 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-theme-border bg-theme-surface p-3 text-left shadow-theme-lg",
+            "right-0 origin-top-right",
             TRANSITION_MENU,
             isOpen ? "scale-100 opacity-100" : "scale-[0.97] opacity-0",
             !open && "pointer-events-none",
           )}
-          style={overlayTransitionStyle(isOpen, "menu")}
+          style={{
+            ...overlayTransitionStyle(isOpen, "menu"),
+            right: shift,
+          }}
         >
           <div
             className="text-xs text-theme-text-tertiary"
