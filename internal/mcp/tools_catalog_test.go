@@ -263,7 +263,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Rollback guidance, its source-mode warning and sync_options
 		// inheritance: 66,869 bytes without exec.
-		maxCatalogBytes         = 66900
+		// search's IP lookup routing (an ip:port from a log, ip:<role> holders vs
+		// mentions, exitedPodIP reuse): 66,903 bytes without exec.
+		maxCatalogBytes         = 66910
 		maxToolDescriptionBytes = 3200
 	)
 

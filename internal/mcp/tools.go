@@ -477,6 +477,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"metadata, but data values won't appear in snippets to avoid leaking " +
 			"secret material through search results. " +
 			"Examples: `readinessProbe user-service`, `image:flagd`, `kind:Pod label:app=cart error`. " +
+			"An IP or ip:port from a log matches only that whole address; site ip:<role> marks a Pod, Service or Node " +
+			"holding it (podIP, hostNetworkPod, clusterIP, nodeInternalIP...; exitedPodIP is a finished pod's old IP, " +
+			"possibly reused); other sites only mention it. " +
 			"Use the namespace parameter for structured namespace scoping. Modifiers such as " +
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
@@ -773,7 +776,7 @@ type podLogsInput struct {
 }
 
 type searchInput struct {
-	Query     string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd. Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
+	Query     string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd, 10.244.1.7:6379 (IP lookup). Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace scope, as an inline ns: modifier; overrides inline ones. Skips cluster-scoped kinds unless kind: names one"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
@@ -3543,6 +3546,9 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		)
 	}
 	response.CoverageHint = searchCoverageHint(result, len(parsed.KindFilter) > 0)
+	if ipOnlyQuery(parsed) && input.Filter == "" && result.TotalMatched == result.Total {
+		response.IPHint = searchIPHint(parsed.Tokens[0], result.Hits)
+	}
 	return toJSONResult(response)
 }
 
@@ -3553,8 +3559,34 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 // agents read the limits before interpreting the matches.
 type searchResponseMCP struct {
 	CoverageHint string `json:"coverageHint,omitempty"`
+	IPHint       string `json:"ipHint,omitempty"`
 	NarrowHint   string `json:"narrowHint,omitempty"`
 	search.Result
+}
+
+// ipOnlyQuery reports a query of one IP address alone: no other term (tokens
+// are AND'd, so a second IP hides each one's holder), modifier or namespace
+// scope that could hide the Pod, Service or Node holding it.
+func ipOnlyQuery(q search.Query) bool {
+	return len(q.Tokens) == 1 && len(q.IPTokens()) == 1 &&
+		len(q.KindFilter) == 0 && len(q.NSFilter) == 0 && len(q.LabelFilter) == 0 && len(q.ImageFilter) == 0
+}
+
+// searchIPHint says when no hit of an untruncated one-IP search currently
+// holds the address, so a hit that only mentions it (a ConfigMap, a Pod's
+// hostIP) or an exited pod that once held it isn't read as its holder.
+// coverageHint qualifies it the same way it qualifies any absence.
+func searchIPHint(ip string, hits []search.Hit) string {
+	held := slices.ContainsFunc(hits, func(h search.Hit) bool {
+		return slices.ContainsFunc(h.Matched, func(m search.MatchedField) bool {
+			return m.Token == ip && strings.HasPrefix(m.Site, "ip:") && m.Site != "ip:exitedPodIP"
+		})
+	})
+	if held {
+		return ""
+	}
+	return fmt.Sprintf("no running Pod, Service or Node in Radar's view holds %s; other hits only mention it or held it "+
+		"before. Pod IPs are reused, a deleted pod's IP no longer resolves, and the address may be outside the cluster", ip)
 }
 
 // toJSONResult marshals data into a text content MCP result.
