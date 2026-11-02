@@ -203,10 +203,10 @@ type FeedSelection struct {
 
 // SelectFeed picks the default feed's page from every ranked candidate. A
 // kind outside the curated set whose rows mark it as controller churn (see
-// churnGuard) is left out, except from slots no other row needs. Then each kind shows at most perKindShown rows while
-// rows of other kinds are left out; slots no other kind fills go back to
-// those kinds in rank order, so a window with one busy kind still fills the
-// page.
+// churnGuard) is left out, except from slots no other row needs. Then each
+// kind shows at most perKindShown rows while rows of other kinds are left
+// out; slots no other kind fills go back to those kinds in rank order, so a
+// window with one busy kind still fills the page.
 func SelectFeed(changes []issuesapi.RecentChange, limit int) FeedSelection {
 	RankAndCap(&changes, 0)
 	var sel FeedSelection
