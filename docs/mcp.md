@@ -1319,7 +1319,7 @@ See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors)
 
 The Strimzi producer returns at most five findings and inspects at most 500 namespace inventory entries. Exceeding the inventory budget returns a `list_too_large` gap with no assessed snapshots; it does not return a sample.
 
-Modern worker attribution requires cached `StrimziPodSet` objects (`core.strimzi.io`); the chart’s Strimzi toggle grants Radar collection access. Pod templates remain cached for resource details, with corresponding memory/timeline cost. MCP owner attribution checks exact object access; REST uses its namespace-level Related Resources policy. Curated Issues access remains separate from full-object grants.
+Modern worker attribution requires cached `StrimziPodSet` objects (`core.strimzi.io`); the chart’s Strimzi toggle grants Radar collection access. Pod templates remain cached for resource details, with corresponding memory/timeline cost. MCP owner attribution checks exact object access; REST uses its namespace-level Related Resources policy. Direct Strimzi diagnosis and curated Issues follow the namespace-level read policy; the stricter owner check applies to attribution from another resource. To verify recovery of a previously observed connector failure, diagnose that connector directly. A clean parent recheck leaves its earlier related finding unresolved.
 
 ## Available Resources
 
