@@ -922,7 +922,8 @@ type ReflectionContext struct {
 type ChildrenContext struct {
 	Items []ContextRef `json:"items"`
 	// Complete: every direct child in the caller-readable scope is included.
-	// Uncollected kinds or truncation make this false, without implying a runtime failure.
+	// Uncollected kinds, loading/read/unresolved inventory gaps or truncation
+	// make this false, without implying a runtime failure.
 	Complete bool `json:"complete"`
 	// Narrowed means permissions may exclude children, not that hidden children exist.
 	Narrowed bool `json:"narrowed,omitempty"`

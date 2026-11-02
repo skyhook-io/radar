@@ -86,8 +86,9 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 	if excluded > 0 {
 		resp.Warnings = append(resp.Warnings, earlierIncarnationEventsNote(excluded, false))
 	}
+	const inventoryFollowUp = "Follow listed references or use list_resources for apps Deployments, StatefulSets or DaemonSets in this namespace. Inspect selected candidates with get_resource/diagnose; these are leads, not exhaustive operator membership. Retry when inventories are loading; request access only when a denied read prevents the needed conclusion."
 	if children == nil || children.Context == nil {
-		resp.Warnings = append(resp.Warnings, "Owned resources could not be established. Retry diagnose after caches load; an empty runtime bundle is not proof there are no workloads.")
+		resp.Warnings = append(resp.Warnings, "Owned resources could not be established; an empty runtime bundle is not proof there are no workloads. "+inventoryFollowUp)
 	} else {
 		for _, ref := range children.AppsWorkloads {
 			if ref.Group != "apps" || ref.Kind != "Deployment" && ref.Kind != "StatefulSet" && ref.Kind != "DaemonSet" {
@@ -107,7 +108,7 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 			resp.OwnedWorkloads = append(resp.OwnedWorkloads, entry)
 		}
 		if !children.AppsWorkloadsComplete {
-			resp.Warnings = append(resp.Warnings, "Some workload inventories could not be checked. Follow the listed references, retry after caches load, or ask a reader with broader access before ruling out other runtime workloads.")
+			resp.Warnings = append(resp.Warnings, "Some workload inventories could not be checked; do not rule out other runtime workloads. "+inventoryFollowUp)
 		}
 	}
 	// Refuse a mixed-cluster answer or one whose root was recreated while
