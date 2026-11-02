@@ -206,13 +206,17 @@ func TestSelectFeedPerKindCap(t *testing.T) {
 	}
 }
 
-// A kind outside the curated set with far more rows than the others is left
-// out whole and named; a curated kind with the same count is not.
+// A kind outside the curated set whose few objects change over and over is
+// left out whole and named; a curated kind with the same rows is not, and
+// neither is a bulk apply of many objects.
 func TestSelectFeedChurnGuard(t *testing.T) {
 	var changes []issuesapi.RecentChange
 	for i := range 200 {
 		changes = append(changes, change("Widget", "example.com/v1", fmt.Sprintf("w-%d", i%7), i%60))
 		changes = append(changes, change("ConfigMap", "v1", fmt.Sprintf("cfg-%d", i%7), i%60))
+	}
+	for i := range 60 {
+		changes = append(changes, change("VirtualService", "networking.istio.io/v1", fmt.Sprintf("vs-%d", i), 30))
 	}
 	for i := range 4 {
 		changes = append(changes,
@@ -228,19 +232,20 @@ func TestSelectFeedChurnGuard(t *testing.T) {
 	if slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "Widget/") }) {
 		t.Fatalf("page lists churn: %v", got)
 	}
-	if !slices.Contains(got, "DestinationRule/dr-3") || !slices.Contains(got, "NodePool/pool-3") || !slices.Contains(got, "ConfigMap/cfg-0") {
-		t.Fatalf("page = %v, want the other kinds", got)
+	for _, want := range []string{"DestinationRule/dr-3", "NodePool/pool-3", "ConfigMap/cfg-0", "VirtualService/vs-0"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("page = %v, want %s", got, want)
+		}
 	}
 	if hint := FeedSelectionGuidance(sel); !strings.Contains(hint, "200 Widget changes") {
 		t.Fatalf("hint = %q", hint)
 	}
 
-	// Below the absolute floor, a lopsided count is not churn.
+	// Below the floor, repeated changes are not churn.
 	var small []issuesapi.RecentChange
 	for i := range churnMinRows - 1 {
 		small = append(small, change("Widget", "example.com/v1", "w", i%60))
 	}
-	small = append(small, change("Deployment", "apps/v1", "web", 1), change("Service", "v1", "web", 1), change("NodePool", "karpenter.sh/v1", "p", 1))
 	if sel := SelectFeed(small, 20); len(sel.Churn) != 0 {
 		t.Fatalf("churn below floor = %+v", sel.Churn)
 	}

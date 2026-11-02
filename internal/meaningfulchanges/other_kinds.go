@@ -177,10 +177,11 @@ const (
 	// while other kinds' rows are left out to make room.
 	perKindShown = 3
 	// Churn guard: a kind outside the curated set with at least
-	// churnMinRows eligible rows in the window, and at least churnFactor
-	// times the median kind's count, is controller churn.
-	churnMinRows = 50
-	churnFactor  = 10
+	// churnMinRows rows in the window, at least churnRowsPerObject per
+	// object on average, is controller churn: a controller rewriting the
+	// same objects. A bulk apply of many objects, once each, is not.
+	churnMinRows       = 50
+	churnRowsPerObject = 5
 )
 
 // KindCount names a kind and how many of its rows a selection left out.
@@ -200,8 +201,8 @@ type FeedSelection struct {
 }
 
 // SelectFeed picks the default feed's page from every ranked candidate. A
-// kind outside the curated set whose row count marks it as controller churn
-// is left out whole. Then each kind shows at most perKindShown rows while
+// kind outside the curated set whose rows mark it as controller churn (see
+// churnGuard) is left out whole. Then each kind shows at most perKindShown rows while
 // rows of other kinds are left out; slots no other kind fills go back to
 // those kinds in rank order, so a window with one busy kind still fills the
 // page.
@@ -276,28 +277,25 @@ func SelectFeed(changes []issuesapi.RecentChange, limit int) FeedSelection {
 	return sel
 }
 
-// churnGuard returns the kinds outside the curated set whose candidate count
-// marks them as controller churn, with their counts.
+// churnGuard returns the kinds outside the curated set whose rows mark them
+// as controller churn, with their counts.
 func churnGuard(changes []issuesapi.RecentChange) map[resourceid.GroupKind]int {
 	counts := map[resourceid.GroupKind]int{}
+	objects := map[resourceid.GroupKind]map[string]bool{}
 	for _, c := range changes {
-		counts[changeGroupKind(c)]++
-	}
-	if len(counts) < 2 {
-		return nil
-	}
-	values := make([]int, 0, len(counts))
-	for _, n := range counts {
-		values = append(values, n)
-	}
-	sort.Ints(values)
-	median := values[len(values)/2]
-	if len(values)%2 == 0 {
-		median = (values[len(values)/2-1] + values[len(values)/2]) / 2
+		key := changeGroupKind(c)
+		if curatedGroupKind(key) {
+			continue
+		}
+		counts[key]++
+		if objects[key] == nil {
+			objects[key] = map[string]bool{}
+		}
+		objects[key][c.Namespace+"/"+c.Name] = true
 	}
 	out := map[resourceid.GroupKind]int{}
 	for key, n := range counts {
-		if n >= churnMinRows && n >= churnFactor*median && !curatedGroupKind(key) {
+		if n >= churnMinRows && n >= churnRowsPerObject*len(objects[key]) {
 			out[key] = n
 		}
 	}
@@ -341,7 +339,7 @@ func FeedSelectionGuidance(sel FeedSelection) string {
 	}
 	var parts []string
 	if len(sel.Churn) > 0 {
-		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, far more changes than other kinds in this window: %s.", kindCountList(sel.Churn)))
+		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, the same objects changed over and over: %s.", kindCountList(sel.Churn)))
 	}
 	if len(sel.Crowded) > 0 {
 		parts = append(parts, fmt.Sprintf("Left out so more kinds fit on the page: %s.", kindCountList(sel.Crowded)))
