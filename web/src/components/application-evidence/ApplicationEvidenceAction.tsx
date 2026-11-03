@@ -10,7 +10,6 @@ import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { ApiError, fetchJSON, useClusterInfo, useCapabilities, useRadarFeature } from '../../api/client'
 import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidate, type EvidenceCandidates } from '../../api/application-evidence'
 
-const vaultNames: Record<string, string> = { initialized: 'Initialized', sealed: 'Sealed', standby: 'Standby', performanceStandby: 'Performance standby' }
 const unavailableReasons: Record<string, string> = {
   pod_not_running: 'The selected Pod is no longer running.',
   container_not_running: 'The selected application container is not running.',
@@ -161,7 +160,16 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
     {result.reason && <p className="mt-2">{unavailableReasons[result.reason] ?? `Collection unavailable (${result.reason}).`} No conclusion about application health can be drawn from unavailable evidence.</p>}
     {facts?.rabbitmq && <dl className="mt-3 grid grid-cols-2 gap-2"><dt>Disk alarm</dt><dd>{facts.rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd><dt>Memory alarm</dt><dd>{facts.rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd></dl>}
     {facts?.rabbitmq && <p className="mt-2 text-xs text-theme-text-secondary">An alarm on another node can block publishers across the cluster.</p>}
-    {vault && <dl className="mt-3 grid grid-cols-2 gap-2">{Object.entries(vault).filter(([key]) => key === 'initialized' || key === 'sealed' || vault.initialized && !vault.sealed).map(([key, value]) => <div key={key} className="contents"><dt>{vaultNames[key]}</dt><dd>{value ? 'Yes' : 'No'}</dd></div>)}</dl>}
+    {vault && <dl className="mt-3 grid grid-cols-2 gap-2">
+      <dt>Initialized</dt><dd>{vault.initialized ? 'Yes' : 'No'}</dd>
+      <dt>Sealed</dt><dd>{vault.sealed ? 'Yes' : 'No'}</dd>
+      {vault.initialized && !vault.sealed && <>
+        <dt>Standby</dt><dd>{vault.standby ? 'Yes' : 'No'}</dd>
+        {vault.performanceStandby !== undefined && <><dt>Performance standby</dt><dd>{vault.performanceStandby ? 'Yes' : 'No'}</dd></>}
+        {(vault.standby || vault.performanceStandby) && <><dt>Connection to active node</dt><dd>{vault.haConnectionHealthy === undefined ? 'Not reported' : vault.haConnectionHealthy ? 'Reported healthy' : 'Reported unhealthy'}</dd></>}
+      </>}
+      {vault.removedFromCluster !== undefined && <><dt>Removed from HA cluster</dt><dd>{vault.removedFromCluster ? 'Yes' : 'No'}</dd></>}
+    </dl>}
     {nats && <div className="mt-3 space-y-2">
       <p>JetStream: {nats.jetStreamEnabled ? 'Enabled' : 'Disabled'}</p>
       <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {pluralize(nats.returnedAccounts, 'account')} · {pluralize(nats.returnedStreams, 'stream')} · {pluralize(nats.returnedConsumers, 'consumer')} returned{nats.truncated ? ' · Truncated' : ''}</p>

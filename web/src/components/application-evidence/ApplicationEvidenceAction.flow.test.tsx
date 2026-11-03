@@ -35,7 +35,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); client.clear(); host.remove() })
 it('keeps limitations expandable and in copied observations, with guidance for omitted Pods', async () => {
   const limitations = ['One selected Pod only.', 'Identity checks do not attest endpoint contents.']
-  const observation = { adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'observed', httpStatus: 501, facts: { vault: { initialized: false, sealed: true, standby: true } }, limitations }
+  const observation = { adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'observed', httpStatus: 501, facts: { vault: { initialized: false, sealed: true, standby: true, removedFromCluster: false } }, limitations }
   state.fetch.mockResolvedValueOnce({ ...candidates, coverageLimited: true }).mockResolvedValueOnce(observation)
   await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Service" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
   await vi.waitFor(() => expect(host.textContent).toContain('Collect Vault evidence'))

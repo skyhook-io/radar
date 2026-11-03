@@ -53,3 +53,38 @@ it.each(['pod_not_running', 'container_not_running', 'endpoint_port_not_declared
   expect(html).not.toContain(reason)
   expect(html).toContain('No conclusion about application health')
 })
+
+
+describe('Vault HA observations', () => {
+  it.each([
+    { value: true, text: 'Reported healthy' },
+    { value: false, text: 'Reported unhealthy' },
+    { value: undefined, text: 'Not reported' },
+  ])('keeps standby connection $value distinct from unknown', ({ value, text }) => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { initialized: true, sealed: false, standby: true, haConnectionHealthy: value } } }} />)
+    expect(html).toContain('Connection to active node')
+    expect(html).toContain(text)
+    expect(html).toContain('other replicas were not checked')
+    expect(html).not.toContain('Removed from HA cluster')
+  })
+  it.each([
+    { initialized: false, sealed: true, standby: true },
+    { initialized: true, sealed: true, standby: true },
+    { initialized: true, sealed: false, standby: false },
+  ])('does not present inapplicable HA connection for $initialized/$sealed/$standby', state => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { ...state, haConnectionHealthy: false } } }} />)
+    expect(html).not.toContain('Connection to active node')
+    expect(html).not.toContain('Reported unhealthy')
+  })
+  it('keeps performance standby connection evidence applicable', () => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { initialized: true, sealed: false, standby: false, performanceStandby: true, haConnectionHealthy: false } } }} />)
+    expect(html).toContain('Connection to active node')
+    expect(html).toContain('Reported unhealthy')
+  })
+  it.each([true, false])('shows reported cluster removal %s even while sealed', removedFromCluster => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { initialized: true, sealed: true, standby: true, removedFromCluster } } }} />)
+    expect(html).toContain(`<dt>Removed from HA cluster</dt><dd>${removedFromCluster ? 'Yes' : 'No'}</dd>`)
+    expect(html).not.toContain('Standby')
+    expect(html).not.toContain('Connection to active node')
+  })
+})
