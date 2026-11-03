@@ -583,7 +583,7 @@ cmd_verify() {
   expect "on-spare stays admitted on the removed flavor" wl_is "${busy}" on-spare \
     "($(cond_pred Admitted True)) and all(.status.admission.podSetAssignments[].flavors[]; . == \"${PREFIX}-spare\")"
   local entry=0
-  cq_is "${PREFIX}-busy" "any(.status.flavorsReservation[]?; .name == \"${PREFIX}-spare\")" || entry=$?
+  cq_is "${PREFIX}-busy" "all(.spec.resourceGroups[].flavors[]; .name != \"${PREFIX}-spare\") and any(.status.flavorsReservation[]?; .name == \"${PREFIX}-spare\")" || entry=$?
   if [ "${entry}" -eq 2 ]; then
     FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ %s${C_RESET}\n" "removed-flavor status entry (could not read)"
   elif [ "${entry}" -eq 0 ]; then

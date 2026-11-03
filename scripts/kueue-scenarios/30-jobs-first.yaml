@@ -22,6 +22,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -70,6 +71,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -117,6 +119,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -164,6 +167,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -211,6 +215,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -258,6 +263,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -306,6 +312,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -353,6 +360,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -401,6 +409,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -449,6 +458,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -496,6 +506,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -543,6 +554,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -590,6 +602,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
@@ -637,6 +650,7 @@ spec:
       - action: Ignore
         onPodConditions:
           - type: DisruptionTarget
+            status: "True"
   template:
     metadata:
       labels:
