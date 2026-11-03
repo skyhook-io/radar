@@ -40,6 +40,9 @@ export interface NeighborhoodSeed {
 const IDENTITY_EDGES = new Set<EdgeType>(['manages'])
 const ROUTING_EDGES = new Set<EdgeType>(['exposes', 'routes-to'])
 const BATCH_RUN_FANOUT_LIMIT = 8
+// A JobSet's member Jobs run side by side, so they aren't thinned like
+// retained runs; past this many, the failed and active ones are kept first.
+const JOBSET_MEMBER_LIMIT = 24
 // context: 'configures' | 'uses' | 'protects' — everything else is leaf-attached.
 
 // GitOps managers: included as context ("managed by"), never expanded through.
@@ -90,6 +93,32 @@ function isBatchRunFanoutEdge(edge: TopologyEdge, nodeById: Map<string, Topology
       || source.kind === 'CronWorkflow' && target.kind === 'Workflow'
   }
   return isTemplateToRunEdge(edge, nodeById)
+}
+
+/** The member key (`jobs/<ns>/<name>`, the JobSet member list's selection key)
+ *  when `node` is a batch/v1 Job the JobSet node `jobSetNodeId` controls, by
+ *  its direct manages edge — the server draws that edge only for exact
+ *  controller-owned members. Undefined for anything else. */
+export function jobSetMemberRunKey(topology: Topology, jobSetNodeId: string, node: TopologyNode): string | undefined {
+  const root = topology.nodes.find((candidate) => candidate.id === jobSetNodeId)
+  if (!root || root.kind !== 'JobSet' || nodeGroup(root) !== 'jobset.x-k8s.io') return undefined
+  if (node.kind !== 'Job' || canonicalResourceGroup('Job', nodeGroup(node)) !== 'batch') return undefined
+  const member = topology.edges.some((edge) =>
+    edge.type === 'manages' && edge.source === root.id && edge.target === node.id && !edge.skipIfKindVisible,
+  )
+  return member ? `jobs/${nodeNamespace(node)}/${node.name}` : undefined
+}
+
+function isJobSetMemberEdge(edge: TopologyEdge, nodeById: Map<string, TopologyNode>): boolean {
+  const source = nodeById.get(edge.source)
+  return edge.type === 'manages' && !edge.skipIfKindVisible
+    && source?.kind === 'JobSet' && !!source && nodeGroup(source) === 'jobset.x-k8s.io'
+    && nodeById.get(edge.target)?.kind === 'Job'
+}
+
+function memberRank(node: TopologyNode): number {
+  if (node.status === 'unhealthy') return 0
+  return runDisposition(node) === 'active' ? 1 : 2
 }
 
 export function batchRunParentNodes(topology: Topology, run: TopologyNode): TopologyNode[] {
@@ -207,8 +236,24 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
     }
   }
 
-  const limitedFanouts = new Map<string, { allowed: Set<string>; total: number; kind: string; activeTotal: number; activeShown: number }>()
+  const limitedFanouts = new Map<string, { allowed: Set<string>; total: number; kind: string; activeTotal: number; activeShown: number; members?: boolean }>()
   for (const [sourceId, edges] of adjacency) {
+    const memberEdges = edges.filter((edge) => edge.source === sourceId && isJobSetMemberEdge(edge, nodeById))
+    if (memberEdges.length > JOBSET_MEMBER_LIMIT) {
+      const members = memberEdges
+        .map((edge) => nodeById.get(edge.target))
+        .filter((node): node is TopologyNode => !!node)
+        .sort((a, b) => memberRank(a) - memberRank(b) || a.name.localeCompare(b.name))
+      limitedFanouts.set(sourceId, {
+        allowed: new Set(members.slice(0, JOBSET_MEMBER_LIMIT).map((node) => node.id)),
+        total: members.length,
+        kind: 'Job',
+        activeTotal: 0,
+        activeShown: 0,
+        members: true,
+      })
+      continue
+    }
     const runEdges = edges.filter((edge) => edge.source === sourceId && batchFanoutLimit(edge, nodeById) !== null)
     if (runEdges.length <= BATCH_RUN_FANOUT_LIMIT) continue
     const targets = runEdges
@@ -240,7 +285,10 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
       const nextNode = nodeById.get(nextId)
       if (!nextNode) continue
       const fanout = e.source === id ? limitedFanouts.get(id) : undefined
-      if (fanout && !fanout.allowed.has(nextId)) {
+      // A capped JobSet's shortcuts to Pods would bring back the Pods of the
+      // members left out; the shown members still reach theirs.
+      if (fanout?.members && e.skipIfKindVisible) continue
+      if (fanout && (!fanout.members || isJobSetMemberEdge(e, nodeById)) && !fanout.allowed.has(nextId)) {
         cappedSources.add(id)
         continue
       }
@@ -308,6 +356,9 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
       ...Array.from(cappedSources).map((sourceId) => {
         const source = nodeById.get(sourceId)
         const fanout = limitedFanouts.get(sourceId)
+        if (fanout?.members) {
+          return `Topology view: showing ${JOBSET_MEMBER_LIMIT} of ${fanout.total} member Jobs of ${source?.kind ?? 'JobSet'}/${source?.name ?? sourceId}, failed and active first. Find any member in the Overview's member list.`
+        }
         const activeNote = fanout && fanout.activeTotal > fanout.activeShown ? ` showing the ${fanout.activeShown - 1} newest and oldest of ${fanout.activeTotal} active runs plus representative completed runs` : ' showing active and representative completed runs'
         return `Topology view:${activeNote} from ${fanout?.total ?? BATCH_RUN_FANOUT_LIMIT} retained ${fanout?.kind ?? 'batch'} runs for ${source?.kind ?? 'workload'}/${source?.name ?? sourceId}. Use Run history for the full retained set.`
       }),

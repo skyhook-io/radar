@@ -1,0 +1,27 @@
+import { describe, expect, it } from 'vitest'
+import { expandPodGroup } from './TopologyGraph'
+import type { TopologyEdge, TopologyNode } from '../../types'
+
+function group(pods: Record<string, unknown>[]): TopologyNode {
+  return { id: 'podgroup/ml/train-workers-0', kind: 'PodGroup', name: 'train-workers-0', status: 'healthy', data: { namespace: 'ml', pods } }
+}
+
+const jobEdge: TopologyEdge = { id: 'job-to-group', source: 'job/ml/train-workers-0', target: 'podgroup/ml/train-workers-0', type: 'manages' }
+const pod = (name: string, extra: Record<string, unknown> = {}) => ({ name, namespace: 'ml', phase: 'Running', restarts: 0, containers: 1, ...extra })
+
+describe('expandPodGroup', () => {
+  it('connects a pod without ownerIds to every owner of the group', () => {
+    const out = expandPodGroup([group([pod('a')])], [jobEdge], 'podgroup/ml/train-workers-0')
+    expect(out.edges.map((e) => [e.source, e.target])).toEqual([['job/ml/train-workers-0', 'pod/ml/a']])
+  })
+
+  it('connects a pod with empty ownerIds to none of the group\'s owners', () => {
+    const out = expandPodGroup(
+      [group([pod('current', { ownerIds: ['job/ml/train-workers-0'] }), pod('earlier', { ownerIds: [] })])],
+      [jobEdge],
+      'podgroup/ml/train-workers-0',
+    )
+    expect(out.nodes.map((n) => n.id).sort()).toEqual(['pod/ml/current', 'pod/ml/earlier'])
+    expect(out.edges.map((e) => [e.source, e.target])).toEqual([['job/ml/train-workers-0', 'pod/ml/current']])
+  })
+})
