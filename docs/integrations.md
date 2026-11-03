@@ -1862,8 +1862,9 @@ message are what to show. Rules that keep the axes honest:
   their message, which is matched against Kueue's own wording. A
   flavor-assignment message reads `insufficient_quota` only when every PodSet
   has a flavor whose only problem is unused quota; a request over the maximum,
-  or a taint, affinity or topology mismatch rules a flavor out, a PodSet whose
-  failure Radar does not recognize leaves the blocker `unrecognized`, and
+  or a taint, affinity, topology or earlier-slice mismatch rules a flavor out,
+  a clause Radar does not understand keeps its flavor from counting, a PodSet
+  whose failure Radar does not recognize leaves the blocker `unrecognized`, and
   "Pending the preemption of N workload(s)" reads `waiting_for_preemption`.
 - `BlockedOnPreemptionGates=True` is the blocker only while it explains the
   current `QuotaReserved` (same message, reason `PreemptionGated`, or

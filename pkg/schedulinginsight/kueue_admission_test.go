@@ -357,6 +357,22 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionUnrecognized,
 		},
 		{
+			name: "an elastic slice pinned to its original flavor cannot use the alternate",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set main: could not assign spot flavor since the original workload is assigned: default, insufficient quota for cpu in flavor default, previously considered podsets requests (0) + current podset request (8) > maximum capacity (4), insufficient unused quota for cpu in flavor spot, 2 more needed")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionExceedsQuota,
+			blocker: rc.KueueAdmissionExceedsQuota,
+		},
+		{
+			name: "a clause Radar does not understand keeps that flavor from counting as viable",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor spot, 2 more needed, some future restriction on flavor spot")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionUnrecognized,
+			blocker: rc.KueueAdmissionUnrecognized,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,

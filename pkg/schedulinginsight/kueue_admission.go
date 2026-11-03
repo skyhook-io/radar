@@ -351,44 +351,56 @@ var (
 		regexp.MustCompile(`untolerated taint \{[^}]*\} in flavor ([^,\s]+)`),
 		regexp.MustCompile(`flavor (\S+) doesn't match node affinity`),
 		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not support TopologyAwareScheduling`),
+		regexp.MustCompile(`could not assign (\S+) flavor since the original workload is assigned`),
 	}
 )
 
 // flavorAssignmentCode reads a scheduler flavor-assignment message: one
 // "couldn't assign flavors to pod set" segment per PodSet that did not fit,
 // listing clauses per flavor and resource. A flavor could fit later only if
-// its only clauses are about unused quota; a resource over the maximum, a
-// taint, affinity or topology mismatch rules that flavor out. Every PodSet
-// must fit, so one PodSet with no flavor that could fit later decides the
-// code, and a PodSet whose clauses are not recognized leaves it undecided
-// rather than letting another PodSet's quota wait stand for it.
+// every clause naming it is understood and about unused quota; a resource
+// over the maximum or a taint, affinity, topology or earlier-slice mismatch
+// rules it out. Every PodSet must fit, so one PodSet with no flavor that
+// could fit later decides the code, and a PodSet whose clauses are not all
+// understood leaves it undecided rather than letting a quota wait stand for
+// it.
 func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 	neverFits, undecided := rc.KueueAdmissionCode(""), false
 	for _, segment := range strings.Split(message, "; couldn't assign flavors to pod set ") {
+		understood := map[string]int{}
 		waiting := map[string]bool{}
 		for _, match := range unusedQuotaClause.FindAllStringSubmatch(segment, -1) {
 			waiting[match[1]] = true
+			understood[match[1]]++
 		}
 		ruledOut := map[string]bool{}
 		exceeded := false
 		for _, match := range maxQuotaClause.FindAllStringSubmatch(segment, -1) {
 			ruledOut[match[1]], exceeded = true, true
+			understood[match[1]]++
 		}
 		mismatch := strings.Contains(segment, "unavailable in ClusterQueue")
 		for _, pattern := range mismatchClauses {
 			for _, match := range pattern.FindAllStringSubmatch(segment, -1) {
 				ruledOut[match[1]], mismatch = true, true
+				understood[match[1]]++
 			}
 		}
-		couldFit := false
+		couldFit, unexplained := false, false
 		for flavor := range waiting {
-			couldFit = couldFit || !ruledOut[flavor]
+			switch {
+			case ruledOut[flavor]:
+			case flavorMentions(segment, flavor) > understood[flavor]:
+				unexplained = true
+			default:
+				couldFit = true
+			}
 		}
 		switch {
 		case couldFit:
 		case exceeded:
 			neverFits = rc.KueueAdmissionExceedsQuota
-		case mismatch:
+		case mismatch && !unexplained:
 			if neverFits == "" {
 				neverFits = rc.KueueAdmissionNoMatchingFlavor
 			}
@@ -403,6 +415,14 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 		return ""
 	}
 	return rc.KueueAdmissionInsufficientQuota
+}
+
+// flavorMentions counts the clauses that name flavor, in either word order
+// Kueue uses ("in flavor F", "flavor F doesn't", "F flavor since").
+func flavorMentions(segment, flavor string) int {
+	name := regexp.QuoteMeta(flavor)
+	pattern := regexp.MustCompile(`(?i)flavor "?` + name + `"?(?:[,\s]|$)|(?:^|\s)` + name + ` flavor\b`)
+	return len(pattern.FindAllStringIndex(segment, -1))
 }
 
 func queueMessageCode(message string, missing, inactive rc.KueueAdmissionCode) rc.KueueAdmissionCode {
