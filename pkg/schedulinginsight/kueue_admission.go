@@ -73,8 +73,9 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 	}
 	if decided != nil {
 		// spec.active=false is current by definition, whatever evidence the
-		// fact cites for its cause.
-		state.State, state.Stale = decided.Code, decided.Stale && decided.Code != rc.KueueAdmissionDeactivated
+		// fact cites for its cause; Kueue's own flip of spec.active also bumps
+		// the generation past the condition that recorded the cause.
+		state.State, state.Stale = decided.Code, decided.Stale && !(decided == state.Inactive && c.specInactive())
 		// The phase chose which blocker rules applied, so a stale
 		// QuotaReserved makes any blocker it led to stale too.
 		if decided == state.Blocker && c.staleCondition("QuotaReserved") {
@@ -168,8 +169,13 @@ func (c classifier) conditionFact(code rc.KueueAdmissionCode, condition workload
 	}
 }
 
+func (c classifier) specInactive() bool {
+	active, found, _ := unstructured.NestedBool(c.u.Object, "spec", "active")
+	return found && !active
+}
+
 func (c classifier) inactive() *rc.KueueAdmissionFact {
-	if active, found, _ := unstructured.NestedBool(c.u.Object, "spec", "active"); found && !active {
+	if c.specInactive() {
 		// Kueue records its own cause as DeactivationTarget until it flips
 		// spec.active, then as the Evicted reason DeactivatedDueTo<Cause>; a
 		// plain Deactivated eviction is someone else's change. Kueue keeps an

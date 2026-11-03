@@ -946,6 +946,14 @@ func TestClassifyKueueWorkloadStaleEvidence(t *testing.T) {
 			t.Fatalf("admission = %+v", uncertain)
 		}
 	})
+	t.Run("Kueue's own spec.active flip does not make its recorded cause stale", func(t *testing.T) {
+		got := classify(t, workloadSpec{generation: 2, active: boolPtr(false), conditions: []condition{
+			{kind: "DeactivationTarget", status: "True", reason: "AdmissionCheck", observedGeneration: 1},
+		}}).Admission
+		if got.State != rc.KueueAdmissionDeactivatedByKueue || got.Stale || got.Inactive == nil || !got.Inactive.Stale {
+			t.Fatalf("admission = %+v", got)
+		}
+	})
 	t.Run("current generation and unreported generation are not stale", func(t *testing.T) {
 		quota := pending("Pending", legacyUnusedQuota)
 		quota.observedGeneration = 2

@@ -123,8 +123,10 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const reason = admission && !phaseStates.has(admission.state) ? kueueAdmissionStatePresentation(admission) : null
   const withdrawn = !!admission?.inactive
   // An unrecognized reason is Kueue's own word; say that rather than Radar's.
-  const unrecognizedReason = admission?.state === 'unrecognized' ? admission.blocker?.reason : undefined
-  const hint = admission && !admission.stale ? kueueAdmissionStateHint(admission.state) : undefined
+  // Kueue's coarse reasons (Pending, Inadmissible) repeat what the phase and
+  // the primary condition already say, so name only a reason that adds to it.
+  const unrecognizedReason = admission?.state === 'unrecognized' && admission.blocker?.reason !== condition?.reason ? admission.blocker?.reason : undefined
+  const hint = admission && !admission.stale ? kueueAdmissionStateHint(admission) : undefined
   // Show the condition behind the state when nothing else on the card says
   // it: backoff or Kueue's deactivation cause. Checks have their own card.
   const decidingFact = admission && [admission.inactive, admission.blocker, admission.disruption].find((fact) => fact?.code === admission.state)

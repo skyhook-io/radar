@@ -93,6 +93,10 @@ describe('Kueue admission investigation', () => {
   it('names an unrecognized reason verbatim and renders unknown codes as sent', () => {
     expect(render(response({ kueue: { phase: 'pending', admission: { state: 'unrecognized', attention: 'unknown', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'SomethingNew' } } } })))
       .toContain('Kueue: <code>SomethingNew</code>')
+    // A coarse reason the primary condition already shows is not repeated.
+    const coarse = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'failed to assign flavors to pod set main: boom' }, kueue: { phase: 'pending', admission: { state: 'unrecognized', attention: 'unknown', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'Pending' } } } }))
+    expect(coarse).toContain('Unclassified reason')
+    expect(coarse).not.toContain('Kueue: <code>Pending</code>')
     expect(render(response({ kueue: { phase: 'pending', admission: { state: 'a_future_code', attention: 'a_future_class' } } }))).toContain('a_future_code')
   })
 
@@ -137,10 +141,11 @@ describe('Kueue admission investigation', () => {
     expect(render(response({ decision: 'unsatisfied', kueue: { phase: 'pending' } }))).toMatch(/Pending admission/)
   })
 
-  it('flags a deactivation whose cause Kueue did not record and shows the eviction it cites', () => {
-    const html = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending' }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'unknown', inactive: { code: 'deactivated', source: 'condition', name: 'Evicted', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
+  it('flags a deactivation whose cause Kueue did not record', () => {
+    const html = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' }], kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'unknown', inactive: { code: 'deactivated', source: 'condition', name: 'Evicted', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
     expect(html).toContain('>Deactivated<')
-    expect(html).toContain('Evicted · PodsReadyTimeout: Exceeded the PodsReady timeout')
+    expect(html).toContain('Kueue recorded no cause for this deactivation')
+    expect(html).toContain('Exceeded the PodsReady timeout')
   })
 
   it('suggests what an actionable state usually asks, and nothing for normal waiting', () => {

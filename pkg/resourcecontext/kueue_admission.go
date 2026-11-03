@@ -139,11 +139,15 @@ const (
 	// a separate Evicted disruption. When the Workload was already evicted for
 	// another reason, Kueue keeps that reason (and v0.18 records no cause even
 	// for its own deactivations), so the fact cites that Evicted condition and
-	// Attention is unknown.
+	// Attention is unknown. Counts of deactivated Workloads should therefore
+	// split by Attention.
 	KueueAdmissionDeactivated KueueAdmissionCode = "deactivated"
 	// KueueAdmissionDeactivatedByKueue means spec.active is false and Kueue
 	// recorded why it deactivated the Workload (a rejected AdmissionCheck,
-	// the requeuing limit, the maximum execution time); Reason keeps it.
+	// the requeuing limit, the maximum execution time). Reason keeps Kueue's
+	// word for it: the DeactivationTarget reason (AdmissionCheck) or, once
+	// Kueue has evicted the Workload, the Evicted reason with a
+	// DeactivatedDueTo prefix (DeactivatedDueToAdmissionCheck).
 	KueueAdmissionDeactivatedByKueue KueueAdmissionCode = "deactivated_by_kueue"
 	// KueueAdmissionDeactivationPending means Kueue set DeactivationTarget
 	// but spec.active is not false yet; Reason carries the cause.

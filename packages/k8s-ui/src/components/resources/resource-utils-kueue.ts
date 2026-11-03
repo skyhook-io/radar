@@ -242,7 +242,7 @@ const kueueAdmissionLabels: Record<string, string> = {
   requeue_backoff: 'Waiting to requeue',
   dra_resources_unresolved: 'DRA resources unresolved',
   invalid_workload: 'Invalid workload',
-  unrecognized: 'Unrecognized reason',
+  unrecognized: 'Unclassified reason',
   preempted: 'Preempted',
   pods_ready_timeout: 'Pods not ready in time',
   evicted: 'Evicted',
@@ -268,12 +268,15 @@ const kueueAdmissionHints: Record<string, string> = {
   cluster_queue_inactive: 'The ClusterQueue may be stopped on purpose or misconfigured. Its status says which.',
   admission_check_rejected: 'An admission check rejected the Workload. Kueue usually deactivates it next.',
   deactivation_pending: 'Kueue is deactivating the Workload. It will not be admitted until reactivated.',
-  deactivated_by_kueue: 'Kueue deactivated this Workload. Fix the cause below, then set it active again to retry.',
+  deactivated_by_kueue: 'Kueue deactivated this Workload. Fix the cause it reports, then set it active again to retry.',
   invalid_workload: "Kueue rejects the job's resource requests. Fix them and resubmit.",
 }
 
-export function kueueAdmissionStateHint(code: string): string | undefined {
-  return kueueAdmissionHints[code]
+export function kueueAdmissionStateHint(admission: Pick<KueueAdmissionState, 'state' | 'attention'>): string | undefined {
+  if (admission.state === 'deactivated' && admission.attention === 'unknown') {
+    return 'Kueue recorded no cause for this deactivation. The earlier eviction it still reports may or may not be why.'
+  }
+  return kueueAdmissionHints[admission.state]
 }
 
 export function kueueAdmissionStateLabel(code: string): string {

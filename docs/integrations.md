@@ -1858,7 +1858,11 @@ message are what to show. Rules that keep the axes honest:
   `Evicted` reason `DeactivatedDueTo…`). Kueue keeps an earlier eviction's
   reason when it records no deactivation target, and v0.18 also for its own
   causes, so `spec.active=false` with some other `Evicted` reason reads
-  `deactivated` with attention `unknown`, and the admission card flags it.
+  `deactivated` with attention `unknown`, and the admission card says Kueue
+  recorded no cause. Counts of `deactivated` should therefore split by
+  `attention`. The cause in a `deactivated_by_kueue` fact is Kueue's own word:
+  the `DeactivationTarget` reason (`AdmissionCheck`) or, after the eviction, the
+  `Evicted` reason (`DeactivatedDueToAdmissionCheck`).
 - An inactive or stopped ClusterQueue or LocalQueue is a blocker, not an
   inactive Workload. Kueue words a stopped queue as either "is stopped" or
   "is inactive" depending on which of its writers ran last, so both read
