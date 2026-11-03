@@ -47,7 +47,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       error={query.error ? query.error.message : null}
       nextPageError={query.isFetchNextPageError ? query.error?.message ?? null : null}
       stale={query.isPlaceholderData}
-      notice={restarted ? 'The list restarted from its first page because what Radar could read for you changed.' : null}
+      notice={restarted ? 'The list restarted from its first page: what Radar read changed since the first page.' : null}
       upgrade={query.upgrade}
       membership={membership}
       onMembershipChange={setMembership}

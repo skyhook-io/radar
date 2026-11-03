@@ -418,7 +418,13 @@ function LocalQueueList({ response, onNavigate }: { response: KueueQueueWorkload
     return (
       <div className="border-t border-theme-border pt-3">
         <h4 className="mb-1 text-xs font-medium uppercase tracking-wider text-theme-text-tertiary">LocalQueues pointing here</h4>
-        <p className="text-sm text-theme-text-secondary">{response.localQueuesError.error_code === 'user_forbidden' ? "You can't list LocalQueues in any namespace Radar shows you." : response.localQueuesError.error}</p>
+        <p className="text-sm text-theme-text-secondary">
+          {response.localQueuesError.error_code !== 'user_forbidden'
+            ? response.localQueuesError.error
+            : response.localQueuesError.coverage?.gaps.some(gap => gap.namespaces?.extent === 'unknown')
+              ? "You can't list LocalQueues in any namespace Radar checked; Radar couldn't list every namespace."
+              : "You can't list LocalQueues in any namespace Radar shows you."}
+        </p>
       </div>
     )
   }
