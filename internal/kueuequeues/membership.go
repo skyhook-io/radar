@@ -149,8 +149,9 @@ func identity(w *unstructured.Unstructured) string {
 
 // Key orders members: unfinished before finished, then namespace, name and
 // UID. Alphabetical on purpose within each, so that no order of the list is
-// mistaken for the order Kueue admits Workloads in; Kueue keeps finished
-// Workloads until their owner goes, so they would otherwise bury the rest.
+// mistaken for the order Kueue admits Workloads in; by default Kueue keeps
+// finished Workloads until their owner goes, so they would otherwise bury
+// the rest.
 func Key(m Member) string {
 	rank := "0"
 	if m.Finished {

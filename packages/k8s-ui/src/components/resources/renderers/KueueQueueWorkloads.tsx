@@ -45,6 +45,8 @@ export interface KueueQueueWorkloadsProps {
   onLoadMore?: () => void
   /** Why the next page could not be read, when the request itself failed. */
   nextPageError?: string | null
+  /** The pages shown belong to the previous filter while the new one loads. */
+  stale?: boolean
   onRetry?: () => void
   onNavigate?: (ref: NavigateRef) => void
 }
@@ -64,7 +66,7 @@ export function KueueQueueWorkloads(props: KueueQueueWorkloadsProps) {
 }
 
 function KueueQueueWorkloadsBody({
-  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, nextPageError, onRetry, onNavigate,
+  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, nextPageError, stale, onRetry, onNavigate,
 }: KueueQueueWorkloadsProps) {
   if (upgrade) return <RadarUpgradeNote requirement={upgrade} />
   const first = pages?.[0]
@@ -88,8 +90,9 @@ function KueueQueueWorkloadsBody({
           onMembershipChange={onMembershipChange}
           state={state}
           onStateChange={onStateChange}
-          hasMore={hasMore}
+          hasMore={hasMore && !stale}
           loadingMore={loadingMore}
+          stale={stale}
           onLoadMore={onLoadMore}
           onNavigate={onNavigate}
         />
@@ -112,22 +115,12 @@ function Retryable({ message, onRetry }: { message: string; onRetry?: () => void
 }
 
 /**
- * Why pages after the first can't simply be added to it: a later page failed,
- * or read a different scope than the first (access changed while paging), so
- * the first page's counts and coverage no longer describe the rows.
+ * Why a page after the first couldn't be added to it. A later page that read
+ * a different scope never arrives: the server refuses its cursor
+ * (kueue_cursor_invalid) and the host rereads from the first page.
  */
 export function laterPageProblem(pages: KueueQueueWorkloadsResponse[]): string | undefined {
-  // Everything that decides which members a page can contain: the Workload
-  // read and where submission could be resolved.
-  const readKey = (members: KueueQueueMembers | undefined) => members
-    ? JSON.stringify([members.coverage.status, members.coverage.scope, members.coverage.read, members.coverage.narrowedBy, members.coverage.gaps, members.submissionUnresolved])
-    : ''
-  const first = readKey(pages[0]?.workloads)
-  for (const page of pages.slice(1)) {
-    if (page.workloadsError) return page.workloadsError.error
-    if (first && readKey(page.workloads) !== first) return 'what Radar could read changed while paging'
-  }
-  return undefined
+  return pages.slice(1).find(page => page.workloadsError)?.workloadsError?.error
 }
 
 /**
@@ -190,7 +183,7 @@ function scopeNotice(coverage: ResourceReadCoverage): string | undefined {
 }
 
 function MemberList({
-  local, clusterQueue, members, rows, paged, laterPageError, onRefresh, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, onNavigate,
+  local, clusterQueue, members, rows, paged, laterPageError, onRefresh, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, stale, onNavigate,
 }: {
   local: boolean
   clusterQueue?: string
@@ -206,6 +199,7 @@ function MemberList({
   hasMore?: boolean
   loadingMore?: boolean
   onLoadMore?: () => void
+  stale?: boolean
   onNavigate?: (ref: NavigateRef) => void
 }) {
   const filtered = !!membership || !!state
@@ -241,7 +235,7 @@ function MemberList({
           {!filtered && confirmedEmptyNote(members, local) && <p className="mt-1 text-xs text-theme-text-tertiary">{confirmedEmptyNote(members, local)}</p>}
         </div>
       ) : (
-        <ul className="divide-y divide-theme-border">
+        <ul className={stale ? 'divide-y divide-theme-border opacity-60' : 'divide-y divide-theme-border'} aria-busy={stale || undefined}>
           {rows.map(row => (
             <WorkloadRow key={row.uid} row={row} local={local} clusterQueue={clusterQueue} onNavigate={onNavigate} />
           ))}

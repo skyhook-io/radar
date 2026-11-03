@@ -44,6 +44,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       loading={query.isPending || (!!query.data && !pages?.length)}
       error={query.error ? query.error.message : null}
       nextPageError={query.isFetchNextPageError ? query.error?.message ?? null : null}
+      stale={query.isPlaceholderData}
       upgrade={query.upgrade}
       membership={membership}
       onMembershipChange={setMembership}
