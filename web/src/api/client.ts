@@ -7761,7 +7761,7 @@ export function useWorkloadPods(
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
     // A denied, missing or recreated root answers the same way on every poll.
-    refetchInterval: (query) => isStableClientError(query.state.error) ? false : options?.refetchInterval ?? false,
+    refetchInterval: (query) => options?.ownerUID && isStableClientError(query.state.error) ? false : options?.refetchInterval ?? false,
     retry: options?.ownerUID ? (count, error) => !isStableClientError(error) && count < 2 : undefined,
   });
 }

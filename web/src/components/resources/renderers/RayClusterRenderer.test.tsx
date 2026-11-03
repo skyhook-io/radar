@@ -7,6 +7,7 @@ import { RayClusterRenderer } from './RayClusterRenderer'
 import { logsContainer } from '../../logs/RayClusterLogsTab'
 const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewLogs: true, opened: [] as any[], support: 'supported' as string }))
 vi.mock('../../../api/client', () => ({
+  ApiError: class ApiError extends Error { constructor(message: string, public status: number) { super(message) } },
   useWorkloadPods: (...args: any[]) => { mock.calls.push(args); return mock.result },
   useRadarFeature: () => ({ support: mock.support, upgrade: mock.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
 }))
@@ -40,6 +41,13 @@ describe('RayCluster host evidence', () => {
     mock.result = { data: { pods: [worker], total: 1, truncated: false } }
     expect(renderToStaticMarkup(<RayClusterRenderer data={root} />)).not.toContain('Open logs for')
   })
+  it('names an unsupporting Radar rather than echoing its 400 when support is unknown', async () => {
+    const { ApiError } = await import('../../../api/client') as any
+    mock.support = 'unknown'
+    mock.result = { error: new ApiError('only deployments, statefulsets, daemonsets, rollouts, jobs, and workflows are supported', 400) }
+    const html = renderToStaticMarkup(<RayClusterRenderer data={root} />)
+    expect(html).toContain('Radar v1.15 and later'); expect(html).not.toContain('only deployments')
+  })
   it('does not ask an older Radar for Pods it cannot list, and says which Radar can', () => {
     mock.support = 'unsupported'
     const html = renderToStaticMarkup(<RayClusterRenderer data={root} />)
@@ -50,10 +58,13 @@ describe('RayCluster host evidence', () => {
     expect(logsContainer({ name: 'p', ready: true, containers: ['init-a', 'init-b', 'ray-worker', 'log-shipper'], containerStatuses: [{ name: 'init-a', init: true, ready: true, restartCount: 0 }, { name: 'init-b', init: true, ready: true, restartCount: 0 }] })).toBe('ray-worker')
   })
   it('opens a worker stuck waiting on the head in its running init container', () => {
-    expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [{ name: 'wait-gcs-ready', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('wait-gcs-ready')
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Pending', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [{ name: 'wait-gcs-ready', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('wait-gcs-ready')
   })
   it('prefers a crashing application container over an unready native sidecar', () => {
-    expect(logsContainer({ name: 'p', ready: false, containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 4 }] })).toBe('ray-worker')
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 4 }] })).toBe('ray-worker')
+  })
+  it('opens a running but unready application, not an unready native sidecar', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('ray-worker')
   })
   it('opens the application container of a finished Pod even when its native sidecar is unready', () => {
     expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('ray-worker')

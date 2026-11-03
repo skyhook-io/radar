@@ -1796,17 +1796,18 @@ that owned-Pod list. Missing access, cache warming and recreated roots are expli
 no RayCluster-wide log stream or lifecycle actions are added.
 
 Logs are read per Pod. The RayCluster's Logs tab lists the Pods its current
-incarnation owns (the same owner-UID list, capped at 200, failures first), not the
+incarnation owns (the same owner-UID list; past 200 it keeps the least healthy), not the
 Pods Radar recalls from history. When that list can't be read (it needs
 `get rayclusters` and `list pods`, a Radar older than v1.15 doesn't serve it, or
-the request fails), the tab falls back to the recorded Pods and says why. The tab is not narrowed by
+the request fails, as does reading the RayCluster itself), the tab falls back to the
+recorded Pods and says why. The tab is not narrowed by
 the Runtime Pods selection on Overview. Each Pod
 in the Runtime Pods list also has a Logs button (when the namespace allows
 `pods/log`) that opens that Pod in the log dock; a Pod that isn't scheduled or has
-no container status yet shows that instead. While no application container has
-run, the button opens the first init container that is not done (a worker
-waiting on the head sits in KubeRay's `wait-gcs-ready`); otherwise the first
-application container. Container output is all Radar reads: Ray session logs
+no container status yet shows that instead. While the Pod is Pending, the button
+and the tab open the first init container that is not done (a worker waiting on
+the head sits in KubeRay's `wait-gcs-ready`); otherwise the first application
+container. Container output is all Radar reads: Ray session logs
 under `/tmp/ray` are not read, and nothing is kept once a Pod is deleted. Radar
 reads RayCluster Pods through `ray.io/v1`; a RayCluster served only as an older
 version keeps the generic tab. An older Radar shows an upgrade note in Runtime

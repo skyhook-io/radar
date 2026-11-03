@@ -12,6 +12,7 @@ export function MultiPodLogsTab({
   selectedPod,
   onSelectPod,
   initialContainer,
+  defaultPod,
   emptyMessage = 'No pods available',
 }: {
   pods: ResourceRef[]
@@ -19,13 +20,15 @@ export function MultiPodLogsTab({
   selectedPod: string | null
   onSelectPod: (name: string | null) => void
   initialContainer?: string | null
+  /** Opened when nothing is selected; the first Pod otherwise. */
+  defaultPod?: string
   emptyMessage?: string
 }) {
   useEffect(() => {
     if (pods.length > 0 && !selectedPod) {
-      onSelectPod(pods[0].name)
+      onSelectPod(pods.some((p) => p.name === defaultPod) ? defaultPod! : pods[0].name)
     }
-  }, [pods, selectedPod, onSelectPod])
+  }, [pods, selectedPod, onSelectPod, defaultPod])
 
   const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
 
@@ -48,7 +51,7 @@ export function MultiPodLogsTab({
   const unlisted = selectedPod && !pods.some((p) => p.name === selectedPod) ? selectedPod : null
   const chips = unlisted ? [...pods, { kind: 'Pod', namespace: podNamespace, name: unlisted }] : pods
 
-  if (pods.length === 0) {
+  if (chips.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
         <Terminal className="w-12 h-12 mb-4 opacity-50" />

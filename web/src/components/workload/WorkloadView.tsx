@@ -1213,6 +1213,8 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            resourceLoading={resourceLoading}
+            resourceError={resourceError}
             group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
@@ -1499,6 +1501,8 @@ function LogsTabContent({
   selectedRunKey,
   onSelectRun,
   viewNamespaces,
+  resourceLoading,
+  resourceError,
 }: {
   kind: string
   apiKind: string
@@ -1514,6 +1518,8 @@ function LogsTabContent({
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
   viewNamespaces: string[]
+  resourceLoading: boolean
+  resourceError: Error | null
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1539,6 +1545,8 @@ function LogsTabContent({
         namespace={namespace}
         name={name}
         uid={resource?.metadata?.uid}
+        rootLoading={resourceLoading}
+        rootError={resourceError}
         historyPods={pods}
         selectedPod={selectedPod}
         onSelectPod={onSelectPod}

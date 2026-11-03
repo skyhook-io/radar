@@ -56,6 +56,19 @@ describe('MultiPodLogsTab', () => {
     expect(onSelect).toHaveBeenCalledWith('live-pod')
   })
 
+  it('keeps the selected Pod\'s viewer when the list empties', () => {
+    state.logs['gone-pod'] = { data: { containers: ['app'] } }
+    act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod="gone-pod" onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
+    expect(host.textContent).toContain('viewer:gone-pod')
+    expect(host.textContent).not.toContain('This RayCluster has no Pods right now.')
+  })
+
+  it('opens the default Pod when nothing is selected', () => {
+    const onSelect = vi.fn()
+    act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod={null} onSelectPod={onSelect} defaultPod="live-pod" />))
+    expect(onSelect).toHaveBeenCalledWith('live-pod')
+  })
+
   it('uses the caller\'s empty message when there are no Pods', () => {
     act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod={null} onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
     expect(host.textContent).toContain('This RayCluster has no Pods right now.')

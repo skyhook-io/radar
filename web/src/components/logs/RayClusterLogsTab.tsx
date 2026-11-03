@@ -10,18 +10,17 @@ export function isKubeRayCluster(kind: string, group: string | undefined, apiVer
 
 // The container a Pod's logs open on. Container lists put init containers
 // first and only reported statuses say which those are, so with no statuses
-// the viewer keeps its own default. While no application container has run
-// (none ready or restarted, and the Pod hasn't finished), the first unready
-// init container is what the Pod is waiting on — a worker waiting for the head
-// sits in KubeRay's wait-gcs-ready — though it may itself not have started
-// yet. Otherwise the first application container, so a running native sidecar
-// never wins over a crashing application.
+// the viewer keeps its own default. A Pod stays Pending until its regular init
+// containers finish, so while it is Pending the first unready init container
+// is what it is waiting on (a worker waiting for the head sits in KubeRay's
+// wait-gcs-ready), though it may itself not have started yet. Past Pending,
+// an unready init container is a native sidecar, never ahead of the
+// application.
 export function logsContainer(pod: WorkloadPodInfo): string | undefined {
   const statuses = pod.containerStatuses ?? []
   if (!statuses.length) return undefined
   const init = new Set(statuses.filter(status => status.init).map(status => status.name))
-  const appRan = pod.phase === 'Succeeded' || pod.phase === 'Failed' || statuses.some(status => !status.init && (status.ready || status.restartCount > 0))
-  const blockingInit = appRan ? undefined : pod.containers.find(name => statuses.some(status => status.init && status.name === name && !status.ready))
+  const blockingInit = pod.phase === 'Pending' ? pod.containers.find(name => statuses.some(status => status.init && status.name === name && !status.ready)) : undefined
   return blockingInit ?? pod.containers.find(name => !init.has(name))
 }
 
@@ -41,6 +40,8 @@ export function RayClusterLogsTab({
   namespace,
   name,
   uid,
+  rootLoading,
+  rootError,
   historyPods,
   selectedPod,
   onSelectPod,
@@ -49,6 +50,8 @@ export function RayClusterLogsTab({
   namespace: string
   name: string
   uid: string | undefined
+  rootLoading: boolean
+  rootError: Error | null
   historyPods: ResourceRef[]
   selectedPod: string | null
   onSelectPod: (name: string | null) => void
@@ -57,25 +60,31 @@ export function RayClusterLogsTab({
   const { support, upgrade } = useRadarFeature('rayClusterPods')
   const unsupported = support === 'unsupported'
   const query = useWorkloadPods('rayclusters', namespace, uid && !unsupported ? name : '', { ownerUID: uid, limit: 200, refetchInterval: 5000 })
-  if (!unsupported && (!uid || query.isLoading)) return <PaneLoader label="Reading runtime Pods…" className="h-full" />
+  if (!unsupported && (uid ? query.isLoading : rootLoading)) return <PaneLoader label="Reading runtime Pods…" className="h-full" />
 
-  const owned = !unsupported && query.data && !(query.error && listUnavailable(query.error)) ? query.data : undefined
+  const owned = !unsupported && uid && query.data && !(query.error && listUnavailable(query.error)) ? query.data : undefined
+  // Shown by name so the strip holds still while health changes; the least
+  // healthy Pod (the route's order) is the one opened first.
   const pods: ResourceRef[] = owned
     ? [...owned.pods].sort((a, b) => a.name.localeCompare(b.name)).map(pod => ({ kind: 'Pod', namespace, name: pod.name }))
     : historyPods
   const selected = owned?.pods.find(pod => pod.name === selectedPod)
+  const reason = unsupported ? ''
+    : !uid ? rootError?.message ?? 'The RayCluster could not be read.'
+    : query.error instanceof ApiError && query.error.status === 400 && support !== 'supported' ? 'This Radar may not list a RayCluster\'s Pods; Radar v1.15 and later do.'
+    : query.error?.message ?? 'Its current Pods could not be read.'
 
   return (
     <div className="flex h-full flex-col">
       {unsupported && upgrade && <div className="shrink-0 px-4 pt-3"><RadarUpgradeNote requirement={upgrade} /></div>}
       {owned?.truncated && (
         <div className="shrink-0 px-4 pt-3">
-          <AlertBanner variant="info" title="Pod list capped" message={`Showing ${owned.pods.length} of ${owned.total} Pods, failures first. To read another Pod, choose its worker group under Runtime Pods on Overview and use that Pod's Logs button.`} />
+          <AlertBanner variant="info" title="Pod list capped" message={`Showing the ${owned.pods.length} least healthy of ${owned.total} Pods. Choosing a worker group under Runtime Pods on Overview narrows the list there, with a Logs button on each Pod.`} />
         </div>
       )}
       {!owned && (
         <div className="shrink-0 px-4 pt-3">
-          <AlertBanner variant="warning" title="Current Pods unavailable" message={`Showing Pods Radar has recorded for this RayCluster, which can include deleted ones.${unsupported ? '' : ` ${query.error?.message ?? 'Its current Pods could not be read.'}`}`} />
+          <AlertBanner variant="warning" title="Current Pods unavailable" message={`Showing Pods Radar has recorded for this RayCluster, which can include deleted ones.${reason ? ` ${reason}` : ''}`} />
         </div>
       )}
       <div className="min-h-0 flex-1">
@@ -84,6 +93,7 @@ export function RayClusterLogsTab({
           namespace={namespace}
           selectedPod={selectedPod}
           onSelectPod={onSelectPod}
+          defaultPod={owned?.pods[0]?.name}
           initialContainer={initialContainer ?? (selected ? logsContainer(selected) : undefined)}
           emptyMessage={owned ? 'This RayCluster has no Pods right now.' : undefined}
         />
