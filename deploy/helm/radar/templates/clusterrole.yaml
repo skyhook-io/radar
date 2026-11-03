@@ -460,6 +460,12 @@ rules:
   - apiGroups: ["kueue.x-k8s.io", "autoscaling.x-k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  # Kueue's visibility API: where a pending Workload sits in its LocalQueue.
+  # Without authentication Radar asks as itself; signed-in users are asked as
+  # themselves and need this through their own roles (Kueue aggregates it to view).
+  - apiGroups: ["visibility.kueue.x-k8s.io"]
+    resources: ["localqueues/pendingworkloads"]
+    verbs: ["get"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kserve }}
   - apiGroups: ["serving.kserve.io"]
