@@ -108,10 +108,10 @@ type kueueIssueProvider interface {
 }
 
 type kueueRootResolver interface {
-	// root is the top of the Workload's controller chain, read from the same
-	// incarnation (UID) of the Workload; false when there is none or it can't
-	// be followed.
-	root(workload *unstructured.Unstructured) (Ref, bool)
+	// chain is the Workload's controller chain above it, nearest first and
+	// the run's root last, read from the same incarnation (UID) of the
+	// Workload; empty when there is none or it can't be followed.
+	chain(workload *unstructured.Unstructured) []Ref
 	// valid reports whether every root answered came from current caches.
 	valid() bool
 }
@@ -120,7 +120,6 @@ type kueueRootResolver interface {
 type kueueRun struct {
 	workload *unstructured.Unstructured
 	state    resourcecontext.KueueAdmissionState
-	ref      Ref // root, or the Workload when it has none
 }
 
 type kueueDetector struct {
@@ -130,6 +129,10 @@ type kueueDetector struct {
 	now       time.Time
 	roots     kueueRootResolver
 	inventory map[string]kueueInventory
+	// requestsByOwner indexes retained ProvisioningRequests by controller UID.
+	requestsByOwner map[types.UID][]*unstructured.Unstructured
+	requestsRead    bool
+	requestsOK      bool
 }
 
 func detectKueueIssues(p Provider, f Filters, unchecked *uncheckedSet) []Issue {
@@ -138,10 +141,9 @@ func detectKueueIssues(p Provider, f Filters, unchecked *uncheckedSet) []Issue {
 		return nil
 	}
 	d := &kueueDetector{p: kp, f: f, unchecked: unchecked, now: time.Now(), inventory: map[string]kueueInventory{}}
-	workloads, ok := d.read(kueueGroup, kueueWorkloadKind)
-	if !ok {
-		return nil
-	}
+	// Each inventory answers on its own: without Workloads the queues are
+	// still read, and without LocalQueues the ClusterQueues are.
+	workloads, _ := d.read(kueueGroup, kueueWorkloadKind)
 
 	variantParents := map[types.UID]bool{}
 	for _, w := range workloads {
@@ -197,17 +199,47 @@ func detectKueueIssues(p Provider, f Filters, unchecked *uncheckedSet) []Issue {
 	}
 
 	if d.roots != nil && !d.roots.valid() {
-		// The caches changed under the ownership reads: claim no roots.
+		// The caches changed under the ownership reads: claim no roots and
+		// keep only the Workloads among the affected resources.
 		for i := range out {
 			if out[i].Owner.Kind != "" {
 				out[i].Owner = Ref{}
 				enrichIdentity(&out[i])
 			}
-			out[i].AffectedRefs = nil
+			out[i].AffectedRefs = kueueWorkloadRefsOnly(out[i].AffectedRefs)
 			out[i].DiagnosticContext = withoutFact(out[i].DiagnosticContext, factKueueAffectedRuns)
+			if len(out[i].AffectedRefs) > 0 && out[i].Kind != kueueWorkloadKind {
+				out[i].DiagnosticContext = withFact(out[i].DiagnosticContext, affectedRefsFact(factKueueAffectedRuns, kueueAffectedRunsMessage(out[i].Kind), out[i].AffectedRefs))
+			}
 		}
 	}
 	return out
+}
+
+func kueueWorkloadRefsOnly(refs []Ref) []Ref {
+	var out []Ref
+	for _, ref := range refs {
+		if ref.Group == kueueGroup && ref.Kind == kueueWorkloadKind {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func withFact(ctx *issuesapi.DiagnosticContext, fact issuesapi.DiagnosticFact) *issuesapi.DiagnosticContext {
+	if ctx == nil {
+		return &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleCandidate, Facts: []issuesapi.DiagnosticFact{fact}}
+	}
+	out := *ctx
+	out.Facts = append(append([]issuesapi.DiagnosticFact(nil), ctx.Facts...), fact)
+	return &out
+}
+
+func kueueAffectedRunsMessage(kind string) string {
+	if kind == kueueClusterQueueKind {
+		return "Runs Kueue reports blocked by this ClusterQueue, through the LocalQueues that point to it, with their Workloads."
+	}
+	return "Runs submitted to this LocalQueue that Kueue reports blocked by it, with their Workloads."
 }
 
 func isKueueQueueDependency(code resourcecontext.KueueAdmissionCode) bool {
@@ -225,34 +257,41 @@ func isKueueWorkloadOwner(owner metav1.OwnerReference) bool {
 // read returns a kind's inventory for the compose's scope, recording a gap
 // when it is incomplete. ok is false when the kind can't be answered.
 func (d *kueueDetector) read(group, kind string) ([]*unstructured.Unstructured, bool) {
+	inv := d.readEvidence(group, kind)
+	if !inv.OK && inv.Gap != "" {
+		d.unchecked.add(issuesapi.UncheckedSourceKueue, inv.Gap, issuesapi.UncheckedKind{Group: group, Kind: kind})
+	}
+	return inv.Items, inv.OK
+}
+
+// readEvidence reads a kind that only adds evidence to rows found from
+// other kinds, so a gap in it hides no finding and records none.
+func (d *kueueDetector) readEvidence(group, kind string) kueueInventory {
 	key := group + "/" + kind
 	inv, seen := d.inventory[key]
 	if !seen {
 		inv = d.p.kueueInventory(group, kind, d.f.Namespaces)
 		d.inventory[key] = inv
-		if !inv.OK && inv.Gap != "" {
-			d.unchecked.add(issuesapi.UncheckedSourceKueue, inv.Gap, issuesapi.UncheckedKind{Group: group, Kind: kind})
-		}
 	}
-	return inv.Items, inv.OK
+	return inv
 }
 
-func (d *kueueDetector) root(w *unstructured.Unstructured) (Ref, bool) {
+// chain is the Workload's controller chain above it, nearest first.
+func (d *kueueDetector) chain(w *unstructured.Unstructured) []Ref {
 	if d.roots == nil {
 		d.roots = d.p.kueueRoots()
 	}
 	if d.roots == nil {
-		return Ref{}, false
+		return nil
 	}
-	return d.roots.root(w)
+	return d.roots.chain(w)
 }
 
-// runRef is the run a Workload belongs to: its root, else the Workload.
-func (d *kueueDetector) runRef(w *unstructured.Unstructured) Ref {
-	if root, ok := d.root(w); ok {
-		return root
-	}
-	return kueueWorkloadRef(w)
+// runRefs are the resources a run consists of: the Workload and every
+// controller above it, so the Workload's page, an intermediate Job's page
+// and the root's page all find a finding about the run.
+func (d *kueueDetector) runRefs(w *unstructured.Unstructured) []Ref {
+	return append([]Ref{kueueWorkloadRef(w)}, d.chain(w)...)
 }
 
 func kueueWorkloadRef(w *unstructured.Unstructured) Ref {
@@ -260,9 +299,9 @@ func kueueWorkloadRef(w *unstructured.Unstructured) Ref {
 }
 
 type kueueRunFinding struct {
-	reason   string
-	cause    string
-	action   string
+	reason string
+	cause  string
+	action string
 	// fact is the classified fact the finding rests on.
 	fact *resourcecontext.KueueAdmissionFact
 	// configuration findings wait out kueueConfigurationGrace.
@@ -369,8 +408,11 @@ func (d *kueueDetector) runIssue(w *unstructured.Unstructured, state resourcecon
 		finding.reason, message, transitionAt, transitionKnown, finding.reason+"\x00"+w.GetName(), created)
 	issue.RawMessage = message
 	issue.Cause, issue.Action = finding.cause, finding.action
-	if root, ok := d.root(w); ok {
-		issue.Owner = root
+	if chain := d.chain(w); len(chain) > 0 {
+		issue.Owner = chain[len(chain)-1]
+		// A root above the run's own Job (a CronJob) is the row's subject;
+		// the Job's page still finds the row.
+		issue.AffectedRefs = chain[:len(chain)-1]
 	}
 	enrichIdentity(&issue)
 
@@ -495,9 +537,10 @@ func (d *kueueDetector) admissionCheckFacts(w *unstructured.Unstructured) []issu
 	if len(names) > maxKueueLinkedObjects {
 		names = names[:maxKueueLinkedObjects]
 	}
-	checks, ok := d.read(kueueGroup, kueueAdmissionCheckKind)
+	inv := d.readEvidence(kueueGroup, kueueAdmissionCheckKind)
+	ok := inv.OK
 	byName := map[string]*unstructured.Unstructured{}
-	for _, check := range checks {
+	for _, check := range inv.Items {
 		byName[check.GetName()] = check
 	}
 	facts := make([]issuesapi.DiagnosticFact, 0, len(names))
@@ -540,11 +583,24 @@ func kueueObjectActiveText(kind, name string, u *unstructured.Unstructured) stri
 // provisioningFacts link the retained ProvisioningRequests this Workload's
 // incarnation controls, newest first, with their native outcome.
 func (d *kueueDetector) provisioningFacts(w *unstructured.Unstructured) []issuesapi.DiagnosticFact {
-	items, ok := d.read(schedulinginsight.ProvisioningRequestGroup, provisioningRequestKind)
-	if !ok {
-		return nil
+	if !d.requestsRead {
+		d.requestsRead = true
+		inv := d.readEvidence(schedulinginsight.ProvisioningRequestGroup, provisioningRequestKind)
+		d.requestsOK = inv.OK || inv.Gap == ""
+		d.requestsByOwner = map[types.UID][]*unstructured.Unstructured{}
+		for _, item := range inv.Items {
+			if owner := metav1.GetControllerOf(item); owner != nil {
+				d.requestsByOwner[owner.UID] = append(d.requestsByOwner[owner.UID], item)
+			}
+		}
 	}
-	requests := schedulinginsight.KueueProvisioningRequests(w, items)
+	if !d.requestsOK {
+		return []issuesapi.DiagnosticFact{{
+			Type:    factKueueProvisioningRequest,
+			Message: "Radar couldn't read ProvisioningRequests, so any it retains for this Workload aren't shown.",
+		}}
+	}
+	requests := schedulinginsight.KueueProvisioningRequests(w, d.requestsByOwner[w.GetUID()])
 	if len(requests) > maxKueueLinkedObjects {
 		requests = requests[:maxKueueLinkedObjects]
 	}
@@ -595,10 +651,7 @@ func truncateKueueText(s string) string {
 // holds the Workloads a LocalQueue row lists as affected.
 func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, map[types.UID]bool) {
 	covered := map[types.UID]bool{}
-	localQueues, ok := d.read(kueueGroup, kueueLocalQueueKind)
-	if !ok {
-		return nil, covered
-	}
+	localQueues, _ := d.read(kueueGroup, kueueLocalQueueKind)
 	canReadClusterQueues := d.f.CanReadClusterScoped == nil || d.f.CanReadClusterScoped(kueueClusterQueueKind, kueueGroup)
 	var clusterQueues map[string]*unstructured.Unstructured
 	clusterQueuesRead := false
@@ -628,13 +681,10 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			continue
 		}
 		status, reason, lqMessage, current := kueueActive(lq)
-		if status != "False" || !current {
+		if status != "False" || !current || d.inGrace(lq) {
 			continue
 		}
 		created := lq.GetCreationTimestamp().Time
-		if !created.IsZero() && d.now.Sub(created) < kueueConfigurationGrace {
-			continue
-		}
 		cqName, _, _ := unstructured.NestedString(lq.Object, "spec", "clusterQueue")
 		runs := dependent[lq.GetNamespace()+"/"+lq.GetName()]
 		var issueReason, message, cause, action string
@@ -650,7 +700,11 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			if !canReadClusterQueues {
 				// The ClusterQueue decides whether this is a stop or a fault;
 				// without it, say the check wasn't made rather than nothing.
-				d.unchecked.add(issuesapi.UncheckedSourceKueue, issuesapi.UncheckedReasonCallerAccessDenied, issuesapi.UncheckedKind{Group: kueueGroup, Kind: kueueClusterQueueKind})
+				subjects := []Ref{{Group: kueueGroup, Kind: kueueLocalQueueKind, Namespace: lq.GetNamespace(), Name: lq.GetName()}}
+				for _, run := range runs {
+					subjects = append(subjects, d.runRefs(run.workload)...)
+				}
+				d.unchecked.addFor(issuesapi.UncheckedSourceKueue, issuesapi.UncheckedReasonCallerAccessDenied, issuesapi.UncheckedKind{Group: kueueGroup, Kind: kueueClusterQueueKind}, subjects)
 				continue
 			}
 			if !readClusterQueues() {
@@ -696,7 +750,7 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 		}
 		if affected := d.affectedRuns(runs, covered); len(affected) > 0 {
 			issue.AffectedRefs = affected
-			facts = append(facts, affectedRefsFact(factKueueAffectedRuns, "Runs submitted to this LocalQueue that Kueue reports blocked by it.", affected))
+			facts = append(facts, affectedRefsFact(factKueueAffectedRuns, kueueAffectedRunsMessage(kueueLocalQueueKind), affected))
 			if issueReason == ReasonKueueClusterQueueInactive {
 				affectedByClusterQueue[cqName] = append(affectedByClusterQueue[cqName], affected...)
 			}
@@ -721,10 +775,10 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			if !broken {
 				continue
 			}
-			created := cq.GetCreationTimestamp().Time
-			if !created.IsZero() && d.now.Sub(created) < kueueConfigurationGrace {
+			if d.inGrace(cq) {
 				continue
 			}
+			created := cq.GetCreationTimestamp().Time
 			issue := newConditionIssue(kueueGroupGVR, kueueClusterQueueKind, "", name, SeverityWarning,
 				ReasonKueueClusterQueueInactive, message, time.Time{}, false, ReasonKueueClusterQueueInactive, created)
 			issue.RawMessage = message
@@ -733,7 +787,7 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			facts := d.clusterQueueCheckFacts(cq, reason)
 			if affected := dedupeRefs(affectedByClusterQueue[name]); len(affected) > 0 {
 				issue.AffectedRefs = affected
-				facts = append(facts, affectedRefsFact(factKueueAffectedRuns, "Runs Kueue reports blocked by this ClusterQueue, through the LocalQueues that point to it.", affected))
+				facts = append(facts, affectedRefsFact(factKueueAffectedRuns, kueueAffectedRunsMessage(kueueClusterQueueKind), affected))
 			}
 			if len(facts) > 0 {
 				issue.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleCandidate, Facts: facts}
@@ -767,12 +821,12 @@ func (d *kueueDetector) clusterQueueCheckFacts(cq *unstructured.Unstructured, re
 	if len(names) == 0 {
 		return nil
 	}
-	checks, ok := d.read(kueueGroup, kueueAdmissionCheckKind)
-	if !ok {
+	inv := d.readEvidence(kueueGroup, kueueAdmissionCheckKind)
+	if !inv.OK {
 		return nil
 	}
 	byName := map[string]*unstructured.Unstructured{}
-	for _, check := range checks {
+	for _, check := range inv.Items {
 		byName[check.GetName()] = check
 	}
 	var facts []issuesapi.DiagnosticFact
@@ -825,7 +879,7 @@ func (d *kueueDetector) affectedRuns(runs []kueueRun, covered map[types.UID]bool
 	refs := make([]Ref, 0, len(runs))
 	for _, run := range runs {
 		covered[run.workload.GetUID()] = true
-		refs = append(refs, d.runRef(run.workload))
+		refs = append(refs, d.runRefs(run.workload)...)
 	}
 	refs = dedupeRefs(refs)
 	sort.Slice(refs, func(i, j int) bool {
@@ -883,4 +937,17 @@ func isKueueLinkFact(factType string) bool {
 		return true
 	}
 	return false
+}
+
+// inGrace keeps a queue out of Issues for a minute after it was created or
+// its Active condition last changed: a GitOps apply or a recreated flavor can
+// leave it inactive for seconds.
+func (d *kueueDetector) inGrace(u *unstructured.Unstructured) bool {
+	since := u.GetCreationTimestamp().Time
+	if cm, ok := kueueConditionMap(u, "Active"); ok {
+		if at, known := conditionTransitionTime(cm); known && at.After(since) {
+			since = at
+		}
+	}
+	return !since.IsZero() && d.now.Sub(since) < kueueConfigurationGrace
 }

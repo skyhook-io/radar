@@ -59,9 +59,9 @@ func (p *fakeKueueProvider) kueueRoots() kueueRootResolver { return fakeKueueRoo
 
 type fakeKueueRoots struct{ p *fakeKueueProvider }
 
-func (r fakeKueueRoots) root(w *unstructured.Unstructured) (Ref, bool) {
-	current, found := w, false
-	var top Ref
+func (r fakeKueueRoots) chain(w *unstructured.Unstructured) []Ref {
+	current := w
+	var out []Ref
 	for depth := 0; depth < 8; depth++ {
 		owner := metav1.GetControllerOf(current)
 		if owner == nil {
@@ -77,10 +77,10 @@ func (r fakeKueueRoots) root(w *unstructured.Unstructured) (Ref, bool) {
 		if next == nil {
 			break
 		}
-		found, current = true, next
-		top = Ref{Group: group, Kind: owner.Kind, Namespace: next.GetNamespace(), Name: next.GetName()}
+		current = next
+		out = append(out, Ref{Group: group, Kind: owner.Kind, Namespace: next.GetNamespace(), Name: next.GetName()})
 	}
-	return top, found
+	return out
 }
 
 func (r fakeKueueRoots) valid() bool { return !r.p.rootsBroken }
@@ -179,8 +179,11 @@ func TestKueueLiveScenarioFindings(t *testing.T) {
 			t.Errorf("%s %s: severity %q cause %q action %q", i.Kind, i.Name, i.Severity, i.Cause, i.Action)
 		}
 		if i.Kind == kueueLocalQueueKind || i.Kind == kueueClusterQueueKind {
-			want := Ref{Group: "batch", Kind: "Job", Namespace: "gpu-night-819-missing-flavor", Name: "blocked"}
-			if len(i.AffectedRefs) != 1 || i.AffectedRefs[0] != want {
+			want := []Ref{
+				{Group: "batch", Kind: "Job", Namespace: "gpu-night-819-missing-flavor", Name: "blocked"},
+				{Group: kueueGroup, Kind: kueueWorkloadKind, Namespace: "gpu-night-819-missing-flavor", Name: "job-blocked-b8211"},
+			}
+			if len(i.AffectedRefs) != 2 || i.AffectedRefs[0] != want[0] || i.AffectedRefs[1] != want[1] {
 				t.Errorf("%s affected = %+v", i.Kind, i.AffectedRefs)
 			}
 		}
@@ -233,9 +236,14 @@ func TestKueueRunPageFindsQueueRowThroughAffectedRuns(t *testing.T) {
 		CanReadRelated:  func(Ref) bool { return true },
 		CanReadEvidence: allowAllEvidence,
 	}
-	related := RelatedIssues(p, opts, "batch", "Job", "gpu-night-819-missing-flavor", "blocked")
-	if len(related) != 1 || related[0].Kind != kueueLocalQueueKind || related[0].Reason != ReasonKueueClusterQueueInactive {
-		t.Fatalf("related = %+v", related)
+	for _, page := range []Ref{
+		{Group: "batch", Kind: "Job", Namespace: "gpu-night-819-missing-flavor", Name: "blocked"},
+		{Group: kueueGroup, Kind: kueueWorkloadKind, Namespace: "gpu-night-819-missing-flavor", Name: "job-blocked-b8211"},
+	} {
+		related := RelatedIssues(p, opts, page.Group, page.Kind, page.Namespace, page.Name)
+		if len(related) != 1 || related[0].Kind != kueueLocalQueueKind || related[0].Reason != ReasonKueueClusterQueueInactive {
+			t.Fatalf("%s page: related = %+v", page.Kind, related)
+		}
 	}
 }
 
@@ -467,7 +475,7 @@ func TestKueueSharedClusterQueueIncident(t *testing.T) {
 		if i.Kind == kueueLocalQueueKind && (i.IncidentParent == nil || i.IncidentParent.Ref.Name != "gpu") {
 			t.Fatalf("LocalQueue %s parent = %+v", i.Namespace, i.IncidentParent)
 		}
-		if i.Kind == kueueClusterQueueKind && len(i.AffectedRefs) != 3 {
+		if i.Kind == kueueClusterQueueKind && len(i.AffectedRefs) != 6 {
 			t.Fatalf("ClusterQueue affected = %+v", i.AffectedRefs)
 		}
 	}
@@ -483,7 +491,7 @@ func TestKueueSharedClusterQueueIncident(t *testing.T) {
 		if i.Kind != kueueClusterQueueKind {
 			continue
 		}
-		if len(i.AffectedRefs) != 2 {
+		if len(i.AffectedRefs) != 4 {
 			t.Fatalf("ClusterQueue affected for team-a caller = %+v", i.AffectedRefs)
 		}
 		for _, f := range i.DiagnosticContext.Facts {
@@ -538,16 +546,111 @@ func TestKueueLocalQueueRowNeedsClusterQueueEvidence(t *testing.T) {
 	p := newFakeKueueProvider(brokenClusterQueue("gpu"), job, kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive), ownedBy(inactiveQueueWorkload("team", "w", "q", "gpu"), job))
 	var withheld []Issue
 	denyClusterQueueList := func(read EvidenceRead) bool { return !(read.Group == kueueGroup && read.Resource == "clusterqueues") }
+	// A memoized compose authorizes the ClusterQueue read only at projection.
 	got := Compose(p, Filters{Limit: NoLimit, Namespaces: []string{"team"}, CanReadEvidence: denyClusterQueueList, OnEvidenceWithheld: func(i Issue) { withheld = append(withheld, i) }})
 	if reasons := kueueReasons(got); len(reasons) != 0 {
 		t.Fatalf("rows = %v", reasons)
 	}
-	if len(withheld) != 1 || !Affects(withheld[0], "batch", "Job", "team", "train") {
-		t.Fatalf("withheld = %+v, want the LocalQueue row, which affects the Job", withheld)
+	if len(withheld) != 1 || withheld[0].Kind != kueueLocalQueueKind {
+		t.Fatalf("withheld = %+v, want the LocalQueue row", withheld)
 	}
 }
 
-// ---- attribution ------------------------------------------------------------
+// The server checks the same "list clusterqueues" permission for the
+// cluster-scoped gate and for evidence; a run page then says it couldn't
+// check, the same way for a stopped and a broken queue.
+func TestKueueRunPageReportsTheUncheckedQueueForACallerWhoCannotReadClusterQueues(t *testing.T) {
+	denyCQ := func(kind, group string) bool { return !(group == kueueGroup && kind == kueueClusterQueueKind) }
+	denyCQList := func(read EvidenceRead) bool { return !(read.Group == kueueGroup && read.Resource == "clusterqueues") }
+	readAll := func(Ref) bool { return true }
+	for _, cq := range []*unstructured.Unstructured{brokenClusterQueue("gpu"), kueueClusterQueue("gpu", "Hold", "False", "Stopped", "is stopped")} {
+		job := kueueJob("team", "train")
+		other := kueueJob("team", "unrelated")
+		p := newFakeKueueProvider(cq, job, other, kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive), ownedBy(inactiveQueueWorkload("team", "w", "q", "gpu"), job))
+		for _, page := range []struct {
+			ref  Ref
+			want bool
+		}{
+			{Ref{Group: "batch", Kind: "Job", Namespace: "team", Name: "train"}, true},
+			{Ref{Group: kueueGroup, Kind: kueueWorkloadKind, Namespace: "team", Name: "w"}, true},
+			{Ref{Group: kueueGroup, Kind: kueueLocalQueueKind, Namespace: "team", Name: "q"}, true},
+			{Ref{Group: "batch", Kind: "Job", Namespace: "team", Name: "unrelated"}, false},
+		} {
+			var gaps []issuesapi.UncheckedSource
+			related := RelatedIssues(p, RelatedIssueOptions{
+				Namespaces: []string{"team"}, CanReadClusterScoped: denyCQ, CanReadEvidence: denyCQList, CanReadRelated: readAll, CanReadSubject: readAll,
+				OnUnchecked: func(g []issuesapi.UncheckedSource) { gaps = g },
+			}, page.ref.Group, page.ref.Kind, page.ref.Namespace, page.ref.Name)
+			if len(related) != 0 {
+				t.Fatalf("%s %s: related = %+v", cq.GetName(), page.ref.Name, related)
+			}
+			if got := len(gaps) == 1 && gaps[0].Source == issuesapi.UncheckedSourceKueue && gaps[0].Reason == issuesapi.UncheckedReasonCallerAccessDenied && gaps[0].Subjects == nil; got != page.want {
+				t.Fatalf("%s %s page: gaps = %+v, want reported=%v", cq.GetName(), page.ref.Name, gaps, page.want)
+			}
+		}
+	}
+}
+
+func TestKueueQueuesAreCheckedWithoutWorkloadsOrLocalQueues(t *testing.T) {
+	p := newFakeKueueProvider(brokenClusterQueue("gpu"), kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive))
+	p.gaps[kueueGroup+"/"+kueueWorkloadKind] = issuesapi.UncheckedReasonCollectorAccessDenied
+	reasons := kueueReasons(Compose(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence}))
+	if reasons["ClusterQueue /gpu"] == "" || reasons["LocalQueue team/q"] == "" {
+		t.Fatalf("rows without Workloads = %v", reasons)
+	}
+	p.gaps[kueueGroup+"/"+kueueLocalQueueKind] = issuesapi.UncheckedReasonSyncPending
+	reasons = kueueReasons(Compose(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence}))
+	if len(reasons) != 1 || reasons["ClusterQueue /gpu"] == "" {
+		t.Fatalf("rows without LocalQueues = %v", reasons)
+	}
+}
+
+func TestKueueEveryAllowlistedClusterQueueReasonIsBroken(t *testing.T) {
+	for reason := range kueueBrokenClusterQueueReasons {
+		cq := kueueClusterQueue("cq", "None", "False", reason, "Can't admit new workloads: "+reason)
+		if _, _, broken := kueueBrokenClusterQueue(cq); !broken {
+			t.Errorf("%s not treated as broken", reason)
+		}
+	}
+}
+
+func TestKueueQueueGraceRunsFromTheActiveTransition(t *testing.T) {
+	lq := kueueLocalQueue("team", "q", "gone", "False", kueueLocalQueueClusterQueueMissing)
+	active := kueueCondition("Active", "False", kueueLocalQueueClusterQueueMissing, "Can't submit new workloads to clusterQueue", 1)
+	active["lastTransitionTime"] = time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339)
+	kueueSetConditions(lq, active)
+	if reasons := kueueReasons(Compose(newFakeKueueProvider(lq), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})); len(reasons) != 0 {
+		t.Fatalf("rows = %v, want none for a queue that just went inactive", reasons)
+	}
+}
+
+func TestKueueReplacedCachesKeepWorkloadsAsAffected(t *testing.T) {
+	job := kueueJob("team", "train")
+	p := newFakeKueueProvider(brokenClusterQueue("gpu"), job, kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive), ownedBy(inactiveQueueWorkload("team", "w", "q", "gpu"), job))
+	p.rootsBroken = true
+	for _, i := range Compose(p, Filters{Limit: NoLimit, Namespaces: []string{"team"}, CanReadEvidence: allowAllEvidence}) {
+		if i.Kind != kueueLocalQueueKind {
+			continue
+		}
+		if len(i.AffectedRefs) != 1 || i.AffectedRefs[0].Kind != kueueWorkloadKind || !hasFact(&i, factKueueAffectedRuns) {
+			t.Fatalf("affected = %+v facts = %+v", i.AffectedRefs, i.DiagnosticContext)
+		}
+		return
+	}
+	t.Fatal("no LocalQueue row")
+}
+
+func TestKueueCronJobRunIsFoundFromItsJob(t *testing.T) {
+	cronJob := kueueTestObject("batch/v1", "CronJob", "team", "nightly")
+	job := ownedBy(kueueJob("team", "nightly-1"), cronJob)
+	p := newFakeKueueProvider(cronJob, job, ownedBy(exceedsWorkload("team", "w", "q"), job))
+	related := RelatedIssues(p, RelatedIssueOptions{Namespaces: []string{"team"}, CanReadRelated: func(Ref) bool { return true }, CanReadEvidence: allowAllEvidence}, "batch", "Job", "team", "nightly-1")
+	if len(related) != 1 || related[0].Kind != "CronJob" || related[0].Reason != ReasonKueueExceedsQuota {
+		t.Fatalf("related = %+v", related)
+	}
+}
+
+// ---- attribution// ---- attribution ------------------------------------------------------------
 
 func TestKueueRootAttribution(t *testing.T) {
 	cronJob := kueueTestObject("batch/v1", "CronJob", "team", "nightly")
@@ -719,6 +822,30 @@ func TestKueueCheckRowsLinkChecksAndOwnedProvisioningRequests(t *testing.T) {
 
 // ---- coverage and filters ---------------------------------------------------
 
+func TestKueueEvidenceOnlyGapsThinTheRowNotTheCoverage(t *testing.T) {
+	job := kueueJob("team", "train")
+	w := ownedBy(kueueWorkload("team", "w", "q", kueueCondition("QuotaReserved", "True", "QuotaReserved", "reserved", 1)), job)
+	_ = unstructured.SetNestedSlice(w.Object, []any{map[string]any{"name": "capacity", "state": "Rejected", "message": "no capacity"}}, "status", "admissionChecks")
+	p := newFakeKueueProvider(job, w)
+	p.gaps["autoscaling.x-k8s.io/"+provisioningRequestKind] = issuesapi.UncheckedReasonCollectorAccessDenied
+	p.gaps[kueueGroup+"/"+kueueAdmissionCheckKind] = issuesapi.UncheckedReasonSyncPending
+	got, stats := ComposeWithStats(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
+	if len(stats.Unchecked) != 0 {
+		t.Fatalf("unchecked = %+v: evidence-only kinds hide no finding", stats.Unchecked)
+	}
+	if len(got) != 1 {
+		t.Fatalf("rows = %+v", got)
+	}
+	var said []string
+	for _, f := range got[0].DiagnosticContext.Facts {
+		said = append(said, f.Message)
+	}
+	joined := strings.Join(said, " | ")
+	if !strings.Contains(joined, "couldn't read ProvisioningRequests") || !strings.Contains(joined, "Radar couldn't read it") {
+		t.Fatalf("facts = %s", joined)
+	}
+}
+
 func TestKueueInventoryGapsAreUnchecked(t *testing.T) {
 	p := newFakeKueueProvider(exceedsWorkload("team", "w", "q"))
 	p.gaps[kueueGroup+"/"+kueueWorkloadKind] = issuesapi.UncheckedReasonSyncPending
@@ -794,7 +921,7 @@ func BenchmarkKueueCompose(b *testing.B) {
 	}
 }
 
-func TestKueueChainRootReadsTheClassifiedIncarnation(t *testing.T) {
+func TestKueueChainReadsTheClassifiedIncarnation(t *testing.T) {
 	w := exceedsWorkload("team", "w", "q")
 	subject := resourceid.Ref{Group: kueueGroup, Kind: kueueWorkloadKind, Namespace: "team", Name: "w"}
 	job := resourceid.Ref{Group: "batch", Kind: "Job", Namespace: "team", Name: "train"}
@@ -805,19 +932,18 @@ func TestKueueChainRootReadsTheClassifiedIncarnation(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		answer ownership.ControllerChainAnswer
-		want   Ref
-		ok     bool
+		want   int
 	}{
-		{"top of the chain", ownership.ControllerChainAnswer{Subject: read(w.GetUID()), Chain: []resourceid.Ref{subject, job, cron}}, Ref{Group: "batch", Kind: "CronJob", Namespace: "team", Name: "nightly"}, true},
-		{"recreated under the same name since it was listed", ownership.ControllerChainAnswer{Subject: read("another-incarnation"), Chain: []resourceid.Ref{subject, job}}, Ref{}, false},
-		{"no controller", ownership.ControllerChainAnswer{Subject: read(w.GetUID()), Chain: []resourceid.Ref{subject}}, Ref{}, false},
-		{"cycle", ownership.ControllerChainAnswer{Subject: read(w.GetUID()), Chain: []resourceid.Ref{subject, job}, Cycle: true}, Ref{}, false},
-		{"not read", ownership.ControllerChainAnswer{}, Ref{}, false},
+		{"the whole chain, root last", ownership.ControllerChainAnswer{Subject: read(w.GetUID()), Chain: []resourceid.Ref{subject, job, cron}}, 2},
+		{"recreated under the same name since it was listed", ownership.ControllerChainAnswer{Subject: read("another-incarnation"), Chain: []resourceid.Ref{subject, job}}, 0},
+		{"no controller", ownership.ControllerChainAnswer{Subject: read(w.GetUID()), Chain: []resourceid.Ref{subject}}, 0},
+		{"cycle", ownership.ControllerChainAnswer{Subject: read(w.GetUID()), Chain: []resourceid.Ref{subject, job}, Cycle: true}, 0},
+		{"not read", ownership.ControllerChainAnswer{}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := kueueChainRoot(tc.answer, w)
-			if got != tc.want || ok != tc.ok {
-				t.Fatalf("root = %+v %v, want %+v %v", got, ok, tc.want, tc.ok)
+			got := kueueChain(tc.answer, w)
+			if len(got) != tc.want || (tc.want == 2 && (got[0].Name != "train" || got[1].Name != "nightly")) {
+				t.Fatalf("chain = %+v", got)
 			}
 		})
 	}

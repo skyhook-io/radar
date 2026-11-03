@@ -91,7 +91,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   backup_stalled: 'Backup not progressing',
   job_failed: 'Job failed',
   cronjob_failed: 'CronJob needs attention',
-  batch_run_stopped: 'Run stopped by its queue',
+  batch_run_stopped: 'Run stopped by Kueue',
   rollout_stalled: 'Rollout stalled',
   hpa_limited_or_failed: 'Autoscaling limited',
   rbac_forbidden: 'Permission denied',

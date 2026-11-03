@@ -313,14 +313,16 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	evidenceWithheld := map[string]bool{}
+	var unchecked []issuesapi.UncheckedSource
 	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked: func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		Namespaces:           namespaces,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
 		CanReadSubject:       s.issueSubjectAccess(r),
 		CanReadEvidence:      s.issueEvidenceAccess(r),
 		OnEvidenceWithheld: func(i issues.Issue) {
-			if issues.Concerns(i, group, kind, namespace, name) || issues.Affects(i, group, kind, namespace, name) {
+			if issues.Concerns(i, group, kind, namespace, name) {
 				evidenceWithheld[i.ID] = true
 			}
 		},
@@ -335,8 +337,9 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	withheld := ResourceIssuesWithheld{Issues: len(evidenceWithheld)}
 	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
 	resp := ResourceIssuesResponse{
-		Issues:   related,
-		Coverage: resourceIssuesCoverage(kind, group, namespace),
+		Issues:    related,
+		Coverage:  resourceIssuesCoverage(kind, group, namespace),
+		Unchecked: unchecked,
 	}
 	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
 		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
@@ -361,6 +364,10 @@ type ResourceIssuesResponse struct {
 	Coverage   string                  `json:"coverage"`
 	Withheld   *ResourceIssuesWithheld `json:"withheld,omitempty"`
 	Visibility *k8s.VisibilitySummary  `json:"visibility,omitempty"`
+	// Unchecked lists checks about this resource Radar couldn't make for the
+	// caller, such as a Kueue queue check that needs ClusterQueues the caller
+	// can't read; with it, an empty list is not "none".
+	Unchecked []issuesapi.UncheckedSource `json:"unchecked_sources,omitempty"`
 }
 
 // ResourceIssuesWithheld counts what the caller's access kept out of the
