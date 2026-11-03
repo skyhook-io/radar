@@ -1,3 +1,4 @@
+import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import type { ResourceCoverage } from '../../types/resource-coverage'
@@ -369,6 +370,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+  'connectCluster', 'connectorClass', 'connectorTasks',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -579,6 +581,15 @@ const DEFAULT_COLUMNS: Column[] = [
 ]
 
 const KNOWN_COLUMNS: Record<string, Column[]> = {
+  kafkaconnectors: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Operator Snapshot', width: 'w-44 shrink-0', tooltip: 'Operator-reported connector and task state, not a live runtime check.' },
+    { key: 'connectCluster', label: 'KafkaConnect', width: 'min-w-32' },
+    { key: 'connectorClass', label: 'Class', width: 'min-w-48' },
+    { key: 'connectorTasks', label: 'Tasks / Max', width: 'w-28 shrink-0', tooltip: 'Reported tasks / configured maximum. A smaller count is not itself a failure.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
   opentelemetrycollectors: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
@@ -2914,6 +2925,7 @@ function isCuratedUnboundedGroup(key: string, group: string): boolean {
  * cannot occupy one. See CORE_API_GROUPS.
  */
 const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
+  kafkaconnectors: ['kafka.strimzi.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -5441,6 +5453,11 @@ export function ResourcesView({
     const meta = resource.metadata || {}
     const status = resource.status || {}
     const kindLower = kind?.toLowerCase() || ''
+    const connectorValue = getStrimziConnectorColumnValue(resource, column)
+    if (connectorValue !== undefined) {
+      if (column === 'connectorTasks') return Array.isArray(resource.status?.connectorStatus?.tasks) ? resource.status.connectorStatus.tasks.length : -1
+      return connectorValue
+    }
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
@@ -7579,6 +7596,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     return <KyvernoCleanupPolicyCell resource={resource} column={column} />
   }
 
+  const connectorValue = getStrimziConnectorColumnValue(resource, column)
+  if (connectorValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{connectorValue || '-'}</span>
+  }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
