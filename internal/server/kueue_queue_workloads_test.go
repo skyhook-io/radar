@@ -639,3 +639,15 @@ func TestKueueQueueWorkloadsConnectionChangedMidRead(t *testing.T) {
 		t.Fatalf("got %d %+v, want 409 connection_changed", response.StatusCode, body)
 	}
 }
+
+// A read with no readable scope and no recorded reason still fails with a
+// code, never an empty one.
+func TestKueueReadGapsFailureAlwaysHasACode(t *testing.T) {
+	if failure := kueueReadGapsFailure("workloads", nil); failure.code != readreason.RadarNamespaceNotCollected {
+		t.Fatalf("code = %q", failure.code)
+	}
+	gaps := []resourceapi.Gap{{Code: readreason.UserForbidden}}
+	if failure := kueueReadGapsFailure("workloads", gaps); failure.code != readreason.UserForbidden {
+		t.Fatalf("code = %q", failure.code)
+	}
+}

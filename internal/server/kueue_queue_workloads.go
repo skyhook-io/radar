@@ -718,7 +718,10 @@ func (s *Server) readKueueIndexed(r *http.Request, h kueueQueueHandles, budget *
 			}
 		}
 	}
-	if inventory.Collection != nil {
+	// Radar's collection narrows the scope only when it leaves something to
+	// read, as REST lists do; otherwise the uncollected namespaces stay in
+	// scope as the gap that explains the failure.
+	if inventory.Collection != nil && len(inventory.Collection.Namespaces) > 0 {
 		target = target.narrowedByCollection(inventory.Collection.Namespaces, inventory.Collection.Outside)
 	}
 	if !inventory.CanReadTarget {
@@ -794,7 +797,13 @@ func kueueReadGapsFailure(resource string, gaps []resourceapi.Gap) *resourceRead
 	for _, gap := range gaps {
 		codes = append(codes, gap.Code)
 	}
-	failure := dynamicPlanFailure(resource, readreason.Primary(codes))
+	code := readreason.Primary(codes)
+	if code == "" {
+		// Nothing readable and no recorded reason: Radar doesn't collect the
+		// kind where the caller may read it.
+		code = readreason.RadarNamespaceNotCollected
+	}
+	failure := dynamicPlanFailure(resource, code)
 	failure.gaps = gaps
 	return failure
 }
