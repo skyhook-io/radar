@@ -1931,6 +1931,8 @@ When Radar runs locally, MCP clients can use `collect_application_evidence` to r
 
 Requires Pod-read/port-forward permissions, a recognized application image and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must already be enabled. Credentials, TLS, custom ports, authenticated/remote/hosted/in-cluster deployments and built-in investigations are unsupported.
 
+In local resource details, use **Collect RabbitMQ evidence**, **Collect NATS evidence** or **Collect Vault evidence** to select a Pod and collect explicitly after a permission check. **Retry permission check** does not contact the application; neither does opening or refreshing a resource. Results show the target, observation time and selected-Pod scope. **Collection limits** expands the qualifications; **Copy observation** always includes them. If a Pod is missing from discovery, open it directly. Resource or cluster changes clear results; a replaced Pod requires a new selection and explicit collection.
+
 These are selected-endpoint observations, not automatic Issues or an application health verdict. See [MCP collection and result semantics](mcp.md#explicit-local-runtime-evidence).
 
 ## Any Other CRD
