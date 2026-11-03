@@ -23,10 +23,10 @@ describe('application observations', () => {
       diskAlarm: false, memoryAlarm: true, diskAvailableBytes: 0, diskWatermarkBytes: 50 * 1024 * 1024,
       memoryUsedBytes: 128 * 1024 * 1024, memoryWatermarkBytes: 512 * 1024 * 1024,
     } } }} />)
-    expect(html).toContain('Free disk</dt><dd title="0 bytes">0 B')
-    expect(html).toContain('Disk alarm below</dt><dd title="52428800 bytes">50 MiB')
-    expect(html).toContain('Memory used (RabbitMQ)</dt><dd title="134217728 bytes">128 MiB')
-    expect(html).toContain('Memory alarm above</dt><dd title="536870912 bytes">512 MiB')
+    expect(html).toContain('Free disk</dt><dd class="break-words" title="0 bytes">0 B')
+    expect(html).toContain('Disk alarm below</dt><dd class="break-words" title="52428800 bytes">50 MiB')
+    expect(html).toContain('Memory used (RabbitMQ)</dt><dd class="break-words" title="134217728 bytes">128 MiB')
+    expect(html).toContain('Memory alarm above</dt><dd class="break-words" title="536870912 bytes">512 MiB')
     expect(html).toContain('Disk alarm</dt><dd>Not reported')
     expect(html).toContain('Memory alarm</dt><dd>Reported')
     expect(html).toContain('can lag the alarm state')
@@ -41,6 +41,16 @@ describe('application observations', () => {
     expect(html).toContain('Disk alarm</dt><dd>Not reported')
     expect(html).not.toContain('undefined')
     expect(html).not.toContain('NaN')
+  })
+  it('keeps unequal near-threshold measurements distinguishable without hovering', () => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, facts: { rabbitmq: {
+      diskAlarm: true, memoryAlarm: true, diskAvailableBytes: 49900000, diskWatermarkBytes: 50000000,
+      memoryUsedBytes: 2415000000, memoryWatermarkBytes: 2412409651,
+    } } }} />)
+    for (const value of [49900000, 50000000, 2415000000, 2412409651]) {
+      expect(html).toContain(`>${value.toLocaleString()} bytes</dd>`)
+    }
+    expect(html).toContain('can lag the alarm state')
   })
   it('does not display facts when collection is unavailable', () => {
     const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, outcome: 'unavailable', reason: 'endpoint_denied', facts: { rabbitmq: { diskAlarm: false, memoryAlarm: false } } }} />)

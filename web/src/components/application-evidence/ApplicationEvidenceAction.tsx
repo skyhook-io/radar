@@ -149,6 +149,13 @@ function EvidenceDialog({ open, data, currentData, refreshing, onClose, onTarget
   </DialogPortal>
 }
 
+function formatRabbitMQMeasurement(value: number | undefined, pairedValue: number | undefined) {
+  if (value === undefined) return 'Unknown'
+  const formatted = formatMemoryBytes(value)
+  if (pairedValue !== undefined && value !== pairedValue && formatted === formatMemoryBytes(pairedValue)) return `${value.toLocaleString()} bytes`
+  return formatted
+}
+
 export function ApplicationEvidenceObservation({ result }: { result: ApplicationEvidenceResult }) {
   const facts = result.outcome === 'observed' ? result.facts : undefined
   const rabbitmq = facts?.rabbitmq
@@ -163,11 +170,11 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
     {rabbitmq && <>
       <dl className="mt-3 grid grid-cols-2 gap-2">
         <dt>Disk alarm</dt><dd>{rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd>
-        <dt>Free disk</dt><dd title={rabbitmq.diskAvailableBytes === undefined ? undefined : `${rabbitmq.diskAvailableBytes} bytes`}>{rabbitmq.diskAvailableBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskAvailableBytes)}</dd>
-        <dt>Disk alarm below</dt><dd title={rabbitmq.diskWatermarkBytes === undefined ? undefined : `${rabbitmq.diskWatermarkBytes} bytes`}>{rabbitmq.diskWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskWatermarkBytes)}</dd>
+        <dt>Free disk</dt><dd className="break-words" title={rabbitmq.diskAvailableBytes === undefined ? undefined : `${rabbitmq.diskAvailableBytes} bytes`}>{formatRabbitMQMeasurement(rabbitmq.diskAvailableBytes, rabbitmq.diskWatermarkBytes)}</dd>
+        <dt>Disk alarm below</dt><dd className="break-words" title={rabbitmq.diskWatermarkBytes === undefined ? undefined : `${rabbitmq.diskWatermarkBytes} bytes`}>{formatRabbitMQMeasurement(rabbitmq.diskWatermarkBytes, rabbitmq.diskAvailableBytes)}</dd>
         <dt>Memory alarm</dt><dd>{rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd>
-        <dt>Memory used (RabbitMQ)</dt><dd title={rabbitmq.memoryUsedBytes === undefined ? undefined : `${rabbitmq.memoryUsedBytes} bytes`}>{rabbitmq.memoryUsedBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.memoryUsedBytes)}</dd>
-        <dt>Memory alarm above</dt><dd title={rabbitmq.memoryWatermarkBytes === undefined ? undefined : `${rabbitmq.memoryWatermarkBytes} bytes`}>{rabbitmq.memoryWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.memoryWatermarkBytes)}</dd>
+        <dt>Memory used (RabbitMQ)</dt><dd className="break-words" title={rabbitmq.memoryUsedBytes === undefined ? undefined : `${rabbitmq.memoryUsedBytes} bytes`}>{formatRabbitMQMeasurement(rabbitmq.memoryUsedBytes, rabbitmq.memoryWatermarkBytes)}</dd>
+        <dt>Memory alarm above</dt><dd className="break-words" title={rabbitmq.memoryWatermarkBytes === undefined ? undefined : `${rabbitmq.memoryWatermarkBytes} bytes`}>{formatRabbitMQMeasurement(rabbitmq.memoryWatermarkBytes, rabbitmq.memoryUsedBytes)}</dd>
       </dl>
       <p className="mt-2 text-xs text-theme-text-secondary">Measurements are RabbitMQ’s periodic statistics and can lag the alarm state. Unknown values were absent or could not be interpreted.</p>
       <p className="mt-2 text-xs text-theme-text-secondary">A disk or memory alarm on another node can block publishers across the cluster.</p>
