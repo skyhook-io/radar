@@ -27,7 +27,14 @@ export interface ApplicationEvidenceResult {
   reason?: string
   httpStatus?: number
   facts?: {
-    rabbitmq?: { diskAlarm: boolean; memoryAlarm: boolean }
+    rabbitmq?: {
+      diskAlarm: boolean
+      memoryAlarm: boolean
+      diskAvailableBytes?: number
+      diskWatermarkBytes?: number
+      memoryUsedBytes?: number
+      memoryWatermarkBytes?: number
+    }
     vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean; haConnectionHealthy?: boolean; removedFromCluster?: boolean }
     nats?: {
       jetStreamEnabled: boolean

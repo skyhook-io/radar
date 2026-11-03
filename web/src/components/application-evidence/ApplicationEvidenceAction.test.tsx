@@ -18,6 +18,42 @@ describe('application observations', () => {
     expect(html).toContain('other replicas were not checked')
     expect(html).not.toContain('Healthy')
   })
+  it('shows reported resource values without inferring alarms or percentages', () => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, facts: { rabbitmq: {
+      diskAlarm: false, memoryAlarm: true, diskAvailableBytes: 0, diskWatermarkBytes: 50 * 1024 * 1024,
+      memoryUsedBytes: 128 * 1024 * 1024, memoryWatermarkBytes: 512 * 1024 * 1024,
+    } } }} />)
+    expect(html).toContain('Free disk</dt><dd class="break-words"><span class="block">0 B')
+    expect(html).toContain('Disk alarm below</dt><dd class="break-words"><span class="block">50 MiB')
+    expect(html).toContain('Memory used (RabbitMQ)</dt><dd class="break-words"><span class="block">128 MiB')
+    expect(html).toContain('Memory alarm above</dt><dd class="break-words"><span class="block">512 MiB')
+    expect(html).toContain('Disk alarm</dt><dd>Not reported')
+    expect(html).toContain('Memory alarm</dt><dd>Reported')
+    expect(html).toContain('can lag the alarm state')
+    expect(html).not.toContain('%')
+  })
+  it('keeps absent measurements unknown while preserving alarms and handles large exact values', () => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, facts: { rabbitmq: {
+      diskAlarm: false, memoryAlarm: false, diskAvailableBytes: Number.MAX_SAFE_INTEGER,
+    } } }} />)
+    expect(html).toContain('GiB')
+    expect(html.match(/Unknown<\/dd>/g)).toHaveLength(3)
+    expect(html).toContain('Disk alarm</dt><dd>Not reported')
+    expect(html).not.toContain('undefined')
+    expect(html).not.toContain('NaN')
+  })
+  it.each([
+    [49900000, 50000000, 2415000000, 2412409651],
+    [1048500, 1048576, 1073700000, 1073741824],
+  ])('keeps exact measurements visible near thresholds and unit boundaries (%d, %d, %d, %d)', (diskAvailableBytes, diskWatermarkBytes, memoryUsedBytes, memoryWatermarkBytes) => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, facts: { rabbitmq: {
+      diskAlarm: true, memoryAlarm: true, diskAvailableBytes, diskWatermarkBytes, memoryUsedBytes, memoryWatermarkBytes,
+    } } }} />)
+    for (const value of [diskAvailableBytes, diskWatermarkBytes, memoryUsedBytes, memoryWatermarkBytes]) {
+      expect(html).toContain(`>${value.toLocaleString()} bytes</span>`)
+    }
+    expect(html).toContain('can lag the alarm state')
+  })
   it('does not display facts when collection is unavailable', () => {
     const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, outcome: 'unavailable', reason: 'endpoint_denied', facts: { rabbitmq: { diskAlarm: false, memoryAlarm: false } } }} />)
     expect(html).toContain('Evidence unavailable')

@@ -324,7 +324,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'collect_application_evidence',
     localOnly: true,
-    desc: 'Read one Pod’s RabbitMQ alarms, NATS JetStream counters or Vault seal/init state. Local only, with operator approval and Pod-read/port-forward permissions. Unavailable evidence is not a health verdict.',
+    desc: 'Read one Pod’s RabbitMQ alarms/resource values, NATS JetStream observations or Vault node state. Local only, with operator approval and Pod-read/port-forward permissions. Unavailable evidence is not a health verdict.',
     params: [
       { arg: 'application', required: true, desc: 'rabbitmq, nats, or vault' },
       { arg: 'namespace', required: true, desc: 'Pod namespace' },

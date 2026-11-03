@@ -1603,7 +1603,7 @@ Available through connected full local MCP, outside built-in investigations and 
 
 | Application | Source | Interpretation |
 |---|---|---|
-| RabbitMQ | Port 15692 `/metrics` | Node-local disk/memory alarms; another node’s alarm can still block publishers. Both samples must be unambiguous; payloads over 256 KiB are unavailable. |
+| RabbitMQ | Port 15692 `/metrics` | Node-local disk/memory alarms, plus available disk, memory used and alarm watermarks when reported. Measurements can lag alarms; missing or invalid optional values stay unknown. Both alarm samples must be valid and unambiguous. A malformed metrics document is unavailable (`invalid_alarm_metric`). Another node’s disk/memory alarm can still block publishers. Payloads over 256 KiB are unavailable. |
 | NATS | Port 8222 `/jsz` | JetStream counters, capped at 20 consumer rows with coverage. Backlog is not necessarily a fault; disabled differs from zero activity. |
 | Vault | Port 8200 `/v1/sys/health` | HTTP status, initialization/seal/standby facts, and optional HA connection/removal reports; none establish overall cluster health. |
 
