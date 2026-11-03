@@ -88,4 +88,10 @@ describe('position slots', () => {
     }] }} renderWorkloadExtra={(workload) => <span>EXTRA {workload.uid}</span>} />)
     expect(html).toContain('EXTRA wl')
   })
+  it('marks a retained unknown queue answer when a later refresh fails', () => {
+    const html = renderToStaticMarkup(<KueuePendingPositionValue position={{ status: 'queue_unknown', localQueue: 'q', readAt: '2026-11-03T01:00:00Z' }} refreshFailed />)
+    expect(html).toContain("Kueue doesn&#x27;t know LocalQueue")
+    expect(html).toContain("Couldn&#x27;t refresh")
+  })
+
 })

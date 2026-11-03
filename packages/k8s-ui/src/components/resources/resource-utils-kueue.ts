@@ -209,12 +209,12 @@ export function getKueueWorkloadAdmittedBy(resource: any): string {
 }
 
 /**
- * Whether Kueue holds this Workload in its pending queues, so asking its
- * visibility API for the Workload's position can find it. Mirrors Go's
- * schedulinginsight.KueueWorkloadAwaitingAdmission; both read
+ * Whether this Workload snapshot permits a pending-position lookup.
+ * True does not establish that Kueue has observed or queued it. Mirrors Go's
+ * schedulinginsight.KueueWorkloadEligibleForPendingPosition; both read
  * pkg/schedulinginsight/testdata/kueue_awaiting_admission.json.
  */
-export function isKueueWorkloadAwaitingAdmission(resource: any): boolean {
+export function isKueueWorkloadEligibleForPendingPosition(resource: any): boolean {
   if (resource?.spec?.active === false) return false
   const conditions: any[] = Array.isArray(resource?.status?.conditions) ? resource.status.conditions : []
   const byType = new Map<string, any>()

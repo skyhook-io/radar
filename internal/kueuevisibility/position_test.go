@@ -205,6 +205,7 @@ func TestReadVersionChoice(t *testing.T) {
 		{"only unverified versions", served("v1alpha1", "v1"), resourcecontext.KueuePositionUnsupported, ""},
 		{"absent after complete discovery (real CRD with the same plural present)", served(), resourcecontext.KueuePositionNotServed, ""},
 		{"absent, group discovery failed", func() fakeDiscovery { d := served(); d.groupFailed = true; return d }(), resourcecontext.KueuePositionUnavailable, readreason.ReadError},
+		{"absent, discovery not complete", func() fakeDiscovery { d := served(); d.complete = false; return d }(), resourcecontext.KueuePositionUnavailable, readreason.ReadError},
 		{"absent, last refresh failed", func() fakeDiscovery { d := served(); d.lastFailed = true; return d }(), resourcecontext.KueuePositionUnavailable, readreason.ReadError},
 	}
 	for _, tc := range cases {
@@ -374,5 +375,18 @@ func TestIdentityOf(t *testing.T) {
 	}
 	if IdentityOf(&pkgauth.User{Username: "radar:system", System: true}) != IdentityUser {
 		t.Fatal("outside user-token mode a system identity is impersonated like any user")
+	}
+}
+
+func TestRequestForDoesNotReuseTokenAuthorizedAnswers(t *testing.T) {
+	previous := pkgauth.CurrentCredentialMode()
+	t.Cleanup(func() { pkgauth.SetCredentialMode(previous) })
+	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
+	for _, token := range []string{"valid-user-token", "", "different-token"} {
+		ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "alice", Token: token})
+		req, _ := RequestFor(ctx, waits3())
+		if req.MemoKey != "" {
+			t.Fatal("a user-token request must perform its own credential-bound read")
+		}
 	}
 }

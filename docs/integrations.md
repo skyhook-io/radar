@@ -1792,7 +1792,7 @@ Workload (a Job's position is on its child Workload). `GET
 
 - **Source.** Radar asks only the LocalQueue subresource
   (`localqueues/pendingworkloads`) and never derives a position from list order
-  or timestamps. It asks only for Workloads Kueue holds as pending — no
+  or timestamps. It asks only for Workloads whose snapshot permits a pending-position lookup — no
   Finished, Admitted or QuotaReserved condition is True and `spec.active` is
   not false — at any `kueue.x-k8s.io` Workload version; the agent context
   carries it on `v1beta2` Workloads, which have a scheduling projection. Kueue

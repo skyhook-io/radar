@@ -16,9 +16,8 @@ import (
 )
 
 // KueuePositionResponse answers GET /api/kueue/position/{namespace}/{name}.
-// Position is set only when Eligible: Kueue holds the Workload in its pending
-// queues (no reserved quota, not finished, not deactivated), judged from
-// Radar's copy of the Workload.
+// Position is set only when Eligible: Radar's Workload snapshot permits a
+// pending-position lookup. Eligibility does not establish queue membership.
 type KueuePositionResponse struct {
 	UID      string                                `json:"uid"`
 	Eligible bool                                  `json:"eligible"`
@@ -80,7 +79,7 @@ func (s *Server) handleKueuePosition(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	response := KueuePositionResponse{UID: string(workload.GetUID()), Eligible: schedulinginsight.KueueWorkloadAwaitingAdmission(workload)}
+	response := KueuePositionResponse{UID: string(workload.GetUID()), Eligible: schedulinginsight.KueueWorkloadEligibleForPendingPosition(workload)}
 	unchanged := true
 	if response.Eligible {
 		req, readBinding := kueuevisibility.RequestFor(r.Context(), workload)

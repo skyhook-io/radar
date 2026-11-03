@@ -46,45 +46,48 @@ export function KueuePendingPositionValue({ position, loading, error, refreshFai
   if (upgrade) return <RadarUpgradeNote requirement={upgrade} />
   if (!position) {
     if (error) return <span className="text-theme-text-secondary">Couldn't ask Kueue: {error}<Retry onRetry={onRetry} /></span>
-    return <span className="text-theme-text-tertiary">{loading ? 'Asking Kueue…' : 'Not asked'}</span>
+    return <span className="text-theme-text-tertiary">{loading ? 'Asking Kueue…' : 'Waiting for a current answer'}</span>
   }
   const queue = position.localQueue ? <span className="font-medium">{position.localQueue}</span> : 'its LocalQueue'
   const caption = (text: React.ReactNode) => <span className="mt-0.5 block text-xs text-theme-text-tertiary">{text}</span>
-  const stale = refreshFailed && caption(<>Couldn't refresh · last read <ReadAge readAt={position.readAt} /><Retry onRetry={onRetry} /></>)
-  switch (position.status) {
-    case 'listed':
-      return <span>
-        <span className="text-theme-text-primary">
-          #{(position.aheadInLocalQueue ?? 0) + 1} in LocalQueue {queue}
-          {position.aheadInClusterQueue != null && <> · #{position.aheadInClusterQueue + 1} in its ClusterQueue</>}
+  const stale = refreshFailed && caption(<>Couldn't refresh{position.readAt && <> · last read <ReadAge readAt={position.readAt} /></>}<Retry onRetry={onRetry} /></>)
+  const content = (() => {
+    switch (position.status) {
+      case 'listed':
+        return <span>
+          <span className="text-theme-text-primary">
+            #{position.aheadInLocalQueue! + 1} in LocalQueue {queue}
+            {' · #'}{position.aheadInClusterQueue! + 1} in its ClusterQueue
+          </span>
+          {caption(<>Kueue's pending order{!refreshFailed && <>, read <ReadAge readAt={position.readAt} /></>}. Not a promise of admission order or a start time.</>)}
+          {requeueAt && Date.parse(requeueAt) > Date.now() && caption(<>Kueue won't try to admit it again before <time dateTime={requeueAt} title={requeueAt}>{new Date(requeueAt).toLocaleString()}</time>.</>)}
         </span>
-        {stale || caption(<>Kueue's pending order, read <ReadAge readAt={position.readAt} />. Not a promise of admission order or a start time.</>)}
-        {requeueAt && Date.parse(requeueAt) > Date.now() && caption(<>Kueue won't try to admit it again before <time dateTime={requeueAt} title={requeueAt}>{new Date(requeueAt).toLocaleString()}</time>.</>)}
-      </span>
-    case 'not_listed':
-      return <span>
-        <span className="text-theme-text-secondary">Not in Kueue's pending list for LocalQueue {queue}</span>
-        {stale || caption(<>Read <ReadAge readAt={position.readAt} />. It may have been admitted or deactivated since, or Kueue hasn't picked it up yet.</>)}
-      </span>
-    case 'limit_reached':
-      return <span>
-        <span className="text-theme-text-secondary">Not among the first {(position.rows ?? position.rowLimit ?? 0).toLocaleString()} Workloads Kueue listed for LocalQueue {queue}</span>
-        {stale || caption(<>Read <ReadAge readAt={position.readAt} />. Its position is unknown.</>)}
-      </span>
-    case 'queue_unknown':
-      return <span className="text-theme-text-secondary">{position.message || <>Kueue doesn't know LocalQueue {queue}.</>}</span>
-    case 'no_local_queue':
-      return <span className="text-theme-text-tertiary">No LocalQueue named, so Kueue holds no position for it.</span>
-    case 'not_served':
-      return <span className="text-theme-text-tertiary">Radar's API discovery didn't find Kueue's visibility API (visibility.kueue.x-k8s.io).<Retry onRetry={onRetry} label="Check again" /></span>
-    case 'unsupported':
-      return <span className="text-theme-text-tertiary">{position.message || "Kueue serves its visibility API only at versions Radar doesn't read."}</span>
-    case 'unavailable':
-      return <span className="text-theme-text-secondary">
-        {position.message || "Radar couldn't get Kueue's answer."}
-        {retryableCodes.has(position.code ?? '') && <Retry onRetry={onRetry} />}
-      </span>
-    default:
-      return <span className="text-theme-text-tertiary">Radar reported a position status this view doesn't know: {position.status}</span>
-  }
+      case 'not_listed':
+        return <span>
+          <span className="text-theme-text-secondary">Not in Kueue's pending list for LocalQueue {queue}</span>
+          {caption(<>{!refreshFailed && <>Read <ReadAge readAt={position.readAt} />. </>}It may have been admitted or deactivated since, or Kueue hasn't picked it up yet.</>)}
+        </span>
+      case 'limit_reached':
+        return <span>
+          <span className="text-theme-text-secondary">Not among the first {position.rows!.toLocaleString()} Workloads Kueue listed for LocalQueue {queue}</span>
+          {caption(<>{!refreshFailed && <>Read <ReadAge readAt={position.readAt} />. </>}Its position is unknown.</>)}
+        </span>
+      case 'queue_unknown':
+        return <span className="text-theme-text-secondary">{position.message || <>Kueue doesn't know LocalQueue {queue}.</>}<Retry onRetry={onRetry} /></span>
+      case 'no_local_queue':
+        return <span className="text-theme-text-tertiary">No LocalQueue named, so Kueue holds no position for it.</span>
+      case 'not_served':
+        return <span className="text-theme-text-tertiary">Radar's API discovery didn't find Kueue's visibility API (visibility.kueue.x-k8s.io).<Retry onRetry={onRetry} label="Check again" /></span>
+      case 'unsupported':
+        return <span className="text-theme-text-tertiary">{position.message || "Kueue serves its visibility API only at versions Radar doesn't read."}</span>
+      case 'unavailable':
+        return <span className="text-theme-text-secondary">
+          {position.message || "Radar couldn't get Kueue's answer."}
+          {retryableCodes.has(position.code ?? '') && <Retry onRetry={onRetry} />}
+        </span>
+      default:
+        return <span className="text-theme-text-tertiary">Radar reported a position status this view doesn't know: {position.status}</span>
+    }
+  })()
+  return <span>{content}{stale}</span>
 }

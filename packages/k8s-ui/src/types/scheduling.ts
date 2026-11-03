@@ -45,7 +45,7 @@ export interface SchedulingObservation {
     waitingForReplacementPods?: SchedulingCondition
     requeueState?: { count?: number; requeueAt?: string }
     concurrentAdmission?: { parentName: string; parentRef?: SchedulingRef }
-    /** Kueue's reported pending position; absent when Radar didn't ask. */
+    /** Kueue's reported pending position; absent means no attached visibility result. */
     pendingPosition?: KueuePendingPosition
   }
 }
@@ -69,10 +69,13 @@ export interface KueuePendingPosition {
   /** listed only: Workloads Kueue orders before this one (Kueue's 0-based position). */
   aheadInLocalQueue?: number
   aheadInClusterQueue?: number
+  /** Workload spec.queueName; omitted when empty, even when no request was made. */
   localQueue?: string
   /** Rows Kueue returned; set whenever a read succeeded. */
   rows?: number
+  /** Requested limit; present only with a successfully decoded answer. */
   rowLimit?: number
+  /** Supported version selected for the lookup; absent when none was selected. */
   apiVersion?: string
   /** When Radar made the read (RFC 3339). */
   readAt?: string
@@ -84,7 +87,7 @@ export interface KueuePendingPosition {
 /** GET /api/kueue/position/{namespace}/{name} */
 export interface KueuePositionResponse {
   uid: string
-  /** Kueue holds the Workload in its pending queues, judged from Radar's copy. */
+  /** The supplied Workload snapshot permits a lookup; not proof of queue membership. */
   eligible: boolean
   position?: KueuePendingPosition
 }

@@ -31,6 +31,7 @@ type fakeVisibility struct {
 	status       int
 	body         string
 	impersonated []string
+	onRead       func()
 }
 
 func (f *fakeVisibility) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +40,9 @@ func (f *fakeVisibility) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.impersonated = append(f.impersonated, r.Header.Get("Impersonate-User"))
 	status, body := f.status, f.body
 	f.mu.Unlock()
+	if f.onRead != nil {
+		f.onRead()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if status == 0 {
 		status = http.StatusOK
@@ -299,5 +303,48 @@ func TestKueuePositionCapabilityAdvertised(t *testing.T) {
 	}
 	if !caps.Features["kueuePendingPosition"] {
 		t.Fatalf("features %v", caps.Features)
+	}
+}
+
+func TestKueuePositionDropsAnswerAfterConnectionChange(t *testing.T) {
+	fake := setupKueuePosition(t, true)
+	started, release := make(chan struct{}), make(chan struct{})
+	fake.onRead = func() { close(started); <-release }
+	srv := New(Config{DevMode: true})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.Stop() })
+	result := make(chan *http.Response, 1)
+	failure := make(chan error, 1)
+	go func() {
+		response, err := http.Get(ts.URL + "/api/kueue/position/default/pending")
+		if err != nil {
+			failure <- err
+			return
+		}
+		result <- response
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("visibility request did not start")
+	}
+	restore := k8s.SetTestProfileSource("different-kubeconfig", "different-context", "user")
+	defer restore()
+	close(release)
+	select {
+	case err := <-failure:
+		t.Fatal(err)
+	case response := <-result:
+		defer response.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusConflict || body["error_code"] != string(readreason.ConnectionChanged) || body["position"] != nil {
+			t.Fatalf("changed connection returned %d %+v", response.StatusCode, body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not complete")
 	}
 }

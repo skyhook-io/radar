@@ -61,11 +61,11 @@ func CurrentBinding() string {
 }
 
 // Attach adds Kueue's reported position to the Kueue observation of a
-// Workload that Kueue holds in its pending queues, read as the context's
+// Workload eligible for a pending-position lookup, read as the context's
 // user. It leaves the summary unchanged for any other object, and drops the
 // answer if the cluster connection changed while reading.
 func Attach(ctx context.Context, summary *resourcecontext.SchedulingSummary, obj runtime.Object) {
-	if summary == nil || !schedulinginsight.KueueWorkloadAwaitingAdmission(obj) {
+	if summary == nil || !schedulinginsight.KueueWorkloadEligibleForPendingPosition(obj) {
 		return
 	}
 	workload, _ := obj.(*unstructured.Unstructured)

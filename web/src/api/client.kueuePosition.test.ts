@@ -6,7 +6,7 @@ const answer = (position?: Record<string, unknown>, eligible = true) => ({ data:
 
 describe('kueuePositionRefetchInterval', () => {
   it('polls answers that change by themselves', () => {
-    for (const status of ['listed', 'not_listed', 'limit_reached']) {
+    for (const status of ['listed', 'not_listed', 'limit_reached', 'queue_unknown']) {
       expect(kueuePositionRefetchInterval(answer({ status }))).toBe(30000)
     }
     expect(kueuePositionRefetchInterval(answer({ status: 'unavailable', code: 'read_error' }))).toBe(30000)
@@ -14,13 +14,13 @@ describe('kueuePositionRefetchInterval', () => {
   })
 
   it('stops on answers only a change of access or cluster resolves', () => {
-    for (const status of ['not_served', 'unsupported', 'no_local_queue', 'queue_unknown']) {
+    for (const status of ['not_served', 'unsupported', 'no_local_queue']) {
       expect(kueuePositionRefetchInterval(answer({ status }))).toBe(false)
     }
     for (const code of ['user_forbidden', 'radar_forbidden', 'radar_credentials_rejected']) {
       expect(kueuePositionRefetchInterval(answer({ status: 'unavailable', code }))).toBe(false)
     }
-    expect(kueuePositionRefetchInterval(answer(undefined, false))).toBe(false)
+    expect(kueuePositionRefetchInterval(answer(undefined, false))).toBe(30000)
   })
 
   it('stops on client errors and an older Radar, keeps polling through transient failures', () => {

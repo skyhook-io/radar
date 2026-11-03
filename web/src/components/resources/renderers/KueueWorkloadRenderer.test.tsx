@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { KueueWorkloadRenderer } from './KueueWorkloadRenderer'
 
 const mock = vi.hoisted(() => ({ query: {} as any }))
-vi.mock('../../../api/client', () => ({ useKueueProvisioning: () => mock.query }))
+vi.mock('../../../api/client', () => ({ useKueueProvisioning: () => mock.query, useKueuePendingPosition: () => ({ isPending: false, refetch: vi.fn() }) }))
 const data = { metadata: { name: 'work', namespace: 'ml', uid: 'new' }, status: { admissionChecks: [{ name: 'capacity', state: 'Rejected', message: 'Capacity unavailable' }] } }
 const render = () => renderToStaticMarkup(<KueueWorkloadRenderer data={data} />)
 

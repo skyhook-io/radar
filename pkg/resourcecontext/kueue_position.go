@@ -10,8 +10,8 @@ import "github.com/skyhook-io/radar/pkg/readreason"
 // Workloads will be admitted, nor a start time.
 //
 // Radar never derives a position itself. Absent on a KueueScheduling means
-// Radar did not ask: the Workload was not pending and active, or the host
-// does not read the visibility API.
+// this projection carries no visibility result: the host may not read it,
+// the Workload may be ineligible, or the result may have been discarded.
 type KueuePendingPosition struct {
 	Status KueuePendingPositionStatus `json:"status"`
 	// AheadInLocalQueue and AheadInClusterQueue are set only when Status is
@@ -22,14 +22,17 @@ type KueuePendingPosition struct {
 	// used.
 	AheadInLocalQueue   *int32 `json:"aheadInLocalQueue,omitempty"`
 	AheadInClusterQueue *int32 `json:"aheadInClusterQueue,omitempty"`
-	// LocalQueue is the Workload's spec.queueName that Radar asked about.
+	// LocalQueue is the Workload's spec.queueName, omitted when empty,
+	// including when no request was made.
 	LocalQueue string `json:"localQueue,omitempty"`
 	// Rows is how many pending Workloads Kueue returned for the LocalQueue;
-	// set whenever a read succeeded. RowLimit is how many Radar asked for.
+	// set only for a successfully decoded answer. RowLimit is how many Radar
+	// asked for, set with Rows; absence does not mean zero.
 	Rows     *int `json:"rows,omitempty"`
 	RowLimit int  `json:"rowLimit,omitempty"`
-	// APIVersion is the visibility API version Radar read, e.g.
-	// visibility.kueue.x-k8s.io/v1beta2.
+	// APIVersion is the supported visibility API version selected for the
+	// lookup (e.g. visibility.kueue.x-k8s.io/v1beta2), even if the read could
+	// not start. Omitted when none was selected.
 	APIVersion string `json:"apiVersion,omitempty"`
 	// ReadAt is when Radar made the read (RFC 3339), set whenever it made
 	// one. Kueue's answer carries no timestamp of its own.

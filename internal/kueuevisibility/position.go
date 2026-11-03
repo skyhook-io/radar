@@ -241,8 +241,9 @@ func servedVersion(d Discovery) (string, resourcecontext.KueuePendingPosition) {
 	if d == nil {
 		return "", resourcecontext.KueuePendingPosition{Status: resourcecontext.KueuePositionUnavailable, Code: readreason.ReadError, Message: "Radar's API discovery is not ready."}
 	}
+	catalog := d.Catalog()
 	served := map[string]bool{}
-	for _, resource := range d.Catalog().Resources {
+	for _, resource := range catalog.Resources {
 		if resource.Group == Group && resource.Name == "localqueues" {
 			served[resource.Version] = true
 		}
@@ -263,7 +264,7 @@ func servedVersion(d Discovery) (string, resourcecontext.KueuePendingPosition) {
 			Message: fmt.Sprintf("Kueue serves its visibility API at %v; Radar reads v1beta2 and v1beta1.", versions),
 		}
 	}
-	if d.LastRefreshFailed() || d.GroupHadPartialDiscovery(Group) {
+	if !catalog.Complete || d.LastRefreshFailed() || d.GroupHadPartialDiscovery(Group) {
 		return "", resourcecontext.KueuePendingPosition{Status: resourcecontext.KueuePositionUnavailable, Code: readreason.ReadError, Message: "Radar's API discovery did not complete for Kueue's visibility API."}
 	}
 	return "", resourcecontext.KueuePendingPosition{Status: resourcecontext.KueuePositionNotServed}
