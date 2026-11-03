@@ -187,11 +187,11 @@ KC_FAIL=''
 echo "==> create_missing creates only what is absent"
 DRY_RUN='{"kind":"Job","apiVersion":"batch/v1","metadata":{"name":"j1","namespace":"t-busy"}}
 {"kind":"Job","apiVersion":"batch/v1","metadata":{"name":"j2","namespace":"t-busy"}}'
-GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1"}}]}'
+GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}}]}'
 : >"${CREATED}"
 create_missing 30-jobs-first.yaml
 check "creates the missing Job" 0 jq -e '[.items[].metadata.name] == ["j2"]' "${CREATED}"
-GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1"}},{"metadata":{"name":"j2"}}]}'
+GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}},{"metadata":{"name":"j2","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}}]}'
 : >"${CREATED}"
 create_missing 30-jobs-first.yaml
 check "creates nothing when everything exists" 0 test ! -s "${CREATED}"
@@ -199,6 +199,20 @@ GET_JSON='{"kind":"List","items":[]}'
 CREATE_ERROR='Error from server (AlreadyExists): jobs.batch "j1" already exists'
 check "an object someone else created after the check makes up stop, not adopt it" 1 create_missing 30-jobs-first.yaml
 CREATE_ERROR=''
+GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1","labels":{}}}]}'
+check "an object someone else created before the existence read is not reused" 1 create_missing 30-jobs-first.yaml
+
+echo "==> Writes land only on owned, unchanged objects"
+GET_JSON='{"metadata":{"name":"t-busy","resourceVersion":"7","labels":{"radar.skyhook.io/kueue-scenarios":"t"}},"spec":{"stopPolicy":"None"}}'
+: >"${KC_LOG}"
+write_owned clusterqueues.kueue.x-k8s.io "" t-busy spec '{spec: {stopPolicy: "Hold"}}' >/dev/null
+check "an owned object is patched with the resourceVersion it was read at" 0 \
+  jq -e '.metadata.resourceVersion == "7" and .spec.stopPolicy == "Hold"' <<<"$(grep '^patch ' "${KC_LOG}" | sed -e 's/.*-p //')"
+check "a cluster-scoped write sends no namespace" 1 grep -q -- ' -n ' <<<"$(grep '^patch ' "${KC_LOG}")"
+GET_JSON='{"metadata":{"name":"t-busy","labels":{"radar.skyhook.io/kueue-scenarios":"other"}}}'
+check "an object of another prefix is not written" 1 write_owned clusterqueues.kueue.x-k8s.io "" t-busy spec '{spec: {stopPolicy: "Hold"}}'
+GET_JSON='{"metadata":{"name":"t-busy","deletionTimestamp":"2026-01-01T00:00:00Z","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}}'
+check "an object being deleted is not written" 1 write_owned clusterqueues.kueue.x-k8s.io "" t-busy spec '{spec: {stopPolicy: "Hold"}}'
 
 echo "==> The viewer kubeconfig"
 OUT_DIR="$(mktemp -d)"
@@ -214,10 +228,13 @@ rm -rf -- "${OUT_DIR}"
 
 echo "==> Arguments"
 check "a flag without its value is refused" 1 main up --kubeconfig
+tilde() { cmd_status() { printf '%s' "${KUBECONFIG_ARG}"; }; main status --kubeconfig '~/k.yaml'; }
+check "a quoted ~ in --kubeconfig is expanded" 0 test "$(tilde 2>/dev/null)" = "${HOME}/k.yaml"
 
 echo "==> Permission answers"
 CAN_I=yes; check "yes is yes" 0 viewer_can yes list workloads t-busy
 CAN_I=no; check "no is no" 0 viewer_can no list workloads t-busy
+CAN_I='no - RBAC: clusterrole.rbac.authorization.k8s.io "gone" not found'; check "no with a reason is no" 0 viewer_can no list workloads t-busy
 CAN_I=''; check "an error is neither" 2 viewer_can no list workloads t-busy
 
 echo

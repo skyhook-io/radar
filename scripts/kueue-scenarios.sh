@@ -178,7 +178,7 @@ check_ownership() {
 # someone else creates a same-named object after check_ownership read it, the
 # create fails with AlreadyExists instead of adopting it.
 create_missing() {
-  local file="$1" objects groups resource namespace names existing missing
+  local file="$1" objects groups resource namespace names existing missing foreign
   objects="$(render "${file}" | kc create --dry-run=client -o json -f - | jq -cs '[.[] | if .kind == "List" then .items[] else . end]')" || \
     fail "cannot parse ${file}"
   groups="$(jq -r "[.[] | ${identity_jq}] | group_by(.[0], .[2]) | .[] | [.[0][0], .[0][2], (map(.[1]) | join(\" \"))] | join(\"|\")" <<<"${objects}")"
@@ -187,7 +187,12 @@ create_missing() {
     [ -n "${resource}" ] || continue
     # shellcheck disable=SC2086 # names is a space-separated list of object names
     existing="$(kc get "${resource}" ${names} ${namespace:+-n "${namespace}"} --ignore-not-found -o json)" || fail "cannot read ${resource} ${namespace}"
-    existing="$(jq -c 'if . == null then [] elif .kind == "List" then [.items[].metadata.name] else [.metadata.name] end' <<<"${existing:-null}")"
+    existing="$(jq -c 'if . == null then [] elif .kind == "List" then .items else [.] end' <<<"${existing:-null}")"
+    # Re-checked here, not only in check_ownership: anything found now is reused, so it must be ours.
+    foreign="$(jq -r --arg l "${OWNER_LABEL}" --arg p "${PREFIX}" \
+      '.[] | select(.metadata.labels[$l] != $p or .metadata.deletionTimestamp != null) | .metadata.name' <<<"${existing}")"
+    [ -z "${foreign}" ] || fail "${resource} ${foreign//$'\n'/, } appeared or changed since the ownership check; not reusing it"
+    existing="$(jq -c '[.[].metadata.name]' <<<"${existing}")"
     missing="$(jq -c --argjson objects "${objects}" --argjson existing "${existing}" --arg r "${resource}" --arg ns "${namespace}" \
       ". + [\$objects[] | select((${identity_jq} | .[0] == \$r and .[2] == \$ns) and (.metadata.name | IN(\$existing[]) | not))]" <<<"${missing}")"
   done <<<"${groups}"
@@ -255,12 +260,6 @@ has_workload() { wl_is "$1" "$2" 'true'; }
 # True only when the Workload was read and holds no quota reservation.
 released() { wl_is "$1" "$2" "($(cond_pred QuotaReserved True)) | not"; }
 
-wl_name() {
-  local json
-  json="$(workload_json "$1" "$2")" || return $?
-  jq -r '.metadata.name // empty' <<<"${json}"
-}
-
 cq_is() { # cq_is <clusterqueue> <jq predicate>
   local json
   json="$(kc get clusterqueues.kueue.x-k8s.io "$1" -o json)" || return 2
@@ -289,26 +288,45 @@ wait_for() { # wait_for <description> <command...>
 
 # --- writes that stand in for other controllers ------------------------------------------
 
-# The script is the controller for ${PREFIX}-check: it writes one check state.
-set_check() { # set_check <namespace> <job> <Pending|Ready|Retry|Rejected> <message>
-  local json wl patch attempt out
+# write_owned <resource> <namespace|""> <name, or the Job for a Workload> <spec|status> <jq program> [jq --arg ...]
+# Every write goes through here. It reads the object, checks it is still this
+# prefix's (a Workload through its owning Job), builds a merge patch from what it
+# read, and sends it with that read's resourceVersion: if the object changed or
+# was replaced since, the write is refused instead of landing on it. Retries on
+# conflict only.
+write_owned() {
+  local resource="$1" namespace="$2" target="$3" sub="$4" program="$5" attempt json name patch out
+  local args=()
+  shift 5
+  [ "${sub}" = status ] && args+=(--subresource=status)
+  [ -z "${namespace}" ] || args+=(-n "${namespace}")
   for attempt in 1 2 3; do
-    json="$(READ_CACHE='' workload_json "$1" "$2")" || fail "cannot read the Workload of Job $1/$2"
-    wl="$(jq -r '.metadata.name // empty' <<<"${json}")"
-    [ -n "${wl}" ] || fail "no Workload for Job $1/$2"
-    # Merge patches replace lists whole, so carry every entry and field Kueue keeps
-    # (retryCount among them) and change only this check's state. The
-    # resourceVersion makes the write fail, rather than overwrite, if Kueue wrote
-    # in between.
-    patch="$(jq -c --arg n "${PREFIX}-check" --arg s "$3" --arg m "$4" --arg t "$(now)" \
-      '{metadata: {resourceVersion: .metadata.resourceVersion},
-        status: {admissionChecks: ([.status.admissionChecks[]? | select(.name != $n)]
-          + [((first(.status.admissionChecks[]? | select(.name == $n)) // {name: $n}) + {state: $s, message: $m, lastTransitionTime: $t})])}}' <<<"${json}")"
-    out="$(kc patch workloads.kueue.x-k8s.io -n "$1" "${wl}" --subresource=status --type=merge -p "${patch}" 2>&1 >/dev/null)" && return 0
-    [[ "${out}" == *"the object has been modified"* || "${out}" == *Conflict* ]] || fail "writing ${PREFIX}-check=$3 on $1/${wl} failed: ${out}"
+    if [ "${resource}" = workloads.kueue.x-k8s.io ]; then
+      json="$(READ_CACHE='' workload_json "${namespace}" "${target}")" || fail "cannot read the Workload of Job ${namespace}/${target}"
+      [ "${json}" != "{}" ] || fail "no Workload for Job ${namespace}/${target}"
+    else
+      json="$(kc get "${resource}" "${target}" ${namespace:+-n "${namespace}"} -o json)" || fail "cannot read ${resource} ${target}"
+      jq -e --arg l "${OWNER_LABEL}" --arg p "${PREFIX}" '.metadata.labels[$l] == $p and .metadata.deletionTimestamp == null' <<<"${json}" >/dev/null || \
+        fail "${resource} ${target} is not this prefix's (or is being deleted); not writing to it"
+    fi
+    name="$(jq -r '.metadata.name' <<<"${json}")"
+    # Merge patches replace lists whole, so programs carry every list entry they keep.
+    patch="$(jq -c "$@" "{metadata: {resourceVersion: .metadata.resourceVersion}} + (${program})" <<<"${json}")" || \
+      fail "cannot build the patch for ${resource} ${name}"
+    out="$(kc patch "${resource}" "${name}" ${args[@]+"${args[@]}"} --type=merge -p "${patch}" 2>&1 >/dev/null)" && return 0
+    [[ "${out}" == *"the object has been modified"* || "${out}" == *Conflict* ]] || fail "writing ${resource} ${name} failed: ${out}"
     sleep 1
   done
-  fail "writing ${PREFIX}-check=$3 on $1/${wl} kept conflicting with Kueue's own updates: ${out}"
+  fail "writing ${resource} ${name} kept conflicting with other updates: ${out}"
+}
+
+# The script is the controller for ${PREFIX}-check: it writes one check state,
+# keeping every other entry and the fields Kueue keeps in its own (retryCount).
+set_check() { # set_check <namespace> <job> <Pending|Ready|Retry|Rejected> <message>
+  write_owned workloads.kueue.x-k8s.io "$1" "$2" status \
+    '{status: {admissionChecks: ([.status.admissionChecks[]? | select(.name != $n)]
+      + [((first(.status.admissionChecks[]? | select(.name == $n)) // {name: $n}) + {state: $s, message: $m, lastTransitionTime: $t})])}}' \
+    --arg n "${PREFIX}-check" --arg s "$3" --arg m "$4" --arg t "$(now)"
 }
 
 check_state_is() { # check_state_is <namespace> <job> <state>
@@ -339,10 +357,9 @@ cmd_up() {
   ok "configuration in place"
 
   step "Reporting ${PREFIX}-check Active, as its controller would"
-  local generation
-  generation="$(kc get admissionchecks.kueue.x-k8s.io "${PREFIX}-check" -o jsonpath='{.metadata.generation}')"
-  kc patch admissionchecks.kueue.x-k8s.io "${PREFIX}-check" --subresource=status --type=merge -p "$(jq -cn --arg t "$(now)" --argjson g "${generation}" \
-    '{status: {conditions: [{type: "Active", status: "True", reason: "Active", message: "Driven by scripts/kueue-scenarios.sh", lastTransitionTime: $t, observedGeneration: $g}]}}')" >/dev/null
+  write_owned admissionchecks.kueue.x-k8s.io "" "${PREFIX}-check" status \
+    '{status: {conditions: [{type: "Active", status: "True", reason: "Active", message: "Driven by scripts/kueue-scenarios.sh", lastTransitionTime: $t, observedGeneration: .metadata.generation}]}}' \
+    --arg t "$(now)"
   wait_for "ClusterQueue ${PREFIX}-busy active" cq_is "${PREFIX}-busy" "$(cond_pred Active True)"
 
   step "Submitting the first Jobs"
@@ -362,19 +379,15 @@ cmd_up() {
   if known cq_is "${PREFIX}-busy" "any(.spec.resourceGroups[].flavors[]; .name == \"${PREFIX}-spare\")"; then
     ready_when_reserved "$(ns busy)" on-spare
     wait_for "busy/on-spare admitted" has_cond "$(ns busy)" on-spare Admitted True
-    local groups
-    groups="$(kc get clusterqueues.kueue.x-k8s.io "${PREFIX}-busy" -o json | jq -c --arg f "${PREFIX}-spare" \
-      '.spec.resourceGroups | map(.flavors |= map(select(.name != $f)))')"
-    kc patch clusterqueues.kueue.x-k8s.io "${PREFIX}-busy" --type=json \
-      -p "[{\"op\":\"replace\",\"path\":\"/spec/resourceGroups\",\"value\":${groups}}]" >/dev/null
+    write_owned clusterqueues.kueue.x-k8s.io "" "${PREFIX}-busy" spec \
+      '{spec: {resourceGroups: (.spec.resourceGroups | map(.flavors |= map(select(.name != $f))))}}' --arg f "${PREFIX}-spare"
   fi
   ok "${PREFIX}-spare is not in ${PREFIX}-busy's spec"
 
   step "Deactivating lifecycle/deactivated"
   if ! known wl_is "$(ns lifecycle)" deactivated '.spec.active == false'; then
     wait_for "lifecycle/deactivated admitted" has_cond "$(ns lifecycle)" deactivated Admitted True
-    kc patch workloads.kueue.x-k8s.io -n "$(ns lifecycle)" "$(wl_name "$(ns lifecycle)" deactivated)" \
-      --type=merge -p '{"spec":{"active":false}}' >/dev/null
+    write_owned workloads.kueue.x-k8s.io "$(ns lifecycle)" deactivated spec '{spec: {active: false}}'
   fi
   wait_for "lifecycle/deactivated evicted" has_cond "$(ns lifecycle)" deactivated Evicted True
 
@@ -385,22 +398,21 @@ cmd_up() {
     wait_for "drain/drained admitted" has_cond "$(ns drain)" drained Admitted True
     wait_for "drain/pods-ready-timeout admitted" has_cond "$(ns drain)" pods-ready-timeout Admitted True
     # Hold first so the Workload evicted next cannot be admitted again.
-    kc patch clusterqueues.kueue.x-k8s.io "${PREFIX}-drain" --type=merge -p '{"spec":{"stopPolicy":"Hold"}}' >/dev/null
+    write_owned clusterqueues.kueue.x-k8s.io "" "${PREFIX}-drain" spec '{spec: {stopPolicy: "Hold"}}'
     policy=Hold
   fi
   if ! known has_cond "$(ns drain)" pods-ready-timeout Evicted True PodsReadyTimeout; then
     [ "${policy}" = "Hold" ] || fail "${PREFIX}-drain is ${policy} but pods-ready-timeout was never evicted; run '$0 down' and start again"
     # waitForPodsReady is a controller-wide setting this script must not change, so it
     # writes the condition that feature writes. Kueue's eviction handling is real.
-    local prt
-    prt="$(workload_json "$(ns drain)" pods-ready-timeout)" || fail "cannot read the Workload of drain/pods-ready-timeout"
-    kc patch workloads.kueue.x-k8s.io -n "$(ns drain)" "$(jq -r '.metadata.name' <<<"${prt}")" \
-      --subresource=status --type=json -p "$(jq -cn --arg t "$(now)" --argjson g "$(jq '.metadata.generation' <<<"${prt}")" \
-      '[{op: "add", path: "/status/conditions/-", value: {type: "Evicted", status: "True", reason: "PodsReadyTimeout", message: "Exceeded the PodsReady timeout (written by scripts/kueue-scenarios.sh)", lastTransitionTime: $t, observedGeneration: $g}}]')" >/dev/null
+    write_owned workloads.kueue.x-k8s.io "$(ns drain)" pods-ready-timeout status \
+      '{status: {conditions: ([.status.conditions[]? | select(.type != "Evicted")]
+        + [{type: "Evicted", status: "True", reason: "PodsReadyTimeout", message: "Exceeded the PodsReady timeout (written by scripts/kueue-scenarios.sh)", lastTransitionTime: $t, observedGeneration: .metadata.generation}])}}' \
+      --arg t "$(now)"
   fi
   wait_for "drain/pods-ready-timeout released its quota" released "$(ns drain)" pods-ready-timeout
   if [ "${policy}" != "HoldAndDrain" ]; then
-    kc patch clusterqueues.kueue.x-k8s.io "${PREFIX}-drain" --type=merge -p '{"spec":{"stopPolicy":"HoldAndDrain"}}' >/dev/null
+    write_owned clusterqueues.kueue.x-k8s.io "" "${PREFIX}-drain" spec '{spec: {stopPolicy: "HoldAndDrain"}}'
   fi
   wait_for "drain/drained evicted" has_cond "$(ns drain)" drained Evicted True ClusterQueueStopped
 
@@ -488,7 +500,11 @@ viewer_can() { # viewer_can <yes|no> <verb> <resource> <namespace>
   for subject in "system:serviceaccount:$(ns viewer):viewer" "${PREFIX}-viewer"; do
     # can-i exits 1 for "no" as well as for errors, so read the answer it prints.
     answer="$(kc auth can-i "$2" "$3" -n "$4" --as "${subject}" 2>/dev/null)" || true
-    case "${answer}" in yes|no) ;; *) return 2 ;; esac
+    case "${answer}" in
+      yes|no) ;;
+      "no - "*) answer=no ;; # kubectl adds the authorizer's reason to some answers
+      *) return 2 ;;
+    esac
     [ "${answer}" = "$1" ] || return 1
   done
 }
@@ -590,18 +606,25 @@ radar_get() { # radar_get <path>: prints the body, then the HTTP status on its o
   curl -sS --connect-timeout 5 --max-time 30 ${headers[@]+"${headers[@]}"} -w '\n%{http_code}' "${RADAR_URL}$1"
 }
 
-radar_expect() { # radar_expect <description> <path> <HTTP status> <jq predicate over the body>
-  local out status body attempt
-  # An answer whose action is "retry" asks for exactly that; Radar gives them
-  # while it is still settling what it can read, especially right after startup.
+# radar_settled_get <path>: like radar_get, but repeats an answer whose action is
+# "retry", which asks for exactly that; Radar gives them while it is still
+# settling what it can read, especially right after startup.
+radar_settled_get() {
+  local out attempt
   for attempt in 1 2 3 4 5 6; do
-    if ! out="$(radar_get "$2")"; then
-      FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ %s (Radar unreachable)${C_RESET}\n" "$1"; return
-    fi
-    status="${out##*$'\n'}"; body="${out%$'\n'*}"
-    jq -e 'any(.coverage.gaps[]?; .action == "retry")' <<<"${body}" >/dev/null 2>&1 || break
+    out="$(radar_get "$1")" || return 1
+    jq -e 'any(.coverage.gaps[]?; .action == "retry")' <<<"${out%$'\n'*}" >/dev/null 2>&1 || break
     sleep 5
   done
+  printf '%s' "${out}"
+}
+
+radar_expect() { # radar_expect <description> <path> <HTTP status> <jq predicate over the body>
+  local out status body
+  if ! out="$(radar_settled_get "$2")"; then
+    FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ %s (Radar unreachable)${C_RESET}\n" "$1"; return
+  fi
+  status="${out##*$'\n'}"; body="${out%$'\n'*}"
   if [ "${status}" = "$3" ] && jq -e --argjson uids "${JOB_UIDS}" "$4" <<<"${body}" >/dev/null 2>&1; then
     ok "$1"
   else
@@ -675,7 +698,7 @@ cmd_verify_radar() {
       # Generic reads of namespaced CRDs are authorized per namespace, not per kind
       # (docs/authentication.md, "Read granularity"); either answer is accepted here.
       local out status
-      out="$(radar_get "$(wl_path "${denied}")")" || fail "Radar unreachable"
+      out="$(radar_settled_get "$(wl_path "${denied}")")" || fail "Radar unreachable"
       status="${out##*$'\n'}"
       if [ "${status}" = "200" ] && jq -e --argjson uids "${JOB_UIDS}" "${complete} and $(jobs_are "${denied}/admitted" "${denied}/pending")" <<<"${out%$'\n'*}" >/dev/null; then
         warn "6: a generic read returns ${denied}'s Workloads to a user who can't list them (namespace-level read granularity); a queue read must check per kind"
@@ -810,6 +833,8 @@ main() {
       *) usage; fail "unknown option $1" ;;
     esac
   done
+  # make and quoted arguments pass "~" through unexpanded.
+  KUBECONFIG_ARG="${KUBECONFIG_ARG/#\~/${HOME}}"
   if [ -z "${KUBECONFIG_ARG}" ] && [ -z "${CONTEXT_ARG}" ]; then
     usage
     fail "pass --kubeconfig or --context so the target cluster is explicit"

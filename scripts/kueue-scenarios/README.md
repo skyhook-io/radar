@@ -16,11 +16,14 @@ beside whatever is already there.
 
 ```bash
 # Prerequisites: bash, kubectl, jq, curl, and an identity that can:
-#   get CRDs; create namespaces, cluster-scoped Kueue objects, ClusterRoles and
-#   ClusterRoleBindings; patch ClusterQueue spec, Workload spec and the status of
-#   Workloads and AdmissionChecks; list Jobs and LocalQueues across namespaces;
-#   create ServiceAccount tokens; impersonate users and ServiceAccounts (verify
-#   uses --as). Listing Deployments cluster-wide is optional (version report).
+#   get CRDs; create and delete namespaces, Jobs, cluster-scoped Kueue objects,
+#   ClusterRoles and ClusterRoleBindings; create LocalQueues, ServiceAccounts and
+#   RoleBindings in the fixture namespaces; grant what the viewer's ClusterRoles
+#   grant (hold it, or have escalate/bind); patch ClusterQueue spec, Workload spec
+#   and the status of Workloads and AdmissionChecks; list Jobs, LocalQueues,
+#   ClusterRoles and ClusterRoleBindings across the cluster; create ServiceAccount
+#   tokens; impersonate users and ServiceAccounts (verify uses --as). Listing
+#   Deployments cluster-wide is optional (version report). Cluster admin covers it.
 K=/path/to/cluster.kubeconfig          # or use --context NAME instead
 ./scripts/kueue-scenarios.sh up     --kubeconfig "$K"   # ~10 minutes on a remote cluster
 ./scripts/kueue-scenarios.sh verify --kubeconfig "$K"
@@ -200,7 +203,9 @@ exists without this prefix's ownership label, is still being deleted, or can't
 be read. It then creates whatever is missing; it never applies over an existing
 object, so a foreign object created in the meantime makes the create fail rather
 than be adopted, and a changed manifest takes effect only after `down` and `up`.
-Next it submits the Jobs in two batches and drives each scenario to its end state:
+Every later write reads the object first, checks it is still this prefix's,
+and is sent with that read's resourceVersion, so it can't land on an object that
+was replaced in between. Next `up` submits the Jobs in two batches and drives each scenario to its end state:
 answers checks, removes the spare flavor, deactivates one Workload, and stops the
 drain queue. Each step checks the cluster before acting, so re-running `up` after
 it finished, or after it was interrupted, resumes instead of repeating a step
