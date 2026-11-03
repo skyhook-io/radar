@@ -117,9 +117,11 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const split = presentation === 'card' && (visible.length > 0 || preemption.length > 0)
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
-      : observation.decision === 'satisfied' ? 'success' : 'warning'
-  // The phase badge and the inactive badge already say these states.
-  const reason = admission && !phaseStates.has(admission.state) ? kueueAdmissionStatePresentation(admission) : null
+      : observation.decision === 'satisfied' ? 'success' : admission ? 'neutral' : 'warning'
+  // The phase badge and the inactive badge already say these states, except a
+  // deactivation whose cause Kueue did not record, which the badge flags.
+  const uncertainDeactivation = admission?.state === 'deactivated' && !!admission.inactive && admission.inactive.source !== 'spec'
+  const reason = admission && (!phaseStates.has(admission.state) || uncertainDeactivation) ? kueueAdmissionStatePresentation(admission) : null
   const unrecognizedReason = admission?.state === 'unrecognized' ? admission.blocker?.reason : undefined
   // Show the evidence behind the state when the primary condition below does
   // not already say it (a check, backoff, or Kueue's deactivation cause).

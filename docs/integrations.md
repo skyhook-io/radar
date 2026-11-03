@@ -1794,7 +1794,10 @@ classification is not a causal diagnosis: queues, namespaces and
 AdmissionChecks appear as the Workload names them and are never read, so
 "LocalQueue missing" is the Workload's report, not a NotFound Radar observed.
 The wording rules were checked against Kueue v0.18 through v0.20; an older
-release's wording that differs reads `unrecognized`.
+release's wording that differs reads `unrecognized`. Radar reads a Workload as
+v1beta1 only from a Kueue that serves no v1beta2 (v0.14 or older); the fields
+are the same, but classification there is best-effort because older releases'
+behaviour was not checked.
 
 | Axis | Codes | Evidence |
 |------|-------|----------|
@@ -1844,9 +1847,10 @@ message are what to show. Rules that keep the axes honest:
 - A rejected AdmissionCheck is the blocker `admission_check_rejected`, usually
   briefly: Kueue then sets `DeactivationTarget` (`deactivation_pending`) and
   `spec.active=false` (`deactivated_by_kueue`, with the cause from the
-  `Evicted` reason `DeactivatedDueTo…`). Kueue v0.18 does not rewrite an
-  earlier eviction when it deactivates a Workload, so `spec.active=false` with
-  some other `Evicted` reason reads `deactivated` with attention `unknown`.
+  `Evicted` reason `DeactivatedDueTo…`). Kueue keeps an earlier eviction's
+  reason when it records no deactivation target, and v0.18 also for its own
+  causes, so `spec.active=false` with some other `Evicted` reason reads
+  `deactivated` with attention `unknown`, and the admission card flags it.
 - An inactive or stopped ClusterQueue or LocalQueue is a blocker, not an
   inactive Workload. Kueue words a stopped queue as either "is stopped" or
   "is inactive" depending on which of its writers ran last, so both read

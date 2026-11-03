@@ -123,6 +123,18 @@ describe('Kueue admission investigation', () => {
     expect(same.match(/LocalQueue gpu doesn&#x27;t exist/g)).toHaveLength(1)
   })
 
+  it('lets the classified state carry the tone instead of a warning phase badge', () => {
+    const waiting = render(response({ decision: 'unsatisfied', kueue: { phase: 'pending', admission: { state: 'insufficient_quota', attention: 'waiting' } } }))
+    expect(waiting).not.toContain('bg-amber')
+    expect(render(response({ decision: 'unsatisfied', kueue: { phase: 'pending' } }))).toMatch(/Pending admission/)
+  })
+
+  it('flags a deactivation whose cause Kueue did not record and shows the eviction it cites', () => {
+    const html = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending' }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'unknown', inactive: { code: 'deactivated', source: 'condition', name: 'Evicted', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
+    expect(html).toContain('>Deactivated<')
+    expect(html).toContain('Evicted · PodsReadyTimeout: Exceeded the PodsReady timeout')
+  })
+
   it('keeps the generic qualifier when an older Radar sends no admission state', () => {
     expect(render(response({ decision: 'unknown', kueue: { phase: 'pending' } }))).toContain('Admission unknown')
   })

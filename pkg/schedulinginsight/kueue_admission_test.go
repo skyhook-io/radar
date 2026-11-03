@@ -309,7 +309,7 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 		{
 			name: "an old eviction does not hide a new reason Radar does not recognize",
 			spec: workloadSpec{conditions: []condition{
-				pending("Pending", "Workload no longer fits after processing another workload"),
+				pending("Pending", "A reason a future Kueue writes"),
 				{kind: "Evicted", status: "True", reason: "Preempted", message: "Preempted to accommodate a workload"},
 				{kind: "Preempted", status: "True", reason: "InClusterQueue", message: "Preempted to accommodate a workload"},
 			}},
@@ -371,6 +371,27 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			phase:   rc.KueuePhasePending,
 			state:   rc.KueueAdmissionUnrecognized,
 			blocker: rc.KueueAdmissionUnrecognized,
+		},
+		{
+			name:    "skipped for another Workload in the same cycle (v0.18 wording)",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", "Workload no longer fits after processing another workload")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionInsufficientQuota,
+			blocker: rc.KueueAdmissionInsufficientQuota,
+		},
+		{
+			name:    "overlapping preemption targets (v0.18 wording)",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", "Workload has overlapping preemption targets with another workload")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionInsufficientQuota,
+			blocker: rc.KueueAdmissionInsufficientQuota,
+		},
+		{
+			name:    "fits after in-flight preemptions (v0.20 wording, granular reasons off)",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", "Workload has overlapping preemption targets with another workload, but will fit after these preemptions complete")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionWaitingForPreemption,
+			blocker: rc.KueueAdmissionWaitingForPreemption,
 		},
 		{
 			name:    "untolerated taint in every flavor",
@@ -1048,4 +1069,14 @@ func TestSharedCodeVectorMatchesDeclaredCodes(t *testing.T) {
 		listed = append(listed, string(code))
 	}
 	sameSet("allAdmissionCodes", listed, vector.Codes)
+}
+
+func TestPendingChecksCiteTheCheck(t *testing.T) {
+	got := classify(t, workloadSpec{
+		conditions: []condition{reserved, {kind: "Admitted", status: "False", reason: "UnsatisfiedChecks", message: "The workload has not all checks ready"}},
+		checks:     []map[string]any{{"name": "policy", "state": "Ready"}, {"name": "provision", "state": "Pending", "message": "Waiting for capacity"}},
+	}).Admission
+	if got.Blocker == nil || got.Blocker.Source != rc.KueueFactSourceAdmissionCheck || got.Blocker.Name != "provision" || got.Blocker.Message != "Waiting for capacity" {
+		t.Fatalf("blocker = %+v", got.Blocker)
+	}
 }

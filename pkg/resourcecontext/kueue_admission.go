@@ -128,8 +128,9 @@ const (
 	// recorded no cause of its own. With no other eviction the fact cites the
 	// spec field and someone set it on purpose; Kueue's acknowledgment is then
 	// a separate Evicted disruption. When the Workload was already evicted for
-	// another reason, Kueue (v0.18) keeps that reason and records no cause, so
-	// the fact cites that Evicted condition and Attention is unknown.
+	// another reason, Kueue keeps that reason (and v0.18 records no cause even
+	// for its own deactivations), so the fact cites that Evicted condition and
+	// Attention is unknown.
 	KueueAdmissionDeactivated KueueAdmissionCode = "deactivated"
 	// KueueAdmissionDeactivatedByKueue means spec.active is false and Kueue
 	// recorded why it deactivated the Workload (a rejected AdmissionCheck,

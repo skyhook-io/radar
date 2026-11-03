@@ -86,14 +86,14 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 	return state
 }
 
+const externalAdmissionGateMessage = "Admission is gated by"
+
 // preemptionGateIsCurrent reports whether BlockedOnPreemptionGates explains
 // the current attempt. Kueue writes it together with QuotaReserved (v0.18
 // with the same message, v0.19 with QuotaReserved reason AdmissionGated) and
 // leaves it True after later attempts rewrite QuotaReserved for another
 // reason, including an external admission gate, which Kueue also reports as
 // AdmissionGated but with its own message.
-const externalAdmissionGateMessage = "Admission is gated by"
-
 func preemptionGateIsCurrent(conditions map[string]workloadCondition) bool {
 	gate, ok := trueCondition(conditions, "BlockedOnPreemptionGates")
 	if !ok {
@@ -170,9 +170,10 @@ func (c classifier) inactive() *rc.KueueAdmissionFact {
 	if active, found, _ := unstructured.NestedBool(c.u.Object, "spec", "active"); found && !active {
 		// Kueue records its own cause as DeactivationTarget until it flips
 		// spec.active, then as the Evicted reason DeactivatedDueTo<Cause>; a
-		// plain Deactivated eviction is someone else's change. Kueue v0.18 does
-		// not rewrite an earlier eviction when it deactivates, so any other
-		// Evicted reason leaves the cause unknown.
+		// plain Deactivated eviction is someone else's change. Kueue keeps an
+		// earlier eviction's reason when it records no deactivation target (and
+		// v0.18 also for its own causes), so any other Evicted reason leaves the
+		// cause unknown.
 		if target, ok := trueCondition(c.conditions, "DeactivationTarget"); ok {
 			return c.conditionFact(rc.KueueAdmissionDeactivatedByKueue, target)
 		}
@@ -258,17 +259,19 @@ func (c classifier) blocker(phase rc.KueuePhase) *rc.KueueAdmissionFact {
 
 func (c classifier) reservedBlocker(checks []checkState) *rc.KueueAdmissionFact {
 	admitted, hasAdmitted := c.conditions["Admitted"]
+	// Cite the check itself when one is not Ready: its name and message say
+	// more than Admitted's generic "not all checks ready".
+	for _, check := range checks {
+		if check.state != "Ready" {
+			return check.fact(rc.KueueAdmissionChecksPending)
+		}
+	}
 	if hasAdmitted && admitted.Status == "False" {
 		switch admitted.Reason {
 		case "UnsatisfiedChecks", "UnsatisfiedAdmissionChecks":
 			return c.conditionFact(rc.KueueAdmissionChecksPending, admitted)
 		case "PendingDelayedTopologyRequests":
 			return c.conditionFact(rc.KueueAdmissionTopologyAssignmentPending, admitted)
-		}
-	}
-	for _, check := range checks {
-		if check.state != "Ready" {
-			return check.fact(rc.KueueAdmissionChecksPending)
 		}
 	}
 	if hasAdmitted && admitted.Status == "False" && !strings.HasPrefix(admitted.Reason, "NoReservation") {
@@ -335,9 +338,15 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 		return rc.KueueAdmissionWaitingForPodsReady
 	case strings.HasPrefix(message, "AdmissionGatedBy cleared"):
 		return rc.KueueAdmissionNoDecision
-	case strings.Contains(message, "Pending the preemption of"):
+	case strings.Contains(message, "but will fit after these preemptions complete"),
+		strings.Contains(message, "Pending the preemption of"):
 		// The same state the granular reason WaitingForPreemptedWorkloads names.
 		return rc.KueueAdmissionWaitingForPreemption
+	case strings.HasPrefix(message, "Workload no longer fits after processing another workload"),
+		strings.HasPrefix(message, "Workload has overlapping preemption targets with another workload"):
+		// Skipped in favour of another Workload in the same cycle; Kueue's
+		// granular reason for this is WaitingForQuota.
+		return rc.KueueAdmissionInsufficientQuota
 	case strings.HasPrefix(message, "resources validation failed"), strings.HasPrefix(message, "resources didn't satisfy LimitRange constraints"):
 		return rc.KueueAdmissionInvalidWorkload
 	}
