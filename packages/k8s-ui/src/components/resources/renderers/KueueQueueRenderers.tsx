@@ -51,8 +51,8 @@ export interface ClusterQueueReads {
   admissionChecks?: Record<string, RelatedRead>
   /** Other ClusterQueues naming the same cohort, from Radar's ClusterQueue list. */
   cohortMembers?: RelatedRead<string[]>
-  /** False when the ClusterQueue list the members came from didn't cover every ClusterQueue. */
-  cohortMembersComplete?: boolean
+  /** Whether the ClusterQueue list the members came from covered every ClusterQueue. */
+  cohortMembersCompleteness?: 'complete' | 'partial' | 'unknown'
 }
 
 const quantity = (value: string | number | undefined | null) => (value == null ? 'Not reported' : String(value))
@@ -312,7 +312,8 @@ function RelatedObjects({ data, reads, onNavigate }: QueueRendererProps & { read
                 {members.state === 'found'
                   ? members.object.length > 0 ? <>Other ClusterQueues naming this cohort: {members.object.map((name, index) => <span key={name} className="[&_button]:text-left">{index > 0 && ', '}<ResourceLink name={name} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} /></span>)}</> : 'No other ClusterQueue names this cohort.'
                   : `Other members not read: ${unreadReason(members)}.`}
-                {members.state === 'found' && reads?.cohortMembersComplete === false && ' Radar’s ClusterQueue list was incomplete, so there may be more.'}
+                {members.state === 'found' && reads?.cohortMembersCompleteness === 'partial' && ' Radar’s ClusterQueue list was incomplete, so there may be more.'}
+                {members.state === 'found' && reads?.cohortMembersCompleteness === 'unknown' && ' This Radar doesn’t say whether its ClusterQueue list is complete.'}
               </p>}
               <p className="text-xs text-theme-text-tertiary">A cohort exists through the ClusterQueues that name it. Radar doesn't read Cohort objects, so a parent cohort or cohort-level quota isn't shown here.</p>
             </div>

@@ -11,6 +11,8 @@ export type RelatedRead<T = any> =
   | { state: 'loading' }
   | { state: 'found'; object: T }
   | { state: 'not_found' }
+  /** Not in a list that can't vouch for its completeness (an older Radar sends no coverage). */
+  | { state: 'unconfirmed' }
   | { state: 'unavailable'; code?: string; message?: string }
 
 export function isDenied(read: RelatedRead | undefined): boolean {
@@ -20,6 +22,7 @@ export function isDenied(read: RelatedRead | undefined): boolean {
 /** Why a related object couldn't be read, in a few words that fit "<name>: …". */
 export function unreadReason(read: RelatedRead | undefined): string {
   if (!read || read.state === 'loading') return 'checking…'
+  if (read.state === 'unconfirmed') return 'not in Radar’s list, and this Radar can’t confirm it’s absent'
   if (read.state !== 'unavailable') return ''
   if (isDenied(read)) return 'you can’t read it'
   switch (canonicalReadCode(read.code)) {

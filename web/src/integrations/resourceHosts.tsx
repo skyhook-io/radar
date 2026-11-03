@@ -46,7 +46,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   {
     id: 'kueue-queues',
     renderers: { LocalQueueRenderer, ClusterQueueRenderer },
-    // The header badge reads the LocalQueue's ClusterQueue like its detail does, so the two never disagree.
+    // The header badge reads the LocalQueue's ClusterQueue like its detail does, so header and detail agree; the table keeps the LocalQueue's own report.
     resources: [{ name: 'localqueues', group: 'kueue.x-k8s.io' }],
     detailSlots: () => ({ renderStatusBadge: (resource: any) => <LocalQueueStatusBadge data={resource} /> }),
   },

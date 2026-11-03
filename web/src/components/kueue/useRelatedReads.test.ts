@@ -13,7 +13,7 @@ describe('relatedReadFrom', () => {
 
   it('keeps denials and collector limits apart', () => {
     expect(relatedReadFrom({ error: fail(403, 'user_forbidden') })).toMatchObject({ state: 'unavailable', code: 'user_forbidden' })
-    expect(relatedReadFrom({ error: fail(403) })).toMatchObject({ state: 'unavailable', code: 'user_forbidden' })
+    expect(relatedReadFrom({ error: fail(403) })).toMatchObject({ state: 'unavailable', code: undefined })
     expect(relatedReadFrom({ error: fail(503, 'radar_forbidden') })).toMatchObject({ state: 'unavailable', code: 'radar_forbidden' })
     expect(relatedReadFrom({ error: fail(503, 'kind_sync_timed_out') })).toMatchObject({ state: 'unavailable', code: 'kind_sync_timed_out' })
     expect(relatedReadFrom({ error: fail(403, 'rbac_denied') })).toMatchObject({ code: 'user_forbidden' })
@@ -40,7 +40,7 @@ describe('relatedReadInList', () => {
     expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: null }, 'gone')).toEqual({ state: 'not_found' })
     expect(relatedReadInList({ data: items, coverage: { status: 'partial', gaps: [{ code: 'radar_namespace_not_collected' }] }, error: null }, 'gone')).toMatchObject({ state: 'unavailable', code: 'radar_namespace_not_collected' })
     // An older Radar sends a bare array, read as unknown coverage.
-    expect(relatedReadInList({ data: items, coverage: { status: 'unknown' }, error: null }, 'gone')).toMatchObject({ state: 'unavailable' })
+    expect(relatedReadInList({ data: items, coverage: { status: 'unknown' }, error: null }, 'gone')).toEqual({ state: 'unconfirmed' })
     expect(relatedReadInList({ data: items, coverage: { status: 'unknown' }, error: null }, 'small').state).toBe('found')
   })
   it('lets a list error outrank the items it kept', () => {

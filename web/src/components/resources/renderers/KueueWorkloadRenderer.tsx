@@ -4,7 +4,7 @@ import { getProvisioningRequestStatus, getProvisioningRequestMessage } from '@sk
 import { Badge, ResourceLink, Section, type Relationships, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { selectorHasTerms } from '@skyhook-io/k8s-ui/components/kueue/eligibility'
 import { useKueueProvisioning } from '../../../api/client'
-import { useRelatedList, useRelatedReads } from '../../kueue/useRelatedReads'
+import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
 
 const KUEUE_GROUP = 'kueue.x-k8s.io'
 
@@ -15,16 +15,16 @@ function useAdmissionPathReads(data: any) {
   const namespace: string = data.metadata?.namespace ?? ''
   const queueName: string = data.spec?.queueName ?? ''
   const reserved: string = data.status?.admission?.clusterQueue ?? ''
-  const localQueue = useRelatedList('localqueues', KUEUE_GROUP, namespace, !!queueName && !!namespace).find(queueName)
-  const configured: string = localQueue.state === 'found' ? localQueue.object?.spec?.clusterQueue ?? '' : ''
-  const queues = useRelatedList('clusterqueues', KUEUE_GROUP, undefined, !!queueName || !!reserved)
-  const configuredRead = configured ? queues.find(configured) : undefined
+  const localQueue = useRelatedObjects('localqueues', KUEUE_GROUP, namespace, [queueName], !!queueName && !!namespace).byName[queueName]
+  const configured: string = localQueue?.state === 'found' ? localQueue.object?.spec?.clusterQueue ?? '' : ''
+  const names = [...new Set([configured, reserved].filter(Boolean))]
+  const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, names, names.length > 0)
+  const configuredRead = configured ? queues.byName[configured] : undefined
   const needsLabels = configuredRead?.state === 'found' && selectorHasTerms(configuredRead.object?.spec?.namespaceSelector)
   const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
-  const names = [...new Set([configured, reserved].filter(Boolean))]
   return {
     localQueue: queueName ? localQueue : undefined,
-    clusterQueues: Object.fromEntries(names.map(name => [name, queues.find(name)])),
+    clusterQueues: queues.byName,
     namespace: needsLabels ? namespaceRead : undefined,
   }
 }

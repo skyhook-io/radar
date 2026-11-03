@@ -4,7 +4,8 @@ import { ResourceLink, Section, ownerNote, ownershipUnanswered } from '../ui/dra
 import { FactSource, FactValue } from '../facts'
 import type { Relationships } from '../../types'
 import { kindToPluralWithGroup } from '../../utils/navigation'
-import { getLocalQueueStatus, isKueueConditionStale } from '../resources/resource-utils-kueue'
+import { isKueueConditionStale } from '../resources/resource-utils-kueue'
+import { localQueueStatusWithParent } from './queue-status'
 import { parseFlavorAttempts, type FlavorAttempt, type FlavorAttemptKind } from './flavors-tried'
 import { ClusterQueueReadSummary, KUEUE_GROUP, ReadState, StatusPill, namespaceEligibilityFact, type Navigate } from './QueueEvidence'
 import type { RelatedRead } from './related-read'
@@ -70,7 +71,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
           {!queueName ? <p className={muted}>No queue name: spec.queueName is empty, so the Workload names no LocalQueue.</p> : <>
             <div className="flex flex-wrap items-center gap-2 break-all [&_button]:text-left">
               <ResourceLink name={queueName} kind="localqueues" namespace={namespace} group={KUEUE_GROUP} onNavigate={onNavigate} />
-              <ReadState read={localQueue} missing="Not found" found={localQueue?.state === 'found' ? <StatusPill status={getLocalQueueStatus(localQueue.object)} /> : undefined} />
+              <ReadState read={localQueue} missing="Not found" found={localQueue?.state === 'found' ? <StatusPill status={localQueueStatusWithParent(localQueue.object, configuredRead)} /> : undefined} />
             </div>
             {localQueue?.state === 'not_found' && <p className={muted}>No LocalQueue {queueName} exists in namespace {namespace}. Kueue can't admit this Workload until it does.</p>}
           </>}
@@ -88,10 +89,10 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
         )}
         <Step label="Reservation">
           {reserved ? <>
-            <div className="flex flex-wrap items-center gap-2 break-all [&_button]:text-left">
-              <span className="text-xs text-theme-text-tertiary">Quota reserved in</span>
-              <ResourceLink name={reserved} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} />
-            </div>
+            <p className="text-xs text-theme-text-tertiary">Quota reserved in</p>
+            {reads && reserved !== configured
+              ? <ClusterQueueReadSummary name={reserved} read={reads.clusterQueues?.[reserved]} onNavigate={onNavigate} />
+              : <div className="break-all [&_button]:text-left"><ResourceLink name={reserved} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} /></div>}
             {configured && configured !== reserved && <p className="text-xs text-warning-text">Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>}
           </> : <p className={muted}>No reservation reported.</p>}
         </Step>

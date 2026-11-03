@@ -1,7 +1,6 @@
-import { useMemo } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import type { RelatedRead } from '@skyhook-io/k8s-ui/components/kueue/related-read'
-import { canonicalReadCode } from '@skyhook-io/k8s-ui/utils/read-actions'
+import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import { ApiError, isStillLoadingError, resourceQueryOptions, useResources } from '../../api/client'
 import { getApiBase } from '../../api/config'
 
@@ -24,9 +23,8 @@ export function relatedReadFrom(query: { data?: { resource?: unknown }; error: u
   if (error instanceof ApiError) {
     const code = canonicalReadCode(error.data?.error_code)
     if (error.status === 404 && code === 'object_not_found') return { state: 'not_found' }
-    if (typeof code === 'string') return { state: 'unavailable', code, message: error.message }
-    // Resource reads answer 403 only for the caller's own access; some typed-kind denials carry no code.
-    return { state: 'unavailable', code: error.status === 403 ? 'user_forbidden' : undefined, message: error.message }
+    // An uncoded failure (an older Radar) can't say whose access refused it: Radar's own or the viewer's.
+    return { state: 'unavailable', code: typeof code === 'string' ? code : undefined, message: error.message }
   }
   return { state: 'unavailable', message: error instanceof Error ? error.message : String(error) }
 }
@@ -42,31 +40,39 @@ export function relatedReadInList(list: { data?: any[]; coverage?: { status: str
   const object = list.data.find(item => item?.metadata?.name === name)
   if (object) return { state: 'found', object }
   if (list.coverage?.status === 'complete') return { state: 'not_found' }
-  return { state: 'unavailable', code: list.coverage?.gaps?.[0]?.code, message: 'Radar’s list did not cover every object' }
+  if (list.coverage?.status === 'partial') return { state: 'unavailable', code: list.coverage.gaps?.[0]?.code, message: 'Radar’s list did not cover every object' }
+  return { state: 'unconfirmed' }
 }
 
-export interface RelatedList {
-  /** One name's read state. */
-  find: (name: string) => RelatedRead
+/** How often a related list re-reads: watch events don't announce most additions, so a missing object is re-checked on this clock. */
+export const RELATED_LIST_RECHECK_MS = 30_000
+
+export interface RelatedObjects {
+  /** Each requested name's read state. */
+  byName: Record<string, RelatedRead>
   /** The whole list: found with its items, or why it wasn't read. */
   all: RelatedRead<any[]>
-  /** The list covered every object it was asked for. */
-  complete: boolean
+  /** Whether the list covered every object: unknown when the Radar sends no coverage. */
+  completeness: 'complete' | 'partial' | 'unknown'
 }
 
 /**
- * Looks names up in one list read of a kind, as the viewer. A list read
- * computes no relationships and refreshes on the list's own schedule, so a
- * detail view that names several related objects costs one read per kind.
- * The cache is scoped to the API base because Radar Hub points one query
- * client at several clusters, where same-named queues are different objects.
+ * Reads named objects of one kind as the viewer. One list read serves every
+ * name — it computes no relationships, unlike a resource GET — and re-reads
+ * on RELATED_LIST_RECHECK_MS. A viewer allowed to get but not list the kind
+ * reads each name with a GET instead, so a list denial never hides an object
+ * the viewer may open. The cache is scoped to the API base because Radar Hub
+ * points one query client at several clusters, where same-named queues are
+ * different objects.
  */
-export function useRelatedList(kind: string, group: string | undefined, namespace: string | undefined, enabled = true): RelatedList {
-  const { data, coverage, error } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase() })
-  return useMemo(() => {
-    const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data ? { state: 'found', object: data } : { state: 'loading' }
-    return { find: (name: string) => relatedReadInList({ data, coverage, error }, name), all, complete: coverage?.status === 'complete' }
-  }, [data, coverage, error])
+export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true): RelatedObjects {
+  const { data, coverage, error } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS })
+  const listDenied = error instanceof ApiError && readActionFor(error.data?.error_code) === 'user_access'
+  const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied)
+  const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data ? { state: 'found', object: data } : { state: 'loading' }
+  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error }, name)]))
+  const completeness = coverage?.status === 'complete' || coverage?.status === 'partial' ? coverage.status : 'unknown'
+  return { byName, all, completeness }
 }
 
 /** Reads single objects through the resource GET with useResource's retry and polling rules. */

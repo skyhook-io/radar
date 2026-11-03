@@ -4,10 +4,10 @@ import { ResourceLink } from '../ui/drawer-components'
 import { TimeValue } from '../ui/ScheduleValue'
 import { FactGrid, FactRow, FactValue, type Fact } from '../facts'
 import type { StatusBadge } from '../resources/resource-utils'
-import { getAdmissionCheckStatus, getClusterQueueStatus, getKueueQueueCondition, isKueueConditionStale } from '../resources/resource-utils-kueue'
+import { getAdmissionCheckStatus, getClusterQueueStatus, getKueueQueueCondition } from '../resources/resource-utils-kueue'
 import { describeKueuePolicy } from './policy'
 import { isDenied, unreadReason, type RelatedRead } from './related-read'
-import { namespaceEligibility, selectorHasTerms } from './eligibility'
+import { namespaceEligibility } from './eligibility'
 
 export const KUEUE_GROUP = 'kueue.x-k8s.io'
 export type Navigate = (ref: { kind: string; namespace: string; name: string; group?: string }) => void
@@ -17,6 +17,7 @@ export function ReadState({ read, missing = 'Not found', found }: { read?: Relat
   if (!read) return null
   if (read.state === 'found') return <>{found ?? <Badge severity="neutral" size="sm">Found</Badge>}</>
   if (read.state === 'not_found') return <Badge severity="error" size="sm">{missing}</Badge>
+  if (read.state === 'unconfirmed') return <span className="text-xs text-theme-text-tertiary">Not in Radar’s list; this Radar can’t confirm it’s absent</span>
   return <span className={isDenied(read) ? 'text-xs text-theme-text-secondary' : 'text-xs text-theme-text-tertiary'}>{read.state === 'loading' ? 'Checking…' : `Not read: ${unreadReason(read)}`}</span>
 }
 
@@ -28,7 +29,6 @@ export function StatusPill({ status }: { status: StatusBadge }) {
 export function ReportedActive({ data, status, children }: { data: any; status: StatusBadge; children?: ReactNode }) {
   const condition = getKueueQueueCondition(data)
   const generation = data?.metadata?.generation
-  const stale = isKueueConditionStale(condition, generation)
   if (!condition) {
     return <div className="space-y-2 text-sm">
       <div className="flex flex-wrap items-center gap-2"><StatusPill status={status} /></div>
@@ -40,7 +40,6 @@ export function ReportedActive({ data, status, children }: { data: any; status: 
     <div className="flex flex-wrap items-center gap-2">
       <StatusPill status={status} />
       {condition.reason && !status.text.startsWith(condition.reason) && <code className="break-all text-xs text-theme-text-secondary">{condition.reason}</code>}
-      {stale && <Badge severity="warning" size="sm">Stale</Badge>}
     </div>
     {condition.message && <p className="whitespace-pre-wrap break-words text-theme-text-primary">{condition.message}</p>}
     <p className="text-xs text-theme-text-tertiary">
@@ -110,7 +109,11 @@ export function ClusterQueueReadSummary({ name, read, onNavigate }: { name: stri
 export function namespaceEligibilityFact({ namespace, clusterQueue, parent, namespaceRead }: { namespace: string; clusterQueue: string; parent?: RelatedRead; namespaceRead?: RelatedRead }): Fact {
   const source = `ClusterQueue ${clusterQueue} namespaceSelector`
   if (parent?.state !== 'found') {
-    return { text: parent?.state === 'not_found' ? 'Unknown: the ClusterQueue was not found' : `Unknown: ClusterQueue ${parent ? unreadReason(parent) : 'not read'}`, tone: 'unknown', source }
+    const why = !parent ? 'Unknown: the ClusterQueue was not read'
+      : parent.state === 'loading' ? 'Checking the ClusterQueue…'
+        : parent.state === 'not_found' ? 'Unknown: the ClusterQueue was not found'
+          : `Unknown: ClusterQueue not read (${unreadReason(parent)})`
+    return { text: why, tone: 'unknown', source }
   }
   const selector = parent.object?.spec?.namespaceSelector
   const labels = namespaceRead?.state === 'found' ? (namespaceRead.object?.metadata?.labels ?? {}) : undefined
@@ -122,7 +125,6 @@ export function namespaceEligibilityFact({ namespace, clusterQueue, parent, name
       return { text: result.basis === 'none' ? 'Not eligible: the ClusterQueue sets no namespaceSelector, so no namespace matches' : `Not eligible: namespace ${namespace}'s labels don't match the selector`, tone: 'unhealthy', source }
     default:
       if (result.why === 'unsupported_operator') return { text: `Unknown: the selector uses operator ${result.operator || '(none)'}, which Radar doesn't evaluate`, tone: 'unknown', source }
-      if (!selectorHasTerms(selector)) return { text: 'Unknown', tone: 'unknown', source }
       return { text: namespaceRead?.state === 'not_found' ? `Unknown: namespace ${namespace} was not found` : `Unknown: namespace labels not read (${unreadReason(namespaceRead)})`, tone: 'unknown', source }
   }
 }

@@ -1747,9 +1747,12 @@ borrowing/lending limits, namespace selector and admission policies. These are
 controller-reported quota facts, not measured utilization or available physical
 capacity. Both v1beta1 and v1beta2 queue shapes are supported.
 
-Related objects are read as the viewer through the resource GET, so each one
-says whether it was found, doesn't exist, or couldn't be read (and why); a
-denial is never shown as missing. A ClusterQueue lists its ResourceFlavors per
+Related objects are read as the viewer, one list read per kind (re-read every
+30 seconds, since watch events don't announce most additions), falling back to
+a GET per object when the viewer may get but not list the kind. Each one says
+whether it was found, doesn't exist, or couldn't be read (and why); a denial is
+never shown as missing, and an object is called missing only from a list Radar
+read in full (an older Radar that reports no coverage can't confirm absence). A ClusterQueue lists its ResourceFlavors per
 resource group in the order Kueue tries them and its AdmissionChecks with their
 own Active state, plus the other ClusterQueues naming its cohort (Cohort objects
 aren't read). A LocalQueue shows its ClusterQueue as read from that object and
