@@ -195,7 +195,9 @@ func (r *Reader) fetch(ctx context.Context, req Request, version, namespace, que
 				delete(r.memo, k)
 			}
 		}
-		r.memo[key] = answer
+		if answer.failure == nil {
+			r.memo[key] = answer
+		}
 		return answer, nil
 	})
 	select {

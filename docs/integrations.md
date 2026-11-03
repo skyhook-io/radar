@@ -1821,10 +1821,11 @@ Workload (a Job's position is on its child Workload). `GET
   as its own identity (`radar_forbidden` when it may not); the Helm chart
   grants that read with the `kueue` CRD group. The endpoint itself first
   requires seeing the namespace and `get` on the Workload.
-- **Load.** One identity's answer for one LocalQueue is reused for 10 seconds
+- **Load.** One identity's successful answer for one LocalQueue is reused for 10 seconds
   except in user-token mode, which reads with each request's credentials
   (each read makes Kueue sort the whole ClusterQueue); the UI refreshes every
-  30 seconds while the answer can change by itself.
+  30 seconds while the answer can change by itself. Failed reads are not memoized,
+  so Retry makes a new attempt.
 
 The ClusterQueue subresource of Kueue v0.18.0–v0.18.10 and v0.19.0–v0.19.1
 miscounts `positionInLocalQueue` when two namespaces use the same LocalQueue

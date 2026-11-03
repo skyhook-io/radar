@@ -390,3 +390,36 @@ func TestRequestForDoesNotReuseTokenAuthorizedAnswers(t *testing.T) {
 		}
 	}
 }
+
+func TestReaderRetriesFailuresWithoutReusingThem(t *testing.T) {
+	for _, initial := range []metav1.Status{
+		status(503, metav1.StatusReasonServiceUnavailable, "visibility is starting", nil),
+		status(404, metav1.StatusReasonNotFound, "queue not observed yet", &metav1.StatusDetails{Name: "pos", Group: Group, Kind: "localqueue"}),
+	} {
+		t.Run(string(initial.Reason), func(t *testing.T) {
+			body := liveAnswer(t)
+			var calls atomic.Int32
+			srv, client := newServer(t, func(w http.ResponseWriter, req *http.Request) {
+				if calls.Add(1) == 1 {
+					writeJSON(w, int(initial.Code), initial)
+					return
+				}
+				_, _ = w.Write(body)
+			})
+			reader := NewReader()
+			req := Request{Workload: waits3(), Client: client, Discovery: served("v1beta2"), Identity: IdentityUser, MemoKey: "ctx\x00alice"}
+			first := reader.Read(context.Background(), req)
+			if first.Status == resourcecontext.KueuePositionListed {
+				t.Fatal("initial failure returned a position")
+			}
+			second := reader.Read(context.Background(), req)
+			if second.Status != resourcecontext.KueuePositionListed || srv.requests.Load() != 2 {
+				t.Fatalf("retry did not read recovered server: %+v, requests %d", second, srv.requests.Load())
+			}
+			reader.Read(context.Background(), req)
+			if srv.requests.Load() != 2 {
+				t.Fatal("successful answer should still be reused")
+			}
+		})
+	}
+}
