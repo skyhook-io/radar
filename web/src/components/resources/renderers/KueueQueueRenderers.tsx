@@ -61,6 +61,10 @@ function ClusterQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navig
 
 /** The header badge: the LocalQueue's own report, toned like its detail by the ClusterQueue it names. */
 export function LocalQueueStatusBadge({ data }: { data: any }) {
+  return <LocalQueueBadgeReads key={data?.metadata?.uid} data={data} />
+}
+
+function LocalQueueBadgeReads({ data }: { data: any }) {
   const parentName: string = data?.spec?.clusterQueue ?? ''
   const supported = isKueueQueueResource(data)
   const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], supported && !!parentName, relatedReadKey(data, [parentName], ['Active'])).byName[parentName]

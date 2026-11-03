@@ -148,3 +148,21 @@ it('re-reads fallback GETs when the subject changes, and holds absence until the
   await act(async () => release?.())
   await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))
 })
+
+it('doesn’t serve a GET result cached before mount as current, found or not', async () => {
+  listStatus = 403
+  client.setQueryData(['resource', 'clusterqueues', '', 'present', 'kueue.x-k8s.io', getApiBase()], { resource: { metadata: { name: 'present', stale: true } } }, { updatedAt: Date.now() - 5000 })
+  let release: (() => void) | undefined
+  vi.mocked(fetch).mockImplementation((input: any) => {
+    const path = new URL(String(input), 'http://localhost').pathname
+    requests.push(path)
+    if (path === '/api/resources/clusterqueues') return Promise.resolve(new Response(JSON.stringify({ error: 'no', error_code: 'user_forbidden' }), { status: 403 }))
+    if (path === '/api/resources/clusterqueues/_/present') return new Promise<Response>(resolve => { release = () => resolve(new Response(JSON.stringify({ resource: { metadata: { name: 'present' } } }))) })
+    return Promise.resolve(new Response(JSON.stringify({ error: 'gone', error_code: 'object_not_found' }), { status: 404 }))
+  })
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe onRead={read => { latest = read }} /></QueryClientProvider>))
+  await vi.waitFor(() => expect(latest?.all).toMatchObject({ state: 'unavailable' }))
+  expect(latest?.byName.present).toEqual({ state: 'loading' })
+  await act(async () => release?.())
+  await vi.waitFor(() => expect(latest?.byName.present).toEqual({ state: 'found', object: { metadata: { name: 'present' } } }))
+})

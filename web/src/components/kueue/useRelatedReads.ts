@@ -37,7 +37,7 @@ export function relatedReadFrom(query: { data?: { resource?: unknown }; error: u
  * covered everything it was asked for; an older Radar that sends no coverage
  * can confirm presence but not absence.
  */
-interface ListCoverage { status: string; scope?: { type?: string; namespaces?: { names?: string[] } }; gaps?: { code: string }[] }
+interface ListCoverage { status: string; scope?: { type?: string; namespaces?: { names?: string[] } }; gaps?: { code: string; namespaces?: { names?: string[] } }[] }
 
 /** The list says it read everything it was asked for, in a scope this client understands. */
 function coversRequest(coverage: ListCoverage | undefined, namespace: string | undefined): boolean {
@@ -55,7 +55,11 @@ export function relatedReadInList(list: { data?: any[]; coverage?: ListCoverage;
   // A list cached before this view mounted can't prove absence now; its re-read is in flight.
   if (list.readBeforeMount) return { state: 'loading' }
   if (coversRequest(list.coverage, list.namespace)) return { state: 'not_found' }
-  if (list.coverage?.status === 'partial') return { state: 'unavailable', code: list.coverage.gaps?.[0]?.code, message: 'Radar’s list did not cover every object' }
+  if (list.coverage?.status === 'partial') {
+    const gaps = list.coverage.gaps ?? []
+    const gap = gaps.find(candidate => !list.namespace || candidate.namespaces?.names?.includes(list.namespace)) ?? gaps[0]
+    return { state: 'unavailable', code: gap?.code, message: 'Radar’s list did not cover every object' }
+  }
   return { state: 'unconfirmed' }
 }
 
@@ -168,8 +172,7 @@ export function useRelatedReads(refs: RelatedRef[], enabled = true, changedAt = 
       void queryClient.refetchQueries({ queryKey: resourceQueryOptions(kind, namespace, name, group ?? undefined, { cacheScope }).queryKey, exact: true })
     }
   }, [enabled, changedAt, mountedAt, signature, cacheScope, queryClient])
-  return results.map(result => {
-    const read = relatedReadFrom(result)
-    return read.state === 'not_found' && result.dataUpdatedAt < freshAfter && result.errorUpdatedAt < freshAfter ? { state: 'loading' } : read
-  })
+  // Like a list, a GET read before mount or before the subject last changed
+  // answers nothing yet, found or not: a cached parent could lend a tone.
+  return results.map(result => result.dataUpdatedAt < freshAfter && result.errorUpdatedAt < freshAfter ? { state: 'loading' } : relatedReadFrom(result))
 }
