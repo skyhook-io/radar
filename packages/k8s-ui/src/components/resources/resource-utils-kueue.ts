@@ -268,7 +268,7 @@ const kueueAdmissionHints: Record<string, string> = {
   cluster_queue_inactive: 'The ClusterQueue may be stopped on purpose or misconfigured. Its status says which.',
   admission_check_rejected: 'An admission check rejected the Workload. Kueue usually deactivates it next.',
   deactivation_pending: 'Kueue is deactivating the Workload. It will not be admitted until reactivated.',
-  deactivated_by_kueue: 'Kueue stopped retrying. Fix the cause, then set the Workload active again to retry.',
+  deactivated_by_kueue: 'Kueue deactivated this Workload. Fix the cause below, then set it active again to retry.',
   invalid_workload: "Kueue rejects the job's resource requests. Fix them and resubmit.",
 }
 
