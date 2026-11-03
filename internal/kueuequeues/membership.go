@@ -159,13 +159,21 @@ func Key(m Member) string {
 	return strings.Join([]string{rank, m.Workload.GetNamespace(), m.Workload.GetName(), string(m.Workload.GetUID())}, "\x00")
 }
 
-// Sort orders members by Key, after their Finished flags are set.
+// Sort orders members by Key, after their Finished flags are set. Each key
+// is built once.
 func Sort(members []Member) {
-	slices.SortFunc(members, compare)
-}
-
-func compare(a, b Member) int {
-	return cmp.Compare(Key(a), Key(b))
+	type keyed struct {
+		key    string
+		member Member
+	}
+	sorted := make([]keyed, len(members))
+	for i, m := range members {
+		sorted[i] = keyed{Key(m), m}
+	}
+	slices.SortFunc(sorted, func(a, b keyed) int { return cmp.Compare(a.key, b.key) })
+	for i, k := range sorted {
+		members[i] = k.member
+	}
 }
 
 // Counts are the numbers of members, each way. A member that belongs both

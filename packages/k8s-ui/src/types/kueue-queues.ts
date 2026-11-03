@@ -37,7 +37,12 @@ export interface KueueQueueMembers {
   items: KueueQueueWorkload[]
   /** Members the filters keep, across all pages. */
   matching: number
-  /** Over every member Radar read for you; submission and reservation overlap. `states` counts, by admission state, the members the membership filter keeps. */
+  /**
+   * Over every member Radar read for you; submission and reservation overlap
+   * (ClusterQueue only: a LocalQueue's members all belong by submission, so its
+   * reservation count is 0). `states` counts, by admission state, the members
+   * the membership filter keeps.
+   */
   counts: { members: number; submission: number; reservation: number; states: Record<string, number> }
   next?: string
   /**

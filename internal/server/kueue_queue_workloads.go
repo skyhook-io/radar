@@ -78,7 +78,9 @@ type KueueQueueMembers struct {
 	// Matching is the members the request's filters keep.
 	Matching int `json:"matching"`
 	// Counts.States counts the members the membership filter keeps by
-	// Admission.State; the other counts ignore the filters.
+	// Admission.State; the other counts ignore the filters. Every member of
+	// a LocalQueue belongs by submission, so its Reservation count is 0:
+	// Submission and Reservation describe a ClusterQueue's members.
 	Counts kueuequeues.Counts `json:"counts"`
 	// Next continues the list after this page; absent on the last page.
 	Next     string               `json:"next,omitempty"`
@@ -566,6 +568,9 @@ type kueueKindRead struct {
 	all      bool
 	read     map[string]bool
 	coverage resourceapi.Coverage
+	// unread is each namespace's gap code, from the gaps before the response
+	// caps their name lists.
+	unread map[string]readreason.Code
 }
 
 func (k kueueKindRead) covers(namespace string) bool { return k.all || k.read[namespace] }
@@ -580,14 +585,9 @@ func (k kueueKindRead) namespaces() []string {
 }
 
 // gapCode is the code of the gap that names namespace, or "" when no gap
-// names it (it is outside the scope, or in a gap Radar can't list).
+// names it (it is outside the scope, or in a gap of unknown extent).
 func (k kueueKindRead) gapCode(namespace string) readreason.Code {
-	for _, gap := range k.coverage.Gaps {
-		if gap.Namespaces != nil && slices.Contains(gap.Namespaces.Names, namespace) {
-			return gap.Code
-		}
-	}
-	return ""
+	return k.unread[namespace]
 }
 
 // kueueReadFailure is a read that returned nothing, with the target its
@@ -711,6 +711,14 @@ func (s *Server) readKueueIndexed(r *http.Request, h kueueQueueHandles, budget *
 	if !out.all {
 		read = out.namespaces()
 	}
+	out.unread = map[string]readreason.Code{}
+	for _, gap := range slices.Concat(target.gaps, gaps) {
+		if gap.Namespaces != nil {
+			for _, ns := range gap.Namespaces.Names {
+				out.unread[ns] = gap.Code
+			}
+		}
+	}
 	out.coverage = target.coverage(read, gaps)
 	return out, nil
 }
@@ -791,10 +799,12 @@ func (s *Server) kueueListAccess(r *http.Request, cache *k8s.ResourceCache, budg
 		// can't list discloses nothing (unlike listScope's candidates, which
 		// can exceed what a restricted caller was shown).
 		candidates, complete := namespaceNamesInCache(cache), cache.KindReadinessFor("namespaces") == k8s.KindReady
+		remainder := readreason.KindSyncPending
 		if len(candidates) == 0 {
 			// Radar's identity may not list Namespaces: check the namespaces
 			// it collects in instead.
 			candidates, complete = k8s.GetAccessibleNamespaces(r.Context())
+			remainder = readreason.RadarForbidden
 		}
 		if len(candidates) == 0 {
 			return nil, target, readFailuref(readreason.RadarNamespaceNotCollected, "Radar can't enumerate namespaces to check where you may list %s", resource)
@@ -807,7 +817,7 @@ func (s *Server) kueueListAccess(r *http.Request, cache *k8s.ResourceCache, budg
 			// Radar couldn't enumerate every namespace: the scope stays every
 			// namespace, and the rest of it is a gap of unknown extent, so the
 			// answer never reads as complete.
-			target.gaps = append(target.gaps, resourceapi.Gap{Code: readreason.RadarForbidden, Namespaces: resourceapi.UnknownNames()})
+			target.gaps = append(target.gaps, resourceapi.Gap{Code: remainder, Namespaces: resourceapi.UnknownNames()})
 		}
 	}
 	var gaps []resourceapi.Gap

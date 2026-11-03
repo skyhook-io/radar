@@ -117,12 +117,15 @@ function Retryable({ message, onRetry }: { message: string; onRetry?: () => void
  * the first page's counts and coverage no longer describe the rows.
  */
 export function laterPageProblem(pages: KueueQueueWorkloadsResponse[]): string | undefined {
-  const first = pages[0]?.workloads?.coverage
-  const scopeKey = (coverage: ResourceReadCoverage | undefined) =>
-    coverage ? JSON.stringify([coverage.status, coverage.gaps.map(gap => [gap.code, gap.namespaces])]) : ''
+  // Everything that decides which members a page can contain: the Workload
+  // read and where submission could be resolved.
+  const readKey = (members: KueueQueueMembers | undefined) => members
+    ? JSON.stringify([members.coverage.status, members.coverage.scope, members.coverage.read, members.coverage.narrowedBy, members.coverage.gaps, members.submissionUnresolved])
+    : ''
+  const first = readKey(pages[0]?.workloads)
   for (const page of pages.slice(1)) {
     if (page.workloadsError) return page.workloadsError.error
-    if (first && scopeKey(page.workloads?.coverage) !== scopeKey(first)) return 'what Radar could read changed while paging'
+    if (first && readKey(page.workloads) !== first) return 'what Radar could read changed while paging'
   }
   return undefined
 }
@@ -250,7 +253,7 @@ function MemberList({
             {showingText(rows.length, members.matching, lowerBound)} · sorted by {local ? 'name' : 'namespace and name'}, finished last; not admission order
           </span>
           <span className="flex gap-2">
-            {paged && onRefresh && (
+            {(paged || laterPageError) && onRefresh && (
               <button type="button" className="btn-secondary px-2 py-1 text-xs" onClick={onRefresh} title="Pages are read at different moments; reread the list from the start">
                 Refresh
               </button>
@@ -328,11 +331,13 @@ function StateBadge({ row }: { row: KueueQueueWorkload }) {
 /** How this row belongs to the queue, in words, naming both queues when they disagree. */
 export function membershipText(row: KueueQueueWorkload, local: boolean, clusterQueue: string | undefined): string {
   const reservedIn = row.reservation?.clusterQueue
+  // A finished Workload's admission record says where quota was reserved,
+  // not that it was admitted, nor that the quota is still held.
   const finished = row.admission?.state === 'finished' || row.phase === 'finished'
-  const reservedWord = finished ? 'was admitted' : 'reserved'
+  const reservedWord = finished ? 'reservation recorded' : 'reserved'
   if (local) {
     if (!reservedIn) return 'No reservation'
-    const cap = finished ? 'Was admitted' : 'Reserved'
+    const cap = finished ? 'Reservation recorded' : 'Reserved'
     if (clusterQueue && reservedIn !== clusterQueue) return `${cap} in ${reservedIn} · this LocalQueue now points to ${clusterQueue}`
     return `${cap} in ${reservedIn}`
   }
