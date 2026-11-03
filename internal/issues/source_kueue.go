@@ -144,6 +144,9 @@ func detectKueueIssues(p Provider, f Filters, unchecked *uncheckedSet) []Issue {
 	// still read, and without LocalQueues the ClusterQueues are.
 	workloads, _ := d.read(kueueGroup, kueueWorkloadKind)
 
+	// Concurrent admission: Kueue makes variant Workloads that are expected to
+	// lose, and the parent's own status reports the race, not one blocked run,
+	// so neither can say on its own that the run needs action.
 	variantParents := map[types.UID]bool{}
 	for _, w := range workloads {
 		if owner := metav1.GetControllerOf(w); owner != nil && isKueueWorkloadOwner(*owner) {
@@ -411,7 +414,11 @@ func (d *kueueDetector) runIssue(w *unstructured.Unstructured, state resourcecon
 
 	facts := []issuesapi.DiagnosticFact{kueueAdmissionFact(w, state)}
 	if finding.checks {
-		facts = append(facts, d.admissionCheckFacts(w)...)
+		blocking := ""
+		if finding.fact.Source == resourcecontext.KueueFactSourceAdmissionCheck {
+			blocking = finding.fact.Name
+		}
+		facts = append(facts, d.admissionCheckFacts(w, blocking)...)
 		facts = append(facts, d.provisioningFacts(w)...)
 	}
 	issue.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleCandidate, Facts: facts}
@@ -513,7 +520,7 @@ func kueueFactText(fact *resourcecontext.KueueAdmissionFact) string {
 // admissionCheckFacts link the AdmissionChecks the Workload lists, with each
 // check's own Active condition. Freshness of a Workload's check state is not
 // established: Kueue records no generation for it.
-func (d *kueueDetector) admissionCheckFacts(w *unstructured.Unstructured) []issuesapi.DiagnosticFact {
+func (d *kueueDetector) admissionCheckFacts(w *unstructured.Unstructured, blocking string) []issuesapi.DiagnosticFact {
 	raw, _, _ := unstructured.NestedSlice(w.Object, "status", "admissionChecks")
 	var names []string
 	for _, item := range raw {
@@ -526,7 +533,13 @@ func (d *kueueDetector) admissionCheckFacts(w *unstructured.Unstructured) []issu
 	if len(names) == 0 {
 		return nil
 	}
-	sort.Strings(names)
+	// The check the finding rests on comes first, so the cap never drops it.
+	sort.SliceStable(names, func(i, j int) bool {
+		if (names[i] == blocking) != (names[j] == blocking) {
+			return names[i] == blocking
+		}
+		return names[i] < names[j]
+	})
 	if len(names) > maxKueueLinkedObjects {
 		names = names[:maxKueueLinkedObjects]
 	}
@@ -674,12 +687,20 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			continue
 		}
 		status, reason, lqMessage, current := kueueActive(lq)
-		if status != "False" || !current || d.inGrace(lq) {
+		if status != "False" {
+			continue
+		}
+		cqName, _, _ := unstructured.NestedString(lq.Object, "spec", "clusterQueue")
+		runs := dependent[lq.GetNamespace()+"/"+lq.GetName()]
+		if !current || d.inGrace(lq) {
+			// Not settled yet: its runs wait with it rather than raising
+			// their own rows.
+			for _, run := range runs {
+				covered[run.workload.GetUID()] = true
+			}
 			continue
 		}
 		created := lq.GetCreationTimestamp().Time
-		cqName, _, _ := unstructured.NestedString(lq.Object, "spec", "clusterQueue")
-		runs := dependent[lq.GetNamespace()+"/"+lq.GetName()]
 		var issueReason, message, cause, action string
 		var requiredReads []EvidenceRead
 		var queueFact *issuesapi.DiagnosticFact
@@ -693,14 +714,15 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			if !canReadClusterQueues {
 				// The ClusterQueue decides whether this is a stop or a fault;
 				// without it, say the check wasn't made rather than nothing.
-				subjects := []Ref{{Group: kueueGroup, Kind: kueueLocalQueueKind, Namespace: lq.GetNamespace(), Name: lq.GetName()}}
-				for _, run := range runs {
-					subjects = append(subjects, d.runRefs(run.workload)...)
-				}
-				d.unchecked.addFor(issuesapi.UncheckedSourceKueue, issuesapi.UncheckedReasonCallerAccessDenied, issuesapi.UncheckedKind{Group: kueueGroup, Kind: kueueClusterQueueKind}, subjects)
+				d.unchecked.addFor(issuesapi.UncheckedSourceKueue, issuesapi.UncheckedReasonCallerAccessDenied, issuesapi.UncheckedKind{Group: kueueGroup, Kind: kueueClusterQueueKind}, d.queueSubjects(lq, runs))
 				continue
 			}
 			if !readClusterQueues() {
+				// Radar couldn't read ClusterQueues: the same unknown, for
+				// the same resources, with Radar's own reason.
+				if gap := d.inventory[kueueGroup+"/"+kueueClusterQueueKind].Gap; gap != "" {
+					d.unchecked.addFor(issuesapi.UncheckedSourceKueue, gap, issuesapi.UncheckedKind{Group: kueueGroup, Kind: kueueClusterQueueKind}, d.queueSubjects(lq, runs))
+				}
 				continue
 			}
 			cq := clusterQueues[cqName]
@@ -869,16 +891,37 @@ func kueueClusterQueueCheckNames(cq *unstructured.Unstructured) []string {
 }
 
 func (d *kueueDetector) affectedRuns(runs []kueueRun, covered map[types.UID]bool) []Ref {
-	refs := make([]Ref, 0, len(runs))
-	for _, run := range runs {
-		covered[run.workload.GetUID()] = true
-		refs = append(refs, d.runRefs(run.workload)...)
+	type run struct {
+		key  string
+		refs []Ref
 	}
-	refs = dedupeRefs(refs)
-	sort.Slice(refs, func(i, j int) bool {
-		return resourceKey(refs[i].Group, refs[i].Kind, refs[i].Namespace, refs[i].Name) < resourceKey(refs[j].Group, refs[j].Kind, refs[j].Namespace, refs[j].Name)
-	})
-	return refs
+	ordered := make([]run, 0, len(runs))
+	for _, r := range runs {
+		covered[r.workload.GetUID()] = true
+		refs := d.runRefs(r.workload)
+		// Root first, then the controllers below it, then the Workload, so the
+		// links read run by run.
+		for i, j := 0, len(refs)-1; i < j; i, j = i+1, j-1 {
+			refs[i], refs[j] = refs[j], refs[i]
+		}
+		ordered = append(ordered, run{key: resourceKey(refs[0].Group, refs[0].Kind, refs[0].Namespace, refs[0].Name), refs: refs})
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].key < ordered[j].key })
+	var out []Ref
+	for _, r := range ordered {
+		out = append(out, r.refs...)
+	}
+	return dedupeRefs(out)
+}
+
+// queueSubjects are the resources whose own answer a queue check that
+// couldn't be made leaves open: the LocalQueue and every run waiting on it.
+func (d *kueueDetector) queueSubjects(lq *unstructured.Unstructured, runs []kueueRun) []Ref {
+	subjects := []Ref{{Group: kueueGroup, Kind: kueueLocalQueueKind, Namespace: lq.GetNamespace(), Name: lq.GetName()}}
+	for _, run := range runs {
+		subjects = append(subjects, d.runRefs(run.workload)...)
+	}
+	return subjects
 }
 
 func withoutFact(ctx *issuesapi.DiagnosticContext, factType string) *issuesapi.DiagnosticContext {

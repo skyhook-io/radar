@@ -315,7 +315,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	evidenceWithheld := map[string]bool{}
 	var unchecked []issuesapi.UncheckedSource
 	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
-		OnUnchecked: func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
+		OnUnchecked:          func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		Namespaces:           namespaces,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
