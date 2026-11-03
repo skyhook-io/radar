@@ -226,8 +226,8 @@ it('keeps NATS progress collapsed until requested without changing the four-colu
   act(() => toggle.click())
   expect(toggle.getAttribute('aria-expanded')).toBe('true')
   const details = document.getElementById(toggle.getAttribute('aria-controls')!)!
-  expect(details.textContent).toContain('Consumer 5 · Stream 5')
-  expect(details.textContent).toContain('Ack floorConsumer 0 · Stream 0')
+  expect(details.textContent).toContain('Consumer seq 5 · Stream seq 5')
+  expect(details.textContent).toContain('Ack floorConsumer seq 0 · Stream seq 0')
   expect(details.textContent).toContain('Waiting pull requests on this node1')
   act(() => toggle.click())
   expect(toggle.getAttribute('aria-expanded')).toBe('false')

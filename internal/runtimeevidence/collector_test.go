@@ -293,7 +293,7 @@ func TestVaultPlaintextAgainstTLSIsUnavailable(t *testing.T) {
 func TestNATSInterpretationTravelsWithResult(t *testing.T) {
 	result := NewCollector().Collect(t.Context(), nil, nil, evidence.NATS, "lab", "nats")
 	limits := strings.Join(result.Limitations, " ")
-	for _, caveat := range []string{"positions, not lag", "cannot establish a stall", "do not mean never active", "push consumer or non-leader replica"} {
+	for _, caveat := range []string{"positions, not lag", "cannot establish a stall", "do not mean never active", "Pending and waiting pull-request counts are node-reported", "non-leader replica can report zero", "waiting zero may also reflect a push consumer"} {
 		if !strings.Contains(limits, caveat) {
 			t.Fatalf("missing agent-facing qualification %q: %v", caveat, result.Limitations)
 		}

@@ -76,6 +76,7 @@ describe('application observations', () => {
     expect(html).toContain('Last delivery</dt><dd class="break-words">Unavailable')
     expect(html).toContain('Waiting pull requests on this node</dt><dd>0')
     expect(html).toContain('zero can also reflect a push consumer or non-leader replica')
+    expect(html).toContain('a non-leader replica can report zero pending messages')
     expect(html).toContain('one snapshot cannot establish stalled progress')
     expect(html).not.toContain('never active')
     const unavailable = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'nats', outcome: 'unavailable', reason: 'endpoint_denied', facts }} />)

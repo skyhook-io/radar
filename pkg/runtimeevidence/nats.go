@@ -132,8 +132,8 @@ func parseNATSSequence(raw json.RawMessage) *NATSSequence {
 	result := &NATSSequence{ConsumerSequence: natsSequenceNumber(value.Consumer), StreamSequence: natsSequenceNumber(value.Stream)}
 	var lastActive string
 	if json.Unmarshal(value.LastActive, &lastActive) == nil && len(lastActive) <= len("2006-01-02T15:04:05.999999999+07:00") {
-		if _, err := time.Parse(time.RFC3339Nano, lastActive); err == nil {
-			result.LastActive = lastActive
+		if timestamp, err := time.Parse(time.RFC3339Nano, lastActive); err == nil {
+			result.LastActive = timestamp.UTC().Format(time.RFC3339Nano)
 		}
 	}
 	if *result == (NATSSequence{}) {

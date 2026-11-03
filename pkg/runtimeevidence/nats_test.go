@@ -97,3 +97,17 @@ func TestNATSDuplicateProgressKeysRemainUnavailable(t *testing.T) {
 		t.Fatalf("ambiguous progress leaked facts: %+v, %v", facts, err)
 	}
 }
+
+func TestNATSActivityUsesBrowserCompatibleUTC(t *testing.T) {
+	for _, input := range []string{"2026-11-03T01:44:18,902568436Z", "2026-11-03T03:44:18.902568436+02:00"} {
+		body := strings.Replace(natsBody(1, 1, 1, 1, 5), `"num_pending":5`, `"num_pending":5,"delivered":{"last_active":"`+input+`"}`, 1)
+		facts, err := Parse(NATS, 200, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		seq := facts.NATS.Consumers[0].Delivered
+		if seq == nil || seq.LastActive != "2026-11-03T01:44:18.902568436Z" {
+			t.Fatalf("noncanonical activity: %+v", seq)
+		}
+	}
+}
