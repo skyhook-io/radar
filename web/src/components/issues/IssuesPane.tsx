@@ -114,7 +114,7 @@ export type IssueSubjectState =
   | { state: "hidden" }
   | { state: "checking" }
   | { state: "unconfirmed"; why: string }
-  | { state: "found"; issues: Issue[]; withheld: number }
+  | { state: "found"; issues: Issue[]; withheld: number; uncheckedWhy?: string }
   | { state: "none" };
 
 /**
@@ -137,7 +137,8 @@ export function issueSubjectState(
   }
   const data = related.data;
   if (related.isLoading || !data) return { state: "checking" };
-  if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0 };
+  const uncheckedWhy = uncheckedSubjectWhy(data.unchecked_sources);
+  if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0, ...(uncheckedWhy ? { uncheckedWhy } : {}) };
   if (data.coverage === "unknownKind") return { state: "unconfirmed", why: "this cluster has no such kind" };
   if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind}` };
   if (data.coverage === "syncing") return { state: "unconfirmed", why: `Radar is still loading ${subject.kind}` };
@@ -145,7 +146,6 @@ export function issueSubjectState(
   if (withheld > 0) {
     return { state: "unconfirmed", why: `your permissions withhold ${withheld} ${withheld === 1 ? "issue" : "issues"} about it` };
   }
-  const uncheckedWhy = uncheckedSubjectWhy(data.unchecked_sources);
   if (uncheckedWhy) return { state: "unconfirmed", why: uncheckedWhy };
   const visibility = data.visibility;
   if (visibility?.state === "degraded" || visibility?.state === "limited") {
@@ -375,6 +375,8 @@ export function IssuesPane({
               {subjectState.state === "unconfirmed" && ` — can't confirm: ${subjectState.why}`}
               {subjectState.state === "found" && subjectState.withheld > 0 &&
                 ` — your permissions withhold ${subjectState.withheld} more`}
+              {subjectState.state === "found" && subjectState.uncheckedWhy &&
+                ` — some checks are unconfirmed: ${subjectState.uncheckedWhy}`}
             </span>
           )}
           <button type="button" onClick={clearSubject} className="text-accent-text hover:underline">
