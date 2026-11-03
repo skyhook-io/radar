@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -127,7 +128,8 @@ func runServingTransportCase(t *testing.T, tc servingTransportCase) {
 					}
 					if serving, ok := rc["serving"].(map[string]any); ok {
 						if kserve, ok := serving["kserveInferenceService"].(map[string]any); ok {
-							for _, entry := range kserve["fieldNotes"].([]any) {
+							notes, _ := kserve["fieldNotes"].([]any)
+							for _, entry := range notes {
 								field := entry.(map[string]any)["field"].(string)
 								if _, found, err := unstructured.NestedFieldNoCopy(resource, strings.Split(field, ".")...); err != nil || !found {
 									t.Fatalf("%s note path %s absent from detail resource", transport, field)
@@ -215,4 +217,51 @@ func TestKServeServingContextRESTAndMCP(t *testing.T) {
 			}
 		},
 	})
+}
+
+func TestKServeStoppedIssuesRESTAndMCP(t *testing.T) {
+	for _, tc := range []struct{ name, condType, reason, want string }{
+		{name: "intentional stop"},
+		{name: "transformer failure", condType: "TransformerReady", reason: "RevisionFailed", want: "TransformerReady: RevisionFailed"},
+		{name: "runtime failure", condType: "PredictorReady", reason: "RuntimeUnhealthy", want: "PredictorReady: RuntimeUnhealthy"},
+		{name: "teardown failure", condType: "Ready", reason: "StopFailed", want: "Ready: StopFailed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runServingTransportCase(t, servingTransportCase{
+				fixture: "../../pkg/servinginsight/testdata/kserve/stopped.json",
+				gvr:     schema.GroupVersionResource{Group: "serving.kserve.io", Version: "v1beta1", Resource: "inferenceservices"},
+				kind:    "InferenceService", listKind: "InferenceServiceList", name: "iris-stopped", generation: 4,
+				expectedServing: `{"kserveInferenceService":{"deploymentMode":"Standard","clusterServingRuntimeName":"kserve-sklearnserver","model":{"transitionStatus":""}}}`,
+				prepare: func(t *testing.T, obj *unstructured.Unstructured) {
+					if tc.condType == "" {
+						return
+					}
+					conds, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+					conds = slices.DeleteFunc(conds, func(c any) bool { return c.(map[string]any)["type"] == tc.condType })
+					conds = append(conds, map[string]any{"type": tc.condType, "status": "False", "reason": tc.reason})
+					if err := unstructured.SetNestedSlice(obj.Object, conds, "status", "conditions"); err != nil {
+						t.Fatal(err)
+					}
+				},
+				checkContext: func(t *testing.T, transport string, rc map[string]any) {
+					summary, present := rc["issueSummary"].(map[string]any)
+					if tc.want == "" {
+						if present {
+							t.Fatalf("%s stopped service has issue summary: %+v", transport, summary)
+						}
+					} else if summary["count"] != float64(1) || summary["highestSeverity"] != "warning" || summary["topReason"] != tc.want {
+						t.Fatalf("%s independent failure missing from issue summary: %+v", transport, summary)
+					}
+					stopped := false
+					for _, c := range rc["statusSummary"].(map[string]any)["conditions"].([]any) {
+						condition := c.(map[string]any)
+						stopped = stopped || condition["type"] == "Stopped" && condition["status"] == "True"
+					}
+					if !stopped {
+						t.Fatalf("%s lost raw stop acknowledgment", transport)
+					}
+				},
+			})
+		})
+	}
 }
