@@ -82,7 +82,6 @@ const (
 	IdentitySystem
 )
 
-// IdentityOf names the identity a request's user reads as.
 func IdentityOf(user *pkgauth.User) Identity {
 	switch {
 	case user == nil:
@@ -94,7 +93,6 @@ func IdentityOf(user *pkgauth.User) Identity {
 	}
 }
 
-// Request is one position read.
 type Request struct {
 	Workload *unstructured.Unstructured
 	// Client reads as Identity. Nil means Radar could not build the
@@ -118,7 +116,6 @@ type Reader struct {
 	memo     map[string]fetched
 }
 
-// NewReader returns a Reader that reuses answers for memoTTL.
 func NewReader() *Reader {
 	return &Reader{now: time.Now, ttl: memoTTL, timeout: ReadTimeout, memo: map[string]fetched{}}
 }

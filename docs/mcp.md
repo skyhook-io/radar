@@ -1667,7 +1667,10 @@ A recorded `Failed` phase describes Flagger's last rollout result. Current-UID W
 
 ## Kueue pending position
 
-For a Kueue Workload eligible for a pending-position lookup, `get_resource` adds `resourceContext.scheduling.observations[].kueue.pendingPosition`: what Kueue's visibility API reported when Radar read it, as the caller. `aheadInLocalQueue` / `aheadInClusterQueue` count the Workloads Kueue orders before this one (0 = first); it is Kueue's current ordering, not admission order or a start time. `not_listed` never means "not pending", `limit_reached` means the position is unknown, and `unavailable` carries a `code` from the read-reason vocabulary (`user_forbidden` names the missing `get localqueues/pendingworkloads` in `visibility.kueue.x-k8s.io`). The read waits at most 3 seconds. A Job's position is on its child Workload, not on the Job. Absent means this projection carries no visibility result; the host may not read it, the Workload may be ineligible, or a result may have been discarded. See [integrations.md](integrations.md#pending-position-kueues-visibility-api).
+Workload `get_resource` may include `scheduling.observations[].kueue.pendingPosition`:
+Kueue's snapshot ordering, read as the caller, not admission order or a start time.
+Absent, unlisted or capped results do not establish that it is no longer pending.
+See [the integration limits and required access](integrations.md#pending-position-kueues-visibility-api).
 
 ## Auto-instrumentation reference context
 

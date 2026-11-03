@@ -1780,56 +1780,17 @@ coverage, or support for other Kueue API versions.
 
 #### Pending position (Kueue's visibility API)
 
-Where Kueue's own visibility API (`visibility.kueue.x-k8s.io`, served by
-Kueue's visibility server) is installed, Workload detail and the Kueue
-admission card on Jobs, JobSets and RayJobs show **where Kueue places a pending
-Workload**: its place in its LocalQueue and in that LocalQueue's ClusterQueue,
-with when Radar read it. MCP `get_resource` and the REST AI resource context
-carry the same answer at
-`resourceContext.scheduling.observations[].kueue.pendingPosition` on the
-Workload (a Job's position is on its child Workload). `GET
-/api/kueue/position/{namespace}/{name}` serves the UI.
+When Kueue's visibility API is installed, pending Workload detail and admission
+cards show its reported LocalQueue and ClusterQueue positions with the read time.
+REST/MCP context carries the result on the Workload, not its parent Job.
+This is snapshot ordering, not promised admission order or a start time.
 
-- **Source.** Radar asks only the LocalQueue subresource
-  (`localqueues/pendingworkloads`) and never derives a position from list order
-  or timestamps. It asks only for Workloads whose snapshot permits a pending-position lookup — no
-  Finished, Admitted or QuotaReserved condition is True and `spec.active` is
-  not false — at any `kueue.x-k8s.io` Workload version; the agent context
-  carries it on `v1beta2` Workloads, which have a scheduling projection. Kueue
-  versions serving the visibility API at `v1beta2` or `v1beta1` are read; other
-  versions answer `unsupported`.
-- **What it means.** `aheadInLocalQueue` / `aheadInClusterQueue` count the
-  Workloads Kueue orders before this one (Kueue's 0-based positions); the UI
-  shows them as `#n`. The order is Kueue's snapshot when Radar read it,
-  including Workloads Kueue already tried and couldn't admit: not a promise of
-  admission order or a start time. The ClusterQueue count includes other
-  namespaces' Workloads without naming them, and Kueue's answer doesn't say
-  which ClusterQueue it used, so none is named.
-- **What absence means.** `not_listed`: Kueue's answer for the LocalQueue
-  didn't include the Workload — it may have been admitted or deactivated since,
-  Kueue may not have seen it yet, or Kueue may not know the LocalQueue's
-  ClusterQueue. It never means "not pending". `limit_reached`: Kueue returned
-  the 1,000 rows Radar asks for without it; the position is unknown.
-  `queue_unknown` means Kueue did not know the LocalQueue; `no_local_queue`,
-  `not_served` and `unsupported` explain why Radar did not ask; `unavailable` carries a `pkg/readreason` code.
-- **Access.** The read runs as the viewer (impersonated, or with their own
-  token), so Kubernetes enforces Kueue's RBAC exactly: `get` on
-  `localqueues/pendingworkloads` in `visibility.kueue.x-k8s.io` in the
-  Workload's namespace. Kueue's `kueue-pending-workloads-lq-viewer-role`
-  grants it and aggregates to `view`, `edit` and `admin`. A refusal is the
-  answer (`user_forbidden`), not an error. Without authentication Radar reads
-  as its own identity (`radar_forbidden` when it may not); the Helm chart
-  grants that read with the `kueue` CRD group. The endpoint itself first
-  requires seeing the namespace and `get` on the Workload.
-- **Load.** One identity's successful answer for one LocalQueue is reused for 10 seconds
-  except in user-token mode, which reads with each request's credentials
-  (each read makes Kueue sort the whole ClusterQueue); the UI refreshes every
-  30 seconds while the answer can change by itself. Failed reads are not memoized,
-  so Retry makes a new attempt.
-
-The ClusterQueue subresource of Kueue v0.18.0–v0.18.10 and v0.19.0–v0.19.1
-miscounts `positionInLocalQueue` when two namespaces use the same LocalQueue
-name, one more reason Radar reads the LocalQueue subresource.
+The read runs as the viewer and requires `get localqueues/pendingworkloads` in
+`visibility.kueue.x-k8s.io` in that namespace; without authentication it uses
+Radar's identity. Access failures and unavailable APIs are shown explicitly.
+An unlisted Workload is not proven absent from the queue; a capped result leaves
+position unknown. Other namespaces contribute only to the ahead count, never
+names. Radar never derives position from timestamps or resource list order.
 
 ### KubeRay
 

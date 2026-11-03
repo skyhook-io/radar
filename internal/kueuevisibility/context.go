@@ -54,7 +54,6 @@ func RequestFor(ctx context.Context, workload *unstructured.Unstructured) (Reque
 	return req, binding
 }
 
-// CurrentBinding is the binding of Radar's current cluster connection.
 func CurrentBinding() string {
 	_, binding := k8s.GetClientSafetySnapshot()
 	return binding
