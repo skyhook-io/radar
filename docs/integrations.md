@@ -1733,6 +1733,55 @@ borrowing/lending limits, namespace eligibility and admission policies. These ar
 controller-reported quota facts, not measured utilization or available physical
 capacity. Both v1beta1 and v1beta2 queue shapes are supported.
 
+#### Workloads in a queue
+
+ClusterQueue and LocalQueue detail list the Workloads that belong to the
+queue, from `GET /api/kueue/clusterqueues/{name}/workloads` and
+`GET /api/kueue/localqueues/{namespace}/{name}/workloads`
+(`internal/server/kueue_queue_workloads.go`, membership rules in
+`internal/kueuequeues`). A Workload belongs to a ClusterQueue in two
+independent ways, and each row says which:
+
+- **Submission:** its `spec.queueName` names a LocalQueue in its namespace
+  whose `spec.clusterQueue` is the ClusterQueue *now*. This is a join by name
+  through the LocalQueue as Radar reads it today, not a record of which
+  LocalQueue, or which target, the Workload was submitted through.
+- **Reservation:** its `status.admission.clusterQueue` names the ClusterQueue,
+  as the Workload reports it.
+
+A LocalQueue's Workloads are those in its namespace whose `spec.queueName`
+names it. The cases the two ways disagree on are listed as reported: a
+Workload still reserved in the ClusterQueue its LocalQueue used to point at
+(`spec.clusterQueue` is immutable, so this follows deleting and re-creating
+the LocalQueue) belongs to the old ClusterQueue by reservation and the new one
+by submission, and its row names both; a finished Workload that still reports
+its admission stays a reservation member, though Kueue released its quota and
+leaves it out of its own counts; a Workload being deleted keeps its membership
+until it is gone; a Workload that belongs both ways is one row.
+
+Lookups go through an index on the cached Workloads and LocalQueues
+(`pkg/k8score/kueue_queue_index.go`), so a queue's cost follows its own size.
+Workloads and LocalQueues are each read only where the caller may `list`
+that kind in the namespace (a SubjectAccessReview per namespace, not
+inferred from Pod access), and the response carries `pkg/resourceapi`
+coverage for each read: a namespace the caller can't list is a
+`user_forbidden` gap, one Radar hasn't loaded `kind_sync_pending`, and an
+empty list with complete coverage is a queue confirmed empty. Where Workloads
+were read but LocalQueues weren't, only reservation can place a Workload, and
+`submissionUnresolved` names those namespaces. A denied Workload read does not
+fail the response: the ClusterQueue answer still lists the LocalQueues
+pointing at it with the counts their controller reports, which is the only
+evidence Radar shows of Workloads the caller can't list. Radar never
+subtracts its own count from a controller count: cache lag, finished
+Workloads and inadmissible Workloads make them differ too.
+
+Rows are paged by key, ordered by namespace and name so that no order is
+mistaken for admission order. A cursor belongs to its queue (by UID), filter
+and cluster context. A member is never returned twice while a list is paged;
+a member that joins behind the cursor appears when the list is read again
+from the start. Counts and coverage describe every member Radar read for the
+caller as of each page's read, not just the page.
+
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
 detail shows native outcomes, reasons, requested Pod counts and PodTemplate
