@@ -34,7 +34,6 @@ const (
 )
 
 const (
-	ReasonKueueExceedsQuota                 = "KueueExceedsQuota"
 	ReasonKueueNoMatchingFlavor             = "KueueNoMatchingFlavor"
 	ReasonKueueNamespaceNotEligible         = "KueueNamespaceNotEligible"
 	ReasonKueueLocalQueueMissing            = "KueueLocalQueueMissing"
@@ -314,12 +313,6 @@ type kueueRunFinding struct {
 // deactivation cause is the reason RAD-811 kept on the fact.
 func kueueRunFindingFor(state resourcecontext.KueueAdmissionState) (kueueRunFinding, bool) {
 	switch state.State {
-	case resourcecontext.KueueAdmissionExceedsQuota:
-		return kueueRunFinding{
-			reason: ReasonKueueExceedsQuota, fact: state.Blocker, configuration: true,
-			cause:  "Kueue reports that this run requests more than its ClusterQueue, or its cohort, could ever provide, so it will not be admitted as configured.",
-			action: "Reduce the run's resource requests or parallelism, or raise the ClusterQueue's nominal quota or borrowing limit for the resources the message names.",
-		}, true
 	case resourcecontext.KueueAdmissionNoMatchingFlavor:
 		return kueueRunFinding{
 			reason: ReasonKueueNoMatchingFlavor, fact: state.Blocker, configuration: true,
