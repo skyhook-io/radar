@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,5 +71,32 @@ func TestKueueFailedDiscoveryIsNotAbsence(t *testing.T) {
 	got := p.kueueInventory(kueueGroup, kueueWorkloadKind, []string{"team"})
 	if got.OK || got.Gap != "read_failed" {
 		t.Fatalf("failed discovery read as absent Kueue: %+v", got)
+	}
+}
+
+func TestKueueInventoryUndiscoveredKindWaitsForDiscovery(t *testing.T) {
+	discovered, err := k8score.NewResourceDiscovery(fake.NewClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynamic, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), Discovery: discovered})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(dynamic.Stop)
+	p := &CacheProvider{dynamic: &k8s.DynamicResourceCache{DynamicResourceCache: dynamic}, discovery: &k8s.ResourceDiscovery{ResourceDiscovery: discovered}}
+	if got := p.kueueInventory(kueueGroup, kueueWorkloadKind, []string{"team"}); got.Gap != issuesapi.UncheckedReasonSyncPending {
+		t.Fatalf("undiscovered kind read as absence: %+v", got)
+	}
+	dynamic.DiscoverAllCRDs()
+	deadline := time.Now().Add(5 * time.Second)
+	for dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
+		t.Fatal("discovery never completed")
+	}
+	if got := p.kueueInventory(kueueGroup, kueueWorkloadKind, []string{"team"}); got.Gap != "" || got.OK {
+		t.Fatalf("confirmed absent kind did not settle: %+v", got)
 	}
 }
