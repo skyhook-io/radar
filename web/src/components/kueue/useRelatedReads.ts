@@ -102,8 +102,11 @@ export interface RelatedObjects {
  */
 export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true, subjectState?: string): RelatedObjects {
   const [mountedAt] = useState(Date.now)
-  const list = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
+  const [refused, setRefused] = useState(false)
+  const list = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: refused ? false : RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
   const { data, coverage, error, dataUpdatedAt, refetch } = list
+  // A refused list isn't polled: the names are read one by one instead.
+  if (listRefused(error) !== refused) setRefused(listRefused(error))
   // The object on screen updates live. When its relevant state changes (the
   // caller's key: the names it points at and the conditions that decide what
   // is shown, not every status write), a read from before can no longer prove
@@ -122,7 +125,8 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
   const listDenied = listRefused(error)
   const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied, subjectChangedAt)
   const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data && !readBeforeMount ? { state: 'found', object: data } : { state: 'loading' }
-  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error, readBeforeMount, namespace }, name)]))
+  // A list read before mount or before the subject last changed answers nothing yet, present or absent: it may lend a tone.
+  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : readBeforeMount && !error ? { state: 'loading' } as RelatedRead : relatedReadInList({ data, coverage, error, readBeforeMount, namespace }, name)]))
   const completeness = coverage?.status === 'complete' || coverage?.status === 'partial' ? coverage.status : 'unknown'
   return { byName, all, completeness }
 }
@@ -136,10 +140,11 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
 export const RELATED_GET_RECHECK_MS = 60_000
 
 /**
- * Reads single objects through the resource GET. A denial is final for the
- * view: it isn't retried or polled. `freshAfter` is when the object on screen
- * last changed: a read older than that is re-run, and until it lands it can't
- * prove absence.
+ * Reads single objects through the resource GET, re-reading on mount whatever
+ * the host QueryClient's defaults. A coded denial is final for the view: it
+ * isn't retried or polled. `changedAt` is when the object on screen last
+ * changed: a read older than that or than mount is re-run, and until it lands
+ * it can't prove absence.
  */
 export function useRelatedReads(refs: RelatedRef[], enabled = true, changedAt = 0): RelatedRead[] {
   const cacheScope = getApiBase()
@@ -149,6 +154,8 @@ export function useRelatedReads(refs: RelatedRef[], enabled = true, changedAt = 
   const results = useQueries({
     queries: bases.map(base => ({
       ...base,
+      staleTime: 0,
+      refetchOnMount: 'always' as const,
       retry: (failureCount: number, error: unknown) => !denied(error) && !provedAbsent(error) && base.retry(failureCount, error),
       refetchInterval: (query: { state: { error: unknown } }) => denied(query.state.error) ? false : base.refetchInterval(query),
     })),

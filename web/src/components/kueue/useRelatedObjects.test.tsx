@@ -82,13 +82,15 @@ it('also reads by GET when an older Radar denies the list with an uncoded 403', 
 
 it('doesn’t call a name missing from a list cached before the hook mounted, until the re-read lands', async () => {
   // Another view read the list a moment ago, before the object existed.
-  client.setQueryData(['resources', 'clusterqueues', 'kueue.x-k8s.io', undefined, getApiBase()], { items: [], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } }, { updatedAt: Date.now() - 5000 })
+  client.setQueryData(['resources', 'clusterqueues', 'kueue.x-k8s.io', undefined, getApiBase()], { items: [{ metadata: { name: 'present' } }], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } }, { updatedAt: Date.now() - 5000 })
   let release: (() => void) | undefined
   vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => {
     release = () => resolve(new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }, { metadata: { name: 'gone' } }], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } })))
   })))
   await act(async () => root.render(<QueryClientProvider client={client}><Probe onRead={read => { latest = read }} /></QueryClientProvider>))
   expect(latest?.byName.gone).toEqual({ state: 'loading' })
+  // Nor does an object found in that old list lend its state before the re-read lands.
+  expect(latest?.byName.present).toEqual({ state: 'loading' })
   await act(async () => release?.())
   await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))
 })

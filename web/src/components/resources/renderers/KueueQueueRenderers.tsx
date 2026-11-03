@@ -66,5 +66,5 @@ export function LocalQueueStatusBadge({ data }: { data: any }) {
   const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], supported && !!parentName, relatedReadKey(data, [parentName], ['Active'])).byName[parentName]
   const parent = parentName ? parentRead : undefined
   const status = localQueueStatusWithParent(data, supported ? parent : undefined)
-  return <span className={`badge ${status.color}`}>{status.text}</span>
+  return <span className={`badge whitespace-nowrap ${status.color}`}>{status.text}</span>
 }

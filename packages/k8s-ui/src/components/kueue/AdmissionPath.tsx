@@ -90,7 +90,9 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
             </div>
             {localQueue?.state === 'not_found' && <p className={muted}>{reserved
               ? `No LocalQueue ${queueName} exists in namespace ${namespace} now; the reservation below was made through it earlier.`
-              : `No LocalQueue ${queueName} exists in namespace ${namespace}. Kueue can't admit this Workload until it does.`}</p>}
+              : finished || data.spec?.active === false
+                ? `No LocalQueue ${queueName} exists in namespace ${namespace}.`
+                : `No LocalQueue ${queueName} exists in namespace ${namespace}. Kueue can't admit this Workload until it does.`}</p>}
           </>}
         </Step>
         {queueName && reads && (

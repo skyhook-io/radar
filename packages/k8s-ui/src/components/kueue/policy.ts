@@ -17,7 +17,7 @@ type Dictionary = Partial<Record<KueuePolicyField, Record<string, string>>>
 
 const shared: Dictionary = {
   stopPolicy: {
-    None: 'Not stopped: new reservations can be made.',
+    None: 'Not stopped by policy.',
     Hold: 'Stopped: no new reservations; reservations are cancelled for Workloads not yet admitted, and admitted Workloads run to completion.',
     HoldAndDrain: 'Stopped and draining: no new reservations; reservations are cancelled and admitted Workloads are evicted.',
   },
