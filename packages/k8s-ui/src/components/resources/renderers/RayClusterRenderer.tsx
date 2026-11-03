@@ -19,8 +19,16 @@ export interface RayClusterRendererProps {
   podsError?: string
   selection?: RayClusterPodSelection
   onSelectPods?: (selection: RayClusterPodSelection) => void
+  /**
+   * Opens one Pod's logs. The host decides whether the viewer may read Pod
+   * logs; without it the rows have no Logs buttons and no logs note.
+   */
   onOpenPodLogs?: (pod: WorkloadPodInfo) => void
-  /** The connected Radar can't list this RayCluster's Pods. */
+  /**
+   * Set when the connected Radar can't list this RayCluster's Pods: Runtime
+   * Pods (shown only with `onSelectPods`) then shows this upgrade note instead
+   * of the error, loading or Pod list. Absent says nothing about support.
+   */
   podsUpgrade?: RadarUpgradeRequirement | null
 }
 
@@ -45,7 +53,7 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
   const owners = (data.metadata?.ownerReferences ?? []).filter((owner: any) => owner.controller === true && apiVersionToGroup(owner.apiVersion) === 'ray.io' && ['RayService', 'RayJob'].includes(owner.kind))
   const scope = selection.workerGroup != null ? `Worker group: ${selection.workerGroup}` : selection.nodeType === 'head' ? 'Head' : 'All runtime Pods'
   const select = (value: RayClusterPodSelection) => { setExpanded(false); onSelectPods?.(value) }
-  const row = (pod: WorkloadPodInfo) => <PodRow key={pod.name} name={pod.name} namespace={data.metadata.namespace} ready={pod.ready} healthLevel={pod.healthLevel} detail={workloadPodDetail(pod)} onNavigate={onNavigate} onOpenLogs={onOpenPodLogs && (() => onOpenPodLogs(pod))} logsUnavailable={pod.containerStatuses?.length ? undefined : pod.nodeName ? 'No container status reported yet' : 'Not scheduled yet'} />
+  const row = (pod: WorkloadPodInfo) => <PodRow key={pod.name} name={pod.name} namespace={data.metadata.namespace} ready={pod.ready} healthLevel={pod.healthLevel} detail={workloadPodDetail(pod)} onNavigate={onNavigate} onOpenLogs={onOpenPodLogs && (() => onOpenPodLogs(pod))} logsUnavailable={pod.containerStatuses?.length ? undefined : pod.nodeName ? 'No container status yet' : 'Not scheduled yet'} />
   return <div className="space-y-4">
     {stale && <AlertBanner variant="info" title="Status describes an earlier generation" message={`Specification generation ${data.metadata.generation}; controller observed ${status.observedGeneration}. Counts and conditions below retain that observation.`} />}
     <Section variant="card" title="Runtime Health" icon={Activity} defaultExpanded>
@@ -68,7 +76,7 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
         value={selection.workerGroup != null ? `group:${selection.workerGroup}` : selection.nodeType === 'head' ? 'head' : 'all'}
         options={[{ value: 'all', label: 'All runtime Pods' }, { value: 'head', label: 'Head' }, ...groups.map((g: any) => ({ value: `group:${g.groupName}`, label: `Worker group: ${g.groupName}` }))]}
         onChange={value => select(value === 'all' ? {} : value === 'head' ? { nodeType: 'head' } : { nodeType: 'worker', workerGroup: value.slice(6) })} />
-      <p className="mb-2 text-xs text-theme-text-tertiary">Directly controlled by this RayCluster incarnation. Cleanup Job descendants are excluded.{onOpenPodLogs ? ' Logs opens a Pod\'s container output, which is gone once the Pod is deleted. Ray session logs under /tmp/ray aren\'t read.' : ''}</p>
+      <p className="mb-2 text-xs text-theme-text-tertiary">Directly controlled by this RayCluster incarnation. Cleanup Job descendants are excluded.{onOpenPodLogs ? ' The Logs button shows a Pod\'s container output while the Pod exists. Ray session logs under /tmp/ray aren\'t read.' : ''}</p>
       {podsUpgrade ? <RadarUpgradeNote requirement={podsUpgrade} /> : podsError ? <AlertBanner variant="warning" title="Pod evidence unavailable" message={podsError} /> : podsLoading ? <p className="text-sm text-theme-text-secondary">Reading runtime Pods…</p> : podEvidence ? <>
         <p className="mb-2 text-sm text-theme-text-secondary">{scope} · {podEvidence.total} {podEvidence.total === 1 ? 'Pod' : 'Pods'}{podEvidence.truncated ? ` (showing ${podEvidence.pods.length}, failures first)` : ''}</p>
         {podEvidence.total === 0 && <p className="text-sm text-theme-text-secondary">No directly owned Pods in this scope.</p>}

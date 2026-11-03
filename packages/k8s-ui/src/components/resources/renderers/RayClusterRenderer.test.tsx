@@ -34,21 +34,14 @@ describe('RayCluster Pod log links', () => {
   it('offers logs on each verified Pod only when the host can open them', () => {
     const withLogs = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={() => {}} />)
     expect(withLogs).toContain('Open logs for cluster-head-abc'); expect(withLogs).toContain('Open logs for cluster-cpu-worker-def')
-    expect(withLogs).toContain('gone once the Pod is deleted'); expect(withLogs).toContain('/tmp/ray')
+    expect(withLogs).toContain('container output while the Pod exists'); expect(withLogs).toContain('/tmp/ray')
     const without = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} />)
     expect(without).not.toContain('logs for'); expect(without).not.toContain('/tmp/ray')
   })
-  it('says why a Pod with no reported container status has no logs, and keeps that button focusable', () => {
-    const opened: string[] = []
-    const host = document.createElement('div')
-    const view = createRoot(host)
-    act(() => view.render(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={pod => opened.push(pod.name)} />))
-    const unscheduled = host.querySelector<HTMLButtonElement>('[aria-label="Logs for cluster-cpu-worker-new: Not scheduled yet"]')!
-    expect(unscheduled.getAttribute('aria-disabled')).toBe('true'); expect(unscheduled.disabled).toBe(false)
-    expect(host.querySelector('[aria-label="Logs for cluster-cpu-worker-bound: No container status reported yet"]')).not.toBeNull()
-    act(() => unscheduled.click())
-    expect(opened).toEqual([])
-    act(() => view.unmount())
+  it('says why a Pod with no reported container status has no logs instead of offering a button', () => {
+    const html = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={() => {}} />)
+    expect(html).toContain('Not scheduled yet'); expect(html).toContain('No container status yet')
+    expect(html).not.toContain('Open logs for cluster-cpu-worker-new'); expect(html).not.toContain('Open logs for cluster-cpu-worker-bound')
   })
   it('opens the clicked row\'s Pod', () => {
     const opened: string[] = []

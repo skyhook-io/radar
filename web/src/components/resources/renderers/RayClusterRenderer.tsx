@@ -27,15 +27,19 @@ function RayClusterEvidence({ data, onNavigate }: { data: any; onNavigate?: (ref
   return <BaseRenderer data={data} onNavigate={onNavigate} selection={selection} onSelectPods={setSelection} podEvidence={query.data} podsLoading={query.isLoading} podsError={query.error?.message} onOpenPodLogs={canViewLogs ? openPodLogs : undefined} podsUpgrade={support === 'unsupported' ? upgrade : null} />
 }
 
-// Pod container lists put init containers first; only reported statuses say
-// which ones they are, so without them the viewer keeps its own default. An
-// unready init container is still running or has failed (a worker waiting on
-// the head's GCS sits in KubeRay's wait-gcs-ready), so its output comes first.
+// The container a Pod's logs open on. Container lists put init containers
+// first and only reported statuses say which those are, so with no statuses
+// the viewer keeps its own default. While no application container has run
+// (none ready, none restarted), the first unready init container is what the
+// Pod is waiting on — a worker waiting for the head sits in KubeRay's
+// wait-gcs-ready — though it may itself not have started yet. Otherwise the
+// first application container, so a running native sidecar never wins over
+// a crashing application.
 export function logsContainer(pod: WorkloadPodInfo): string | undefined {
   const statuses = pod.containerStatuses ?? []
   if (!statuses.length) return undefined
-  const blockingInit = pod.containers.find(name => statuses.some(status => status.init && status.name === name && !status.ready))
-  if (blockingInit) return blockingInit
   const init = new Set(statuses.filter(status => status.init).map(status => status.name))
-  return pod.containers.find(name => !init.has(name))
+  const appRan = statuses.some(status => !status.init && (status.ready || status.restartCount > 0))
+  const blockingInit = appRan ? undefined : pod.containers.find(name => statuses.some(status => status.init && status.name === name && !status.ready))
+  return blockingInit ?? pod.containers.find(name => !init.has(name))
 }

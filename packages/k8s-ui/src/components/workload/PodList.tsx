@@ -22,8 +22,9 @@ export function PodRow({
   healthLevel?: WorkloadPodInfo['healthLevel']
   detail: string
   onNavigate?: NavigateToResource
+  /** Adds a Logs button beside the row. */
   onOpenLogs?: () => void
-  /** Shown instead of opening logs when the Pod has none to read yet. */
+  /** With `onOpenLogs`, shows this reason in place of the Logs button. */
   logsUnavailable?: string
 }) {
   const statusLabel = podStatusLabel(healthLevel, ready)
@@ -59,17 +60,21 @@ export function PodRow({
   return (
     <div className="flex min-w-0 items-stretch gap-2">
       <div className="min-w-0 flex-1">{row}</div>
-      <button
-        type="button"
-        onClick={logsUnavailable ? undefined : onOpenLogs}
-        aria-disabled={logsUnavailable ? true : undefined}
-        aria-label={logsUnavailable ? `Logs for ${name}: ${logsUnavailable}` : `Open logs for ${name}`}
-        title={logsUnavailable}
-        className={clsx('btn-secondary inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium', logsUnavailable && 'cursor-not-allowed opacity-50')}
-      >
-        <Terminal className="h-3.5 w-3.5" />
-        Logs
-      </button>
+      {logsUnavailable ? (
+        <span className="flex w-24 shrink-0 items-center justify-center rounded-md border border-dashed border-theme-border px-2 text-center text-xs text-theme-text-tertiary">
+          {logsUnavailable}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onOpenLogs}
+          aria-label={`Open logs for ${name}`}
+          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium"
+        >
+          <Terminal className="h-3.5 w-3.5" />
+          Logs
+        </button>
+      )}
     </div>
   )
 }
