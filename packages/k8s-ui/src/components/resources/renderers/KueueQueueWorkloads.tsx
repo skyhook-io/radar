@@ -82,7 +82,7 @@ function KueueQueueWorkloadsBody({
           members={first.workloads}
           rows={uniqueRows(pages ?? [])}
           paged={(pages?.length ?? 0) > 1}
-          laterPageError={nextPageError ?? pages?.slice(1).find(page => page.workloadsError)?.workloadsError?.error}
+          laterPageError={nextPageError ?? laterPageProblem(pages ?? [])}
           onRefresh={onRetry}
           membership={membership}
           onMembershipChange={onMembershipChange}
@@ -109,6 +109,22 @@ function Retryable({ message, onRetry }: { message: string; onRetry?: () => void
       {onRetry && <button type="button" className="text-xs text-theme-text-secondary underline hover:text-theme-text-primary" onClick={onRetry}>Retry</button>}
     </div>
   )
+}
+
+/**
+ * Why pages after the first can't simply be added to it: a later page failed,
+ * or read a different scope than the first (access changed while paging), so
+ * the first page's counts and coverage no longer describe the rows.
+ */
+export function laterPageProblem(pages: KueueQueueWorkloadsResponse[]): string | undefined {
+  const first = pages[0]?.workloads?.coverage
+  const scopeKey = (coverage: ResourceReadCoverage | undefined) =>
+    coverage ? JSON.stringify([coverage.status, coverage.gaps.map(gap => [gap.code, gap.namespaces])]) : ''
+  for (const page of pages.slice(1)) {
+    if (page.workloadsError) return page.workloadsError.error
+    if (first && scopeKey(page.workloads?.coverage) !== scopeKey(first)) return 'what Radar could read changed while paging'
+  }
+  return undefined
 }
 
 /**

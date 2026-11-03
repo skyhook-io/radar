@@ -153,6 +153,14 @@ describe('paging', () => {
     expect(html).not.toContain('Could not refresh')
   })
 
+  it('stops paging when access changed between pages', () => {
+    const first = response(members([row('a')], complete, { next: 'x' }))
+    const narrowed = response(members([row('b')], partial))
+    const html = render({ pages: [first, narrowed], hasMore: true, onLoadMore: () => {}, onRetry: () => {} })
+    expect(html).toContain('Could not read the next page: what Radar could read changed while paging')
+    expect(html).not.toContain('Load more')
+  })
+
   it('stops paging and says so when a later page could not be read', () => {
     const first = response(members([row('a')], complete, { next: 'x' }))
     const failed = response(undefined, { workloadsError: { error: 'still loading', error_code: 'kind_sync_pending' } })

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { ResourceRef } from '@skyhook-io/k8s-ui'
 import {
   ClusterQueueRenderer as BaseClusterQueueRenderer,
@@ -24,11 +25,15 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
   const pages = query.data?.pages.filter(page => page.queue.uid === data.metadata?.uid)
   const cursorRejected = query.isFetchNextPageError && (query.error as { data?: { error_code?: string } } | null)?.data?.error_code === 'kueue_cursor_invalid'
   const { refetch } = query
+  const queryClient = useQueryClient()
+  // Refresh reads the list again from its first page, dropping the pages
+  // loaded since: replaying them all would reread the queue once per page.
+  const restart = () => void queryClient.resetQueries({ queryKey: ['kueue-queue-workloads', kind, data.metadata?.namespace ?? '', data.metadata?.name ?? '', data.metadata?.uid ?? ''] })
   // A cursor issued for another list (a re-created queue, another cluster
   // context) is refused: read the list again from its first page.
   useEffect(() => {
-    if (cursorRejected) void refetch()
-  }, [cursorRejected, refetch])
+    if (cursorRejected) void queryClient.resetQueries({ queryKey: ['kueue-queue-workloads', kind, data.metadata?.namespace ?? '', data.metadata?.name ?? '', data.metadata?.uid ?? ''] })
+  }, [cursorRejected, queryClient, kind, data.metadata?.namespace, data.metadata?.name, data.metadata?.uid])
   return (
     <KueueQueueWorkloads
       kind={kind}
@@ -47,7 +52,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       hasMore={query.hasNextPage}
       loadingMore={query.isFetchingNextPage}
       onLoadMore={() => void query.fetchNextPage()}
-      onRetry={() => void query.refetch()}
+      onRetry={pages && pages.length > 1 ? restart : () => void refetch()}
       onNavigate={onNavigate}
     />
   )

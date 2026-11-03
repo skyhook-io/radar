@@ -790,17 +790,25 @@ func (s *Server) kueueListAccess(r *http.Request, cache *k8s.ResourceCache, budg
 		// Every namespace is visible to this caller, so naming the ones they
 		// can't list discloses nothing (unlike listScope's candidates, which
 		// can exceed what a restricted caller was shown).
-		candidates := namespaceNamesInCache(cache)
+		candidates, complete := namespaceNamesInCache(cache), cache.KindReadinessFor("namespaces") == k8s.KindReady
 		if len(candidates) == 0 {
 			// Radar's identity may not list Namespaces: check the namespaces
 			// it collects in instead.
-			candidates, _ = k8s.GetAccessibleNamespaces(r.Context())
+			candidates, complete = k8s.GetAccessibleNamespaces(r.Context())
 		}
 		if len(candidates) == 0 {
 			return nil, target, readFailuref(readreason.RadarNamespaceNotCollected, "Radar can't enumerate namespaces to check where you may list %s", resource)
 		}
-		target.namespaces = candidates
 		allowed, denied, unchecked = readscope.ClusterFirstNamespaceAccess(r.Context(), candidates, budget, cached, check)
+		if complete {
+			// Radar's list of namespaces is all of them: they become the scope.
+			target.namespaces = candidates
+		} else {
+			// Radar couldn't enumerate every namespace: the scope stays every
+			// namespace, and the rest of it is a gap of unknown extent, so the
+			// answer never reads as complete.
+			target.gaps = append(target.gaps, resourceapi.Gap{Code: readreason.RadarForbidden, Namespaces: resourceapi.UnknownNames()})
+		}
 	}
 	var gaps []resourceapi.Gap
 	if len(denied) > 0 {
