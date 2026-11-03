@@ -1772,15 +1772,18 @@ says `localQueueUnread`, and the member counts are lower bounds. An empty list
 is a queue confirmed empty only when the coverage is complete, nothing
 narrowed it, and `submissionUnresolved` is absent. A caller who sees every
 namespace but may list Workloads only in some is checked namespace by
-namespace (within one budget of permission checks per request). A denied Workload read does not
-fail the response: the ClusterQueue answer still lists the LocalQueues
+namespace (within a budget of permission checks per request, split between
+Workloads and LocalQueues). This rule is stricter than the resource
+browser's, which shows Workloads wherever the caller can see the namespace.
+A denied Workload read does not fail the response: the ClusterQueue answer still lists the LocalQueues
 pointing at it with the counts their controller reports, which is the only
 evidence Radar shows of Workloads the caller can't list. Radar never
 subtracts its own count from a controller count: cache lag, finished
 Workloads and inadmissible Workloads make them differ too.
 
-Rows are paged by key, ordered by namespace and name so that no order is
-mistaken for admission order. A cursor belongs to its queue (by UID), filter
+Rows are paged by key: unfinished Workloads first, finished ones after
+(Kueue keeps them until their owner goes), each by namespace and name so that
+no order is mistaken for admission order. A cursor belongs to its queue (by UID), filter
 and cluster context. A member is never returned twice while a list is paged;
 a member that joins behind the cursor appears when the list is read again
 from the start. Counts and coverage describe every member Radar read for the
