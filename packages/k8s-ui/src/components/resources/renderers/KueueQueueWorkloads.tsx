@@ -43,6 +43,8 @@ export interface KueueQueueWorkloadsProps {
   hasMore?: boolean
   loadingMore?: boolean
   onLoadMore?: () => void
+  /** Why the next page could not be read, when the request itself failed. */
+  nextPageError?: string | null
   onRetry?: () => void
   onNavigate?: (ref: NavigateRef) => void
 }
@@ -62,7 +64,7 @@ export function KueueQueueWorkloads(props: KueueQueueWorkloadsProps) {
 }
 
 function KueueQueueWorkloadsBody({
-  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, onRetry, onNavigate,
+  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, nextPageError, onRetry, onNavigate,
 }: KueueQueueWorkloadsProps) {
   if (upgrade) return <RadarUpgradeNote requirement={upgrade} />
   const first = pages?.[0]
@@ -76,12 +78,11 @@ function KueueQueueWorkloadsBody({
       {first.workloads ? (
         <MemberList
           local={local}
-          namespace={first.queue.namespace}
           clusterQueue={first.queue.clusterQueue}
           members={first.workloads}
           rows={uniqueRows(pages ?? [])}
           paged={(pages?.length ?? 0) > 1}
-          laterPageError={pages?.slice(1).find(page => page.workloadsError)?.workloadsError?.error}
+          laterPageError={nextPageError ?? pages?.slice(1).find(page => page.workloadsError)?.workloadsError?.error}
           onRefresh={onRetry}
           membership={membership}
           onMembershipChange={onMembershipChange}
@@ -95,7 +96,7 @@ function KueueQueueWorkloadsBody({
       ) : (
         <WorkloadsUnread local={local} queue={queue} code={first.workloadsError?.error_code} message={first.workloadsError?.error} />
       )}
-      {error && <Retryable message={`Could not refresh: ${error}`} onRetry={onRetry} />}
+      {error && !nextPageError && <Retryable message={`Could not refresh: ${error}`} onRetry={onRetry} />}
       {!local && <LocalQueueList response={first} onNavigate={onNavigate} />}
     </div>
   )
@@ -171,12 +172,10 @@ function scopeNotice(coverage: ResourceReadCoverage): string | undefined {
   return undefined
 }
 
-
 function MemberList({
-  local, namespace, clusterQueue, members, rows, paged, laterPageError, onRefresh, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, onNavigate,
+  local, clusterQueue, members, rows, paged, laterPageError, onRefresh, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, onNavigate,
 }: {
   local: boolean
-  namespace?: string
   clusterQueue?: string
   members: KueueQueueMembers
   rows: KueueQueueWorkload[]
@@ -202,7 +201,6 @@ function MemberList({
   ].filter(Boolean) as string[]
   const lowerBound = membersLowerBound(members, membership)
   const chip = (count: number, bounded: boolean) => (bounded ? undefined : count)
-  const unresolved = new Set(members.submissionUnresolved?.names ?? [])
   return (
     <div className="space-y-3">
       <FactGrid>
@@ -219,7 +217,7 @@ function MemberList({
           <FilterPill label={chipLabel('Admission here', members.counts.reservation, isLowerBound(members.coverage))} count={chip(members.counts.reservation, isLowerBound(members.coverage))} active={membership === 'reservation'} onClick={() => onMembershipChange('reservation')} tooltip="Workloads whose admission record names this ClusterQueue, finished ones included" />
         </div>
       )}
-      {onStateChange && <StateFilter counts={members.counts.states} state={state} onStateChange={onStateChange} />}
+      {onStateChange && <StateFilter counts={members.counts.states} bounded={lowerBound} state={state} onStateChange={onStateChange} />}
       {rows.length === 0 ? (
         <div>
           <p className="text-sm text-theme-text-secondary">{emptyMessage(members, local, filtered)}</p>
@@ -228,7 +226,7 @@ function MemberList({
       ) : (
         <ul className="divide-y divide-theme-border">
           {rows.map(row => (
-            <WorkloadRow key={row.uid} row={row} local={local} namespace={namespace} clusterQueue={clusterQueue} unresolved={unresolved.has(row.namespace)} onNavigate={onNavigate} />
+            <WorkloadRow key={row.uid} row={row} local={local} clusterQueue={clusterQueue} onNavigate={onNavigate} />
           ))}
         </ul>
       )}
@@ -270,8 +268,10 @@ function unresolvedNotice(members: KueueQueueMembers): string | undefined {
   const set = members.submissionUnresolved
   if (!set) return undefined
   const names = set.names ?? []
-  const where = names.length > 0 && names.length <= 3 && names.length === set.count ? names.join(', ') : 'some namespaces'
-  return `Radar couldn't read LocalQueues in ${where}, so Workloads there are listed only when their reservation names this queue.`
+  const where = set.extent === 'all'
+    ? 'any namespace it read Workloads in'
+    : names.length > 0 && names.length <= 3 && names.length === set.count ? names.join(', ') : 'some namespaces'
+  return `Radar couldn't read LocalQueues in ${where}, so Workloads there are listed only when their admission names this queue.`
 }
 
 const severityOrder: BadgeSeverity[] = ['error', 'alert', 'warning', 'info', 'neutral', 'success']
@@ -280,7 +280,7 @@ const severityOrder: BadgeSeverity[] = ['error', 'alert', 'warning', 'info', 'ne
  * Members grouped by the state the shared classification gives them, worst
  * first. Counts are Radar's, over every member it read for you.
  */
-function StateFilter({ counts, state, onStateChange }: { counts: Record<string, number>; state?: string; onStateChange: (state: string | undefined) => void }) {
+function StateFilter({ counts, bounded, state, onStateChange }: { counts: Record<string, number>; bounded: boolean; state?: string; onStateChange: (state: string | undefined) => void }) {
   const entries = Object.entries(counts ?? {}).filter(([, n]) => n > 0)
   if (state && !entries.some(([code]) => code === state)) entries.push([state, 0])
   if (entries.length < 2 && !state) return null
@@ -293,7 +293,7 @@ function StateFilter({ counts, state, onStateChange }: { counts: Record<string, 
       {entries.map(([code, n]) => {
         const { label, severity } = kueueAdmissionStatePresentation(code)
         const tone = severity === 'error' ? 'danger' : severity === 'alert' ? 'high' : severity === 'warning' ? 'warn' : 'neutral'
-        return <FilterPill key={code} label={label} count={n} tone={tone} active={state === code} onClick={() => onStateChange(state === code ? undefined : code)} />
+        return <FilterPill key={code} label={chipLabel(label, n, bounded)} count={bounded ? undefined : n} tone={tone} active={state === code} onClick={() => onStateChange(state === code ? undefined : code)} />
       })}
     </div>
   )
@@ -312,7 +312,7 @@ function StateBadge({ row }: { row: KueueQueueWorkload }) {
 }
 
 /** How this row belongs to the queue, in words, naming both queues when they disagree. */
-export function membershipText(row: KueueQueueWorkload, local: boolean, clusterQueue: string | undefined, unresolved: boolean): string {
+export function membershipText(row: KueueQueueWorkload, local: boolean, clusterQueue: string | undefined): string {
   const reservedIn = row.reservation?.clusterQueue
   const finished = row.admission?.state === 'finished' || row.phase === 'finished'
   const reservedWord = finished ? 'was admitted' : 'reserved'
@@ -331,19 +331,17 @@ export function membershipText(row: KueueQueueWorkload, local: boolean, clusterQ
   else parts.push('no reservation')
   if (!submitted && row.queueName) {
     if (row.submission) parts.push(`its LocalQueue ${row.queueName} now points to ${row.submission.clusterQueue}`)
-    else if (unresolved) parts.push(`LocalQueue ${row.queueName} not read`)
+    else if (row.localQueueUnread) parts.push(`LocalQueue ${row.queueName} not read`)
     else parts.push(`LocalQueue ${row.queueName} not found`)
   }
   const text = parts.join(' · ')
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
-function WorkloadRow({ row, local, clusterQueue, unresolved, onNavigate }: {
+function WorkloadRow({ row, local, clusterQueue, onNavigate }: {
   row: KueueQueueWorkload
   local: boolean
-  namespace?: string
   clusterQueue?: string
-  unresolved: boolean
   onNavigate?: (ref: NavigateRef) => void
 }) {
   return (
@@ -357,7 +355,7 @@ function WorkloadRow({ row, local, clusterQueue, unresolved, onNavigate }: {
         {row.deleting && <Badge severity="neutral" size="sm">Deleting</Badge>}
       </div>
       <p className="mt-0.5 break-words text-xs text-theme-text-secondary">
-        {membershipText(row, local, clusterQueue, unresolved)}
+        {membershipText(row, local, clusterQueue)}
         {row.createdAt && <span className="text-theme-text-tertiary"> · created {formatRelativeAgeTime(row.createdAt)}</span>}
       </p>
     </li>
@@ -393,7 +391,7 @@ function WorkloadsUnread({ local, queue, code, message }: { local: boolean; queu
   const namespace = queue?.metadata?.namespace
   let headline: ReactNode = message ?? 'Radar could not read Workloads for this queue.'
   if (code === 'user_forbidden') {
-    headline = local ? `You can't list Workloads in ${namespace}.` : "You can't list Workloads in any namespace you can see."
+    headline = local ? `You can't list Workloads in ${namespace}.` : "You can't list Workloads in any namespace Radar shows you."
   } else if (code === 'user_no_namespace_access') {
     headline = "You don't have access to any namespace, so Radar can't list this queue's Workloads for you."
   }
@@ -415,7 +413,7 @@ function LocalQueueList({ response, onNavigate }: { response: KueueQueueWorkload
     return (
       <div className="border-t border-theme-border pt-3">
         <h4 className="mb-1 text-xs font-medium uppercase tracking-wider text-theme-text-tertiary">LocalQueues pointing here</h4>
-        <p className="text-sm text-theme-text-secondary">{response.localQueuesError.error_code === 'user_forbidden' ? "You can't list LocalQueues in the namespaces you can see." : response.localQueuesError.error}</p>
+        <p className="text-sm text-theme-text-secondary">{response.localQueuesError.error_code === 'user_forbidden' ? "You can't list LocalQueues in any namespace Radar shows you." : response.localQueuesError.error}</p>
       </div>
     )
   }

@@ -78,7 +78,11 @@ func localQueue(namespace, name, target string) *unstructured.Unstructured {
 func summary(members []Member) []string {
 	out := make([]string, 0, len(members))
 	for _, m := range members {
-		out = append(out, fmt.Sprintf("%s/%s %v submitted=%s reserved=%s", m.Workload.GetNamespace(), m.Workload.GetName(), m.Kinds, m.SubmittedTo, m.ReservedIn))
+		line := fmt.Sprintf("%s/%s %v submitted=%s reserved=%s", m.Workload.GetNamespace(), m.Workload.GetName(), m.Kinds, m.SubmittedTo, m.ReservedIn)
+		if m.LocalQueueUnread {
+			line += " (LocalQueue unread)"
+		}
+		out = append(out, line)
 	}
 	return out
 }
@@ -119,7 +123,7 @@ func TestClusterQueueMembership(t *testing.T) {
 		"team/finished [reservation] submitted=other-cq reserved=cq",
 		"team/reserved-only [reservation] submitted=other-cq reserved=cq",
 		"team/submitted [submission] submitted=cq reserved=",
-		"unread/unresolved-reserved [reservation] submitted= reserved=cq",
+		"unread/unresolved-reserved [reservation] submitted= reserved=cq (LocalQueue unread)",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("members of cq:\n got %q\nwant %q", got, want)

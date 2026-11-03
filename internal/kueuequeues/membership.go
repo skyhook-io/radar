@@ -52,6 +52,10 @@ type Member struct {
 	// UID: a LocalQueue re-created under the same name is another one.
 	SubmittedTo   string
 	LocalQueueUID string
+	// LocalQueueUnread: the Workload names a LocalQueue in a namespace whose
+	// LocalQueues Radar didn't read, so whether it was submitted here is
+	// unknown.
+	LocalQueueUnread bool
 	// ReservedIn is the ClusterQueue the Workload reports its admission in.
 	ReservedIn string
 }
@@ -97,7 +101,9 @@ func ClusterQueueMembers(clusterQueue string, workloads []*unstructured.Unstruct
 		seen[identity(w)] = true
 		m := Member{Workload: w, QueueName: QueueName(w), ReservedIn: ReservedIn(w)}
 		if m.QueueName != "" {
-			if lq, _ := localQueues.Get(w.GetNamespace(), m.QueueName); lq != nil {
+			lq, read := localQueues.Get(w.GetNamespace(), m.QueueName)
+			m.LocalQueueUnread = !read
+			if lq != nil {
 				m.SubmittedTo, m.LocalQueueUID = LocalQueueTarget(lq), string(lq.GetUID())
 			}
 		}

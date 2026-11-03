@@ -77,7 +77,8 @@ type KueueQueueMembers struct {
 	Items []KueueQueueWorkload `json:"items"`
 	// Matching is the members the request's filters keep.
 	Matching int `json:"matching"`
-	// Counts.States counts members by Admission.State.
+	// Counts.States counts the members the membership filter keeps by
+	// Admission.State; the other counts ignore the filters.
 	Counts kueuequeues.Counts `json:"counts"`
 	// Next continues the list after this page; absent on the last page.
 	Next     string               `json:"next,omitempty"`
@@ -107,8 +108,10 @@ type KueueQueueWorkload struct {
 	Membership []kueuequeues.Kind                   `json:"membership"`
 	QueueName  string                               `json:"queueName,omitempty"`
 	// Submission is where the Workload's LocalQueue points now, when Radar
-	// read it.
-	Submission *KueueQueueSubmission `json:"submission,omitempty"`
+	// read it. LocalQueueUnread: Radar didn't read the LocalQueues in the
+	// Workload's namespace, so whether it was submitted here is unknown.
+	Submission       *KueueQueueSubmission `json:"submission,omitempty"`
+	LocalQueueUnread bool                  `json:"localQueueUnread,omitempty"`
 	// Reservation is the ClusterQueue the Workload reports its admission in.
 	Reservation *KueueQueueReservation `json:"reservation,omitempty"`
 }
@@ -454,7 +457,9 @@ func kueueQueueMembersPage(members []kueuequeues.Member, page kueueQueuePage, co
 	}
 	matching := kueuequeues.Filter(members, page.membership, page.state, stateOf)
 	rows, more := kueuequeues.Page(matching, page.after, page.limit)
-	out := &KueueQueueMembers{Items: make([]KueueQueueWorkload, 0, len(rows)), Matching: len(matching), Counts: kueuequeues.Count(members, stateOf), Coverage: coverage}
+	counts := kueuequeues.Count(members, stateOf)
+	counts.States = kueuequeues.Count(kueuequeues.Filter(members, page.membership, "", stateOf), stateOf).States
+	out := &KueueQueueMembers{Items: make([]KueueQueueWorkload, 0, len(rows)), Matching: len(matching), Counts: counts, Coverage: coverage}
 	for _, m := range rows {
 		row := kueueQueueWorkload(m)
 		if c, ok := classified[m.Workload]; ok {
@@ -474,7 +479,7 @@ func kueueQueueWorkload(m kueuequeues.Member) KueueQueueWorkload {
 	row := KueueQueueWorkload{
 		Namespace: w.GetNamespace(), Name: w.GetName(), UID: string(w.GetUID()), APIVersion: w.GetAPIVersion(),
 		CreatedAt: w.GetCreationTimestamp(), Deleting: w.GetDeletionTimestamp() != nil,
-		Membership: m.Kinds, QueueName: m.QueueName,
+		Membership: m.Kinds, QueueName: m.QueueName, LocalQueueUnread: m.LocalQueueUnread,
 	}
 	if m.QueueName != "" && m.SubmittedTo != "" {
 		row.Submission = &KueueQueueSubmission{LocalQueue: m.QueueName, LocalQueueUID: m.LocalQueueUID, ClusterQueue: m.SubmittedTo}
@@ -610,7 +615,7 @@ func (s *Server) readKueueIndexed(r *http.Request, h kueueQueueHandles, budget *
 	if selectionCode == readreason.UserPermissionCheckFailed {
 		return fail(target, readFailuref(selectionCode, "Radar could not determine your namespace access; retry when the permission check is available"))
 	}
-	authorized, target, failure := s.kueueListAccess(r, budget, target, resource)
+	authorized, target, failure := s.kueueListAccess(r, h.cache, budget, target, resource)
 	if failure != nil {
 		return fail(target, failure)
 	}
@@ -647,7 +652,8 @@ func (s *Server) readKueueIndexed(r *http.Request, h kueueQueueHandles, budget *
 		}
 		// A cluster-wide store serves every namespace: read it once, rather
 		// than once per namespace.
-		if objs, code := readKueueIndexChecked(h.dynamic, gvr, "", keys); code == "" {
+		_, clusterWide := h.dynamic.ReadSource(gvr, "")
+		if objs, code := readKueueIndexChecked(h.dynamic, gvr, "", keys); clusterWide && code == "" {
 			for _, u := range objs {
 				if wanted[u.GetNamespace()] {
 					out.objects = append(out.objects, u)
@@ -728,8 +734,9 @@ func readKueueIndexChecked(dc *k8s.DynamicResourceCache, gvr schema.GroupVersion
 // namespace within the request's budget. A namespace the caller can see but
 // not list it in is a user_forbidden gap; one whose check failed or didn't
 // fit the budget, user_permission_check_failed. A caller who sees every
-// namespace needs the cluster-wide grant, as exact-kind lists require.
-func (s *Server) kueueListAccess(r *http.Request, budget *atomic.Int32, target listTarget, resource string) ([]string, listTarget, *resourceReadFailure) {
+// namespace but may not list resource across all of them is checked in each
+// namespace Radar's cache holds, and those namespaces become the scope.
+func (s *Server) kueueListAccess(r *http.Request, cache *k8s.ResourceCache, budget *atomic.Int32, target listTarget, resource string) ([]string, listTarget, *resourceReadFailure) {
 	if target.namespaces != nil && len(target.namespaces) == 0 {
 		return nil, target, readFailuref(readreason.UserNoNamespaceAccess, "no namespace access")
 	}
@@ -737,22 +744,27 @@ func (s *Server) kueueListAccess(r *http.Request, budget *atomic.Int32, target l
 	if user := auth.UserFromContext(r.Context()); user != nil && s.permCache != nil {
 		perms = s.permCache.Get(user.Username, user.Groups)
 	}
-	allowed, denied, unchecked := readscope.ClusterFirstNamespaceAccess(r.Context(), target.namespaces, budget,
-		func(ns string) (bool, bool) {
-			if perms == nil {
-				return false, false
-			}
-			return perms.CanI("list", kueueGroup, resource, ns)
-		},
-		func(ns string) (bool, bool) { return s.canReadDecision(r, kueueGroup, resource, ns, "list") })
+	cached := func(ns string) (bool, bool) {
+		if perms == nil {
+			return false, false
+		}
+		return perms.CanI("list", kueueGroup, resource, ns)
+	}
+	check := func(ns string) (bool, bool) { return s.canReadDecision(r, kueueGroup, resource, ns, "list") }
+	allowed, denied, unchecked := readscope.ClusterFirstNamespaceAccess(r.Context(), target.namespaces, budget, cached, check)
 	if target.namespaces == nil {
 		switch {
 		case slices.Contains(unchecked, ""):
 			return nil, target, permissionFailure(false, "")
-		case slices.Contains(denied, ""):
+		case !slices.Contains(denied, ""):
+			return nil, target, nil
+		}
+		candidates := namespaceNamesInCache(cache)
+		if len(candidates) == 0 {
 			return nil, target, permissionFailure(true, fmt.Sprintf("insufficient permissions to list %s in every namespace", resource))
 		}
-		return nil, target, nil
+		target.namespaces = candidates
+		allowed, denied, unchecked = readscope.ClusterFirstNamespaceAccess(r.Context(), candidates, budget, cached, check)
 	}
 	var gaps []resourceapi.Gap
 	if len(denied) > 0 {
