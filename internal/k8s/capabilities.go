@@ -203,6 +203,8 @@ type FeatureCapabilities struct {
 	// GET /api/kueue/clusterqueues/{name}/workloads and
 	// /api/kueue/localqueues/{namespace}/{name}/workloads
 	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
+	// GET /api/kueue/position/{namespace}/{name}
+	KueuePendingPosition bool `json:"kueuePendingPosition"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

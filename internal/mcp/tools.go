@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/kueuevisibility"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
@@ -1384,6 +1385,9 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
+	scheduling := schedulinginsight.ForResource(obj, tier)
+	kueuevisibility.Attach(ctx, scheduling, obj)
+
 	opts := resourcecontext.Options{
 		RelatedFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }),
 		Reflections:     k8s.ReflectionLookup{Cache: cache},
@@ -1391,7 +1395,7 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 		AccessChecker:   newMCPRequestScopedChecker(ctx),
 		IssueSummary:    issueSummary,
 		AuditSummary:    auditSum,
-		Scheduling:      schedulinginsight.ForResource(obj, tier),
+		Scheduling:      scheduling,
 		Execution:       executioninsight.ForResource(obj, tier),
 		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(

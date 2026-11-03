@@ -48,6 +48,7 @@ export const RADAR_FEATURES = {
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },
   kueueQueueWorkloads: { label: 'Workload lists on Kueue queues', flag: 'kueueQueueWorkloads', flagShippedWithEndpoint: true },
+  kueuePendingPosition: { label: 'Kueue queue positions', flag: 'kueuePendingPosition', flagShippedWithEndpoint: true },
   // One flag, two controls. An older Radar's rollback never runs, and its
   // resume reports success while leaving automated.enabled: false in place.
   argoRollback: { label: 'Argo CD rollbacks', flag: 'argoRollbackSync', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },

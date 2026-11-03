@@ -1,5 +1,7 @@
 import { KueueAdmissionSection } from '@skyhook-io/k8s-ui/components/resources/KueueAdmissionSection'
+import type { KueueAdmissionWorkload } from '@skyhook-io/k8s-ui/types/scheduling'
 import { ApiError, useKueueAdmission } from '../../api/client'
+import { KueuePendingPosition } from '../kueue/KueuePendingPosition'
 
 export function KueueAdmission({ resource, namespace, name, onNavigate, presentation }: {
   presentation?: 'card' | 'drawer'
@@ -20,7 +22,16 @@ export function KueueAdmission({ resource, namespace, name, onNavigate, presenta
   const error = query.error?.message ?? (query.data && !data ? 'Admission evidence belongs to a different workload instance; waiting for a fresh observation.' : undefined)
   if ((isJob || isRayJob) && !hinted && !data?.workloads.length) return null
   const hasOwner = (resource.metadata?.ownerReferences ?? []).some((owner: any) => owner.controller === true && !(owner.apiVersion === 'batch/v1' && owner.kind === 'CronJob'))
-  return <KueueAdmissionSection presentation={presentation} data={data} loading={query.isLoading} error={error} forbidden={query.error instanceof ApiError && query.error.status === 403} hinted={hinted} externalExecution={externalExecution} hasOwner={isJob && hasOwner} onRetry={() => { void query.refetch() }} onNavigate={onNavigate} />
+  return <KueueAdmissionSection presentation={presentation} data={data} loading={query.isLoading} error={error} forbidden={query.error instanceof ApiError && query.error.status === 403} hinted={hinted} externalExecution={externalExecution} hasOwner={isJob && hasOwner} onRetry={() => { void query.refetch() }} onNavigate={onNavigate} renderWorkloadExtra={renderPendingPosition} />
+}
+
+// Kueue's reported position, for a Workload the admission projection reads as
+// pending and active: the same rule the Workload drawer and the server apply.
+function renderPendingPosition(workload: KueueAdmissionWorkload) {
+  const kueue = workload.scheduling?.observations?.find(observation => observation.kueue)?.kueue
+  const queue = workload.scheduling?.observations?.flatMap(observation => observation.queues ?? []).find(entry => entry.roles.includes('submission'))?.name
+  if (!kueue || kueue.phase !== 'pending' || kueue.active === false) return null
+  return <p className="text-sm"><span className="text-theme-text-secondary">Queue position: </span><KueuePendingPosition namespace={workload.namespace} name={workload.name} uid={workload.uid} queueName={queue} requeueAt={kueue.requeueState?.requeueAt} /></p>
 }
 
 export { KueueAdmission as JobSetAdmission }

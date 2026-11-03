@@ -1674,6 +1674,10 @@ workloads; other direct children remain followable through Related Resources.
 
 A recorded `Failed` phase describes Flagger's last rollout result. Current-UID Warning events may explain it, while an empty event sample does not prove no prior failure. Neither the phase nor configured weight establishes live availability or traffic distribution. Provider endpoints, live traffic and telemetry delivery are not probed.
 
+## Kueue pending position
+
+For a Kueue Workload eligible for a pending-position lookup, `get_resource` adds `resourceContext.scheduling.observations[].kueue.pendingPosition`: what Kueue's visibility API reported when Radar read it, as the caller. `aheadInLocalQueue` / `aheadInClusterQueue` count the Workloads Kueue orders before this one (0 = first); it is Kueue's current ordering, not admission order or a start time. `not_listed` never means "not pending", `limit_reached` means the position is unknown, and `unavailable` carries a `code` from the read-reason vocabulary (`user_forbidden` names the missing `get localqueues/pendingworkloads` in `visibility.kueue.x-k8s.io`). The read waits at most 3 seconds. A Job's position is on its child Workload, not on the Job. Absent means this projection carries no visibility result; the host may not read it, the Workload may be ineligible, or a result may have been discarded. See [integrations.md](integrations.md#pending-position-kueues-visibility-api).
+
 ## Auto-instrumentation reference context
 
 Pod and supported workload detail reads can include `resourceContext.autoInstrumentation.openTelemetry`. It evaluates declared injection requests for a hypothetical new Pod, even when the subject is an existing Pod. It does not establish observed injection, application health or telemetry delivery.
