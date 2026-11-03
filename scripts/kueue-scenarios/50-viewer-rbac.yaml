@@ -1,0 +1,276 @@
+# A restricted viewer for scenarios 2 and 6, bound twice: as a ServiceAccount
+# (`kubeconfig` writes a short-lived kubeconfig for it, to run Radar as that
+# identity) and as the plain user ${PREFIX}-viewer (to send as the signed-in user
+# to a Radar running with --auth-mode=proxy). It can read the Kueue cluster-scoped
+# configuration and most fixture namespaces, but:
+#   - nothing in ${PREFIX}-busy-hidden (scenario 2: a namespace it cannot read);
+#   - LocalQueues but not Workloads in ${PREFIX}-lq-denied (scenario 6).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-viewer
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${PREFIX}-viewer-cluster
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get, list, watch]
+  - apiGroups: [kueue.x-k8s.io]
+    resources: [clusterqueues, resourceflavors, admissionchecks, cohorts, workloadpriorityclasses, topologies]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${PREFIX}-viewer-cluster
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-cluster
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+# Granted per namespace through RoleBindings below.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${PREFIX}-viewer-namespace
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, events, services]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch]
+  - apiGroups: [kueue.x-k8s.io]
+    resources: [localqueues, workloads]
+    verbs: [get, list, watch]
+---
+# Same as ${PREFIX}-viewer-namespace without Workloads.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${PREFIX}-viewer-namespace-no-workloads
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, events, services]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch]
+  - apiGroups: [kueue.x-k8s.io]
+    resources: [localqueues]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-quota
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-held
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-missing-flavor
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-empty
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-lifecycle
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-drain
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-ineligible
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: ${PREFIX}-lq-denied
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${PREFIX}-viewer-namespace-no-workloads
+subjects:
+  - kind: ServiceAccount
+    name: viewer
+    namespace: ${PREFIX}-viewer
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: ${PREFIX}-viewer
