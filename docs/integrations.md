@@ -1776,7 +1776,7 @@ except for an inactive queue, which Radar settles by reading the queue.
 
 | Row | Subject | When | Category |
 |-----|---------|------|----------|
-| `KueueResourceUnavailable` (the ClusterQueue offers no quota for a requested resource), `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it (RAD-811's `action_needed`) and is at least a minute old | `queue_admission_blocked` |
+| `KueueResourceUnavailable` (the ClusterQueue offers no quota for a requested resource), `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it (classified `action_needed`) and is at least a minute old | `queue_admission_blocked` |
 | `KueueClusterQueueMissing` | the LocalQueue, or the run when no LocalQueue row explains it | Kueue reports the LocalQueue's ClusterQueue doesn't exist | `queue_admission_blocked` |
 | `KueueAdmissionCheckRejected` | the run | an AdmissionCheck rejected it, through Kueue's deactivation that follows (one row, one ID) | `queue_admission_blocked` |
 | `KueueRequeuingLimitExceeded`, `KueueMaximumExecutionTimeExceeded`, `KueueDeactivatedByKueue` | the run | Kueue deactivated it, or decided to, and recorded why | `batch_run_stopped` (the first two), `queue_admission_blocked` |

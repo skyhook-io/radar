@@ -19,7 +19,7 @@ import (
 
 // Kueue findings: a run Kueue will not admit as configured, a run Kueue
 // stopped, and a queue that admits nothing because its configuration is
-// broken. Which Workload states ask for action is RAD-811's classification
+// broken. Which Workload states ask for action is the shared classification
 // (schedulinginsight.ClassifyKueueWorkload, Attention); this source decides
 // only what the Workload alone can't: whether an inactive queue is stopped on
 // purpose or broken, read from the queue objects themselves.
@@ -321,7 +321,7 @@ type kueueRunFinding struct {
 }
 
 // kueueRunFindingFor maps an action_needed state to its finding. The
-// deactivation cause is the reason RAD-811 kept on the fact.
+// deactivation cause is the reason the classification kept on the fact.
 func kueueRunFindingFor(state resourcecontext.KueueAdmissionState) (kueueRunFinding, bool) {
 	switch state.State {
 	case resourcecontext.KueueAdmissionResourceUnavailable:

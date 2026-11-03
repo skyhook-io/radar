@@ -83,7 +83,8 @@ export function uncheckedSourceLines(sources: IssuesResponse["unchecked_sources"
 export function uncheckedSubjectWhy(sources: UncheckedSource[] | undefined): string | undefined {
   const first = sources?.[0];
   if (!first) return undefined;
-  const kinds = nameList([...new Set((first.kinds ?? []).map((k) => englishPlural(k.kind)))]);
+  const plural = [...new Set((first.kinds ?? []).map((k) => englishPlural(k.kind)))];
+  const kinds = plural.length > 0 ? nameList(plural) : undefined;
   if (first.reason === "caller_access_denied") {
     return kinds ? `you can't read ${kinds}, which this check needs` : "you can't read what this check needs";
   }
