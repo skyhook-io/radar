@@ -553,6 +553,7 @@ type KueueScheduling struct {
 	PodSetAssignmentsTruncated bool                      `json:"podSetAssignmentsTruncated,omitempty"`
 	RequeueState               *KueueRequeueState        `json:"requeueState,omitempty"`
 	ConcurrentAdmission        *KueueConcurrentAdmission `json:"concurrentAdmission,omitempty"`
+	Admission                  *KueueAdmissionState      `json:"admission,omitempty"`
 }
 
 // KueuePhase is Radar's compact projection of the Kueue admission lifecycle.
