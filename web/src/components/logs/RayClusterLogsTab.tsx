@@ -1,53 +1,11 @@
 import { useEffect, useRef } from 'react'
-import { AlertBanner, PaneLoader, RadarUpgradeNote, type WorkloadPodInfo } from '@skyhook-io/k8s-ui'
-import { isKubeRayClusterIdentity } from '@skyhook-io/k8s-ui/components/resources/resource-utils-ray'
-import { podLogsUnavailableReason } from '@skyhook-io/k8s-ui/components/resources/renderers/RayClusterRenderer'
+import { AlertBanner, PaneLoader, RadarUpgradeNote } from '@skyhook-io/k8s-ui'
+import { logsContainer, podLogsUnavailableReason } from '@skyhook-io/k8s-ui/components/resources/resource-utils-ray'
 import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
-import { ApiError, isStableClientError, useCapabilities, useRadarFeature, useWorkloadPods } from '../../api/client'
-import type { RadarFeatureSupport } from '../../api/radarFeatures'
+import { isStableClientError, useCapabilities, useRadarFeature, useWorkloadPods } from '../../api/client'
 import type { ResourceRef } from '../../types'
 import { MultiPodLogsTab } from './MultiPodLogsTab'
-
-export function isKubeRayCluster(kind: string, group: string | undefined, apiVersion: string | undefined): boolean {
-  return kind === 'RayCluster' && isKubeRayClusterIdentity(group, apiVersion)
-}
-
-// Pod container info marks native sidecars from the release that first
-// advertised rayClusterPods; older Radars that list RayCluster Pods omit it.
-export function useSidecarsMarked(): boolean {
-  return useCapabilities().data?.features?.rayClusterPods === true
-}
-
-// The container a Pod's logs open on. Container lists put init containers
-// first and only reported statuses say which those are, so with no statuses
-// the viewer keeps its own default. A regular init container that isn't done
-// while the Pod is Pending is what it waits on (a worker waiting for the head
-// sits in KubeRay's wait-gcs-ready), though it may not have started yet; in a
-// Failed Pod it is what failed. Native sidecars never finish, so they are
-// never that container. Without sidecar marks (an older Radar) an unready
-// init container can't be told from a sidecar, so one is chosen only in a
-// Pending Pod and only when it is the sole unready init container.
-export function logsContainer(pod: WorkloadPodInfo, sidecarsMarked: boolean): string | undefined {
-  const statuses = pod.containerStatuses ?? []
-  if (!statuses.length) return undefined
-  const init = new Set(statuses.filter(status => status.init).map(status => status.name))
-  const unfinished = pod.containers.filter(name => statuses.some(status => status.init && status.name === name && !status.ready && !(sidecarsMarked && status.sidecar)))
-  const blocking = sidecarsMarked
-    ? (pod.phase === 'Pending' || pod.phase === 'Failed' ? unfinished[0] : undefined)
-    : (pod.phase === 'Pending' && unfinished.length === 1 ? unfinished[0] : undefined)
-  return blocking ?? pod.containers.find(name => !init.has(name))
-}
-
-// What a failed read of a RayCluster's Pods means. A Radar of unknown version
-// that answers 400 most likely predates the route, so say which Radar has it
-// rather than echo the route's error.
-export function rayClusterPodsError(error: unknown, support: RadarFeatureSupport): string | undefined {
-  if (!error) return undefined
-  // Radars before v1.15 reject the kind with this message; a current Radar's own 400s pass through.
-  if (error instanceof ApiError && error.status === 400 && support !== 'supported' && /^only deployments/.test(error.message)) return 'This Radar may not list a RayCluster\'s Pods; Radar v1.15 and later do.'
-  return error instanceof Error ? error.message : 'The Pod list could not be read.'
-}
-
+import { rayClusterPodsError, useSidecarsMarked } from './rayClusterPods'
 
 // The generic Logs tab lists Pods recalled from history, deleted ones
 // included. A RayCluster's tab lists the Pods its current incarnation owns
@@ -79,8 +37,9 @@ export function RayClusterLogsTab({
 }) {
   const { support, upgrade } = useRadarFeature('rayClusterPods')
   const sidecarsMarked = useSidecarsMarked()
-  const { canViewLogs } = useNamespacedCapabilities(namespace)
+  const { canViewLogs, logsUnknown } = useNamespacedCapabilities(namespace)
   const capabilitiesFailed = useCapabilities().isError
+  const logsDenied = !canViewLogs && !logsUnknown && !capabilitiesFailed
   const unsupported = support === 'unsupported'
   const query = useWorkloadPods('rayclusters', namespace, uid && !unsupported ? name : '', { ownerUID: uid, limit: 200, refetchInterval: 5000 })
   const owned = !unsupported && uid && query.data && !isStableClientError(query.error) ? query.data : undefined
@@ -121,9 +80,9 @@ export function RayClusterLogsTab({
       )}
       {!canViewLogs && (
         <div className="shrink-0 px-4 pt-3">
-          {capabilitiesFailed
-            ? <AlertBanner variant="info" title="Permissions not checked" message="Radar couldn't check whether you can read Pod logs here; a Pod's logs say so if you can't." />
-            : <AlertBanner variant="warning" title="Pod logs not readable" message="Reading a Pod's logs in this namespace needs get on pods/log, which you don't have. The Pods are listed so you can see which exist." />}
+          {logsDenied
+            ? <AlertBanner variant="warning" title="Pod logs not readable" message="Reading a Pod's logs in this namespace needs get on pods/log, which you don't have. The Pods are listed so you can see which exist." />
+            : <AlertBanner variant="info" title="Permissions not checked" message="Radar hasn't confirmed whether you can read Pod logs here; a Pod's logs say so if you can't." />}
         </div>
       )}
       {refreshError && (
@@ -131,7 +90,7 @@ export function RayClusterLogsTab({
           <AlertBanner variant="info" title="Pod list not refreshed" message={`Showing the last list Radar read. ${sentence(refreshError)}`} />
         </div>
       )}
-      {!owned && (
+      {!owned && (historyPods.length > 0 || reason) && (
         <div className="shrink-0 px-4 pt-3">
           <AlertBanner variant={unsupported ? 'info' : 'warning'} title={unsupported ? 'Showing recorded Pods' : 'Current Pods unavailable'} message={`Showing Pods Radar has recorded for this RayCluster, which can include deleted ones.${reason ? ` ${sentence(reason)}` : ''}`} />
         </div>
@@ -144,8 +103,8 @@ export function RayClusterLogsTab({
           onSelectPod={onSelectPod}
           defaultPod={defaultPod}
           initialContainer={container}
-          selectedPodNote={selected ? podLogsUnavailableReason(selected) : undefined}
-          emptyMessage={owned ? `This RayCluster has no Pods right now.${suspendRequested ? ' Its suspension is requested.' : ''}` : undefined}
+          selectedPodNote={logsDenied ? 'You can\'t read Pod logs in this namespace.' : selected ? podLogsUnavailableReason(selected) : undefined}
+          emptyMessage={owned ? `This RayCluster has no Pods right now.${suspendRequested ? ' Its suspension is requested.' : ''}` : 'Radar hasn\'t recorded any Pods for this RayCluster.'}
         />
       </div>
     </div>

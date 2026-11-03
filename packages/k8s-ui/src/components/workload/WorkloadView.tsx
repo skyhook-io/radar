@@ -580,12 +580,20 @@ export function WorkloadView({
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
-  // Hosts reuse this view across resources; a Pod picked for one must not be
-  // carried to the next.
-  useEffect(() => {
-    setSelectedPod(null)
-    setInitialContainer(null)
-  }, [kind, namespace, name])
+  // Hosts reuse this view across resources, and a resource can be recreated
+  // under the same name: a Pod picked for one must not reach the next, not
+  // even for one render. A UID arriving with the first load is not a change.
+  const selectionIdentity = `${kind}\u0000${namespace}\u0000${name}`
+  const selectionUID = resource?.metadata?.uid as string | undefined
+  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID })
+  if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
+    const recreated = selectionScope.identity === selectionIdentity && selectionScope.uid !== undefined
+    setSelectionScope({ identity: selectionIdentity, uid: selectionUID })
+    if (selectionScope.identity !== selectionIdentity || recreated) {
+      setSelectedPod(null)
+      setInitialContainer(null)
+    }
+  }
   const [copied, setCopied] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [recentImageSave, setRecentImageSave] = useState(false)

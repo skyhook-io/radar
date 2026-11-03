@@ -2,13 +2,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any, flag: true, canViewLogs: true, capsFailed: false }))
-vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: state.canViewLogs }) }))
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: state.canViewLogs, logsUnknown: false }) }))
 vi.mock('../../api/client', () => {
   class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
   return {
     ApiError,
     isStableClientError: (e: any) => e instanceof ApiError && [400, 403, 404, 409].includes(e.status),
-    useCapabilities: () => ({ data: { features: { rayClusterPods: state.flag } }, isError: state.capsFailed }),
+    useCapabilities: () => ({ data: { features: { rayClusterPods: true, podSidecarMarks: state.flag } }, isError: state.capsFailed }),
     useRadarFeature: () => ({ support: state.support, upgrade: state.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
     useWorkloadPods: (...args: any[]) => { state.calls.push(args); return state.query },
   }
@@ -20,7 +20,9 @@ vi.mock('@skyhook-io/k8s-ui', () => ({
   RadarUpgradeNote: ({ requirement }: any) => <div>upgrade:{requirement.feature} {requirement.minimumVersion}</div>,
 }))
 const { ApiError } = await import('../../api/client') as any
-const { RayClusterLogsTab, isKubeRayCluster, logsContainer } = await import('./RayClusterLogsTab')
+const { RayClusterLogsTab } = await import('./RayClusterLogsTab')
+const { isKubeRayCluster } = await import('./rayClusterPods')
+const { logsContainer } = await import('@skyhook-io/k8s-ui/components/resources/resource-utils-ray')
 
 const history = [{ kind: 'Pod', namespace: 'ml', name: 'deleted-worker' }, { kind: 'Pod', namespace: 'ml', name: 'cluster-head' }]
 const started = (name: string, init = false, ready = true) => ({ name, init, ready, restartCount: 0 })
@@ -65,7 +67,7 @@ describe('RayClusterLogsTab', () => {
     expect(html).toContain('pods:deleted-worker,cluster-head')
     expect(html).toContain('can include deleted ones')
     expect(html).toContain('requires get rayclusters and list pods')
-    expect(state.tab.emptyMessage).toBeUndefined()
+    expect(state.tab.emptyMessage).toBe('Radar hasn\'t recorded any Pods for this RayCluster.')
   })
 
   it('keeps the last list through a passing refresh failure', () => {
@@ -127,7 +129,7 @@ describe('RayClusterLogsTab', () => {
     state.capsFailed = true
     state.query = { data: owned }
     const html = render()
-    expect(html).toContain('couldn&#x27;t check whether you can read Pod logs')
+    expect(html).toContain('hasn&#x27;t confirmed whether you can read Pod logs')
     expect(html).not.toContain('which you don&#x27;t have')
   })
 
@@ -137,10 +139,18 @@ describe('RayClusterLogsTab', () => {
     expect(state.tab.selectedPodNote).toBe('Not scheduled')
   })
 
-  it('says once, up front, when Pod logs are not readable here', () => {
+  it('says once, up front, when Pod logs are not readable here, and fetches none', () => {
     state.canViewLogs = false
     state.query = { data: owned }
     expect(render()).toContain('needs get on pods/log')
+    expect(state.tab.selectedPodNote).toBe('You can\'t read Pod logs in this namespace.')
+  })
+
+  it('says what happened when an older Radar has no recorded Pods either', () => {
+    state.support = 'unsupported'
+    const html = renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={[]} selectedPod={null} onSelectPod={() => {}} initialContainer={null} />)
+    expect(state.tab.emptyMessage).toBe('Radar hasn\'t recorded any Pods for this RayCluster.')
+    expect(html).not.toContain('Showing recorded Pods')
   })
 
   it('names a requested suspension when the cluster has no Pods', () => {

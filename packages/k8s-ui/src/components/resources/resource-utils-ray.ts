@@ -1,5 +1,6 @@
 // KubeRay CRD utility functions (ray.io/v1)
 
+import type { WorkloadPodInfo } from '../../types'
 import type { StatusBadge } from './resource-utils'
 import { healthColors, formatAge } from './resource-utils'
 
@@ -198,4 +199,33 @@ export function rayJobSubmissionMode(resource: any): string {
 /** The KubeRay RayCluster Radar reads Pods for: `ray.io/v1`, or group `ray.io` before the object loads. */
 export function isKubeRayClusterIdentity(group: string | undefined, apiVersion: string | undefined): boolean {
   return apiVersion ? apiVersion === 'ray.io/v1' : group === 'ray.io'
+}
+
+/** Why a Pod has no container output to read yet, or undefined when it may. */
+export function podLogsUnavailableReason(pod: WorkloadPodInfo): string | undefined {
+  // A native sidecar's status alone doesn't mean the Pod's own containers have one.
+  if (pod.containerStatuses?.some(status => !status.sidecar)) return undefined
+  if (pod.phase === 'Failed' || pod.phase === 'Succeeded') return 'Ended before starting'
+  return pod.nodeName ? 'No status yet' : 'Not scheduled'
+}
+
+// The container a Pod's logs open on. Container lists put init containers
+// first and only reported statuses say which those are, so with no statuses
+// the viewer keeps its own default. A regular init container that isn't done
+// while the Pod is Pending is what it waits on (a worker waiting for the head
+// sits in KubeRay's wait-gcs-ready), though it may not have started yet; in a
+// Failed Pod it is what failed, or what never ran if the Pod was evicted
+// first. Native sidecars never finish, so they are never that container.
+// Without sidecar marks (an older Radar) an unready init container can't be
+// told from a sidecar, so one is chosen only in a Pending Pod and only when it
+// is the sole unready init container.
+export function logsContainer(pod: WorkloadPodInfo, sidecarsMarked: boolean): string | undefined {
+  const statuses = pod.containerStatuses ?? []
+  if (!statuses.length) return undefined
+  const init = new Set(statuses.filter(status => status.init).map(status => status.name))
+  const unfinished = pod.containers.filter(name => statuses.some(status => status.init && status.name === name && !status.ready && !(sidecarsMarked && status.sidecar)))
+  const blocking = sidecarsMarked
+    ? (pod.phase === 'Pending' || pod.phase === 'Failed' ? unfinished[0] : undefined)
+    : (pod.phase === 'Pending' && unfinished.length === 1 ? unfinished[0] : undefined)
+  return blocking ?? pod.containers.find(name => !init.has(name))
 }

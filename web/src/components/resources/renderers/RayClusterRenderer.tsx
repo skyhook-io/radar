@@ -4,7 +4,8 @@ import type { ResourceRef, WorkloadPodInfo } from '@skyhook-io/k8s-ui'
 import { useRadarFeature, useWorkloadPods } from '../../../api/client'
 import { useNamespacedCapabilities } from '../../../contexts/CapabilitiesContext'
 import { useOpenLogs } from '../../dock'
-import { logsContainer, rayClusterPodsError, useSidecarsMarked } from '../../logs/RayClusterLogsTab'
+import { logsContainer } from '@skyhook-io/k8s-ui/components/resources/resource-utils-ray'
+import { rayClusterPodsError, useSidecarsMarked } from '../../logs/rayClusterPods'
 
 export function RayClusterRenderer(props: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
   return <RayClusterEvidence key={props.data.metadata.uid} {...props} />

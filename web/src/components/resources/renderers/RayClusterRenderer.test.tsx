@@ -8,7 +8,7 @@ const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewL
 vi.mock('../../../api/client', () => ({
   ApiError: class ApiError extends Error { constructor(message: string, public status: number) { super(message) } },
   useWorkloadPods: (...args: any[]) => { mock.calls.push(args); return mock.result },
-  useCapabilities: () => ({ data: { features: { rayClusterPods: true } } }),
+  useCapabilities: () => ({ data: { features: { rayClusterPods: true, podSidecarMarks: true } } }),
   isStableClientError: () => false,
   useRadarFeature: () => ({ support: mock.support, upgrade: mock.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
 }))
@@ -54,4 +54,5 @@ describe('RayCluster host evidence', () => {
     const html = renderToStaticMarkup(<RayClusterRenderer data={root} />)
     expect(mock.calls[0][2]).toBe('')
     expect(html).toContain('RayCluster runtime Pods'); expect(html).toContain('v1.15')
-  })})
+  })
+})

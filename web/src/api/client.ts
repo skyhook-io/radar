@@ -243,6 +243,12 @@ export function isStableClientError(error: unknown): boolean {
   return error instanceof ApiError && [400, 403, 404, 409].includes(error.status)
 }
 
+// An owner-UID query stops polling on an answer that will repeat; a recreated
+// root recovers when its new UID changes the query key.
+export function workloadPodsRefetchInterval(error: unknown, options?: { ownerUID?: string; refetchInterval?: number | false }): number | false {
+  return options?.ownerUID && isStableClientError(error) ? false : options?.refetchInterval ?? false
+}
+
 export function isNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
 }
@@ -7762,9 +7768,7 @@ export function useWorkloadPods(
       fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods${queryString}`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
-    // A denied, missing or recreated root answers the same way on every poll;
-    // a recreated root recovers when its new UID changes the query key.
-    refetchInterval: (query) => options?.ownerUID && isStableClientError(query.state.error) ? false : options?.refetchInterval ?? false,
+    refetchInterval: (query) => workloadPodsRefetchInterval(query.state.error, options),
     retry: options?.ownerUID ? (count, error) => !isStableClientError(error) && count < 2 : undefined,
   });
 }

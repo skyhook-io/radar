@@ -1509,6 +1509,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,
 		RayClusterPods:           true,
+		PodSidecarMarks:          true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()

@@ -8,7 +8,7 @@ import { Badge } from '../../ui/Badge'
 import { SelectMenu } from '../../ui/SelectMenu'
 import { AlertBanner, ConditionsSection, type ConditionTone, Property, PropertyList, ResourceLink, Section } from '../../ui/drawer-components'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from '../../workload/PodList'
-import { isRayObservationStale, rayClusterWorkerCounts } from '../resource-utils-ray'
+import { isRayObservationStale, podLogsUnavailableReason, rayClusterWorkerCounts } from '../resource-utils-ray'
 
 export interface RayClusterPodSelection { nodeType?: 'head' | 'worker'; workerGroup?: string }
 export interface RayClusterRendererProps {
@@ -30,14 +30,6 @@ export interface RayClusterRendererProps {
    * of the error, loading or Pod list. Absent says nothing about support.
    */
   podsUpgrade?: RadarUpgradeRequirement | null
-}
-
-/** Why a Pod has no container output to read yet, or undefined when it may. */
-export function podLogsUnavailableReason(pod: WorkloadPodInfo): string | undefined {
-  // A native sidecar's status alone doesn't mean the Pod's own containers have one.
-  if (pod.containerStatuses?.some(status => !status.sidecar)) return undefined
-  if (pod.phase === 'Failed' || pod.phase === 'Succeeded') return 'Ended before starting'
-  return pod.nodeName ? 'No status yet' : 'Not scheduled'
 }
 
 export function rayClusterConditionTone(condition: any): ConditionTone {
