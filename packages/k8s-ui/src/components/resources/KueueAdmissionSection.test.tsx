@@ -92,27 +92,28 @@ describe('Kueue admission investigation', () => {
 
   it('names an unrecognized reason verbatim and renders unknown codes as sent', () => {
     expect(render(response({ kueue: { phase: 'pending', admission: { state: 'unrecognized', attention: 'unknown', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'SomethingNew' } } } })))
-      .toContain('Unrecognized reason: <code>SomethingNew</code>')
+      .toContain('Kueue: <code>SomethingNew</code>')
     expect(render(response({ kueue: { phase: 'pending', admission: { state: 'a_future_code', attention: 'a_future_class' } } }))).toContain('a_future_code')
   })
 
-  it('does not repeat states the phase and inactive badges already show', () => {
+  it('does not repeat the phase, and leads with the state for a withdrawn Workload', () => {
     const admitted = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none' } } }))
     expect(admitted.match(/>Admitted</g)).toHaveLength(1)
     const deactivated = render(response({ decision: 'held', kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
-    expect(deactivated).toContain('Workload inactive')
-    expect(deactivated).not.toContain('Deactivated')
+    expect(deactivated).toContain('>Deactivated<')
+    expect(deactivated).not.toContain('Pending admission')
+    expect(deactivated).not.toContain('Workload inactive')
     expect(deactivated).not.toContain('Admission held')
   })
 
   it('takes staleness from the server classification, once', () => {
     const stale = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none', stale: true } } }))
     expect(stale.match(/>Admitted</g)).toHaveLength(1)
-    expect(stale).toContain('Last reported for an earlier generation')
+    expect(stale).toContain('Reported before the Workload')
     // A stale primary condition does not contradict a current classification.
     const current = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', observedGeneration: 1 }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
     expect(current).not.toContain('Stale evidence')
-    expect(current).not.toContain('Last reported')
+    expect(current).not.toContain('Reported before')
   })
 
   it('shows the condition behind the state only when nothing else on the card says it', () => {
@@ -135,6 +136,11 @@ describe('Kueue admission investigation', () => {
     const html = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending' }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'unknown', inactive: { code: 'deactivated', source: 'condition', name: 'Evicted', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
     expect(html).toContain('>Deactivated<')
     expect(html).toContain('Evicted · PodsReadyTimeout: Exceeded the PodsReady timeout')
+  })
+
+  it('suggests what an actionable state usually asks, and nothing for normal waiting', () => {
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'local_queue_missing', attention: 'action_needed' } } }))).toContain('ask an admin to create the LocalQueue')
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'insufficient_quota', attention: 'waiting' } } }))).not.toContain('ask an admin')
   })
 
   it('keeps the generic qualifier when an older Radar sends no admission state', () => {

@@ -220,11 +220,11 @@ const kueueAdmissionLabels: Record<string, string> = {
   quota_reserved: 'Quota reserved',
   deactivated: 'Deactivated',
   deactivated_by_kueue: 'Deactivated by Kueue',
-  deactivation_pending: 'Being deactivated',
+  deactivation_pending: 'Deactivating',
   on_hold: 'On hold',
   no_decision: 'Awaiting evaluation',
   insufficient_quota: 'Waiting for quota',
-  exceeds_quota: 'Requests exceed quota limits',
+  exceeds_quota: 'Too large for the queue\'s quota',
   no_matching_flavor: 'No matching flavor',
   topology_placement_failed: 'Topology placement failed',
   waiting_for_preemption: 'Waiting for preempted workloads',
@@ -238,7 +238,7 @@ const kueueAdmissionLabels: Record<string, string> = {
   admission_check_rejected: 'Admission check rejected',
   admission_checks_pending: 'Waiting for admission checks',
   topology_assignment_pending: 'Waiting for topology assignment',
-  waiting_for_pods_ready: "Waiting for other workloads' Pods",
+  waiting_for_pods_ready: 'Waiting for admitted workloads to start',
   requeue_backoff: 'Waiting to requeue',
   dra_resources_unresolved: 'DRA resources unresolved',
   invalid_workload: 'Invalid workload',
@@ -253,7 +253,27 @@ const kueueAttentionSeverity: Record<string, BadgeSeverity> = {
   waiting: 'neutral',
   paused: 'neutral',
   action_needed: 'alert',
-  unknown: 'warning',
+  unknown: 'info',
+}
+
+// What the reported state usually asks of someone, worded as a suggestion:
+// the classification reads only the Workload, never its queue.
+const kueueAdmissionHints: Record<string, string> = {
+  exceeds_quota: 'The requests are larger than the queue can ever provide. Reduce them, or ask an admin to raise its quota.',
+  no_matching_flavor: "No flavor in the queue fits the Workload's node selectors, tolerations or resources.",
+  namespace_not_eligible: "The ClusterQueue does not accept this namespace. Use another LocalQueue, or ask an admin.",
+  local_queue_missing: "Check the job's queue name, or ask an admin to create the LocalQueue.",
+  cluster_queue_missing: "The LocalQueue points at a ClusterQueue that doesn't exist. An admin needs to fix the LocalQueue.",
+  local_queue_inactive: 'The LocalQueue may be stopped on purpose or misconfigured. Its status says which.',
+  cluster_queue_inactive: 'The ClusterQueue may be stopped on purpose or misconfigured. Its status says which.',
+  admission_check_rejected: 'An admission check rejected the Workload. Kueue usually deactivates it next.',
+  deactivation_pending: 'Kueue is deactivating the Workload. It will not be admitted until reactivated.',
+  deactivated_by_kueue: 'Kueue stopped retrying. Fix the cause, then set the Workload active again to retry.',
+  invalid_workload: "Kueue rejects the job's resource requests. Fix them and resubmit.",
+}
+
+export function kueueAdmissionStateHint(code: string): string | undefined {
+  return kueueAdmissionHints[code]
 }
 
 export function kueueAdmissionStateLabel(code: string): string {

@@ -1786,8 +1786,10 @@ axes, so every surface describes a Workload's admission state the same way.
 `schedulinginsight.ClassifyKueueWorkload` is the only place the codes and their
 attention class are decided; Go consumers that list Workloads call it per
 object, and the UI only maps codes to labels (`kueueAdmissionStatePresentation`
-in k8s-ui), rendering a code it does not know verbatim. Today the admission card
-on Job, JobSet and RayJob detail shows it; the Workload's own detail and its
+in k8s-ui, with a short suggestion for states that usually need someone),
+rendering a code it does not know verbatim. Today the admission card on Job,
+JobSet and RayJob detail shows it, leading with the state instead of
+"Pending admission" for a withdrawn Workload; the Workload's own detail and its
 table Status column still show its most notable native condition, which can
 differ (an Evicted Workload now blocked by a missing LocalQueue). The
 classification is not a causal diagnosis: queues, namespaces and

@@ -1,4 +1,4 @@
-import { admissionCheckSeverity, isKueueConditionStale, kueueAdmissionStatePresentation } from './resource-utils-kueue'
+import { admissionCheckSeverity, isKueueConditionStale, kueueAdmissionStateHint, kueueAdmissionStatePresentation } from './resource-utils-kueue'
 import { Disclosure } from '../ui/Disclosure'
 import { formatRelativeAgeTime } from '../../utils/format'
 import { Badge } from '../ui/Badge'
@@ -20,7 +20,7 @@ interface KueueAdmissionSectionProps {
 }
 
 const phases = { pending: 'Pending admission', quota_reserved: 'Quota reserved', admitted: 'Admitted', finished: 'Finished' }
-const phaseStates = new Set(['admitted', 'quota_reserved', 'finished', 'deactivated'])
+const phaseStates = new Set(['admitted', 'quota_reserved', 'finished'])
 
 export function KueueAdmissionSection({ presentation = 'card', data, loading, error, forbidden, hinted, externalExecution, hasOwner, onRetry, onNavigate }: KueueAdmissionSectionProps) {
   if (!loading && !error && data && data.workloads.length === 0 && !hinted) return null
@@ -118,11 +118,13 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
       : observation.decision === 'satisfied' ? 'success' : admission ? 'neutral' : 'warning'
-  // The phase badge and the inactive badge already say these states, except a
-  // deactivation whose cause Kueue did not record, which the badge flags.
-  const uncertainDeactivation = admission?.state === 'deactivated' && !!admission.inactive && admission.inactive.source !== 'spec'
-  const reason = admission && (!phaseStates.has(admission.state) || uncertainDeactivation) ? kueueAdmissionStatePresentation(admission) : null
+  // The phase badge already says these states. A withdrawn Workload is not
+  // waiting, so its state replaces the pending phase rather than following it.
+  const reason = admission && !phaseStates.has(admission.state) ? kueueAdmissionStatePresentation(admission) : null
+  const withdrawn = !!admission?.inactive
+  // An unrecognized reason is Kueue's own word; say that rather than Radar's.
   const unrecognizedReason = admission?.state === 'unrecognized' ? admission.blocker?.reason : undefined
+  const hint = admission && !admission.stale ? kueueAdmissionStateHint(admission.state) : undefined
   // Show the condition behind the state when nothing else on the card says
   // it: backoff or Kueue's deactivation cause. Checks have their own card.
   const decidingFact = admission && [admission.inactive, admission.blocker, admission.disruption].find((fact) => fact?.code === admission.state)
@@ -137,16 +139,17 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
       <div className="space-y-2 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium break-all">{identity}</span>
-        <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>
-        {reason && <Badge severity={reason.severity}>{reason.label}{unrecognizedReason && <>: <code>{unrecognizedReason}</code></>}</Badge>}
+        {!withdrawn && <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>}
+        {reason && <Badge severity={reason.severity}>{unrecognizedReason ? <>Kueue: <code>{unrecognizedReason}</code></> : reason.label}</Badge>}
         {qualifier && <span className="text-xs text-theme-text-secondary">{qualifier}</span>}
-        {kueue?.active === false && <Badge severity="neutral">Workload inactive</Badge>}
+        {!admission && kueue?.active === false && <Badge severity="neutral">Workload inactive</Badge>}
         {deleting && <Badge severity="alert">Deleting</Badge>}
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
         {stale && (admission
-          ? <p className="text-xs text-warning-text">Last reported for an earlier generation of this Workload; not confirmed for its current spec (generation {observation.subjectGeneration}).</p>
+          ? <p className="text-xs text-warning-text">Reported before the Workload's spec last changed; it may not reflect the current spec.</p>
           : <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>)}
+        {hint && <p className="max-w-3xl text-xs text-theme-text-secondary">{hint}</p>}
         {factEvidence && <p className="max-w-3xl whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{factEvidence.name}{factEvidence.reason && ` · ${factEvidence.reason}`}{factEvidence.message && `: ${factEvidence.message}`}</p>}
         {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
         {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
