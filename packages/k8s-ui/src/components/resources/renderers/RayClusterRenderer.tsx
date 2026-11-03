@@ -34,7 +34,8 @@ export interface RayClusterRendererProps {
 
 /** Why a Pod has no container output to read yet, or undefined when it may. */
 export function podLogsUnavailableReason(pod: WorkloadPodInfo): string | undefined {
-  if (pod.containerStatuses?.length) return undefined
+  // A native sidecar's status alone doesn't mean the Pod's own containers have one.
+  if (pod.containerStatuses?.some(status => !status.sidecar)) return undefined
   if (pod.phase === 'Failed' || pod.phase === 'Succeeded') return 'Ended before starting'
   return pod.nodeName ? 'No status yet' : 'Not scheduled'
 }

@@ -35,7 +35,6 @@ export function MultiPodLogsTab({
 
   const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
 
-  // Fetch container list for the selected pod
   const { data: logsData, error: containersError } = usePodLogs(podNamespace, selectedPod || '', {
     tailLines: 1,
   })
@@ -72,6 +71,7 @@ export function MultiPodLogsTab({
               key={pod.name}
               onClick={() => onSelectPod(pod.name)}
               aria-pressed={selectedPod === pod.name}
+              title={pod.name}
               className={clsx(
                 'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
                 selectedPod === pod.name

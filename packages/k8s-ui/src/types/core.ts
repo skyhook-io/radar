@@ -189,7 +189,8 @@ export interface FeatureCapabilities {
   argoEnableSelfHealOff?: boolean
   clusterScopedPlaceholder?: boolean
   // GET /api/workloads/rayclusters/{namespace}/{name}/pods. Older Radars that
-  // serve the route omit the flag; radarFeatures falls back to v1.15.0.
+  // serve the route omit the flag; radarFeatures falls back to v1.15.0. When
+  // set, Pod info also marks native sidecars (containerStatuses[].sidecar).
   rayClusterPods?: boolean
 }
 

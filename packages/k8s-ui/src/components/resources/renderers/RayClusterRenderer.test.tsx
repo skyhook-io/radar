@@ -30,7 +30,7 @@ it('distinguishes unreported counters and humanizes the API default bound', () =
 
 describe('RayCluster Pod log links', () => {
   const started = (name: string) => [{ name, ready: true, restartCount: 0 }]
-  const evidence = { pods: [{ name: 'cluster-head-abc', ready: true, containers: ['ray-head'], containerStatuses: started('ray-head') }, { name: 'cluster-cpu-worker-def', ready: false, containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: started('ray-worker') }, { name: 'cluster-cpu-worker-new', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, { name: 'cluster-cpu-worker-bound', ready: false, nodeName: 'node-a', containers: ['ray-worker'] }, { name: 'cluster-cpu-worker-evicted', ready: false, phase: 'Failed', nodeName: 'node-a', containers: ['ray-worker'] }], total: 5, truncated: false }
+  const evidence = { pods: [{ name: 'cluster-head-abc', ready: true, containers: ['ray-head'], containerStatuses: started('ray-head') }, { name: 'cluster-cpu-worker-def', ready: false, containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: started('ray-worker') }, { name: 'cluster-cpu-worker-new', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, { name: 'cluster-cpu-worker-bound', ready: false, nodeName: 'node-a', containers: ['ray-worker'] }, { name: 'cluster-cpu-worker-evicted', ready: false, phase: 'Failed', nodeName: 'node-a', containers: ['ray-worker'] }, { name: 'cluster-cpu-worker-sidecar-only', ready: false, phase: 'Pending', nodeName: 'node-a', containers: ['proxy', 'ray-worker'], containerStatuses: [{ name: 'proxy', init: true, sidecar: true, ready: true, restartCount: 0 }] }], total: 6, truncated: false }
   it('offers logs on each verified Pod only when the host can open them', () => {
     const withLogs = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={() => {}} />)
     expect(withLogs).toContain('Open logs for cluster-head-abc'); expect(withLogs).toContain('Open logs for cluster-cpu-worker-def')
@@ -40,7 +40,7 @@ describe('RayCluster Pod log links', () => {
   })
   it('says why a Pod with no reported container status has no logs instead of offering a button', () => {
     const html = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={() => {}} />)
-    expect(html).toContain('Logs for cluster-cpu-worker-new: </span>Not scheduled'); expect(html).toContain('Logs for cluster-cpu-worker-bound: </span>No status yet'); expect(html).toContain('Logs for cluster-cpu-worker-evicted: </span>Ended before starting')
+    expect(html).toContain('Logs for cluster-cpu-worker-new: </span>Not scheduled'); expect(html).toContain('Logs for cluster-cpu-worker-bound: </span>No status yet'); expect(html).toContain('Logs for cluster-cpu-worker-evicted: </span>Ended before starting'); expect(html).toContain('Logs for cluster-cpu-worker-sidecar-only: </span>No status yet')
     expect(html).not.toContain('Open logs for cluster-cpu-worker-new'); expect(html).not.toContain('Open logs for cluster-cpu-worker-bound')
   })
   it('opens the clicked row\'s Pod', () => {

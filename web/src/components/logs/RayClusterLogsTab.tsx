@@ -43,7 +43,8 @@ export function logsContainer(pod: WorkloadPodInfo, sidecarsMarked: boolean): st
 // rather than echo the route's error.
 export function rayClusterPodsError(error: unknown, support: RadarFeatureSupport): string | undefined {
   if (!error) return undefined
-  if (error instanceof ApiError && error.status === 400 && support !== 'supported') return 'This Radar may not list a RayCluster\'s Pods; Radar v1.15 and later do.'
+  // Radars before v1.15 reject the kind with this message; a current Radar's own 400s pass through.
+  if (error instanceof ApiError && error.status === 400 && support !== 'supported' && /^only deployments/.test(error.message)) return 'This Radar may not list a RayCluster\'s Pods; Radar v1.15 and later do.'
   return error instanceof Error ? error.message : 'The Pod list could not be read.'
 }
 
@@ -79,6 +80,7 @@ export function RayClusterLogsTab({
   const { support, upgrade } = useRadarFeature('rayClusterPods')
   const sidecarsMarked = useSidecarsMarked()
   const { canViewLogs } = useNamespacedCapabilities(namespace)
+  const capabilitiesFailed = useCapabilities().isError
   const unsupported = support === 'unsupported'
   const query = useWorkloadPods('rayclusters', namespace, uid && !unsupported ? name : '', { ownerUID: uid, limit: 200, refetchInterval: 5000 })
   const owned = !unsupported && uid && query.data && !isStableClientError(query.error) ? query.data : undefined
@@ -87,6 +89,8 @@ export function RayClusterLogsTab({
 
   // A pick made from the recorded Pods while the owned list was failing gives
   // way to the owned list's first Pod once it arrives, unless still owned.
+  // Only a recorded list actually shown counts: a selection that predates
+  // this tab (a deep link, or a Pod that has since left the owned list) stays.
   const showedRecorded = useRef(false)
   useEffect(() => {
     if (!owned) { if (!loading) showedRecorded.current = true; return }
@@ -112,12 +116,14 @@ export function RayClusterLogsTab({
       {unsupported && upgrade && <div className="shrink-0 px-4 pt-3"><RadarUpgradeNote requirement={upgrade} /></div>}
       {owned?.truncated && (
         <div className="shrink-0 px-4 pt-3">
-          <AlertBanner variant="info" title="Pod list capped" message={`Showing the ${owned.pods.length} least healthy of ${owned.total} Pods. To reach the others, narrow Runtime Pods on Overview to the head or one worker group and use a Pod's Logs button.`} />
+          <AlertBanner variant="info" title="Pod list capped" message={`Showing the ${owned.pods.length} least healthy of ${owned.total} Pods. Runtime Pods on Overview can narrow to the head or one worker group (each view is capped at 200), with a Logs button on each Pod.`} />
         </div>
       )}
       {!canViewLogs && (
         <div className="shrink-0 px-4 pt-3">
-          <AlertBanner variant="warning" title="Pod logs not readable" message="Reading a Pod's logs in this namespace needs get on pods/log, which you don't have. The Pods are listed so you can see which exist." />
+          {capabilitiesFailed
+            ? <AlertBanner variant="info" title="Permissions not checked" message="Radar couldn't check whether you can read Pod logs here; a Pod's logs say so if you can't." />
+            : <AlertBanner variant="warning" title="Pod logs not readable" message="Reading a Pod's logs in this namespace needs get on pods/log, which you don't have. The Pods are listed so you can see which exist." />}
         </div>
       )}
       {refreshError && (
@@ -127,7 +133,7 @@ export function RayClusterLogsTab({
       )}
       {!owned && (
         <div className="shrink-0 px-4 pt-3">
-          <AlertBanner variant="warning" title="Current Pods unavailable" message={`Showing Pods Radar has recorded for this RayCluster, which can include deleted ones.${reason ? ` ${sentence(reason)}` : ''}`} />
+          <AlertBanner variant={unsupported ? 'info' : 'warning'} title={unsupported ? 'Showing recorded Pods' : 'Current Pods unavailable'} message={`Showing Pods Radar has recorded for this RayCluster, which can include deleted ones.${reason ? ` ${sentence(reason)}` : ''}`} />
         </div>
       )}
       <div className="min-h-0 flex-1">

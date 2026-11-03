@@ -147,3 +147,20 @@ it.each(['Deployment', 'Pod', 'Pooler', 'ScheduledBackup'])('groups %s drawer ac
   if (kind === 'ScheduledBackup') { expect(object.querySelectorAll('button')).toHaveLength(3); expect(object.textContent).toContain('Run blocked: no backup destination') }
   act(() => root.unmount())
 })
+
+it('does not carry a picked Pod to the next resource the view shows', () => {
+  const pods = (name: string) => ({ pods: [{ kind: 'Pod', namespace: 'db', name }] })
+  const seen: (string | null)[] = []
+  const renderLogsTab = ({ selectedPod, onSelectPod }: { selectedPod: string | null; onSelectPod: (pod: string | null) => void }) => {
+    seen.push(selectedPod)
+    return <button data-pick onClick={() => onSelectPod('pg-1')}>pick</button>
+  }
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  act(() => root.render(<WorkloadView {...props} activeTab="logs" relationships={pods('pg-1')} renderLogsTab={renderLogsTab} />))
+  act(() => host.querySelector<HTMLButtonElement>('[data-pick]')!.click())
+  expect(seen.at(-1)).toBe('pg-1')
+  act(() => root.render(<WorkloadView {...props} name="other" activeTab="logs" relationships={pods('other-1')} renderLogsTab={renderLogsTab} />))
+  expect(seen.at(-1)).toBeNull()
+  act(() => root.unmount())
+})

@@ -1801,8 +1801,8 @@ not read, and nothing is kept once a Pod is deleted.
 - **Logs tab.** A `ray.io/v1` RayCluster's tab lists the Pods its current
   incarnation owns, through the same owner-UID request as Runtime Pods, and opens
   the least healthy one. Past 200 Pods it keeps the least healthy; to reach the
-  others, narrow Runtime Pods to the head or one worker group and use a Pod's Logs
-  button. The tab doesn't need Radar to
+  others, narrow Runtime Pods to the head or one worker group (each view is capped
+  at 200) and use a Pod's Logs button. The tab doesn't need Radar to
   have recorded any Pods.
 - **Fallback.** When the owned list can't be read (it needs `get rayclusters` and
   `list pods`), the Radar is older than v1.15, or the RayCluster itself can't be
@@ -1812,8 +1812,9 @@ not read, and nothing is kept once a Pod is deleted.
 - **Row buttons.** Each Runtime Pods row has a Logs button (when the namespace
   allows `pods/log`) that opens the Pod in the log dock. A Pod with no container
   status shows why instead: not scheduled, no status yet, or ended before starting.
-- **Container.** While a Pod is Pending, or after it failed, the button and the tab
-  open the first regular init container that isn't done (a worker waiting on the
+- **Container.** The viewer opens on one container and stays there until you
+  switch. While a Pod is Pending, or after it failed, the button and the tab open
+  on the first regular init container that isn't done (a worker waiting on the
   head sits in KubeRay's `wait-gcs-ready`). Otherwise they open the first
   application container. Native sidecars are never chosen first; a Radar older than
   the one that advertises `rayClusterPods` doesn't mark sidecars, so there an init

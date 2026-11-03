@@ -199,7 +199,10 @@ type FeatureCapabilities struct {
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
-	RayClusterPods           bool `json:"rayClusterPods"` // GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=
+	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Also
+	// says Pod info marks native sidecars (containerStatuses[].sidecar), added
+	// in the same release; the UI trusts sidecar marks only when this is set.
+	RayClusterPods bool `json:"rayClusterPods"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

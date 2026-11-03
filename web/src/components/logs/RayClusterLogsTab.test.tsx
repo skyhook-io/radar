@@ -1,14 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any, flag: true, canViewLogs: true }))
+const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any, flag: true, canViewLogs: true, capsFailed: false }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: state.canViewLogs }) }))
 vi.mock('../../api/client', () => {
   class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
   return {
     ApiError,
     isStableClientError: (e: any) => e instanceof ApiError && [400, 403, 404, 409].includes(e.status),
-    useCapabilities: () => ({ data: { features: { rayClusterPods: state.flag } } }),
+    useCapabilities: () => ({ data: { features: { rayClusterPods: state.flag } }, isError: state.capsFailed }),
     useRadarFeature: () => ({ support: state.support, upgrade: state.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
     useWorkloadPods: (...args: any[]) => { state.calls.push(args); return state.query },
   }
@@ -34,7 +34,7 @@ const renderUID = (uid: string | undefined, selectedPod: string | null = null, r
 )
 
 describe('RayClusterLogsTab', () => {
-  beforeEach(() => { state.support = 'supported'; state.query = {}; state.calls = []; state.tab = null; state.flag = true; state.canViewLogs = true })
+  beforeEach(() => { state.support = 'supported'; state.query = {}; state.calls = []; state.tab = null; state.flag = true; state.canViewLogs = true; state.capsFailed = false })
 
   it('lists the Pods the current incarnation owns, by name, not the ones history recalls', () => {
     state.query = { data: owned }
@@ -56,7 +56,7 @@ describe('RayClusterLogsTab', () => {
     state.query = { data: { ...owned, total: 250, truncated: true } }
     const html = render()
     expect(html).toContain('Showing the 2 least healthy of 250 Pods')
-    expect(html).toContain('To reach the others, narrow Runtime Pods on Overview to the head or one worker group')
+    expect(html).toContain('Runtime Pods on Overview can narrow to the head or one worker group (each view is capped at 200)')
   })
 
   it('falls back to the recorded Pods with the reason when the current list is denied', () => {
@@ -89,6 +89,7 @@ describe('RayClusterLogsTab', () => {
     const html = render()
     expect(state.calls[0][2]).toBe('')
     expect(html).toContain('upgrade:RayCluster runtime Pods v1.15.0')
+    expect(html).toContain('Showing recorded Pods: ')
     expect(html).toContain('pods:deleted-worker,cluster-head')
   })
 
@@ -111,6 +112,23 @@ describe('RayClusterLogsTab', () => {
     const html = render()
     expect(html).toContain('Radar v1.15 and later')
     expect(html).not.toContain('only deployments')
+  })
+
+  it('passes a current Radar\'s own 400 through even when its version is unknown', () => {
+    state.support = 'unknown'
+    state.query = { error: new ApiError('Expected ray.io/v1 RayCluster', 400) }
+    const html = render()
+    expect(html).toContain('Expected ray.io/v1 RayCluster')
+    expect(html).not.toContain('Radar v1.15 and later')
+  })
+
+  it('does not claim a missing permission when capabilities could not be read', () => {
+    state.canViewLogs = false
+    state.capsFailed = true
+    state.query = { data: owned }
+    const html = render()
+    expect(html).toContain('couldn&#x27;t check whether you can read Pod logs')
+    expect(html).not.toContain('which you don&#x27;t have')
   })
 
   it('shows why a selected Pod has no output instead of an empty viewer', () => {

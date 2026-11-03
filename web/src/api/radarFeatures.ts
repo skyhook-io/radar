@@ -37,7 +37,7 @@ export const RADAR_FEATURES = {
   podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
   policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
-  // The Pods route predates its flag; v1.15.0 is the first release that served it.
+  // Radars from v1.15.0 serve the route without advertising the flag.
   rayClusterPods: { label: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0', flag: 'rayClusterPods' },
   upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },
   drainPlan: { label: 'Drain plans', minimumVersion: 'v1.14.0' },

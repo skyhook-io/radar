@@ -580,6 +580,12 @@ export function WorkloadView({
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
+  // Hosts reuse this view across resources; a Pod picked for one must not be
+  // carried to the next.
+  useEffect(() => {
+    setSelectedPod(null)
+    setInitialContainer(null)
+  }, [kind, namespace, name])
   const [copied, setCopied] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [recentImageSave, setRecentImageSave] = useState(false)
