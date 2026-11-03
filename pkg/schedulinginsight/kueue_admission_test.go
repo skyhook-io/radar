@@ -1146,6 +1146,8 @@ func TestClassifyKueueWorkloadAttention(t *testing.T) {
 	}{
 		{workloadSpec{conditions: []condition{reserved, admitted}}, rc.KueueAttentionNone},
 		{workloadSpec{conditions: []condition{pending("Pending", legacyUnusedQuota)}}, rc.KueueAttentionWaiting},
+		{workloadSpec{conditions: []condition{pending("Pending", legacyExceedsQuota)}}, rc.KueueAttentionUnknown},
+		{workloadSpec{conditions: []condition{pending("ExceedsMaxQuota", legacyExceedsQuota)}}, rc.KueueAttentionUnknown},
 		{workloadSpec{active: boolPtr(false)}, rc.KueueAttentionPaused},
 		{workloadSpec{conditions: []condition{pending("Inadmissible", "LocalQueue gpu doesn't exist")}}, rc.KueueAttentionActionNeeded},
 		{workloadSpec{conditions: []condition{pending("Inadmissible", "ClusterQueue gpu-team is inactive")}}, rc.KueueAttentionUnknown},

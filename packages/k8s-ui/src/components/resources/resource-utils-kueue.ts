@@ -225,7 +225,7 @@ const kueueAdmissionLabels: Record<string, string> = {
   no_decision: 'Awaiting evaluation',
   insufficient_quota: 'Waiting for quota',
   exceeds_quota: 'Too large for the flavors tried',
-  no_matching_flavor: 'No matching flavor',
+  no_matching_flavor: 'No fit among the flavors tried',
   resource_unavailable: 'Resource not in the queue',
   topology_placement_failed: 'Topology placement failed',
   waiting_for_preemption: 'Waiting for preempted workloads',
@@ -262,7 +262,7 @@ const kueueAttentionSeverity: Record<string, BadgeSeverity> = {
 const kueueAdmissionHints: Record<string, string> = {
   exceeds_quota: "In its last attempt, Kueue found the requests too large for every flavor it tried. If the queue has no larger flavor, reduce them or ask an admin to raise its quota.",
   no_matching_flavor: "In its last attempt, no flavor Kueue tried fits the Workload's node selectors, tolerations or topology, or the flavor an earlier slice was admitted to.",
-  resource_unavailable: 'The ClusterQueue has no quota for a resource the job requests. Remove the request, or ask an admin to add it to the queue.',
+  resource_unavailable: 'The ClusterQueue has no quota for a resource the job requests. If the request is required, use a queue that offers it or ask an admin to add quota. Remove it only if unintended.',
   namespace_not_eligible: "The ClusterQueue does not accept this namespace. Use another LocalQueue, or ask an admin.",
   local_queue_missing: "Check the job's queue name, or ask an admin to create the LocalQueue.",
   cluster_queue_missing: "The LocalQueue points at a ClusterQueue that doesn't exist or is being deleted. An admin needs to restore it or repoint the LocalQueue.",

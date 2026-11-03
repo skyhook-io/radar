@@ -131,6 +131,22 @@ describe('Kueue admission investigation', () => {
     expect(check).not.toContain('capacity · Rejected')
   })
 
+  it('leads with the deciding evidence and its transition time while retaining the earlier condition in Technical details', () => {
+    const since = '2026-09-26T10:00:00Z'
+    const data = response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'Earlier quota shortage', observedGeneration: 1 }, kueue: { phase: 'pending', admission: { state: 'requeue_backoff', attention: 'waiting', blocker: { code: 'requeue_backoff', source: 'condition', name: 'Requeued', reason: 'PodsReadyTimeout', message: 'Waiting for the retry delay', since } } } })
+    const html = render(data)
+    expect(html.indexOf('Waiting for the retry delay')).toBeLessThan(html.indexOf('Technical details<'))
+    expect(html.indexOf('Earlier quota shortage')).toBeGreaterThan(html.indexOf('Technical details<'))
+    expect(html).toContain(`Requeued since <time dateTime="${since}"`)
+    expect(html).toContain('condition in Technical details was reported before')
+    data.workloads[0].scheduling!.observations![0].primaryCondition!.message = 'Waiting for the retry delay'
+    const repeated = render(data)
+    expect(repeated).toContain(`Requeued since <time dateTime="${since}"`)
+    expect(repeated.match(/Waiting for the retry delay/g)).toHaveLength(1)
+    delete data.workloads[0].scheduling!.observations![0].kueue!.admission!.blocker!.since
+    expect(render(data)).not.toContain('Requeued since')
+  })
+
   it('does not repeat an eviction the supporting evidence already lists', () => {
     const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'QuotaReserved', message: 'Quota reserved' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'Preempted', message: 'Preempted to accommodate a workload' }], kueue: { phase: 'quota_reserved', admission: { state: 'preempted', attention: 'waiting', disruption: { code: 'preempted', source: 'condition', name: 'Evicted', reason: 'Preempted', message: 'Preempted to accommodate a workload' } } } }))
     expect(html).not.toContain('Evicted · Preempted')
@@ -177,7 +193,7 @@ describe('Kueue admission investigation', () => {
 
   it('quietly marks a stale primary condition under a current classification', () => {
     const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'old', observedGeneration: 1 }, kueue: { phase: 'pending', admission: { state: 'requeue_backoff', attention: 'waiting', blocker: { code: 'requeue_backoff', source: 'condition', name: 'Requeued', reason: 'PodsReadyTimeout' } } } }))
-    expect(html).toContain('The condition below was reported before')
+    expect(html).toContain('The condition in Technical details was reported before')
     expect(html).not.toContain('Stale evidence')
   })
 

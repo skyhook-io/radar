@@ -1792,7 +1792,11 @@ reading of conditions), and the UI only maps codes to labels
 with a short suggestion from `kueueAdmissionStateHint` for states that usually
 need someone), rendering a code it does not know verbatim. Today the admission
 card on Job, JobSet and RayJob detail shows it, leading with the state instead of
-"Pending admission" for a withdrawn Workload; the Workload's own detail and its
+"Pending admission" for a withdrawn Workload. When a different condition decides
+the state (such as requeue backoff), its evidence and transition time lead the
+card, with the earlier primary condition retained in Technical details. MCP
+`get_resource` describes how to interpret state, attention and freshness;
+the Workload's own detail and its
 table Status column still show its most notable native condition, which can
 differ (an Evicted Workload now blocked by a missing LocalQueue). The
 classification is not a causal diagnosis: queues, namespaces and
