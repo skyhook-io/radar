@@ -11,21 +11,33 @@ import (
 	rc "github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
-// ClassifyKueueWorkload classifies one kueue.x-k8s.io Workload (v1beta1 or
-// v1beta2) from its own object. It is the single authority for Kueue
-// admission-state codes: list, Issues and Capacity consumers call it per
-// Workload instead of interpreting conditions themselves.
-func ClassifyKueueWorkload(obj runtime.Object) (rc.KueueWorkloadClassification, bool) {
-	u, ok := obj.(*unstructured.Unstructured)
-	if !ok || !isKueueWorkload(u) {
-		return rc.KueueWorkloadClassification{}, false
+// KueueClassification is one Workload's lifecycle phase, terminal outcome and
+// admission state. Outcome is empty until Phase is finished, and also for a
+// finish reason Kueue does not name as success or failure.
+type KueueClassification struct {
+	Phase     rc.KueuePhase
+	Outcome   rc.KueueOutcome
+	Admission rc.KueueAdmissionState
+}
+
+// ClassifyKueueWorkload classifies one Workload from its own object, as an
+// *unstructured.Unstructured of kueue.x-k8s.io/v1beta2 or v1beta1 kind
+// Workload (how Radar's dynamic cache holds it). ok is false, with a zero
+// result, for anything else; true says only that the object was classified.
+// It is the single authority for Kueue admission-state codes: list, Issues
+// and Capacity consumers call it per Workload instead of interpreting
+// conditions themselves.
+func ClassifyKueueWorkload(obj runtime.Object) (classification KueueClassification, ok bool) {
+	u, isUnstructured := obj.(*unstructured.Unstructured)
+	if !isUnstructured || !isKueueWorkload(u) {
+		return KueueClassification{}, false
 	}
 	return classifyWorkload(u, workloadConditions(u)), true
 }
 
-func classifyWorkload(u *unstructured.Unstructured, conditions map[string]workloadCondition) rc.KueueWorkloadClassification {
+func classifyWorkload(u *unstructured.Unstructured, conditions map[string]workloadCondition) KueueClassification {
 	phase := workloadPhase(conditions)
-	return rc.KueueWorkloadClassification{
+	return KueueClassification{
 		Phase:     phase,
 		Outcome:   workloadOutcome(conditions),
 		Admission: admissionState(u, conditions, phase),
@@ -48,7 +60,7 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 		state.State, state.Stale = rc.KueueAdmissionFinished, c.staleCondition("Finished")
 	case state.Inactive != nil:
 		decided = state.Inactive
-	case state.Blocker != nil && (state.Disruption == nil || !uninformativeBlocker(state.Blocker.Code)):
+	case state.Blocker != nil && (state.Disruption == nil || !c.uninformative(state.Blocker)):
 		decided = state.Blocker
 	case state.Disruption != nil:
 		decided = state.Disruption
@@ -58,7 +70,9 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 		state.State, state.Stale = rc.KueueAdmissionQuotaReserved, c.staleCondition("QuotaReserved")
 	}
 	if decided != nil {
-		state.State, state.Stale = decided.Code, decided.Stale
+		// spec.active=false is current by definition, whatever evidence the
+		// fact cites for its cause.
+		state.State, state.Stale = decided.Code, decided.Stale && decided.Code != rc.KueueAdmissionDeactivated
 		// The phase chose which blocker rules applied, so a stale
 		// QuotaReserved makes any blocker it led to stale too.
 		if decided == state.Blocker && c.staleCondition("QuotaReserved") {
@@ -66,6 +80,9 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 		}
 	}
 	state.Attention = attention(state.State)
+	if state.State == rc.KueueAdmissionDeactivated && state.Inactive.Source == rc.KueueFactSourceCondition {
+		state.Attention = rc.KueueAttentionUnknown
+	}
 	return state
 }
 
@@ -90,11 +107,17 @@ func preemptionGateIsCurrent(conditions map[string]workloadCondition) bool {
 		(quota.Reason == "AdmissionGated" && !strings.HasPrefix(quota.Message, externalAdmissionGateMessage))
 }
 
-// uninformativeBlocker is what Kueue writes into QuotaReserved right after an
-// eviction (the eviction message, or pending evaluation); the eviction itself
-// says more until the scheduler reports a real reason.
-func uninformativeBlocker(code rc.KueueAdmissionCode) bool {
-	return code == rc.KueueAdmissionNoDecision || code == rc.KueueAdmissionUnrecognized
+// uninformative is a blocker that says less than a current eviction: no
+// decision yet, or the eviction message itself, which Kueue copies into
+// QuotaReserved when it releases the quota. Any other unrecognized reason is
+// news and stays the State.
+func (c classifier) uninformative(blocker *rc.KueueAdmissionFact) bool {
+	if blocker.Code == rc.KueueAdmissionNoDecision {
+		return true
+	}
+	quota, hasQuota := c.conditions["QuotaReserved"]
+	evicted, evictedNow := trueCondition(c.conditions, "Evicted")
+	return blocker.Code == rc.KueueAdmissionUnrecognized && hasQuota && evictedNow && quota.Message == evicted.Message
 }
 
 func attention(code rc.KueueAdmissionCode) rc.KueueAttention {
@@ -147,12 +170,18 @@ func (c classifier) inactive() *rc.KueueAdmissionFact {
 	if active, found, _ := unstructured.NestedBool(c.u.Object, "spec", "active"); found && !active {
 		// Kueue records its own cause as DeactivationTarget until it flips
 		// spec.active, then as the Evicted reason DeactivatedDueTo<Cause>; a
-		// plain Deactivated eviction is someone else's change.
+		// plain Deactivated eviction is someone else's change. Kueue v0.18 does
+		// not rewrite an earlier eviction when it deactivates, so any other
+		// Evicted reason leaves the cause unknown.
 		if target, ok := trueCondition(c.conditions, "DeactivationTarget"); ok {
 			return c.conditionFact(rc.KueueAdmissionDeactivatedByKueue, target)
 		}
-		if evicted, ok := trueCondition(c.conditions, "Evicted"); ok && strings.HasPrefix(evicted.Reason, "DeactivatedDueTo") {
+		evicted, evictedNow := trueCondition(c.conditions, "Evicted")
+		switch {
+		case evictedNow && strings.HasPrefix(evicted.Reason, "DeactivatedDueTo"):
 			return c.conditionFact(rc.KueueAdmissionDeactivatedByKueue, evicted)
+		case evictedNow && evicted.Reason != "Deactivated":
+			return c.conditionFact(rc.KueueAdmissionDeactivated, evicted)
 		}
 		return &rc.KueueAdmissionFact{Code: rc.KueueAdmissionDeactivated, Source: rc.KueueFactSourceSpec, Name: "active"}
 	}
@@ -189,9 +218,11 @@ func (c classifier) disruption() *rc.KueueAdmissionFact {
 // blocker picks one reason a Workload still competing for admission is not
 // admitted. A rejected check outranks everything because Kueue will not admit
 // past it; backoff outranks the quota condition because a Workload in backoff
-// is not in the queue. While pending, only the QuotaReserved condition
+// is not in the queue. Otherwise, while pending, the QuotaReserved condition
 // decides: Kueue resets check states to Pending on eviction, and
-// Admitted=False NoReservation only restates the missing reservation.
+// Admitted=False NoReservation only restates the missing reservation. When
+// QuotaReserved only repeats the eviction message, a Requeued=False naming a
+// stopped queue says what holds the Workload back.
 func (c classifier) blocker(phase rc.KueuePhase) *rc.KueueAdmissionFact {
 	if phase == rc.KueuePhaseAdmitted || phase == rc.KueuePhaseFinished {
 		return nil
@@ -213,7 +244,16 @@ func (c classifier) blocker(phase rc.KueuePhase) *rc.KueueAdmissionFact {
 	if !ok {
 		return &rc.KueueAdmissionFact{Code: rc.KueueAdmissionNoDecision}
 	}
-	return c.conditionFact(c.quotaBlockerCode(quota), quota)
+	fact := c.conditionFact(c.quotaBlockerCode(quota), quota)
+	if requeued, ok := c.conditions["Requeued"]; ok && requeued.Status == "False" && c.uninformative(fact) {
+		switch requeued.Reason {
+		case "ClusterQueueStopped":
+			return c.conditionFact(rc.KueueAdmissionClusterQueueInactive, requeued)
+		case "LocalQueueStopped":
+			return c.conditionFact(rc.KueueAdmissionLocalQueueInactive, requeued)
+		}
+	}
+	return fact
 }
 
 func (c classifier) reservedBlocker(checks []checkState) *rc.KueueAdmissionFact {
@@ -275,9 +315,6 @@ func (c classifier) quotaBlockerCode(quota workloadCondition) rc.KueueAdmissionC
 		if code := messageBlockerCode(quota.Message); code != "" {
 			return code
 		}
-		if quota.Reason == "Misconfigured" {
-			return rc.KueueAdmissionInvalidWorkload
-		}
 	}
 	return rc.KueueAdmissionUnrecognized
 }
@@ -298,6 +335,9 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 		return rc.KueueAdmissionWaitingForPodsReady
 	case strings.HasPrefix(message, "AdmissionGatedBy cleared"):
 		return rc.KueueAdmissionNoDecision
+	case strings.Contains(message, "Pending the preemption of"):
+		// The same state the granular reason WaitingForPreemptedWorkloads names.
+		return rc.KueueAdmissionWaitingForPreemption
 	case strings.HasPrefix(message, "resources validation failed"), strings.HasPrefix(message, "resources didn't satisfy LimitRange constraints"):
 		return rc.KueueAdmissionInvalidWorkload
 	}
@@ -308,7 +348,7 @@ var (
 	unusedQuotaClause = regexp.MustCompile(`insufficient unused quota for \S+ in flavor (\S+?),`)
 	maxQuotaClause    = regexp.MustCompile(`insufficient quota for \S+ in flavor (\S+?),`)
 	mismatchClauses   = []*regexp.Regexp{
-		regexp.MustCompile(`untolerated taint .*? in flavor (\S+?)(?:,|$)`),
+		regexp.MustCompile(`untolerated taint \{[^}]*\} in flavor ([^,\s]+)`),
 		regexp.MustCompile(`flavor (\S+) doesn't match node affinity`),
 		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not support TopologyAwareScheduling`),
 	}

@@ -105,8 +105,22 @@ describe('Kueue admission investigation', () => {
     expect(deactivated).not.toContain('Admission held')
   })
 
-  it('marks a stale state as last reported, even for a phase-like code', () => {
-    expect(render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none', stale: true } } }))).toContain('Admitted (stale)')
+  it('takes staleness from the server classification, once', () => {
+    const stale = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none', stale: true } } }))
+    expect(stale.match(/>Admitted</g)).toHaveLength(1)
+    expect(stale).toContain('Last reported for an earlier generation')
+    // A stale primary condition does not contradict a current classification.
+    const current = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', observedGeneration: 1 }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
+    expect(current).not.toContain('Stale evidence')
+    expect(current).not.toContain('Last reported')
+  })
+
+  it('shows the evidence behind the state when the primary condition does not say it', () => {
+    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'QuotaReserved' }, kueue: { phase: 'quota_reserved', admission: { state: 'admission_check_rejected', attention: 'action_needed', blocker: { code: 'admission_check_rejected', source: 'admission_check', name: 'capacity', reason: 'Rejected', message: 'Provisioning request cannot satisfy this workload' } } } }))
+    expect(html).toContain('Admission check rejected')
+    expect(html).toContain('Admission check capacity · Rejected: Provisioning request cannot satisfy this workload')
+    const same = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Inadmissible', message: "LocalQueue gpu doesn't exist" }, kueue: { phase: 'pending', admission: { state: 'local_queue_missing', attention: 'action_needed', blocker: { code: 'local_queue_missing', source: 'condition', name: 'QuotaReserved', reason: 'Inadmissible', message: "LocalQueue gpu doesn't exist" } } } }))
+    expect(same.match(/LocalQueue gpu doesn&#x27;t exist/g)).toHaveLength(1)
   })
 
   it('keeps the generic qualifier when an older Radar sends no admission state', () => {

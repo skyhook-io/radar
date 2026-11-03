@@ -2,6 +2,7 @@
 
 import type { BadgeSeverity } from '../ui/Badge'
 import type { StatusBadge } from './resource-utils'
+import type { KueueAdmissionState } from '../../types/scheduling'
 import { healthColors } from './resource-utils'
 
 const failedFinishedReasons = new Set(['Failed', 'FailedToStart', 'OutOfSync', 'OwnerNotFound'])
@@ -174,6 +175,10 @@ export function getLocalQueueAdmittedWorkloads(resource: any): string {
 // KUEUE WORKLOAD UTILITIES
 // ============================================================================
 
+// The Workload's most notable native condition, for its status badge. This is
+// not the admission-state classification, which only the server decides
+// (kueue.admission); the two can differ, e.g. an Evicted Workload now blocked
+// by a missing LocalQueue.
 export function getKueueWorkloadStatusCondition(resource: any): any {
   for (const type of ['Finished', 'Evicted', 'Preempted', 'Admitted', 'QuotaReserved']) {
     const condition = findCondition(resource, type)
@@ -206,8 +211,9 @@ export interface KueueAdmissionStatePresentation {
 }
 
 // Presentation only: the server decides every code and its attention class
-// (pkg/schedulinginsight). A code or class this UI does not know renders as
-// sent, in a neutral tone.
+// (pkg/schedulinginsight). A code this UI has no label for renders as sent;
+// an attention class it does not know renders in a neutral tone. Stale
+// evidence is always neutral.
 const kueueAdmissionLabels: Record<string, string> = {
   finished: 'Finished',
   admitted: 'Admitted',
@@ -216,7 +222,7 @@ const kueueAdmissionLabels: Record<string, string> = {
   deactivated_by_kueue: 'Deactivated by Kueue',
   deactivation_pending: 'Being deactivated',
   on_hold: 'On hold',
-  no_decision: 'Not evaluated yet',
+  no_decision: 'Awaiting evaluation',
   insufficient_quota: 'Waiting for quota',
   exceeds_quota: 'Requests exceed quota limits',
   no_matching_flavor: 'No matching flavor',
@@ -250,10 +256,15 @@ const kueueAttentionSeverity: Record<string, BadgeSeverity> = {
   unknown: 'warning',
 }
 
-export function kueueAdmissionStatePresentation(admission: { state: string; attention?: string; stale?: boolean }): KueueAdmissionStatePresentation {
-  const label = kueueAdmissionLabels[admission.state] ?? admission.state
-  if (admission.stale) return { label: `${label} (stale)`, severity: 'neutral' }
-  return { label, severity: kueueAttentionSeverity[admission.attention ?? ''] ?? 'neutral' }
+export function kueueAdmissionStateLabel(code: string): string {
+  return kueueAdmissionLabels[code] ?? code
+}
+
+export function kueueAdmissionStatePresentation(admission: Pick<KueueAdmissionState, 'state' | 'attention' | 'stale'>): KueueAdmissionStatePresentation {
+  return {
+    label: kueueAdmissionStateLabel(admission.state),
+    severity: admission.stale ? 'neutral' : kueueAttentionSeverity[admission.attention] ?? 'neutral',
+  }
 }
 
 export function getKueueWorkloadQueueName(resource: any): string {

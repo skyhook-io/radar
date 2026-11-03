@@ -96,7 +96,10 @@ function GateEvidence({ gate, link }: { gate: Gate; link: Link }) {
 function AdmissionObservation({ observation, identity, sourceLink, generation, deleting, presentation, link }: { observation: SchedulingObservation; identity: React.ReactNode; sourceLink?: React.ReactNode; generation: number; deleting: boolean; presentation: 'card' | 'drawer'; link: Link }) {
   const kueue = observation.kueue
   const condition = observation.primaryCondition
-  const stale = isKueueConditionStale(condition, observation.subjectGeneration)
+  const admission = kueue?.admission
+  // The server decides staleness from the evidence behind the state; an
+  // older Radar sends no admission block, so fall back to the condition.
+  const stale = admission ? !!admission.stale : isKueueConditionStale(condition, observation.subjectGeneration)
   const secondary = [...(observation.disruptions ?? []), kueue?.podsReady, kueue?.waitingForReplacementPods]
     .filter((entry) => entry != null)
     .filter((entry) => entry.type !== condition?.type)
@@ -115,10 +118,14 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
       : observation.decision === 'satisfied' ? 'success' : 'warning'
-  const admission = kueue?.admission
   // The phase badge and the inactive badge already say these states.
-  const reason = admission && (admission.stale || !phaseStates.has(admission.state)) ? kueueAdmissionStatePresentation(admission) : null
+  const reason = admission && !phaseStates.has(admission.state) ? kueueAdmissionStatePresentation(admission) : null
   const unrecognizedReason = admission?.state === 'unrecognized' ? admission.blocker?.reason : undefined
+  // Show the evidence behind the state when the primary condition below does
+  // not already say it (a check, backoff, or Kueue's deactivation cause).
+  const decidingFact = admission && [admission.inactive, admission.blocker, admission.disruption].find((fact) => fact?.code === admission.state)
+  const factEvidence = reason && decidingFact && decidingFact.source !== 'spec' && !(decidingFact.source === 'condition' && decidingFact.name === condition?.type)
+    ? decidingFact : undefined
   const qualifier = admission ? null : observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
     <div className={split ? 'grid min-w-0 items-start gap-4 @min-[1024px]/admission:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]' : 'space-y-4'}>
@@ -135,7 +142,10 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
         {deleting && <Badge severity="alert">Deleting</Badge>}
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
-        {stale && <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>}
+        {stale && (admission
+          ? <p className="text-xs text-warning-text">Last reported for an earlier generation of this Workload; not confirmed for its current spec (generation {observation.subjectGeneration}).</p>
+          : <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>)}
+        {factEvidence && <p className="max-w-3xl whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{factEvidence.source === 'admission_check' ? `Admission check ${factEvidence.name}` : factEvidence.name}{factEvidence.reason && ` · ${factEvidence.reason}`}{factEvidence.message && `: ${factEvidence.message}`}</p>}
         {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
         {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
       <div className="empty:hidden flex flex-wrap gap-x-5 gap-y-2 border-t border-theme-border pt-2 text-xs text-theme-text-secondary">

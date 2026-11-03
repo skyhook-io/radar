@@ -49,8 +49,9 @@ export interface SchedulingObservation {
   }
 }
 
-// Mirrors resourcecontext.KueueAdmissionState. The server is the only place
-// codes are decided; a code this UI does not know still renders verbatim.
+// Mirrors resourcecontext.KueueAdmissionFact (see its Go doc for the
+// evidence contract: message is bounded display text, an absent stale means
+// not known to be stale).
 export interface KueueAdmissionFact {
   code: string
   source?: 'condition' | 'admission_check' | 'spec'
@@ -60,6 +61,11 @@ export interface KueueAdmissionFact {
   stale?: boolean
 }
 
+// Mirrors resourcecontext.KueueAdmissionState. The server is the only place
+// codes and attention are decided; a code this UI does not know still renders
+// verbatim. A missing fact is not evidence on its own (see the Go doc for
+// which facts each state reports), and a missing admission block means an
+// older Radar, not a Workload with no blocker.
 export interface KueueAdmissionState {
   state: string
   attention: string

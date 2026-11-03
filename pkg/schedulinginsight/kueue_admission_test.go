@@ -2,7 +2,13 @@ package schedulinginsight
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"reflect"
+	"sort"
+	"strconv"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -96,7 +102,7 @@ var (
 
 func boolPtr(value bool) *bool { return &value }
 
-func classify(t *testing.T, spec workloadSpec) rc.KueueWorkloadClassification {
+func classify(t *testing.T, spec workloadSpec) KueueClassification {
 	t.Helper()
 	got, ok := ClassifyKueueWorkload(buildWorkload(spec))
 	if !ok {
@@ -258,7 +264,7 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 		{
 			name: "every taint clause rules out its flavor, not only the last",
 			spec: workloadSpec{conditions: []condition{pending("Pending",
-				"couldn't assign flavors to pod set main: untolerated taint {spot true NoSchedule <nil>} in flavor spot, untolerated taint {gpu true NoSchedule <nil>} in flavor a100, insufficient unused quota for cpu in flavor spot, 1 more needed")}},
+				"couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor a100, 1 more needed, untolerated taint {gpu true NoSchedule <nil>} in flavor a100, untolerated taint {spot true NoSchedule <nil>} in flavor spot")}},
 			phase:   rc.KueuePhasePending,
 			state:   rc.KueueAdmissionNoMatchingFlavor,
 			blocker: rc.KueueAdmissionNoMatchingFlavor,
@@ -266,7 +272,7 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 		{
 			name: "taint and unused quota in the same flavor rule it out",
 			spec: workloadSpec{conditions: []condition{pending("Pending",
-				"couldn't assign flavors to pod set main: untolerated taint {spot true NoSchedule <nil>} in flavor spot, insufficient unused quota for cpu in flavor spot, 1 more needed")}},
+				"couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor spot, 1 more needed, untolerated taint {spot true NoSchedule <nil>} in flavor spot")}},
 			phase:   rc.KueuePhasePending,
 			state:   rc.KueueAdmissionNoMatchingFlavor,
 			blocker: rc.KueueAdmissionNoMatchingFlavor,
@@ -299,6 +305,56 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			phase:   rc.KueuePhasePending,
 			state:   rc.KueueAdmissionAdmissionGated,
 			blocker: rc.KueueAdmissionAdmissionGated,
+		},
+		{
+			name: "an old eviction does not hide a new reason Radar does not recognize",
+			spec: workloadSpec{conditions: []condition{
+				pending("Pending", "Workload no longer fits after processing another workload"),
+				{kind: "Evicted", status: "True", reason: "Preempted", message: "Preempted to accommodate a workload"},
+				{kind: "Preempted", status: "True", reason: "InClusterQueue", message: "Preempted to accommodate a workload"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionUnrecognized,
+			blocker:    rc.KueueAdmissionUnrecognized,
+			disruption: rc.KueueAdmissionPreempted,
+		},
+		{
+			name: "drained by a stopped ClusterQueue, not requeued until it restarts",
+			spec: workloadSpec{conditions: []condition{
+				pending("Pending", "The ClusterQueue is stopped"),
+				{kind: "Evicted", status: "True", reason: "ClusterQueueStopped", message: "The ClusterQueue is stopped"},
+				{kind: "Requeued", status: "False", reason: "ClusterQueueStopped", message: "The ClusterQueue is stopped"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionClusterQueueInactive,
+			blocker:    rc.KueueAdmissionClusterQueueInactive,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name: "drained by a stopped LocalQueue",
+			spec: workloadSpec{conditions: []condition{
+				pending("Pending", "The LocalQueue is stopped"),
+				{kind: "Evicted", status: "True", reason: "LocalQueueStopped", message: "The LocalQueue is stopped"},
+				{kind: "Requeued", status: "False", reason: "LocalQueueStopped", message: "The LocalQueue is stopped"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionLocalQueueInactive,
+			blocker:    rc.KueueAdmissionLocalQueueInactive,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name:    "preemptions in flight (v0.18 wording)",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyUnusedQuota+". Pending the preemption of 2 workload(s)")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionWaitingForPreemption,
+			blocker: rc.KueueAdmissionWaitingForPreemption,
+		},
+		{
+			name:    "a cluster-side misconfiguration is not blamed on the Workload",
+			spec:    workloadSpec{conditions: []condition{pending("Misconfigured", "invalid namespace selector: a bad operator")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionUnrecognized,
+			blocker: rc.KueueAdmissionUnrecognized,
 		},
 		{
 			name:    "untolerated taint in every flavor",
@@ -385,7 +441,7 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionNamespaceNotEligible,
 		},
 		{
-			name:    "other misconfiguration",
+			name:    "the Workload's own requests fail validation",
 			spec:    workloadSpec{conditions: []condition{pending("Misconfigured", "resources validation failed: spec.podSets[0]: Invalid value")}},
 			phase:   rc.KueuePhasePending,
 			state:   rc.KueueAdmissionInvalidWorkload,
@@ -550,6 +606,17 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			state:      rc.KueueAdmissionDeactivatedByKueue,
 			inactive:   rc.KueueAdmissionDeactivatedByKueue,
 			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name: "Kueue v0.18 deactivated an already-evicted Workload: the cause is not recorded",
+			spec: workloadSpec{active: boolPtr(false), conditions: []condition{
+				pending("Pending", "Exceeded the PodsReady timeout ml/train"),
+				{kind: "Evicted", status: "True", reason: "PodsReadyTimeout", message: "Exceeded the PodsReady timeout ml/train"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionDeactivated,
+			inactive:   rc.KueueAdmissionDeactivated,
+			disruption: rc.KueueAdmissionPodsReadyTimeout,
 		},
 		{
 			name: "deactivated by a person and acknowledged",
@@ -780,10 +847,16 @@ func TestClassifyKueueWorkloadStaleEvidence(t *testing.T) {
 	})
 	t.Run("current spec decides even when a secondary axis is stale", func(t *testing.T) {
 		got := classify(t, workloadSpec{generation: 3, active: boolPtr(false), conditions: []condition{
-			{kind: "Evicted", status: "True", reason: "Preempted", observedGeneration: 2},
+			{kind: "Evicted", status: "True", reason: "Deactivated", observedGeneration: 2},
 		}}).Admission
 		if got.State != rc.KueueAdmissionDeactivated || got.Stale || got.Disruption == nil || !got.Disruption.Stale {
 			t.Fatalf("admission = %+v", got)
+		}
+		uncertain := classify(t, workloadSpec{generation: 3, active: boolPtr(false), conditions: []condition{
+			{kind: "Evicted", status: "True", reason: "Preempted", observedGeneration: 2},
+		}}).Admission
+		if uncertain.State != rc.KueueAdmissionDeactivated || uncertain.Stale || uncertain.Attention != rc.KueueAttentionUnknown {
+			t.Fatalf("admission = %+v", uncertain)
 		}
 	})
 	t.Run("current generation and unreported generation are not stale", func(t *testing.T) {
@@ -905,4 +978,58 @@ func TestPrimaryConditionFollowsTheCurrentAttempt(t *testing.T) {
 	if primary := onlyObservation(t, ForResource(withChecks, rc.TierBasic)).PrimaryCondition; primary == nil || primary.Type != "QuotaReserved" {
 		t.Fatalf("generic NoReservationUnsatisfiedChecks hid the quota reason: %+v", primary)
 	}
+}
+
+// The shared vector lists every code once; the k8s-ui presentation test reads
+// the same file, so a code added here without a UI label fails there.
+func TestSharedCodeVectorMatchesDeclaredCodes(t *testing.T) {
+	raw, err := os.ReadFile("testdata/kueue_admission_codes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vector struct {
+		Codes     []string `json:"codes"`
+		Attention []string `json:"attention"`
+	}
+	if err := json.Unmarshal(raw, &vector); err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string][]string{}
+	file, err := parser.ParseFile(token.NewFileSet(), "../resourcecontext/kueue_admission.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value := spec.(*ast.ValueSpec)
+			ident, ok := value.Type.(*ast.Ident)
+			if !ok || len(value.Values) != 1 {
+				continue
+			}
+			literal, ok := value.Values[0].(*ast.BasicLit)
+			if !ok {
+				continue
+			}
+			unquoted, _ := strconv.Unquote(literal.Value)
+			declared[ident.Name] = append(declared[ident.Name], unquoted)
+		}
+	}
+	sameSet := func(name string, got, want []string) {
+		sort.Strings(got)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: shared vector %v, declared %v", name, want, got)
+		}
+	}
+	sameSet("KueueAdmissionCode", declared["KueueAdmissionCode"], vector.Codes)
+	sameSet("KueueAttention", declared["KueueAttention"], vector.Attention)
+	listed := make([]string, 0, len(allAdmissionCodes))
+	for _, code := range allAdmissionCodes {
+		listed = append(listed, string(code))
+	}
+	sameSet("allAdmissionCodes", listed, vector.Codes)
 }
