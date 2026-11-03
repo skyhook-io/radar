@@ -111,18 +111,16 @@ function Retryable({ message, onRetry }: { message: string; onRetry?: () => void
   )
 }
 
-/** Rows across pages, once each: a member can move between pages as the list changes. */
+/**
+ * Rows across pages, once each, in first-seen position with the latest data:
+ * a member that finishes between pages is returned again among the finished.
+ */
 export function uniqueRows(pages: KueueQueueWorkloadsResponse[]): KueueQueueWorkload[] {
-  const seen = new Set<string>()
-  const rows: KueueQueueWorkload[] = []
+  const rows = new Map<string, KueueQueueWorkload>()
   for (const page of pages) {
-    for (const row of page.workloads?.items ?? []) {
-      if (seen.has(row.uid)) continue
-      seen.add(row.uid)
-      rows.push(row)
-    }
+    for (const row of page.workloads?.items ?? []) rows.set(row.uid, row)
   }
-  return rows
+  return [...rows.values()]
 }
 
 /**
@@ -367,7 +365,7 @@ export function unreadWorkloadsText(lq: KueueQueueLocalQueue): string {
   const where = `in ${lq.namespace}`
   switch (lq.workloadsGap) {
     case 'user_forbidden': return `You can't list Workloads ${where}, so its Workloads aren't listed above.`
-    case 'user_permission_check_failed': return `Radar couldn't confirm you may list Workloads ${where}; retrying.`
+    case 'user_permission_check_failed': return `Radar hasn't confirmed you may list Workloads ${where} yet; refresh to check again.`
     case 'kind_sync_pending': return `Workloads ${where} are still loading.`
     case 'kind_sync_timed_out': return `Workloads ${where} haven't finished loading.`
     case 'radar_forbidden':

@@ -76,6 +76,7 @@ func localQueue(namespace, name, target string) *unstructured.Unstructured {
 }
 
 func summary(members []Member) []string {
+	Sort(members)
 	out := make([]string, 0, len(members))
 	for _, m := range members {
 		line := fmt.Sprintf("%s/%s %v submitted=%s reserved=%s", m.Workload.GetNamespace(), m.Workload.GetName(), m.Kinds, m.SubmittedTo, m.ReservedIn)
@@ -185,6 +186,7 @@ func TestFilterAndPageByKey(t *testing.T) {
 	}
 	lqs := readLocalQueues{targets: map[string]string{"team/lq": "cq"}, read: map[string]bool{"team": true}}
 	members := ClusterQueueMembers("cq", workloads, lqs)
+	Sort(members)
 	none := func(Member) string { return "" }
 	if got := len(Filter(members, Reservation, "", none)); got != 4 {
 		t.Fatalf("reservation members = %d, want 4", got)
@@ -228,7 +230,9 @@ func TestPagingWhileMembershipChanges(t *testing.T) {
 		for _, n := range names {
 			ws = append(ws, workload("team", n, queue("lq")))
 		}
-		return ClusterQueueMembers("cq", ws, lqs)
+		members := ClusterQueueMembers("cq", ws, lqs)
+		Sort(members)
+		return members
 	}
 	first, more := Page(build(names), "", 2)
 	if !more || first[1].Workload.GetName() != "c" {
@@ -254,7 +258,9 @@ func TestFinishedMembersSortLast(t *testing.T) {
 	members := ClusterQueueMembers("cq", []*unstructured.Unstructured{
 		workload("a", "done", queue("lq")), workload("a", "running", queue("lq")), workload("b", "waiting", queue("lq")),
 	}, lqs)
-	members[0].Finished = true // a/done
+	for i := range members {
+		members[i].Finished = members[i].Workload.GetName() == "done"
+	}
 	Sort(members)
 	var got []string
 	for _, m := range members {
@@ -266,5 +272,41 @@ func TestFinishedMembersSortLast(t *testing.T) {
 	page, more := Page(members, Key(members[1]), 5)
 	if more || len(page) != 1 || page[0].Workload.GetName() != "done" {
 		t.Fatalf("page after b/waiting = %v", summary(page))
+	}
+}
+
+// A member's key changes once, when it finishes: it is returned again among
+// the finished ones, and nothing else repeats or is skipped.
+func TestPagingWhileAMemberFinishes(t *testing.T) {
+	lqs := readLocalQueues{targets: map[string]string{"team/lq": "cq"}, read: map[string]bool{"team": true}}
+	build := func(finished ...string) []Member {
+		var ws []*unstructured.Unstructured
+		for _, n := range []string{"a", "b", "c"} {
+			ws = append(ws, workload("team", n, queue("lq")))
+		}
+		members := ClusterQueueMembers("cq", ws, lqs)
+		for i := range members {
+			members[i].Finished = slices.Contains(finished, members[i].Workload.GetName())
+		}
+		Sort(members)
+		return members
+	}
+	first, _ := Page(build(), "", 1)
+	var read []string
+	read = append(read, first[0].Workload.GetName())
+	after := Key(first[0])
+	for {
+		page, more := Page(build("a"), after, 1)
+		if len(page) == 0 {
+			break
+		}
+		read = append(read, page[0].Workload.GetName())
+		after = Key(page[0])
+		if !more {
+			break
+		}
+	}
+	if !slices.Equal(read, []string{"a", "b", "c", "a"}) {
+		t.Fatalf("read %v, want a b c then a again among the finished", read)
 	}
 }

@@ -272,8 +272,9 @@ func (s *Server) writeKueueQueuePageError(w http.ResponseWriter, err error) {
 
 // newKueueAccessBudget bounds the fresh permission checks one request makes
 // for one kind. A ClusterQueue request reads two kinds and gives each half of
-// readscope.MaxAccessChecks, so the LocalQueue read can't spend the checks
-// the Workload read needs.
+// readscope.MaxAccessChecks, so the LocalQueue read, which runs first, can't
+// spend the checks the Workload read needs; the request's total stays within
+// MaxAccessChecks.
 func newKueueAccessBudget(kinds int32) *atomic.Int32 {
 	budget := new(atomic.Int32)
 	budget.Store(readscope.MaxAccessChecks / kinds)
@@ -631,10 +632,26 @@ func (s *Server) readKueueIndexed(r *http.Request, h kueueQueueHandles, budget *
 		}
 		return fail(target, readFailuref(readreason.KindUnknown, "%s are not served by this cluster", resource))
 	}
-	warmKueueKind(r.Context(), h.dynamic, gvr, authorized)
+	// Warm what an unnamed scope needs once (the cache picks the scopes it
+	// can watch), or each namespace the request named.
+	var warm []string
+	if target.explicit {
+		warm = authorized
+	}
+	starting := warmKueueKind(r.Context(), h.dynamic, gvr, warm)
 
 	inventory := readplan.ForInventory(readplan.Dynamic(h.dynamic, gvr, authorized, false), authorized, target.explicit, false)
 	gaps := inventoryGaps(inventory)
+	if starting {
+		// The watch this read started is still being set up: until Radar's
+		// access check answers, the kind reads as not collected, which would
+		// send the reader to Radar's configuration rather than a retry.
+		for i := range gaps {
+			if gaps[i].Code == readreason.RadarKindNotCollected {
+				gaps[i].Code = readreason.KindSyncPending
+			}
+		}
+	}
 	if inventory.Collection != nil {
 		target = target.narrowedByCollection(inventory.Collection.Namespaces, inventory.Collection.Outside)
 	}
@@ -658,11 +675,13 @@ func (s *Server) readKueueIndexed(r *http.Request, h kueueQueueHandles, budget *
 		// A cluster-wide store serves every namespace: read it once, rather
 		// than once per namespace.
 		var clusterObjs []*unstructured.Unstructured
-		clusterCode := readreason.Code("unread")
+		readClusterWide := false
 		if _, clusterWide := h.dynamic.ReadSource(gvr, ""); clusterWide {
-			clusterObjs, clusterCode = readKueueIndexChecked(h.dynamic, gvr, "", keys)
+			var code readreason.Code
+			clusterObjs, code = readKueueIndexChecked(h.dynamic, gvr, "", keys)
+			readClusterWide = code == ""
 		}
-		if clusterCode == "" {
+		if readClusterWide {
 			for _, u := range clusterObjs {
 				if wanted[u.GetNamespace()] {
 					out.objects = append(out.objects, u)
@@ -799,23 +818,28 @@ func (s *Server) kueueListAccess(r *http.Request, cache *k8s.ResourceCache, budg
 
 // warmKueueKind starts the watches a read of namespaces (nil: every
 // namespace) needs and waits briefly for them to load. What doesn't load in
-// time is reported by the planner as still loading.
-func warmKueueKind(ctx context.Context, dc *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, namespaces []string) {
+// time is reported by the planner as still loading. It reports whether a
+// watch was still being started when the wait ran out.
+func warmKueueKind(ctx context.Context, dc *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, namespaces []string) (starting bool) {
 	ctx, cancel := context.WithTimeout(ctx, kueueQueueSyncWait)
 	defer cancel()
 	scopes := namespaces
 	if scopes == nil {
 		scopes = []string{""}
 	}
+	var pending atomic.Bool
 	var g errgroup.Group
 	g.SetLimit(8)
 	for _, ns := range scopes {
 		g.Go(func() error {
 			if err := dc.EnsureWatchingContext(ctx, gvr, ns); err == nil {
 				dc.WaitForSyncContext(ctx, gvr, ns)
+			} else if ctx.Err() != nil {
+				pending.Store(true)
 			}
 			return nil
 		})
 	}
 	_ = g.Wait()
+	return pending.Load()
 }

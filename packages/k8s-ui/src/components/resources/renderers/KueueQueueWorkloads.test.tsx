@@ -164,7 +164,9 @@ describe('paging', () => {
   it('polls sooner only while a retry can complete the answer', () => {
     expect(kueueQueueRetryable(response(members([], { ...partial, gaps: [{ code: 'kind_sync_pending', namespaces: { count: 1, names: ['team-b'] } }] })))).toBe(true)
     expect(kueueQueueRetryable(response(members([], partial)))).toBe(false)
-    expect(kueueQueueRetryable(response(undefined, { workloadsError: { error: 'x', error_code: 'user_permission_check_failed' } }))).toBe(true)
+    expect(kueueQueueRetryable(response(undefined, { workloadsError: { error: 'x', error_code: 'kind_sync_pending' } }))).toBe(true)
+    // Each poll would spend more permission checks: wait for the ordinary refresh.
+    expect(kueueQueueRetryable(response(undefined, { workloadsError: { error: 'x', error_code: 'user_permission_check_failed' } }))).toBe(false)
   })
 })
 
@@ -173,10 +175,13 @@ it('says why a LocalQueue\'s Workloads are missing by who can fix it', () => {
   expect(unreadWorkloadsText({ ...lq, workloadsGap: 'user_forbidden' })).toContain("You can't list Workloads in team-b")
   expect(unreadWorkloadsText({ ...lq, workloadsGap: 'radar_forbidden' })).toContain("Radar's own access")
   expect(unreadWorkloadsText({ ...lq, workloadsGap: 'kind_sync_pending' })).toBe('Workloads in team-b are still loading.')
+  expect(unreadWorkloadsText({ ...lq, workloadsGap: 'user_permission_check_failed' })).toContain('refresh to check again')
 })
 
 it('lists a row once when it moved between pages', () => {
   const first = response(members([row('a'), row('b')], complete))
   const second = response(members([row('b'), row('c')], complete))
   expect(uniqueRows([first, second]).map(r => r.name)).toEqual(['a', 'b', 'c'])
+  const finishedLater = response(members([row('a', { admission: { state: 'finished' } })], complete))
+  expect(uniqueRows([first, finishedLater]).map(r => [r.name, r.admission?.state])).toEqual([['a', 'finished'], ['b', undefined]])
 })
