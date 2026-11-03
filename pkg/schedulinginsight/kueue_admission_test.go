@@ -462,8 +462,8 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionNoMatchingFlavor,
 		},
 		{
-			name: "v0.20 Deactivated reason left behind after reactivation",
-			spec: workloadSpec{active: boolPtr(true), conditions: []condition{pending("Deactivated", "The workload is deactivated")}},
+			name:    "v0.20 Deactivated reason left behind after reactivation",
+			spec:    workloadSpec{active: boolPtr(true), conditions: []condition{pending("Deactivated", "The workload is deactivated")}},
 			phase:   rc.KueuePhasePending,
 			state:   rc.KueueAdmissionNoDecision,
 			blocker: rc.KueueAdmissionNoDecision,
