@@ -25,7 +25,6 @@ export function StatusPill({ status }: { status: StatusBadge }) {
   return <Badge colorClass={status.color} size="sm">{status.text}</Badge>
 }
 
-/** The Active condition exactly as the controller reported it, with its age and generation. */
 export function ReportedActive({ data, status, children }: { data: any; status: StatusBadge; children?: ReactNode }) {
   const condition = getKueueQueueCondition(data)
   const generation = data?.metadata?.generation
@@ -71,7 +70,6 @@ export function QueueCounts({ data, kind }: { data: any; kind: 'ClusterQueue' | 
   </div>
 }
 
-/** stopPolicy as configured, with what it means at this API version. */
 export function ConfiguredStop({ data }: { data: any }) {
   const raw = data?.spec?.stopPolicy
   const policy = describeKueuePolicy(data?.apiVersion, 'stopPolicy', raw ?? 'None')
@@ -85,7 +83,6 @@ export function ConfiguredStop({ data }: { data: any }) {
   </div>
 }
 
-/** A related object's condition message; one describing an earlier generation says so. */
 function ReportedMessage({ condition, generation }: { condition: any; generation?: number }) {
   return <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary">
     {isKueueConditionStale(condition, generation) && <span className="text-theme-text-tertiary">Reported for generation {condition.observedGeneration} (now {generation}): </span>}
@@ -93,7 +90,6 @@ function ReportedMessage({ condition, generation }: { condition: any; generation
   </p>
 }
 
-/** A ClusterQueue as read from its own object: link, reported state and stop policy. */
 export function ClusterQueueReadSummary({ name, read, onNavigate }: { name: string; read?: RelatedRead; onNavigate?: Navigate }) {
   const parent = read?.state === 'found' ? read.object : undefined
   const condition = parent ? getKueueQueueCondition(parent) : undefined
@@ -138,7 +134,6 @@ export function namespaceEligibilityFact({ clusterQueue, parent, namespaceRead }
   }
 }
 
-/** An AdmissionCheck's name, read state and its own Active report. */
 export function AdmissionCheckRow({ name, onFlavors, read, onNavigate }: { name: string; onFlavors?: string[]; read?: RelatedRead; onNavigate?: Navigate }) {
   const check = read?.state === 'found' ? read.object : undefined
   const condition = check ? getKueueQueueCondition(check) : undefined

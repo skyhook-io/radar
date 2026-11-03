@@ -1724,52 +1724,22 @@ quota reservations and assigned flavors, admission-check states and messages,
 and conditions. Reservation is distinguished from admission; resource totals are
 requests, not measured usage.
 
-Its **admission path** follows the Workload's owner (the owner-reference answer
-from [ownership](ownership.md), so a missing, replaced or hidden owner says so),
-its LocalQueue, the ClusterQueue that LocalQueue names, the ClusterQueue holding
-its reservation and the assigned flavor per PodSet and resource. The path names
-the states a stuck Workload usually has: no queue name, a LocalQueue that
-doesn't exist, no reservation, and a reservation in a ClusterQueue other than
-the one the LocalQueue now names. `status.clusterName` is shown as reported and
-never followed to another cluster. While quota isn't reserved, the reasons Kueue
-gave per flavor are parsed out of the QuotaReserved message, or shown verbatim
-when any part isn't recognised; Kueue sorts them alphabetically, so they are
-not an attempt order, and they describe one controller report, not history.
+Its **admission path** connects the owner, submission LocalQueue, its current
+ClusterQueue, reservation ClusterQueue and assigned ResourceFlavors. Missing,
+replaced and unreadable objects are distinguished. Per-flavor rejection reasons
+are one controller report, not attempt order or history; unrecognized text stays
+verbatim. Remote cluster names are reported without following them.
 
-LocalQueue and ClusterQueue detail put the Active condition as reported (reason,
-verbatim message, observed generation, with a stale marker when it describes an
-earlier generation) next to the configured stop policy, and show
-pending/reserving/admitted counts, which are not additive. Policy values carry a
-plain meaning from a dictionary per API version (v1beta1, v1beta2); a value the
-dictionary doesn't know is shown raw. Per-flavor resource rows join quota
-reservations and admitted usage; ClusterQueues also show nominal quota,
-borrowing/lending limits, namespace selector and admission policies. These are
-controller-reported quota facts, not measured utilization or available physical
-capacity. Both v1beta1 and v1beta2 queue shapes are supported.
-
-Related objects are read as the viewer, one list read per kind (re-read when the
-detail opens, when the object on screen changes and every 30 seconds, since
-watch events don't announce most additions), falling back to a
-GET per object, re-read every minute, when the viewer may get but not list the
-kind. Each one says whether it was found, doesn't exist, or couldn't be read
-(and why); a denial is never shown as missing, and an object is called missing
-only from a list Radar read in full (an older Radar that reports no coverage
-can't confirm absence). A ClusterQueue lists its ResourceFlavors per resource
-group in configured preference order and its AdmissionChecks with their own
-Active state, plus the other ClusterQueues naming its cohort (Cohort objects
-aren't read). A LocalQueue shows its ClusterQueue as read from that object and
-whether its namespace matches the ClusterQueue's `namespaceSelector` (null
-matches no namespace, `{}` every namespace; other selectors need the Namespace's
-labels). A LocalQueue that reports `ClusterQueueIsInactive` loses its alert tone
-in its detail only when its ClusterQueue, read now, reports it was stopped and
-nothing else (Kueue names only the first of a ClusterQueue's inactive causes as
-the reason, so a stopped queue that is also missing a flavor still says Stopped;
-its message lists every cause, and such a queue keeps the alert tone too) and
-both reports describe their current generation; its header badge follows the
-same rule, while the resource table and the Investigate hint keep the
-LocalQueue's own report. A
-consumer of the k8s-ui renderers that doesn't inject these reads shows the names
-without read state.
+LocalQueue and ClusterQueue detail separate Active state and freshness from
+configured stop policy. Pending/reserving/admitted counts are not additive;
+quota is requested capacity, not utilization or available hardware. Per-flavor
+rows compare reservations, admitted usage, nominal quota and borrowing/lending
+limits. Both v1beta1 and v1beta2 queue shapes are supported. Related flavors, AdmissionChecks and
+cohort peers are read as the viewer; Cohort objects are not read. A LocalQueue
+also shows namespace eligibility. Denied or incomplete reads never prove an
+object missing. An intentionally stopped parent softens a LocalQueue's alert
+only when fresh evidence establishes that the stop is its sole cause; table
+status retains the LocalQueue's own report.
 
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
