@@ -435,13 +435,13 @@ No auth by default (local use). See the **[Authentication Guide](docs/authentica
 
 ---
 
-## Supported Resources
+## Supported Resources & Integrations
 
-Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integrations](docs/integrations.md) with topology edges, detail views, and AI summaries.
+Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integrations](docs/integrations.md) with resource views, topology, AI context and application evidence. Coverage varies by integration.
 
 The Helm chart grants read access to common built-in Kubernetes kinds; Secrets and RBAC objects depend on chart settings and the authentication mode. CRD-based integrations need the CRD installed in your cluster *and* read access; most API groups are granted by default, and the chart's [RBAC](deploy/helm/radar/README.md#rbac) and [CRD access](deploy/helm/radar/README.md#crd-access) sections list what is on, what is opt-in, and how to add rules.
 
-| Category | Resources |
+| Category / integration | Coverage |
 |----------|-----------|
 | **Workloads** | Deployments, DaemonSets, StatefulSets, ReplicaSets, Pods, Jobs, CronJobs |
 | **Networking** | Services, Ingresses, NetworkPolicies, Endpoints, EndpointSlices, PodDisruptionBudgets |
@@ -472,8 +472,11 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |
 | **Security (Trivy)** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, ClusterComplianceReport, SbomReport, RbacAssessmentReport, InfraAssessmentReport |
 | **Strimzi** | [KafkaConnector failure evidence](docs/integrations.md#strimzi-kafka-connectors) (connector/task status) |
+| **[RabbitMQ](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Node-reported disk and memory alarms - **local collection** |
+| **[NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | JetStream consumer backlog, acknowledgment-pending and redelivery counters - **local collection** |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
+| **[Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Initialization, seal and standby state - **local collection** |
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |
 | **Kyverno** | Policy, ClusterPolicy, PolicyReport, ClusterPolicyReport |
@@ -494,12 +497,6 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 ### Local runtime evidence via MCP
 
 Local MCP clients can explicitly collect evidence from one Pod after operator approval:
-
-| Integration | Evidence collected |
-|---|---|
-| [RabbitMQ](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | Node-reported disk and memory alarms |
-| [NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | JetStream consumer pending, acknowledgement-pending and redelivery counts |
-| [Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | Initialized, sealed and standby state |
 
 These observations describe one Pod endpoint, not overall application health, and do not add automatic Issues detection. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
 
