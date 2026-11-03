@@ -195,6 +195,13 @@ describe('issueSubjectState', () => {
     const unchecked = [{ source: 'kueue', reason: 'caller_access_denied', kinds: [{ group: 'kueue.x-k8s.io', kind: 'ClusterQueue' }] }]
     expect(issueSubjectState(subject, [], loaded({ unchecked_sources: unchecked }))).toEqual({ state: 'unconfirmed', why: "you can't read ClusterQueues, which this check needs" })
   })
+  it('keeps unchecked evidence alongside findings and withheld issue counts', () => {
+    const found = issue({ kind: 'Job', namespace: 'pg', name: 'main' })
+    const unchecked = [{ source: 'kueue', reason: 'caller_access_denied', kinds: [{ group: 'kueue.x-k8s.io', kind: 'ClusterQueue' }] }]
+    expect(issueSubjectState(subject, [], loaded({ issues: [found], withheld: { issues: 1 }, unchecked_sources: unchecked }))).toEqual({
+      state: 'found', issues: [found], withheld: 1, uncheckedWhy: "you can't read ClusterQueues, which this check needs",
+    })
+  })
   it('reads an empty answer under limited visibility as unconfirmed, never none', () => {
     expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'degraded', impact: 'Pods are not readable.' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable (Pods are not readable)" })
     expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'limited' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable" })
