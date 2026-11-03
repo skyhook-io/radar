@@ -1,26 +1,52 @@
 import { Boxes } from 'lucide-react'
 import { KueueWorkloadRenderer as BaseRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/KueueWorkloadRenderer'
 import { getProvisioningRequestStatus, getProvisioningRequestMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
-import { Badge, ResourceLink, Section, type ResourceRef } from '@skyhook-io/k8s-ui'
+import { Badge, ResourceLink, Section, type Relationships, type ResourceRef } from '@skyhook-io/k8s-ui'
+import { selectorHasTerms } from '@skyhook-io/k8s-ui/components/kueue/eligibility'
 import { useKueueProvisioning } from '../../../api/client'
+import { useRelatedList, useRelatedReads } from '../../kueue/useRelatedReads'
 
-export function KueueWorkloadRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
+const KUEUE_GROUP = 'kueue.x-k8s.io'
+
+// Reads the Workload's admission path as the viewer: its LocalQueue, the
+// ClusterQueue that LocalQueue names, the ClusterQueue holding a reservation
+// when that differs, and the namespace's labels only when a selector needs them.
+function useAdmissionPathReads(data: any) {
+  const namespace: string = data.metadata?.namespace ?? ''
+  const queueName: string = data.spec?.queueName ?? ''
+  const reserved: string = data.status?.admission?.clusterQueue ?? ''
+  const localQueue = useRelatedList('localqueues', KUEUE_GROUP, namespace, !!queueName && !!namespace).find(queueName)
+  const configured: string = localQueue.state === 'found' ? localQueue.object?.spec?.clusterQueue ?? '' : ''
+  const queues = useRelatedList('clusterqueues', KUEUE_GROUP, undefined, !!queueName || !!reserved)
+  const configuredRead = configured ? queues.find(configured) : undefined
+  const needsLabels = configuredRead?.state === 'found' && selectorHasTerms(configuredRead.object?.spec?.namespaceSelector)
+  const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
+  const names = [...new Set([configured, reserved].filter(Boolean))]
+  return {
+    localQueue: queueName ? localQueue : undefined,
+    clusterQueues: Object.fromEntries(names.map(name => [name, queues.find(name)])),
+    namespace: needsLabels ? namespaceRead : undefined,
+  }
+}
+
+export function KueueWorkloadRenderer({ data, onNavigate, relationships }: { data: any; onNavigate?: (ref: ResourceRef) => void; relationships?: Relationships }) {
+  const reads = useAdmissionPathReads(data)
   const namespace = data.metadata?.namespace ?? ''
   const uid = data.metadata?.uid
   const hasChecks = (data.status?.admissionChecks?.length ?? 0) > 0
   const requests = useKueueProvisioning(namespace, data.metadata?.name ?? '', uid, hasChecks)
   const current = requests.data?.uid === uid ? requests.data : undefined
-  const provisioning = hasChecks ? <Section title="Provisioning Requests" icon={Boxes} defaultExpanded>
+  const provisioning = hasChecks ? <Section variant="card" title="Provisioning Requests" icon={Boxes} defaultExpanded>
       {requests.error ? <p className="text-sm text-warning-text">Could not observe provisioning requests: {requests.error.message}</p>
         : !current ? <p className="text-sm text-theme-text-tertiary">Looking for provisioning requests…</p>
           : !current.installed ? <p className="text-sm text-theme-text-tertiary">The ProvisioningRequest API is not served by this cluster.</p>
             : current.requests.length === 0 ? <p className="text-sm text-theme-text-tertiary">No retained provisioning requests found on this cluster. A request may not be needed or may have been cleaned up. Check results above retain the controller’s explanation; requests on a MultiKueue worker cluster are not included.</p>
-              : <div className="space-y-2">
+              : <div className="space-y-3">
                 <p className="text-xs text-theme-text-tertiary">Currently retained requests owned by this Workload, not a retry history. Requests may be removed after completion or eviction.</p>
                 {current.requests.map(request => {
                   const status = getProvisioningRequestStatus(request)
                   const message = getProvisioningRequestMessage(request)
-                  return <div key={request.metadata.uid} className="card-inner">
+                  return <div key={request.metadata.uid} className="border-t border-theme-border pt-3">
                     <div className="flex flex-wrap items-center gap-2 break-all [&_button]:text-left">
                       <ResourceLink kind="provisioningrequests" group="autoscaling.x-k8s.io" namespace={namespace} name={request.metadata.name} onNavigate={onNavigate} />
                       <Badge colorClass={status.color} size="sm">{status.text}</Badge>
@@ -33,5 +59,5 @@ export function KueueWorkloadRenderer({ data, onNavigate }: { data: any; onNavig
                 {current.truncated && <p className="text-xs text-theme-text-tertiary">Showing {current.requests.length} of {current.total} retained requests, newest first.</p>}
               </div>}
     </Section> : undefined
-  return <BaseRenderer data={data} onNavigate={onNavigate} provisioning={provisioning} />
+  return <BaseRenderer data={data} onNavigate={onNavigate} provisioning={provisioning} relationships={relationships} reads={reads} />
 }

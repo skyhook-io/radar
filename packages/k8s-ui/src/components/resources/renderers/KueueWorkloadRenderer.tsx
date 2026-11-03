@@ -12,6 +12,8 @@ import {
   type ConditionTone,
 } from '../../ui/drawer-components'
 import { formatResources } from '../resource-utils'
+import type { Relationships } from '../../../types'
+import { AdmissionPath, FlavorReasons, type KueueWorkloadReads } from '../../kueue/AdmissionPath'
 import { admissionCheckSeverity, getKueueWorkloadStatus, getKueueWorkloadPriority, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
 
 const KUEUE_GROUP = 'kueue.x-k8s.io'
@@ -20,6 +22,10 @@ interface KueueWorkloadRendererProps {
   data: any
   provisioning?: ReactNode
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
+  /** The Workload's own REST relationships: its owner comes from the ownership answer. */
+  relationships?: Relationships
+  /** Objects on the admission path, read as the viewer. Absent: names only. */
+  reads?: KueueWorkloadReads
 }
 
 function resourceList(resources: any): string | null {
@@ -46,24 +52,9 @@ export function getKueueWorkloadConditionTone(condition: any): ConditionTone {
   return 'unknown'
 }
 
-function FlavorAssignments({ flavors, onNavigate }: { flavors: any; onNavigate?: KueueWorkloadRendererProps['onNavigate'] }) {
-  if (!flavors || typeof flavors !== 'object' || Object.keys(flavors).length === 0) return null
-  return (
-    <div className="space-y-1 break-all [&_button]:text-left">
-      {Object.entries(flavors).map(([resource, flavor]) => (
-        <div key={resource} className="text-xs">
-          {resource}:{' '}
-          <ResourceLink name={String(flavor)} kind="resourceflavors" group={KUEUE_GROUP} onNavigate={onNavigate} />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueWorkloadRendererProps) {
+export function KueueWorkloadRenderer({ data, onNavigate, provisioning, relationships, reads }: KueueWorkloadRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
-  const namespace = data.metadata?.namespace || ''
   const workloadStatus = getKueueWorkloadStatus(data)
   const priority = getKueueWorkloadPriority(data)
   const statusCondition = getKueueWorkloadStatusCondition(data)
@@ -95,29 +86,9 @@ export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueW
 
       {stale && <AlertBanner variant="info" title="Reported state describes an earlier generation" message={`Workload generation ${data.metadata.generation}. Stale condition: ${statusCondition?.type} (generation ${statusCondition?.observedGeneration}). Reported state may not reflect the current specification.`} />}
 
-      <Section title="Admission" icon={Gauge} defaultExpanded>
+      <Section variant="card" title="Admission" icon={Gauge} defaultExpanded>
         <PropertyList>
           <Property label="Reported State" value={<Badge colorClass={stale ? undefined : workloadStatus.color} severity={stale ? 'neutral' : undefined}>{workloadStatus.text}</Badge>} />
-          <Property
-            label="Local Queue"
-            value={
-              spec.queueName ? (
-                <ResourceLink name={spec.queueName} kind="localqueues" namespace={namespace} group={KUEUE_GROUP} onNavigate={onNavigate} />
-              ) : (
-                'Not assigned'
-              )
-            }
-          />
-          <Property
-            label="Cluster Queue"
-            value={
-              status.admission?.clusterQueue ? (
-                <ResourceLink name={status.admission.clusterQueue} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} />
-              ) : (
-                'No reservation reported'
-              )
-            }
-          />
           {priority !== '-' && <Property label="Priority" value={priority} />}
           {checks.length > 0 && (
             <Property label="Reported Checks" value={Array.from(checkCounts).filter(([, count]) => count > 0).map(([state, count]) => `${count} ${state}`).join(' · ')} />
@@ -126,11 +97,15 @@ export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueW
         </PropertyList>
       </Section>
 
+      <AdmissionPath data={data} reads={reads} relationships={relationships} onNavigate={onNavigate} />
+
+      <FlavorReasons data={data} onNavigate={onNavigate} />
+
       {checks.length > 0 && (
-        <Section title={`Admission Checks (${checks.length})`} icon={ListChecks} defaultExpanded>
-          <div className="max-w-2xl space-y-2">
+        <Section variant="card" title={`Admission Checks (${checks.length})`} icon={ListChecks} defaultExpanded>
+          <div className="divide-y divide-theme-border">
             {checks.map((check: any, index: number) => (
-              <div key={check?.name || index} className="card-inner">
+              <div key={check?.name || index} className="py-3 first:pt-0 last:pb-0">
                 <div className="mb-2 grid max-w-md grid-cols-[minmax(0,1fr)_6rem] items-start gap-2">
                   <span className="min-w-0 break-words text-sm font-medium text-theme-text-primary [&_button]:text-left">
                     <ResourceLink
@@ -160,14 +135,14 @@ export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueW
 
       {provisioning}
 
-      <ConditionsSection conditions={status.conditions} getConditionTone={(condition) => isKueueConditionStale(condition, data.metadata?.generation) ? 'unknown' : getKueueWorkloadConditionTone(condition)} defaultExpanded />
+      <ConditionsSection variant="card" conditions={status.conditions} getConditionTone={(condition) => isKueueConditionStale(condition, data.metadata?.generation) ? 'unknown' : getKueueWorkloadConditionTone(condition)} defaultExpanded />
 
-      <Section title={`Pod Sets (${podSets.length})`} icon={Cpu} defaultExpanded>
+      <Section variant="card" title={`Pod Sets (${podSets.length})`} icon={Cpu} defaultExpanded>
         <p className="mb-2 text-xs text-theme-text-tertiary">
           Controller-reported requests for each PodSet, not measured usage. Reservation values are recorded when quota is assigned; they do not decrease after quota reclamation or completion.
         </p>
         {podSets.length > 0 ? (
-          <div className="space-y-2">
+          <div className="divide-y divide-theme-border">
             {podSets.map((podSet: any) => {
               const name = podSet?.name || 'main'
               const assignment: any = assignments.get(name)
@@ -177,7 +152,7 @@ export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueW
               const reserved = status.admission != null
               const reclaimableCount = reclaimable.get(name)
               return (
-                <div key={name} className="card-inner">
+                <div key={name} className="py-3 first:pt-0 last:pb-0">
                   <div className="mb-2 flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-theme-text-primary">{name}</span>
                     <Badge tone="structural" size="sm">
@@ -196,12 +171,6 @@ export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueW
                       label={reserved ? 'Resources at Reservation' : 'Evaluated Requests'}
                       value={reserved ? reservedResources || 'Not reported' : evaluatedDemand || 'Not reported'}
                     />
-                    {assignment?.flavors && (
-                      <Property
-                        label="Resource Flavors"
-                        value={<FlavorAssignments flavors={assignment.flavors} onNavigate={onNavigate} />}
-                      />
-                    )}
                   </PropertyList>
                 </div>
               )

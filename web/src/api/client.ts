@@ -2896,6 +2896,32 @@ export function refetchOnResourceEvents(
   return namedObjects.has(resourceEventKey(kind, String(namespace ?? ""), String(name ?? "")));
 }
 
+// The query behind useResource, for callers that read several resources at
+// once (useQueries) and must keep its key, polling and retry rules.
+export function resourceQueryOptions<T>(
+  kind: string,
+  namespace: string,
+  name: string,
+  group?: string,
+  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
+) {
+  return {
+    queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
+    queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
+    enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
+    refetchInterval: (query: { state: { error: unknown } }) => goneRecheckInterval(query, options?.refetchInterval),
+    // Kind still completing its initial sync: stay in loading and poll until
+    // it becomes readable instead of erroring out (deep links during startup).
+    retry: (failureCount: number, error: unknown) => {
+      if (isStillLoadingError(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
+    },
+    retryDelay: (failureCount: number, error: unknown) =>
+      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
+  };
+}
+
 // `cacheScope` keeps a caller's copy apart from the shared one, for hosts
 // that point one QueryClient at several clusters (see useGitOpsWriteGuard).
 export function useResource<T>(
@@ -2905,21 +2931,7 @@ export function useResource<T>(
   group?: string,
   options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
 ) {
-  const query = useQuery<ResourceWithRelationships<T>>({
-    queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
-    queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
-    enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
-    refetchInterval: (query) => goneRecheckInterval(query, options?.refetchInterval),
-    // Kind still completing its initial sync: stay in loading and poll until
-    // it becomes readable instead of erroring out (deep links during startup).
-    retry: (failureCount, error) => {
-      if (isStillLoadingError(error)) return true;
-      if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
-    },
-    retryDelay: (failureCount, error) =>
-      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
-  });
+  const query = useQuery<ResourceWithRelationships<T>>(resourceQueryOptions<T>(kind, namespace, name, group, options));
 
   // Extract resource and relationships from the response
   return {

@@ -136,6 +136,11 @@ export function getClusterQueuePendingWorkloads(resource: any): string {
   return formatWorkloadCount(resource?.status?.pendingWorkloads)
 }
 
+/** Reserving includes admitted Workloads; the two counts are not additive. */
+export function getKueueQueueReservingWorkloads(resource: any): string {
+  return formatWorkloadCount(resource?.status?.reservingWorkloads)
+}
+
 export function getClusterQueueAdmittedWorkloads(resource: any): string {
   return formatWorkloadCount(resource?.status?.admittedWorkloads)
 }

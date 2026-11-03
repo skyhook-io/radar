@@ -1008,7 +1008,7 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
 }
 
 // ownershipUnanswered says why Owner and Children couldn't be answered at all.
-function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | undefined {
+export function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | undefined {
   const reason = coverage?.unavailableReason
   if (!reason) return undefined
   if (reason === 'user_forbidden') return "Owner and children aren't shown: your access lets you open this object, but not list its kind here."
@@ -1016,7 +1016,7 @@ function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | 
 }
 
 // ownerNote says why no owner is named, when there is an owner reference.
-function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
+export function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
   const ref = coverage?.ownerRef
   const named = ref?.kind && ref.name ? `${ref.kind} ${ref.name}` : 'the owner it names'
   switch (coverage?.primaryOwnerState) {
