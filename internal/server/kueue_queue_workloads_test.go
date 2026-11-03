@@ -594,6 +594,23 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(first.Workloads.Next), "alice", ""), http.StatusOK)
 	})
 
+	t.Run("cluster-wide Workloads with LocalQueues granted in every namespace stay exact", func(t *testing.T) {
+		initKueueQueueCache(t, kueueQueueFixture(), nil)
+		env := newAuthTestServer(t)
+		permissions := &auth.UserPermissions{}
+		permissions.SetCanI("get", kueueGroup, "clusterqueues", "", true)
+		permissions.SetCanI("list", kueueGroup, "workloads", "", true)
+		permissions.SetCanI("list", kueueGroup, "localqueues", "", false)
+		for _, ns := range []string{"team-a", "team-b", "team-c"} {
+			permissions.SetCanI("list", kueueGroup, "localqueues", ns, true)
+		}
+		env.srv.permCache.Set("frank", nil, permissions)
+		got := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/other/workloads", "frank", ""), http.StatusOK)
+		if got.Workloads.SubmissionUnresolved != nil {
+			t.Fatalf("submission unresolved = %+v, want none", got.Workloads.SubmissionUnresolved)
+		}
+	})
+
 	t.Run("ClusterQueue denied before existence is checked", func(t *testing.T) {
 		env := setup(t, grants{getCQ: false, workloads: all, localQueues: all})
 		decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "alice", ""), http.StatusForbidden)

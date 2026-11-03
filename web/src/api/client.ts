@@ -8193,6 +8193,8 @@ export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQue
     // A paged list isn't replayed on mount (that would reread the queue once
     // per page); the renderer restarts it from the first page instead.
     refetchOnMount: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnWindowFocus: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnReconnect: query => (query.state.data?.pages.length ?? 0) <= 1,
     // Poll the first page only: refetching an infinite query rereads every
     // loaded page, so a list paged further waits for an explicit refresh.
     // A part a retry can complete (still loading, a check that failed) is

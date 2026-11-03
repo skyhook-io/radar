@@ -17,7 +17,7 @@ interface Props {
 function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueue' | 'LocalQueue' }) {
   const [membership, setMembership] = useState<KueueQueueMembership | undefined>()
   const [state, setState] = useState<string | undefined>()
-  const [restarted, setRestarted] = useState(false)
+  const [restarted, setRestarted] = useState<string | null>(null)
   const query = useKueueQueueWorkloads(
     { kind, namespace: data.metadata?.namespace, name: data.metadata?.name ?? '', uid: data.metadata?.uid },
     { membership, state },
@@ -39,7 +39,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
   // A cursor issued for another list (a re-created queue, another cluster
   // context) is refused: read the list again from its first page.
   useEffect(() => {
-    if (cursorRejected) setRestarted(true)
+    if (cursorRejected) setRestarted('restarted')
     if (cursorRejected) void queryClient.resetQueries({ queryKey: ['kueue-queue-workloads', kind, data.metadata?.namespace ?? '', data.metadata?.name ?? '', data.metadata?.uid ?? ''] })
   }, [cursorRejected, queryClient, kind, data.metadata?.namespace, data.metadata?.name, data.metadata?.uid])
   return (
@@ -56,13 +56,13 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       notice={restarted ? 'The list restarted from its first page.' : null}
       upgrade={query.upgrade}
       membership={membership}
-      onMembershipChange={next => { setRestarted(false); setMembership(next) }}
+      onMembershipChange={next => { setRestarted(null); setMembership(next) }}
       state={state}
-      onStateChange={next => { setRestarted(false); setState(next) }}
+      onStateChange={next => { setRestarted(null); setState(next) }}
       hasMore={query.hasNextPage}
       loadingMore={query.isFetchingNextPage}
-      onLoadMore={() => { setRestarted(false); void query.fetchNextPage() }}
-      onRetry={() => { setRestarted(false); if (pages && pages.length > 1) restart(); else void refetch() }}
+      onLoadMore={() => { setRestarted(null); void query.fetchNextPage() }}
+      onRetry={() => { setRestarted(null); if (pages && pages.length > 1) restart(); else void refetch() }}
       onNavigate={onNavigate}
     />
   )
