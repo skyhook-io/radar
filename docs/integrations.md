@@ -1884,7 +1884,9 @@ message are what to show. Rules that keep the axes honest:
   resource the ClusterQueue does not offer at all reads `no_matching_flavor`, a
   PodSet that fits no flavor outranks one that exceeds quota, and Kueue's notes
   on in-flight or retried preemptions read `waiting_for_preemption`.
-  `exceeds_quota` describes Kueue's last attempt: with flavor fungibility an
+  A message Kueue cut at its 32 KiB limit proves only its complete PodSet
+  segments; otherwise it reads `unrecognized`. `exceeds_quota` describes
+  Kueue's last attempt: with flavor fungibility an
   attempt can resume past flavors tried before, so another flavor may still fit
   later.
 - `BlockedOnPreemptionGates=True` is the blocker only while it explains the

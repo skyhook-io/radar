@@ -2,6 +2,7 @@ package schedulinginsight
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -9,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -706,6 +708,17 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			disruption: rc.KueueAdmissionPodsReadyTimeout,
 		},
 		{
+			name: "preempted, then deactivated by Kueue: the cause stays on the inactive fact",
+			spec: workloadSpec{active: boolPtr(false), conditions: []condition{
+				{kind: "Preempted", status: "True", reason: "InClusterQueue", message: "Preempted to accommodate a workload"},
+				{kind: "Evicted", status: "True", reason: "DeactivatedDueToAdmissionCheck", message: "The workload is deactivated due to a rejected check"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionDeactivatedByKueue,
+			inactive:   rc.KueueAdmissionDeactivatedByKueue,
+			disruption: rc.KueueAdmissionPreempted,
+		},
+		{
 			name: "deactivated by a person and acknowledged",
 			spec: workloadSpec{active: boolPtr(false), conditions: []condition{
 				{kind: "Evicted", status: "True", reason: "Deactivated", message: "The workload is deactivated"},
@@ -1162,5 +1175,27 @@ func TestDecisionAndStateDisagreeOnlyWhereDocumented(t *testing.T) {
 				t.Fatalf("decision=%s state=%s attention=%s", observation.Decision, admission.State, admission.Attention)
 			}
 		})
+	}
+}
+
+func TestTruncatedFlavorMessageProvesOnlyItsCompleteSegments(t *testing.T) {
+	var clauses []string
+	for i := 0; len(strings.Join(clauses, ", ")) < 33*1024; i++ {
+		clauses = append(clauses, fmt.Sprintf("insufficient unused quota for example.com/r%03d in flavor default, 1 more needed", i))
+	}
+	full := "couldn't assign flavors to pod set main: " + strings.Join(clauses, ", ") +
+		", insufficient quota for cpu in flavor default, previously considered podsets requests (0) + current podset request (8) > maximum capacity (4)"
+	// Kueue's TruncateConditionMessage: cut to 32 KiB, ending in " ...".
+	truncated := full[:32*1024-len(" ...")] + " ..."
+	got := classify(t, workloadSpec{conditions: []condition{pending("Pending", truncated)}}).Admission
+	if got.State != rc.KueueAdmissionUnrecognized {
+		t.Fatalf("truncated message read as %s", got.State)
+	}
+
+	// A complete earlier PodSet that fits nowhere is still proof.
+	proven := "couldn't assign flavors to pod set launcher: insufficient quota for cpu in flavor a, previously considered podsets requests (0) + current podset request (8) > maximum capacity (4); couldn't assign flavors to pod set " + truncated[len("couldn't assign flavors to pod set "):]
+	proven = proven[:32*1024-len(" ...")] + " ..."
+	if got := classify(t, workloadSpec{conditions: []condition{pending("Pending", proven)}}).Admission; got.State != rc.KueueAdmissionExceedsQuota {
+		t.Fatalf("complete segment before the cut read as %s", got.State)
 	}
 }

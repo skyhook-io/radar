@@ -384,7 +384,14 @@ var (
 // it.
 func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 	neverFits, undecided := rc.KueueAdmissionCode(""), false
-	for _, segment := range strings.Split(message, "; couldn't assign flavors to pod set ") {
+	segments := strings.Split(message, "; couldn't assign flavors to pod set ")
+	// Kueue cuts a condition message at 32 KiB and appends " ...". The cut
+	// segment may have lost clauses for any flavor, so only the complete
+	// segments before it can prove anything.
+	if strings.HasSuffix(message, kueueTruncationSuffix) && len(message) >= kueueMaxConditionMessage {
+		segments, undecided = segments[:len(segments)-1], true
+	}
+	for _, segment := range segments {
 		understood := map[string]int{}
 		waiting := map[string]bool{}
 		for _, match := range unusedQuotaClause.FindAllStringSubmatch(segment, -1) {
@@ -445,6 +452,11 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 	}
 	return rc.KueueAdmissionInsufficientQuota
 }
+
+const (
+	kueueMaxConditionMessage = 32 * 1024
+	kueueTruncationSuffix    = " ..."
+)
 
 var anyFlavor = regexp.MustCompile(`(?i)\bflavor "?([^"\s,;]+)|(\S+) flavor since`)
 
