@@ -370,6 +370,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+  'connectCluster', 'connectorClass', 'connectorTasks',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -5452,6 +5453,11 @@ export function ResourcesView({
     const meta = resource.metadata || {}
     const status = resource.status || {}
     const kindLower = kind?.toLowerCase() || ''
+    const connectorValue = getStrimziConnectorColumnValue(resource, column)
+    if (connectorValue !== undefined) {
+      if (column === 'connectorTasks') return Array.isArray(resource.status?.connectorStatus?.tasks) ? resource.status.connectorStatus.tasks.length : -1
+      return connectorValue
+    }
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)

@@ -20,11 +20,18 @@ it('replaces the native Ready printer column with task-aware snapshot status', a
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   const kind: APIResource = { group: 'kafka.strimzi.io', version: 'v1', kind: 'KafkaConnector', name: 'kafkaconnectors', namespaced: true, isCrd: true, verbs: ['get', 'list'] }
   const data = {...cases[1].resource, metadata: {...cases[1].resource.metadata, uid: 'fixture'}}
-  await act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 48 }}><KeyboardShortcutProvider><ResourcesView printerTable={{kind:kind.name,group:kind.group,columns:[{name:'Ready',type:'string',jsonPath:'.status.conditions[?(@.type=="Ready")].status'}],cells:{fixture:['True']}}} namespaces={['lab']} apiResources={[kind]} resourceCounts={{ KafkaConnector: 1 }} selectedKindQuery={{ isLoading: false, data: [data], resourceName: kind.name, group: kind.group }} locationPathname="/resources/kafkaconnectors" locationSearch="?apiGroup=kafka.strimzi.io" onNavigate={() => {}} /></KeyboardShortcutProvider></VirtuosoMockContext.Provider>))
+  const second = {...data, metadata:{...data.metadata,name:'zzz',uid:'second'},spec:{...data.spec,class:'AConnector'},status:{...data.status,connectorStatus:{...data.status.connectorStatus,tasks:Array.from({length:10},(_,id)=>({id,state:'RUNNING'}))}}}
+  await act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 48 }}><KeyboardShortcutProvider><ResourcesView printerTable={{kind:kind.name,group:kind.group,columns:[{name:'Ready',type:'string',jsonPath:'.status.conditions[?(@.type=="Ready")].status'}],cells:{fixture:['True']}}} namespaces={['lab']} apiResources={[kind]} resourceCounts={{ KafkaConnector: 2 }} selectedKindQuery={{ isLoading: false, data: [data,second], resourceName: kind.name, group: kind.group }} locationPathname="/resources/kafkaconnectors" locationSearch="?apiGroup=kafka.strimzi.io" onNavigate={() => {}} /></KeyboardShortcutProvider></VirtuosoMockContext.Provider>))
   const table = host.querySelector('table')!
   expect(table).not.toBeNull()
   expect(table.textContent).toContain('Operator Snapshot')
   expect(table.textContent).toContain('Tasks failed')
   expect(table.textContent).not.toContain('Ready')
+  const classHeader = [...table.querySelectorAll('th')].find(th=>th.textContent?.trim()==='Class')!
+  act(() => classHeader.click())
+  expect(table.querySelector('tbody tr')?.textContent).toContain('zzz')
+  const tasksHeader = [...table.querySelectorAll('th')].find(th=>th.textContent?.trim()==='Tasks / Max')!
+  act(() => tasksHeader.click())
+  expect(table.querySelector('tbody tr')?.textContent).toContain('connector')
   expect(getCellFilterValue(data, 'status', 'kafkaconnectors')).toBe('Tasks failed')
 })

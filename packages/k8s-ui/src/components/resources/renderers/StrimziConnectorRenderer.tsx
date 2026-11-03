@@ -11,6 +11,9 @@ export function StrimziConnectorRenderer({ data, onNavigate }: { data: any; onNa
   const spec = data.spec ?? {}
   const status = data.status ?? {}
   const runtime = status.connectorStatus ?? {}
+  const conditions = Array.isArray(status.conditions) ? status.conditions
+    .filter((condition: any) => typeof condition?.type === 'string' && typeof condition?.status === 'string')
+    .map((condition: any) => ({ type: condition.type, status: condition.status, reason: typeof condition.reason === 'string' ? condition.reason : undefined, lastTransitionTime: typeof condition.lastTransitionTime === 'string' ? condition.lastTransitionTime : undefined })) : []
   const tasks: any[] = Array.isArray(runtime.tasks) ? [...runtime.tasks].sort((a, b) => Number(b?.state === 'FAILED') - Number(a?.state === 'FAILED')) : []
   const cluster = data.metadata?.labels?.['strimzi.io/cluster']
   const historical = !state.snapshotCurrent
@@ -27,14 +30,14 @@ export function StrimziConnectorRenderer({ data, onNavigate }: { data: any; onNa
     <Section title="Reported Runtime" defaultExpanded>
       <p className="mb-3 text-xs text-theme-text-secondary">{historical ? 'Historical or unassessed status. These observations do not establish current runtime health.' : 'Strimzi operator snapshot, not a live runtime check. Runtime state may have changed since reconciliation.'}</p>
       <PropertyList>
-        <Property label="Connector state" value={runtime.connector?.state ?? 'Not reported'} />
-        <Property label="Worker" value={<span className="break-all">{runtime.connector?.worker_id ?? 'Not reported'}</span>} />
+        <Property label="Connector state" value={typeof runtime.connector?.state === 'string' ? runtime.connector.state : 'Not reported'} />
+        <Property label="Worker" value={<span className="break-all">{typeof runtime.connector?.worker_id === 'string' ? runtime.connector.worker_id : 'Not reported'}</span>} />
         <Property label="Observed / desired generation" value={`${status.observedGeneration ?? 'Unknown'} / ${data.metadata?.generation ?? 'Unknown'}`} />
       </PropertyList>
       <h4 className="mt-4 mb-2 text-sm font-medium">Reported tasks ({tasks.length})</h4>
       {tasks.length === 0 ? <p className="text-sm text-theme-text-secondary">No task states reported. This does not establish that tasks are running.</p> : <>
         <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="text-theme-text-secondary"><th className="pr-3 pb-2">Task</th><th className="pr-3 pb-2">State</th><th className="pb-2">Worker</th></tr></thead><tbody>
-          {(showAll ? tasks.slice(0, 100) : tasks.slice(0, 5)).map((task, index) => <tr key={index} className="border-t border-theme-border"><td className="py-2 pr-3">{task?.id ?? 'Unknown'}</td><td className="py-2 pr-3">{task?.state ?? 'Not reported'}</td><td className="py-2 break-all">{task?.worker_id ?? 'Not reported'}</td></tr>)}
+          {(showAll ? tasks.slice(0, 100) : tasks.slice(0, 5)).map((task, index) => <tr key={index} className="border-t border-theme-border"><td className="py-2 pr-3">{Number.isInteger(task?.id) && task.id >= 0 ? task.id : 'Unknown'}</td><td className="py-2 pr-3">{typeof task?.state === 'string' ? task.state : 'Not reported'}</td><td className="py-2 break-all">{typeof task?.worker_id === 'string' ? task.worker_id : 'Not reported'}</td></tr>)}
         </tbody></table></div>
         {tasks.length > 5 && <button type="button" className="mt-2 text-sm text-accent-text hover:underline" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer tasks' : `Show ${Math.min(tasks.length, 100)} tasks`}</button>}
         {tasks.length > 100 && <p className="mt-2 text-xs text-theme-text-secondary">Task preview is limited to 100 of {tasks.length}. Inspect YAML for the full reported list.</p>}
@@ -49,7 +52,8 @@ export function StrimziConnectorRenderer({ data, onNavigate }: { data: any; onNa
         <Property label="Last reported restart" value={status.autoRestart?.lastRestartTimestamp ?? 'Not reported'} />
       </PropertyList>
     </Section>}
+    {/* Topic inventory is secondary to identifying the failing task. */}
     {Array.isArray(status.topics) && status.topics.length > 0 && <Section title={`Reported Topics (${status.topics.length})`} defaultExpanded={false}><p className="break-all text-sm">{status.topics.slice(0, 20).join(', ')}{status.topics.length > 20 && `; ${status.topics.length - 20} more in YAML`}</p></Section>}
-    <ConditionsSection conditions={status.conditions} getConditionTone={condition => historical ? 'unknown' : condition.type === 'NotReady' && condition.status === 'True' ? 'fail' : condition.type === 'Warning' && condition.status === 'True' ? 'warning' : 'neutral'} />
+    <ConditionsSection conditions={conditions} getConditionTone={condition => historical ? 'unknown' : condition.type === 'NotReady' && condition.status === 'True' ? 'fail' : condition.type === 'Warning' && condition.status === 'True' ? 'warning' : 'neutral'} />
   </>
 }
