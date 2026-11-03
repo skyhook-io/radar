@@ -1755,7 +1755,7 @@ kind. Each one says whether it was found, doesn't exist, or couldn't be read
 (and why); a denial is never shown as missing, and an object is called missing
 only from a list Radar read in full (an older Radar that reports no coverage
 can't confirm absence). A ClusterQueue lists its ResourceFlavors per resource
-group in the order Kueue tries them and its AdmissionChecks with their own
+group in configured preference order and its AdmissionChecks with their own
 Active state, plus the other ClusterQueues naming its cohort (Cohort objects
 aren't read). A LocalQueue shows its ClusterQueue as read from that object and
 whether its namespace matches the ClusterQueue's `namespaceSelector` (null

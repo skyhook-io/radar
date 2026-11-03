@@ -122,18 +122,21 @@ describe('ClusterQueue related objects', () => {
   // Prototype scenario 4 (live: gpu-night-813-missing-flavor).
   const cq = clusterQueue('cq', active('False', 'FlavorNotFound', 1, "Can't admit new workloads: references missing ResourceFlavor(s): gone."), {
     cohortName: 'pool',
+    concurrentAdmissionPolicy: { migration: { mode: 'TryPreferredFlavors' } },
     namespaceSelector: {},
     resourceGroups: [{ coveredResources: ['cpu'], flavors: [{ name: 'small', resources: [] }, { name: 'gone', resources: [] }] }, { coveredResources: ['nvidia.com/gpu'], flavors: [{ name: 'a100', resources: [] }] }],
     admissionChecksStrategy: { admissionChecks: [{ name: 'prov', onFlavors: ['a100'] }, { name: 'hidden' }] },
   })
 
-  it('lists flavors per resource group in try order, each with its read state', () => {
+  it('lists flavors in configured preference order during concurrent admission, each with its read state', () => {
     const html = renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{
       flavors: { small: found({}), gone: { state: 'not_found' }, a100: { state: 'unavailable', code: 'radar_kind_not_collected' } },
       admissionChecks: { prov: found({ apiVersion: v, metadata: { generation: 1 }, status: { conditions: [active('False', 'BadParametersRef', 1, 'ProvisioningRequestConfig missing')] } }), hidden: { state: 'unavailable', code: 'user_forbidden' } },
       cohortMembers: found(['other-cq']),
       cohortMembersCompleteness: 'complete',
     }} />)
+    expect(html).toContain('Resource flavors, in configured preference order')
+    expect(html).not.toContain('in the order tried')
     expect(html.indexOf('>small<')).toBeLessThan(html.indexOf('>gone<'))
     expect(html).toContain('Not found')
     expect(html).toContain('Not read: Radar doesn’t collect it')

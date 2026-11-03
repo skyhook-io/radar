@@ -285,7 +285,7 @@ function clusterQueueChecks(data: any): { name: string; onFlavors?: string[] }[]
   ]
 }
 
-/** Flavor names per resource group, in the order Kueue tries them. */
+/** Flavor names per resource group, in configured preference order. */
 function clusterQueueFlavorGroups(data: any): { resources: string[]; flavors: string[] }[] {
   return (data.spec?.resourceGroups ?? []).map((group: any) => ({
     resources: group.coveredResources ?? [],
@@ -326,7 +326,7 @@ function RelatedObjects({ data, reads, onNavigate }: QueueRendererProps & { read
           )}
         </div>
         <div>
-          <h4 className={heading}>Resource flavors, in the order tried</h4>
+          <h4 className={heading}>Resource flavors, in configured preference order</h4>
           {groups.length === 0 ? <p className="text-sm text-theme-text-secondary">No resource groups configured.</p> : (
             <div className="space-y-3">
               {groups.map((group, index) => (
