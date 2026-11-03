@@ -126,8 +126,10 @@ WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","
 : >"${KC_LOG}"
 set_check t-busy j Rejected "no" >/dev/null
 check "Rejected is not requested again once Kueue deactivated the Workload" 1 grep -q '^patch ' "${KC_LOG}"
-WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending","retryCount":1},{"name":"other","state":"Ready"}]}' | list)"
-check "the write carries the resourceVersion it read" 0 jq -e '.metadata.resourceVersion == "42"' <<<"${patch}"
+WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending","retryCount":1},{"name":"other","state":"Ready"}]}' | jq -c '.metadata.resourceVersion = "43"' | list)"
+: >"${KC_LOG}"
+set_check t-busy j Ready "fine" >/dev/null
+check "the write carries the resourceVersion it read" 0 jq -e '.metadata.resourceVersion == "43"' <<<"$(grep '^patch ' "${KC_LOG}" | sed -e 's/.*-p //')"
 printf '%s\n' 'Error from server (Conflict): the object has been modified; please apply your changes to the latest version' ok >"${PATCH_ANSWERS}"
 : >"${KC_LOG}"
 set_check t-busy j Ready "ok" >/dev/null 2>&1
@@ -247,6 +249,14 @@ GET_JSON='{"metadata":{"name":"t-busy","labels":{"radar.skyhook.io/kueue-scenari
 check "an object of another prefix is not written" 1 write_owned clusterqueues.kueue.x-k8s.io "" t-busy spec '{spec: {stopPolicy: "Hold"}}'
 GET_JSON='{"metadata":{"name":"t-busy","deletionTimestamp":"2026-01-01T00:00:00Z","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}}'
 check "an object being deleted is not written" 1 write_owned clusterqueues.kueue.x-k8s.io "" t-busy spec '{spec: {stopPolicy: "Hold"}}'
+GET_JSON='{"metadata":{"name":"t-check","generation":2,"resourceVersion":"9","labels":{"radar.skyhook.io/kueue-scenarios":"t"}},"status":{"conditions":[{"type":"Active","status":"True","observedGeneration":2}]}}'
+: >"${KC_LOG}"
+report_check_active >/dev/null
+check "an AdmissionCheck already Active at its generation is not rewritten" 1 grep -q '^patch ' "${KC_LOG}"
+GET_JSON='{"metadata":{"name":"t-check","generation":3,"resourceVersion":"9","labels":{"radar.skyhook.io/kueue-scenarios":"t"}},"status":{"conditions":[{"type":"Active","status":"True","observedGeneration":2}]}}'
+: >"${KC_LOG}"
+report_check_active >/dev/null
+check "an older Active condition is refreshed for the current generation" 0 grep -q '^patch ' "${KC_LOG}"
 
 echo "==> The viewer kubeconfig"
 OUT_DIR="$(mktemp -d)"

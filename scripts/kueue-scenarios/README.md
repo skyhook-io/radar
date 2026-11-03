@@ -15,7 +15,8 @@ beside whatever is already there.
 ## Quick start
 
 ```bash
-# Prerequisites: bash, kubectl 1.24+, jq, curl, and an identity that can:
+# Prerequisites: Kubernetes 1.26+ (Job podFailurePolicy), bash, kubectl 1.24+,
+# jq, curl, and an identity that can:
 #   get CRDs; create and delete namespaces, Jobs, cluster-scoped Kueue objects,
 #   ClusterRoles and ClusterRoleBindings; create LocalQueues, ServiceAccounts and
 #   RoleBindings in the fixture namespaces; grant what the viewer's ClusterRoles
@@ -135,7 +136,8 @@ creates one viewer with two identities bound to the same roles:
 
 Both can list every Namespace, CRD and Kueue cluster-scoped object on the
 cluster (including other teams' ClusterQueues), and read Pods, events,
-Services, Jobs, LocalQueues and Workloads in the fixture namespaces, except:
+Services, Jobs, LocalQueues and Workloads in the scenario namespaces (not in
+`<p>-viewer`, which only holds the ServiceAccount), except:
 
 - nothing at all in `<p>-busy-hidden`;
 - everything but Workloads in `<p>-lq-denied`.

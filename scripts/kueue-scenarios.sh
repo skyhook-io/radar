@@ -378,6 +378,15 @@ ready_when_reserved() { # ready_when_reserved <namespace> <job>
   known check_state_is "$1" "$2" Ready || set_check "$1" "$2" Ready "Fixture check controller: ready"
 }
 
+# Reports ${PREFIX}-check Active, as its controller would, unless it already is at
+# the current generation (rewriting would move lastTransitionTime).
+report_check_active() {
+  write_owned admissionchecks.kueue.x-k8s.io "" "${PREFIX}-check" status \
+    '.metadata.generation as $g | if any(.status.conditions[]?; .type == "Active" and .status == "True" and .observedGeneration == $g) then null
+     else {status: {conditions: [{type: "Active", status: "True", reason: "Active", message: "Driven by scripts/kueue-scenarios.sh", lastTransitionTime: $t, observedGeneration: .metadata.generation}]}} end' \
+    --arg t "$(now)"
+}
+
 # --- up ---------------------------------------------------------------------------------
 
 cmd_up() {
@@ -398,10 +407,7 @@ cmd_up() {
   ok "configuration in place"
 
   step "Reporting ${PREFIX}-check Active, as its controller would"
-  write_owned admissionchecks.kueue.x-k8s.io "" "${PREFIX}-check" status \
-    'if any(.status.conditions[]?; .type == "Active" and .status == "True" and .observedGeneration == .metadata.generation) then null
-     else {status: {conditions: [{type: "Active", status: "True", reason: "Active", message: "Driven by scripts/kueue-scenarios.sh", lastTransitionTime: $t, observedGeneration: .metadata.generation}]}} end' \
-    --arg t "$(now)"
+  report_check_active
   wait_for "ClusterQueue ${PREFIX}-busy active" cq_is "${PREFIX}-busy" "$(cond_pred Active True)"
 
   step "Submitting the first Jobs"
