@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RayClusterRenderer } from './RayClusterRenderer'
-const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewLogs: true, opened: [] as any[], support: 'supported' as string }))
+const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewLogs: true, opened: [] as any[], support: 'supported' as string, logsUnknown: false }))
 vi.mock('../../../api/client', () => ({
   ApiError: class ApiError extends Error { constructor(message: string, public status: number) { super(message) } },
   useWorkloadPods: (...args: any[]) => { mock.calls.push(args); return mock.result },
@@ -12,13 +12,13 @@ vi.mock('../../../api/client', () => ({
   isStableClientError: () => false,
   useRadarFeature: () => ({ support: mock.support, upgrade: mock.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
 }))
-vi.mock('../../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: mock.canViewLogs }) }))
+vi.mock('../../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: mock.canViewLogs, logsUnknown: mock.logsUnknown }) }))
 vi.mock('../../dock', () => ({ useOpenLogs: () => (opts: any) => mock.opened.push(opts) }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 const root = { apiVersion: 'ray.io/v1', kind: 'RayCluster', metadata: { name: 'cluster', namespace: 'ml', uid: 'current' } }
 const worker = { name: 'cluster-cpu-worker-def', ready: true, containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [{ name: 'ray-worker', ready: true, restartCount: 0 }, { name: 'wait-gcs-ready', init: true, ready: true, restartCount: 0 }] }
 describe('RayCluster host evidence', () => {
-  beforeEach(() => { mock.result = {}; mock.calls = []; mock.canViewLogs = true; mock.opened = []; mock.support = 'supported' })
+  beforeEach(() => { mock.result = {}; mock.calls = []; mock.canViewLogs = true; mock.opened = []; mock.support = 'supported'; mock.logsUnknown = false })
   it('makes one bounded UID-bound query with polling', () => {
     renderToStaticMarkup(<RayClusterRenderer data={root} />)
     expect(mock.calls).toEqual([['rayclusters', 'ml', 'cluster', { ownerUID: 'current', limit: 200, refetchInterval: 5000 }]])
@@ -46,10 +46,17 @@ describe('RayCluster host evidence', () => {
     expect(mock.opened.at(-1).containerName).toBe('wait-gcs-ready')
     act(() => view.unmount())
   })
-  it('offers no log links without permission to read Pod logs', () => {
+  it('offers no log links without permission to read Pod logs, and says so', () => {
     mock.canViewLogs = false
     mock.result = { data: { pods: [worker], total: 1, truncated: false } }
-    expect(renderToStaticMarkup(<RayClusterRenderer data={root} />)).not.toContain('Open logs for')
+    const html = renderToStaticMarkup(<RayClusterRenderer data={root} />)
+    expect(html).not.toContain('Open logs for'); expect(html).toContain('Pod logs need get on pods/log')
+  })
+  it('keeps log links while the namespace permission is unconfirmed', () => {
+    mock.canViewLogs = false
+    mock.logsUnknown = true
+    mock.result = { data: { pods: [worker], total: 1, truncated: false } }
+    expect(renderToStaticMarkup(<RayClusterRenderer data={root} />)).toContain('Open logs for')
   })
   it('names an unsupporting Radar rather than echoing its 400 when support is unknown', async () => {
     const { ApiError } = await import('../../../api/client') as any

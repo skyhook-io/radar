@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
+import { Tooltip } from '@skyhook-io/k8s-ui'
 import { usePodLogs, useResource } from '../../api/client'
 import type { ResourceRef } from '../../types'
 import { LogsViewer } from './LogsViewer'
@@ -68,11 +69,11 @@ export function MultiPodLogsTab({
       {(chips.length > 1 || unlisted) && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
           {chips.map((pod) => (
+            <Tooltip key={pod.name} content={pod.name} disabled={pod.name.length <= 40}>
             <button
-              key={pod.name}
               onClick={() => onSelectPod(pod.name)}
               aria-pressed={selectedPod === pod.name}
-              title={pod.name}
+              aria-label={pod.name.length > 40 ? pod.name : undefined}
               className={clsx(
                 'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
                 selectedPod === pod.name
@@ -83,13 +84,14 @@ export function MultiPodLogsTab({
               {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
               {pod.name === unlisted && <span className="ml-1.5 text-xs opacity-75">· not in this list</span>}
             </button>
+            </Tooltip>
           ))}
         </div>
       )}
       {selectedPod && selectedPodNote && (
         <div role="status" className="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-theme-text-tertiary">
           <Terminal className="mb-3 h-12 w-12 opacity-50" />
-          <p className="text-sm font-medium text-theme-text-secondary">No logs for {selectedPod} yet</p>
+          <p className="text-sm font-medium text-theme-text-secondary">No logs shown for {selectedPod}</p>
           <p className="text-sm">{selectedPodNote}</p>
         </div>
       )}

@@ -3,11 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any, flag: true, canViewLogs: true, capsFailed: false, capsData: true }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: state.canViewLogs, logsUnknown: false }) }))
-vi.mock('../../api/client', () => {
-  class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
+vi.mock('../../api/client', async (original) => {
+  const actual = await original<typeof import('../../api/client')>()
   return {
-    ApiError,
-    isStableClientError: (e: any) => e instanceof ApiError && [400, 403, 404, 409].includes(e.status),
+    ...actual,
     useCapabilities: () => ({ data: state.capsData ? { features: { rayClusterPods: true, podSidecarMarks: state.flag } } : undefined, isError: state.capsFailed }),
     useRadarFeature: () => ({ support: state.support, upgrade: state.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
     useWorkloadPods: (...args: any[]) => { state.calls.push(args); return state.query },
@@ -19,10 +18,9 @@ vi.mock('@skyhook-io/k8s-ui', () => ({
   PaneLoader: ({ label }: any) => <div>{label}</div>,
   RadarUpgradeNote: ({ requirement }: any) => <div>upgrade:{requirement.feature} {requirement.minimumVersion}</div>,
 }))
-const { ApiError } = await import('../../api/client') as any
+const { ApiError } = await import('../../api/client')
 const { RayClusterLogsTab } = await import('./RayClusterLogsTab')
 const { isKubeRayCluster } = await import('./rayClusterPods')
-const { logsContainer } = await import('@skyhook-io/k8s-ui/components/resources/resource-utils-ray')
 
 const history = [{ kind: 'Pod', namespace: 'ml', name: 'deleted-worker' }, { kind: 'Pod', namespace: 'ml', name: 'cluster-head' }]
 const started = (name: string, init = false, ready = true) => ({ name, init, ready, restartCount: 0 })
@@ -97,7 +95,7 @@ describe('RayClusterLogsTab', () => {
 
   it.each([[{ isLoading: true }, 'uid-1', false], [{}, undefined, true]])('waits rather than flashing recorded Pods (%#)', (query, uid, rootLoading) => {
     state.query = query
-    expect(renderUID(uid as string | undefined, null, { loading: rootLoading as boolean })).toContain('Reading runtime Pods')
+    expect(renderUID(uid as string | undefined, null, { loading: rootLoading as boolean })).toContain(uid ? 'Reading runtime Pods' : 'Reading RayCluster')
     expect(state.tab).toBeNull()
   })
 
@@ -167,42 +165,20 @@ describe('RayClusterLogsTab', () => {
     expect(state.tab.emptyMessage).toBe('This RayCluster has no Pods right now. Its suspension is requested.')
   })
 
+  it('applies a linked container to its own Pod only, not to Pods picked after it', () => {
+    state.query = { data: owned }
+    const tab = (selectedPod: string) => <RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod={selectedPod} onSelectPod={() => {}} initialContainer="wait-gcs-ready" />
+    renderToStaticMarkup(tab('cluster-worker-b'))
+    expect(state.tab.initialContainer).toBe('wait-gcs-ready')
+    renderToStaticMarkup(tab('cluster-head'))
+    expect(state.tab.initialContainer).toBe('ray-head')
+  })
+
   it('applies only to the KubeRay ray.io/v1 RayCluster', () => {
     expect(isKubeRayCluster('RayCluster', 'ray.io', 'ray.io/v1')).toBe(true)
     expect(isKubeRayCluster('RayCluster', 'ray.io', undefined)).toBe(true)
     expect(isKubeRayCluster('RayCluster', 'ray.io', 'ray.io/v1alpha1')).toBe(false)
     expect(isKubeRayCluster('RayCluster', 'example.io', 'example.io/v1')).toBe(false)
     expect(isKubeRayCluster('RayJob', 'ray.io', 'ray.io/v1')).toBe(false)
-  })
-})
-
-describe('logsContainer', () => {
-  const status = (name: string, extra: Record<string, unknown> = {}) => ({ name, ready: false, restartCount: 0, ...extra })
-  it('opens a Pending worker in the regular init container it waits on, past a started native sidecar', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] }, true)).toBe('wait-gcs-ready')
-  })
-  it('opens the regular init container that failed in a Failed Pod', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['setup', 'ray-worker'], containerStatuses: [status('setup', { init: true }), status('ray-worker')] }, true)).toBe('setup')
-  })
-  it('opens the application of a running Pod, never an unready native sidecar', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['proxy', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('ray-worker')] }, true)).toBe('ray-worker')
-  })
-  it('opens the application of a Failed Pod whose init containers finished', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }, true)).toBe('ray-worker')
-  })
-  it('leaves the choice to the viewer when init statuses are missing but init containers may exist', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [status('ray-worker')] }, true)).toBeUndefined()
-    expect(logsContainer({ name: 'p', ready: true, phase: 'Running', containers: ['ray-head'], containerStatuses: [status('ray-head')] }, true)).toBe('ray-head')
-  })
-  it('leaves the choice to the viewer when no status is reported', () => {
-    expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, true)).toBeUndefined()
-  })
-  it('on a Radar that does not mark sidecars, picks an init container only when it is the sole unready one in a Pending Pod', () => {
-    const proxyFirst = { name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] }
-    expect(logsContainer(proxyFirst, false)).toBe('ray-worker')
-    const onlyWait = { name: 'p', ready: false, phase: 'Pending', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [status('wait-gcs-ready', { init: true }), status('ray-worker')] }
-    expect(logsContainer(onlyWait, false)).toBe('wait-gcs-ready')
-    const failedWithStoppedSidecar = { name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }
-    expect(logsContainer(failedWithStoppedSidecar, false)).toBe('ray-worker')
   })
 })

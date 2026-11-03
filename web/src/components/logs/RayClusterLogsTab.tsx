@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertBanner, PaneLoader, RadarUpgradeNote } from '@skyhook-io/k8s-ui'
 import { logsContainer, podLogsUnavailableReason } from '@skyhook-io/k8s-ui/components/resources/resource-utils-ray'
 import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
@@ -60,7 +60,12 @@ export function RayClusterLogsTab({
     showedRecorded.current = false
   }, [owned, loading, defaultPod, selectedPod, onSelectPod])
 
-  if (loading) return <PaneLoader label="Reading runtime Pods…" className="h-full" />
+  // A container named by a link or a Pod's container button applies to that
+  // Pod only; Pods share container names, so it mustn't follow other picks.
+  const [linked, setLinked] = useState({ container: initialContainer, pod: initialContainer ? selectedPod : null })
+  if (linked.container !== initialContainer) setLinked({ container: initialContainer, pod: initialContainer ? selectedPod : null })
+
+  if (loading) return <PaneLoader label={uid ? 'Reading runtime Pods…' : 'Reading RayCluster…'} className="h-full" />
 
   // Shown by name so the strip holds still while health changes; the least
   // healthy Pod (the route's order) is the one opened first.
@@ -68,7 +73,10 @@ export function RayClusterLogsTab({
     ? [...owned.pods].sort((a, b) => a.name.localeCompare(b.name)).map(pod => ({ kind: 'Pod', namespace, name: pod.name }))
     : historyPods
   const selected = owned?.pods.find(pod => pod.name === selectedPod)
-  const container = selected && !(initialContainer && selected.containers.includes(initialContainer)) ? logsContainer(selected, sidecarsMarked) : initialContainer
+  const linkedApplies = Boolean(initialContainer && selectedPod === linked.pod)
+  const container = selected
+    ? (linkedApplies && selected.containers.includes(initialContainer!) ? initialContainer : logsContainer(selected, sidecarsMarked))
+    : linkedApplies ? initialContainer : null
   const reason = unsupported ? '' : !uid ? rootError?.message ?? 'The RayCluster could not be read.' : rayClusterPodsError(query.error, support) ?? 'Its current Pods could not be read.'
   const refreshError = owned && query.error ? rayClusterPodsError(query.error, support) : undefined
   const sentence = (text: string) => /[.!?]$/.test(text) ? text : `${text}.`

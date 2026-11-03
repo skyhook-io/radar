@@ -4,10 +4,12 @@ import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ query: {} as any }))
-vi.mock('../../api/client', () => {
-  class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
-  return { ApiError, isStableClientError: (e: any) => e instanceof ApiError && [400, 403, 404, 409].includes(e.status), useCapabilities: () => ({ data: { features: { rayClusterPods: true, podSidecarMarks: true } } }), useRadarFeature: () => ({ support: 'supported', upgrade: null }), useWorkloadPods: () => state.query }
-})
+vi.mock('../../api/client', async (original) => ({
+  ...await original<typeof import('../../api/client')>(),
+  useCapabilities: () => ({ data: { features: { rayClusterPods: true, podSidecarMarks: true } } }),
+  useRadarFeature: () => ({ support: 'supported', upgrade: null }),
+  useWorkloadPods: () => state.query,
+}))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: true, logsUnknown: false }) }))
 vi.mock('./MultiPodLogsTab', () => ({ MultiPodLogsTab: () => null }))
 vi.mock('@skyhook-io/k8s-ui', () => ({ AlertBanner: () => null, PaneLoader: () => null, RadarUpgradeNote: () => null }))

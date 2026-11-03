@@ -24,6 +24,8 @@ export interface RayClusterRendererProps {
    * logs; without it the rows have no Logs buttons and no logs note.
    */
   onOpenPodLogs?: (pod: WorkloadPodInfo) => void
+  /** Said in place of the logs note when the host offers no Logs buttons. */
+  podLogsNote?: string
   /**
    * Set when the connected Radar can't list this RayCluster's Pods: Runtime
    * Pods (shown only with `onSelectPods`) then shows this upgrade note instead
@@ -40,7 +42,7 @@ export function rayClusterConditionTone(condition: any): ConditionTone {
   return 'unknown'
 }
 
-export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading, podsError, selection = {}, onSelectPods, onOpenPodLogs, podsUpgrade }: RayClusterRendererProps) {
+export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading, podsError, selection = {}, onSelectPods, onOpenPodLogs, podLogsNote, podsUpgrade }: RayClusterRendererProps) {
   const [expanded, setExpanded] = useState(false)
   const podsRef = useRef<HTMLDivElement>(null)
   const status = data.status ?? {}
@@ -76,7 +78,7 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
         value={selection.workerGroup != null ? `group:${selection.workerGroup}` : selection.nodeType === 'head' ? 'head' : 'all'}
         options={[{ value: 'all', label: 'All runtime Pods' }, { value: 'head', label: 'Head' }, ...groups.map((g: any) => ({ value: `group:${g.groupName}`, label: `Worker group: ${g.groupName}` }))]}
         onChange={value => select(value === 'all' ? {} : value === 'head' ? { nodeType: 'head' } : { nodeType: 'worker', workerGroup: value.slice(6) })} />
-      <p className="mb-2 text-xs text-theme-text-tertiary">Directly controlled by this RayCluster incarnation. Cleanup Job descendants are excluded.{onOpenPodLogs ? ' The Logs button shows a Pod\'s container output while the Pod exists. Ray session logs under /tmp/ray aren\'t read.' : ''}</p>
+      <p className="mb-2 text-xs text-theme-text-tertiary">Directly controlled by this RayCluster incarnation. Cleanup Job descendants are excluded.{onOpenPodLogs ? ' The Logs button shows a Pod\'s container output while the Pod exists. Ray session logs under /tmp/ray aren\'t read.' : podLogsNote ? ` ${podLogsNote}` : ''}</p>
       {podsUpgrade ? <RadarUpgradeNote requirement={podsUpgrade} /> : podsError ? <AlertBanner variant="warning" title="Pod evidence unavailable" message={podsError} /> : podsLoading ? <p className="text-sm text-theme-text-secondary">Reading runtime Pods…</p> : podEvidence ? <>
         <p className="mb-2 text-sm text-theme-text-secondary">{scope} · {podEvidence.total} {podEvidence.total === 1 ? 'Pod' : 'Pods'}{podEvidence.truncated ? ` (showing ${podEvidence.pods.length}, failures first)` : ''}</p>
         {podEvidence.total === 0 && <p className="text-sm text-theme-text-secondary">No directly owned Pods in this scope.</p>}

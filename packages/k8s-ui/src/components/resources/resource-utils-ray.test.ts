@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRayCronJobTimeZone, getRayCronJobStatus, getRayServiceStatus } from './resource-utils-ray'
+import { getRayCronJobTimeZone, getRayCronJobStatus, getRayServiceStatus, logsContainer, podLogsUnavailableReason } from './resource-utils-ray'
 import { getCellFilterValue } from './resource-utils'
 
 describe('getRayCronJobTimeZone', () => {
@@ -89,5 +89,46 @@ describe('RayCluster readiness', () => {
     expect(getRayClusterStatus(root({ observedGeneration: 1 })).level).toBe('unknown')
     expect(getRayClusterStatus(root({ state: 'ready', conditions: [] })).level).toBe('unknown')
     expect(getRayClusterStatus(root({ conditions: [{ type: 'RayClusterProvisioned', status: 'True' }] })).level).toBe('neutral')
+  })
+})
+
+describe('logsContainer', () => {
+  const status = (name: string, extra: Record<string, unknown> = {}) => ({ name, ready: false, restartCount: 0, ...extra })
+  it('opens a Pending worker in the regular init container it waits on, past a started native sidecar', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] }, true)).toBe('wait-gcs-ready')
+  })
+  it('opens the regular init container that failed in a Failed Pod', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['setup', 'ray-worker'], containerStatuses: [status('setup', { init: true }), status('ray-worker')] }, true)).toBe('setup')
+  })
+  it('opens the application of a running Pod, never an unready native sidecar', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['proxy', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('ray-worker')] }, true)).toBe('ray-worker')
+  })
+  it('opens the application of a Failed Pod whose init containers finished', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }, true)).toBe('ray-worker')
+  })
+  it('leaves the choice to the viewer when init statuses are missing but init containers may exist', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [status('ray-worker')] }, true)).toBeUndefined()
+    expect(logsContainer({ name: 'p', ready: true, phase: 'Running', containers: ['ray-head'], containerStatuses: [status('ray-head')] }, true)).toBe('ray-head')
+  })
+  it('leaves the choice to the viewer when no status is reported', () => {
+    expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, true)).toBeUndefined()
+  })
+  it('on a Radar that does not mark sidecars, picks an init container only when it is the sole unready one in a Pending Pod', () => {
+    const proxyFirst = { name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] }
+    expect(logsContainer(proxyFirst, false)).toBe('ray-worker')
+    const onlyWait = { name: 'p', ready: false, phase: 'Pending', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [status('wait-gcs-ready', { init: true }), status('ray-worker')] }
+    expect(logsContainer(onlyWait, false)).toBe('wait-gcs-ready')
+    const failedWithStoppedSidecar = { name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }
+    expect(logsContainer(failedWithStoppedSidecar, false)).toBe('ray-worker')
+  })
+})
+
+describe('podLogsUnavailableReason', () => {
+  it('names why a Pod has no output to read yet', () => {
+    expect(podLogsUnavailableReason({ name: 'p', ready: false, containers: ['c'] })).toBe('Not scheduled')
+    expect(podLogsUnavailableReason({ name: 'p', ready: false, nodeName: 'n', containers: ['c'] })).toBe('No status yet')
+    expect(podLogsUnavailableReason({ name: 'p', ready: false, phase: 'Failed', containers: ['c'] })).toBe('Ended before starting')
+    expect(podLogsUnavailableReason({ name: 'p', ready: false, nodeName: 'n', containers: ['proxy', 'c'], containerStatuses: [{ name: 'proxy', init: true, sidecar: true, ready: true, restartCount: 0 }] })).toBe('No status yet')
+    expect(podLogsUnavailableReason({ name: 'p', ready: true, containers: ['c'], containerStatuses: [{ name: 'c', ready: true, restartCount: 0 }] })).toBeUndefined()
   })
 })

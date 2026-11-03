@@ -18,7 +18,7 @@ function RayClusterEvidence({ data, onNavigate }: { data: any; onNavigate?: (ref
   const query = useWorkloadPods('rayclusters', data.metadata.namespace, data.metadata.uid && support !== 'unsupported' ? data.metadata.name : '', {
     ownerUID: data.metadata.uid, ...selection, limit: 200, refetchInterval: 5000,
   })
-  const { canViewLogs } = useNamespacedCapabilities(data.metadata.namespace)
+  const { canViewLogs, logsUnknown } = useNamespacedCapabilities(data.metadata.namespace)
   const openLogs = useOpenLogs()
   const sidecarsMarked = useSidecarsMarked()
   const openPodLogs = (pod: WorkloadPodInfo) => openLogs({
@@ -27,5 +27,5 @@ function RayClusterEvidence({ data, onNavigate }: { data: any; onNavigate?: (ref
     containers: pod.containers,
     containerName: logsContainer(pod, sidecarsMarked),
   })
-  return <BaseRenderer data={data} onNavigate={onNavigate} selection={selection} onSelectPods={setSelection} podEvidence={query.data} podsLoading={query.isLoading} podsError={rayClusterPodsError(query.error, support)} onOpenPodLogs={canViewLogs ? openPodLogs : undefined} podsUpgrade={support === 'unsupported' ? upgrade : null} />
+  return <BaseRenderer data={data} onNavigate={onNavigate} selection={selection} onSelectPods={setSelection} podEvidence={query.data} podsLoading={query.isLoading} podsError={rayClusterPodsError(query.error, support)} onOpenPodLogs={canViewLogs || logsUnknown ? openPodLogs : undefined} podLogsNote={canViewLogs || logsUnknown ? undefined : 'Pod logs need get on pods/log in this namespace.'} podsUpgrade={support === 'unsupported' ? upgrade : null} />
 }

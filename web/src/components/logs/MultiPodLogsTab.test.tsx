@@ -73,7 +73,7 @@ describe('MultiPodLogsTab', () => {
   it('shows the caller\'s reason instead of a viewer for a Pod with no output yet', () => {
     state.logs['live-pod'] = { data: { containers: ['app'] } }
     act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod="live-pod" onSelectPod={vi.fn()} selectedPodNote="Not scheduled" />))
-    expect(host.textContent).toContain('No logs for live-pod yet')
+    expect(host.textContent).toContain('No logs shown for live-pod')
     expect(host.textContent).toContain('Not scheduled')
     expect(host.textContent).not.toContain('viewer:live-pod')
     expect(state.requested).not.toContain('live-pod')
