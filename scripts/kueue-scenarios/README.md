@@ -1,16 +1,8 @@
 # Kueue queue scenarios (any cluster that already runs Kueue)
 
-This lane builds the scenarios from the Kueue queue design review on a cluster
-you already have, using the real Kueue controller. It is the
-fixture set for queue-level work: queue detail, the Workloads in a queue, their
-coverage, and Kueue Issues.
-
-It complements [`kueue-demo`](../kueue-demo/README.md), which creates its own
-`kind` cluster, installs a pinned Kueue, and proves one admission lifecycle in
-depth. This lane does neither of those things: it never creates a cluster,
-installs or upgrades Kueue, or edits Kueue's configuration. Point it at a
-cluster with Kueue running and it adds its own namespaces, queues and Jobs
-beside whatever is already there.
+Run queue-detail, membership, coverage and Issues fixtures beside an existing
+Kueue controller. Unlike [`kueue-demo`](../kueue-demo/README.md), this lane does
+not create a cluster, install/upgrade Kueue or change its configuration.
 
 ## Quick start
 
@@ -60,15 +52,9 @@ v1beta2) on EKS Kubernetes 1.34, with Kueue's default configuration plus the
 `registry.k8s.io/pause:3.10` or a busybox that exits; quotas are a few hundred
 millicores, so nothing needs accelerators or meaningful capacity.
 
-**Kind** says who produced the state:
-- **controller**: Kueue reached it on its own from ordinary inputs (Jobs,
-  queue configuration, a user setting `spec.active`).
-- **check controller**: the script plays the controller for the AdmissionCheck
-  `<prefix>-check` and writes one check state, as any external check
-  controller would. Everything Kueue does in response is its own.
-- **injected**: the script writes a condition Kueue itself would normally write,
-  because the setting that makes Kueue write it is controller-wide. Only Kueue's
-  reaction is real; the cause is not.
+The table distinguishes controller output, script-played **check controller**
+responses and **injected** conditions. Only Kueue's reaction to the latter two
+is controller proof.
 
 | # | Scenario | Where | What it shows | Kind |
 |---|---|---|---|---|
@@ -133,23 +119,11 @@ whether some states appear or last:
 
 ## The restricted viewer
 
-Scenarios 2 and 6 are about what a viewer with less access sees. The lane
-creates one viewer with two identities bound to the same roles:
-
-- ServiceAccount `<p>-viewer/viewer`, to run Radar **as** the viewer;
-- the plain user `<p>-viewer`, to send to a Radar running with full access and
-  `--auth-mode=proxy`.
-
-Both can list every Namespace, CRD and Kueue cluster-scoped object on the
-cluster (including other teams' ClusterQueues), and read Pods, events,
-Services, Jobs, LocalQueues and Workloads in the scenario namespaces (not in
-`<p>-viewer`, which only holds the ServiceAccount), except:
-
-- nothing at all in `<p>-busy-hidden`;
-- everything but Workloads in `<p>-lq-denied`.
-
-`verify` checks those permissions with `kubectl auth can-i --as` for both
-identities.
+The ServiceAccount `<p>-viewer/viewer` (run Radar as the viewer) and user
+`<p>-viewer` (proxy mode) share roles. Both can list all Namespaces, CRDs and
+cluster-scoped Kueue objects, including other teams' queues. They read fixture
+namespaces except `<p>-busy-hidden`, and cannot read Workloads in `<p>-lq-denied`.
+`verify` checks both identities with `kubectl auth can-i --as`.
 
 ### Run Radar as the viewer (Radar's own access is limited)
 
@@ -195,61 +169,27 @@ listener: proxy mode trusts that header.
 | Workloads in `<p>-busy-hidden` alone | — | 503 `radar_forbidden` | — |
 | Workloads in `<p>-lq-denied` (6) | complete, 2 | 503 `radar_forbidden` | either complete, 2 (warns) or 403 (see below) |
 
-Workload sets are compared by the UIDs of this run's Jobs on the cluster named
-by `--kubeconfig`/`--context`, through each Workload's controller reference, so
-a Radar pointed at another cluster with the same fixtures fails. These are
-today's generic resource reads, not a queue-membership answer; queue features
-should add their own assertions on top.
-
-Scenario 6 reads differently depending on whose access is limited. When Radar's
-own identity can't list Workloads there, Radar can't hold them and says so. When
-only the signed-in user can't, a generic read still returns them: Radar
-authorizes namespaced CRD reads per namespace, not per kind
-([Read granularity](../../docs/authentication.md#read-granularity-namespace-level)),
-and the viewer can read that namespace. `verify-radar` accepts that answer with
-a warning, and also a refusal. A queue read that promises per-kind coverage has
-to check `list workloads.kueue.x-k8s.io` itself; that is the case this scenario
-exists to catch.
-
-Right after Radar starts, a namespace its identity can't read can come back as a
-`read_error` with the action `retry` (an 8-second request-budget timeout) before
-it settles on `radar_forbidden`. `verify-radar` retries any answer whose action
-is `retry` for up to 30 seconds, then expects the exact codes in the table.
+`verify-radar` matches Workloads to this cluster's Job UIDs, so pointing Radar
+at a different cluster fails. These are generic resource reads, not queue APIs.
+Scenario 6 accepts either complete data (with a warning) or a denial for the
+proxy user: generic CRD reads authorize namespace access, while queue reads
+promise exact per-kind access. See [read granularity](../../docs/authentication.md#read-granularity-namespace-level).
+Retryable startup errors are retried for up to 30 seconds before checking codes.
 
 ## Up, re-runs and cleanup
 
-`up` checks every object it is about to create first, and stops if any of them
-exists without this prefix's ownership label, is still being deleted, or can't
-be read. It then creates whatever is missing; it never applies over an existing
-object, so a foreign object created in the meantime makes the create fail rather
-than be adopted, and a changed manifest takes effect only after `down` and `up`.
-Every later write reads the object first, checks it is still this prefix's,
-and is sent with that read's resourceVersion, so it can't land on an object that
-was replaced in between. Next `up` submits the Jobs in two batches and drives each scenario to its end state:
-answers checks, removes the spare flavor, deactivates one Workload, and stops the
-drain queue. Each step checks the cluster before acting, so re-running `up` after
-it finished, or after it was interrupted, resumes instead of repeating a step
-(for example, Retry is written only while Kueue's `retryCount` is still 0). A
-read that fails stops `up` rather than being taken as an answer.
+`up` refuses unreadable, terminating or unowned existing objects. It creates
+missing objects without adopting others; later writes check ownership and use
+resourceVersion. Re-runs resume completed steps instead of repeating transitions.
+Changed manifests or manually altered one-time states need `down`/`up` or a new
+prefix. Failed reads stop the run.
 
-Some states are transitions that only happen once per object (preemption,
-removal of the spare flavor, the drain). If an object was changed by hand, `down`
-and `up` again, or use another prefix.
-
-`down` deletes objects that carry this prefix's ownership label **and** are
-named with the prefix (or, for Jobs, sit in a namespace named with it): the
-Jobs, the namespaces (with everything in them, including anything someone added
-later), the cluster-scoped Kueue objects, and the viewer's ClusterRoles and
-ClusterRoleBindings. Each delete names the object and uses the label as a
-selector, so an object that lost the label, or was recreated without it, by the
-time kubectl looks it up is left alone. kubectl can't send UID preconditions, so
-a swap in the instant between kubectl's lookup and its delete call isn't
-covered; a namespace can't be replaced while it is terminating. The label holds
-the prefix, not who ran `up`: on a shared prefix, `down` removes the shared
-copy, and it lists the namespaces it is deleting. It waits for them to go, because `up` refuses objects that
-are still being deleted, and exits with status 2 if they haven't gone. If Kueue's CRDs are gone it
-skips those kinds. If Kueue's controller is gone but its CRDs remain, Kueue's
-finalizers can keep them terminating; `down` warns instead of waiting forever.
+`down` deletes only prefixed, ownership-labeled Jobs, namespaces, Kueue objects
+and viewer RBAC. **Deleting a fixture namespace also deletes anything added to
+it later.** A shared prefix is one shared copy; cleanup lists its namespaces.
+Deletes recheck the label, but kubectl provides no UID precondition against an
+instant replacement. Cleanup waits for deletion and exits 2 if objects remain;
+it skips removed CRDs and warns when controller finalizers prevent completion.
 
 `scripts/kueue-scenarios/test.sh` tests the script's decisions offline (no
 cluster; kubectl is stubbed): unreadable versus absent, ownership refusal,
@@ -259,14 +199,8 @@ bash and jq) after changing the script.
 
 ## Proof boundary
 
-Passing `verify` proves that this Kueue reached these states from these inputs
-on this cluster. It does not prove:
-
-- the states of other Kueue releases or configurations (see above);
-- a real PodsReadyTimeout (injected) or a real external admission check
-  controller (played by the script);
-- a stale `observedGeneration` or a ClusterQueue status entry for a removed
-  flavor (not reachable against a running controller, see scenarios 5 and 2);
-- ProvisioningRequest, MultiKueue, topology-aware scheduling, fair sharing or
-  hierarchical cohorts;
-- anything about GPUs: every quota here is CPU and memory.
+`verify` proves these inputs reached these states on the reported Kueue release
+and configuration. It does not prove real PodsReadyTimeout or an external check
+controller, stale generation or removed-flavor ClusterQueue status, GPU behavior,
+ProvisioningRequest, MultiKueue, topology-aware scheduling, fair sharing or
+hierarchical cohorts. Keep synthetic states in unit tests, not live-proof claims.
