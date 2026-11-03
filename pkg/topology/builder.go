@@ -3308,6 +3308,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				for _, pod := range group.Pods {
 					podID := GetPodID(pod)
 					podNode := CreatePodNode(pod, b.provider, true) // includeNodeName=true for resources view
+					jobIncarnation.markEarlierJobRun(&podNode, []*corev1.Pod{pod})
 					if role := podRolloutTrafficRole(pod, replicaSetToRollout, rolloutTrafficByID); role != "" {
 						podNode.Data["trafficRole"] = role
 					}
@@ -3320,6 +3321,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				// Large group - create PodGroup
 				podGroupID := GetPodGroupID(group)
 				podGroupNode := CreatePodGroupNode(group, b.provider)
+				jobIncarnation.markEarlierJobRun(&podGroupNode, group.Pods)
 
 				// A large group's pods can span more than one owning
 				// ReplicaSet and traffic role at once (a Rollout mid-
@@ -7739,6 +7741,17 @@ func (b *Builder) createPodOwnerEdges(
 				Type:   EdgeManages,
 			})
 		case "Job":
+			if earlier := jobs.earlierJob(pod); earlier != nil && earlier.UID == ownerRef.UID {
+				// The replacement Job supplies context, not ownership of the old Pods.
+				if jobSetID := jobs.jobSets[jobs.uids[ownerKey]]; jobSetID != "" {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s-earlier-run", jobSetID, targetID),
+						Source: jobSetID, Target: targetID, Type: EdgeUses,
+						Label: "Earlier Job run (same name)",
+					})
+				}
+				continue
+			}
 			if ownerID, ok := jobIDs[ownerKey]; ok && jobs.current(ownerKey, ownerRef) {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),

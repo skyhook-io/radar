@@ -1076,6 +1076,9 @@ func TestStructuralRoot_JobSetMembersShareTheJobSetRoot(t *testing.T) {
 	}
 
 	want := resourceid.ResourceKey("jobset.x-k8s.io", "JobSet", "ml", "train")
+	if root, kind, group, identity := g.rootOf("jobset.x-k8s.io", "JobSet", "ml", "train"); root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+		t.Fatalf("JobSet workload root = %q %q %q %q", root, kind, group, identity)
+	}
 	for _, name := range []string{"train-driver-0", "train-workers-0"} {
 		root, kind, group, identity := g.rootOf("batch", "Job", "ml", name)
 		if root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {

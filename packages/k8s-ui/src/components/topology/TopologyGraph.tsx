@@ -327,6 +327,7 @@ export function expandPodGroup(
     restarts: number
     containers: number
     status?: HealthStatus
+    terminating?: boolean
     // Present only when the group spans more than one owner (e.g. a
     // Rollout's canary + stable ReplicaSets) — the specific edge
     // source(s) that actually own this pod, from the backend's own
@@ -367,6 +368,7 @@ export function expandPodGroup(
         restarts: pod.restarts,
         containers: pod.containers,
         trafficRole: pod.trafficRole,
+        ...(podGroupNode.data.earlierJobRun ? { terminating: pod.terminating ? 1 : 0 } : {}),
         expandedFromGroup: podGroupId, // Track which group this came from
       },
     })
@@ -383,7 +385,7 @@ export function expandPodGroup(
     // with different labels. The pod's own trafficRole is unambiguous, so
     // an ownership edge derives its label from that directly rather than
     // trying to match back to one specific original edge.
-    const label = edgeType === 'manages' && pod.trafficRole
+    const label = podGroupNode.data.earlierJobRun ? edgesToGroup[0]?.label : edgeType === 'manages' && pod.trafficRole
       ? pod.trafficRole[0].toUpperCase() + pod.trafficRole.slice(1)
       : undefined
     for (const sourceId of podSourceIds) {

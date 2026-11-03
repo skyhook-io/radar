@@ -73,7 +73,9 @@ shared repo/parent would collapse every separately-released service into one gia
 "shop" blob, which has no operational value. We refuse to do that. (Workloads with
 **no manager** resolve instead to their **topmost ownerRef** — a Deployment, or an
 operator CR like a CNPG `Cluster`). A JobSet run groups its member Jobs as one
-app; the Jobs, rather than the JobSet root, appear in the workload list.
+app keyed `<ns>/JobSet/<name>`; the JobSet is its workload, with lifecycle health
+from `pkg/jobset`. Member Jobs stay in its graph and open the selected member
+in the JobSet overview.
 
 The weaker labels (`part-of`, `name`) are a fallback for loose/raw workloads, not
 an umbrella over independently-released ones. **One honest caveat to the absolute

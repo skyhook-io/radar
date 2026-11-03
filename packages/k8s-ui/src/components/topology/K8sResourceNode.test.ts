@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { baseSubtitle, knativeDomainsTooltipLines } from './K8sResourceNode'
 
 describe('baseSubtitle', () => {
+  it('explains earlier Job runs on grouped and loose Pods', () => {
+    expect(baseSubtitle('PodGroup', { earlierJobRun: 'train-workers-0', terminating: 6 })).toBe('Earlier run • terminating')
+    expect(baseSubtitle('Pod', { earlierJobRun: 'hook', terminating: 0 })).toBe('Earlier run')
+  })
   it('describes workflow templates without dropping newer topology kinds', () => {
     expect(baseSubtitle('WorkflowTemplate', { entrypoint: 'main', templateCount: 3 })).toBe('main • 3 templates')
     expect(baseSubtitle('ClusterWorkflowTemplate', { templateCount: 2 })).toBe('2 templates')

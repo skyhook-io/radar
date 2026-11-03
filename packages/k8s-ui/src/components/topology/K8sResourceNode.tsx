@@ -392,6 +392,10 @@ export interface ServicePortEntry {
 }
 
 export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
+  if (typeof nodeData.earlierJobRun === 'string') {
+    const state = Number(nodeData.terminating) > 0 ? ' • terminating' : ''
+    return `Earlier run${state}`
+  }
   if (nodeData.deploymentMembership === 'source-only') {
     return `Declared by ${nodeData.deploymentSourceLabel ?? 'deployment source'}`
   }
@@ -852,7 +856,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                 </div>
               </Tooltip>
             ) : (
-              <div className="text-xs text-theme-text-secondary truncate mt-0.5">
+              <div className="text-xs text-theme-text-secondary truncate mt-0.5" title={typeof nodeData.earlierJobRun === 'string' ? `Earlier run of Job ${nodeData.earlierJobRun}` : undefined}>
                 {subtitle}
               </div>
             )

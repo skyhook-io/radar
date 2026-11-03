@@ -10,6 +10,17 @@ const jobEdge: TopologyEdge = { id: 'job-to-group', source: 'job/ml/train-worker
 const pod = (name: string, extra: Record<string, unknown> = {}) => ({ name, namespace: 'ml', phase: 'Running', restarts: 0, containers: 1, ...extra })
 
 describe('expandPodGroup', () => {
+  it('preserves earlier-run context and each Pod termination state when expanded', () => {
+    const node = group([pod('old', { status: 'neutral', terminating: true }), pod('failed', { status: 'unhealthy', terminating: false })])
+    node.data.earlierJobRun = 'train-workers-0'
+    node.data.terminating = 1
+    const edge: TopologyEdge = { ...jobEdge, source: 'jobset/ml/train/jobset.x-k8s.io', type: 'uses', label: 'Earlier Job run (same name)' }
+    const out = expandPodGroup([node], [edge], node.id)
+    expect(out.nodes.map(n => [n.status, n.data.earlierJobRun, n.data.terminating])).toEqual([
+      ['neutral', 'train-workers-0', 1], ['unhealthy', 'train-workers-0', 0],
+    ])
+    expect(out.edges.every(e => e.type === 'uses' && e.label === edge.label)).toBe(true)
+  })
   it('connects a pod without ownerIds to every owner of the group', () => {
     const out = expandPodGroup([group([pod('a')])], [jobEdge], 'podgroup/ml/train-workers-0')
     expect(out.edges.map((e) => [e.source, e.target])).toEqual([['job/ml/train-workers-0', 'pod/ml/a']])
