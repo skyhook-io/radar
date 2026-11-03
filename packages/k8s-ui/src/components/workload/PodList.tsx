@@ -61,7 +61,7 @@ export function PodRow({
     <div className="flex min-w-0 items-stretch gap-2">
       <div className="min-w-0 flex-1">{row}</div>
       {logsUnavailable ? (
-        <span className="flex w-24 shrink-0 items-center justify-center rounded-md border border-dashed border-theme-border px-2 text-center text-xs text-theme-text-tertiary">
+        <span aria-label={`Logs for ${name}: ${logsUnavailable}`} className="flex w-24 shrink-0 items-center justify-center rounded-md border border-dashed border-theme-border px-2 text-center text-xs text-theme-text-tertiary">
           {logsUnavailable}
         </span>
       ) : (
@@ -69,7 +69,7 @@ export function PodRow({
           type="button"
           onClick={onOpenLogs}
           aria-label={`Open logs for ${name}`}
-          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium"
+          className="btn-secondary inline-flex w-24 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium"
         >
           <Terminal className="h-3.5 w-3.5" />
           Logs

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { gitOpsOwnerFromRelationships } from '@skyhook-io/k8s-ui'
 import type { Relationships } from '../../types'
-import { collectServingRefs, rayClusterLogsOnPodRows, supportsBatchExecution } from './WorkloadView'
+import { collectServingRefs, supportsBatchExecution } from './WorkloadView'
 import { findInheritedGitOpsLookupRef } from '../../hooks/useResolvedGitOpsOwner'
 
 describe('findInheritedGitOpsLookupRef', () => {
@@ -82,24 +82,5 @@ describe('collectServingRefs', () => {
     const broker = { kind: 'Broker', group: 'eventing.knative.dev', namespace: 'demo', name: 'messages' }
     const other = { ...broker, group: 'other.example' }
     expect(collectServingRefs({ routedFrom: [broker, broker, other] })).toEqual([broker, other])
-  })
-})
-
-describe('rayClusterLogsOnPodRows', () => {
-  it('moves a KubeRay RayCluster\'s logs to its verified Pod rows', () => {
-    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', 'ray.io/v1', 'supported')).toBe(true)
-    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', undefined, 'supported')).toBe(true)
-  })
-
-  it('keeps the generic tab until the connected Radar is known to list RayCluster Pods', () => {
-    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', 'ray.io/v1', 'unknown')).toBe(false)
-  })
-
-  it('keeps the generic tab where the replacement does not apply', () => {
-    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', 'ray.io/v1', 'unsupported')).toBe(false)
-    expect(rayClusterLogsOnPodRows('rayclusters', 'example.io', 'example.io/v1', 'supported')).toBe(false)
-    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', 'ray.io/v1alpha1', 'supported')).toBe(false)
-    expect(rayClusterLogsOnPodRows('rayclusters', undefined, undefined, 'supported')).toBe(false)
-    expect(rayClusterLogsOnPodRows('rayjobs', 'ray.io', 'ray.io/v1', 'supported')).toBe(false)
   })
 })

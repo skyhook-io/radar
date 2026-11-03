@@ -53,7 +53,7 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
   const owners = (data.metadata?.ownerReferences ?? []).filter((owner: any) => owner.controller === true && apiVersionToGroup(owner.apiVersion) === 'ray.io' && ['RayService', 'RayJob'].includes(owner.kind))
   const scope = selection.workerGroup != null ? `Worker group: ${selection.workerGroup}` : selection.nodeType === 'head' ? 'Head' : 'All runtime Pods'
   const select = (value: RayClusterPodSelection) => { setExpanded(false); onSelectPods?.(value) }
-  const row = (pod: WorkloadPodInfo) => <PodRow key={pod.name} name={pod.name} namespace={data.metadata.namespace} ready={pod.ready} healthLevel={pod.healthLevel} detail={workloadPodDetail(pod)} onNavigate={onNavigate} onOpenLogs={onOpenPodLogs && (() => onOpenPodLogs(pod))} logsUnavailable={pod.containerStatuses?.length ? undefined : pod.nodeName ? 'No container status yet' : 'Not scheduled yet'} />
+  const row = (pod: WorkloadPodInfo) => <PodRow key={pod.name} name={pod.name} namespace={data.metadata.namespace} ready={pod.ready} healthLevel={pod.healthLevel} detail={workloadPodDetail(pod)} onNavigate={onNavigate} onOpenLogs={onOpenPodLogs && (() => onOpenPodLogs(pod))} logsUnavailable={pod.containerStatuses?.length ? undefined : pod.nodeName ? 'No status yet' : 'Not scheduled'} />
   return <div className="space-y-4">
     {stale && <AlertBanner variant="info" title="Status describes an earlier generation" message={`Specification generation ${data.metadata.generation}; controller observed ${status.observedGeneration}. Counts and conditions below retain that observation.`} />}
     <Section variant="card" title="Runtime Health" icon={Activity} defaultExpanded>

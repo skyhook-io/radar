@@ -9,10 +9,10 @@ vi.mock('../../api/client', async (original) => ({
   usePodLogs: (_ns: string, pod: string) => state.logs[pod] ?? {},
   useResource: () => ({ data: { status: { phase: 'Running' } } }),
 }))
-vi.mock('../logs/LogsViewer', () => ({ LogsViewer: ({ podName }: { podName: string }) => { state.viewer.push(podName); return <div>viewer:{podName}</div> } }))
+vi.mock('./LogsViewer', () => ({ LogsViewer: ({ podName }: { podName: string }) => { state.viewer.push(podName); return <div>viewer:{podName}</div> } }))
 
 const { ApiError } = await import('../../api/client')
-const { MultiPodLogsTab } = await import('./WorkloadView')
+const { MultiPodLogsTab } = await import('./MultiPodLogsTab')
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const pods = [{ kind: 'Pod', namespace: 'ml', name: 'gone-pod' }, { kind: 'Pod', namespace: 'ml', name: 'live-pod' }]
@@ -42,6 +42,11 @@ describe('MultiPodLogsTab', () => {
     render('live-pod')
     expect(host.textContent).toContain('requires get pods/log')
     expect(host.textContent).not.toContain("can't find")
+  })
+
+  it('uses the caller\'s empty message when there are no Pods', () => {
+    act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod={null} onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
+    expect(host.textContent).toContain('This RayCluster has no Pods right now.')
   })
 
   it('keeps the viewer for a Pod whose containers loaded even if a later refetch fails', () => {

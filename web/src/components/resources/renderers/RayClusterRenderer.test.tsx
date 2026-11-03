@@ -54,6 +54,9 @@ describe('RayCluster host evidence', () => {
   it('prefers a crashing application container over an unready native sidecar', () => {
     expect(logsContainer({ name: 'p', ready: false, containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 4 }] })).toBe('ray-worker')
   })
+  it('opens the application container of a finished Pod even when its native sidecar is unready', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('ray-worker')
+  })
   it('leaves the container choice to the viewer when statuses are not reported yet', () => {
     expect(logsContainer({ ...worker, containerStatuses: undefined })).toBeUndefined()
     expect(logsContainer({ name: 'p', ready: true, containers: ['main'], containerStatuses: [{ name: 'main', ready: true, restartCount: 0 }] })).toBe('main')
