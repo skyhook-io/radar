@@ -1187,6 +1187,8 @@ export function WorkloadView({
         olderHistoryError={historyFallback ? null : olderHistoryError}
         historyScoped={!historyFallback}
         historyIncomplete={!historyFallback && Boolean(historyQuery.data?.incomplete)}
+        historyCoverage={historyFallback ? undefined : historyQuery.data?.historyCoverage}
+        historyGaps={historyFallback ? undefined : historyQuery.data?.gaps}
         historyError={(historyFallback ? namespaceChanges.error : historyQuery.error) as Error | null}
         onRetryHistory={() => void (historyFallback ? namespaceChanges.refetch() : historyQuery.refetch())}
         relatedTimelineEvents={relatedTimelineEvents}
