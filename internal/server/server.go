@@ -1508,6 +1508,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,
+		RayClusterPods:           true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()

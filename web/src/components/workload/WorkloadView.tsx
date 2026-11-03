@@ -100,13 +100,14 @@ import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
-import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
+import { isRadarFeatureUnsupported, type RadarFeatureSupport } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
+import { PodLogsUnavailable } from '../logs/PodLogsUnavailable'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -144,6 +145,15 @@ const BATCH_EXECUTION_KINDS = new Set([
   'ScaledJob',
   'JobSet',
 ])
+
+// A KubeRay RayCluster has no root log route, and the generic Logs tab lists
+// Pods recalled from history, deleted ones included. Its renderer links each
+// verified head and worker Pod to that Pod's logs instead; a Radar too old to
+// list those Pods keeps the generic tab.
+export function rayClusterLogsOnPodRows(apiKind: string, group: string | undefined, apiVersion: string | undefined, podsSupport: RadarFeatureSupport): boolean {
+  if (apiKind !== 'rayclusters' || podsSupport === 'unsupported') return false
+  return apiVersion ? apiVersion === 'ray.io/v1' : group === 'ray.io'
+}
 
 export function supportsBatchExecution(kind: string, apiKind: string, group?: string, apiVersion?: string): boolean {
   if (!BATCH_EXECUTION_KINDS.has(kind)) return false
@@ -575,6 +585,7 @@ export function WorkloadView({
   // of itself. Fall back to the group derived from the fetched resource, then
   // to undefined (which the gate treats as "group unknown → allow").
   const effectiveGroup = rest.group || resourceGroup || undefined
+  const { support: rayClusterPodsSupport } = useRadarFeature('rayClusterPods')
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
@@ -1210,7 +1221,7 @@ export function WorkloadView({
         activeTab={migratedTab}
         onTabChange={handleTabChange}
         // Render props
-        renderLogsTab={(props) => (
+        renderLogsTab={rayClusterLogsOnPodRows(apiKind, effectiveGroup, resource?.apiVersion, rayClusterPodsSupport) ? undefined : (props) => (
           <LogsTabContent
             {...props}
             group={effectiveGroup}
@@ -1628,7 +1639,7 @@ function PodLogsTab({
   )
 }
 
-function MultiPodLogsTab({
+export function MultiPodLogsTab({
   pods,
   namespace,
   selectedPod,
@@ -1650,7 +1661,7 @@ function MultiPodLogsTab({
   const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
 
   // Fetch container list for the selected pod
-  const { data: logsData } = usePodLogs(podNamespace, selectedPod || '', {
+  const { data: logsData, error: containersError } = usePodLogs(podNamespace, selectedPod || '', {
     tailLines: 1,
   })
   const containers = logsData?.containers || []
@@ -1690,6 +1701,9 @@ function MultiPodLogsTab({
             </button>
           ))}
         </div>
+      )}
+      {selectedPod && containersError && !logsData && (
+        <PodLogsUnavailable podName={selectedPod} error={containersError} />
       )}
       {selectedPod && containers.length > 0 && (
         <div className="flex-1 min-h-0">

@@ -199,6 +199,7 @@ type FeatureCapabilities struct {
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
+	RayClusterPods           bool `json:"rayClusterPods"` // GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

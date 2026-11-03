@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react'
 import { Activity, Boxes, Server } from 'lucide-react'
 import type { ResourceRef, WorkloadPodInfo } from '../../../types'
+import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
+import { RadarUpgradeNote } from '../../ui/RadarUpgradeNote'
 import { apiVersionToGroup } from '../../../utils/navigation'
 import { Badge } from '../../ui/Badge'
 import { SelectMenu } from '../../ui/SelectMenu'
@@ -17,6 +19,9 @@ export interface RayClusterRendererProps {
   podsError?: string
   selection?: RayClusterPodSelection
   onSelectPods?: (selection: RayClusterPodSelection) => void
+  onOpenPodLogs?: (pod: WorkloadPodInfo) => void
+  /** The connected Radar can't list this RayCluster's Pods. */
+  podsUpgrade?: RadarUpgradeRequirement | null
 }
 
 export function rayClusterConditionTone(condition: any): ConditionTone {
@@ -27,7 +32,7 @@ export function rayClusterConditionTone(condition: any): ConditionTone {
   return 'unknown'
 }
 
-export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading, podsError, selection = {}, onSelectPods }: RayClusterRendererProps) {
+export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading, podsError, selection = {}, onSelectPods, onOpenPodLogs, podsUpgrade }: RayClusterRendererProps) {
   const [expanded, setExpanded] = useState(false)
   const podsRef = useRef<HTMLDivElement>(null)
   const status = data.status ?? {}
@@ -40,7 +45,7 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
   const owners = (data.metadata?.ownerReferences ?? []).filter((owner: any) => owner.controller === true && apiVersionToGroup(owner.apiVersion) === 'ray.io' && ['RayService', 'RayJob'].includes(owner.kind))
   const scope = selection.workerGroup != null ? `Worker group: ${selection.workerGroup}` : selection.nodeType === 'head' ? 'Head' : 'All runtime Pods'
   const select = (value: RayClusterPodSelection) => { setExpanded(false); onSelectPods?.(value) }
-  const row = (pod: WorkloadPodInfo) => <PodRow key={pod.name} name={pod.name} namespace={data.metadata.namespace} ready={pod.ready} healthLevel={pod.healthLevel} detail={workloadPodDetail(pod)} onNavigate={onNavigate} />
+  const row = (pod: WorkloadPodInfo) => <PodRow key={pod.name} name={pod.name} namespace={data.metadata.namespace} ready={pod.ready} healthLevel={pod.healthLevel} detail={workloadPodDetail(pod)} onNavigate={onNavigate} onOpenLogs={onOpenPodLogs && (() => onOpenPodLogs(pod))} logsUnavailable={pod.containerStatuses?.length ? undefined : 'No container has started yet'} />
   return <div className="space-y-4">
     {stale && <AlertBanner variant="info" title="Status describes an earlier generation" message={`Specification generation ${data.metadata.generation}; controller observed ${status.observedGeneration}. Counts and conditions below retain that observation.`} />}
     <Section variant="card" title="Runtime Health" icon={Activity} defaultExpanded>
@@ -63,8 +68,8 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
         value={selection.workerGroup != null ? `group:${selection.workerGroup}` : selection.nodeType === 'head' ? 'head' : 'all'}
         options={[{ value: 'all', label: 'All runtime Pods' }, { value: 'head', label: 'Head' }, ...groups.map((g: any) => ({ value: `group:${g.groupName}`, label: `Worker group: ${g.groupName}` }))]}
         onChange={value => select(value === 'all' ? {} : value === 'head' ? { nodeType: 'head' } : { nodeType: 'worker', workerGroup: value.slice(6) })} />
-      <p className="mb-2 text-xs text-theme-text-tertiary">Directly controlled by this RayCluster incarnation. Cleanup Job descendants are excluded. Open a Pod for logs.</p>
-      {podsError ? <AlertBanner variant="warning" title="Pod evidence unavailable" message={podsError} /> : podsLoading ? <p className="text-sm text-theme-text-secondary">Reading runtime Pods…</p> : podEvidence ? <>
+      <p className="mb-2 text-xs text-theme-text-tertiary">Directly controlled by this RayCluster incarnation. Cleanup Job descendants are excluded.{onOpenPodLogs ? ' Logs shows a Pod\'s container output while the Pod exists; Ray session logs under /tmp/ray stay inside the Pod.' : ''}</p>
+      {podsUpgrade ? <RadarUpgradeNote requirement={podsUpgrade} /> : podsError ? <AlertBanner variant="warning" title="Pod evidence unavailable" message={podsError} /> : podsLoading ? <p className="text-sm text-theme-text-secondary">Reading runtime Pods…</p> : podEvidence ? <>
         <p className="mb-2 text-sm text-theme-text-secondary">{scope} · {podEvidence.total} {podEvidence.total === 1 ? 'Pod' : 'Pods'}{podEvidence.truncated ? ` (showing ${podEvidence.pods.length}, failures first)` : ''}</p>
         {podEvidence.total === 0 && <p className="text-sm text-theme-text-secondary">No directly owned Pods in this scope.</p>}
         <PodListFrame expanded={expanded} hasOverflow={podEvidence.pods.length > 20} overflow={podEvidence.pods.slice(20).map(row)} toggle={<PodListToggle expanded={expanded} hiddenCount={podEvidence.pods.length - 20} label="Pods" onToggle={() => setExpanded(!expanded)} />}>{podEvidence.pods.slice(0,20).map(row)}</PodListFrame>
