@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { guardRadarFeature, radarFeatureSupport } from '../../api/radarFeatures'
 import { ApiError } from '../../api/client'
-import { ApplicationEvidenceAction } from './ApplicationEvidenceAction'
+import { ApplicationEvidenceAction, ApplicationEvidenceObservation } from './ApplicationEvidenceAction'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 
 vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: vi.fn().mockResolvedValue(true) }))
@@ -216,4 +216,19 @@ it('copies exact RabbitMQ bytes and identity without an additional collection re
   await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Copy observation')!.click())
   expect(JSON.parse(vi.mocked(copyText).mock.calls.at(-1)![0])).toEqual({ context: 'test-cluster', ...observation })
   expect(state.fetch).toHaveBeenCalledTimes(2)
+})
+
+it('keeps NATS progress collapsed until requested without changing the four-column count table', () => {
+  act(() => root.render(<ApplicationEvidenceObservation result={{ adapter: 'nats', target: { namespace: 'demo', pod: 'nats-0' }, observedAt: '2026-11-03T01:44:19Z', source: 'selected_pod_endpoint', outcome: 'observed', limitations: [], facts: { nats: { jetStreamEnabled: true, coverage: 'node_reported', returnedAccounts: 1, returnedStreams: 1, returnedConsumers: 1, truncated: false, consumers: [{ account: '$G', stream: 'events', name: 'worker', pending: 0, ackPending: 5, redelivered: 0, delivered: { consumerSequence: '5', streamSequence: '5' }, ackFloor: { consumerSequence: '0', streamSequence: '0' }, waitingPullRequests: 1 }] } } }} />))
+  const toggle = [...host.querySelectorAll('button')].find(item => item.textContent === 'Consumer progress')!
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(host.querySelectorAll('th')).toHaveLength(4)
+  act(() => toggle.click())
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  const details = document.getElementById(toggle.getAttribute('aria-controls')!)!
+  expect(details.textContent).toContain('Consumer seq 5 · Stream seq 5')
+  expect(details.textContent).toContain('Ack floorConsumer seq 0 · Stream seq 0')
+  expect(details.textContent).toContain('Waiting pull requests on this node1')
+  act(() => toggle.click())
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
 })
