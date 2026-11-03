@@ -208,6 +208,20 @@ export function getKueueWorkloadAdmittedBy(resource: any): string {
   return resource?.status?.admission?.clusterQueue || '-'
 }
 
+/**
+ * Whether Kueue holds this Workload in its pending queues, so asking its
+ * visibility API for the Workload's position can find it. Mirrors Go's
+ * schedulinginsight.KueueWorkloadAwaitingAdmission; both read
+ * pkg/schedulinginsight/testdata/kueue_awaiting_admission.json.
+ */
+export function isKueueWorkloadAwaitingAdmission(resource: any): boolean {
+  if (resource?.spec?.active === false) return false
+  const conditions: any[] = Array.isArray(resource?.status?.conditions) ? resource.status.conditions : []
+  const byType = new Map<string, any>()
+  for (const condition of conditions) if (condition?.type) byType.set(condition.type, condition)
+  return !['Finished', 'Admitted', 'QuotaReserved'].some(type => byType.get(type)?.status === 'True')
+}
+
 export function getKueueWorkloadPriority(resource: any): string {
   const priority = resource?.spec?.priority
   if (typeof priority === 'number') return String(priority)

@@ -19,6 +19,8 @@ const KUEUE_GROUP = 'kueue.x-k8s.io'
 interface KueueWorkloadRendererProps {
   data: any
   provisioning?: ReactNode
+  /** Kueue's reported pending position, supplied by the host (it reads the visibility API). */
+  pendingPosition?: ReactNode
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
@@ -60,7 +62,7 @@ function FlavorAssignments({ flavors, onNavigate }: { flavors: any; onNavigate?:
   )
 }
 
-export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueWorkloadRendererProps) {
+export function KueueWorkloadRenderer({ data, onNavigate, provisioning, pendingPosition }: KueueWorkloadRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const namespace = data.metadata?.namespace || ''
@@ -98,6 +100,7 @@ export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueW
       <Section title="Admission" icon={Gauge} defaultExpanded>
         <PropertyList>
           <Property label="Reported State" value={<Badge colorClass={stale ? undefined : workloadStatus.color} severity={stale ? 'neutral' : undefined}>{workloadStatus.text}</Badge>} />
+          {pendingPosition && <Property label="Queue Position" value={pendingPosition} />}
           <Property
             label="Local Queue"
             value={

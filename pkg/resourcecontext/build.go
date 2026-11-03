@@ -2082,6 +2082,7 @@ func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac 
 		}
 		out.PodSetAssignments = append(out.PodSetAssignments, filteredAssignment)
 	}
+	out.PendingPosition = scheduling.PendingPosition.Clone()
 	return &out
 }
 

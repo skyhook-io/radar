@@ -1,8 +1,9 @@
 import { Boxes } from 'lucide-react'
 import { KueueWorkloadRenderer as BaseRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/KueueWorkloadRenderer'
-import { getProvisioningRequestStatus, getProvisioningRequestMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
+import { getProvisioningRequestStatus, getProvisioningRequestMessage, isKueueWorkloadAwaitingAdmission } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
 import { Badge, ResourceLink, Section, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { useKueueProvisioning } from '../../../api/client'
+import { KueuePendingPosition } from '../../kueue/KueuePendingPosition'
 
 export function KueueWorkloadRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
   const namespace = data.metadata?.namespace ?? ''
@@ -33,5 +34,8 @@ export function KueueWorkloadRenderer({ data, onNavigate }: { data: any; onNavig
                 {current.truncated && <p className="text-xs text-theme-text-tertiary">Showing {current.requests.length} of {current.total} retained requests, newest first.</p>}
               </div>}
     </Section> : undefined
-  return <BaseRenderer data={data} onNavigate={onNavigate} provisioning={provisioning} />
+  const pendingPosition = isKueueWorkloadAwaitingAdmission(data)
+    ? <KueuePendingPosition namespace={namespace} name={data.metadata?.name ?? ''} uid={uid} queueName={data.spec?.queueName} requeueAt={data.status?.requeueState?.requeueAt} />
+    : undefined
+  return <BaseRenderer data={data} onNavigate={onNavigate} provisioning={provisioning} pendingPosition={pendingPosition} />
 }
