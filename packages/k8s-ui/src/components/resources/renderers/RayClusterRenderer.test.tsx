@@ -30,17 +30,25 @@ it('distinguishes unreported counters and humanizes the API default bound', () =
 
 describe('RayCluster Pod log links', () => {
   const started = (name: string) => [{ name, ready: true, restartCount: 0 }]
-  const evidence = { pods: [{ name: 'cluster-head-abc', ready: true, containers: ['ray-head'], containerStatuses: started('ray-head') }, { name: 'cluster-cpu-worker-def', ready: false, containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: started('ray-worker') }, { name: 'cluster-cpu-worker-new', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }], total: 3, truncated: false }
+  const evidence = { pods: [{ name: 'cluster-head-abc', ready: true, containers: ['ray-head'], containerStatuses: started('ray-head') }, { name: 'cluster-cpu-worker-def', ready: false, containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: started('ray-worker') }, { name: 'cluster-cpu-worker-new', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, { name: 'cluster-cpu-worker-bound', ready: false, nodeName: 'node-a', containers: ['ray-worker'] }], total: 4, truncated: false }
   it('offers logs on each verified Pod only when the host can open them', () => {
     const withLogs = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={() => {}} />)
     expect(withLogs).toContain('Open logs for cluster-head-abc'); expect(withLogs).toContain('Open logs for cluster-cpu-worker-def')
-    expect(withLogs).toContain('container output while the Pod exists'); expect(withLogs).toContain('/tmp/ray')
+    expect(withLogs).toContain('gone once the Pod is deleted'); expect(withLogs).toContain('/tmp/ray')
     const without = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} />)
     expect(without).not.toContain('logs for'); expect(without).not.toContain('/tmp/ray')
   })
-  it('does not offer logs for a Pod whose containers have not started', () => {
-    const html = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={() => {}} />)
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Logs for cluster-cpu-worker-new: No container has started yet"/)
+  it('says why a Pod with no reported container status has no logs, and keeps that button focusable', () => {
+    const opened: string[] = []
+    const host = document.createElement('div')
+    const view = createRoot(host)
+    act(() => view.render(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={pod => opened.push(pod.name)} />))
+    const unscheduled = host.querySelector<HTMLButtonElement>('[aria-label="Logs for cluster-cpu-worker-new: Not scheduled yet"]')!
+    expect(unscheduled.getAttribute('aria-disabled')).toBe('true'); expect(unscheduled.disabled).toBe(false)
+    expect(host.querySelector('[aria-label="Logs for cluster-cpu-worker-bound: No container status reported yet"]')).not.toBeNull()
+    act(() => unscheduled.click())
+    expect(opened).toEqual([])
+    act(() => view.unmount())
   })
   it('opens the clicked row\'s Pod', () => {
     const opened: string[] = []

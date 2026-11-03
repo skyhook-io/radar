@@ -22,15 +22,20 @@ function RayClusterEvidence({ data, onNavigate }: { data: any; onNavigate?: (ref
     namespace: data.metadata.namespace,
     podName: pod.name,
     containers: pod.containers,
-    containerName: firstAppContainer(pod),
+    containerName: logsContainer(pod),
   })
   return <BaseRenderer data={data} onNavigate={onNavigate} selection={selection} onSelectPods={setSelection} podEvidence={query.data} podsLoading={query.isLoading} podsError={query.error?.message} onOpenPodLogs={canViewLogs ? openPodLogs : undefined} podsUpgrade={support === 'unsupported' ? upgrade : null} />
 }
 
 // Pod container lists put init containers first; only reported statuses say
-// which ones they are, so without them the viewer keeps its own default.
-export function firstAppContainer(pod: WorkloadPodInfo): string | undefined {
-  if (!pod.containerStatuses?.length) return undefined
-  const init = new Set(pod.containerStatuses.filter(status => status.init).map(status => status.name))
+// which ones they are, so without them the viewer keeps its own default. An
+// unready init container is still running or has failed (a worker waiting on
+// the head's GCS sits in KubeRay's wait-gcs-ready), so its output comes first.
+export function logsContainer(pod: WorkloadPodInfo): string | undefined {
+  const statuses = pod.containerStatuses ?? []
+  if (!statuses.length) return undefined
+  const blockingInit = pod.containers.find(name => statuses.some(status => status.init && status.name === name && !status.ready))
+  if (blockingInit) return blockingInit
+  const init = new Set(statuses.filter(status => status.init).map(status => status.name))
   return pod.containers.find(name => !init.has(name))
 }

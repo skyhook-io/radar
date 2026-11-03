@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { RayClusterRenderer, firstAppContainer } from './RayClusterRenderer'
+import { RayClusterRenderer, logsContainer } from './RayClusterRenderer'
 const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewLogs: true, opened: [] as any[], support: 'supported' as string }))
 vi.mock('../../../api/client', () => ({
   useWorkloadPods: (...args: any[]) => { mock.calls.push(args); return mock.result },
@@ -45,11 +45,14 @@ describe('RayCluster host evidence', () => {
     expect(mock.calls[0][2]).toBe('')
     expect(html).toContain('RayCluster runtime Pods'); expect(html).toContain('v1.15')
   })
-  it('opens a multi-init, sidecar Pod on its first application container', () => {
-    expect(firstAppContainer({ name: 'p', ready: true, containers: ['init-a', 'init-b', 'ray-worker', 'log-shipper'], containerStatuses: [{ name: 'init-a', init: true, ready: true, restartCount: 0 }, { name: 'init-b', init: true, ready: false, restartCount: 0 }] })).toBe('ray-worker')
+  it('opens a Pod whose init containers finished on its first application container, past sidecars', () => {
+    expect(logsContainer({ name: 'p', ready: true, containers: ['init-a', 'init-b', 'ray-worker', 'log-shipper'], containerStatuses: [{ name: 'init-a', init: true, ready: true, restartCount: 0 }, { name: 'init-b', init: true, ready: true, restartCount: 0 }] })).toBe('ray-worker')
+  })
+  it('opens a worker stuck waiting on the head in its running init container', () => {
+    expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [{ name: 'wait-gcs-ready', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('wait-gcs-ready')
   })
   it('leaves the container choice to the viewer when statuses are not reported yet', () => {
-    expect(firstAppContainer({ ...worker, containerStatuses: undefined })).toBeUndefined()
-    expect(firstAppContainer({ name: 'p', ready: true, containers: ['main'], containerStatuses: [{ name: 'main', ready: true, restartCount: 0 }] })).toBe('main')
+    expect(logsContainer({ ...worker, containerStatuses: undefined })).toBeUndefined()
+    expect(logsContainer({ name: 'p', ready: true, containers: ['main'], containerStatuses: [{ name: 'main', ready: true, restartCount: 0 }] })).toBe('main')
   })
 })

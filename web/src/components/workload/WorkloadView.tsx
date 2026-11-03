@@ -148,11 +148,16 @@ const BATCH_EXECUTION_KINDS = new Set([
 
 // A KubeRay RayCluster has no root log route, and the generic Logs tab lists
 // Pods recalled from history, deleted ones included. Its renderer links each
-// verified head and worker Pod to that Pod's logs instead; a Radar too old to
-// list those Pods keeps the generic tab.
+// verified head and worker Pod to that Pod's logs instead. Until the connected
+// Radar is known to list those Pods, the generic tab stays.
 export function rayClusterLogsOnPodRows(apiKind: string, group: string | undefined, apiVersion: string | undefined, podsSupport: RadarFeatureSupport): boolean {
-  if (apiKind !== 'rayclusters' || podsSupport === 'unsupported') return false
+  if (apiKind !== 'rayclusters' || podsSupport !== 'supported') return false
   return apiVersion ? apiVersion === 'ray.io/v1' : group === 'ray.io'
+}
+
+export function useRayClusterLogsOnPodRows(apiKind: string, group: string | undefined, apiVersion: string | undefined): boolean {
+  const { support } = useRadarFeature('rayClusterPods')
+  return rayClusterLogsOnPodRows(apiKind, group, apiVersion, support)
 }
 
 export function supportsBatchExecution(kind: string, apiKind: string, group?: string, apiVersion?: string): boolean {
@@ -585,7 +590,7 @@ export function WorkloadView({
   // of itself. Fall back to the group derived from the fetched resource, then
   // to undefined (which the gate treats as "group unknown → allow").
   const effectiveGroup = rest.group || resourceGroup || undefined
-  const { support: rayClusterPodsSupport } = useRadarFeature('rayClusterPods')
+  const rayClusterLogsOnRows = useRayClusterLogsOnPodRows(apiKind, effectiveGroup, resource?.apiVersion)
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
@@ -1221,7 +1226,7 @@ export function WorkloadView({
         activeTab={migratedTab}
         onTabChange={handleTabChange}
         // Render props
-        renderLogsTab={rayClusterLogsOnPodRows(apiKind, effectiveGroup, resource?.apiVersion, rayClusterPodsSupport) ? undefined : (props) => (
+        renderLogsTab={rayClusterLogsOnRows ? undefined : (props) => (
           <LogsTabContent
             {...props}
             group={effectiveGroup}

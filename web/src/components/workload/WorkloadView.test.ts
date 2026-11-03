@@ -88,7 +88,11 @@ describe('collectServingRefs', () => {
 describe('rayClusterLogsOnPodRows', () => {
   it('moves a KubeRay RayCluster\'s logs to its verified Pod rows', () => {
     expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', 'ray.io/v1', 'supported')).toBe(true)
-    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', undefined, 'unknown')).toBe(true)
+    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', undefined, 'supported')).toBe(true)
+  })
+
+  it('keeps the generic tab until the connected Radar is known to list RayCluster Pods', () => {
+    expect(rayClusterLogsOnPodRows('rayclusters', 'ray.io', 'ray.io/v1', 'unknown')).toBe(false)
   })
 
   it('keeps the generic tab where the replacement does not apply', () => {

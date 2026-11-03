@@ -1796,12 +1796,15 @@ that owned-Pod list. Missing access, cache warming and recreated roots are expli
 no RayCluster-wide log stream or lifecycle actions are added.
 
 Logs are read per Pod: each listed Pod has a Logs button (when the namespace
-allows `pods/log`) that opens that Pod's container output in the log dock, on its
-first non-init container. A RayCluster has no Logs tab, because the generic tab
-would list Pods recalled from history, including deleted ones. Container output is
-all Radar reads; Ray session logs under `/tmp/ray` stay inside the Pod, and nothing
-is kept once a Pod is deleted. A Radar older than v1.15, which cannot list the
-RayCluster's Pods, shows an upgrade note in their place and keeps the generic tab.
+allows `pods/log`) that opens that Pod's container output in the log dock. It
+opens an init container that is still running or has failed (a worker waiting on
+the head sits in KubeRay's `wait-gcs-ready`), otherwise the first application
+container. A `ray.io/v1` RayCluster has no Logs tab, because the generic tab would
+list Pods recalled from history, including deleted ones. Container output is all
+Radar reads; Ray session logs under `/tmp/ray` are not read, and nothing is kept
+once a Pod is deleted. A Radar older than v1.15, which cannot list the
+RayCluster's Pods, shows an upgrade note in their place; until the connected Radar
+is known to list them, the generic tab stays.
 
 RayJob detail separates the controller lifecycle from the last reported application
 state, with links to the runtime RayCluster and a UID-verified submitter Job for

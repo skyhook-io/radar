@@ -61,11 +61,11 @@ export function PodRow({
       <div className="min-w-0 flex-1">{row}</div>
       <button
         type="button"
-        onClick={onOpenLogs}
-        disabled={Boolean(logsUnavailable)}
+        onClick={logsUnavailable ? undefined : onOpenLogs}
+        aria-disabled={logsUnavailable ? true : undefined}
         aria-label={logsUnavailable ? `Logs for ${name}: ${logsUnavailable}` : `Open logs for ${name}`}
         title={logsUnavailable}
-        className="btn-secondary inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium disabled:cursor-not-allowed"
+        className={clsx('btn-secondary inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium', logsUnavailable && 'cursor-not-allowed opacity-50')}
       >
         <Terminal className="h-3.5 w-3.5" />
         Logs
