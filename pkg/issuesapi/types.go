@@ -42,6 +42,9 @@ const (
 	CategoryUnschedulable            Category = "unschedulable"
 	CategoryQuotaExceeded            Category = "quota_exceeded"
 	CategoryAdmissionWebhookBlocking Category = "admission_webhook_blocking"
+	// CategoryQueueAdmissionBlocked is a batch run a queueing controller
+	// (Kueue) will not admit as configured, or a queue that admits nothing.
+	CategoryQueueAdmissionBlocked Category = "queue_admission_blocked"
 
 	CategoryImagePullFailed     Category = "image_pull_failed"
 	CategoryContainerWaiting    Category = "container_waiting"
@@ -56,6 +59,10 @@ const (
 	CategoryPodEvicted        Category = "pod_evicted"
 	CategoryJobFailed         Category = "job_failed"
 	CategoryCronJobFailed     Category = "cronjob_failed"
+	// CategoryBatchRunStopped is a batch run its queueing controller stopped
+	// trying: too many requeues, or past its maximum execution time. It does
+	// not establish that the run's Pods ever ran.
+	CategoryBatchRunStopped Category = "batch_run_stopped"
 
 	CategoryMissingConfigRef         Category = "missing_config_ref"
 	CategoryInvalidConfiguration     Category = "invalid_configuration"
@@ -127,6 +134,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryUnschedulable:            GroupScheduling,
 	CategoryQuotaExceeded:            GroupScheduling,
 	CategoryAdmissionWebhookBlocking: GroupScheduling,
+	CategoryQueueAdmissionBlocked:    GroupScheduling,
 	CategoryImagePullFailed:          GroupStartup,
 	CategoryContainerWaiting:         GroupStartup,
 	CategoryInitContainerFailed:      GroupStartup,
@@ -139,6 +147,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPodEvicted:               GroupRuntime,
 	CategoryJobFailed:                GroupRuntime,
 	CategoryCronJobFailed:            GroupRuntime,
+	CategoryBatchRunStopped:          GroupRuntime,
 	CategoryMissingConfigRef:         GroupConfiguration,
 	CategoryInvalidConfiguration:     GroupConfiguration,
 	CategoryPDBBlocksEvictions:       GroupConfiguration,
@@ -276,7 +285,7 @@ type IncidentParent struct {
 	Ref        Ref        `json:"ref"` // parent subject, for display + deep-link
 	Category   Category   `json:"category,omitempty"`
 	Confidence Confidence `json:"confidence,omitempty"`
-	FactType   string     `json:"fact_type,omitempty"` // node_blast_radius | pvc_blast_radius | apiservice_hpa | secret_not_ready
+	FactType   string     `json:"fact_type,omitempty"` // the diagnostic fact type that establishes the link; an open vocabulary (e.g. pvc_blast_radius, kueue_queue)
 }
 
 type IssueRef struct {
@@ -791,16 +800,23 @@ func (c *ClusterScopedChanges) Informative() bool {
 type UncheckedSource struct {
 	Source UncheckedSourceName `json:"source"`
 	Reason UncheckedReason     `json:"reason"`
-	// Kinds names the kinds within the source that went unchecked. Absent
+	// Kinds names the kinds within the source that couldn't be read or
+	// checked. Findings on other resources that depend on them (a run whose
+	// queue is one of them) may be missing too. Absent
 	// means the whole source, or that Radar can't tell which kinds.
 	Kinds []UncheckedKind `json:"kinds,omitempty"`
 	// Namespaces names the namespaces whose read failed when the source was
 	// read in the others, so issues outside them are complete. Absent means
 	// the gap is not limited to particular namespaces.
 	Namespaces []string `json:"namespaces,omitempty"`
+	// Subjects are resources whose own issues this gap may hide, when a
+	// check knows them. They supplement kind-wide inventory gaps when
+	// entries merge; they do not narrow those gaps. Never serialized.
+	Subjects []Ref `json:"-"`
 }
 
-// UncheckedKind is a resource kind whose issues went unchecked.
+// UncheckedKind is a resource kind that couldn't be read or checked as input
+// to an issue source.
 type UncheckedKind struct {
 	Group string `json:"group,omitempty"`
 	Kind  string `json:"kind"`
@@ -824,6 +840,9 @@ const (
 	// UncheckedSourceKarpenter is the Karpenter NodePool, NodeClass and
 	// NodeClaim checks.
 	UncheckedSourceKarpenter UncheckedSourceName = "karpenter"
+	// UncheckedSourceKueue is the Kueue checks: runs Kueue will not admit or
+	// stopped, and LocalQueues and ClusterQueues that admit nothing.
+	UncheckedSourceKueue UncheckedSourceName = "kueue"
 )
 
 type UncheckedReason string
@@ -841,6 +860,10 @@ const (
 	// identity, such as a ServiceAccount that may not impersonate the
 	// caller. Granting the caller more access does not help.
 	UncheckedReasonCollectorAccessDenied UncheckedReason = "collector_access_denied"
+	// UncheckedReasonCallerAccessDenied: the check needs kinds the caller may
+	// not read, so Radar does not answer it for them. Radar's other answers
+	// are unaffected.
+	UncheckedReasonCallerAccessDenied UncheckedReason = "caller_access_denied"
 )
 
 type BindingType string

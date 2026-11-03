@@ -274,8 +274,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Main uses 67,317 bytes; application evidence adds 864 and Strimzi
 		// routing adds 208. Kueue admission's headline and uncertainty contract adds
-		// 213. Preserve main's 33-byte headroom.
-		maxCatalogBytes         = 68635
+		// 213. Batch diagnosis routing and its explicit collection/log-argument
+		// boundaries add 407. Preserve main's 33-byte headroom.
+		maxCatalogBytes         = 69042
 		maxToolDescriptionBytes = 3200
 	)
 
