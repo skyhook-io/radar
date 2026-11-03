@@ -175,7 +175,7 @@ func workloadDecision(conditions map[string]workloadCondition, inactive, hasInco
 	if inactive || isOnHold(conditions) {
 		return resourcecontext.SchedulingDecisionHeld
 	}
-	if _, blocked := trueCondition(conditions, "BlockedOnPreemptionGates"); blocked {
+	if preemptionGateIsCurrent(conditions) {
 		return resourcecontext.SchedulingDecisionUnsatisfied
 	}
 	if admissionGatedByController {

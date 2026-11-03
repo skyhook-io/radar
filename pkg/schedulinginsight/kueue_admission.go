@@ -73,8 +73,10 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 // the current attempt. Kueue writes it together with QuotaReserved (v0.18
 // with the same message, v0.19 with QuotaReserved reason AdmissionGated) and
 // leaves it True after later attempts rewrite QuotaReserved for another
-// reason. With AdmissionGated it outranks the admission-gated-by annotation,
-// matching workloadDecision.
+// reason, including an external admission gate, which Kueue also reports as
+// AdmissionGated but with its own message.
+const externalAdmissionGateMessage = "Admission is gated by"
+
 func preemptionGateIsCurrent(conditions map[string]workloadCondition) bool {
 	gate, ok := trueCondition(conditions, "BlockedOnPreemptionGates")
 	if !ok {
@@ -85,7 +87,7 @@ func preemptionGateIsCurrent(conditions map[string]workloadCondition) bool {
 		return false
 	}
 	return quota.Reason == "PreemptionGated" || gate.Message == quota.Message ||
-		quota.Reason == "AdmissionGated"
+		(quota.Reason == "AdmissionGated" && !strings.HasPrefix(quota.Message, externalAdmissionGateMessage))
 }
 
 // uninformativeBlocker is what Kueue writes into QuotaReserved right after an
@@ -305,21 +307,24 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 var (
 	unusedQuotaClause = regexp.MustCompile(`insufficient unused quota for \S+ in flavor (\S+?),`)
 	maxQuotaClause    = regexp.MustCompile(`insufficient quota for \S+ in flavor (\S+?),`)
-	taintClause       = regexp.MustCompile(`untolerated taint .*? in flavor (\S+?)(?:,|$)`)
-	affinityClause    = regexp.MustCompile(`flavor (\S+) doesn't match node affinity`)
+	mismatchClauses   = []*regexp.Regexp{
+		regexp.MustCompile(`untolerated taint .*? in flavor (\S+?)(?:,|$)`),
+		regexp.MustCompile(`flavor (\S+) doesn't match node affinity`),
+		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not support TopologyAwareScheduling`),
+	}
 )
 
 // flavorAssignmentCode reads a scheduler flavor-assignment message: one
 // "couldn't assign flavors to pod set" segment per PodSet that did not fit,
 // listing clauses per flavor and resource. A flavor could fit later only if
-// its only clauses are about unused quota; a resource over the maximum or a
-// taint or affinity mismatch rules that flavor out. Every PodSet must fit, so
-// one PodSet with no flavor that could fit later decides the code.
+// its only clauses are about unused quota; a resource over the maximum, a
+// taint, affinity or topology mismatch rules that flavor out. Every PodSet
+// must fit, so one PodSet with no flavor that could fit later decides the
+// code, and a PodSet whose clauses are not recognized leaves it undecided
+// rather than letting another PodSet's quota wait stand for it.
 func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
-	segments := strings.Split(message, "; couldn't assign flavors to pod set ")
-	sawQuota, sawFlavorMismatch := false, false
-	neverFits := rc.KueueAdmissionCode("")
-	for _, segment := range segments {
+	neverFits, undecided := rc.KueueAdmissionCode(""), false
+	for _, segment := range strings.Split(message, "; couldn't assign flavors to pod set ") {
 		waiting := map[string]bool{}
 		for _, match := range unusedQuotaClause.FindAllStringSubmatch(segment, -1) {
 			waiting[match[1]] = true
@@ -330,13 +335,11 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 			ruledOut[match[1]], exceeded = true, true
 		}
 		mismatch := strings.Contains(segment, "unavailable in ClusterQueue")
-		for _, pattern := range []*regexp.Regexp{taintClause, affinityClause} {
+		for _, pattern := range mismatchClauses {
 			for _, match := range pattern.FindAllStringSubmatch(segment, -1) {
 				ruledOut[match[1]], mismatch = true, true
 			}
 		}
-		sawQuota = sawQuota || exceeded || len(waiting) > 0
-		sawFlavorMismatch = sawFlavorMismatch || mismatch
 		couldFit := false
 		for flavor := range waiting {
 			couldFit = couldFit || !ruledOut[flavor]
@@ -345,19 +348,21 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 		case couldFit:
 		case exceeded:
 			neverFits = rc.KueueAdmissionExceedsQuota
-		case mismatch && neverFits == "":
-			neverFits = rc.KueueAdmissionNoMatchingFlavor
+		case mismatch:
+			if neverFits == "" {
+				neverFits = rc.KueueAdmissionNoMatchingFlavor
+			}
+		default:
+			undecided = true
 		}
 	}
 	switch {
 	case neverFits != "":
 		return neverFits
-	case sawQuota:
-		return rc.KueueAdmissionInsufficientQuota
-	case sawFlavorMismatch:
-		return rc.KueueAdmissionNoMatchingFlavor
+	case undecided:
+		return ""
 	}
-	return ""
+	return rc.KueueAdmissionInsufficientQuota
 }
 
 func queueMessageCode(message string, missing, inactive rc.KueueAdmissionCode) rc.KueueAdmissionCode {

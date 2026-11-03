@@ -1844,13 +1844,15 @@ are what to show. Rules that keep the axes honest:
   `PendingEvaluation` for failed checks) carry the cause in their message,
   which is matched against Kueue's own wording. A flavor-assignment message
   reads `insufficient_quota` only when every PodSet has a flavor whose only
-  problem is unused quota; a request over the maximum, a taint or an affinity
-  mismatch rules a flavor out.
+  problem is unused quota; a request over the maximum or a taint, affinity or
+  topology mismatch rules a flavor out, and a PodSet whose failure Radar does
+  not recognize leaves the blocker `unrecognized`.
 - `BlockedOnPreemptionGates=True` is the blocker only while it explains the
-  current `QuotaReserved` (same message, or reason `PreemptionGated` /
-  `AdmissionGated`): later scheduling attempts rewrite `QuotaReserved` but leave
-  the gate condition set. The projection's primary condition follows the same
-  rule.
+  current `QuotaReserved` (same message, reason `PreemptionGated`, or
+  `AdmissionGated` without the external gate's "Admission is gated by"
+  message): later attempts, including an external admission gate, rewrite
+  `QuotaReserved` but leave the gate condition set. The projection's primary
+  condition and decision follow the same rule.
 - `Evicted` and `Preempted` reset to `False` ("Previously: …") at the next quota
   reservation, so an old failure after recovery is not a disruption.
 

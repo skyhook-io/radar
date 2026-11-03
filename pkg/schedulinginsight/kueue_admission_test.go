@@ -272,6 +272,35 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionNoMatchingFlavor,
 		},
 		{
+			name: "an unrecognized PodSet failure is not covered by another PodSet's quota wait",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set driver: insufficient unused quota for cpu in flavor default, 1 more needed; couldn't assign flavors to pod set workers: something Kueue adds later")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionUnrecognized,
+			blocker: rc.KueueAdmissionUnrecognized,
+		},
+		{
+			name: "a flavor without topology support is ruled out",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				`couldn't assign flavors to pod set driver: insufficient unused quota for cpu in flavor default, 1 more needed; couldn't assign flavors to pod set workers: Flavor "default" does not support TopologyAwareScheduling`)}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoMatchingFlavor,
+			blocker: rc.KueueAdmissionNoMatchingFlavor,
+		},
+		{
+			name: "an external admission gate after a lingering preemption gate",
+			spec: workloadSpec{
+				annotations: map[string]string{admissionGatedByAnnotation: "example.com/gate"},
+				conditions: []condition{
+					pending("AdmissionGated", "Admission is gated by: example.com/gate"),
+					{kind: "BlockedOnPreemptionGates", status: "True", reason: "PreemptionGated", message: legacyUnusedQuota},
+				},
+			},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionAdmissionGated,
+			blocker: rc.KueueAdmissionAdmissionGated,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
@@ -850,6 +879,18 @@ func TestClassifyKueueWorkloadRejectsOtherObjects(t *testing.T) {
 }
 
 func TestPrimaryConditionFollowsTheCurrentAttempt(t *testing.T) {
+	externallyGated := buildWorkload(workloadSpec{
+		annotations: map[string]string{admissionGatedByAnnotation: "example.com/gate"},
+		conditions: []condition{
+			pending("AdmissionGated", "Admission is gated by: example.com/gate"),
+			{kind: "BlockedOnPreemptionGates", status: "True", reason: "PreemptionGated", message: legacyUnusedQuota},
+		},
+	})
+	observation := onlyObservation(t, ForResource(externallyGated, rc.TierBasic))
+	if observation.PrimaryCondition == nil || observation.PrimaryCondition.Type != "QuotaReserved" || observation.Decision != rc.SchedulingDecisionHeld {
+		t.Fatalf("external gate hidden by a lingering preemption gate: decision=%s primary=%+v", observation.Decision, observation.PrimaryCondition)
+	}
+
 	lingering := buildWorkload(workloadSpec{conditions: []condition{
 		pending("Inadmissible", "LocalQueue gpu doesn't exist"),
 		{kind: "BlockedOnPreemptionGates", status: "True", reason: "PreemptionGated", message: legacyUnusedQuota},
