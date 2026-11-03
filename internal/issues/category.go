@@ -78,6 +78,8 @@ func Classify(in classifyInput) issuesapi.Category {
 
 	case SourceCondition:
 		switch in.Reason {
+		case ReasonCertificateRenewalFailed:
+			return issuesapi.CategoryCertificateRenewalFailed
 		case ReasonKarpenterNodePoolNotReady,
 			ReasonKarpenterNodeClassNotReady,
 			ReasonKarpenterNodeClassNotFound,

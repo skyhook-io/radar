@@ -606,6 +606,8 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 - Subject, DNS names, issuer reference
 - Renewal time and last failure
 
+**Renewal failures:** Issues and AI issue context warn when cert-manager reports a failed issuance after the scheduled renewal time while the existing certificate is still reported Ready. The finding includes the latest failure time and controller error, expiration and whether a retry is in progress; successful issuance clears it. It remains visible and becomes critical if the recorded validity expires before the Ready condition changes; it does not establish a live TLS outage. Detection uses current-generation Certificate status only, without reading Secret values. Disabled renewal, early reissuance failures, stale or incomplete status, and stalled attempts without a reported failure are not covered.
+
 **Dashboard:** Certificate health card showing healthy/warning/critical/expired certificate counts across all namespaces.
 
 **TLS Secret Parsing:** Click any TLS Secret to see the X.509 certificate details — subject, issuer, validity dates, SANs — parsed directly from the secret data.
