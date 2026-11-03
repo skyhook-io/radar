@@ -115,12 +115,14 @@ describe('Kueue admission investigation', () => {
     expect(current).not.toContain('Last reported')
   })
 
-  it('shows the evidence behind the state when the primary condition does not say it', () => {
-    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'QuotaReserved' }, kueue: { phase: 'quota_reserved', admission: { state: 'admission_check_rejected', attention: 'action_needed', blocker: { code: 'admission_check_rejected', source: 'admission_check', name: 'capacity', reason: 'Rejected', message: 'Provisioning request cannot satisfy this workload' } } } }))
-    expect(html).toContain('Admission check rejected')
-    expect(html).toContain('Admission check capacity · Rejected: Provisioning request cannot satisfy this workload')
-    const same = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Inadmissible', message: "LocalQueue gpu doesn't exist" }, kueue: { phase: 'pending', admission: { state: 'local_queue_missing', attention: 'action_needed', blocker: { code: 'local_queue_missing', source: 'condition', name: 'QuotaReserved', reason: 'Inadmissible', message: "LocalQueue gpu doesn't exist" } } } }))
-    expect(same.match(/LocalQueue gpu doesn&#x27;t exist/g)).toHaveLength(1)
+  it('shows the condition behind the state only when nothing else on the card says it', () => {
+    const backoff = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'couldn\'t assign flavors' }, kueue: { phase: 'pending', admission: { state: 'requeue_backoff', attention: 'waiting', blocker: { code: 'requeue_backoff', source: 'condition', name: 'Requeued', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
+    expect(backoff).toContain('Requeued · PodsReadyTimeout: Exceeded the PodsReady timeout')
+    const sameMessage = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'The workload is deactivated due to a rejected check' }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated_by_kueue', attention: 'action_needed', inactive: { code: 'deactivated_by_kueue', source: 'condition', name: 'Evicted', reason: 'DeactivatedDueToAdmissionCheck', message: 'The workload is deactivated due to a rejected check' } } } }))
+    expect(sameMessage.match(/deactivated due to a rejected check/g)).toHaveLength(1)
+    const check = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'QuotaReserved' }, kueue: { phase: 'quota_reserved', admission: { state: 'admission_check_rejected', attention: 'action_needed', blocker: { code: 'admission_check_rejected', source: 'admission_check', name: 'capacity', reason: 'Rejected', message: 'Provisioning request cannot satisfy this workload' } } } }))
+    expect(check).toContain('Admission check rejected')
+    expect(check).not.toContain('capacity · Rejected')
   })
 
   it('lets the classified state carry the tone instead of a warning phase badge', () => {

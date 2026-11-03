@@ -123,10 +123,10 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const uncertainDeactivation = admission?.state === 'deactivated' && !!admission.inactive && admission.inactive.source !== 'spec'
   const reason = admission && (!phaseStates.has(admission.state) || uncertainDeactivation) ? kueueAdmissionStatePresentation(admission) : null
   const unrecognizedReason = admission?.state === 'unrecognized' ? admission.blocker?.reason : undefined
-  // Show the evidence behind the state when the primary condition below does
-  // not already say it (a check, backoff, or Kueue's deactivation cause).
+  // Show the condition behind the state when nothing else on the card says
+  // it: backoff or Kueue's deactivation cause. Checks have their own card.
   const decidingFact = admission && [admission.inactive, admission.blocker, admission.disruption].find((fact) => fact?.code === admission.state)
-  const factEvidence = reason && decidingFact && decidingFact.source !== 'spec' && !(decidingFact.source === 'condition' && decidingFact.name === condition?.type)
+  const factEvidence = reason && decidingFact?.source === 'condition' && decidingFact.name !== condition?.type && decidingFact.message !== condition?.message
     ? decidingFact : undefined
   const qualifier = admission ? null : observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
@@ -147,7 +147,7 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
         {stale && (admission
           ? <p className="text-xs text-warning-text">Last reported for an earlier generation of this Workload; not confirmed for its current spec (generation {observation.subjectGeneration}).</p>
           : <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>)}
-        {factEvidence && <p className="max-w-3xl whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{factEvidence.source === 'admission_check' ? `Admission check ${factEvidence.name}` : factEvidence.name}{factEvidence.reason && ` · ${factEvidence.reason}`}{factEvidence.message && `: ${factEvidence.message}`}</p>}
+        {factEvidence && <p className="max-w-3xl whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{factEvidence.name}{factEvidence.reason && ` · ${factEvidence.reason}`}{factEvidence.message && `: ${factEvidence.message}`}</p>}
         {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
         {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
       <div className="empty:hidden flex flex-wrap gap-x-5 gap-y-2 border-t border-theme-border pt-2 text-xs text-theme-text-secondary">
