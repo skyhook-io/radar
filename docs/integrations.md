@@ -1771,6 +1771,77 @@ LocalQueue's own report. A
 consumer of the k8s-ui renderers that doesn't inject these reads shows the names
 without read state.
 
+#### Workloads in a queue
+
+ClusterQueue and LocalQueue detail list the Workloads that belong to the
+queue, from `GET /api/kueue/clusterqueues/{name}/workloads` and
+`GET /api/kueue/localqueues/{namespace}/{name}/workloads`
+(`internal/server/kueue_queue_workloads.go`, membership rules in
+`internal/kueuequeues`). A Workload belongs to a ClusterQueue in two
+independent ways, and each row says which:
+
+- **Submission:** its `spec.queueName` names a LocalQueue in its namespace
+  whose `spec.clusterQueue` is the ClusterQueue *now*. This is a join by name
+  through the LocalQueue as Radar reads it today, not a record of which
+  LocalQueue, or which target, the Workload was submitted through.
+- **Reservation:** its `status.admission.clusterQueue` names the ClusterQueue,
+  as the Workload reports it.
+
+A LocalQueue's Workloads are those in its namespace whose `spec.queueName`
+names it. The cases the two ways disagree on are listed as reported: a
+Workload still reserved in a ClusterQueue its LocalQueue no longer points at
+(`spec.clusterQueue` is immutable, so this follows deleting and re-creating
+the LocalQueue) belongs to the old ClusterQueue by reservation and the new one
+by submission, and its row names both; a finished Workload that still reports
+its admission stays a reservation member, though Kueue released its quota and
+leaves it out of its own counts; a Workload being deleted keeps its membership
+until it is gone; a Workload that belongs both ways is one row.
+
+Lookups go through an index on the cached Workloads and LocalQueues
+(`pkg/k8score/kueue_queue_index.go`), so a queue's cost follows its own size.
+Workloads and LocalQueues are each read only where the caller may `list`
+that kind in the namespace (a SubjectAccessReview per namespace, not
+inferred from Pod access), and the response carries `pkg/resourceapi`
+coverage for each read: a namespace the caller can't list is a
+`user_forbidden` gap, one Radar hasn't loaded `kind_sync_pending`. Where
+Workloads were read but LocalQueues weren't, only the admission record can
+place a Workload: `submissionUnresolved` names those namespaces, each such row
+says `localQueueUnread`, and the member counts are lower bounds. An empty list
+is a queue confirmed empty only when the coverage is complete, nothing
+narrowed it, and `submissionUnresolved` is absent. A caller who sees every
+namespace but may list Workloads only in some is checked namespace by
+namespace (within a budget of permission checks per request, split between
+Workloads and LocalQueues). This rule is stricter than the resource
+browser's, which shows Workloads wherever the caller can see the namespace.
+A denied Workload read does not fail the response: the ClusterQueue answer still lists the LocalQueues
+pointing at it with the counts their controller reports, which is the only
+evidence Radar shows of Workloads the caller can't list. Radar never
+subtracts its own count from a controller count: cache lag, finished
+Workloads and inadmissible Workloads make them differ too.
+
+Before Radar connects, both routes answer the usual 503 `{error}`;
+afterwards a failed request is `{error, error_code, coverage?}`, and a cursor
+issued for another list (another queue, a re-created queue, other filters or
+another cluster context, or a read that no longer matches the first page's)
+is refused with 400 `kueue_cursor_invalid`, after which a client reads from
+the first page again. Every page checks access afresh within its budget, and a page whose read
+differs from the first page's is refused by the cursor.
+
+Rows are paged by key: unfinished Workloads first, finished ones after
+(by default Kueue keeps them until their owner goes), each by namespace and name so that
+no order is mistaken for admission order. A cursor belongs to its queue (by UID), filter
+and cluster context. A member that keeps its key is never returned twice while a list is paged;
+a member that joins behind the cursor appears when the list is read again
+from the start. A member's key changes once, when it finishes, so one
+returned among the unfinished members that finishes before the traversal
+reaches the finished ones is returned again there: readers merge pages by
+UID. Counts and coverage describe every member Radar read for the caller as
+of each page's read, not just the page; the UI takes them, and the
+LocalQueues (sent with the first page only), from the first page. Each row
+carries the shared admission classification (`phase`, `admission`), and
+`counts.states` counts the members by `admission.state`, so a list can be
+filtered to one state with `state=`.
+
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
 detail shows native outcomes, reasons, requested Pod counts and PodTemplate

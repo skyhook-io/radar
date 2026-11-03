@@ -6,6 +6,8 @@ import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/ut
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
+import { kueueQueueRetryable } from '@skyhook-io/k8s-ui/utils/kueue-queue-workloads'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
@@ -27,7 +29,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { focusManager, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
+import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
@@ -8172,6 +8174,53 @@ export interface KueueProvisioningResponse {
     spec: { provisioningClassName: string }
     status?: { conditions: Array<{ type: string; status: string; reason?: string; message?: string; observedGeneration?: number }> }
   }>
+}
+
+// The Workloads that belong to a Kueue queue, page by page. Pages chain by
+// cursor; a refetch re-reads them from the first, so a list that changed is
+// traversed again rather than patched. Nothing is read until the queue's UID
+// is known, nor for a LocalQueue without its namespace.
+export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQueue'; namespace?: string; name: string; uid?: string }, filters: { membership?: KueueQueueMembership; state?: string }) {
+  const { membership, state } = filters
+  const { guard, gatedKey, support, upgrade } = useRadarFeature('kueueQueueWorkloads')
+  const path = queue.kind === 'ClusterQueue'
+    ? `/kueue/clusterqueues/${encodeURIComponent(queue.name)}/workloads`
+    : `/kueue/localqueues/${encodeURIComponent(queue.namespace ?? '')}/${encodeURIComponent(queue.name)}/workloads`
+  const query = useInfiniteQuery<KueueQueueWorkloadsResponse>({
+    queryKey: ['kueue-queue-workloads', queue.kind, queue.namespace ?? '', queue.name, queue.uid ?? '', membership ?? '', state ?? '', ...gatedKey],
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams()
+      if (membership) params.set('membership', membership)
+      if (state) params.set('state', state)
+      if (typeof pageParam === 'string') params.set('cursor', pageParam)
+      const qs = params.toString()
+      return guard(() => fetchJSON<KueueQueueWorkloadsResponse>(`${path}${qs ? `?${qs}` : ''}`, signal))
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: last => last.workloads?.next,
+    // A changed filter keeps the previous list on screen until the new one
+    // arrives; the renderer drops pages of another queue (by UID).
+    placeholderData: previous => previous,
+    enabled: Boolean(queue.name && queue.uid && (queue.kind === 'ClusterQueue' || queue.namespace)) && support !== 'unsupported',
+    staleTime: 5000,
+    // A paged list isn't replayed on mount (that would reread the queue once
+    // per page); the renderer restarts it from the first page instead.
+    refetchOnMount: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnWindowFocus: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnReconnect: query => (query.state.data?.pages.length ?? 0) <= 1,
+    // Poll the first page only: refetching an infinite query rereads every
+    // loaded page, so a list paged further waits for an explicit refresh.
+    // A part a retry can complete (still loading, a check that failed) is
+    // polled sooner.
+    refetchInterval: query => {
+      if (query.state.error instanceof ApiError && query.state.error.status < 500) return false
+      const pages = query.state.data?.pages ?? []
+      if (pages.length > 1) return false
+      return kueueQueueRetryable(pages[0]) ? 3000 : 15000
+    },
+    retry: shouldRetryRadarQuery,
+  })
+  return { ...query, upgrade, support }
 }
 
 export function useKueueProvisioning(namespace: string, name: string, uid: string | undefined, enabled: boolean) {

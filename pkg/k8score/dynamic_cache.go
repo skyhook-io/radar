@@ -597,6 +597,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 		maps.Copy(indexers, ownerUIDIndexers)
 	}
 	maps.Copy(indexers, gitopsMembersIndexers[gvr.GroupResource()])
+	maps.Copy(indexers, kueueQueueIndexers[gvr.GroupResource()])
 	for name := range informer.GetIndexer().GetIndexers() {
 		delete(indexers, name)
 	}
