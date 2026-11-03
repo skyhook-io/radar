@@ -181,7 +181,7 @@ func TestCertificateRenewalFailureExpiryAndMessage(t *testing.T) {
 	condition := u.Object["status"].(map[string]any)["conditions"].([]any)[1].(map[string]any)
 	condition["message"] = "DNS challenge rejected"
 	before := detectCertificateRenewalFailure(gvr, u, now)[0]
-	if !strings.Contains(before.Message, "DNS challenge rejected") {
+	if !strings.Contains(before.Message, "DNS challenge rejected") || !strings.Contains(before.Message, now.Add(-time.Hour).Format(time.RFC3339)) {
 		t.Fatal(before.Message)
 	}
 	for _, expiry := range []time.Time{now, now.Add(-time.Minute)} {

@@ -67,7 +67,7 @@ func detectCertificateRenewalFailure(gvr schema.GroupVersionResource, u *unstruc
 		severity = SeverityCritical
 		validity = fmt.Sprintf("The recorded certificate expired at %s despite cert-manager still reporting Ready. Check the current certificate and serving endpoint.", expiry.UTC().Format(time.RFC3339))
 	}
-	message := fmt.Sprintf("Certificate renewal failed (%d consecutive failed issuance %s; last failure %s ago). %s", attempts, attemptLabel, timeutil.FormatAgeShort(now.Sub(failed)), validity)
+	message := fmt.Sprintf("Certificate renewal failed (%d consecutive failed issuance %s; last failure %s ago, %s). %s", attempts, attemptLabel, timeutil.FormatAgeShort(now.Sub(failed)), failed.UTC().Format(time.RFC3339), validity)
 	if issuing == "True" {
 		message += " A retry is in progress; renewal has not yet succeeded."
 	} else if detail := strings.TrimSpace(issuingMessage); detail != "" {
