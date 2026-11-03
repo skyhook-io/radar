@@ -161,7 +161,9 @@ export function listedFact(members: KueueQueueMembers, local: boolean): Fact {
 
 /** Why the list is empty, from what the read covered. */
 export function emptyMessage(members: KueueQueueMembers, local: boolean, filtered: boolean): string {
-  if (filtered && members.counts.members > 0) return 'No Workloads match this filter.'
+  if (filtered && members.counts.members > 0) {
+    return membersLowerBound(members) ? 'No Workloads match this filter in what Radar could read.' : 'No Workloads match this filter.'
+  }
   const { status, narrowedBy } = members.coverage
   if (status === 'partial' || members.submissionUnresolved) return 'No Workloads found where Radar could read.'
   if (narrowedBy?.includes('namespace_collection')) return 'No Workloads in the namespaces Radar collects.'
