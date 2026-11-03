@@ -155,7 +155,15 @@ func TestKueueReadGaps(t *testing.T) {
 }
 
 func TestKueueManagedRoot_QueueLabel(t *testing.T) {
-	if !kueueManagedRoot(nil, schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads"}, "ml", liveObject("job-2", time.Now(), map[string]string{kueueQueueNameLabel: "team-a"})) {
+	if !kueueManagedRoot(nil, schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads"}, "ml", liveObject("job-2", time.Now(), map[string]string{kueueQueueNameLabel: "team-a"}), true) {
 		t.Fatal("a queue-labelled Job isn't recognized")
+	}
+}
+
+func TestKueueManagedRoot_UnreadableOrDeletedDoesNotConsultInventory(t *testing.T) {
+	for _, live := range []liveIdentity{liveObject("job", time.Now(), nil), {}} {
+		if !kueueManagedRoot(nil, schema.GroupVersionResource{}, "ml", live, false) {
+			t.Fatal("unknown affiliation must qualify independently of hidden inventory")
+		}
 	}
 }

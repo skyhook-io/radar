@@ -20,9 +20,8 @@ const maxConditionMessageRunes = 300
 
 // kueueStatusCounters are Workload status fields the differ leaves out: they
 // count or total things another recorded field already marks the moment of
-// (schedulingStats.evictions moves with the Evicted condition), or mirror the
-// spec (resourceRequests), whose edits the spec backstop records.
-var kueueStatusCounters = []string{"schedulingStats", "accumulatedPastExecutionTimeSeconds", "resourceRequests"}
+// (schedulingStats.evictions moves with the Evicted condition).
+var kueueStatusCounters = []string{"schedulingStats", "accumulatedPastExecutionTimeSeconds"}
 
 // diffKueueWorkload records a Kueue Workload's admission story: condition
 // transitions with their messages, the admission assignment (ClusterQueue,
@@ -47,7 +46,10 @@ func diffKueueWorkload(oldObj, newObj any) ([]FieldChange, []string) {
 	d.admission(oldU, newU)
 	d.admissionChecks(oldU, newU)
 	d.requeueState(oldU, newU)
-	d.otherStatus(oldU, newU, append([]string{"conditions", "admission", "admissionChecks", "requeueState"}, kueueStatusCounters...))
+	d.otherStatus(kueueStatusRemainder(oldU), kueueStatusRemainder(newU), kueueStatusCounters)
+	if len(d.changes) == 0 {
+		return diffGenericUnstructured(kueueTimelineObject(oldU), kueueTimelineObject(newU))
+	}
 	return d.changes, d.summary
 }
 
@@ -64,7 +66,88 @@ func diffProvisioningRequest(oldObj, newObj any) ([]FieldChange, []string) {
 	d.deletion(oldU, newU)
 	d.conditions(oldU, newU, genericConditionSummary)
 	d.otherStatus(oldU, newU, []string{"conditions"})
+	if len(d.changes) == 0 {
+		return diffGenericUnstructured(kueueTimelineObject(oldU), kueueTimelineObject(newU))
+	}
 	return d.changes, d.summary
+}
+
+// Keep fields outside the readable summaries: topology assignments and
+// admission-check pod-set updates are independent operational evidence.
+func kueueStatusRemainder(u *unstructured.Unstructured) *unstructured.Unstructured {
+	out := u.DeepCopy()
+	unstructured.RemoveNestedField(out.Object, "status", "admission", "clusterQueue")
+	for _, block := range []struct {
+		path   []string
+		fields []string
+	}{
+		{[]string{"admission", "podSetAssignments"}, []string{"count", "flavors", "resourceUsage"}},
+		{[]string{"admissionChecks"}, []string{"state", "message", "retryCount"}},
+		{[]string{"conditions"}, []string{"status", "reason", "message"}},
+	} {
+		path := append([]string{"status"}, block.path...)
+		items, found, _ := unstructured.NestedSlice(out.Object, path...)
+		if !found {
+			continue
+		}
+		var remaining []any
+		for _, item := range items {
+			m, ok := stripTimelineNoise(item).(map[string]any)
+			if !ok {
+				remaining = append(remaining, item)
+				continue
+			}
+			for _, field := range block.fields {
+				delete(m, field)
+			}
+			identity := "name"
+			if block.path[0] == "conditions" {
+				identity = "type"
+			}
+			if len(m) > 1 || m[identity] == nil {
+				remaining = append(remaining, m)
+			}
+		}
+		unstructured.RemoveNestedField(out.Object, path...)
+		if len(remaining) > 0 {
+			_ = unstructured.SetNestedSlice(out.Object, remaining, path...)
+		}
+	}
+	unstructured.RemoveNestedField(out.Object, "status", "requeueState", "count")
+	unstructured.RemoveNestedField(out.Object, "status", "requeueState", "requeueAt")
+	for _, key := range []string{"admission", "requeueState"} {
+		if m, found, _ := unstructured.NestedMap(out.Object, "status", key); found && len(m) == 0 {
+			unstructured.RemoveNestedField(out.Object, "status", key)
+		}
+	}
+	return out
+}
+
+// The generic fallback retains changes outside the integration's summaries,
+// while the same explicit noise policy applies to all recording paths.
+func kueueTimelineObject(u *unstructured.Unstructured) *unstructured.Unstructured {
+	out := u.DeepCopy()
+	if u.GetKind() == "Workload" {
+		for _, key := range kueueStatusCounters {
+			unstructured.RemoveNestedField(out.Object, "status", key)
+		}
+	}
+
+	if u.GetKind() == "Workload" {
+		items, found, _ := unstructured.NestedSlice(out.Object, "status", "conditions")
+		if found {
+			for _, item := range items {
+				if m, ok := item.(map[string]any); ok && m["type"] == "QuotaReserved" && m["status"] == "False" && m["reason"] == "Pending" {
+					if message, ok := m["message"].(string); ok && strings.HasPrefix(message, "couldn't assign flavors to pod set ") {
+						m["message"] = maskQuantities(message)
+					}
+				}
+			}
+			_ = unstructured.SetNestedSlice(out.Object, items, "status", "conditions")
+		}
+	}
+
+	return out
 }
 
 type statusDiff struct {
@@ -246,7 +329,8 @@ func (d *statusDiff) conditions(oldU, newU *unstructured.Unstructured, summarize
 		if !messageChanged {
 			continue
 		}
-		if !signalChanged && maskQuantities(o.message) == maskQuantities(n.message) {
+		if !signalChanged && newU.GetKind() == "Workload" && typ == "QuotaReserved" && o.status == "False" && o.reason == "Pending" &&
+			strings.HasPrefix(o.message, "couldn't assign flavors to pod set ") && strings.HasPrefix(n.message, "couldn't assign flavors to pod set ") && maskQuantities(o.message) == maskQuantities(n.message) {
 			continue
 		}
 		d.add(path+".message", optionalMessage(o.message, oldOK), optionalMessage(n.message, newOK))
@@ -412,7 +496,7 @@ func (d *statusDiff) admissionChecks(oldU, newU *unstructured.Unstructured) {
 				d.summary = append(d.summary, fmt.Sprintf("check %s: %s → %s", name, o.state, n.state))
 			}
 		}
-		if o.message == n.message || (!stateChanged && maskQuantities(o.message) == maskQuantities(n.message)) {
+		if o.message == n.message {
 			continue
 		}
 		d.add(path+".message", optionalMessage(o.message, oldOK && o.message != ""), optionalMessage(n.message, newOK && n.message != ""))

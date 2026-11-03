@@ -1378,8 +1378,11 @@ func extractTimelineHistoricalEvents(clusterContext, kind, apiVersion, namespace
 					ct.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			for _, t := range kueueHistoricalEvents(u) {
-				events = append(events, timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
-					t.at, t.reason, "", timeline.HealthUnknown, owner, labels))
+				event := timeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name,
+					t.at, t.reason, "", timeline.HealthUnknown, owner, labels)
+				// A recreated resource can carry the same dated status snapshot.
+				event.ID += "-" + string(u.GetUID())
+				events = append(events, event)
 			}
 		}
 	}

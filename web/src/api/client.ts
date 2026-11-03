@@ -3302,7 +3302,7 @@ export interface WorkloadHistoryPage {
   events: TimelineEvent[];
   truncated: boolean;
   nextBeforeSeq?: number;
-  /** The workload has more related resources than the history follows. */
+  /** Related history may be missing because scope bounds or expired ownership records limit traversal. */
   incomplete?: boolean;
   /** Radar may not hold every change since the workload existed; absent when it does, and from older Radars. */
   historyCoverage?: WorkloadHistoryCoverage;

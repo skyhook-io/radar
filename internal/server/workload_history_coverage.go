@@ -40,10 +40,10 @@ var kueueHistoryKinds = []resourceapi.KindRef{
 // same on every page and say nothing about whether hidden rows exist.
 // watchedSince is when Radar began watching the kinds it does collect, when
 // that is later than this process's observation start.
-func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveIdentity) (gaps []resourceapi.Gap, watchedSince time.Time) {
+func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveIdentity, historicalScope bool) (gaps []resourceapi.Gap, watchedSince time.Time) {
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
-	if discovery == nil || dynamicCache == nil || live.Object == nil {
+	if discovery == nil || dynamicCache == nil {
 		return nil, time.Time{}
 	}
 	type servedKind struct {
@@ -56,7 +56,13 @@ func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveI
 			served = append(served, servedKind{ref, gvr})
 		}
 	}
-	if len(served) == 0 || served[0].ref.Kind != "Workload" || !kueueManagedRoot(dynamicCache, served[0].gvr, namespace, live) {
+	if len(served) == 0 || served[0].ref.Kind != "Workload" {
+		return nil, time.Time{}
+	}
+	allowed, authoritative := s.canReadDecision(r, served[0].gvr.Group, served[0].gvr.Resource, namespace, "list")
+	// When affiliation cannot be checked, qualify the possible dependency
+	// independently of hidden inventory. A gap never asserts an object exists.
+	if !historicalScope && !kueueManagedRoot(dynamicCache, served[0].gvr, namespace, live, allowed && authoritative) {
 		return nil, time.Time{}
 	}
 	reads := make([]kueueKindRead, 0, len(served))
@@ -69,7 +75,11 @@ func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveI
 					read.uncollected = append(read.uncollected, part.Verdict.Code)
 				}
 			}
-			read.watchedSince, _ = dynamicCache.WatchedSince(kind.gvr)
+			var known bool
+			read.watchedSince, known = dynamicCache.NamespaceWatchedSince(kind.gvr, namespace)
+			if !known && len(read.uncollected) == 0 {
+				read.uncollected = append(read.uncollected, readreason.ReadError)
+			}
 		}
 		reads = append(reads, read)
 	}
@@ -116,16 +126,19 @@ func kueueReadGaps(namespace string, reads []kueueKindRead) (gaps []resourceapi.
 		kinds := byCode[code]
 		gaps = append(gaps, resourceapi.Gap{
 			Code:       code,
-			Kinds:      &resourceapi.KindSet{Count: len(kinds), Names: kinds},
+			Kinds:      resourceapi.Kinds(kinds, resourceapi.RESTSetLimit),
 			Namespaces: &resourceapi.NameSet{Count: 1, Names: []string{namespace}},
 		})
 	}
 	return gaps, watchedSince
 }
 
-// kueueManagedRoot reports a workload Kueue queues: it carries the queue
-// label, or Radar's cache holds a Workload it controls.
-func kueueManagedRoot(dynamicCache *k8s.DynamicResourceCache, workloads schema.GroupVersionResource, namespace string, live liveIdentity) bool {
+// kueueManagedRoot checks readable affiliation. An unreadable dependency or
+// deleted root remains potentially queued, without consulting hidden inventory.
+func kueueManagedRoot(dynamicCache *k8s.DynamicResourceCache, workloads schema.GroupVersionResource, namespace string, live liveIdentity, mayReadWorkloads bool) bool {
+	if !mayReadWorkloads || live.Object == nil {
+		return true
+	}
 	if _, ok := live.Object.GetLabels()[kueueQueueNameLabel]; ok {
 		return true
 	}
@@ -134,7 +147,7 @@ func kueueManagedRoot(dynamicCache *k8s.DynamicResourceCache, workloads schema.G
 	}
 	owned, ok := dynamicCache.ReadableIndexed(workloads, namespace, k8score.OwnerUIDIndex, live.UID)
 	if !ok {
-		return false
+		return true
 	}
 	return slices.ContainsFunc(owned, func(u *unstructured.Unstructured) bool {
 		ref := metav1.GetControllerOf(u)

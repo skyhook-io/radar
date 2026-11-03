@@ -232,7 +232,7 @@ interface WorkloadViewProps {
   /** allEvents holds only this workload's own history (what it runs and the
    *  resources attached to it), not its whole namespace. */
   historyScoped?: boolean
-  /** Some related resources' history isn't included: there were more than the host follows. */
+  /** Scope bounds or expired ownership records may leave related history out. */
   historyIncomplete?: boolean
   /** Radar may not hold every change since the workload existed. */
   historyCoverage?: WorkloadHistoryCoverage | null
@@ -1934,7 +1934,7 @@ function EventsTab({
               This workload, what it runs, and the Services, Ingresses, config and scalers attached to it.
             </span>
           )}
-          {incomplete && <span>This workload has more past runs and related resources than Radar follows, so some are left out.</span>}
+          {incomplete && <span>Some past runs or related resources may be outside the history Radar can follow.</span>}
           {notes.map((note) => <span key={note}>{note}</span>)}
           {truncated && <span>Showing the most recent events. Older history exists.</span>}
           {truncated && olderError && (

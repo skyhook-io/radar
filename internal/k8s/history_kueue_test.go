@@ -424,6 +424,15 @@ func TestKueueHistoricalEvents_StatusOnly(t *testing.T) {
 		t.Fatalf("reasons = %v, want %v", reasons, want)
 	}
 
+	recreated := wl.DeepCopy()
+	recreated.SetUID("wl-recreated")
+	again := extractTimelineHistoricalEvents("ctx", "Workload", v1beta2, "ml", wl.GetName(), recreated, nil, nil)
+	for i := 1; i < len(events); i++ {
+		if events[i].ID == again[i].ID {
+			t.Fatal("recreated resources share a status snapshot ID")
+		}
+	}
+
 	foreign := kueueWorkload("example.com/v1", withConditions(kueueCondition{"Ready", "True", "Ready", ""}))
 	events = extractTimelineHistoricalEvents("ctx", "Workload", "example.com/v1", "ml", foreign.GetName(), foreign, nil, nil)
 	if len(events) != 1 || events[0].Reason != "created" {
@@ -461,5 +470,67 @@ func TestRecordToTimelineStore_KueueWorkloadChurnDroppedTransitionKept(t *testin
 	}
 	if e.Diff == nil || !strings.Contains(e.Diff.Summary, "quota reserved in ClusterQueue busy") {
 		t.Fatalf("diff = %+v", e.Diff)
+	}
+}
+
+func TestKueueWorkloadDiff_PreservesNestedStatusAndGenericFallback(t *testing.T) {
+	base := kueueWorkload(v1beta2, withAdmission("busy", 1, map[string]any{"cpu": "default"}, map[string]any{"cpu": "1"}), withCheck("prov", "Ready", "", 0))
+	for _, tt := range []struct {
+		name  string
+		path  []string
+		value any
+		want  string
+	}{
+		{"topology assignment", []string{"status", "admission", "podSetAssignments"}, []any{map[string]any{"name": "main", "count": int64(1), "flavors": map[string]any{"cpu": "default"}, "resourceUsage": map[string]any{"cpu": "1"}, "topologyAssignment": map[string]any{"levels": []any{"zone"}, "domains": []any{map[string]any{"values": []any{"zone-a"}, "count": int64(1)}}}}}, "status.admission.podSetAssignments[main].topologyAssignment"},
+		{"check podset updates", []string{"status", "admissionChecks"}, []any{map[string]any{"name": "prov", "state": "Ready", "message": "", "podSetUpdates": []any{map[string]any{"name": "main", "nodeSelector": map[string]any{"zone": "a"}}}}}, "status.admissionChecks[prov].podSetUpdates"},
+		{"future admission field", []string{"status", "admission", "extra"}, "value", "status.admission.extra"},
+		{"future requeue field", []string{"status", "requeueState", "extra"}, "value", "status.requeueState.extra"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cur := base.DeepCopy()
+			if err := unstructured.SetNestedField(cur.Object, tt.value, tt.path...); err != nil {
+				t.Fatal(err)
+			}
+			d := ComputeDiff("Workload", base, cur)
+			if d == nil {
+				t.Fatal("meaningful nested status change dropped")
+			}
+			found := false
+			for _, f := range d.Fields {
+				if strings.HasPrefix(f.Path, tt.want) || strings.HasPrefix(tt.want, f.Path+".") || strings.HasPrefix(tt.want, f.Path+"[") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("want %s, fields %v", tt.want, fieldPaths(d))
+			}
+		})
+	}
+	effective := base.DeepCopy()
+	_ = unstructured.SetNestedSlice(effective.Object, []any{map[string]any{"name": "main", "resources": map[string]any{"cpu": "150m"}}}, "status", "resourceRequests")
+	if d := ComputeDiff("Workload", base, effective); d == nil {
+		t.Fatal("effective resource request change dropped")
+	}
+
+	cur := base.DeepCopy()
+	cur.SetLabels(map[string]string{"example.com/label": "changed"})
+	if d := ComputeDiff("Workload", base, cur); d == nil || d.Summary != "resource changed" {
+		t.Fatalf("generic fallback = %+v", d)
+	}
+}
+
+func TestKueueDiff_DoesNotMaskArbitraryControllerMessages(t *testing.T) {
+	for _, kind := range []string{"Workload", "ProvisioningRequest"} {
+		old := kueueWorkload(v1beta2, withConditions(kueueCondition{"Ready", "False", "Failed", "failed after (1) attempts"}), withCheck("custom", "Pending", "(1) rejected", 0))
+		cur := kueueWorkload(v1beta2, withConditions(kueueCondition{"Ready", "False", "Failed", "failed after (2) attempts"}), withCheck("custom", "Pending", "(2) rejected", 0))
+		if kind == "ProvisioningRequest" {
+			old.SetAPIVersion("autoscaling.x-k8s.io/v1")
+			cur.SetAPIVersion("autoscaling.x-k8s.io/v1")
+			old.SetKind(kind)
+			cur.SetKind(kind)
+		}
+		if d := ComputeDiff(kind, old, cur); d == nil {
+			t.Fatalf("%s numeric failure evidence dropped", kind)
+		}
 	}
 }

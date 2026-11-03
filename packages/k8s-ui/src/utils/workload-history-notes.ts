@@ -5,6 +5,8 @@ import { gapReasonText, readActionFor } from './read-actions'
  * Whether Radar holds every change since a workload existed, as Radar's
  * issuesapi.HistoryCoverage serializes it. Present only when incomplete;
  * complete_since is sent only to callers who can read every namespace.
+ * An absent coverage value means complete history or an older Radar; it
+ * does not establish completeness on its own.
  */
 export interface WorkloadHistoryCoverage {
   incomplete: boolean
@@ -52,7 +54,7 @@ export function workloadHistoryNotes(coverage?: WorkloadHistoryCoverage | null, 
   const notes: string[] = []
   if (coverage?.incomplete) {
     const why: string[] = []
-    if (coverage.reasons.includes('observation_started_late')) why.push('Radar started recording after this workload was created')
+    if (coverage.reasons.includes('observation_started_late')) why.push('Radar began recording part of this history later')
     if (coverage.reasons.includes('events_evicted')) why.push('older history was deleted to stay within its limits')
     const head = coverage.complete_since
       ? `Changes before ${formatSince(coverage.complete_since)} may be missing`

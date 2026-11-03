@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,7 +49,8 @@ type workloadHistoryResponse struct {
 	Truncated     bool  `json:"truncated"`
 	NextBeforeSeq int64 `json:"nextBeforeSeq,omitempty"`
 	// Incomplete reports that the workload has more related resources than
-	// the history follows, so some of their events are missing.
+	// the history follows, or older ownership records have expired, so related
+	// events may be missing even when those events are still retained.
 	Incomplete bool `json:"incomplete,omitempty"`
 	// HistoryCoverage is set when Radar may not hold every change since the
 	// workload existed: it started observing, or began watching a kind the
@@ -122,12 +124,15 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 		s.writeTimelineQueryError(w, err)
 		return
 	}
-	gaps, collectedSince := s.kueueHistoryReads(r, namespace, live)
+	gaps, collectedSince := s.kueueHistoryReads(r, namespace, live, hasEarlierIncarnation(r.Context(), store, clusterContext, key, live.UID))
 	resp := workloadHistoryResponse{
 		Events:          events,
 		Incomplete:      incomplete,
 		Gaps:            gaps,
 		HistoryCoverage: workloadHistoryCoverage(r.Context(), store, clusterContext, key, live, collectedSince, s.callerReadsAllNamespaces(r)),
+	}
+	if resp.HistoryCoverage != nil && slices.Contains(resp.HistoryCoverage.Reasons, issuesapi.HistoryEventsEvicted) {
+		resp.Incomplete = true
 	}
 	if len(events) > limit {
 		resp.Events = events[:limit]
