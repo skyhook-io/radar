@@ -361,8 +361,10 @@ func (s *Server) handleKueueClusterQueueWorkloads(w http.ResponseWriter, r *http
 	keys := []string{k8score.KueueReservationKey(name)}
 	pointing := map[string]*unstructured.Unstructured{}
 	if lqFailure != nil {
-		body, _ := readErrorBody("localqueues", lqFailure.err, &lqFailure.target)
-		response.LocalQueuesError = &body
+		if page.after == "" {
+			body, _ := readErrorBody("localqueues", lqFailure.err, &lqFailure.target)
+			response.LocalQueuesError = &body
+		}
 	} else {
 		for _, lq := range localQueues.objects {
 			if kueuequeues.LocalQueueTarget(lq) == name {
@@ -581,6 +583,9 @@ func submissionUnresolved(workloads, localQueues kueueKindRead, localQueuesFaile
 		}
 		if !named {
 			return resourceapi.UnknownNames()
+		}
+		if len(localQueues.unread) == 0 {
+			return nil
 		}
 		return resourceapi.Names(slices.Sorted(maps.Keys(localQueues.unread)), resourceapi.RESTSetLimit)
 	}
@@ -852,16 +857,15 @@ func (s *Server) kueueListAccess(r *http.Request, cache *k8s.ResourceCache, budg
 		return nil, target, readFailuref(readreason.UserNoNamespaceAccess, "no namespace access")
 	}
 	user := auth.UserFromContext(r.Context())
-	var perms *auth.UserPermissions
-	if user != nil && s.permCache != nil {
-		perms = s.permCache.Get(user.Username, user.Groups)
-	}
 	cached := func(ns string) (bool, bool) {
-		switch {
-		case user == nil || s.permCache == nil:
+		if user == nil || s.permCache == nil {
 			// Without authentication every read is Radar's own.
 			return true, true
-		case perms == nil:
+		}
+		// Read the entry each time: a check earlier in this request may have
+		// created it.
+		perms := s.permCache.Get(user.Username, user.Groups)
+		if perms == nil {
 			return false, false
 		}
 		return perms.CanI("list", kueueGroup, resource, ns)
