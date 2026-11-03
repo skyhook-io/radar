@@ -2329,6 +2329,44 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 | TrainedModel | `serving.kserve.io/v1alpha1` | Ready condition |
 | LLMInferenceService | `serving.kserve.io` (v1alpha2, v1alpha1) | Ready / aggregate conditions |
 
+For an exact `serving.kserve.io/v1beta1` InferenceService, REST AI detail and MCP
+`get_resource` include `resourceContext.serving.kserveInferenceService`: reported
+mode and runtime names, the main predictor's `transitionStatus`, `targetModelState`
+and last failure reason/exit code, Knative component revision names and configured
+traffic (eight targets per component), and Standard-mode canary readiness and
+spec traffic percentages (eight canaries). Source order is retained; truncation
+flags disclose omitted entries. Absent facts are unreported, not zero or healthy.
+Conditions stay in `statusSummary`; Standard-mode `Ready=True` can coexist with
+`TransformerReady=False`.
+
+The block includes `fieldNotes` (`field`, `note`) for present raw fields whose
+names overstate their evidence. `referenceWriterRelease: "KServe v0.20.0"` identifies the
+reference writer, **not a detected installed release**. Notes are fixed writer
+documentation, never a verdict computed from values. `field` is a dotted path in
+the Kubernetes object; `[]` means any entry. Detail output retains the fields;
+summary/compact minification may omit them. No note is not an assurance of safety.
+The notes explain sticky active-model and failure history (stopping clears them),
+the child-derived `observedGeneration` (not comparable with the root's generation),
+mode-specific model transitions, unfilled failed-copy/canary-model fields, and
+canary readiness/declared traffic. Knative `totalCopies` covers only ready Pods of
+the latest-created predictor revision, excludes older serving revisions and omits
+zero. It cannot establish service-wide capacity. A last failure may be historical; it is not
+necessarily historical. Standard-mode `UpToDate`/`Loaded` can precede a new rollout
+Pod starting. Confirming what serves requires Pod/route/request evidence.
+
+This root-only projection follows the [KServe v0.20.0 status writers](https://github.com/kserve/kserve/blob/v0.20.0/pkg/apis/serving/v1beta1/inference_service_status.go).
+It fetches no child, runtime or route; runtime names are reported selections, not
+verified references. ModelMesh gets mode/runtime names only, without notes.
+LLMInferenceService is excluded. Selected fields omit active model state, copies,
+observed generation, URLs, storage URIs and failure messages; the raw resource
+remains available. `context=none` and list/search summaries carry no serving block.
+The addition shares existing root read authorization in local, authenticated
+shared, Hub and unauthenticated shared modes; no route, RBAC or feature flag changes.
+Standard-mode status writers were exercised live on v0.20.0. Knative revision
+traffic and a serving-old/failing-new two-Pod state have writer-derived fixtures;
+those cases have no live proof here. Notes add bounded fixed text to each detail
+read, with at most eight entries independent of array lengths.
+
 ### Gateway API Inference Extension
 
 | Resource | Group | Status source |
