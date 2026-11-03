@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // PodGroup represents a collection of pods grouped by app label or owner
@@ -35,6 +37,10 @@ type PodGroupingOptions struct {
 	ServiceMatching bool                                  // Whether to match pods to services (for traffic view)
 	ServicesByNS    map[string]map[string]*corev1.Service // Namespace -> svcKey -> service
 	ServiceIDs      map[string]string                     // svcKey -> serviceID
+	// JobUIDs (namespace/name -> UID of the drawn Job) puts the Pods of an
+	// earlier Job with the same name in a group of their own, so a recreated
+	// Job's group counts only its own Pods.
+	JobUIDs map[string]types.UID
 }
 
 // matchesNamespaceFilter returns true if the given namespace matches the filter.
@@ -71,6 +77,13 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 
 		// Determine group key
 		groupKey, groupKind, groupName := determineGroupKey(pod)
+		if groupKind == "Job" {
+			if ref := metav1.GetControllerOf(pod); ref != nil && ref.Kind == "Job" && ref.Name == groupName {
+				if drawn := opts.JobUIDs[pod.Namespace+"/"+ref.Name]; drawn != "" && ref.UID != "" && ref.UID != drawn {
+					groupKey += "/" + string(ref.UID)
+				}
+			}
+		}
 
 		if _, exists := result.Groups[groupKey]; !exists {
 			result.Groups[groupKey] = &PodGroup{

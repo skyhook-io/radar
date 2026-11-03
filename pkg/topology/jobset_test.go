@@ -214,48 +214,41 @@ func TestJobSetPodShortcutsFollowExactMemberJob(t *testing.T) {
 	}
 }
 
-// In a PodGroup, an earlier incarnation's Pod must not be the one that
-// decides the group's owner edges.
-func TestJobSetPodGroupWithEarlierIncarnationKeepsCurrentEdges(t *testing.T) {
+// A recreated member Job's predecessor Pods, still terminating, form a group
+// of their own: the current Job's group counts and grades only its own Pods.
+func TestJobSetPodGroupsSplitByJobIncarnation(t *testing.T) {
 	root := testJobSetRoot("ml", "train", "jobset-uid", nil, nil)
 	provider := &mockProvider{jobs: []*batchv1.Job{memberJob("ml", "train-workers-0", "job-current", jobSetOwnerRef("train", "jobset-uid"))}}
-	// The earlier incarnation's Pod sorts first.
-	provider.pods = append(provider.pods, jobPod("ml", "train-workers-0-aaa-old", "train-workers-0", "job-earlier"))
+	for i := 0; i < 3; i++ {
+		earlier := jobPod("ml", fmt.Sprintf("train-workers-0-old%d", i), "train-workers-0", "job-earlier")
+		earlier.Status.Phase = corev1.PodFailed
+		provider.pods = append(provider.pods, earlier)
+	}
 	for i := 0; i < 4; i++ {
-		provider.pods = append(provider.pods, jobPod("ml", fmt.Sprintf("train-workers-0-b%d", i), "train-workers-0", "job-current"))
+		provider.pods = append(provider.pods, jobPod("ml", fmt.Sprintf("train-workers-0-new%d", i), "train-workers-0", "job-current"))
 	}
 	opts := DefaultBuildOptions()
 	opts.MaxIndividualPods = 2
 	topo := buildJobSetTopology(t, provider, jobSetTestDynamic(root), opts)
 
-	var group *Node
-	for i := range topo.Nodes {
-		if topo.Nodes[i].Kind == KindPodGroup {
-			group = &topo.Nodes[i]
-		}
+	current := nodeByID(topo.Nodes, "podgroup-ml-Job-train-workers-0")
+	if current == nil {
+		t.Fatalf("current Job's PodGroup keeps its usual ID; nodes: %+v", topo.Nodes)
 	}
-	if group == nil {
-		t.Fatalf("no PodGroup: %+v", topo.Nodes)
+	if current.Data["podCount"] != 4 || current.Data["unhealthy"] != 0 || current.Status == StatusUnhealthy {
+		t.Fatalf("current group = count %v unhealthy %v status %s, want 4 healthy Pods", current.Data["podCount"], current.Data["unhealthy"], current.Status)
 	}
-	if edgeByID(topo.Edges, "job/ml/train-workers-0-to-"+group.ID) == nil {
-		t.Fatalf("current Job lost its PodGroup edge: %+v", topo.Edges)
+	if edgeByID(topo.Edges, "job/ml/train-workers-0-to-"+current.ID) == nil ||
+		edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-"+current.ID+"-shortcut") == nil {
+		t.Fatalf("current group not attached to its Job and JobSet: %+v", topo.Edges)
 	}
-	if edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-"+group.ID+"-shortcut") == nil {
-		t.Fatalf("JobSet lost its PodGroup shortcut: %+v", topo.Edges)
+	earlier := nodeByID(topo.Nodes, "podgroup-ml-Job-train-workers-0-job-earlier")
+	if earlier == nil {
+		t.Fatalf("earlier incarnation's Pods not grouped apart: %+v", topo.Nodes)
 	}
-	// Expanding the group connects each Pod to its ownerIds, and to every
-	// owner of the group when ownerIds is absent; the earlier incarnation's
-	// Pod must say "none" explicitly.
-	for _, pd := range group.Data["pods"].([]map[string]any) {
-		owners, present := pd["ownerIds"].([]string)
-		if pd["name"] == "train-workers-0-aaa-old" {
-			if !present || len(owners) != 0 {
-				t.Fatalf("earlier incarnation's Pod ownerIds = %#v, want explicitly empty", pd["ownerIds"])
-			}
-			continue
-		}
-		if !slices.Contains(owners, "job/ml/train-workers-0") {
-			t.Fatalf("current Pod ownerIds = %#v, want the current Job", pd["ownerIds"])
+	for _, e := range topo.Edges {
+		if e.Target == earlier.ID {
+			t.Fatalf("earlier incarnation's group attached: %+v", e)
 		}
 	}
 }
@@ -398,7 +391,7 @@ func TestJobSetMemberRelationships(t *testing.T) {
 }
 
 // The node's status and label match the JobSet status badge on the same
-// vectors (packages/k8s-ui resource-utils-jobset-lws.test.ts reads them too).
+// vectors (packages/k8s-ui resource-utils-gpu-ecosystem.test.ts reads them too).
 func TestJobSetNodeStatusMatchesSharedVectors(t *testing.T) {
 	raw, err := os.ReadFile("../jobset/testdata/lifecycle.json")
 	if err != nil {

@@ -110,8 +110,10 @@ export function jobSetMemberRunKey(topology: Topology, jobSetNodeId: string, nod
 }
 
 function isJobSetMemberEdge(edge: TopologyEdge, nodeById: Map<string, TopologyNode>): boolean {
+  const source = nodeById.get(edge.source)
   return edge.type === 'manages' && !edge.skipIfKindVisible
-    && nodeById.get(edge.source)?.kind === 'JobSet' && nodeById.get(edge.target)?.kind === 'Job'
+    && source?.kind === 'JobSet' && !!source && nodeGroup(source) === 'jobset.x-k8s.io'
+    && nodeById.get(edge.target)?.kind === 'Job'
 }
 
 function memberRank(node: TopologyNode): number {

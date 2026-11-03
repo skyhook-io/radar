@@ -15,7 +15,7 @@ describe('expandPodGroup', () => {
     expect(out.edges.map((e) => [e.source, e.target])).toEqual([['job/ml/train-workers-0', 'pod/ml/a']])
   })
 
-  it('leaves a pod of an earlier Job incarnation (empty ownerIds) unconnected', () => {
+  it('connects a pod with empty ownerIds to none of the group\'s owners', () => {
     const out = expandPodGroup(
       [group([pod('current', { ownerIds: ['job/ml/train-workers-0'] }), pod('earlier', { ownerIds: [] })])],
       [jobEdge],

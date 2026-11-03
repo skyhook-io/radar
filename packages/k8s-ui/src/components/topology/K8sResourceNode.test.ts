@@ -10,10 +10,13 @@ describe('baseSubtitle', () => {
   })
 
   it('describes a JobSet by its lifecycle and the Jobs it declares, not Jobs it has created', () => {
-    expect(baseSubtitle('JobSet', { phase: 'Active', declaredJobs: 8 })).toBe('Active • 8 Jobs declared')
-    expect(baseSubtitle('JobSet', { phase: 'Pending', declaredJobs: 1 })).toBe('Pending • 1 Job declared')
-    expect(baseSubtitle('JobSet', { phase: 'Unknown' })).toBe('Unknown')
-    expect(baseSubtitle('JobSet', {})).toBe('Unknown')
+    const apiVersion = 'jobset.x-k8s.io/v1alpha2'
+    expect(baseSubtitle('JobSet', { apiVersion, phase: 'Active', declaredJobs: 8 })).toBe('Active • 8 Jobs declared')
+    expect(baseSubtitle('JobSet', { apiVersion, phase: 'Pending', declaredJobs: 1 })).toBe('Pending • 1 Job declared')
+    expect(baseSubtitle('JobSet', { apiVersion, phase: 'Unknown' })).toBe('Unknown')
+    expect(baseSubtitle('JobSet', { apiVersion })).toBe('Unknown')
+    // Another group's JobSet has no lifecycle fields to describe.
+    expect(baseSubtitle('JobSet', { apiVersion: 'jobset.example.com/v1' })).toBe('')
   })
 
   it('describes a Service by its first port, capping additional ports to a count', () => {

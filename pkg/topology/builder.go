@@ -3292,6 +3292,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		// Group pods using shared grouping logic
 		groupingResult := GroupPods(pods, PodGroupingOptions{
 			Namespaces: opts.Namespaces,
+			JobUIDs:    jobIncarnation.uids,
 		})
 
 		// Create nodes and edges for each group
@@ -3338,10 +3339,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				// (see the stamping loop after ownerIds, below).
 				podRoleByKey := map[string]string{}
 				ownerReps := map[string]*corev1.Pod{}
-				// An earlier incarnation of a drawn Job: its Pods get an
-				// explicit empty ownerIds, since an absent one means every
-				// owner of the group once expanded.
-				earlierJobs := map[string]bool{}
 				for _, p := range group.Pods {
 					if role := podRolloutTrafficRole(p, replicaSetToRollout, rolloutTrafficByID); role != "" {
 						roles[role] = true
@@ -3349,9 +3346,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					}
 					for _, ref := range p.OwnerReferences {
 						ownerKey := podOwnerKey(p.Namespace, ref)
-						if ref.Kind == "Job" && !jobIncarnation.current(p.Namespace+"/"+ref.Name, ref) {
-							earlierJobs[ownerKey] = true
-						}
 						if _, ok := ownerReps[ownerKey]; !ok {
 							ownerReps[ownerKey] = p
 						}
@@ -3386,8 +3380,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						if ownerKey, ok := pd["ownerKey"].(string); ok {
 							if sourceIDs := ownerKeyToSourceIDs[ownerKey]; len(sourceIDs) > 0 {
 								pd["ownerIds"] = sourceIDs
-							} else if earlierJobs[ownerKey] {
-								pd["ownerIds"] = []string{}
 							}
 						}
 						// Expanding the group re-badges each pod from this —

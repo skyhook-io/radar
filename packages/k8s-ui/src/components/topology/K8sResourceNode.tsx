@@ -537,6 +537,8 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       return instanceType || "";
     }
     case "JobSet": {
+      // Another API group's JobSet comes from the generic pass, without these fields.
+      if (!String(nodeData.apiVersion ?? "").startsWith("jobset.x-k8s.io/")) return "";
       // Declared, not observed: a JobSet holding roles behind dependencies
       // has created fewer Jobs than its spec asks for.
       const phase = (nodeData.phase as string) || "Unknown";

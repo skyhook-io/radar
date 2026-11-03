@@ -1916,7 +1916,9 @@ reported yet is unknown. The node shows that state and the number of Jobs its sp
 which can exceed the Jobs created so far. Edges go to the member Jobs the member list shows:
 Jobs whose controller owner reference names this JobSet by API version, name and UID.
 Labels, other owner references and earlier same-named JobSets never link. With Jobs hidden,
-member Pods attach to the JobSet directly, matched by their Job's UID. Objects a JobSet owns
+member Pods attach to the JobSet directly. Pods are matched to their Job by UID, for every
+Job: while a recreated Job's predecessor Pods are still terminating, they are grouped apart
+and attached to nothing, so they don't count toward the current Job. Objects a JobSet owns
 that Radar watches, such as its Kueue Workload, attach through the generic owner pass. A
 JobSet's Topology tab shows up to 24 member Jobs, failed and active ones first, and says how
 many it left out; clicking a member Job there opens that member in the Overview. The traffic
