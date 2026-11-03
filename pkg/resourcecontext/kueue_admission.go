@@ -64,7 +64,8 @@ const (
 	KueueAttentionActionNeeded KueueAttention = "action_needed"
 	// KueueAttentionUnknown means the Workload alone cannot tell: an inactive
 	// queue can be a stop policy or broken configuration, a request too large
-	// for the flavors Kueue last tried may fit another one, unresolved DRA
+	// for (or not matching) the flavors Kueue last tried may fit another one,
+	// unresolved DRA
 	// resources can be the claims or the cluster, an unrecognized reason is
 	// not known to be actionable, and a deactivation may have no recorded
 	// cause.
@@ -174,10 +175,14 @@ const (
 	// free. With flavor fungibility an attempt can resume past flavors tried
 	// before, so another flavor may still fit in a later attempt.
 	KueueAdmissionExceedsQuota KueueAdmissionCode = "exceeds_quota"
-	// KueueAdmissionNoMatchingFlavor means no ResourceFlavor can hold the
-	// Workload: taints, node affinity or topology rule them out, or the
-	// ClusterQueue offers no quota for a requested resource.
+	// KueueAdmissionNoMatchingFlavor means that in its last attempt no flavor
+	// Kueue tried could hold the Workload: taints, node affinity, topology or
+	// an earlier slice's flavor ruled them out. Like exceeds_quota it covers
+	// only the flavors tried.
 	KueueAdmissionNoMatchingFlavor KueueAdmissionCode = "no_matching_flavor"
+	// KueueAdmissionResourceUnavailable means the ClusterQueue offers no quota
+	// at all for a resource the Workload requests.
+	KueueAdmissionResourceUnavailable KueueAdmissionCode = "resource_unavailable"
 	// KueueAdmissionTopologyPlacementFailed means topology requirements
 	// could not be placed.
 	KueueAdmissionTopologyPlacementFailed KueueAdmissionCode = "topology_placement_failed"

@@ -426,8 +426,8 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			spec: workloadSpec{conditions: []condition{pending("Pending",
 				"couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor default, 1 more needed, resource nvidia.com/gpu unavailable in ClusterQueue")}},
 			phase:   rc.KueuePhasePending,
-			state:   rc.KueueAdmissionNoMatchingFlavor,
-			blocker: rc.KueueAdmissionNoMatchingFlavor,
+			state:   rc.KueueAdmissionResourceUnavailable,
+			blocker: rc.KueueAdmissionResourceUnavailable,
 		},
 		{
 			name: "a taint on one flavor and an unknown failure on another is not a confident no-match",
@@ -469,6 +469,20 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionNoDecision,
 		},
 		{
+			name:    "no longer on hold, waiting for quota (StatefulSet integration)",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", "Workload no longer on hold; waiting for quota reservation")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoDecision,
+			blocker: rc.KueueAdmissionNoDecision,
+		},
+		{
+			name:    "granular NoMatchingFlavor for a resource the ClusterQueue doesn't offer",
+			spec:    workloadSpec{conditions: []condition{pending("NoMatchingFlavor", legacyNoGPUResource)}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionResourceUnavailable,
+			blocker: rc.KueueAdmissionResourceUnavailable,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
@@ -479,8 +493,8 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			name:    "resource the ClusterQueue has no quota for",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyNoGPUResource)}},
 			phase:   rc.KueuePhasePending,
-			state:   rc.KueueAdmissionNoMatchingFlavor,
-			blocker: rc.KueueAdmissionNoMatchingFlavor,
+			state:   rc.KueueAdmissionResourceUnavailable,
+			blocker: rc.KueueAdmissionResourceUnavailable,
 		},
 		{
 			name:    "missing LocalQueue (v0.18)",
@@ -1011,6 +1025,23 @@ func TestClassifyKueueWorkloadStaleEvidence(t *testing.T) {
 	})
 }
 
+func TestDeactivationCauseFromBeforeAReactivationIsNotThisDeactivationsCause(t *testing.T) {
+	// Kueue deactivated it, someone reactivated it, then someone deactivated it
+	// again before any new reservation: Evicted still carries the old cause.
+	u := buildWorkload(workloadSpec{active: boolPtr(false), conditions: []condition{
+		{kind: "Evicted", status: "True", reason: "DeactivatedDueToAdmissionCheck", message: "deactivated due to a rejected check"},
+		{kind: "Requeued", status: "True", reason: "Reactivated", message: "The workload was reactivated"},
+	}})
+	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	conditions[0].(map[string]any)["lastTransitionTime"] = "2026-11-01T10:00:00Z"
+	conditions[1].(map[string]any)["lastTransitionTime"] = "2026-11-01T11:00:00Z"
+	_ = unstructured.SetNestedSlice(u.Object, conditions, "status", "conditions")
+	got, _ := ClassifyKueueWorkload(u)
+	if got.Admission.State != rc.KueueAdmissionDeactivated || got.Admission.Attention != rc.KueueAttentionUnknown {
+		t.Fatalf("admission = %+v", got.Admission)
+	}
+}
+
 func TestClassifyKueueWorkloadAttention(t *testing.T) {
 	for _, test := range []struct {
 		spec      workloadSpec
@@ -1036,7 +1067,7 @@ func TestEveryAdmissionCodeHasAnAttentionClass(t *testing.T) {
 		rc.KueueAdmissionUnrecognized: true, rc.KueueAdmissionLocalQueueInactive: true, rc.KueueAdmissionClusterQueueInactive: true,
 		rc.KueueAdmissionDRAResourcesUnresolved: true,
 		// The message covers only the flavors Kueue tried in its last attempt.
-		rc.KueueAdmissionExceedsQuota: true,
+		rc.KueueAdmissionExceedsQuota: true, rc.KueueAdmissionNoMatchingFlavor: true,
 	}
 	for _, code := range allAdmissionCodes {
 		if got := attention(code); got == rc.KueueAttentionUnknown && !deliberatelyUnknown[code] {
@@ -1048,7 +1079,7 @@ func TestEveryAdmissionCodeHasAnAttentionClass(t *testing.T) {
 var allAdmissionCodes = []rc.KueueAdmissionCode{
 	rc.KueueAdmissionFinished, rc.KueueAdmissionAdmitted, rc.KueueAdmissionQuotaReserved,
 	rc.KueueAdmissionDeactivated, rc.KueueAdmissionDeactivatedByKueue, rc.KueueAdmissionDeactivationPending, rc.KueueAdmissionOnHold,
-	rc.KueueAdmissionNoDecision, rc.KueueAdmissionInsufficientQuota, rc.KueueAdmissionExceedsQuota, rc.KueueAdmissionNoMatchingFlavor,
+	rc.KueueAdmissionNoDecision, rc.KueueAdmissionInsufficientQuota, rc.KueueAdmissionExceedsQuota, rc.KueueAdmissionNoMatchingFlavor, rc.KueueAdmissionResourceUnavailable,
 	rc.KueueAdmissionTopologyPlacementFailed, rc.KueueAdmissionWaitingForPreemption, rc.KueueAdmissionPreemptionGated,
 	rc.KueueAdmissionAdmissionGated, rc.KueueAdmissionNamespaceNotEligible, rc.KueueAdmissionLocalQueueMissing,
 	rc.KueueAdmissionLocalQueueInactive, rc.KueueAdmissionClusterQueueMissing, rc.KueueAdmissionClusterQueueInactive,

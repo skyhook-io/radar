@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -136,7 +137,7 @@ func attention(code rc.KueueAdmissionCode) rc.KueueAttention {
 		rc.KueueAdmissionChecksPending, rc.KueueAdmissionTopologyAssignmentPending, rc.KueueAdmissionWaitingForPodsReady,
 		rc.KueueAdmissionRequeueBackoff, rc.KueueAdmissionPreempted, rc.KueueAdmissionPodsReadyTimeout, rc.KueueAdmissionEvicted:
 		return rc.KueueAttentionWaiting
-	case rc.KueueAdmissionNoMatchingFlavor, rc.KueueAdmissionNamespaceNotEligible,
+	case rc.KueueAdmissionResourceUnavailable, rc.KueueAdmissionNamespaceNotEligible,
 		rc.KueueAdmissionLocalQueueMissing, rc.KueueAdmissionClusterQueueMissing, rc.KueueAdmissionCheckRejected,
 		rc.KueueAdmissionDeactivationPending, rc.KueueAdmissionDeactivatedByKueue, rc.KueueAdmissionInvalidWorkload:
 		return rc.KueueAttentionActionNeeded
@@ -189,9 +190,11 @@ func (c classifier) inactive() *rc.KueueAdmissionFact {
 		}
 		evicted, evictedNow := trueCondition(c.conditions, "Evicted")
 		switch {
-		case evictedNow && strings.HasPrefix(evicted.Reason, "DeactivatedDueTo"):
+		case evictedNow && strings.HasPrefix(evicted.Reason, "DeactivatedDueTo") && !c.reactivatedSince(evicted):
 			return c.conditionFact(rc.KueueAdmissionDeactivatedByKueue, evicted)
 		case evictedNow && evicted.Reason != "Deactivated":
+			// Includes a Kueue cause from before a later reactivation: this
+			// deactivation came after it, with no cause recorded.
 			return c.conditionFact(rc.KueueAdmissionDeactivated, evicted)
 		}
 		return &rc.KueueAdmissionFact{Code: rc.KueueAdmissionDeactivated, Source: rc.KueueFactSourceSpec, Name: "active"}
@@ -203,6 +206,20 @@ func (c classifier) inactive() *rc.KueueAdmissionFact {
 		return c.conditionFact(rc.KueueAdmissionOnHold, quota)
 	}
 	return nil
+}
+
+// reactivatedSince reports whether the Workload was reactivated after this
+// eviction was recorded. Kueue keeps an eviction's reason across a
+// reactivation and a later manual deactivation, so its cause then belongs to
+// the earlier deactivation.
+func (c classifier) reactivatedSince(evicted workloadCondition) bool {
+	requeued, ok := trueCondition(c.conditions, "Requeued")
+	if !ok || requeued.Reason != "Reactivated" {
+		return false
+	}
+	reactivated, err1 := time.Parse(time.RFC3339, requeued.LastTransitionTime)
+	evictedAt, err2 := time.Parse(time.RFC3339, evicted.LastTransitionTime)
+	return err1 == nil && err2 == nil && reactivated.After(evictedAt)
 }
 
 // disruption reports a current eviction. Kueue resets Evicted and Preempted
@@ -300,6 +317,9 @@ func (c classifier) quotaBlockerCode(quota workloadCondition) rc.KueueAdmissionC
 	case "ExceedsMaxQuota":
 		return rc.KueueAdmissionExceedsQuota
 	case "NoMatchingFlavor":
+		if strings.Contains(quota.Message, "unavailable in ClusterQueue") {
+			return rc.KueueAdmissionResourceUnavailable
+		}
 		return rc.KueueAdmissionNoMatchingFlavor
 	case "TopologyPlacementFailed":
 		return rc.KueueAdmissionTopologyPlacementFailed
@@ -350,7 +370,7 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 		return rc.KueueAdmissionChecksPending
 	case strings.Contains(message, "waiting for all admitted workloads to be in PodsReady condition"):
 		return rc.KueueAdmissionWaitingForPodsReady
-	case strings.HasPrefix(message, "AdmissionGatedBy cleared"):
+	case strings.HasPrefix(message, "AdmissionGatedBy cleared"), strings.HasSuffix(message, "waiting for quota reservation"):
 		return rc.KueueAdmissionNoDecision
 	case strings.Contains(message, "but will fit after these preemptions complete"),
 		strings.Contains(message, "Pending the preemption of"),
@@ -428,10 +448,11 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 		// only failure Radar does not understand might still fit, so it keeps
 		// the PodSet from being called waiting or never-fitting.
 		couldFit, unexplained := false, false
+		lower := strings.ToLower(segment)
 		for _, flavor := range mentionedFlavors(segment) {
 			switch {
 			case ruledOut[flavor]:
-			case flavorMentions(segment, flavor) > understood[flavor]:
+			case flavorMentions(segment, lower, flavor) > understood[flavor]:
 				unexplained = true
 			case waiting[flavor]:
 				couldFit = true
@@ -441,14 +462,16 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 		case strings.Contains(segment, "unavailable in ClusterQueue"):
 			// The ClusterQueue offers no quota for a requested resource at all;
 			// no flavor can hold this PodSet, whatever else the segment says.
-			neverFits = rc.KueueAdmissionNoMatchingFlavor
+			neverFits = rc.KueueAdmissionResourceUnavailable
 		case couldFit && !unexplained:
 		case unexplained:
 			undecided = true
 		case mismatch && !exceeded:
 			// No placement at all outranks too little quota, as in Kueue's own
 			// most-severe-reason ranking: more quota would not help.
-			neverFits = rc.KueueAdmissionNoMatchingFlavor
+			if neverFits != rc.KueueAdmissionResourceUnavailable {
+				neverFits = rc.KueueAdmissionNoMatchingFlavor
+			}
 		case exceeded:
 			if neverFits == "" {
 				neverFits = rc.KueueAdmissionExceedsQuota
@@ -499,9 +522,8 @@ func mentionedFlavors(segment string) []string {
 // Kueue uses ("in flavor F,", "flavor F doesn't", `Flavor "F"`, "F flavor
 // since"). It scans strings rather than compiling a pattern per flavor,
 // because list consumers classify every Workload on each request.
-func flavorMentions(segment, flavor string) int {
+func flavorMentions(segment, lower, flavor string) int {
 	count := 0
-	lower := strings.ToLower(segment)
 	for _, prefix := range []string{"flavor " + strings.ToLower(flavor), `flavor "` + strings.ToLower(flavor) + `"`} {
 		for rest := lower; ; {
 			i := strings.Index(rest, prefix)

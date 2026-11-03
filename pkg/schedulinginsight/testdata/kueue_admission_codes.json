@@ -12,6 +12,7 @@
     "insufficient_quota",
     "exceeds_quota",
     "no_matching_flavor",
+    "resource_unavailable",
     "topology_placement_failed",
     "waiting_for_preemption",
     "preemption_gated",

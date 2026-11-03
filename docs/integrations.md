@@ -1809,7 +1809,7 @@ behaviour was not checked.
 |------|-------|----------|
 | lifecycle | `kueue.phase`: `pending`, `quota_reserved`, `admitted`, `finished` (result in `kueue.outcome`) | conditions |
 | `inactive`: withdrawn from admission, not waiting | `deactivated` (`spec.active=false`, no cause recorded by Kueue), `deactivated_by_kueue` (cause in the fact's reason: a rejected AdmissionCheck, the requeuing limit, the maximum execution time), `deactivation_pending` (`DeactivationTarget=True`, `spec.active` not yet false), `on_hold` (Kueue v0.20+) | spec or condition |
-| `blocker`: why a Workload still competing is not admitted | `no_decision`, `insufficient_quota`, `exceeds_quota`, `no_matching_flavor`, `topology_placement_failed`, `waiting_for_preemption`, `preemption_gated`, `admission_gated`, `namespace_not_eligible`, `local_queue_missing`, `local_queue_inactive`, `cluster_queue_missing`, `cluster_queue_inactive`, `admission_check_rejected`, `admission_checks_pending`, `topology_assignment_pending`, `waiting_for_pods_ready`, `requeue_backoff`, `dra_resources_unresolved`, `invalid_workload`, `unrecognized` | condition or AdmissionCheck |
+| `blocker`: why a Workload still competing is not admitted | `no_decision`, `insufficient_quota`, `exceeds_quota`, `no_matching_flavor`, `resource_unavailable`, `topology_placement_failed`, `waiting_for_preemption`, `preemption_gated`, `admission_gated`, `namespace_not_eligible`, `local_queue_missing`, `local_queue_inactive`, `cluster_queue_missing`, `cluster_queue_inactive`, `admission_check_rejected`, `admission_checks_pending`, `topology_assignment_pending`, `waiting_for_pods_ready`, `requeue_backoff`, `dra_resources_unresolved`, `invalid_workload`, `unrecognized` | condition or AdmissionCheck |
 | `disruption`: an eviction not yet followed by a new quota reservation | `preempted`, `pods_ready_timeout`, `evicted` | `Evicted` / `Preempted` condition |
 
 `state` is the one code to group or count by: `finished`, else the inactive
@@ -1830,7 +1830,8 @@ finished), `waiting` (Kueue or another controller is expected to move it on),
 reported, it will not be admitted without a change to the Workload, its queue
 or quota, or a controller that should have acted), or `unknown` (the Workload
 alone cannot tell, such as an inactive queue that may be stopped on purpose,
-a request too large for the flavors Kueue last tried (another may fit),
+a request too large for, or not matching, the flavors Kueue last tried (another
+may fit),
 unresolved DRA resources, an unrecognized reason, or a deactivation whose cause
 Kueue did not record).
 It is not a severity or a guarantee: how long waiting may last before it is a
@@ -1840,7 +1841,8 @@ controller-neutral scheduling view: an external admission gate is a `held`
 decision but a waiting blocker, and an inactive queue is an `unsatisfied`
 decision whose attention is `unknown`. Consumers pick their population from the axes:
 Workloads awaiting admission are those whose `phase` is not `admitted` or
-`finished` and that have no `inactive` fact.
+`finished`, that have no `inactive` fact, and that name a queue
+(`spec.queueName`; Kueue manages no other).
 
 `stale` marks a `state` decided by evidence written for an earlier
 `metadata.generation` (for a blocker read because quota is reserved, that
@@ -1868,7 +1870,10 @@ message are what to show. Rules that keep the axes honest:
   recorded no cause. Counts of `deactivated` should therefore split by
   `attention`. The cause in a `deactivated_by_kueue` fact is Kueue's own word:
   the `DeactivationTarget` reason (`AdmissionCheck`) or, after the eviction, the
-  `Evicted` reason (`DeactivatedDueToAdmissionCheck`).
+  `Evicted` reason (`DeactivatedDueToAdmissionCheck`). A `DeactivatedDueTo…`
+  eviction older than a later reactivation (`Requeued=True Reactivated`)
+  belongs to the earlier deactivation, so it reads `deactivated` with
+  attention `unknown`.
 - An inactive or stopped ClusterQueue or LocalQueue is a blocker, not an
   inactive Workload. Kueue words a stopped queue as either "is stopped" or
   "is inactive" depending on which of its writers ran last, so both read
@@ -1886,13 +1891,14 @@ message are what to show. Rules that keep the axes honest:
   has a flavor whose only problem is unused quota; a request over the maximum,
   or a taint, affinity, topology or earlier-slice mismatch rules a flavor out,
   a flavor named by a clause Radar does not understand (and a PodSet whose
-  failure Radar does not recognize) leaves the blocker `unrecognized`, a
-  resource the ClusterQueue does not offer at all reads `no_matching_flavor`, a
+  failure Radar does not recognize) leaves the blocker `unrecognized` unless
+  another PodSet can never fit, a resource the ClusterQueue does not offer at
+  all reads `resource_unavailable`, a
   PodSet that fits no flavor outranks one that exceeds quota, and Kueue's notes
   on in-flight or retried preemptions read `waiting_for_preemption`.
   A message Kueue cut at its 32 KiB limit proves only its complete PodSet
-  segments; otherwise it reads `unrecognized`. `exceeds_quota` describes
-  Kueue's last attempt: with flavor fungibility an
+  segments; otherwise it reads `unrecognized`. `exceeds_quota` and `no_matching_flavor`
+  describe Kueue's last attempt: with flavor fungibility an
   attempt can resume past flavors tried before, so another flavor may still fit
   later.
 - `BlockedOnPreemptionGates=True` is the blocker only while it explains the

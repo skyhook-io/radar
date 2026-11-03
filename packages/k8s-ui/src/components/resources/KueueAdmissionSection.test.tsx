@@ -95,8 +95,9 @@ describe('Kueue admission investigation', () => {
       .toContain('Kueue: <code>SomethingNew</code>')
     // A coarse reason the primary condition already shows is not repeated.
     const coarse = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'failed to assign flavors to pod set main: boom' }, kueue: { phase: 'pending', admission: { state: 'unrecognized', attention: 'unknown', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'Pending' } } } }))
-    expect(coarse).toContain('Unclassified reason')
+    expect(coarse).not.toContain('Unclassified reason')
     expect(coarse).not.toContain('Kueue: <code>Pending</code>')
+    expect(coarse).toContain('failed to assign flavors to pod set main: boom')
     expect(render(response({ kueue: { phase: 'pending', admission: { state: 'a_future_code', attention: 'a_future_class' } } }))).toContain('a_future_code')
   })
 
@@ -139,6 +140,21 @@ describe('Kueue admission investigation', () => {
     const waiting = render(response({ decision: 'unsatisfied', kueue: { phase: 'pending', admission: { state: 'insufficient_quota', attention: 'waiting' } } }))
     expect(waiting).not.toContain('bg-amber')
     expect(render(response({ decision: 'unsatisfied', kueue: { phase: 'pending' } }))).toMatch(/Pending admission/)
+  })
+
+  it('shows a fresh eviction next to the pending phase without repeating it', () => {
+    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'Preempted to accommodate a workload' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'Preempted', message: 'Preempted to accommodate a workload' }], kueue: { phase: 'pending', admission: { state: 'preempted', attention: 'waiting', blocker: { code: 'no_decision' }, disruption: { code: 'preempted', source: 'condition', name: 'Evicted', reason: 'Preempted', message: 'Preempted to accommodate a workload' } } } }))
+    expect(html).toContain('Pending admission')
+    expect(html).toContain('>Preempted<')
+    expect(html.match(/Preempted to accommodate a workload/g)?.length).toBeLessThanOrEqual(2)
+  })
+
+  it('marks a stale withdrawn state without its hint', () => {
+    const html = render(response({ kueue: { phase: 'pending', admission: { state: 'deactivation_pending', attention: 'action_needed', stale: true, inactive: { code: 'deactivation_pending', source: 'condition', name: 'DeactivationTarget', reason: 'AdmissionCheck', stale: true } } } }))
+    expect(html).not.toContain('Pending admission')
+    expect(html).toContain('Deactivating')
+    expect(html).toContain('Reported before the Workload')
+    expect(html).not.toContain('Kueue is deactivating the Workload')
   })
 
   it('keeps the admitted phase for a Workload deactivated while still admitted', () => {

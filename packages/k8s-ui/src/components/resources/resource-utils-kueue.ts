@@ -226,6 +226,7 @@ const kueueAdmissionLabels: Record<string, string> = {
   insufficient_quota: 'Waiting for quota',
   exceeds_quota: 'Too large for the flavors tried',
   no_matching_flavor: 'No matching flavor',
+  resource_unavailable: 'Resource not in the queue',
   topology_placement_failed: 'Topology placement failed',
   waiting_for_preemption: 'Waiting for preempted workloads',
   preemption_gated: 'Preemption gated',
@@ -260,10 +261,11 @@ const kueueAttentionSeverity: Record<string, BadgeSeverity> = {
 // the classification reads only the Workload, never its queue.
 const kueueAdmissionHints: Record<string, string> = {
   exceeds_quota: "In its last attempt, Kueue found the requests too large for every flavor it tried. If the queue has no larger flavor, reduce them or ask an admin to raise its quota.",
-  no_matching_flavor: "No flavor in the queue fits the Workload's node selectors, tolerations or resources.",
+  no_matching_flavor: "In its last attempt, no flavor Kueue tried fits the Workload's node selectors, tolerations or topology, or the flavor an earlier slice was admitted to.",
+  resource_unavailable: 'The ClusterQueue has no quota for a resource the job requests. Remove the request, or ask an admin to add it to the queue.',
   namespace_not_eligible: "The ClusterQueue does not accept this namespace. Use another LocalQueue, or ask an admin.",
   local_queue_missing: "Check the job's queue name, or ask an admin to create the LocalQueue.",
-  cluster_queue_missing: "The LocalQueue points at a ClusterQueue that doesn't exist. An admin needs to fix the LocalQueue.",
+  cluster_queue_missing: "The LocalQueue points at a ClusterQueue that doesn't exist or is being deleted. An admin needs to restore it or repoint the LocalQueue.",
   local_queue_inactive: 'The LocalQueue may be stopped on purpose or misconfigured. Its status says which.',
   cluster_queue_inactive: 'The ClusterQueue may be stopped on purpose or misconfigured. Its status says which.',
   admission_check_rejected: 'An admission check rejected the Workload. Kueue usually deactivates it next.',
