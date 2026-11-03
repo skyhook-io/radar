@@ -33,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// Kind is one way a Workload belongs to a queue.
 type Kind string
 
 const (
@@ -41,11 +40,9 @@ const (
 	Reservation Kind = "reservation"
 )
 
-// Member is a Workload that belongs to the queue, and how.
 type Member struct {
-	Workload *unstructured.Unstructured
-	Kinds    []Kind
-	// QueueName is the Workload's spec.queueName as written.
+	Workload  *unstructured.Unstructured
+	Kinds     []Kind
 	QueueName string
 	// SubmittedTo is the ClusterQueue the Workload's LocalQueue points at now,
 	// when Radar read that LocalQueue, and LocalQueueUID that LocalQueue's
@@ -56,35 +53,29 @@ type Member struct {
 	// LocalQueues Radar didn't read, so whether it was submitted here is
 	// unknown.
 	LocalQueueUnread bool
-	// ReservedIn is the ClusterQueue the Workload reports its admission in.
-	ReservedIn string
+	ReservedIn       string
 	// Finished members sort after the others (see Key).
 	Finished bool
 }
 
-// Has reports whether the member belongs in kind's way.
 func (m Member) Has(kind Kind) bool { return slices.Contains(m.Kinds, kind) }
 
-// LocalQueues finds the LocalQueues Radar read.
 type LocalQueues interface {
 	// Get returns LocalQueue namespace/name, nil when it doesn't exist, and
 	// whether Radar read the LocalQueues in namespace at all.
 	Get(namespace, name string) (localQueue *unstructured.Unstructured, read bool)
 }
 
-// QueueName is a Workload's spec.queueName.
 func QueueName(w *unstructured.Unstructured) string {
 	name, _, _ := unstructured.NestedString(w.Object, "spec", "queueName")
 	return name
 }
 
-// ReservedIn is the ClusterQueue a Workload reports its admission in.
 func ReservedIn(w *unstructured.Unstructured) string {
 	name, _, _ := unstructured.NestedString(w.Object, "status", "admission", "clusterQueue")
 	return name
 }
 
-// LocalQueueTarget is the ClusterQueue a LocalQueue points at.
 func LocalQueueTarget(lq *unstructured.Unstructured) string {
 	name, _, _ := unstructured.NestedString(lq.Object, "spec", "clusterQueue")
 	return name
@@ -188,7 +179,6 @@ type Counts struct {
 	States      map[string]int `json:"states"`
 }
 
-// Count counts members; with a nil stateOf, States stays empty.
 func Count(members []Member, stateOf func(Member) string) Counts {
 	c := Counts{Members: len(members), States: map[string]int{}}
 	for _, m := range members {
