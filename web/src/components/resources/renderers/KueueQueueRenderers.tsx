@@ -23,10 +23,12 @@ export function LocalQueueRenderer({ data, onNavigate }: { data: any; onNavigate
 function LocalQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const parentName: string = data.spec?.clusterQueue ?? ''
   const namespace: string = data.metadata?.namespace ?? ''
-  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], !!parentName, relatedReadKey(data, [parentName], ['Active'])).byName[parentName]
+  const subjectKey = relatedReadKey(data, [parentName], ['Active'])
+  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], !!parentName, subjectKey).byName[parentName]
   const clusterQueue = parentName ? parentRead : undefined
   const needsLabels = clusterQueue?.state === 'found' && needsNamespaceLabels(clusterQueue.object?.spec?.namespaceSelector)
-  const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
+  const namespaceState = JSON.stringify([subjectKey, needsLabels, clusterQueue?.state === 'found' ? clusterQueue.object?.spec?.namespaceSelector : null])
+  const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace, namespaceState)
   return <BaseLocalQueueRenderer data={data} onNavigate={onNavigate} reads={{ clusterQueue, namespace: needsLabels ? namespaceRead : undefined }} />
 }
 

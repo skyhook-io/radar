@@ -24,7 +24,8 @@ function useAdmissionPathReads(data: any) {
   const configuredRead = configured ? queues.byName[configured] : undefined
   // Eligibility is shown only while unreserved, so a reserved Workload skips the Namespace read.
   const needsLabels = !reserved && configuredRead?.state === 'found' && needsNamespaceLabels(configuredRead.object?.spec?.namespaceSelector)
-  const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
+  const namespaceState = JSON.stringify([key, configured, needsLabels, configuredRead?.state === 'found' ? configuredRead.object?.spec?.namespaceSelector : null])
+  const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace, namespaceState)
   return {
     localQueue: queueName ? localQueue : undefined,
     clusterQueues: queues.byName,

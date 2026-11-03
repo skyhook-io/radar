@@ -297,3 +297,18 @@ describe('reasons reported per flavor', () => {
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending("LocalQueue no-such-localqueue doesn't exist")} />)).not.toContain('Reasons Reported per Flavor')
   })
 })
+
+for (const [kind, Renderer, after] of [
+  ['LocalQueue', LocalQueueRenderer, 'Conditions'],
+  ['ClusterQueue', ClusterQueueRenderer, 'Admission Policy'],
+] as const) {
+  it(`renders the ${kind} host Workloads slot after quota and before ${after}`, () => {
+    const data: any = kind === 'LocalQueue'
+      ? localQueue(active('True', 'Ready'))
+      : clusterQueue('parent', active('True', 'Ready'))
+    data.status = { ...data.status, flavorsReservation: [{ name: 'default', resources: [{ name: 'cpu', total: '1' }] }] }
+    const html = renderToStaticMarkup(<Renderer data={data} workloads={<section>Host Workloads</section>} />)
+    expect(html.indexOf('Host Workloads')).toBeGreaterThan(html.indexOf(kind === 'LocalQueue' ? 'Quota Accounting' : 'Quota by Flavor'))
+    expect(html.indexOf('Host Workloads')).toBeLessThan(html.indexOf(after))
+  })
+}

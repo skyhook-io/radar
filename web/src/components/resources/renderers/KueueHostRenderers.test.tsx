@@ -93,3 +93,25 @@ it('follows a Workload to its LocalQueue and that LocalQueue’s ClusterQueue th
   expect(requests).toEqual(expect.arrayContaining(['/api/resources/localqueues', '/api/resources/clusterqueues']))
   expect(requests.filter(path => path.startsWith('/api/resources/') && path.split('/').length > 4)).toEqual([])
 })
+
+for (const kind of ['LocalQueue', 'Workload'] as const) {
+  it(`holds Namespace labels until a new read settles after ${kind} state changes`, async () => {
+    queues = [cq('parent', undefined, active('True', 'Ready'), { namespaceSelector: { matchLabels: { team: 'a' } } })]
+    const data = { apiVersion: v, kind, metadata: { name: 'lq', namespace: 'team', generation: 1, uid: 'subject' }, spec: { queueName: 'lq', clusterQueue: 'parent' }, status: { conditions: [active('True', 'Ready')] } }
+    const node = (value: any) => kind === 'LocalQueue' ? <LocalQueueRenderer data={value} /> : <KueueWorkloadRenderer data={value} />
+    await render(node(data), () => expect(element.textContent).toContain('labels match the selector'))
+    const original = vi.mocked(fetch).getMockImplementation()!
+    const pending: (() => void)[] = []
+    vi.mocked(fetch).mockImplementation((input: any, init?: any) => {
+      if (String(input).includes('/namespaces/_/team')) return new Promise<Response>(resolve => {
+        pending.push(() => resolve(new Response(JSON.stringify({ resource: { metadata: { name: 'team', labels: { team: 'b' } } } }))))
+      })
+      return original(input, init)
+    })
+    const changed = { ...data, status: { conditions: [kind === 'LocalQueue' ? active('False', 'ClusterQueueIsInactive') : { type: 'QuotaReserved', status: 'False', reason: 'Pending', observedGeneration: 1 }] } }
+    await render(node(changed), () => expect(pending.length).toBeGreaterThan(0))
+    expect(element.textContent).not.toContain('labels match the selector')
+    await act(async () => pending[0]())
+    await vi.waitFor(() => expect(element.textContent).toContain('labels don’t match the selector'))
+  })
+}

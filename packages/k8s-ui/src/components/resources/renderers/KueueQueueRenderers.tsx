@@ -36,6 +36,7 @@ import { KUEUE_GROUP } from '../../kueue/constants'
 interface QueueRendererProps {
   data: any
   onNavigate?: Navigate
+  workloads?: ReactNode
 }
 
 /**
@@ -182,7 +183,7 @@ function Situation({ reported, configured }: { reported: ReactNode; configured: 
   )
 }
 
-export function LocalQueueRenderer({ data, onNavigate, reads }: QueueRendererProps & { reads?: LocalQueueReads }) {
+export function LocalQueueRenderer({ data, onNavigate, reads, workloads }: QueueRendererProps & { reads?: LocalQueueReads }) {
   const parentName: string | undefined = data.spec?.clusterQueue
   const namespace: string = data.metadata?.namespace ?? ''
   const parentStopped = localQueueInactiveBecauseParentStopped(data, reads?.clusterQueue)
@@ -223,6 +224,7 @@ export function LocalQueueRenderer({ data, onNavigate, reads }: QueueRendererPro
         </Section>
       )}
       <QuotaAccounting data={data} onNavigate={onNavigate} />
+      {workloads}
       <QueueConditions data={data} parentStopped={parentStopped} />
     </div>
   )
@@ -357,7 +359,7 @@ function RelatedObjects({ data, reads, onNavigate }: QueueRendererProps & { read
   )
 }
 
-export function ClusterQueueRenderer({ data, onNavigate, reads }: QueueRendererProps & { reads?: ClusterQueueReads }) {
+export function ClusterQueueRenderer({ data, onNavigate, reads, workloads }: QueueRendererProps & { reads?: ClusterQueueReads }) {
   return (
     <div className="@container/queue space-y-4">
       <StaleBanner data={data} />
@@ -369,6 +371,7 @@ export function ClusterQueueRenderer({ data, onNavigate, reads }: QueueRendererP
       />
       <RelatedObjects data={data} reads={reads} onNavigate={onNavigate} />
       <QuotaAccounting data={data} clusterQueue onNavigate={onNavigate} />
+      {workloads}
       <AdmissionPolicy data={data} />
       <QueueConditions data={data} clusterQueue />
     </div>

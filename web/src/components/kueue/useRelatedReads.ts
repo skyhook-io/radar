@@ -173,7 +173,7 @@ export const RELATED_GET_RECHECK_MS = 60_000
  * each one marks every read, and until a read started after the mark lands
  * the object reads as loading, found or not.
  */
-export function useRelatedReads(refs: RelatedRef[], enabled = true, changes = 0): RelatedRead[] {
+export function useRelatedReads(refs: RelatedRef[], enabled = true, changes: string | number = 0): RelatedRead[] {
   const cacheScope = getApiBase()
   const queryClient = useQueryClient()
   const bases = refs.map(ref => resourceQueryOptions<unknown>(ref.kind, ref.namespace ?? '', ref.name, ref.group, { enabled, cacheScope, refetchInterval: RELATED_GET_RECHECK_MS }))
