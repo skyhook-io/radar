@@ -94,6 +94,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   hpa_limited_or_failed: 'Autoscaling limited',
   rbac_forbidden: 'Permission denied',
   certificate_not_ready: 'Certificate not ready',
+  certificate_renewal_failed: 'Certificate renewal failed',
   pod_security_violation: 'Pod Security blocked',
   node_not_ready: 'Node not ready',
   node_provisioning_failed: 'Node provisioning failed',

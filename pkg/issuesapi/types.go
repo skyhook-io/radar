@@ -83,6 +83,7 @@ const (
 	CategoryHPALimitedOrFailed       Category = "hpa_limited_or_failed"
 	CategoryRBACForbidden            Category = "rbac_forbidden"
 	CategoryCertificateNotReady      Category = "certificate_not_ready"
+	CategoryCertificateRenewalFailed Category = "certificate_renewal_failed"
 	CategoryPodSecurityViolation     Category = "pod_security_violation"
 	CategoryTerminationStuck         Category = "termination_stuck"
 	CategoryNodeNotReady             Category = "node_not_ready"
@@ -165,6 +166,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryHPALimitedOrFailed:       GroupScaling,
 	CategoryRBACForbidden:            GroupSecurity,
 	CategoryCertificateNotReady:      GroupSecurity,
+	CategoryCertificateRenewalFailed: GroupSecurity,
 	CategoryPodSecurityViolation:     GroupSecurity,
 	CategoryTerminationStuck:         GroupControlPlane,
 	CategoryNodeNotReady:             GroupControlPlane,
