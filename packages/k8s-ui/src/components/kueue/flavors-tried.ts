@@ -30,9 +30,9 @@ export interface PodSetAttempts {
 
 const podSetPrefix = "couldn't assign flavors to pod set "
 
-/** The message is Kueue's account of assigning flavors, parsed or not. */
+/** The message is Kueue's per-flavor account of why quota wasn't assigned (parsed or not). Its error form isn't. */
 export function isFlavorAssignmentMessage(message: string | undefined): boolean {
-  return !!message && (message.startsWith(podSetPrefix) || message.startsWith('failed to assign flavors to pod set '))
+  return !!message && message.startsWith(podSetPrefix)
 }
 
 const patterns: { kind: FlavorAttemptKind; re: RegExp; flavor?: number; resource?: number }[] = [

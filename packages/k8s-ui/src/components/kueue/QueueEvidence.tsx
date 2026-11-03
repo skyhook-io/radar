@@ -133,6 +133,7 @@ export function namespaceEligibilityFact({ clusterQueue, parent, namespaceRead }
       return { text: result.basis === 'none' ? 'Not eligible: the ClusterQueue sets no namespaceSelector, so no namespace matches' : 'Not eligible: its labels don’t match the selector', tone: 'unhealthy', source }
     default:
       if (result.why === 'unsupported_operator') return { text: `Unknown: the selector uses operator ${result.operator || '(none)'}, which Radar doesn't evaluate`, tone: 'unknown', source }
+      if (namespaceRead?.state === 'loading') return { text: 'Checking the namespace…', tone: 'unknown', source }
       return { text: namespaceRead?.state === 'not_found' ? 'Unknown: the Namespace was not found' : `Unknown: its labels weren’t read (${unreadReason(namespaceRead)})`, tone: 'unknown', source }
   }
 }

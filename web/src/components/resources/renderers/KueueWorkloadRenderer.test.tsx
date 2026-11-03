@@ -6,6 +6,7 @@ const mock = vi.hoisted(() => ({ query: {} as any }))
 vi.mock('../../../api/client', () => ({ useKueueProvisioning: () => mock.query }))
 // The admission-path reads have their own tests; here they stay unread.
 vi.mock('../../kueue/useRelatedReads', () => ({
+  relatedReadKey: () => '',
   useRelatedObjects: () => ({ byName: {}, all: { state: 'loading' }, completeness: 'unknown' }),
   useRelatedReads: (refs: unknown[]) => refs.map(() => ({ state: 'loading' })),
 }))

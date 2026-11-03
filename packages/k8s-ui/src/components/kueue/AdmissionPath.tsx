@@ -171,16 +171,13 @@ const attemptLabel: Record<FlavorAttemptKind, string> = {
 export function FlavorReasons({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const conditions: any[] = data.status?.conditions ?? []
   const quota = conditions.find(condition => condition?.type === 'QuotaReserved')
-  if (quota?.status !== 'False' || !quota.message) return null
+  if (quota?.status !== 'False' || !isFlavorAssignmentMessage(quota.message)) return null
   const stale = isKueueConditionStale(quota, data.metadata?.generation)
-  if (!isFlavorAssignmentMessage(quota.message)) return null
   const parsed = parseFlavorAttempts(quota.message)
   return (
     <Section variant="card" title="Reasons Reported per Flavor">
       {stale && <p className="mb-2 text-xs text-warning-text">Reported for generation {quota.observedGeneration} (now {data.metadata?.generation}); the Workload has changed since.</p>}
-      <p className="mb-3 text-xs text-theme-text-tertiary">{quota.message.startsWith("couldn't assign")
-        ? 'From the controller-reported message on QuotaReserved. Kueue lists the reasons alphabetically, not in the order it tried flavors, and may not report every flavor.'
-        : 'The controller-reported error on QuotaReserved.'}</p>
+      <p className="mb-3 text-xs text-theme-text-tertiary">From the controller-reported message on QuotaReserved. Kueue lists the reasons alphabetically, not in the order it tried flavors, and may not report every flavor.</p>
       {parsed ? (
         <div className="space-y-3">
           {parsed.map(podSet => (

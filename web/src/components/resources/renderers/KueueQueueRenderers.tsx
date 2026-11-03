@@ -11,7 +11,7 @@ import { needsNamespaceLabels } from '@skyhook-io/k8s-ui/components/kueue/eligib
 import { localQueueStatusWithParent } from '@skyhook-io/k8s-ui/components/kueue/queue-status'
 import type { RelatedRead } from '@skyhook-io/k8s-ui/components/kueue/related-read'
 import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/constants'
-import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
+import { relatedReadKey, useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
 
 type Navigate = (ref: ResourceRef) => void
 
@@ -23,7 +23,7 @@ export function LocalQueueRenderer({ data, onNavigate }: { data: any; onNavigate
 function LocalQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const parentName: string = data.spec?.clusterQueue ?? ''
   const namespace: string = data.metadata?.namespace ?? ''
-  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], !!parentName, data.metadata?.resourceVersion).byName[parentName]
+  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], !!parentName, relatedReadKey(data, [parentName], ['Active'])).byName[parentName]
   const clusterQueue = parentName ? parentRead : undefined
   const needsLabels = clusterQueue?.state === 'found' && needsNamespaceLabels(clusterQueue.object?.spec?.namespaceSelector)
   const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
@@ -37,8 +37,9 @@ export function ClusterQueueRenderer({ data, onNavigate }: { data: any; onNaviga
 function ClusterQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const names = useMemo(() => clusterQueueRelatedNames(data), [data])
   const cohort = getClusterQueueCohort(data)
-  const flavors = useRelatedObjects('resourceflavors', KUEUE_GROUP, undefined, names.flavors, names.flavors.length > 0, data.metadata?.resourceVersion)
-  const checks = useRelatedObjects('admissionchecks', KUEUE_GROUP, undefined, names.admissionChecks, names.admissionChecks.length > 0, data.metadata?.resourceVersion)
+  const subjectKey = relatedReadKey(data, [...names.flavors, ...names.admissionChecks], ['Active'])
+  const flavors = useRelatedObjects('resourceflavors', KUEUE_GROUP, undefined, names.flavors, names.flavors.length > 0, subjectKey)
+  const checks = useRelatedObjects('admissionchecks', KUEUE_GROUP, undefined, names.admissionChecks, names.admissionChecks.length > 0, subjectKey)
   const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [], cohort !== '-')
   const members: RelatedRead<string[]> | undefined = cohort === '-' ? undefined
     : queues.all.state !== 'found' ? queues.all as RelatedRead<string[]>
@@ -62,7 +63,7 @@ function ClusterQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navig
 export function LocalQueueStatusBadge({ data }: { data: any }) {
   const parentName: string = data?.spec?.clusterQueue ?? ''
   const supported = isKueueQueueResource(data)
-  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], supported && !!parentName, data?.metadata?.resourceVersion).byName[parentName]
+  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], supported && !!parentName, relatedReadKey(data, [parentName], ['Active'])).byName[parentName]
   const parent = parentName ? parentRead : undefined
   const status = localQueueStatusWithParent(data, supported ? parent : undefined)
   return <span className={`badge ${status.color}`}>{status.text}</span>

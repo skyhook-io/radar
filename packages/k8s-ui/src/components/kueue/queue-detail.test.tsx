@@ -273,7 +273,10 @@ describe('reasons reported per flavor', () => {
   it('falls back to the verbatim message, marks a stale one, and skips unrelated messages', () => {
     const odd = "couldn't assign flavors to pod set main: topology \"rack\" doesn't allow to fit any of 3 pod(s)"
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending(odd)} />)).toContain('topology &quot;rack&quot; doesn&#x27;t allow to fit any of 3 pod(s)')
-    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending('failed to assign flavors to pod set main: boom')} />)).toContain('Reasons Reported per Flavor')
+    // Kueue's error form isn't a per-flavor account: it stays on the path, verbatim.
+    const failed = renderToStaticMarkup(<KueueWorkloadRenderer data={pending('failed to assign flavors to pod set main: boom')} reads={{}} />)
+    expect(failed).not.toContain('Reasons Reported per Flavor')
+    expect(failed).toContain('Controller-reported on QuotaReserved: </span>failed to assign flavors to pod set main: boom')
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={{ ...pending(live), metadata: { name: 'w', namespace: 'team', generation: 2 } }} />)).toContain('Reported for generation 1 (now 2)')
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending("LocalQueue no-such-localqueue doesn't exist")} />)).not.toContain('Reasons Reported per Flavor')
   })

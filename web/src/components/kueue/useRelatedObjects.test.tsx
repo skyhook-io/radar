@@ -42,8 +42,8 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-function Probe({ onRead, version }: { onRead: (read: RelatedObjects) => void; version?: string }) {
-  const read = useRelatedObjects('clusterqueues', 'kueue.x-k8s.io', undefined, ['present', 'gone'], true, version)
+function Probe({ onRead, version, names = ['present', 'gone'] }: { onRead: (read: RelatedObjects) => void; version?: string; names?: string[] }) {
+  const read = useRelatedObjects('clusterqueues', 'kueue.x-k8s.io', undefined, names, true, version)
   useEffect(() => onRead(read))
   return null
 }
@@ -102,6 +102,47 @@ it('re-reads, and stops claiming absence, when the object on screen changes', as
   })))
   await act(async () => root.render(<QueryClientProvider client={client}><Probe version="2" onRead={read => { latest = read }} /></QueryClientProvider>))
   expect(latest?.byName.gone).toEqual({ state: 'loading' })
+  await act(async () => release?.())
+  await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))
+})
+
+it('makes no new request when the subject key stays the same', async () => {
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="a" onRead={read => { latest = read }} /></QueryClientProvider>))
+  await vi.waitFor(() => expect(latest?.byName.gone).toEqual({ state: 'not_found' }))
+  const before = requests.length
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="a" onRead={read => { latest = read }} /></QueryClientProvider>))
+  expect(requests.length).toBe(before)
+})
+
+it('neither retries nor polls a denied GET', async () => {
+  listStatus = 403
+  vi.mocked(fetch).mockImplementation(async (input: any) => {
+    const url = new URL(String(input), 'http://localhost')
+    requests.push(url.pathname)
+    return new Response(JSON.stringify({ error: 'no', error_code: 'user_forbidden' }), { status: 403 })
+  })
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe names={['denied']} onRead={read => { latest = read }} /></QueryClientProvider>))
+  await vi.waitFor(() => expect(latest?.byName.denied).toMatchObject({ state: 'unavailable', code: 'user_forbidden' }))
+  const query = client.getQueryCache().findAll({ queryKey: ['resource', 'clusterqueues', '', 'denied'] })[0]
+  const interval = (query?.options as { refetchInterval?: unknown }).refetchInterval
+  expect(typeof interval === 'function' ? interval(query) : interval).toBe(false)
+  expect(requests.filter(path => path === '/api/resources/clusterqueues/_/denied')).toHaveLength(1)
+})
+
+it('re-reads fallback GETs when the subject changes, and holds absence until they land', async () => {
+  listStatus = 403
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="1" onRead={read => { latest = read }} /></QueryClientProvider>))
+  await vi.waitFor(() => expect(latest?.byName.gone).toEqual({ state: 'not_found' }), { timeout: 6000 })
+  let release: (() => void) | undefined
+  vi.mocked(fetch).mockImplementation((input: any) => {
+    const path = new URL(String(input), 'http://localhost').pathname
+    requests.push(path)
+    if (path === '/api/resources/clusterqueues') return Promise.resolve(new Response(JSON.stringify({ error: 'no', error_code: 'user_forbidden' }), { status: 403 }))
+    if (path === '/api/resources/clusterqueues/_/gone') return new Promise<Response>(resolve => { release = () => resolve(new Response(JSON.stringify({ resource: { metadata: { name: 'gone' } } }))) })
+    return Promise.resolve(new Response(JSON.stringify({ resource: { metadata: { name: 'present' } } })))
+  })
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="2" onRead={read => { latest = read }} /></QueryClientProvider>))
+  await vi.waitFor(() => expect(latest?.byName.gone).toEqual({ state: 'loading' }))
   await act(async () => release?.())
   await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))
 })
