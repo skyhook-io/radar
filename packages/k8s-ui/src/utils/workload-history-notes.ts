@@ -1,5 +1,5 @@
 import type { ReadGap, ReadKindRef } from '../types/read-coverage'
-import { gapReasonText, readActionFor } from './read-actions'
+import { canonicalReadCode, gapReasonText, READ_ACTIONS, readActionFor } from './read-actions'
 
 /**
  * Whether Radar holds every change since a workload existed, as Radar's
@@ -29,14 +29,37 @@ function joinWords(words: string[]): string {
   return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
 }
 
-function gapClause(code: string): string {
-  switch (readActionFor(code)) {
+function gapClause(gap: ReadGap): string {
+  const code = canonicalReadCode(gap.code)
+  switch (code) {
+    case 'radar_forbidden':
+      return "Radar's Kubernetes identity may not list them"
+    case 'radar_credentials_rejected':
+      return "Kubernetes rejected Radar's credentials"
+    case 'radar_kind_not_collected':
+    case 'radar_namespace_not_collected':
+      return "Radar doesn't collect them here"
+  }
+  if (typeof code === 'string' && Object.hasOwn(READ_ACTIONS, code)) {
+    return readActionFor(code) === 'user_access'
+      ? "you don't have access to list them in this namespace"
+      : gapReasonText(code)
+  }
+  switch (gap.action) {
     case 'user_access':
       return "you don't have access to list them in this namespace"
     case 'radar_config':
-      return "Radar doesn't collect them here"
+      return "Radar's connection or collection settings need attention"
+    case 'retry':
+      return 'retry the read'
+    case 'wait':
+      return 'wait and retry the read'
+    case 'check_target':
+      return 'check the requested target and retry'
+    case 'change_request':
+      return 'change the read request'
     default:
-      return gapReasonText(code)
+      return gapReasonText(gap.code)
   }
 }
 
@@ -64,7 +87,7 @@ export function workloadHistoryNotes(coverage?: WorkloadHistoryCoverage | null, 
   for (const gap of gaps ?? []) {
     const kinds = gap.kinds?.names?.map(kindLabel) ?? []
     const what = kinds.length > 0 ? `Changes to ${joinWords(kinds)}` : 'Some related changes'
-    notes.push(`${what} aren't shown: ${gapClause(gap.code)}.`)
+    notes.push(`${what} aren't shown: ${gapClause(gap)}.`)
   }
   return notes
 }

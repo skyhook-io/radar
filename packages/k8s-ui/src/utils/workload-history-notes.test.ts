@@ -40,9 +40,37 @@ describe('workloadHistoryNotes', () => {
         { code: 'some_future_code' },
       ]),
     ).toEqual([
-      "Changes to Kueue Workloads aren't shown: Radar doesn't collect them here.",
+      "Changes to Kueue Workloads aren't shown: Radar's Kubernetes identity may not list them.",
       "Changes to ProvisioningRequests aren't shown: still loading.",
       "Some related changes aren't shown: the read failed.",
+    ])
+  })
+})
+
+
+describe('history gap remedies', () => {
+  it('preserves known Radar access and collection reasons separately', () => {
+    expect(workloadHistoryNotes(null, [
+      { code: 'radar_credentials_rejected', action: 'radar_config' },
+      { code: 'radar_namespace_not_collected', action: 'radar_config' },
+      { code: 'cluster_disconnected', action: 'radar_config' },
+    ])).toEqual([
+      "Some related changes aren't shown: Kubernetes rejected Radar's credentials.",
+      "Some related changes aren't shown: Radar doesn't collect them here.",
+      "Some related changes aren't shown: Radar lost its connection.",
+    ])
+  })
+
+  it.each([
+    ['user_access', "you don't have access to list them in this namespace"],
+    ['radar_config', "Radar's connection or collection settings need attention"],
+    ['retry', 'retry the read'],
+    ['wait', 'wait and retry the read'],
+    ['check_target', 'check the requested target and retry'],
+    ['change_request', 'change the read request'],
+  ])('uses the supplied %s action for an unknown code', (action, clause) => {
+    expect(workloadHistoryNotes(null, [{ code: 'new_server_code', action }])).toEqual([
+      `Some related changes aren't shown: ${clause}.`,
     ])
   })
 })
