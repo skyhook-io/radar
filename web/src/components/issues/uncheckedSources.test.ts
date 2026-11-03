@@ -32,6 +32,19 @@ describe('uncheckedSourceLines', () => {
       .toEqual(["Helm releases couldn't be checked because Radar's service account isn't allowed to impersonate users, so failed or stuck releases may be missing."])
   })
 
+  it('says a Kueue queue check was skipped because the caller cannot read ClusterQueues', () => {
+    expect(uncheckedSourceLines([{
+      source: 'kueue', reason: 'caller_access_denied', kinds: [{ group: 'kueue.x-k8s.io', kind: 'ClusterQueue' }],
+    }])).toEqual(["You can't read ClusterQueues, so Radar can't tell you whether a queue your runs wait on is stopped on purpose or broken."])
+  })
+
+  it('names Kueue kinds Radar could not load', () => {
+    expect(uncheckedSourceLines([{ source: 'kueue', reason: 'kind_sync_pending', kinds: [{ group: 'kueue.x-k8s.io', kind: 'LocalQueue' }] }]))
+      .toEqual(['Still loading LocalQueues, so their issues may be missing.'])
+    expect(uncheckedSourceLines([{ source: 'kueue', reason: 'read_failed' }]))
+      .toEqual(["Kueue resources couldn't be checked, so blocked runs and broken queues may be missing."])
+  })
+
   it('falls back to the source line for a reason this version does not know', () => {
     expect(uncheckedSourceLines([{ source: 'karpenter', reason: 'something_new' }]))
       .toEqual(["Karpenter resources couldn't be checked, so NodePool and NodeClaim issues may be missing."])

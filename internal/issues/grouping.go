@@ -88,6 +88,19 @@ func Concerns(i Issue, group, kind, namespace, name string) bool {
 		(i.Owner.Kind != "" && same(i.Owner.Group, i.Owner.Kind, i.Owner.Namespace, i.Owner.Name))
 }
 
+// Affects reports whether an issue about another subject names the resource
+// among the resources it affects (AffectedRefs), matched the way Concerns
+// matches.
+func Affects(i Issue, group, kind, namespace, name string) bool {
+	wantGroup := resolveGroup(group, kind)
+	for _, ref := range i.AffectedRefs {
+		if strings.EqualFold(ref.Kind, kind) && ref.Namespace == namespace && ref.Name == name && resolveGroup(ref.Group, ref.Kind) == wantGroup {
+			return true
+		}
+	}
+	return false
+}
+
 // RelatedIssuesFrom is the matching half of RelatedIssues over an
 // already-composed (flat, grouped) pair. Split out so a caller that needs the
 // related issues for MANY resources in one request (e.g. the GitOps insights

@@ -1760,6 +1760,67 @@ confirm freshness, and transition times do not date scheduling attempts.
 Older Kueue wording is best-effort; unrecognized reasons remain visible.
 Radar does not infer fairness, Pod placement, physical capacity or runtime health.
 
+#### Kueue in Issues
+
+Issues reports a Kueue run only when someone has to act. Waiting (for quota,
+preemption, a pending AdmissionCheck, a provisioning retry or an eviction
+backoff), a deliberate pause (a stop policy, an admission or preemption gate,
+`OnHold`, a user's `spec.active=false`) and states Radar can't judge
+(`unrecognized`, `topology_placement_failed`, stale evidence) are not Issues;
+they stay in the Workload's admission context. Pending, suspended or Pod-less
+alone is never an Issue. The Workload's own `attention` from the
+classification above decides: `action_needed` is an Issue, the rest is not,
+except for an inactive queue, which Radar settles by reading the queue.
+
+| Row | Subject | When | Category |
+|-----|---------|------|----------|
+| `KueueExceedsQuota`, `KueueNoMatchingFlavor`, `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it and is at least a minute old | `queue_admission_blocked` |
+| `KueueClusterQueueMissing` | the LocalQueue, or the run when no LocalQueue row explains it | Kueue reports the LocalQueue's ClusterQueue doesn't exist | `queue_admission_blocked` |
+| `KueueAdmissionCheckRejected` | the run | an AdmissionCheck rejected it, through Kueue's deactivation that follows (one row, one ID) | `queue_admission_blocked` |
+| `KueueRequeuingLimitExceeded`, `KueueMaximumExecutionTimeExceeded`, `KueueDeactivatedByKueue` | the run | Kueue deactivated it and recorded why | `batch_run_stopped` (the first two), `queue_admission_blocked` |
+| `KueueClusterQueueInactive` | the LocalQueue whose ClusterQueue is broken, and that ClusterQueue | the ClusterQueue's current `Active=False` reason is a configuration error (FlavorNotFound, AdmissionCheckNotFound, AdmissionCheckInactive, TopologyNotFound, CohortCycleDetected or a MultiKueue misconfiguration) and its `stopPolicy` is `None` | `queue_admission_blocked` |
+
+All are warnings. The run is the top of the Workload's controller chain (a
+Job, JobSet or RayJob, or the CronJob above a Job), read through the ownership
+view from the same Workload incarnation that was classified; with no
+followable controller, the Workload is the subject. Ownership is never inferred
+from a queue or a name. Concurrent-admission variants and their parent are
+skipped: a losing variant is expected.
+
+A broken ClusterQueue is one incident, not one row per run: each LocalQueue
+pointing to it gets a row listing the runs submitted there that Kueue reports
+blocked (its namespace, so the run's own page finds it), and the cluster-wide
+view adds one row for the ClusterQueue, which the LocalQueue rows name as
+their cause. A stopped (`Hold`, `HoldAndDrain`), terminating or recovered
+ClusterQueue raises nothing; neither does a LocalQueue with its own stop policy.
+
+Evidence on each row: the Workload's classified facts with their native
+reasons and messages, and for a rejected check the AdmissionChecks the Workload
+lists (with each check's `Active` condition; Kueue records no generation for a
+Workload's check state, so its freshness is not established) and up to three
+retained ProvisioningRequests whose controller owner is that Workload
+incarnation, newest first, with their native outcome. A ProvisioningRequest is
+not matched to a particular check. Kueue retries a failed provisioning attempt
+(the check reads `Retry`, which is waiting) and rejects only once retries are
+exhausted or capacity is revoked; with a large retry limit, a run can retry
+for a long time without becoming an Issue.
+
+Access: rows follow the caller's namespace access; a run row whose root the
+caller can't read falls back to the Workload. A LocalQueue or ClusterQueue
+row about a broken ClusterQueue needs permission to list ClusterQueues; for a
+caller without it, Radar reads no ClusterQueue, raises neither row (a stop and
+a fault would otherwise look different) and says so in `unchecked_sources`
+(`kueue`, `caller_access_denied`); the run's own Issues section counts the row
+as withheld. Links to runs, AdmissionChecks and ProvisioningRequests are kept
+only when the caller can open them, without counts. ClusterQueue rows appear
+only in answers not narrowed to namespaces.
+
+Not covered: a Workload Kueue never decides about (`no_decision` for as long
+as Kueue is down), a reason a newer Kueue adds (`unrecognized`), MultiKueue
+handoff, and queue position. `diagnose` does not accept batch kinds; agents
+get the same rows from `issues` and from `get_resource` on the run or the
+Workload (`relatedIssues`, beside its `scheduling` admission context).
+
 ### KubeRay
 
 | Resource | Group | Status source |

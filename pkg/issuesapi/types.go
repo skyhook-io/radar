@@ -42,6 +42,9 @@ const (
 	CategoryUnschedulable            Category = "unschedulable"
 	CategoryQuotaExceeded            Category = "quota_exceeded"
 	CategoryAdmissionWebhookBlocking Category = "admission_webhook_blocking"
+	// CategoryQueueAdmissionBlocked is a batch run a queueing controller
+	// (Kueue) will not admit as configured, or a queue that admits nothing.
+	CategoryQueueAdmissionBlocked Category = "queue_admission_blocked"
 
 	CategoryImagePullFailed     Category = "image_pull_failed"
 	CategoryContainerWaiting    Category = "container_waiting"
@@ -56,6 +59,9 @@ const (
 	CategoryPodEvicted        Category = "pod_evicted"
 	CategoryJobFailed         Category = "job_failed"
 	CategoryCronJobFailed     Category = "cronjob_failed"
+	// CategoryBatchRunStopped is a batch run its queueing controller stopped
+	// after it ran: too many requeues, or past its maximum execution time.
+	CategoryBatchRunStopped Category = "batch_run_stopped"
 
 	CategoryMissingConfigRef         Category = "missing_config_ref"
 	CategoryInvalidConfiguration     Category = "invalid_configuration"
@@ -127,6 +133,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryUnschedulable:            GroupScheduling,
 	CategoryQuotaExceeded:            GroupScheduling,
 	CategoryAdmissionWebhookBlocking: GroupScheduling,
+	CategoryQueueAdmissionBlocked:    GroupScheduling,
 	CategoryImagePullFailed:          GroupStartup,
 	CategoryContainerWaiting:         GroupStartup,
 	CategoryInitContainerFailed:      GroupStartup,
@@ -139,6 +146,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPodEvicted:               GroupRuntime,
 	CategoryJobFailed:                GroupRuntime,
 	CategoryCronJobFailed:            GroupRuntime,
+	CategoryBatchRunStopped:          GroupRuntime,
 	CategoryMissingConfigRef:         GroupConfiguration,
 	CategoryInvalidConfiguration:     GroupConfiguration,
 	CategoryPDBBlocksEvictions:       GroupConfiguration,
@@ -824,6 +832,9 @@ const (
 	// UncheckedSourceKarpenter is the Karpenter NodePool, NodeClass and
 	// NodeClaim checks.
 	UncheckedSourceKarpenter UncheckedSourceName = "karpenter"
+	// UncheckedSourceKueue is the Kueue checks: Workloads Kueue will not
+	// admit, and LocalQueues and ClusterQueues that admit nothing.
+	UncheckedSourceKueue UncheckedSourceName = "kueue"
 )
 
 type UncheckedReason string
@@ -841,6 +852,10 @@ const (
 	// identity, such as a ServiceAccount that may not impersonate the
 	// caller. Granting the caller more access does not help.
 	UncheckedReasonCollectorAccessDenied UncheckedReason = "collector_access_denied"
+	// UncheckedReasonCallerAccessDenied: the check needs kinds the caller may
+	// not read, so Radar does not answer it for them. Radar's other answers
+	// are unaffected.
+	UncheckedReasonCallerAccessDenied UncheckedReason = "caller_access_denied"
 )
 
 type BindingType string

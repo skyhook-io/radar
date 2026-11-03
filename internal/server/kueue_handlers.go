@@ -15,7 +15,6 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
 )
 
@@ -222,7 +221,7 @@ func kueueAdmissionForRoot(ctx context.Context, root *unstructured.Unstructured,
 	return response
 }
 
-const provisioningGroup = "autoscaling.x-k8s.io"
+const provisioningGroup = schedulinginsight.ProvisioningRequestGroup
 const maxProvisioningRequests = 20
 
 type KueueProvisioningResponse struct {
@@ -289,27 +288,7 @@ func (s *Server) handleKueueProvisioning(w http.ResponseWriter, r *http.Request)
 }
 
 func provisioningForWorkload(root *unstructured.Unstructured, items []*unstructured.Unstructured) KueueProvisioningResponse {
-	matches := make([]*unstructured.Unstructured, 0)
-	for _, item := range items {
-		if item == nil || root.GetUID() == "" || item.GroupVersionKind().Group != provisioningGroup || item.GetKind() != "ProvisioningRequest" || item.GetNamespace() != root.GetNamespace() {
-			continue
-		}
-		owner := metav1.GetControllerOf(item)
-		if owner == nil || resourceid.GroupFromAPIVersion(owner.APIVersion) != kueueGroup || owner.Kind != "Workload" || owner.Name != root.GetName() || owner.UID != root.GetUID() {
-			continue
-		}
-		matches = append(matches, item)
-	}
-	sort.Slice(matches, func(i, j int) bool {
-		at, bt := matches[i].GetCreationTimestamp(), matches[j].GetCreationTimestamp()
-		if !at.Equal(&bt) {
-			return at.After(bt.Time)
-		}
-		if matches[i].GetName() != matches[j].GetName() {
-			return matches[i].GetName() < matches[j].GetName()
-		}
-		return matches[i].GetUID() < matches[j].GetUID()
-	})
+	matches := schedulinginsight.KueueProvisioningRequests(root, items)
 	result := KueueProvisioningResponse{UID: string(root.GetUID()), Installed: true, Requests: make([]*unstructured.Unstructured, 0), Total: len(matches), Truncated: len(matches) > maxProvisioningRequests}
 	if result.Truncated {
 		matches = matches[:maxProvisioningRequests]

@@ -320,7 +320,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		CanReadSubject:       s.issueSubjectAccess(r),
 		CanReadEvidence:      s.issueEvidenceAccess(r),
 		OnEvidenceWithheld: func(i issues.Issue) {
-			if issues.Concerns(i, group, kind, namespace, name) {
+			if issues.Concerns(i, group, kind, namespace, name) || issues.Affects(i, group, kind, namespace, name) {
 				evidenceWithheld[i.ID] = true
 			}
 		},
