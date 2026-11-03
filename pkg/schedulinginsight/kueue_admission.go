@@ -305,7 +305,7 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 var (
 	unusedQuotaClause = regexp.MustCompile(`insufficient unused quota for \S+ in flavor (\S+?),`)
 	maxQuotaClause    = regexp.MustCompile(`insufficient quota for \S+ in flavor (\S+?),`)
-	taintClause       = regexp.MustCompile(`untolerated taint .* in flavor (\S+?)(?:,|$)`)
+	taintClause       = regexp.MustCompile(`untolerated taint .*? in flavor (\S+?)(?:,|$)`)
 	affinityClause    = regexp.MustCompile(`flavor (\S+) doesn't match node affinity`)
 )
 

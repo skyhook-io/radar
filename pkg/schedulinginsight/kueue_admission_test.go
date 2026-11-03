@@ -256,6 +256,22 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			disruption: rc.KueueAdmissionEvicted,
 		},
 		{
+			name: "every taint clause rules out its flavor, not only the last",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set main: untolerated taint {spot true NoSchedule <nil>} in flavor spot, untolerated taint {gpu true NoSchedule <nil>} in flavor a100, insufficient unused quota for cpu in flavor spot, 1 more needed")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoMatchingFlavor,
+			blocker: rc.KueueAdmissionNoMatchingFlavor,
+		},
+		{
+			name: "taint and unused quota in the same flavor rule it out",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set main: untolerated taint {spot true NoSchedule <nil>} in flavor spot, insufficient unused quota for cpu in flavor spot, 1 more needed")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoMatchingFlavor,
+			blocker: rc.KueueAdmissionNoMatchingFlavor,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
