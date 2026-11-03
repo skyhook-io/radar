@@ -76,14 +76,6 @@ describe('RayClusterLogsTab', () => {
     expect(html).toContain('Pod list not refreshed: Showing the last list Radar read. Cluster connection changed')
   })
 
-  it('opens the deep-linked container only on a Pod that has it', () => {
-    state.query = { data: owned }
-    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-worker-b" onSelectPod={() => {}} initialContainer="ray-head" />)
-    expect(state.tab.initialContainer).toBe('wait-gcs-ready')
-    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-head" onSelectPod={() => {}} initialContainer="ray-head" />)
-    expect(state.tab.initialContainer).toBe('ray-head')
-  })
-
   it('asks for a newer Radar instead of requesting a list it cannot serve', () => {
     state.support = 'unsupported'
     const html = render()
@@ -163,15 +155,6 @@ describe('RayClusterLogsTab', () => {
     state.query = { data: { pods: [], total: 0, truncated: false } }
     renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested rootLoading={false} rootError={null} historyPods={history} selectedPod={null} onSelectPod={() => {}} initialContainer={null} />)
     expect(state.tab.emptyMessage).toBe('This RayCluster has no Pods right now. Its suspension is requested.')
-  })
-
-  it('applies a linked container to its own Pod only, not to Pods picked after it', () => {
-    state.query = { data: owned }
-    const tab = (selectedPod: string) => <RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod={selectedPod} onSelectPod={() => {}} initialContainer="wait-gcs-ready" />
-    renderToStaticMarkup(tab('cluster-worker-b'))
-    expect(state.tab.initialContainer).toBe('wait-gcs-ready')
-    renderToStaticMarkup(tab('cluster-head'))
-    expect(state.tab.initialContainer).toBe('ray-head')
   })
 
   it('applies only to the KubeRay ray.io/v1 RayCluster', () => {

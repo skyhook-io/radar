@@ -73,7 +73,7 @@ export function MultiPodLogsTab({
             <button
               onClick={() => onSelectPod(pod.name)}
               aria-pressed={selectedPod === pod.name}
-              aria-label={pod.name.length > 40 ? pod.name : undefined}
+              aria-label={pod.name.length > 40 ? `${pod.name}${pod.name === unlisted ? ', not in this list' : ''}` : undefined}
               className={clsx(
                 'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
                 selectedPod === pod.name

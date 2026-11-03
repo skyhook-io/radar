@@ -1809,8 +1809,8 @@ not read, and nothing is kept once a Pod is deleted.
   read, the tab lists the Pods Radar has recorded and says why. On an older Radar
   the tab and Runtime Pods both show an upgrade note. A refresh that fails for a
   passing reason keeps the last list and says it wasn't refreshed.
-- **Row buttons.** Each Runtime Pods row has a Logs button (when the namespace
-  allows `pods/log`) that opens the Pod in the log dock. A Pod with no container
+- **Row buttons.** Each Runtime Pods row has a Logs button (unless the namespace
+  is known to deny `pods/log`) that opens the Pod in the log dock. A Pod with no container
   status shows why instead: not scheduled, no status yet, or ended before starting.
 - **Container.** The viewer opens on one container and stays there until you
   switch. While a Pod is Pending, or after it failed, the button and the tab open
