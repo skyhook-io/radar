@@ -1928,7 +1928,7 @@ When Radar runs locally, MCP clients can use `collect_application_evidence` to r
 | Integration | Endpoint | Evidence |
 |---|---|---|
 | RabbitMQ | Port 15692, `/metrics` | Node-reported disk/memory alarms, optional resource measurements and watermarks |
-| NATS | Port 8222, `/jsz` | JetStream pending, acknowledgement-pending and redelivery counts |
+| NATS | Port 8222, `/jsz` | JetStream pending, acknowledgement-pending and redelivery counts; delivery/acknowledgement positions, activity times and waiting pull requests when reported |
 | Vault | Port 8200, `/v1/sys/health` | HTTP status, initialization/seal/standby state, and HA connection/removal facts when reported |
 
 Requires Pod-read/port-forward permissions, a recognized application image and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must already be enabled. Credentials, TLS, custom ports, authenticated/remote/hosted/in-cluster deployments and built-in investigations are unsupported.

@@ -195,6 +195,19 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
       <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {pluralize(nats.returnedAccounts, 'account')} · {pluralize(nats.returnedStreams, 'stream')} · {pluralize(nats.returnedConsumers, 'consumer')} returned{nats.truncated ? ' · Truncated' : ''}</p>
       {nats.totals && <p>Node reports {pluralize(nats.totals.messages, 'message')} across {pluralize(nats.totals.streams, 'stream')} and {pluralize(nats.totals.consumers, 'consumer')}.</p>}
       {nats.consumers.length > 0 && <div className="overflow-x-auto"><table className="w-full min-w-[480px] text-left text-xs"><thead><tr><th className="pr-3">Account / stream / consumer</th><th className="pr-3">Pending</th><th className="pr-3">Ack pending</th><th>Redelivered</th></tr></thead><tbody>{nats.consumers.map(item => <tr key={JSON.stringify([item.account, item.stream, item.name])}><td className="py-2 pr-3 break-all">{item.account} / {item.stream} / {item.name}</td><td>{item.pending}</td><td>{item.ackPending}</td><td>{item.redelivered}</td></tr>)}</tbody></table></div>}
+      {nats.consumers.length > 0 && <Disclosure summary="Consumer progress" summaryClassName="text-xs text-theme-text-secondary">
+        <p className="mt-2 text-xs text-theme-text-secondary">Reported positions, not backlog or lag. Ack floor marks acknowledged-through positions. One snapshot cannot establish stalled progress. Missing or invalid values are unavailable.</p>
+        <div className="mt-2 space-y-3">{nats.consumers.map(item => <div key={JSON.stringify([item.account, item.stream, item.name])} className="card-inner p-2 text-xs">
+          <p className="break-all font-medium">{item.account} / {item.stream} / {item.name}</p>
+          <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+            <dt>Delivered</dt><dd className="break-words">Consumer {item.delivered?.consumerSequence ?? 'unavailable'} · Stream {item.delivered?.streamSequence ?? 'unavailable'}</dd>
+            <dt>Last delivery</dt><dd className="break-words">{item.delivered?.lastActive ? <time dateTime={item.delivered.lastActive}>{item.delivered.lastActive}</time> : 'Unavailable'}</dd>
+            <dt>Ack floor</dt><dd className="break-words">Consumer {item.ackFloor?.consumerSequence ?? 'unavailable'} · Stream {item.ackFloor?.streamSequence ?? 'unavailable'}</dd>
+            <dt>Last ack</dt><dd className="break-words">{item.ackFloor?.lastActive ? <time dateTime={item.ackFloor.lastActive}>{item.ackFloor.lastActive}</time> : 'Unavailable'}</dd>
+            <dt>Waiting pull requests</dt><dd>{item.outstandingPullRequests ?? 'Unavailable'} <span className="text-theme-text-secondary">(pull consumers only)</span></dd>
+          </dl>
+        </div>)}</div>
+      </Disclosure>}
     </div>}
     {result.limitations.length > 0 && <Disclosure summary="Collection limits" className="mt-3" summaryClassName="text-xs text-theme-text-secondary">
       <ul className="mt-2 space-y-1 text-xs text-theme-text-secondary">{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>

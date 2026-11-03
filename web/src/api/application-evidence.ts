@@ -18,6 +18,12 @@ export interface EvidenceCandidates {
   truncated?: boolean
   coverageLimited?: boolean
 }
+export interface NATSSequence {
+  /** Decimal uint64 identifiers, preserved without JavaScript number rounding. */
+  consumerSequence?: string
+  streamSequence?: string
+  lastActive?: string
+}
 export interface ApplicationEvidenceResult {
   adapter: EvidenceApplication
   target: EvidenceTarget
@@ -39,7 +45,7 @@ export interface ApplicationEvidenceResult {
     nats?: {
       jetStreamEnabled: boolean
       totals?: { accounts: number; streams: number; consumers: number; messages: number }
-      consumers: { account: string; stream: string; name: string; pending: number; ackPending: number; redelivered: number }[]
+      consumers: { account: string; stream: string; name: string; pending: number; ackPending: number; redelivered: number; delivered?: NATSSequence; ackFloor?: NATSSequence; outstandingPullRequests?: number }[]
       coverage: string
       returnedAccounts: number
       returnedStreams: number
