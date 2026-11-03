@@ -65,9 +65,9 @@ func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveI
 	if !knownDependency && !kueueManagedRoot(dynamicCache, served[0].gvr, namespace, live, allowed && authoritative) {
 		return nil, time.Time{}
 	}
-	reads := make([]kueueKindRead, 0, len(served))
+	reads := make([]kueueHistoryKindRead, 0, len(served))
 	for _, kind := range served {
-		read := kueueKindRead{ref: kind.ref}
+		read := kueueHistoryKindRead{ref: kind.ref}
 		read.allowed, read.authoritative = s.canReadDecision(r, kind.gvr.Group, kind.gvr.Resource, namespace, "list")
 		if read.allowed {
 			for _, part := range readplan.Dynamic(dynamicCache, kind.gvr, []string{namespace}, false).Partitions {
@@ -86,11 +86,11 @@ func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveI
 	return kueueReadGaps(namespace, reads)
 }
 
-// kueueKindRead is what kueueReadGaps needs to know about one kind: whether
+// kueueHistoryKindRead is what kueueReadGaps needs to know about one kind: whether
 // the caller may list it in the namespace (authoritative false when the check
 // itself failed), why Radar can't serve it there, if it can't, and since when
 // Radar has watched it.
-type kueueKindRead struct {
+type kueueHistoryKindRead struct {
 	ref                    resourceapi.KindRef
 	allowed, authoritative bool
 	uncollected            []readreason.Code
@@ -99,7 +99,7 @@ type kueueKindRead struct {
 
 // kueueReadGaps groups the kinds the caller can't get into one gap per
 // reason, and returns the latest watch start among the kinds it can.
-func kueueReadGaps(namespace string, reads []kueueKindRead) (gaps []resourceapi.Gap, watchedSince time.Time) {
+func kueueReadGaps(namespace string, reads []kueueHistoryKindRead) (gaps []resourceapi.Gap, watchedSince time.Time) {
 	byCode := map[readreason.Code][]resourceapi.KindRef{}
 	var codes []readreason.Code
 	note := func(code readreason.Code, ref resourceapi.KindRef) {

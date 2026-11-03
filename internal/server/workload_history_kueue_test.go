@@ -123,12 +123,23 @@ func TestWorkloadHistoryCoverage(t *testing.T) {
 	}
 }
 
+func TestKueueHistoryReadGapsKeepReadableWatchStart(t *testing.T) {
+	watched := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	gaps, since := kueueReadGaps("ml", []kueueHistoryKindRead{
+		{ref: kueueHistoryKinds[0], allowed: true, authoritative: true, watchedSince: watched},
+		{ref: kueueHistoryKinds[1], allowed: false, authoritative: true},
+	})
+	if !since.Equal(watched) || len(gaps) != 1 || gaps[0].Code != readreason.UserForbidden || gaps[0].Kinds.Names[0] != kueueHistoryKinds[1] {
+		t.Fatalf("readable watch start and denied kind must remain independent: gaps=%+v since=%v", gaps, since)
+	}
+}
+
 func TestKueueReadGaps(t *testing.T) {
 	workload := resourceapi.KindRef{Kind: "Workload", Group: "kueue.x-k8s.io"}
 	request := resourceapi.KindRef{Kind: "ProvisioningRequest", Group: "autoscaling.x-k8s.io"}
 	early, late := time.Now().Add(-time.Hour), time.Now().Add(-time.Minute)
 
-	gaps, since := kueueReadGaps("ml", []kueueKindRead{
+	gaps, since := kueueReadGaps("ml", []kueueHistoryKindRead{
 		{ref: workload, allowed: true, authoritative: true, watchedSince: early},
 		{ref: request, allowed: true, authoritative: true, watchedSince: late},
 	})
@@ -136,7 +147,7 @@ func TestKueueReadGaps(t *testing.T) {
 		t.Fatalf("all readable: gaps %+v since %v", gaps, since)
 	}
 
-	gaps, since = kueueReadGaps("ml", []kueueKindRead{
+	gaps, since = kueueReadGaps("ml", []kueueHistoryKindRead{
 		{ref: workload, allowed: false, authoritative: true},
 		{ref: request, allowed: false, authoritative: true},
 	})
@@ -145,7 +156,7 @@ func TestKueueReadGaps(t *testing.T) {
 		t.Fatalf("both denied: %+v", gaps)
 	}
 
-	gaps, _ = kueueReadGaps("ml", []kueueKindRead{
+	gaps, _ = kueueReadGaps("ml", []kueueHistoryKindRead{
 		{ref: workload, allowed: false, authoritative: false},
 		{ref: request, allowed: true, authoritative: true, uncollected: []readreason.Code{readreason.RadarForbidden}},
 	})
