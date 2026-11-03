@@ -340,7 +340,7 @@ func kueueRunFindingFor(state resourcecontext.KueueAdmissionState) (kueueRunFind
 		if fact == nil {
 			return kueueRunFinding{}, false
 		}
-		cause := strings.TrimPrefix(fact.Reason, "DeactivatedDueTo")
+		cause := strings.TrimPrefix(strings.TrimPrefix(fact.Reason, "DeactivatedDueTo"), "InactiveWorkload")
 		// deactivation_pending: Kueue decided, but spec.active is not false yet.
 		deactivated := "Kueue deactivated this run (spec.active=false)"
 		reactivate := "then set the Workload's spec.active to true or resubmit the run"
@@ -713,6 +713,12 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 		var queueFact *issuesapi.DiagnosticFact
 		switch reason {
 		case kueueLocalQueueClusterQueueMissing:
+			if canReadClusterQueues && (d.f.CanReadEvidence == nil || d.f.CanReadEvidence(EvidenceRead{Group: kueueGroup, Resource: "clusterqueues", Verb: "list"})) && readClusterQueues() && clusterQueues[cqName] != nil {
+				for _, run := range runs {
+					covered[run.workload.GetUID()] = true
+				}
+				continue
+			}
 			issueReason = ReasonKueueClusterQueueMissing
 			message = fmt.Sprintf("Kueue reports ClusterQueue %s does not exist.", cqName)
 			cause = fmt.Sprintf("Kueue reports that ClusterQueue %s, which this LocalQueue points to, does not exist, so it admits no run submitted here.", cqName)

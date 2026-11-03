@@ -8,13 +8,18 @@ package summarycontext
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -401,5 +406,58 @@ func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 	// likewise returns 0.
 	if sc := build(nil, nil, "", "Pod", "prod", "worker-1"); sc != nil && sc.IssueCount != 0 {
 		t.Errorf("Pod hit using Node-bucket name leaked count: %+v", sc)
+	}
+}
+
+func TestBuildIssueIndexDoesNotCountClusterIncidentOnNamespacedRun(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team"}})); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	var objects []runtime.Object
+	for _, raw := range []string{
+		`{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"Workload","metadata":{"name":"waiting","namespace":"team","uid":"waiting","generation":1,"creationTimestamp":"2026-01-01T00:00:00Z"},"spec":{"queueName":"q"},"status":{"conditions":[{"type":"QuotaReserved","status":"False","reason":"Inadmissible","message":"ClusterQueue gpu is inactive","observedGeneration":1}]}}`,
+		`{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"LocalQueue","metadata":{"name":"q","namespace":"team","uid":"q","generation":1,"creationTimestamp":"2026-01-01T00:00:00Z"},"spec":{"clusterQueue":"gpu"},"status":{"conditions":[{"type":"Active","status":"False","reason":"ClusterQueueIsInactive","observedGeneration":1}]}}`,
+		`{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ClusterQueue","metadata":{"name":"gpu","uid":"gpu","generation":1,"creationTimestamp":"2026-01-01T00:00:00Z"},"spec":{"stopPolicy":"None"},"status":{"conditions":[{"type":"Active","status":"False","reason":"FlavorNotFound","message":"missing flavor","observedGeneration":1}]}}`,
+	} {
+		obj := &unstructured.Unstructured{}
+		if err := json.Unmarshal([]byte(raw), obj); err != nil {
+			t.Fatal(err)
+		}
+		objects = append(objects, obj)
+	}
+	resources := []k8s.APIResource{
+		{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "Workload", Name: "workloads", Namespaced: true},
+		{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "LocalQueue", Name: "localqueues", Namespaced: true},
+		{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "ClusterQueue", Name: "clusterqueues"},
+	}
+	listKinds := map[schema.GroupVersionResource]string{}
+	for i, res := range resources {
+		res.Verbs = []string{"get", "list", "watch"}
+		resources[i] = res
+		listKinds[schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name}] = res.Kind + "List"
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objects...), resources); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for gvr := range listKinds {
+		if _, err := k8s.GetDynamicResourceCache().ListBlocking(gvr, "", 5*time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ref := issuesapi.Ref{Group: "kueue.x-k8s.io", Kind: "Workload", Namespace: "team", Name: "waiting"}
+	p := issues.NewCacheProvider()
+	allow := func(issues.Ref) bool { return true }
+	allowEvidence := func(issues.EvidenceRead) bool { return true }
+	for _, namespaces := range [][]string{nil, {"team"}} {
+		idx := BuildIssueIndex(p, issues.Filters{Namespaces: namespaces, CanReadRelated: allow, CanReadEvidence: allowEvidence})
+		detail := issues.RelatedIssues(p, issues.RelatedIssueOptions{Namespaces: []string{"team"}, CanReadRelated: allow, CanReadEvidence: allowEvidence}, ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if got := idx.Count(ref.Group, ref.Kind, ref.Namespace, ref.Name); got != len(detail) || got != 1 {
+			t.Fatalf("namespaces=%v: summary=%d detail=%+v", namespaces, got, detail)
+		}
+		if len(namespaces) == 0 && idx.Count("kueue.x-k8s.io", "ClusterQueue", "", "gpu") != 1 {
+			t.Fatal("cluster incident lost its own count")
+		}
 	}
 }

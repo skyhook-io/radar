@@ -775,12 +775,16 @@ func TestKueueRejectedCheckKeepsOneIdentityThroughDeactivation(t *testing.T) {
 func TestKueueExecutionStopsAreTheirOwnCategory(t *testing.T) {
 	for cause, reason := range map[string]string{
 		"DeactivatedDueToRequeuingLimitExceeded":       ReasonKueueRequeuingLimitExceeded,
+		"InactiveWorkloadRequeuingLimitExceeded":       ReasonKueueRequeuingLimitExceeded,
 		"DeactivatedDueToMaximumExecutionTimeExceeded": ReasonKueueMaximumExecutionTimeExceeded,
 	} {
 		w := kueueWorkload("team", "w", "q",
 			kueueCondition("QuotaReserved", "False", "Pending", "The workload is deactivated", 2),
 			kueueCondition("Evicted", "True", cause, "The workload is deactivated", 2))
 		w.SetGeneration(2)
+		if strings.HasPrefix(cause, "InactiveWorkload") {
+			w.SetAPIVersion("kueue.x-k8s.io/v1beta1")
+		}
 		_ = unstructured.SetNestedField(w.Object, false, "spec", "active")
 		got := Compose(newFakeKueueProvider(w), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
 		if len(got) != 1 || got[0].Reason != reason || got[0].Category != issuesapi.CategoryBatchRunStopped || got[0].CategoryGroup != issuesapi.GroupRuntime {
@@ -1181,5 +1185,32 @@ func TestKueueDeactivationDoesNotReuseEarlierEvictionOnset(t *testing.T) {
 	rows := Compose(newFakeKueueProvider(w), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
 	if len(rows) != 1 || rows[0].Reason != ReasonKueueRequeuingLimitExceeded || !rows[0].FirstSeen.IsZero() || !rows[0].OnsetUnknown || rows[0].IssueTiming != "" {
 		t.Fatalf("retained eviction timestamp was asserted as deactivation onset: %+v", rows)
+	}
+}
+
+func TestKueueCreatedClusterQueueOutranksMissingLocalQueueReport(t *testing.T) {
+	for _, state := range []struct{ status, reason, policy string }{
+		{"True", "Ready", "None"},
+		{"False", "Stopped", "Hold"},
+		{"False", "FlavorNotFound", "None"},
+	} {
+		cq := kueueClusterQueue("gpu", state.policy, state.status, state.reason, "current queue evidence")
+		cq.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-5 * time.Second)))
+		lq := kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueMissing)
+		w := kueueWorkload("team", "lagging", "q", kueueCondition("QuotaReserved", "False", "Inadmissible", "ClusterQueue gpu doesn't exist", 1))
+		rows := Compose(newFakeKueueProvider(w, lq, cq), Filters{Namespaces: []string{"team"}, Limit: NoLimit, CanReadEvidence: allowAllEvidence})
+		if len(rows) != 0 {
+			t.Fatalf("%+v: current queue did not suppress the obsolete missing report: %+v", state, rows)
+		}
+	}
+}
+
+func TestKueueMissingQueueRecoveryDoesNotUseUnreadableInventory(t *testing.T) {
+	lq := kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueMissing)
+	cq := kueueClusterQueue("gpu", "None", "True", "Ready", "current")
+	p := newFakeKueueProvider(lq, cq)
+	rows := Compose(p, Filters{Namespaces: []string{"team"}, Limit: NoLimit, CanReadEvidence: func(read EvidenceRead) bool { return read.Resource != "clusterqueues" }})
+	if len(rows) != 1 || rows[0].Reason != ReasonKueueClusterQueueMissing || p.reads[kueueGroup+"/"+kueueClusterQueueKind] != 0 {
+		t.Fatalf("unreadable recovery influenced native evidence: rows=%+v reads=%v", rows, p.reads)
 	}
 }
