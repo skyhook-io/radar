@@ -88,6 +88,9 @@ func (c *Collector) CollectTarget(ctx context.Context, client kubernetes.Interfa
 	if adapter == evidence.RabbitMQ {
 		result.Limitations = append(result.Limitations, "Alarms describe this node only; an alarm on another node can block publishers across the cluster.")
 	}
+	if adapter == evidence.Vault {
+		result.Limitations = append(result.Limitations, "HA connection reflects Vault's standby request-forwarding heartbeat; a missing report does not establish connectivity. A false removal flag does not prove cluster membership.")
+	}
 	fail := func(reason string) Result { result.Reason = reason; return result }
 	ep, ok := endpointFor(adapter)
 	if !ok {

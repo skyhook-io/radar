@@ -28,7 +28,7 @@ export interface ApplicationEvidenceResult {
   httpStatus?: number
   facts?: {
     rabbitmq?: { diskAlarm: boolean; memoryAlarm: boolean }
-    vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean }
+    vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean; haConnectionHealthy?: boolean; removedFromCluster?: boolean }
     nats?: {
       jetStreamEnabled: boolean
       totals?: { accounts: number; streams: number; consumers: number; messages: number }

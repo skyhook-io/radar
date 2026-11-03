@@ -234,6 +234,11 @@ func TestConflictingJSONDoesNotChooseLastValue(t *testing.T) {
 		`{"initialized":true,"sealed":true,"sealed":false,"standby":false}`,
 		`{"initialized":true,"sealed":true,"Sealed":false,"standby":false}`,
 		`{"initialized":true,"sealed":true,"s\u0065aled":false,"standby":false}`,
+		`{"initialized":true,"sealed":true,"ſealed":false,"standby":false}`,
+		`{"initialized":true,"sealed":true,"ſtandby":true,"standby":false}`,
+		`{"initialized":true,"sealed":true,"standby":false,"removed_from_cluster":false,"removed_from_cluſter":true}`,
+		`{"initialized":true,"sealed":true,"standby":false,"key":true,"Key":false}`,
+		`{"initialized":true,"sealed":true,"standby":false,"Σ":true,"ς":false}`,
 	} {
 		facts, err := Parse(Vault, 200, []byte(body))
 		if !errors.Is(err, UnexpectedShape) || facts != (Facts{}) {
@@ -272,5 +277,15 @@ func TestCapturedNATSEndpoints(t *testing.T) {
 		if n.Coverage != "node_reported" || n.Totals.Messages != 5 || len(n.Consumers) != 1 || n.Consumers[0].Account != "$G" || n.Consumers[0].Pending != scenario.pending {
 			t.Fatalf("unexpected facts: %+v", n)
 		}
+	}
+}
+
+func TestJSONCaseFoldingPreservesDistinctKeys(t *testing.T) {
+	var decoded map[string]any
+	if err := decode([]byte(`{"sealed":true,"standby":false,"status":"ready","σ":1,"τ":2}`), &decoded); err != nil {
+		t.Fatalf("distinct keys rejected: %v", err)
+	}
+	if len(decoded) != 5 || decoded["sealed"] != true || decoded["standby"] != false {
+		t.Fatalf("distinct observations changed: %+v", decoded)
 	}
 }
