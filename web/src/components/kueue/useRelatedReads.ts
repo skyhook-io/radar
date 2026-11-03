@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import type { RelatedRead } from '@skyhook-io/k8s-ui/components/kueue/related-read'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
@@ -80,10 +80,22 @@ export interface RelatedObjects {
  * points one query client at several clusters, where same-named queues are
  * different objects.
  */
-export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true): RelatedObjects {
+export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true, subjectVersion?: string): RelatedObjects {
   const [mountedAt] = useState(Date.now)
-  const { data, coverage, error, dataUpdatedAt } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
-  const readBeforeMount = dataUpdatedAt < mountedAt
+  const list = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
+  const { data, coverage, error, dataUpdatedAt, refetch } = list
+  // The object on screen updates live; when it changes, a list read before
+  // the change can no longer prove absence, so re-read it.
+  const [subjectChangedAt, setSubjectChangedAt] = useState(mountedAt)
+  const [seenVersion, setSeenVersion] = useState(subjectVersion)
+  if (subjectVersion !== seenVersion) {
+    setSeenVersion(subjectVersion)
+    setSubjectChangedAt(Date.now())
+  }
+  useEffect(() => {
+    if (enabled && subjectChangedAt > mountedAt) void refetch()
+  }, [enabled, subjectChangedAt, mountedAt, refetch])
+  const readBeforeMount = dataUpdatedAt < Math.max(mountedAt, subjectChangedAt)
   // An older Radar answers a list denial with an uncoded 403; a GET still says what the viewer may open.
   const listDenied = error instanceof ApiError && (readActionFor(error.data?.error_code) === 'user_access' || (error.status === 403 && !error.data?.error_code))
   const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied)

@@ -42,8 +42,8 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-function Probe({ onRead }: { onRead: (read: RelatedObjects) => void }) {
-  const read = useRelatedObjects('clusterqueues', 'kueue.x-k8s.io', undefined, ['present', 'gone'])
+function Probe({ onRead, version }: { onRead: (read: RelatedObjects) => void; version?: string }) {
+  const read = useRelatedObjects('clusterqueues', 'kueue.x-k8s.io', undefined, ['present', 'gone'], true, version)
   useEffect(() => onRead(read))
   return null
 }
@@ -88,6 +88,19 @@ it('doesn’t call a name missing from a list cached before the hook mounted, un
     release = () => resolve(new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }, { metadata: { name: 'gone' } }], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } })))
   })))
   await act(async () => root.render(<QueryClientProvider client={client}><Probe onRead={read => { latest = read }} /></QueryClientProvider>))
+  expect(latest?.byName.gone).toEqual({ state: 'loading' })
+  await act(async () => release?.())
+  await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))
+})
+
+it('re-reads, and stops claiming absence, when the object on screen changes', async () => {
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="1" onRead={read => { latest = read }} /></QueryClientProvider>))
+  await vi.waitFor(() => expect(latest?.byName.gone).toEqual({ state: 'not_found' }))
+  let release: (() => void) | undefined
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => {
+    release = () => resolve(new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }, { metadata: { name: 'gone' } }], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } })))
+  })))
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="2" onRead={read => { latest = read }} /></QueryClientProvider>))
   expect(latest?.byName.gone).toEqual({ state: 'loading' })
   await act(async () => release?.())
   await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))

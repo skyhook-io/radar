@@ -17,6 +17,8 @@ export interface KueueWorkloadReads {
   /** Keyed by ClusterQueue name: the LocalQueue's target and, when different, the one holding the reservation. */
   clusterQueues?: Record<string, RelatedRead>
   namespace?: RelatedRead
+  /** Keyed by ResourceFlavor name: the flavors the reservation assigned. */
+  flavors?: Record<string, RelatedRead>
 }
 
 function Step({ label, children }: { label: string; children: ReactNode }) {
@@ -111,7 +113,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
             {reads && reserved !== configured
               ? <ClusterQueueReadSummary name={reserved} read={reads.clusterQueues?.[reserved]} onNavigate={onNavigate} />
               : <div className="break-all [&_button]:text-left"><ResourceLink name={reserved} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} /></div>}
-            {configured && configured !== reserved && <p className="text-xs text-warning-text">Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>}
+            {configured && configured !== reserved && <p className={finished ? 'text-xs text-theme-text-tertiary' : 'text-xs text-warning-text'}>Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>}
           </> : <>
             <p className={muted}>No reservation reported.</p>
             {pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">{pendingStale ? `Controller-reported on QuotaReserved for generation ${quota.observedGeneration} (now ${data.metadata?.generation}): ` : 'Controller-reported on QuotaReserved: '}</span>{pendingMessage}</p>}
@@ -130,6 +132,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
                         <span className="text-theme-text-secondary">{resource}</span>
                         <span className="text-theme-text-tertiary">→</span>
                         <ResourceLink name={String(flavor)} kind="resourceflavors" group={KUEUE_GROUP} onNavigate={onNavigate} />
+                        {reads?.flavors?.[String(flavor)]?.state !== 'found' && <ReadState read={reads?.flavors?.[String(flavor)]} />}
                       </div>
                     ))}
                 </div>
@@ -168,11 +171,13 @@ const attemptLabel: Record<FlavorAttemptKind, string> = {
 export function FlavorReasons({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const conditions: any[] = data.status?.conditions ?? []
   const quota = conditions.find(condition => condition?.type === 'QuotaReserved')
-  if (quota?.status !== 'False' || !quota.message || isKueueConditionStale(quota, data.metadata?.generation)) return null
+  if (quota?.status !== 'False' || !quota.message) return null
+  const stale = isKueueConditionStale(quota, data.metadata?.generation)
   if (!isFlavorAssignmentMessage(quota.message)) return null
   const parsed = parseFlavorAttempts(quota.message)
   return (
     <Section variant="card" title="Reasons Reported per Flavor">
+      {stale && <p className="mb-2 text-xs text-warning-text">Reported for generation {quota.observedGeneration} (now {data.metadata?.generation}); the Workload has changed since.</p>}
       <p className="mb-3 text-xs text-theme-text-tertiary">{quota.message.startsWith("couldn't assign")
         ? 'From the controller-reported message on QuotaReserved. Kueue lists the reasons alphabetically, not in the order it tried flavors, and may not report every flavor.'
         : 'The controller-reported error on QuotaReserved.'}</p>

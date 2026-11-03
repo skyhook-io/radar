@@ -16,6 +16,12 @@ export function selectorHasTerms(selector: LabelSelector | null | undefined): bo
   return !!selector && (Object.keys(selector.matchLabels ?? {}).length > 0 || (selector.matchExpressions?.length ?? 0) > 0)
 }
 
+/** Evaluating the selector would use the namespace's labels (it has terms, all with supported operators). */
+export function needsNamespaceLabels(selector: LabelSelector | null | undefined): boolean {
+  const result = namespaceEligibility(selector, undefined)
+  return result.state === 'unknown' && result.why === 'labels_unread'
+}
+
 /** labels is undefined when the namespace's labels weren't read. */
 export function namespaceEligibility(selector: LabelSelector | null | undefined, labels: Record<string, string> | undefined): NamespaceEligibility {
   if (selector == null) return { state: 'not_eligible', basis: 'none' }

@@ -270,11 +270,11 @@ describe('reasons reported per flavor', () => {
     expect(html).toContain('nvidia.com/gpu')
   })
 
-  it('falls back to the verbatim message, and skips stale or unrelated messages', () => {
+  it('falls back to the verbatim message, marks a stale one, and skips unrelated messages', () => {
     const odd = "couldn't assign flavors to pod set main: topology \"rack\" doesn't allow to fit any of 3 pod(s)"
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending(odd)} />)).toContain('topology &quot;rack&quot; doesn&#x27;t allow to fit any of 3 pod(s)')
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending('failed to assign flavors to pod set main: boom')} />)).toContain('Reasons Reported per Flavor')
-    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={{ ...pending(live), metadata: { name: 'w', namespace: 'team', generation: 2 } }} />)).not.toContain('Reasons Reported per Flavor')
+    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={{ ...pending(live), metadata: { name: 'w', namespace: 'team', generation: 2 } }} />)).toContain('Reported for generation 1 (now 2)')
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending("LocalQueue no-such-localqueue doesn't exist")} />)).not.toContain('Reasons Reported per Flavor')
   })
 })

@@ -2,7 +2,7 @@ import { Boxes } from 'lucide-react'
 import { KueueWorkloadRenderer as BaseRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/KueueWorkloadRenderer'
 import { getProvisioningRequestStatus, getProvisioningRequestMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
 import { Badge, ResourceLink, Section, type Relationships, type ResourceRef } from '@skyhook-io/k8s-ui'
-import { selectorHasTerms } from '@skyhook-io/k8s-ui/components/kueue/eligibility'
+import { needsNamespaceLabels } from '@skyhook-io/k8s-ui/components/kueue/eligibility'
 import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/constants'
 import { useKueueProvisioning } from '../../../api/client'
 import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
@@ -14,17 +14,21 @@ function useAdmissionPathReads(data: any) {
   const namespace: string = data.metadata?.namespace ?? ''
   const queueName: string = data.spec?.queueName ?? ''
   const reserved: string = data.status?.admission?.clusterQueue ?? ''
-  const localQueue = useRelatedObjects('localqueues', KUEUE_GROUP, namespace, [queueName], !!queueName && !!namespace).byName[queueName]
+  const version: string | undefined = data.metadata?.resourceVersion
+  const localQueue = useRelatedObjects('localqueues', KUEUE_GROUP, namespace, [queueName], !!queueName && !!namespace, version).byName[queueName]
   const configured: string = localQueue?.state === 'found' ? localQueue.object?.spec?.clusterQueue ?? '' : ''
   const names = [...new Set([configured, reserved].filter(Boolean))]
-  const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, names, names.length > 0)
+  const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, names, names.length > 0, version)
+  const flavorNames = [...new Set<string>((data.status?.admission?.podSetAssignments ?? []).flatMap((assignment: any) => Object.values(assignment?.flavors ?? {}).map(String)))]
+  const flavors = useRelatedObjects('resourceflavors', KUEUE_GROUP, undefined, flavorNames, flavorNames.length > 0, version)
   const configuredRead = configured ? queues.byName[configured] : undefined
   // Eligibility is shown only while unreserved, so a reserved Workload skips the Namespace read.
-  const needsLabels = !reserved && configuredRead?.state === 'found' && selectorHasTerms(configuredRead.object?.spec?.namespaceSelector)
+  const needsLabels = !reserved && configuredRead?.state === 'found' && needsNamespaceLabels(configuredRead.object?.spec?.namespaceSelector)
   const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
   return {
     localQueue: queueName ? localQueue : undefined,
     clusterQueues: queues.byName,
+    flavors: flavors.byName,
     namespace: needsLabels ? namespaceRead : undefined,
   }
 }
