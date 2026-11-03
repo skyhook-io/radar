@@ -37,6 +37,15 @@ describe('RayCluster host evidence', () => {
     expect(mock.opened).toEqual([{ namespace: 'ml', podName: 'cluster-cpu-worker-def', containers: ['wait-gcs-ready', 'ray-worker'], containerName: 'ray-worker' }])
     act(() => view.unmount())
   })
+  it('opens a Pending worker in the init container it waits on', () => {
+    mock.result = { data: { pods: [{ ...worker, phase: 'Pending', containerStatuses: [{ name: 'wait-gcs-ready', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] }], total: 1, truncated: false } }
+    const host = document.createElement('div')
+    const view = createRoot(host)
+    act(() => view.render(<RayClusterRenderer data={root} />))
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Open logs for cluster-cpu-worker-def"]')!.click())
+    expect(mock.opened.at(-1).containerName).toBe('wait-gcs-ready')
+    act(() => view.unmount())
+  })
   it('offers no log links without permission to read Pod logs', () => {
     mock.canViewLogs = false
     mock.result = { data: { pods: [worker], total: 1, truncated: false } }

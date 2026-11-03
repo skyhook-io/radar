@@ -35,7 +35,8 @@ export function MultiPodLogsTab({
 
   const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
 
-  const { data: logsData, error: containersError } = usePodLogs(podNamespace, selectedPod || '', {
+  const readable = selectedPod && !selectedPodNote ? selectedPod : ''
+  const { data: logsData, error: containersError } = usePodLogs(podNamespace, readable, {
     tailLines: 1,
   })
   const containers = logsData?.containers || []
@@ -43,7 +44,7 @@ export function MultiPodLogsTab({
   // A terminated pod (common for Job/CronJob children) has nothing to follow —
   // only stream live ones. Wait for the pod to load before deciding so we don't
   // briefly auto-stream a completed pod while its phase is still unknown.
-  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, selectedPod || '')
+  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, readable)
   const phase = selectedPodResource?.status?.phase
   const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
 
@@ -80,7 +81,7 @@ export function MultiPodLogsTab({
               )}
             >
               {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
-              {pod.name === unlisted && <span className="ml-1.5 text-xs opacity-75">· no longer listed</span>}
+              {pod.name === unlisted && <span className="ml-1.5 text-xs opacity-75">· not in this list</span>}
             </button>
           ))}
         </div>

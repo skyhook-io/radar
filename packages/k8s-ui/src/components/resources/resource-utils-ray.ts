@@ -223,6 +223,9 @@ export function logsContainer(pod: WorkloadPodInfo, sidecarsMarked: boolean): st
   const statuses = pod.containerStatuses ?? []
   if (!statuses.length) return undefined
   const init = new Set(statuses.filter(status => status.init).map(status => status.name))
+  // Init statuses missing while there are more containers than reported
+  // application statuses: which names are init containers isn't known.
+  if (!init.size && pod.containers.length > statuses.length) return undefined
   const unfinished = pod.containers.filter(name => statuses.some(status => status.init && status.name === name && !status.ready && !(sidecarsMarked && status.sidecar)))
   const blocking = sidecarsMarked
     ? (pod.phase === 'Pending' || pod.phase === 'Failed' ? unfinished[0] : undefined)

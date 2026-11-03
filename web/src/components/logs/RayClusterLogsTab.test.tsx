@@ -1,14 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any, flag: true, canViewLogs: true, capsFailed: false }))
+const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any, flag: true, canViewLogs: true, capsFailed: false, capsData: true }))
 vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: state.canViewLogs, logsUnknown: false }) }))
 vi.mock('../../api/client', () => {
   class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
   return {
     ApiError,
     isStableClientError: (e: any) => e instanceof ApiError && [400, 403, 404, 409].includes(e.status),
-    useCapabilities: () => ({ data: { features: { rayClusterPods: true, podSidecarMarks: state.flag } }, isError: state.capsFailed }),
+    useCapabilities: () => ({ data: state.capsData ? { features: { rayClusterPods: true, podSidecarMarks: state.flag } } : undefined, isError: state.capsFailed }),
     useRadarFeature: () => ({ support: state.support, upgrade: state.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
     useWorkloadPods: (...args: any[]) => { state.calls.push(args); return state.query },
   }
@@ -36,7 +36,7 @@ const renderUID = (uid: string | undefined, selectedPod: string | null = null, r
 )
 
 describe('RayClusterLogsTab', () => {
-  beforeEach(() => { state.support = 'supported'; state.query = {}; state.calls = []; state.tab = null; state.flag = true; state.canViewLogs = true; state.capsFailed = false })
+  beforeEach(() => { state.support = 'supported'; state.query = {}; state.calls = []; state.tab = null; state.flag = true; state.canViewLogs = true; state.capsFailed = false; state.capsData = true })
 
   it('lists the Pods the current incarnation owns, by name, not the ones history recalls', () => {
     state.query = { data: owned }
@@ -124,9 +124,17 @@ describe('RayClusterLogsTab', () => {
     expect(html).not.toContain('Radar v1.15 and later')
   })
 
+  it('still reports a known denial when only a capabilities refetch failed', () => {
+    state.canViewLogs = false
+    state.capsFailed = true
+    state.query = { data: owned }
+    expect(render()).toContain('which you don&#x27;t have')
+  })
+
   it('does not claim a missing permission when capabilities could not be read', () => {
     state.canViewLogs = false
     state.capsFailed = true
+    state.capsData = false
     state.query = { data: owned }
     const html = render()
     expect(html).toContain('hasn&#x27;t confirmed whether you can read Pod logs')
@@ -181,6 +189,10 @@ describe('logsContainer', () => {
   })
   it('opens the application of a Failed Pod whose init containers finished', () => {
     expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }, true)).toBe('ray-worker')
+  })
+  it('leaves the choice to the viewer when init statuses are missing but init containers may exist', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [status('ray-worker')] }, true)).toBeUndefined()
+    expect(logsContainer({ name: 'p', ready: true, phase: 'Running', containers: ['ray-head'], containerStatuses: [status('ray-head')] }, true)).toBe('ray-head')
   })
   it('leaves the choice to the viewer when no status is reported', () => {
     expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, true)).toBeUndefined()

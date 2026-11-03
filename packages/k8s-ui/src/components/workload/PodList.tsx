@@ -61,7 +61,7 @@ export function PodRow({
     <div className="flex min-w-0 items-stretch gap-2">
       <div className="min-w-0 flex-1">{row}</div>
       {logsUnavailable ? (
-        <span className="flex min-w-24 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-dashed border-theme-border px-2.5 text-center text-xs text-theme-text-tertiary">
+        <span className="flex min-w-24 shrink-0 items-center justify-center whitespace-nowrap px-2.5 text-center text-xs text-theme-text-tertiary">
           <span className="sr-only">Logs for {name}: </span>
           {logsUnavailable}
         </span>

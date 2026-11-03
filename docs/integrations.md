@@ -1816,8 +1816,8 @@ not read, and nothing is kept once a Pod is deleted.
   switch. While a Pod is Pending, or after it failed, the button and the tab open
   on the first regular init container that isn't done (a worker waiting on the
   head sits in KubeRay's `wait-gcs-ready`). Otherwise they open the first
-  application container. Native sidecars are never chosen first; a Radar older than
-  the one that advertises `rayClusterPods` doesn't mark sidecars, so there an init
+  application container. Native sidecars are never chosen first; a Radar that doesn't
+  advertise `podSidecarMarks` doesn't mark sidecars, so there an init
   container is chosen only in a Pending Pod where it is the sole unready one.
 - A RayCluster served only as a version older than `ray.io/v1` keeps the generic
   Logs tab, because Radar reads RayCluster Pods through `ray.io/v1`.

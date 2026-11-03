@@ -38,7 +38,9 @@ export function RayClusterLogsTab({
   const { support, upgrade } = useRadarFeature('rayClusterPods')
   const sidecarsMarked = useSidecarsMarked()
   const { canViewLogs, logsUnknown } = useNamespacedCapabilities(namespace)
-  const capabilitiesFailed = useCapabilities().isError
+  const capabilities = useCapabilities()
+  // A failed refetch keeps serving the last answer; only no answer at all is unknown.
+  const capabilitiesFailed = capabilities.isError && !capabilities.data
   const logsDenied = !canViewLogs && !logsUnknown && !capabilitiesFailed
   const unsupported = support === 'unsupported'
   const query = useWorkloadPods('rayclusters', namespace, uid && !unsupported ? name : '', { ownerUID: uid, limit: 200, refetchInterval: 5000 })
@@ -47,7 +49,8 @@ export function RayClusterLogsTab({
   const loading = !unsupported && (uid ? query.isLoading : rootLoading)
 
   // A pick made from the recorded Pods while the owned list was failing gives
-  // way to the owned list's first Pod once it arrives, unless still owned.
+  // way to the owned list's first Pod once it arrives, unless still owned:
+  // the recorded Pod may well be deleted.
   // Only a recorded list actually shown counts: a selection that predates
   // this tab (a deep link, or a Pod that has since left the owned list) stays.
   const showedRecorded = useRef(false)
