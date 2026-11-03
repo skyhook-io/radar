@@ -188,7 +188,7 @@ type Counts struct {
 	States      map[string]int `json:"states"`
 }
 
-// Count counts members.
+// Count counts members; with a nil stateOf, States stays empty.
 func Count(members []Member, stateOf func(Member) string) Counts {
 	c := Counts{Members: len(members), States: map[string]int{}}
 	for _, m := range members {
@@ -197,6 +197,9 @@ func Count(members []Member, stateOf func(Member) string) Counts {
 		}
 		if m.Has(Reservation) {
 			c.Reservation++
+		}
+		if stateOf == nil {
+			continue
 		}
 		if state := stateOf(m); state != "" {
 			c.States[state]++

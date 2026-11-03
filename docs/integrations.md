@@ -1786,8 +1786,8 @@ afterwards a failed request is `{error, error_code, coverage?}`, and a cursor
 issued for another list (another queue, a re-created queue, other filters or
 another cluster context, or a read that no longer matches the first page's)
 is refused with 400 `kueue_cursor_invalid`, after which a client reads from
-the first page again. A later page decides access only from the answers the
-first page's permission checks cached, so it reads the same scope.
+the first page again. Every page checks access afresh within its budget, and a page whose read
+differs from the first page's is refused by the cursor.
 
 Rows are paged by key: unfinished Workloads first, finished ones after
 (by default Kueue keeps them until their owner goes), each by namespace and name so that

@@ -490,15 +490,19 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		if unchecked == 0 || len(got.Workloads.Items) != 4 {
 			t.Fatalf("over budget: %d unchecked namespaces, members %v", unchecked, memberNames(got.Workloads))
 		}
-		// Paging spends no fresh checks, so the next page reads the same
-		// scope and is accepted, however many namespaces stay unchecked.
-		before := reviews.Load()
-		first := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1", "carol", ""), http.StatusOK)
-		afterFirst := reviews.Load()
-		decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(first.Workloads.Next), "carol", ""), http.StatusOK)
-		if reviews.Load() != afterFirst || afterFirst-before > readscope.MaxAccessChecks {
-			t.Fatalf("reviews: %d on the first page, %d on the next", afterFirst-before, reviews.Load()-afterFirst)
+		// Each read answers more of the unchecked namespaces from cache, so
+		// a next page that read more than its first page is refused and the
+		// list restarts; once every namespace is answered, paging continues.
+		var first KueueQueueWorkloadsResponse
+		for range 4 {
+			first = decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1", "carol", ""), http.StatusOK)
 		}
+		for _, gap := range first.Workloads.Coverage.Gaps {
+			if gap.Code == readreason.UserPermissionCheckFailed {
+				t.Fatalf("still unchecked after the budget's worth of reads: %+v", gap)
+			}
+		}
+		decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(first.Workloads.Next), "carol", ""), http.StatusOK)
 	})
 
 	t.Run("a viewer of every namespace with Workload access in some is checked namespace by namespace", func(t *testing.T) {
@@ -569,20 +573,25 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 			}
 		}
 		refused(env.authGet(t, next, "alice", ""))
-		// A later page that reads nothing at all (access gone, or its cached
-		// answers expired, since it spends no fresh checks) is refused too:
-		// the client rereads from the first page, which checks again.
+		// A later page that reads nothing at all is refused too: the client
+		// rereads from the first page.
 		for _, ns := range []string{"team-a", "team-b", "team-c"} {
 			env.srv.permCache.Get("alice", nil).SetCanI("list", kueueGroup, "workloads", ns, false)
 		}
 		refused(env.authGet(t, next, "alice", ""))
-		response := env.authGet(t, next, "alice", "")
-		defer response.Body.Close()
-		var body map[string]string
-		_ = json.NewDecoder(response.Body).Decode(&body)
-		if response.StatusCode != http.StatusBadRequest || body["error_code"] != kueueCursorInvalid {
-			t.Fatalf("changed read = %d %v", response.StatusCode, body)
-		}
+	})
+
+	t.Run("a later page after the permission answers expired checks again and continues", func(t *testing.T) {
+		env := setup(t, grants{getCQ: true, workloads: all, localQueues: all})
+		first := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1", "alice", ""), http.StatusOK)
+		// The cached answers are gone, as when the entry expires; the
+		// apiserver still allows the same namespaces.
+		fakeSARServer(t, func(attrs authv1.ResourceAttributes) bool {
+			return attrs.Namespace != "" || attrs.Resource == "clusterqueues"
+		})
+		fresh := &auth.UserPermissions{AllowedNamespaces: []string{"team-a", "team-b", "team-c"}}
+		env.srv.permCache.Set("alice", nil, fresh)
+		decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(first.Workloads.Next), "alice", ""), http.StatusOK)
 	})
 
 	t.Run("ClusterQueue denied before existence is checked", func(t *testing.T) {
