@@ -2012,7 +2012,9 @@ as Kueue is down), a reason a newer Kueue adds (`unrecognized`), MultiKueue
 handoff, and queue position. `diagnose` accepts Job, JobSet, RayJob and Kueue Workload for cached resource
 evidence, canonical `relatedIssues` and resource events, sharing the
 `get_resource` read and authorization path. It explicitly collects no Pods,
-runtime logs or metrics; an empty Issues list does not establish runtime health.
+runtime logs or metrics. It also skips the full relationship graph, marking
+graph-derived networking/scaling fields unavailable instead of probing unrelated
+CRDs on a cold or restricted collector. An empty Issues list does not establish runtime health.
 Follow the Workload reference for its `scheduling` admission context and Pod
 references for runtime diagnosis. The same rows are available through `issues`
 and `get_resource(include=issues)`.
@@ -2121,8 +2123,9 @@ requested suspension, and JobSet-specific role, child-Job, and recreation counts
 Missing observations remain distinct from zero. Activity does not guarantee running
 Pods, and a suspension request does not prove observed suspension or its cause.
 Root outcomes require root evidence; child failures alone are not terminal.
-Native spec/status remain available. This does not add JobSet `diagnose`, infer
-admission causes, or replace the JobSet→Job→Pod ownership chain.
+Native spec/status remain available. Generic JobSet `diagnose` returns this cached
+context, related Issues and resource events; it does not collect runtime logs or
+metrics, infer admission causes, or replace the JobSet→Job→Pod ownership chain.
 
 Job and JobSet drawer and fullscreen details connect the root to exact
 controller-owned Kueue Workloads, showing each admission decision, native reason, queues, checks, and

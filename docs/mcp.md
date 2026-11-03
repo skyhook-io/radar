@@ -499,7 +499,9 @@ Pause is separate from recorded readiness, operational issues and audit findings
 Job, JobSet, RayJob and Kueue Workload diagnosis returns cached resource context,
 canonical related Issues and a bounded sample of resource events through the
 same reads and authorization as `get_resource`. Its `coverage` text states that
-Pods, runtime logs and metrics were not collected. An empty Issues list does not
+Pods, runtime logs, metrics and graph-derived networking/scaling relationships
+were not collected. The graph fields carry `omitted: unavailable`; batch diagnosis
+does not build the full relationship graph or probe unrelated CRDs. An empty Issues list does not
 establish runtime health. Follow Workload references for admission context and
 Pod references for runtime diagnosis.
 

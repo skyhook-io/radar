@@ -64,7 +64,7 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 		OperatorSnapshot: issues.AssessStrimziSnapshot(gvr, obj),
 		Coverage:         "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
 		Resource:         map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
-		ResourceContext:  buildMCPResourceContext(ctx, obj, kind, input.Namespace, input.Name, resourcecontext.TierBasic, nil),
+		ResourceContext:  buildMCPResourceContext(ctx, obj, kind, input.Namespace, input.Name, resourcecontext.TierBasic, nil, true),
 	}
 	// Generic condition messages may contain credentials or exception traces.
 	resp.ResourceContext.StatusSummary = nil
