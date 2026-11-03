@@ -5,6 +5,13 @@
 
 set -euo pipefail
 
+# The script looks for a kubectl binary before calling its kc wrapper; give it one
+# that can't reach anything, so the tests need only bash and jq.
+STUB_BIN="$(mktemp -d)"
+printf '#!/bin/sh\nexit 1\n' >"${STUB_BIN}/kubectl"
+chmod +x "${STUB_BIN}/kubectl"
+PATH="${STUB_BIN}:${PATH}"
+
 # shellcheck source=../kueue-scenarios.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/kueue-scenarios.sh"
 PREFIX=t
@@ -20,7 +27,7 @@ DRY_RUN='' CREATED="$(mktemp)" CRDS='' OWNED='{}' DEPLOYMENTS='{"items":[]}' CRE
 # Answers to successive patch calls, one per line ("ok" or an error); kc runs in
 # command substitutions, so the queue lives in a file.
 PATCH_ANSWERS="$(mktemp)"
-trap 'rm -f -- "${KC_LOG}" "${CREATED}" "${PATCH_ANSWERS}"' EXIT
+trap 'rm -f -- "${KC_LOG}" "${CREATED}" "${PATCH_ANSWERS}"; rm -rf -- "${STUB_BIN}"' EXIT
 
 kc() {
   printf '%s\n' "$*" >>"${KC_LOG}"
@@ -72,7 +79,7 @@ workload() { # workload <name> <owner uid> <owner kind> <controller> [status jso
   local status='{}'
   [ -z "${5:-}" ] || status="$5"
   jq -cn --arg n "$1" --arg u "$2" --arg k "$3" --argjson c "$4" --argjson s "${status}" \
-    '{metadata: {name: $n, generation: 1, ownerReferences: [{kind: $k, name: "j", uid: $u, controller: $c}]}, status: $s}'
+    '{metadata: {name: $n, generation: 1, resourceVersion: "42", ownerReferences: [{kind: $k, name: "j", uid: $u, controller: $c}]}, status: $s}'
 }
 list() { jq -cs '{items: .}'; }
 
@@ -98,8 +105,10 @@ KC_FAIL=''
 WAIT_SECONDS=600
 check "waiting stops at once on a missing Job" 1 wait_for "never" has_cond t-busy other Admitted True
 WAIT_SECONDS=240
-KC_FAIL="get workloads"
-KC_FAIL=''
+JOBS="$(job j uid-1 | list)"
+WORKLOADS="$(workload wl uid-1 Job true '{"conditions":[]}' | list)"
+check "a predicate that can't evaluate is its own answer" 4 wl_is t-busy j '.metadata.name | tonumber'
+check "known stops on it" 1 known wl_is t-busy j '.metadata.name | tonumber'
 
 echo "==> The check controller keeps what Kueue recorded"
 WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending","retryCount":1},{"name":"other","state":"Ready"}]}' | list)"
@@ -117,7 +126,7 @@ WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","
 set_check t-busy j Rejected "no" >/dev/null
 check "Rejected is not requested again once Kueue deactivated the Workload" 1 grep -q '^patch ' "${KC_LOG}"
 WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending","retryCount":1},{"name":"other","state":"Ready"}]}' | list)"
-check "the write carries the resourceVersion it read" 0 jq -e '.metadata | has("resourceVersion")' <<<"${patch}"
+check "the write carries the resourceVersion it read" 0 jq -e '.metadata.resourceVersion == "42"' <<<"${patch}"
 printf '%s\n' 'Error from server (Conflict): the object has been modified; please apply your changes to the latest version' ok >"${PATCH_ANSWERS}"
 : >"${KC_LOG}"
 set_check t-busy j Ready "ok" >/dev/null 2>&1

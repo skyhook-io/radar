@@ -8,7 +8,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES_DIR="${SCRIPT_DIR}/kueue-scenarios"
-PREFIX="${KUEUE_SCENARIOS_PREFIX:-radar-kueue}"
+# Per-user default, so two people who don't pass --prefix get separate copies.
+DEFAULT_PREFIX="kq-$(id -un 2>/dev/null | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | cut -c1-20 | sed -e 's/-*$//')"
+[ "${DEFAULT_PREFIX}" != "kq-" ] || DEFAULT_PREFIX=radar-kueue
+PREFIX="${KUEUE_SCENARIOS_PREFIX:-${DEFAULT_PREFIX}}"
 FIXTURE="${KUEUE_SCENARIOS_FIXTURE:-kueue-scenarios}"
 WAIT_SECONDS="${WAIT_SECONDS:-240}"
 TOKEN_DURATION="${TOKEN_DURATION:-24h}"
@@ -238,8 +241,15 @@ wl_is() { # wl_is <namespace> <job> <jq predicate over the Workload>
   json="$(workload_json "$1" "$2")" || rc=$?
   [ "${rc}" -eq 0 ] || return "${rc}"
   [ "${json}" != "{}" ] || return 1
-  jq -e "$3" <<<"${json}" >/dev/null && return 0
-  return 1
+  pred "$3" "${json}"
+}
+
+# pred <jq predicate> <json>: 0 true, 1 false, 4 the predicate itself failed (an
+# object shape this script doesn't expect, e.g. after a Kueue API change).
+pred() {
+  local rc=0
+  jq -e "$1" <<<"$2" >/dev/null 2>&1 || rc=$?
+  case "${rc}" in 0) return 0 ;; 1) return 1 ;; *) return 4 ;; esac
 }
 
 # known <reader...>: the reader's yes (0) or no (1); stops `up` when the cluster
@@ -250,6 +260,7 @@ known() {
   case "${rc}" in
     0|1) return "${rc}" ;;
     3) fail "a fixture Job is missing or not this prefix's (${*:2:2}); run '$0 down' and 'up' again" ;;
+    4) fail "unexpected object shape for: $* (a different Kueue API?)" ;;
     *) fail "could not read the cluster for: $*" ;;
   esac
 }
@@ -268,15 +279,13 @@ released() { wl_is "$1" "$2" "($(cond_pred QuotaReserved True)) | not"; }
 cq_is() { # cq_is <clusterqueue> <jq predicate>
   local json
   json="$(kc get clusterqueues.kueue.x-k8s.io "$1" -o json)" || return 2
-  jq -e "$2" <<<"${json}" >/dev/null && return 0
-  return 1
+  pred "$2" "${json}"
 }
 
 lq_is() { # lq_is <namespace> <localqueue> <jq predicate>
   local json
   json="$(kc get localqueues.kueue.x-k8s.io "$2" -n "$1" -o json)" || return 2
-  jq -e "$3" <<<"${json}" >/dev/null && return 0
-  return 1
+  pred "$3" "${json}"
 }
 
 wait_for() { # wait_for <description> <command...>
@@ -288,6 +297,7 @@ wait_for() { # wait_for <description> <command...>
     "$@" || rc=$?
     [ "${rc}" -ne 0 ] || break
     [ "${rc}" -ne 3 ] || fail "a fixture Job is missing or not this prefix's (${*:2:2}); run '$0 down' and 'up' again"
+    [ "${rc}" -ne 4 ] || fail "unexpected object shape while waiting for ${desc} (a different Kueue API?)"
     if [ "${SECONDS}" -ge "${deadline}" ]; then
       fail "Timed out after ${WAIT_SECONDS}s waiting for ${desc}. Inspect with: $0 status"
     fi
@@ -385,7 +395,8 @@ cmd_up() {
 
   step "Reporting ${PREFIX}-check Active, as its controller would"
   write_owned admissionchecks.kueue.x-k8s.io "" "${PREFIX}-check" status \
-    '{status: {conditions: [{type: "Active", status: "True", reason: "Active", message: "Driven by scripts/kueue-scenarios.sh", lastTransitionTime: $t, observedGeneration: .metadata.generation}]}}' \
+    'if any(.status.conditions[]?; .type == "Active" and .status == "True" and .observedGeneration == .metadata.generation) then null
+     else {status: {conditions: [{type: "Active", status: "True", reason: "Active", message: "Driven by scripts/kueue-scenarios.sh", lastTransitionTime: $t, observedGeneration: .metadata.generation}]}} end' \
     --arg t "$(now)"
   wait_for "ClusterQueue ${PREFIX}-busy active" cq_is "${PREFIX}-busy" "$(cond_pred Active True)"
 
@@ -492,6 +503,7 @@ expect() { # expect <description> <command...>
     case "${rc}" in
       2) desc+=" (could not read)" ;;
       3) desc+=" (its Job is missing)" ;;
+      4) desc+=" (unexpected object shape)" ;;
     esac
     printf "${C_RED}    ✗ %s${C_RESET}\n" "${desc}"
   fi
@@ -729,7 +741,7 @@ cmd_verify_radar() {
       status="${out##*$'\n'}"
       if [ "${status}" = "200" ] && jq -e --argjson uids "${JOB_UIDS}" "${complete} and $(jobs_are "${denied}/admitted" "${denied}/pending")" <<<"${out%$'\n'*}" >/dev/null; then
         warn "6: a generic read returns ${denied}'s Workloads to a user who can't list them (namespace-level read granularity); a queue read must check per kind"
-      elif [ "${status}" = "403" ]; then
+      elif [ "${status}" = "403" ] && jq -e '.error_code == "user_forbidden"' <<<"${out%$'\n'*}" >/dev/null 2>&1; then
         ok "6: Workloads in ${denied} are refused to the user"
       else
         FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ 6: unexpected read of %s (HTTP %s)${C_RESET}\n" "${denied}" "${status}"
