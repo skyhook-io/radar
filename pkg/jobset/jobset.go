@@ -21,7 +21,6 @@ const (
 // release.
 var GVK = schema.GroupVersionKind{Group: Group, Version: "v1alpha2", Kind: Kind}
 
-// Supported reports whether obj is a JobSet of the interpreted API version.
 func Supported(obj *unstructured.Unstructured) bool {
 	return obj != nil && obj.GetAPIVersion() == APIVersion && obj.GetKind() == Kind
 }
@@ -41,7 +40,6 @@ func Controls(jobSet *unstructured.Unstructured, child metav1.Object) bool {
 	return jobSet.GetUID() != "" && owner.UID == jobSet.GetUID()
 }
 
-// Phase is a JobSet's normalized root lifecycle.
 type Phase string
 
 const (
@@ -124,15 +122,12 @@ func Lifecycle(u *unstructured.Unstructured) State {
 	}
 }
 
-// conditionSet maps each condition type to its reason when its status is
-// True, and to nil otherwise.
 type conditionSet map[string]*string
 
 func (c conditionSet) true(conditionType string) bool {
 	return c[conditionType] != nil
 }
 
-// decide names conditionType as the deciding condition when it is True.
 func (c conditionSet) decide(state State, conditionType string) State {
 	if reason := c[conditionType]; reason != nil {
 		state.Condition, state.Reason = conditionType, *reason
@@ -186,7 +181,6 @@ func Declared(u *unstructured.Unstructured) (roles, jobs int64) {
 	return roles, jobs
 }
 
-// ChildCounts sums status.replicatedJobsStatus over the roles it names.
 type ChildCounts struct {
 	Roles     int64
 	Ready     int64
