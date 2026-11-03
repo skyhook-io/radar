@@ -151,7 +151,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
 			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
 			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
-			"Absent is not empty; coverage is not health. " +
+			"Absent is not empty; coverage is not health. Absent `stale` does not establish freshness. " +
 			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
 			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
 			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +

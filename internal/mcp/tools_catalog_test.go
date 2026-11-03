@@ -273,7 +273,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Includes batch diagnosis routing and log-argument boundaries.
-		maxCatalogBytes = 68616
+		maxCatalogBytes = 68661
 
 		maxToolDescriptionBytes = 3200
 	)
