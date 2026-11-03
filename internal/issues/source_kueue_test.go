@@ -87,7 +87,7 @@ func (r fakeKueueRoots) valid() bool { return !r.p.rootsBroken }
 
 func loadKueueLiveFixture(t *testing.T) []*unstructured.Unstructured {
 	t.Helper()
-	return loadKueueFixture(t, "testdata/kueue/rad819-live.json")
+	return loadKueueFixture(t, "testdata/kueue/queue-scenarios-live.json")
 }
 
 func loadKueueFixture(t *testing.T, path string) []*unstructured.Unstructured {
@@ -155,7 +155,7 @@ const (
 	kueueWaitMessage    = "couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor default, 50m more needed"
 )
 
-// The live fixture is every RAD-819 scenario object on radar-test-nonprod
+// The live fixture is every Kueue scenario object on a test cluster
 // (Kueue v0.18.0), produced by the real controller (see testdata/kueue/README.md).
 func TestKueueLiveScenarioFindings(t *testing.T) {
 	p := newFakeKueueProvider(loadKueueLiveFixture(t)...)
@@ -327,7 +327,7 @@ func kueueWorkload(namespace, name, queue string, conditions ...map[string]any) 
 	return w
 }
 
-// actionableWorkload reports a missing LocalQueue, which RAD-811 reads as
+// actionableWorkload reports a missing LocalQueue, which the classification reads as
 // action_needed.
 func actionableWorkload(namespace, name, queue string) *unstructured.Unstructured {
 	return kueueWorkload(namespace, name, queue, kueueCondition("QuotaReserved", "False", "Inadmissible", "LocalQueue "+queue+" doesn't exist", 1))
@@ -386,7 +386,7 @@ func TestKueueWaitingPauseAndUnknownRaiseNothing(t *testing.T) {
 		kueueCondition("QuotaReserved", "False", "Pending", kueueWaitMessage, 1),
 		kueueCondition("Evicted", "True", "PodsReadyTimeout", "Exceeded the PodsReady timeout", 1))
 	finished := kueueWorkload("team", "finished", "q", kueueCondition("Finished", "True", "Failed", "Job failed", 1))
-	// Kueue's message names only the flavors it tried last, so RAD-811 can't
+	// Kueue's message names only the flavors it tried last, so the classification can't
 	// tell "never fits" from "not now".
 	exceeds := exceedsWorkload("team", "exceeds", "q")
 	mismatch := kueueWorkload("team", "mismatch", "q", kueueCondition("QuotaReserved", "False", "Pending", "couldn't assign flavors to pod set main: flavor default doesn't match node affinity", 1))
@@ -965,7 +965,7 @@ func TestKueueChainReadsTheClassifiedIncarnation(t *testing.T) {
 // that failed twice (retry limit 1) and to capacity revoked from an admitted
 // run (testdata/kueue/README.md).
 func TestKueueLiveProvisioningOutcomes(t *testing.T) {
-	p := newFakeKueueProvider(loadKueueFixture(t, "testdata/kueue/rad843-provisioning-live.json")...)
+	p := newFakeKueueProvider(loadKueueFixture(t, "testdata/kueue/provisioning-live.json")...)
 	got := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadEvidence: allowAllEvidence})
 	want := map[string]string{
 		"provisioning-fails": "Failed=True (CapacityUnavailable): RAD-843 fixture provider: no capacity for 1 node (attempt 2)",

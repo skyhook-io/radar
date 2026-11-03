@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { UNKNOWN_SOURCE_LINE, uncheckedSourceLines } from './uncheckedSources'
+import { UNKNOWN_SOURCE_LINE, uncheckedSourceLines, uncheckedSubjectWhy } from './uncheckedSources'
 
 describe('uncheckedSourceLines', () => {
   it('names the kinds still loading', () => {
@@ -36,6 +36,12 @@ describe('uncheckedSourceLines', () => {
     expect(uncheckedSourceLines([{
       source: 'kueue', reason: 'caller_access_denied', kinds: [{ group: 'kueue.x-k8s.io', kind: 'ClusterQueue' }],
     }])).toEqual(["You can't read ClusterQueues, so Radar can't tell you whether a queue your runs wait on is stopped on purpose or broken."])
+  })
+
+  it('explains a per-resource gap with or without kinds', () => {
+    expect(uncheckedSubjectWhy([{ source: 'kueue', reason: 'caller_access_denied' }])).toBe("you can't read what this check needs")
+    expect(uncheckedSubjectWhy([{ source: 'kueue', reason: 'read_failed' }])).toBe("some checks couldn't run")
+    expect(uncheckedSubjectWhy(undefined)).toBeUndefined()
   })
 
   it('names Kueue kinds Radar could not load', () => {
