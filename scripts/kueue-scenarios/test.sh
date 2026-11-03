@@ -16,8 +16,11 @@ FAILED=0
 JOBS='' WORKLOADS='' GET_JSON='' CAN_I='' KC_FAIL=''
 KC_LOG="$(mktemp)"
 
-DRY_RUN='' CREATED="$(mktemp)" CRDS='' OWNED='{}'
-trap 'rm -f -- "${KC_LOG}" "${CREATED}"' EXIT
+DRY_RUN='' CREATED="$(mktemp)" CRDS='' OWNED='{}' DEPLOYMENTS='{"items":[]}'
+# Answers to successive patch calls, one per line ("ok" or an error); kc runs in
+# command substitutions, so the queue lives in a file.
+PATCH_ANSWERS="$(mktemp)"
+trap 'rm -f -- "${KC_LOG}" "${CREATED}" "${PATCH_ANSWERS}"' EXIT
 
 kc() {
   printf '%s\n' "$*" >>"${KC_LOG}"
@@ -33,7 +36,14 @@ kc() {
     "create -f -") cat >>"${CREATED}" ;;
     "get crd "*) [[ " ${CRDS} " == *" ${3%%.*} "* ]] && echo "customresourcedefinition/$3"; return 0 ;;
     *" -l radar.skyhook.io/kueue-scenarios=t -o json") jq -c --arg r "${2}" '.[$r] // {items: []}' <<<"${OWNED}" ;;
-    "patch "*|"delete "*|"wait "*|version) ;;
+    "patch "*)
+      local answer
+      answer="$(head -n 1 "${PATCH_ANSWERS}")"
+      sed -i.bak '1d' "${PATCH_ANSWERS}" && rm -f "${PATCH_ANSWERS}.bak"
+      [ -z "${answer}" ] || [ "${answer}" = ok ] && return 0
+      echo "${answer}" >&2; return 1 ;;
+    "get deployments -A "*) printf '%s' "${DEPLOYMENTS}" ;;
+    "delete "*|"wait "*|version) ;;
     get*) printf '%s' "${GET_JSON}" ;;
     *) echo "unexpected kc call: $*" >&2; return 1 ;;
   esac
@@ -89,6 +99,16 @@ patch="$(grep '^patch ' "${KC_LOG}" | sed -e 's/.*-p //')"
 check "Retry keeps retryCount" 0 jq -e 'any(.status.admissionChecks[]; .name == "t-check" and .state == "Retry" and .retryCount == 1)' <<<"${patch}"
 check "Retry keeps the other check" 0 jq -e 'any(.status.admissionChecks[]; .name == "other" and .state == "Ready")' <<<"${patch}"
 check "already retried" 0 retried t-busy j
+check "the write carries the resourceVersion it read" 0 jq -e '.metadata | has("resourceVersion")' <<<"${patch}"
+printf '%s\n' 'Error from server (Conflict): the object has been modified; please apply your changes to the latest version' ok >"${PATCH_ANSWERS}"
+: >"${KC_LOG}"
+set_check t-busy j Ready "ok" >/dev/null 2>&1
+check "a conflict is retried" 0 test "$(grep -c '^patch ' "${KC_LOG}")" = 2
+printf '%s\n' 'Error from server (Forbidden): workloads.kueue.x-k8s.io "wl" is forbidden' >"${PATCH_ANSWERS}"
+: >"${KC_LOG}"
+check "any other refusal stops at once" 1 set_check t-busy j Ready "ok"
+check "  without retrying" 0 test "$(grep -c '^patch ' "${KC_LOG}")" = 1
+: >"${PATCH_ANSWERS}"
 
 echo "==> Radar's Workload sets match the Jobs on the cluster"
 uids='{"t-busy/a":"uid-a","t-busy/b":"uid-b"}'
@@ -103,6 +123,16 @@ BODY="$(body '[{"metadata":{"ownerReferences":[{"kind":"Job","uid":"uid-a","cont
 check "a non-controller reference fails" 1 match t-busy/a
 BODY="$(body '[]')"
 check "a Job unknown on the cluster fails even with no items" 1 match t-busy/zzz
+BODY="$(body '[{"metadata":{"ownerReferences":[{"kind":"Job","uid":"uid-a","controller":true}]}},{"metadata":{"name":"ownerless"}}]')"
+check "an extra Workload without a controlling Job fails" 1 match t-busy/a
+BODY="$(body '[{"metadata":{"ownerReferences":[{"kind":"Job","uid":"uid-a","controller":true}]}},{"metadata":{"ownerReferences":[{"kind":"RayJob","uid":"r","controller":true}]}}]')"
+check "an extra Workload owned by another kind fails" 1 match t-busy/a
+
+echo "==> Kueue version report"
+version_line() { DEPLOYMENTS="$(jq -cn --arg i "$1" '{items: [{spec: {template: {spec: {containers: [{image: $i}]}}}}]}')"; report_kueue_version 2>&1; }
+check "a tag in the validated series is accepted" 0 grep -q '✓' <<<"$(version_line registry.k8s.io/kueue/kueue:v0.18.0)"
+check "a digest-pinned tag is read by its tag" 0 grep -q '✓' <<<"$(version_line registry.k8s.io/kueue/kueue:v0.18.1@sha256:abcd)"
+check "another release warns" 0 grep -q '!' <<<"$(version_line registry.k8s.io/kueue/kueue:v0.19.2)"
 
 echo "==> Ownership and cleanup stay inside the prefix"
 objects_in() {

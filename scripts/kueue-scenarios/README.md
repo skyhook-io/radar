@@ -15,8 +15,10 @@ beside whatever is already there.
 ## Quick start
 
 ```bash
-# Prerequisites: kubectl, jq, curl; an identity that can create namespaces,
-# cluster-scoped Kueue objects, ClusterRoles and ClusterRoleBindings.
+# Prerequisites: bash, kubectl, jq, curl, and an identity that can create
+# namespaces, cluster-scoped Kueue objects, ClusterRoles and ClusterRoleBindings,
+# patch Workload and AdmissionCheck status, list Jobs and LocalQueues across
+# namespaces, create ServiceAccount tokens, and impersonate (verify uses --as).
 K=/path/to/cluster.kubeconfig          # or use --context NAME instead
 ./scripts/kueue-scenarios.sh up     --kubeconfig "$K"   # ~10 minutes on a remote cluster
 ./scripts/kueue-scenarios.sh verify --kubeconfig "$K"
@@ -186,7 +188,8 @@ exists to catch.
 
 In the `viewer` column, the gap for `<p>-busy-hidden` in a two-namespace read is
 currently coded `read_error` (retry), while the same namespace read alone is
-`radar_forbidden`; `verify-radar` checks only that the gap names the namespace.
+`radar_forbidden`. `verify-radar` accepts either code there and warns on
+`read_error`; any other code fails.
 
 ## Up, re-runs and cleanup
 
@@ -215,7 +218,8 @@ finalizers can keep them terminating; `down` warns instead of waiting forever.
 `scripts/kueue-scenarios/test.sh` tests the script's decisions offline (no
 cluster; kubectl is stubbed): unreadable versus absent, ownership refusal,
 Workload matching by Job UID, check states that keep Kueue's `retryCount`, and
-cleanup scoped to the prefix. Run it after changing the script.
+cleanup scoped to the prefix. Run it (`make kueue-scenarios-test`; needs only
+bash and jq) after changing the script.
 
 ## Proof boundary
 

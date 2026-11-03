@@ -1,7 +1,7 @@
 .PHONY: build install clean dev frontend backend test test-changed test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
 .PHONY: calico-demo calico-demo-down calico-demo-status
 .PHONY: kueue-demo kueue-demo-down kueue-demo-status kueue-demo-verify
-.PHONY: kueue-scenarios kueue-scenarios-down kueue-scenarios-status kueue-scenarios-verify
+.PHONY: kueue-scenarios kueue-scenarios-down kueue-scenarios-status kueue-scenarios-verify kueue-scenarios-test
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
 .PHONY: gpu-ecosystem-demo gpu-ecosystem-demo-down gpu-ecosystem-demo-status
 .PHONY: kubecost-demo kubecost-demo-down kubecost-demo-status
@@ -387,6 +387,9 @@ kueue-scenarios-status:
 
 kueue-scenarios-down:
 	./scripts/kueue-scenarios.sh down $(KUEUE_SCENARIOS_TARGET)
+
+kueue-scenarios-test:
+	./scripts/kueue-scenarios/test.sh
 
 # Focused live JobSet controller lane. Complements the controller-free GPU
 # breadth fixtures with role/index lineage, dependency gating, and a terminal

@@ -89,7 +89,9 @@ check_args() {
   command -v jq >/dev/null || fail "jq not found"
   [[ "${PREFIX}" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] || fail "--prefix must be a DNS label of at most 32 characters"
   [[ "${FIXTURE}" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$ ]] || fail "--fixture must be a valid label value"
-  kc version >/dev/null 2>&1 || fail "cluster unreachable with the given --kubeconfig/--context"
+  [ -z "${KUBECONFIG_ARG}" ] || [ -r "${KUBECONFIG_ARG}" ] || fail "cannot read kubeconfig ${KUBECONFIG_ARG} (give a path the shell expands, not a quoted ~)"
+  local out
+  out="$(kc version 2>&1 >/dev/null)" || fail "cannot reach the cluster with the given --kubeconfig/--context: ${out}"
 }
 
 preflight() {
@@ -108,9 +110,11 @@ report_kueue_version() {
   local image
   image="$(kc get deployments -A -l control-plane=controller-manager -o json 2>/dev/null \
     | jq -r '[.items[].spec.template.spec.containers[].image | select(test("/kueue(@|:)"))][0] // empty')" || true
+  local tag="${image%@*}"
+  tag="${tag##*:}"
   if [ -z "${image}" ]; then
     warn "could not find the Kueue controller Deployment; expectations were validated on Kueue ${VALIDATED_KUEUE}x"
-  elif [[ "${image##*:}" == ${VALIDATED_KUEUE}* ]]; then
+  elif [[ "${tag}" == ${VALIDATED_KUEUE}* ]]; then
     ok "Kueue controller ${image##*/} (API kueue.x-k8s.io/v1beta2)"
   else
     warn "Kueue controller ${image##*/}: expectations were validated on ${VALIDATED_KUEUE}x, so reasons and messages may differ"
@@ -243,6 +247,8 @@ cond_pred() { # cond_pred <type> <status> [reason]
 
 has_cond() { wl_is "$1" "$2" "$(cond_pred "$3" "$4" "${5:-}")"; }
 
+has_workload() { wl_is "$1" "$2" 'true'; }
+
 # True only when the Workload was read and holds no quota reservation.
 released() { wl_is "$1" "$2" "($(cond_pred QuotaReserved True)) | not"; }
 
@@ -271,7 +277,7 @@ wait_for() { # wait_for <description> <command...>
   shift
   until "$@"; do
     if [ "${SECONDS}" -ge "${deadline}" ]; then
-      fail "Timed out after ${WAIT_SECONDS}s waiting for ${desc}. Inspect with: $0 status. A Job without a Workload means Kueue's batch/job integration is off or Kueue isn't running"
+      fail "Timed out after ${WAIT_SECONDS}s waiting for ${desc}. Inspect with: $0 status"
     fi
     sleep 3
   done
@@ -282,7 +288,7 @@ wait_for() { # wait_for <description> <command...>
 
 # The script is the controller for ${PREFIX}-check: it writes one check state.
 set_check() { # set_check <namespace> <job> <Pending|Ready|Retry|Rejected> <message>
-  local json wl patch attempt
+  local json wl patch attempt out
   for attempt in 1 2 3; do
     json="$(READ_CACHE='' workload_json "$1" "$2")" || fail "cannot read the Workload of Job $1/$2"
     wl="$(jq -r '.metadata.name // empty' <<<"${json}")"
@@ -295,9 +301,11 @@ set_check() { # set_check <namespace> <job> <Pending|Ready|Retry|Rejected> <mess
       '{metadata: {resourceVersion: .metadata.resourceVersion},
         status: {admissionChecks: ([.status.admissionChecks[]? | select(.name != $n)]
           + [((first(.status.admissionChecks[]? | select(.name == $n)) // {name: $n}) + {state: $s, message: $m, lastTransitionTime: $t})])}}' <<<"${json}")"
-    kc patch workloads.kueue.x-k8s.io -n "$1" "${wl}" --subresource=status --type=merge -p "${patch}" >/dev/null 2>&1 && return 0
+    out="$(kc patch workloads.kueue.x-k8s.io -n "$1" "${wl}" --subresource=status --type=merge -p "${patch}" 2>&1 >/dev/null)" && return 0
+    [[ "${out}" == *"the object has been modified"* || "${out}" == *Conflict* ]] || fail "writing ${PREFIX}-check=$3 on $1/${wl} failed: ${out}"
+    sleep 1
   done
-  fail "could not write ${PREFIX}-check=$3 on $1/${wl}; it kept changing or the write was refused"
+  fail "writing ${PREFIX}-check=$3 on $1/${wl} kept conflicting with Kueue's own updates: ${out}"
 }
 
 check_state_is() { # check_state_is <namespace> <job> <state>
@@ -339,6 +347,12 @@ cmd_up() {
 
   step "Submitting the first Jobs"
   create_missing 30-jobs-first.yaml
+  local deadline=$((SECONDS + 60))
+  until known has_workload "$(ns quota)" fits; do
+    [ "${SECONDS}" -lt "${deadline}" ] || \
+      fail "Kueue created no Workload for Job $(ns quota)/fits within 60s: is Kueue running with its batch/job integration enabled?"
+    sleep 3
+  done
   wait_for "quota/fits admitted" has_cond "$(ns quota)" fits Admitted True
   wait_for "lq-denied/admitted admitted" has_cond "$(ns lq-denied)" admitted Admitted True
   wait_for "lifecycle/finished finished" has_cond "$(ns lifecycle)" finished Finished True Succeeded
@@ -608,7 +622,8 @@ job_uids() {
 jobs_are() {
   local wanted
   wanted="$(printf '%s\n' "$@" | jq -R . | jq -sc .)"
-  printf '([.items[] | .metadata.ownerReferences[]? | select(.kind == "Job" and .controller == true) | .uid] | sort) == ([%s | .[] | $uids[.]] | sort) and all(%s[]; $uids[.] != null)' "${wanted}" "${wanted}"
+  # Every item counts: one without a controlling Job maps to null and breaks equality.
+  printf '([.items[] | first(.metadata.ownerReferences[]? | select(.kind == "Job" and .controller == true) | .uid) // null] | sort) == ([%s | .[] | $uids[.]] | sort) and all(%s[]; $uids[.] != null)' "${wanted}" "${wanted}"
 }
 
 cmd_verify_radar() {
@@ -642,7 +657,12 @@ cmd_verify_radar() {
       ;;
     viewer)
       radar_expect "2: busy Workloads partial, ${hidden} not read" "$(wl_path "${busy},${hidden}")" 200 \
-        ".coverage.status == \"partial\" and .coverage.read.namespaces.names == [\"${busy}\"] and (.coverage.gaps | length == 1) and .coverage.gaps[0].namespaces.names == [\"${hidden}\"] and ${busy_jobs}"
+        ".coverage.status == \"partial\" and .coverage.read.namespaces.names == [\"${busy}\"] and (.coverage.gaps | length == 1) and .coverage.gaps[0].namespaces.names == [\"${hidden}\"] and (.coverage.gaps[0].code | IN(\"radar_forbidden\", \"read_error\")) and ${busy_jobs}"
+      local gap
+      gap="$(radar_get "$(wl_path "${busy},${hidden}")" | sed '$d' | jq -r '.coverage.gaps[0].code // empty' 2>/dev/null)" || true
+      if [ "${gap}" = "read_error" ]; then
+        warn "2: that gap is coded read_error, while ${hidden} read alone is radar_forbidden (known inconsistency; see the README)"
+      fi
       radar_expect "2: ${hidden} alone: Radar's identity cannot read it" "$(wl_path "${hidden}")" 503 \
         ".error_code == \"radar_forbidden\" and .coverage.gaps[0].code == \"radar_forbidden\""
       radar_expect "6: Workloads in ${denied}: Radar's identity cannot read them" "$(wl_path "${denied}")" 503 \
@@ -772,10 +792,11 @@ cmd_down() {
   # Kueue finalizes queues and flavors; `up` refuses objects still being deleted,
   # so wait here rather than leave the next `up` to trip over them.
   if [ "${#namespaces[@]}" -gt 0 ] || [ "${#deleting[@]}" -gt 0 ]; then
-    kc wait --for=delete ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --timeout="${WAIT_SECONDS}s" >/dev/null 2>&1 || {
-      warn "some objects are still being deleted; with Kueue's controller gone, its finalizers can hold them"
+    if ! kc wait --for=delete ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --timeout="${WAIT_SECONDS}s" >/dev/null 2>&1; then
+      warn "still being deleted after ${WAIT_SECONDS}s: $(kc get ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --ignore-not-found -o name 2>/dev/null | tr '\n' ' ')"
+      warn "run 'down' again to wait longer; finalizers only clear while Kueue's controller runs"
       return 0
-    }
+    fi
   fi
   ok "removed"
 }
