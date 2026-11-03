@@ -21,6 +21,9 @@ func (p *CacheProvider) kueueInventory(group, kind string, namespaces []string) 
 		if p.discovery.LastRefreshFailed() || p.discovery.GroupHadPartialDiscovery(group) {
 			return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 		}
+		if p.dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
+			return kueueInventory{Gap: issuesapi.UncheckedReasonSyncPending}
+		}
 		return kueueInventory{}
 	}
 	gvr := schema.GroupVersionResource{Group: apiResource.Group, Version: apiResource.Version, Resource: apiResource.Name}
