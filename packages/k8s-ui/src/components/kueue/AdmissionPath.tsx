@@ -132,7 +132,9 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
                         <span className="text-theme-text-secondary">{resource}</span>
                         <span className="text-theme-text-tertiary">→</span>
                         <ResourceLink name={String(flavor)} kind="resourceflavors" group={KUEUE_GROUP} onNavigate={onNavigate} />
-                        {reads?.flavors?.[String(flavor)]?.state !== 'found' && <ReadState read={reads?.flavors?.[String(flavor)]} />}
+                        {finished && reads?.flavors?.[String(flavor)]?.state === 'not_found'
+                          ? <span className="text-xs text-theme-text-tertiary">No longer exists</span>
+                          : reads?.flavors?.[String(flavor)]?.state !== 'found' && <ReadState read={reads?.flavors?.[String(flavor)]} />}
                       </div>
                     ))}
                 </div>

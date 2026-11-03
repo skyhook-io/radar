@@ -12,7 +12,7 @@ export type NamespaceEligibility =
 interface Requirement { key?: string; operator?: string; values?: string[] }
 export interface LabelSelector { matchLabels?: Record<string, string>; matchExpressions?: Requirement[] }
 
-export function selectorHasTerms(selector: LabelSelector | null | undefined): boolean {
+function selectorHasTerms(selector: LabelSelector | null | undefined): boolean {
   return !!selector && (Object.keys(selector.matchLabels ?? {}).length > 0 || (selector.matchExpressions?.length ?? 0) > 0)
 }
 

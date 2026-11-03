@@ -8,7 +8,7 @@ import type { RelatedRead } from './related-read'
  * missing observedGeneration as not stale: a tone that hides an alert needs
  * positive evidence, not the absence of contrary evidence.
  */
-export function conditionIsCurrent(condition: { observedGeneration?: number } | undefined, generation: number | undefined): boolean {
+function conditionIsCurrent(condition: { observedGeneration?: number } | undefined, generation: number | undefined): boolean {
   return !!condition?.observedGeneration && !!generation && condition.observedGeneration === generation
 }
 

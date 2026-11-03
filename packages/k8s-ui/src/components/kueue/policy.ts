@@ -22,8 +22,8 @@ const shared: Dictionary = {
     HoldAndDrain: 'Stopped and draining: no new reservations; reservations are cancelled and admitted Workloads are evicted.',
   },
   queueingStrategy: {
-    StrictFIFO: 'Strictly by creation time: an older Workload that can’t be admitted blocks newer ones, even if they fit.',
-    BestEffortFIFO: 'By creation time, but an older Workload that can’t be admitted doesn’t block newer ones that fit.',
+    StrictFIFO: 'By priority, then creation time; the Workload at the head that can’t be admitted blocks those behind it, even if they fit.',
+    BestEffortFIFO: 'By priority, then creation time; a Workload that can’t be admitted doesn’t block those behind it that fit.',
   },
   'preemption.withinClusterQueue': {
     Never: 'A pending Workload never preempts Workloads in this ClusterQueue.',

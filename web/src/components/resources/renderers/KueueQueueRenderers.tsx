@@ -40,7 +40,7 @@ function ClusterQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navig
   const subjectKey = relatedReadKey(data, [...names.flavors, ...names.admissionChecks], ['Active'])
   const flavors = useRelatedObjects('resourceflavors', KUEUE_GROUP, undefined, names.flavors, names.flavors.length > 0, subjectKey)
   const checks = useRelatedObjects('admissionchecks', KUEUE_GROUP, undefined, names.admissionChecks, names.admissionChecks.length > 0, subjectKey)
-  const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [], cohort !== '-')
+  const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [], cohort !== '-', relatedReadKey(data, [cohort], ['Active']))
   const members: RelatedRead<string[]> | undefined = cohort === '-' ? undefined
     : queues.all.state !== 'found' ? queues.all as RelatedRead<string[]>
       : {

@@ -280,7 +280,7 @@ function clusterQueueChecks(data: any): { name: string; onFlavors?: string[] }[]
 }
 
 /** Flavor names per resource group, in the order Kueue tries them. */
-export function clusterQueueFlavorGroups(data: any): { resources: string[]; flavors: string[] }[] {
+function clusterQueueFlavorGroups(data: any): { resources: string[]; flavors: string[] }[] {
   return (data.spec?.resourceGroups ?? []).map((group: any) => ({
     resources: group.coveredResources ?? [],
     flavors: (group.flavors ?? []).map((flavor: any) => flavor?.name).filter(Boolean),

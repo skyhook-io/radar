@@ -1766,7 +1766,9 @@ nothing else (Kueue names only the first of a ClusterQueue's inactive causes as
 the reason, so a stopped queue that is also missing a flavor still says Stopped;
 its message lists every cause, and such a queue keeps the alert tone too) and
 both reports describe their current generation; its header badge follows the
-same rule, while the resource table keeps the LocalQueue's own report. A
+same rule, while the resource table keeps the LocalQueue's own report; the
+Investigate button never flags a LocalQueue whose report blames its
+ClusterQueue, since the cause lives on the ClusterQueue. A
 consumer of the k8s-ui renderers that doesn't inject these reads shows the names
 without read state.
 

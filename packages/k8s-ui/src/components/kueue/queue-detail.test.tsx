@@ -4,6 +4,7 @@ import { ClusterQueueRenderer, LocalQueueRenderer } from '../resources/renderers
 import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
 import { localQueueInactiveBecauseParentStopped, localQueueStatusWithParent } from './queue-status'
 import { getClusterQueueStatus, getLocalQueueStatus } from '../resources/resource-utils-kueue'
+import { diagnoseHealthHint } from '../shared/ResourceRendererDispatch'
 import type { RelatedRead } from './related-read'
 
 const v = 'kueue.x-k8s.io/v1beta2'
@@ -53,6 +54,11 @@ describe('parent-aware LocalQueue tone', () => {
 
   it('keeps the alert when the ClusterQueue can’t be read', () => {
     expect(localQueueStatusWithParent(inactive, { state: 'unavailable', code: 'user_forbidden' }).level).toBe('alert')
+  })
+
+  it('doesn’t flag a LocalQueue for investigation when its own report blames its ClusterQueue', () => {
+    expect(diagnoseHealthHint('localqueues', inactive)).toBe('unknown')
+    expect(diagnoseHealthHint('localqueues', localQueue(active('False', 'ClusterQueueDoesNotExist', 1)))).toBe('problem')
   })
 
   it('never hides the LocalQueue’s own faults behind a stopped parent', () => {
@@ -222,8 +228,11 @@ describe('Workload admission path', () => {
     const html = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'gone' }, { admission: { clusterQueue: 'cq' } })} reads={{ localQueue: { state: 'not_found' }, clusterQueues: { cq: found(clusterQueue('cq', active('True', 'Ready', 1))) } }} />)
     expect(html).toContain('the reservation below was made through it earlier')
     expect(html).not.toContain('can&#x27;t admit this Workload')
-    const finished = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' }, { admission: { clusterQueue: 'cq' }, conditions: [{ type: 'Finished', status: 'True', reason: 'Succeeded', observedGeneration: 1 }] })} />)
+    const finished = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' }, { admission: { clusterQueue: 'cq', podSetAssignments: [{ name: 'main', flavors: { cpu: 'old-flavor' } }] }, conditions: [{ type: 'Finished', status: 'True', reason: 'Succeeded', observedGeneration: 1 }] })} reads={{ flavors: { 'old-flavor': { state: 'not_found' } } }} />)
     expect(finished).toContain('the Workload finished, so its quota was released')
+    expect(finished).toContain('No longer exists')
+    const unconfirmed = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' })} reads={{ localQueue: { state: 'unconfirmed' } }} />)
+    expect(unconfirmed).toContain('can&#x27;t confirm LocalQueue lq exists')
   })
 
   it('keeps the reserved ClusterQueue’s read state when the LocalQueue can’t be read', () => {

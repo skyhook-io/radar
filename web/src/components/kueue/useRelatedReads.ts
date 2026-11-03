@@ -62,8 +62,12 @@ export function relatedReadInList(list: { data?: any[]; coverage?: ListCoverage;
 /** How often a related list re-reads: watch events don't announce most additions, so a missing object is re-checked on this clock. */
 export const RELATED_LIST_RECHECK_MS = 30_000
 
-/** The viewer's own access refused the read; an older Radar's uncoded 403 counts too. */
-const denied = (error: unknown) => error instanceof ApiError && (readActionFor(error.data?.error_code) === 'user_access' || (error.status === 403 && !error.data?.error_code))
+/** The viewer's own access refused the read, as the server's code says. */
+const denied = (error: unknown) => error instanceof ApiError && readActionFor(error.data?.error_code) === 'user_access'
+/** A refused list worth trying name by name: a coded denial, or an older Radar's uncoded 403. */
+const listRefused = (error: unknown) => denied(error) || (error instanceof ApiError && error.status === 403 && !error.data?.error_code)
+/** Absence the server proved: asking again won't change it before the next scheduled read. */
+const provedAbsent = (error: unknown) => error instanceof ApiError && error.status === 404 && canonicalReadCode(error.data?.error_code) === 'object_not_found'
 
 /**
  * A key for the subject state that decides what its related reads must
@@ -115,9 +119,9 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
   }, [enabled, subjectChangedAt, mountedAt, refetch])
   const readBeforeMount = dataUpdatedAt < Math.max(mountedAt, subjectChangedAt)
   // An older Radar answers a list denial with an uncoded 403; a GET still says what the viewer may open.
-  const listDenied = denied(error)
-  const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied, subjectChangedAt > mountedAt ? subjectChangedAt : 0)
-  const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data ? { state: 'found', object: data } : { state: 'loading' }
+  const listDenied = listRefused(error)
+  const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied, subjectChangedAt)
+  const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data && !readBeforeMount ? { state: 'found', object: data } : { state: 'loading' }
   const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error, readBeforeMount, namespace }, name)]))
   const completeness = coverage?.status === 'complete' || coverage?.status === 'partial' ? coverage.status : 'unknown'
   return { byName, all, completeness }
@@ -137,24 +141,26 @@ export const RELATED_GET_RECHECK_MS = 60_000
  * last changed: a read older than that is re-run, and until it lands it can't
  * prove absence.
  */
-export function useRelatedReads(refs: RelatedRef[], enabled = true, freshAfter = 0): RelatedRead[] {
+export function useRelatedReads(refs: RelatedRef[], enabled = true, changedAt = 0): RelatedRead[] {
   const cacheScope = getApiBase()
+  const [mountedAt] = useState(Date.now)
+  const freshAfter = Math.max(mountedAt, changedAt)
   const bases = refs.map(ref => resourceQueryOptions<unknown>(ref.kind, ref.namespace ?? '', ref.name, ref.group, { enabled, cacheScope, refetchInterval: RELATED_GET_RECHECK_MS }))
   const results = useQueries({
     queries: bases.map(base => ({
       ...base,
-      retry: (failureCount: number, error: unknown) => !denied(error) && base.retry(failureCount, error),
+      retry: (failureCount: number, error: unknown) => !denied(error) && !provedAbsent(error) && base.retry(failureCount, error),
       refetchInterval: (query: { state: { error: unknown } }) => denied(query.state.error) ? false : base.refetchInterval(query),
     })),
   })
   const queryClient = useQueryClient()
   const signature = JSON.stringify(refs.map(ref => [ref.kind, ref.namespace ?? '', ref.name, ref.group ?? null]))
   useEffect(() => {
-    if (!enabled || freshAfter === 0) return
+    if (!enabled || changedAt <= mountedAt) return
     for (const [kind, namespace, name, group] of JSON.parse(signature) as [string, string, string, string | null][]) {
       void queryClient.refetchQueries({ queryKey: resourceQueryOptions(kind, namespace, name, group ?? undefined, { cacheScope }).queryKey, exact: true })
     }
-  }, [enabled, freshAfter, signature, cacheScope, queryClient])
+  }, [enabled, changedAt, mountedAt, signature, cacheScope, queryClient])
   return results.map(result => {
     const read = relatedReadFrom(result)
     return read.state === 'not_found' && result.dataUpdatedAt < freshAfter && result.errorUpdatedAt < freshAfter ? { state: 'loading' } : read
