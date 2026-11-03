@@ -10,15 +10,13 @@ import { isDenied, unreadReason, type RelatedRead } from './related-read'
 import { namespaceEligibility } from './eligibility'
 
 import { KUEUE_GROUP } from './constants'
-
-export { KUEUE_GROUP }
 export type Navigate = (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 
 /** One related object's name with what Radar's read of it found. Without a read, the name alone. */
-export function ReadState({ read, missing = 'Not found', found }: { read?: RelatedRead; missing?: string; found?: ReactNode }) {
+export function ReadState({ read, found }: { read?: RelatedRead; found?: ReactNode }) {
   if (!read) return null
   if (read.state === 'found') return <>{found ?? <Badge severity="neutral" size="sm">Found</Badge>}</>
-  if (read.state === 'not_found') return <Badge severity="error" size="sm">{missing}</Badge>
+  if (read.state === 'not_found') return <Badge severity="error" size="sm">Not found</Badge>
   if (read.state === 'unconfirmed') return <span className="text-xs text-theme-text-tertiary">Not in Radar’s list; this Radar can’t confirm it’s absent</span>
   return <span className={isDenied(read) ? 'text-xs text-theme-text-secondary' : 'text-xs text-theme-text-tertiary'}>{read.state === 'loading' ? 'Checking…' : `Not read: ${unreadReason(read)}`}</span>
 }

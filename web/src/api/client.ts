@@ -3031,14 +3031,14 @@ export function useResources<T>(
   kind: string,
   namespace?: string,
   group?: string,
-  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string; refetchOnMount?: boolean | 'always' },
+  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string; refetchOnMount?: boolean | 'always'; staleTime?: number },
 ) {
   const loadingInterval = useMemo(() => createListRefetchInterval(options?.refetchInterval), [options?.refetchInterval])
   const query = useQuery<ResourceListResult<T>>({
     queryKey: ["resources", kind, group, namespace, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: ({ signal }) => fetchResourceList<T>(kind, { namespaces: namespace ? [namespace] : [], group, signal }),
     enabled: (options?.enabled ?? true) && Boolean(kind),
-    staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
+    staleTime: options?.staleTime ?? 30000, // 30 seconds - matches refetchInterval in ResourcesView
     ...(options?.refetchOnMount !== undefined ? { refetchOnMount: options.refetchOnMount } : {}),
     refetchInterval: loadingInterval,
     // Kind still completing its initial sync (progressive shell, or a

@@ -6,14 +6,12 @@ import {
   clusterQueueRelatedNames,
   type ClusterQueueReads,
 } from '@skyhook-io/k8s-ui/components/resources/renderers/KueueQueueRenderers'
-import { getClusterQueueCohort } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
+import { getClusterQueueCohort, isKueueQueueResource } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
 import { selectorHasTerms } from '@skyhook-io/k8s-ui/components/kueue/eligibility'
 import { localQueueStatusWithParent } from '@skyhook-io/k8s-ui/components/kueue/queue-status'
-import { isKueueQueueResource } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
 import type { RelatedRead } from '@skyhook-io/k8s-ui/components/kueue/related-read'
 import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/constants'
 import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
-
 
 type Navigate = (ref: ResourceRef) => void
 

@@ -7,7 +7,8 @@ import { kindToPluralWithGroup } from '../../utils/navigation'
 import { isKueueConditionStale } from '../resources/resource-utils-kueue'
 import { localQueueStatusWithParent } from './queue-status'
 import { isFlavorAssignmentMessage, parseFlavorAttempts, type FlavorAttempt, type FlavorAttemptKind } from './flavors-tried'
-import { ClusterQueueReadSummary, KUEUE_GROUP, ReadState, StatusPill, namespaceEligibilityFact, type Navigate } from './QueueEvidence'
+import { ClusterQueueReadSummary, ReadState, StatusPill, namespaceEligibilityFact, type Navigate } from './QueueEvidence'
+import { KUEUE_GROUP } from './constants'
 import type { RelatedRead } from './related-read'
 
 /** Objects on a Workload's admission path that a host read as the viewer. */
@@ -82,7 +83,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
           {!queueName ? <p className={muted}>No queue name: spec.queueName is empty, so the Workload names no LocalQueue.</p> : <>
             <div className="flex flex-wrap items-center gap-2 break-all [&_button]:text-left">
               <ResourceLink name={queueName} kind="localqueues" namespace={namespace} group={KUEUE_GROUP} onNavigate={onNavigate} />
-              <ReadState read={localQueue} missing="Not found" found={localQueue?.state === 'found' ? <StatusPill status={localQueueStatusWithParent(localQueue.object, configuredRead)} /> : undefined} />
+              <ReadState read={localQueue} found={localQueue?.state === 'found' ? <StatusPill status={localQueueStatusWithParent(localQueue.object, configuredRead)} /> : undefined} />
             </div>
             {localQueue?.state === 'not_found' && <p className={muted}>{reserved
               ? `No LocalQueue ${queueName} exists in namespace ${namespace} now; the reservation below was made through it earlier.`
@@ -98,6 +99,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
             </> : <p className={muted}>
               {localQueue?.state === 'found' ? 'The LocalQueue names no ClusterQueue.'
                 : localQueue?.state === 'not_found' ? `None: LocalQueue ${queueName} doesn't exist.`
+                  : localQueue?.state === 'unconfirmed' ? `Unknown: this Radar can't confirm LocalQueue ${queueName} exists.`
                   : localQueue?.state === 'loading' ? 'Checking…' : 'Unknown until the LocalQueue is read.'}
             </p>}
           </Step>

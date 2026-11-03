@@ -70,7 +70,7 @@ export interface RelatedObjects {
  */
 export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true): RelatedObjects {
   const [mountedAt] = useState(Date.now)
-  const { data, coverage, error, dataUpdatedAt } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS, refetchOnMount: 'always' })
+  const { data, coverage, error, dataUpdatedAt } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
   const readBeforeMount = dataUpdatedAt < mountedAt
   // An older Radar answers a list denial with an uncoded 403; a GET still says what the viewer may open.
   const listDenied = error instanceof ApiError && (readActionFor(error.data?.error_code) === 'user_access' || (error.status === 403 && !error.data?.error_code))

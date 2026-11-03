@@ -14,7 +14,7 @@ import {
 import { formatResources } from '../resource-utils'
 import type { Relationships } from '../../../types'
 import { AdmissionPath, FlavorReasons, type KueueWorkloadReads } from '../../kueue/AdmissionPath'
-import { KUEUE_GROUP } from '../../kueue/QueueEvidence'
+import { KUEUE_GROUP } from '../../kueue/constants'
 import { admissionCheckSeverity, getKueueWorkloadStatus, getKueueWorkloadPriority, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
 
 

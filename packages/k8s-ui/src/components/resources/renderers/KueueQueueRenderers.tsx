@@ -25,13 +25,13 @@ import {
   AdmissionCheckRow,
   ClusterQueueReadSummary,
   ConfiguredStop,
-  KUEUE_GROUP,
   namespaceEligibilityFact,
   QueueCounts,
   ReadState,
   ReportedActive,
   type Navigate,
 } from '../../kueue/QueueEvidence'
+import { KUEUE_GROUP } from '../../kueue/constants'
 
 interface QueueRendererProps {
   data: any
@@ -331,7 +331,7 @@ function RelatedObjects({ data, reads, onNavigate }: QueueRendererProps & { read
                       <li key={name} className="flex flex-wrap items-center gap-2 break-all text-sm [&_button]:text-left">
                         <span className="w-4 shrink-0 text-right text-xs text-theme-text-tertiary">{position + 1}.</span>
                         <ResourceLink name={name} kind="resourceflavors" group={KUEUE_GROUP} onNavigate={onNavigate} />
-                        <ReadState read={reads?.flavors?.[name]} missing="Not found" />
+                        <ReadState read={reads?.flavors?.[name]} />
                       </li>
                     ))}
                   </ol>
