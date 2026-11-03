@@ -25,7 +25,7 @@ Radar shows you what's broken in a Kubernetes cluster, why, and what changed: is
 - [Installation](#installation)
 - [Usage](#usage)
 - [Views](#views) — Issues · Topology · Resources · Image Filesystem · Timeline · Helm · Compare · TLS · GitOps · Traffic · Metrics · Capacity · Cost · Audit · Network path · Upgrade impact · RBAC · Auth
-- [Supported Resources](#supported-resources)
+- [Supported Resources & Integrations](#supported-resources--integrations)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Security](#security)
 - [Development](#development) · [Contributing](#contributing)
@@ -496,7 +496,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 
 ### Local runtime evidence via MCP
 
-Local MCP clients can explicitly collect evidence from one Pod after operator approval.
+When Radar runs locally, MCP clients can explicitly collect evidence from one Pod after operator approval.
 
 These observations describe one Pod endpoint, not overall application health, and do not add automatic Issues detection. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
 

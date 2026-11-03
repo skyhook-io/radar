@@ -1921,7 +1921,7 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 
 ## Local runtime evidence: RabbitMQ, NATS and Vault
 
-Local MCP clients can use `collect_application_evidence` to read one Pod endpoint after operator approval:
+When Radar runs locally, MCP clients can use `collect_application_evidence` to read one Pod endpoint after operator approval:
 
 | Integration | Endpoint | Evidence |
 |---|---|---|
