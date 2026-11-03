@@ -1875,8 +1875,9 @@ message are what to show. Rules that keep the axes honest:
   flavor-assignment message reads `insufficient_quota` only when every PodSet
   has a flavor whose only problem is unused quota; a request over the maximum,
   or a taint, affinity, topology or earlier-slice mismatch rules a flavor out,
-  a clause Radar does not understand keeps its flavor from counting, a PodSet
-  whose failure Radar does not recognize leaves the blocker `unrecognized`, a
+  a flavor named by a clause Radar does not understand (and a PodSet whose
+  failure Radar does not recognize) leaves the blocker `unrecognized`, a
+  resource the ClusterQueue does not offer at all reads `no_matching_flavor`, a
   PodSet that fits no flavor outranks one that exceeds quota, and Kueue's notes
   on in-flight or retried preemptions read `waiting_for_preemption`.
   `exceeds_quota` describes Kueue's last attempt: with flavor fungibility an

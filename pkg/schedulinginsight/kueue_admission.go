@@ -391,26 +391,35 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 			ruledOut[match[1]], exceeded = true, true
 			understood[match[1]]++
 		}
-		mismatch := strings.Contains(segment, "unavailable in ClusterQueue")
+		mismatch := false
 		for _, pattern := range mismatchClauses {
 			for _, match := range pattern.FindAllStringSubmatch(segment, -1) {
 				ruledOut[match[1]], mismatch = true, true
 				understood[match[1]]++
 			}
 		}
+		// Every flavor the segment names must be accounted for: a flavor whose
+		// only failure Radar does not understand might still fit, so it keeps
+		// the PodSet from being called waiting or never-fitting.
 		couldFit, unexplained := false, false
-		for flavor := range waiting {
+		for _, flavor := range mentionedFlavors(segment) {
 			switch {
 			case ruledOut[flavor]:
 			case flavorMentions(segment, flavor) > understood[flavor]:
 				unexplained = true
-			default:
+			case waiting[flavor]:
 				couldFit = true
 			}
 		}
 		switch {
-		case couldFit:
-		case mismatch && !exceeded && !unexplained:
+		case strings.Contains(segment, "unavailable in ClusterQueue"):
+			// The ClusterQueue offers no quota for a requested resource at all;
+			// no flavor can hold this PodSet, whatever else the segment says.
+			neverFits = rc.KueueAdmissionNoMatchingFlavor
+		case couldFit && !unexplained:
+		case unexplained:
+			undecided = true
+		case mismatch && !exceeded:
 			// No placement at all outranks too little quota, as in Kueue's own
 			// most-severe-reason ranking: more quota would not help.
 			neverFits = rc.KueueAdmissionNoMatchingFlavor
@@ -429,6 +438,28 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 		return ""
 	}
 	return rc.KueueAdmissionInsufficientQuota
+}
+
+var anyFlavor = regexp.MustCompile(`(?i)\bflavor "?([^"\s,;]+)|(\S+) flavor since`)
+
+// mentionedFlavors lists each flavor a segment names once, in either of
+// Kueue's word orders.
+func mentionedFlavors(segment string) []string {
+	seen := map[string]bool{}
+	var flavors []string
+	for _, match := range anyFlavor.FindAllStringSubmatch(segment, -1) {
+		name := match[1]
+		if name == "" {
+			name = match[2]
+		}
+		// "spot flavor since …" also reads as "flavor since"; "since" is no flavor.
+		if name == "" || name == "since" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		flavors = append(flavors, name)
+	}
+	return flavors
 }
 
 // flavorMentions counts the clauses that name flavor, in either word order
