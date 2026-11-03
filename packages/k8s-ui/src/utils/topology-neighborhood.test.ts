@@ -500,6 +500,8 @@ describe('JobSet ownership in the neighborhood', () => {
   it('keys only directly controlled batch/v1 member Jobs for in-place selection', () => {
     const byId = new Map(topo.nodes.map((n) => [n.id, n]))
     expect(jobSetMemberRunKey(topo, jobSetID, byId.get('job/ml/train-workers-0')!)).toBe('jobs/ml/train-workers-0')
+    expect(batchRunParentNodes(topo, byId.get('job/ml/train-workers-0')!)).toEqual([byId.get(jobSetID)])
+    expect(batchRunParentNodes(topo, byId.get('job/ml/train-workers-0/batch.volcano.sh')!)).toEqual([])
     expect(jobSetMemberRunKey(topo, jobSetID, byId.get('job/ml/standalone')!)).toBeUndefined()
     expect(jobSetMemberRunKey(topo, jobSetID, byId.get('job/ml/train-workers-0/batch.volcano.sh')!)).toBeUndefined()
     expect(jobSetMemberRunKey(topo, jobSetID, byId.get('pod/ml/train-workers-0-a')!)).toBeUndefined()

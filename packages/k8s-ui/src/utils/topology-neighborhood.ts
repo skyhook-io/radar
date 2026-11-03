@@ -111,9 +111,10 @@ export function jobSetMemberRunKey(topology: Topology, jobSetNodeId: string, nod
 
 function isJobSetMemberEdge(edge: TopologyEdge, nodeById: Map<string, TopologyNode>): boolean {
   const source = nodeById.get(edge.source)
+  const target = nodeById.get(edge.target)
   return edge.type === 'manages' && !edge.skipIfKindVisible
     && source?.kind === 'JobSet' && !!source && nodeGroup(source) === 'jobset.x-k8s.io'
-    && nodeById.get(edge.target)?.kind === 'Job'
+    && target?.kind === 'Job' && canonicalResourceGroup('Job', nodeGroup(target)) === 'batch'
 }
 
 function memberRank(node: TopologyNode): number {
@@ -123,7 +124,7 @@ function memberRank(node: TopologyNode): number {
 
 export function batchRunParentNodes(topology: Topology, run: TopologyNode): TopologyNode[] {
   const nodeById = new Map(topology.nodes.map((node) => [node.id, node]))
-  const parentEdges = topology.edges.filter((edge) => edge.target === run.id && isBatchRunFanoutEdge(edge, nodeById))
+  const parentEdges = topology.edges.filter((edge) => edge.target === run.id && (isBatchRunFanoutEdge(edge, nodeById) || isJobSetMemberEdge(edge, nodeById)))
   parentEdges.sort((left, right) => Number(right.type === 'manages') - Number(left.type === 'manages'))
   return parentEdges.flatMap((edge) => {
     const parent = nodeById.get(edge.source)

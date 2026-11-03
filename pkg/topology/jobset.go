@@ -5,10 +5,12 @@ import (
 	"log"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -162,4 +164,44 @@ func podOwnerKey(namespace string, ref metav1.OwnerReference) string {
 		key += "/" + string(ref.UID)
 	}
 	return key
+}
+
+func (j jobIncarnations) earlierJob(pod *corev1.Pod) *metav1.OwnerReference {
+	ref := metav1.GetControllerOf(pod)
+	if ref == nil || ref.Kind != "Job" || !ownerGroupMatches(ref.Kind, ref.APIVersion) || j.current(pod.Namespace+"/"+ref.Name, *ref) {
+		return nil
+	}
+	return ref
+}
+
+func (j jobIncarnations) markEarlierJobRun(node *Node, pods []*corev1.Pod) {
+	for _, pod := range pods {
+		if j.earlierJob(pod) == nil {
+			return
+		}
+	}
+	terminating := 0
+	level := health.LevelNeutral
+	details, _ := node.Data["pods"].([]map[string]any)
+	for i, pod := range pods {
+		node.Data["earlierJobRun"] = j.earlierJob(pod).Name
+		if pod.DeletionTimestamp != nil {
+			terminating++
+		}
+		podLevel := topoPodLevel(pod)
+		level = health.WorseOf(level, podLevel)
+		status := healthLevelToStatus(podLevel)
+		if i < len(details) {
+			details[i]["status"] = string(status)
+			details[i]["terminating"] = pod.DeletionTimestamp != nil
+		}
+	}
+	node.Data["terminating"] = terminating
+	node.Status = healthLevelToStatus(level)
+}
+
+// Historical display context is neither a dependency nor controller ownership.
+func earlierJobRunEdge(edge Edge, nodes map[string]*Node) bool {
+	source, target := nodes[edge.Source], nodes[edge.Target]
+	return edge.Type == EdgeUses && source != nil && source.Kind == KindJobSet && target != nil && target.Data["earlierJobRun"] != nil
 }

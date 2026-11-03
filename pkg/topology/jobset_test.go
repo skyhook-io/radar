@@ -247,9 +247,17 @@ func TestJobSetPodGroupsSplitByJobIncarnation(t *testing.T) {
 		t.Fatalf("earlier incarnation's Pods not grouped apart: %+v", topo.Nodes)
 	}
 	for _, e := range topo.Edges {
-		if e.Target == earlier.ID {
-			t.Fatalf("earlier incarnation's group attached: %+v", e)
+		if e.Target == earlier.ID && e.Type == EdgeManages {
+			t.Fatalf("earlier incarnation's group claimed as owned: %+v", e)
 		}
+	}
+
+	if earlier.Data["earlierJobRun"] != "train-workers-0" || earlier.Status != StatusUnhealthy {
+		t.Fatalf("earlier failed run unexplained: %+v", earlier)
+	}
+	context := edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-"+earlier.ID+"-earlier-run")
+	if context == nil || context.Type != EdgeUses || context.Label != "Same Job name" || context.SkipIfKindVisible != "" {
+		t.Fatalf("missing contextual earlier run link: %+v", context)
 	}
 }
 
@@ -597,5 +605,84 @@ func TestLabelGroupedJobPodsSplitByIncarnation(t *testing.T) {
 		if e.Target == earlier.ID {
 			t.Fatalf("earlier incarnation's group attached: %+v", e)
 		}
+	}
+}
+
+func TestEarlierJobRunTerminatingPods(t *testing.T) {
+	for _, grouped := range []bool{false, true} {
+		t.Run(fmt.Sprint(grouped), func(t *testing.T) {
+			root := testJobSetRoot("ml", "train", "root", nil, nil)
+			provider := &mockProvider{jobs: []*batchv1.Job{memberJob("ml", "workers", "current", jobSetOwnerRef("train", "root"))}}
+			for i := 0; i < 3; i++ {
+				pod := jobPod("ml", fmt.Sprintf("workers-old-%d", i), "workers", "earlier")
+				stamp := metav1.Now()
+				pod.DeletionTimestamp = &stamp
+				provider.pods = append(provider.pods, pod)
+			}
+			opts := DefaultBuildOptions()
+			if grouped {
+				opts.MaxIndividualPods = 2
+			}
+			topo := buildJobSetTopology(t, provider, jobSetTestDynamic(root), opts)
+			found := 0
+			for _, node := range topo.Nodes {
+				if node.Kind != KindPod && node.Kind != KindPodGroup {
+					continue
+				}
+				found++
+				if node.Data["earlierJobRun"] != "workers" || node.Status != StatusNeutral || node.Data["terminating"] == 0 {
+					t.Fatalf("terminating earlier run = %+v", node)
+				}
+				if e := edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-"+node.ID+"-earlier-run"); e == nil || e.Type != EdgeUses {
+					t.Fatalf("missing earlier run context for %s", node.ID)
+				}
+				for _, edge := range topo.Edges {
+					if edge.Target == node.ID && edge.Type == EdgeManages {
+						t.Fatalf("replacement claims old Pods: %+v", edge)
+					}
+				}
+				if grouped {
+					for _, detail := range node.Data["pods"].([]map[string]any) {
+						if detail["status"] != string(StatusNeutral) || detail["terminating"] != true {
+							t.Fatalf("expanded Pod = %+v", detail)
+						}
+					}
+				}
+			}
+			if found == 0 {
+				t.Fatal("earlier run missing")
+			}
+		})
+	}
+}
+
+func TestEarlierJobRunKeepsProblemsAndIsNotADependency(t *testing.T) {
+	root := testJobSetRoot("ml", "train", "root", nil, nil)
+	for _, tc := range []struct {
+		name  string
+		phase corev1.PodPhase
+		want  HealthStatus
+	}{
+		{"pending", corev1.PodPending, StatusDegraded}, {"unknown", corev1.PodUnknown, StatusUnknown}, {"failed", corev1.PodFailed, StatusUnhealthy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := jobPod("ml", "workers-old", "workers", "earlier")
+			pod.Status.Phase = tc.phase
+			if tc.name == "pending" {
+				pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable"}}
+			}
+			provider := &mockProvider{jobs: []*batchv1.Job{memberJob("ml", "workers", "current", jobSetOwnerRef("train", "root"))}, pods: []*corev1.Pod{pod}}
+			dynamic := jobSetTestDynamic(root)
+			topo := buildJobSetTopology(t, provider, dynamic, DefaultBuildOptions())
+			node := nodeByID(topo.Nodes, "pod/ml/workers-old")
+			if node == nil || node.Status != tc.want {
+				t.Fatalf("earlier Pod: %+v", node)
+			}
+			rootRel := GetRelationshipsWithObject("JobSet", "ml", "train", root, topo, provider, dynamic, nil)
+			podRel := GetRelationshipsWithObject("Pod", "ml", "workers-old", pod, topo, provider, dynamic, nil)
+			if rootRel != nil && len(rootRel.Dependencies) != 0 || podRel != nil && len(podRel.Dependents) != 0 {
+				t.Fatalf("historical context became dependencies: root=%+v pod=%+v", rootRel, podRel)
+			}
+		})
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, servingReadiness, resolveAppWorkloadSelection, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
+import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, batchSignalForApp, servingReadiness, resolveAppWorkloadSelection, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
 
 describe('application workload scope resolution', () => {
   const sole = ['Deployment/prod/api']
@@ -64,6 +64,20 @@ describe('application workload scope resolution', () => {
 })
 
 describe('batch application runtime', () => {
+  it('uses JobSet root health without interpreting child activity as running Pods', () => {
+    const workload: AppWorkload = { kind: 'JobSet', group: 'jobset.x-k8s.io', name: 'train', namespace: 'ml', health: 'unknown', ready: 0, desired: 0, restarts: 0, batch: { latestRunPhase: 'Unknown', retainedRuns: 1 } }
+    const app: AppRow = { key: 'ml/JobSet/train', name: 'train', health: 'unknown', workload_class: 'job', workloads: [workload] }
+    for (const [health, phase] of [['unknown', 'Unknown'], ['degraded', 'Restarting'], ['neutral', 'Active'], ['neutral', 'Succeeded'], ['unhealthy', 'Failed']]) {
+      workload.health = health
+      workload.batch = { latestRunPhase: phase, retainedRuns: 1, activeRuns: phase === 'Active' ? 1 : 0 }
+      expect(batchRuntimeForApp(app)).toMatchObject({ health, label: phase })
+      expect(batchSignalForApp(app)).toMatchObject({ label: `JobSet ${phase}` })
+      expect(batchActivityForApp(app)[0]).toMatchObject({ label: phase })
+    }
+    workload.health = 'unhealthy'
+    app.workloads!.push({ ...workload, kind: 'CronJob', group: 'batch', health: 'neutral', batch: { activeRuns: 1, latestRunPhase: 'Running' } })
+    expect(batchRuntimeForApp(app).health).toBe('unhealthy')
+  })
   it('uses the latest retained outcome instead of historical failure count', () => {
     const app: AppRow = {
       key: 'batch', name: 'batch', health: 'unhealthy', workload_class: 'job',
