@@ -140,8 +140,8 @@ func (j jobIncarnations) current(ownerKey string, ref metav1.OwnerReference) boo
 }
 
 // podOwnerKey names the owner a Pod in a PodGroup belongs to. A Job owner
-// includes its UID, so a group holding Pods of two incarnations of a Job keeps
-// them apart.
+// includes its UID, so the owner representative and the Pods it resolves are
+// of one incarnation.
 func podOwnerKey(namespace string, ref metav1.OwnerReference) string {
 	key := namespace + "/" + ref.Kind + "/" + ref.Name
 	if ref.Kind == "Job" && ref.UID != "" {

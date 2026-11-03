@@ -536,3 +536,43 @@ func TestPlainJobIgnoresEarlierIncarnationPods(t *testing.T) {
 		t.Fatalf("summary-mode Job pod count = %v, want 1", summary)
 	}
 }
+
+// A manual-selector Job's Pods may carry only an app label; the predecessor's
+// Pods still stay out of the current Job's group.
+func TestLabelGroupedJobPodsSplitByIncarnation(t *testing.T) {
+	provider := &mockProvider{jobs: []*batchv1.Job{memberJob("ops", "migrate", "job-current")}}
+	appPod := func(name, uid string, phase corev1.PodPhase) *corev1.Pod {
+		p := jobPod("ops", name, "migrate", uid)
+		p.Labels = map[string]string{"app": "migrate"}
+		p.Status.Phase = phase
+		return p
+	}
+	provider.pods = []*corev1.Pod{
+		appPod("old-0", "job-earlier", corev1.PodFailed),
+		appPod("old-1", "job-earlier", corev1.PodFailed),
+		appPod("old-2", "job-earlier", corev1.PodFailed),
+		appPod("new-0", "job-current", corev1.PodRunning),
+		appPod("new-1", "job-current", corev1.PodRunning),
+		appPod("new-2", "job-current", corev1.PodRunning),
+	}
+	opts := DefaultBuildOptions()
+	opts.MaxIndividualPods = 2
+	topo := buildJobSetTopology(t, provider, nil, opts)
+
+	current := nodeByID(topo.Nodes, "podgroup-ops-app-migrate")
+	earlier := nodeByID(topo.Nodes, "podgroup-ops-app-migrate-job-earlier")
+	if current == nil || earlier == nil {
+		t.Fatalf("want the current and earlier Pods in separate groups: %+v", topo.Nodes)
+	}
+	if current.Data["podCount"] != 3 || current.Data["unhealthy"] != 0 {
+		t.Fatalf("current group = %v pods, %v unhealthy; want 3 healthy", current.Data["podCount"], current.Data["unhealthy"])
+	}
+	if edgeByID(topo.Edges, "job/ops/migrate-to-"+current.ID) == nil {
+		t.Fatalf("current group not attached: %+v", topo.Edges)
+	}
+	for _, e := range topo.Edges {
+		if e.Target == earlier.ID {
+			t.Fatalf("earlier incarnation's group attached: %+v", e)
+		}
+	}
+}

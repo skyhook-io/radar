@@ -14,7 +14,7 @@ describe('baseSubtitle', () => {
     expect(baseSubtitle('JobSet', { apiVersion, phase: 'Active', declaredJobs: 8 })).toBe('Active • 8 Jobs declared')
     expect(baseSubtitle('JobSet', { apiVersion, phase: 'Pending', declaredJobs: 1 })).toBe('Pending • 1 Job declared')
     expect(baseSubtitle('JobSet', { apiVersion, phase: 'Unknown' })).toBe('Unknown')
-    expect(baseSubtitle('JobSet', { apiVersion })).toBe('Unknown')
+    expect(baseSubtitle('JobSet', { apiVersion })).toBe('')
     // Another group's JobSet has no lifecycle fields to describe.
     expect(baseSubtitle('JobSet', { apiVersion: 'jobset.example.com/v1' })).toBe('')
   })

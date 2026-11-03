@@ -77,11 +77,11 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 
 		// Determine group key
 		groupKey, groupKind, groupName := determineGroupKey(pod)
-		if groupKind == "Job" {
-			if ref := metav1.GetControllerOf(pod); ref != nil && ref.Kind == "Job" && ref.Name == groupName {
-				if drawn := opts.JobUIDs[pod.Namespace+"/"+ref.Name]; drawn != "" && ref.UID != "" && ref.UID != drawn {
-					groupKey += "/" + string(ref.UID)
-				}
+		// Whatever label grouped it, a Pod of an earlier same-named Job
+		// stays out of the current Job's group.
+		if ref := metav1.GetControllerOf(pod); ref != nil && ref.Kind == "Job" && ownerGroupMatches(ref.Kind, ref.APIVersion) {
+			if drawn := opts.JobUIDs[pod.Namespace+"/"+ref.Name]; drawn != "" && ref.UID != "" && ref.UID != drawn {
+				groupKey += "/" + string(ref.UID)
 			}
 		}
 

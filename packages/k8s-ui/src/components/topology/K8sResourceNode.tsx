@@ -541,7 +541,10 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       if (!String(nodeData.apiVersion ?? "").startsWith("jobset.x-k8s.io/")) return "";
       // Declared, not observed: a JobSet holding roles behind dependencies
       // has created fewer Jobs than its spec asks for.
-      const phase = (nodeData.phase as string) || "Unknown";
+      // An older Radar draws an owned JobSet without a phase; its status
+      // color then comes from generic conditions, so don't claim "Unknown".
+      const phase = (nodeData.phase as string) || "";
+      if (!phase) return "";
       const declared = nodeData.declaredJobs as number | undefined;
       return typeof declared === "number" ? `${phase} • ${declared} ${declared === 1 ? "Job" : "Jobs"} declared` : phase;
     }

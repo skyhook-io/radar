@@ -331,8 +331,7 @@ export function expandPodGroup(
     // Rollout's canary + stable ReplicaSets) — the specific edge
     // source(s) that actually own this pod, from the backend's own
     // per-pod owner resolution. See pkg/topology/builder.go's
-    // ownerKeyToSourceIDs. Empty for a pod of an earlier incarnation of
-    // its Job, which belongs to none of the group's owners.
+    // ownerKeyToSourceIDs.
     ownerIds?: string[]
     // The group's own trafficRole (podGroupNode.data.trafficRole) is only
     // set when every pod agrees — this is each pod's OWN role, so a mixed
