@@ -18,7 +18,7 @@ beside whatever is already there.
 # Prerequisites: kubectl, jq, curl; an identity that can create namespaces,
 # cluster-scoped Kueue objects, ClusterRoles and ClusterRoleBindings.
 K=/path/to/cluster.kubeconfig          # or use --context NAME instead
-./scripts/kueue-scenarios.sh up     --kubeconfig "$K"   # ~3 minutes
+./scripts/kueue-scenarios.sh up     --kubeconfig "$K"   # ~10 minutes on a remote cluster
 ./scripts/kueue-scenarios.sh verify --kubeconfig "$K"
 ./scripts/kueue-scenarios.sh status --kubeconfig "$K"
 
@@ -26,9 +26,10 @@ K=/path/to/cluster.kubeconfig          # or use --context NAME instead
 ./scripts/kueue-scenarios.sh down   --kubeconfig "$K"
 ```
 
-The Makefile wraps the same commands: `make kueue-scenarios KUBECONFIG_FILE=…`
-and/or `CONTEXT=…` (both are passed when both are set), plus `-verify`,
-`-status` and `-down`, with `SCENARIOS_PREFIX=…` for another prefix. One of
+The Makefile wraps the same commands: `make kueue-scenarios
+SCENARIOS_KUBECONFIG=…` and/or `SCENARIOS_CONTEXT=…` (both are passed when both
+are set), plus `-verify`, `-status` and `-down`, with `SCENARIOS_PREFIX=…` for
+another prefix. One of
 `--kubeconfig`/`--context` is always required, so the target cluster is never
 implied, and the kubeconfig's current context is never changed.
 
@@ -203,12 +204,13 @@ removal of the spare flavor, the drain). If an object was changed by hand, `down
 and `up` again, or use another prefix.
 
 `down` deletes objects that carry this prefix's ownership label **and** are
-named with the prefix: the Jobs, the namespaces (with everything in them,
-including anything someone added later), the cluster-scoped Kueue objects, and
-the viewer's ClusterRoles and ClusterRoleBindings. If Kueue's CRDs are gone it
+named with the prefix (or, for Jobs, sit in a namespace named with it): the
+Jobs, the namespaces (with everything in them, including anything someone added
+later), the cluster-scoped Kueue objects, and the viewer's ClusterRoles and
+ClusterRoleBindings. It waits for them to go, because `up` refuses objects that
+are still being deleted. If Kueue's CRDs are gone it
 skips those kinds. If Kueue's controller is gone but its CRDs remain, Kueue's
-finalizers can keep the namespaces terminating; `down` warns and still removes
-the cluster-scoped objects.
+finalizers can keep them terminating; `down` warns instead of waiting forever.
 
 `scripts/kueue-scenarios/test.sh` tests the script's decisions offline (no
 cluster; kubectl is stubbed): unreadable versus absent, ownership refusal,

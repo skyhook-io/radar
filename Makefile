@@ -371,10 +371,10 @@ kueue-demo-verify:
 	./scripts/kueue-demo.sh verify
 
 # Kueue queue-design scenarios on an existing cluster that already runs Kueue
-# (no kind). The target must be explicit: KUBECONFIG_FILE=<path> and/or
-# CONTEXT=<name>; SCENARIOS_PREFIX=<name> to run beside another copy.
+# (no kind). The target must be explicit: SCENARIOS_KUBECONFIG=<path> and/or
+# SCENARIOS_CONTEXT=<name>; SCENARIOS_PREFIX=<name> to run beside another copy.
 # See scripts/kueue-scenarios/README.md.
-KUEUE_SCENARIOS_TARGET = $(if $(KUBECONFIG_FILE),--kubeconfig $(KUBECONFIG_FILE)) $(if $(CONTEXT),--context $(CONTEXT)) $(if $(SCENARIOS_PREFIX),--prefix $(SCENARIOS_PREFIX))
+KUEUE_SCENARIOS_TARGET = $(if $(SCENARIOS_KUBECONFIG),--kubeconfig '$(SCENARIOS_KUBECONFIG)') $(if $(SCENARIOS_CONTEXT),--context '$(SCENARIOS_CONTEXT)') $(if $(SCENARIOS_PREFIX),--prefix '$(SCENARIOS_PREFIX)')
 
 kueue-scenarios:
 	./scripts/kueue-scenarios.sh up $(KUEUE_SCENARIOS_TARGET)
@@ -568,7 +568,7 @@ help:
 	@echo "  make gpu-ecosystem-demo - 37 GPU, batch, and AI/ML resource fixtures"
 	@echo "  make kubecost-demo    - Kubecost 3 current-cost API and Radar connection lanes"
 	@echo "  make kueue-demo      - Live Kueue admission and pre-Pod blocker fixtures"
-	@echo "  make kueue-scenarios KUBECONFIG_FILE=… - Kueue queue-design scenarios on an existing Kueue cluster"
+	@echo "  make kueue-scenarios SCENARIOS_KUBECONFIG=… - Kueue queue-design scenarios on an existing Kueue cluster"
 	@echo "  make jobset-demo      - Live JobSet role, dependency, and failure fixtures"
 	@echo "  make kuberay-demo     - Real RayService active/pending revision lifecycle"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"

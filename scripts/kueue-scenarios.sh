@@ -96,7 +96,8 @@ preflight() {
   check_args
   local crd json
   for crd in "${REQUIRED_CRDS[@]}"; do
-    json="$(kc get crd "${crd}.kueue.x-k8s.io" -o json 2>/dev/null)" || fail "Kueue CRD ${crd}.kueue.x-k8s.io is missing"
+    json="$(kc get crd "${crd}.kueue.x-k8s.io" --ignore-not-found -o json)" || fail "cannot read CRD ${crd}.kueue.x-k8s.io"
+    [ -n "${json}" ] || fail "Kueue CRD ${crd}.kueue.x-k8s.io is missing"
     jq -e '.spec.versions[] | select(.name == "v1beta2" and .served)' <<<"${json}" >/dev/null || \
       fail "${crd}.kueue.x-k8s.io does not serve v1beta2; these scenarios need a Kueue release that serves v1beta2"
   done
@@ -162,6 +163,8 @@ check_ownership() {
       '(if .kind == "List" then .items[] else . end) | select((.metadata.labels[$l] // "<none>") != $p)
        | "\(.metadata.namespace // "" | if . == "" then "" else . + "/" end)\(.metadata.name) (\($l)=\(.metadata.labels[$l] // "<none>"))"' <<<"${owners}")"
     [ -z "${foreign}" ] || fail "Refusing to adopt existing ${resource} ${foreign//$'\n'/, }; choose another --prefix"
+    foreign="$(jq -r '(if .kind == "List" then .items[] else . end) | select(.metadata.deletionTimestamp != null) | .metadata.name' <<<"${owners}")"
+    [ -z "${foreign}" ] || fail "${resource} ${foreign//$'\n'/, } is still being deleted by an earlier 'down'; wait for it to go and run 'up' again"
   done < <(awk -F'|' 'NF { key = $1 "|" $3; names[key] = names[key] " " $2 } END { for (k in names) print k "|" substr(names[k], 2) }' <<<"${inventory}")
 }
 
@@ -279,16 +282,22 @@ wait_for() { # wait_for <description> <command...>
 
 # The script is the controller for ${PREFIX}-check: it writes one check state.
 set_check() { # set_check <namespace> <job> <Pending|Ready|Retry|Rejected> <message>
-  local json wl patch
-  json="$(workload_json "$1" "$2")" || fail "cannot read the Workload of Job $1/$2"
-  wl="$(jq -r '.metadata.name // empty' <<<"${json}")"
-  [ -n "${wl}" ] || fail "no Workload for Job $1/$2"
-  # Merge patches replace lists whole, so carry every entry and field Kueue keeps
-  # (retryCount among them) and change only this check's state.
-  patch="$(jq -c --arg n "${PREFIX}-check" --arg s "$3" --arg m "$4" --arg t "$(now)" \
-    '{status: {admissionChecks: ([.status.admissionChecks[]? | select(.name != $n)]
-      + [((first(.status.admissionChecks[]? | select(.name == $n)) // {name: $n}) + {state: $s, message: $m, lastTransitionTime: $t})])}}' <<<"${json}")"
-  kc patch workloads.kueue.x-k8s.io -n "$1" "${wl}" --subresource=status --type=merge -p "${patch}" >/dev/null
+  local json wl patch attempt
+  for attempt in 1 2 3; do
+    json="$(READ_CACHE='' workload_json "$1" "$2")" || fail "cannot read the Workload of Job $1/$2"
+    wl="$(jq -r '.metadata.name // empty' <<<"${json}")"
+    [ -n "${wl}" ] || fail "no Workload for Job $1/$2"
+    # Merge patches replace lists whole, so carry every entry and field Kueue keeps
+    # (retryCount among them) and change only this check's state. The
+    # resourceVersion makes the write fail, rather than overwrite, if Kueue wrote
+    # in between.
+    patch="$(jq -c --arg n "${PREFIX}-check" --arg s "$3" --arg m "$4" --arg t "$(now)" \
+      '{metadata: {resourceVersion: .metadata.resourceVersion},
+        status: {admissionChecks: ([.status.admissionChecks[]? | select(.name != $n)]
+          + [((first(.status.admissionChecks[]? | select(.name == $n)) // {name: $n}) + {state: $s, message: $m, lastTransitionTime: $t})])}}' <<<"${json}")"
+    kc patch workloads.kueue.x-k8s.io -n "$1" "${wl}" --subresource=status --type=merge -p "${patch}" >/dev/null 2>&1 && return 0
+  done
+  fail "could not write ${PREFIX}-check=$3 on $1/${wl}; it kept changing or the write was refused"
 }
 
 check_state_is() { # check_state_is <namespace> <job> <state>
@@ -742,13 +751,16 @@ cmd_down() {
     kc delete namespaces "${namespaces[@]}" --ignore-not-found --wait=false >/dev/null
   fi
   local present
+  local deleting=()
   for crd in clusterqueues cohorts admissionchecks workloadpriorityclasses resourceflavors; do
     present="$(kc get crd "${crd}.kueue.x-k8s.io" --ignore-not-found -o name)" || fail "cannot read CRD ${crd}.kueue.x-k8s.io"
     [ -n "${present}" ] || continue
     resource="${crd}.kueue.x-k8s.io"
     rows="$(owned_names "${resource}")" || fail "cannot list ${resource}"
     while IFS='|' read -r namespace name; do
-      [ -n "${name}" ] && kc delete "${resource}" "${name}" --ignore-not-found --wait=false >/dev/null
+      [ -n "${name}" ] || continue
+      kc delete "${resource}" "${name}" --ignore-not-found --wait=false >/dev/null
+      deleting+=("${resource}/${name}")
     done <<<"${rows}"
   done
   for resource in clusterrolebindings.rbac.authorization.k8s.io clusterroles.rbac.authorization.k8s.io; do
@@ -757,9 +769,13 @@ cmd_down() {
       [ -n "${name}" ] && kc delete "${resource}" "${name}" --ignore-not-found >/dev/null
     done <<<"${rows}"
   done
-  if [ "${#namespaces[@]}" -gt 0 ]; then
-    kc wait --for=delete "${namespaces[@]/#/namespace/}" --timeout="${WAIT_SECONDS}s" >/dev/null 2>&1 || \
-      warn "some namespaces are still terminating; with Kueue's controller gone, its finalizers can hold them"
+  # Kueue finalizes queues and flavors; `up` refuses objects still being deleted,
+  # so wait here rather than leave the next `up` to trip over them.
+  if [ "${#namespaces[@]}" -gt 0 ] || [ "${#deleting[@]}" -gt 0 ]; then
+    kc wait --for=delete ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --timeout="${WAIT_SECONDS}s" >/dev/null 2>&1 || {
+      warn "some objects are still being deleted; with Kueue's controller gone, its finalizers can hold them"
+      return 0
+    }
   fi
   ok "removed"
 }

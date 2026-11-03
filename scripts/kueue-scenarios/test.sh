@@ -15,7 +15,9 @@ FAILED=0
 # The stub answers from these variables; KC_LOG collects every call.
 JOBS='' WORKLOADS='' GET_JSON='' CAN_I='' KC_FAIL=''
 KC_LOG="$(mktemp)"
-trap 'rm -f -- "${KC_LOG}"' EXIT
+
+DRY_RUN='' CREATED="$(mktemp)" CRDS='' OWNED='{}'
+trap 'rm -f -- "${KC_LOG}" "${CREATED}"' EXIT
 
 kc() {
   printf '%s\n' "$*" >>"${KC_LOG}"
@@ -27,7 +29,11 @@ kc() {
     "get jobs.batch -n "*) printf '%s' "${JOBS}" ;;
     "get workloads.kueue.x-k8s.io -n "*) printf '%s' "${WORKLOADS}" ;;
     "auth can-i "*) printf '%s\n' "${CAN_I}"; [ "${CAN_I}" = yes ] ;;
-    "patch "*) ;;
+    "create --dry-run=client "*) cat >/dev/null; printf '%s' "${DRY_RUN}" ;;
+    "create -f -") cat >>"${CREATED}" ;;
+    "get crd "*) [[ " ${CRDS} " == *" ${3%%.*} "* ]] && echo "customresourcedefinition/$3"; return 0 ;;
+    *" -l radar.skyhook.io/kueue-scenarios=t -o json") jq -c --arg r "${2}" '.[$r] // {items: []}' <<<"${OWNED}" ;;
+    "patch "*|"delete "*|"wait "*|version) ;;
     get*) printf '%s' "${GET_JSON}" ;;
     *) echo "unexpected kc call: $*" >&2; return 1 ;;
   esac
@@ -99,17 +105,61 @@ BODY="$(body '[]')"
 check "a Job unknown on the cluster fails even with no items" 1 match t-busy/zzz
 
 echo "==> Ownership and cleanup stay inside the prefix"
-objects_in() { [ "$1" = config ] && printf 'namespace|%s|\n' t-quota t-busy; return 0; }
+objects_in() {
+  case "$1" in
+    config) printf 'namespace|%s|\n' t-quota t-busy ;;
+    jobs) printf 'job.batch|%s|t-busy\n' j1 j2 ;;
+  esac
+}
 CONFIG_FILES=(config) JOB_FILES=(jobs)
 GET_JSON='{"kind":"List","items":[{"metadata":{"name":"t-quota","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}}]}'
 check "owned objects pass" 0 check_ownership
+: >"${KC_LOG}"
+check_ownership >/dev/null
+check "one read per kind and namespace" 0 test "$(grep -c '^get ' "${KC_LOG}")" = 2
+check "the Jobs are read together" 0 grep -q '^get job.batch j1 j2 -n t-busy ' "${KC_LOG}"
 GET_JSON='{"kind":"List","items":[{"metadata":{"name":"t-busy","labels":{}}}]}'
 check "an unlabeled same-named object is refused" 1 check_ownership
+GET_JSON='{"kind":"List","items":[{"metadata":{"name":"t-quota","deletionTimestamp":"2026-01-01T00:00:00Z","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}}]}'
+check "an owned object still being deleted is refused" 1 check_ownership
 KC_FAIL="get namespace"
 check "an unreadable object is refused" 1 check_ownership
 KC_FAIL=''
-GET_JSON='{"items":[{"metadata":{"name":"t-quota"}},{"metadata":{"name":"someone-else"}}]}'
+OWNED='{"namespaces":{"items":[{"metadata":{"name":"t-quota"}},{"metadata":{"name":"someone-else"}}]}}'
 check "down only names objects with the prefix" 0 test "$(owned_names namespaces)" = '|t-quota'
+
+echo "==> down deletes only owned, prefixed objects, and skips kinds whose CRD is gone"
+OWNED='{
+  "jobs.batch": {"items": [{"metadata": {"namespace": "t-busy", "name": "j1"}}, {"metadata": {"namespace": "other", "name": "j2"}}]},
+  "namespaces": {"items": [{"metadata": {"name": "t-busy"}}, {"metadata": {"name": "copied-label"}}]},
+  "clusterqueues.kueue.x-k8s.io": {"items": [{"metadata": {"name": "t-busy"}}, {"metadata": {"name": "gpu-cluster-queue"}}]},
+  "clusterroles.rbac.authorization.k8s.io": {"items": [{"metadata": {"name": "t-viewer-cluster"}}]}
+}'
+CRDS="clusterqueues"
+: >"${KC_LOG}"
+cmd_down >/dev/null
+deletes="$(grep '^delete ' "${KC_LOG}")"
+check "deletes the owned Job" 0 grep -q '^delete job.batch j1 -n t-busy ' <<<"${deletes}"
+check "deletes the owned namespace" 0 grep -q '^delete namespaces t-busy ' <<<"${deletes}"
+check "deletes the owned ClusterQueue" 0 grep -q '^delete clusterqueues.kueue.x-k8s.io t-busy ' <<<"${deletes}"
+check "deletes the owned ClusterRole" 0 grep -q '^delete clusterroles.rbac.authorization.k8s.io t-viewer-cluster ' <<<"${deletes}"
+check "leaves everything else alone" 0 test "$(grep -cE 'j2|copied-label|gpu-cluster-queue' <<<"${deletes}")" = 0
+check "skips kinds whose CRD is gone" 1 grep -q 'resourceflavors' <<<"${deletes}"
+KC_FAIL="get crd cohorts"
+check "an unreadable CRD stops down instead of skipping the kind" 1 cmd_down
+KC_FAIL=''
+
+echo "==> create_missing creates only what is absent"
+DRY_RUN='{"kind":"Job","apiVersion":"batch/v1","metadata":{"name":"j1","namespace":"t-busy"}}
+{"kind":"Job","apiVersion":"batch/v1","metadata":{"name":"j2","namespace":"t-busy"}}'
+GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1"}}]}'
+: >"${CREATED}"
+create_missing 30-jobs-first.yaml
+check "creates the missing Job" 0 jq -e '[.items[].metadata.name] == ["j2"]' "${CREATED}"
+GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1"}},{"metadata":{"name":"j2"}}]}'
+: >"${CREATED}"
+create_missing 30-jobs-first.yaml
+check "creates nothing when everything exists" 0 test ! -s "${CREATED}"
 
 echo "==> Permission answers"
 CAN_I=yes; check "yes is yes" 0 viewer_can yes list workloads t-busy
