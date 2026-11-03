@@ -243,13 +243,19 @@ func TestJobSetPodGroupWithEarlierIncarnationKeepsCurrentEdges(t *testing.T) {
 	if edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-"+group.ID+"-shortcut") == nil {
 		t.Fatalf("JobSet lost its PodGroup shortcut: %+v", topo.Edges)
 	}
+	// Expanding the group connects each Pod to its ownerIds, and to every
+	// owner of the group when ownerIds is absent; the earlier incarnation's
+	// Pod must say "none" explicitly.
 	for _, pd := range group.Data["pods"].([]map[string]any) {
-		_, linked := pd["ownerIds"]
-		if pd["name"] == "train-workers-0-aaa-old" && linked {
-			t.Fatalf("earlier incarnation's Pod resolved to the current Job: %+v", pd)
+		owners, present := pd["ownerIds"].([]string)
+		if pd["name"] == "train-workers-0-aaa-old" {
+			if !present || len(owners) != 0 {
+				t.Fatalf("earlier incarnation's Pod ownerIds = %#v, want explicitly empty", pd["ownerIds"])
+			}
+			continue
 		}
-		if pd["name"] != "train-workers-0-aaa-old" && !linked {
-			t.Fatalf("current Pod has no owner: %+v", pd)
+		if !slices.Contains(owners, "job/ml/train-workers-0") {
+			t.Fatalf("current Pod ownerIds = %#v, want the current Job", pd["ownerIds"])
 		}
 	}
 }
@@ -510,3 +516,30 @@ func TestJobSetUninterpretedVersionWarns(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// The incarnation check holds for every Job, not only JobSet members: a Pod
+// left from an earlier Job of the same name (a recreated hook Job, say) isn't
+// the current Job's, in the graph or in its summary-mode health.
+func TestPlainJobIgnoresEarlierIncarnationPods(t *testing.T) {
+	job := memberJob("ops", "migrate", "job-current")
+	provider := &mockProvider{
+		jobs: []*batchv1.Job{job},
+		pods: []*corev1.Pod{
+			jobPod("ops", "migrate-new", "migrate", "job-current"),
+			jobPod("ops", "migrate-old", "migrate", "job-earlier"),
+		},
+	}
+	topo := buildJobSetTopology(t, provider, nil, DefaultBuildOptions())
+	if got := managesTargets(topo, "job/ops/migrate"); !slices.Equal(got, []string{"pod/ops/migrate-new"}) {
+		t.Fatalf("Job → Pod edges = %v, want only the current Job's Pod", got)
+	}
+
+	opts := DefaultBuildOptions()
+	opts.Namespaces = []string{"ops"}
+	opts.SummaryMode = true
+	topo = buildJobSetTopology(t, provider, nil, opts)
+	summary, _ := nodeByID(topo.Nodes, "job/ops/migrate").Data["podSummary"].(map[string]any)
+	if summary["total"] != 1 {
+		t.Fatalf("summary-mode Job pod count = %v, want 1", summary)
+	}
+}

@@ -1865,7 +1865,7 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 | Resource | Group | Status source | Topology |
 |----------|-------|---------------|----------|
 | LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions | No |
-| JobSet | `jobset.x-k8s.io/v1alpha2` | Completed / Failed / Suspended conditions | Yes: JobSet → member Job → Pod |
+| JobSet | `jobset.x-k8s.io/v1alpha2` | terminalState, then Failed / Completed / Suspended / StartupPolicyInProgress / RestartingJobSet conditions, then reported child counts | Yes: JobSet → member Job → Pod |
 | Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group | No |
 | Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) | No |
 | PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition | No |
