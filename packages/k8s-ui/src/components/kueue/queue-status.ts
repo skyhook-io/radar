@@ -1,8 +1,13 @@
 import { healthColors, type StatusBadge } from '../resources/resource-utils'
-import { getKueueQueueCondition, getLocalQueueStatus } from '../resources/resource-utils-kueue'
+import { getKueueQueueCondition, getLocalQueueStatus, isKueueStopOnly } from '../resources/resource-utils-kueue'
 import type { RelatedRead } from './related-read'
 
-/** The condition describes the object's current generation, as the object itself records it. */
+/**
+ * The condition describes the object's current generation, as the object
+ * itself records it. Stricter than isKueueConditionStale, which treats a
+ * missing observedGeneration as not stale: a tone that hides an alert needs
+ * positive evidence, not the absence of contrary evidence.
+ */
 export function conditionIsCurrent(condition: { observedGeneration?: number } | undefined, generation: number | undefined): boolean {
   return !!condition?.observedGeneration && !!generation && condition.observedGeneration === generation
 }
@@ -18,7 +23,7 @@ export function localQueueInactiveBecauseParentStopped(localQueue: any, parent: 
   if (!conditionIsCurrent(own, localQueue?.metadata?.generation)) return false
   if (parent?.state !== 'found' || parent.object?.metadata?.name !== localQueue?.spec?.clusterQueue) return false
   const theirs = getKueueQueueCondition(parent.object)
-  return theirs?.status === 'False' && theirs.reason === 'Stopped' && conditionIsCurrent(theirs, parent.object?.metadata?.generation)
+  return isKueueStopOnly(theirs, true) && conditionIsCurrent(theirs, parent.object?.metadata?.generation)
 }
 
 /**

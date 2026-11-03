@@ -77,14 +77,18 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
 }
 
 /**
- * Reads single objects through the resource GET with useResource's retry
- * rules, re-reading on RELATED_LIST_RECHECK_MS: a viewer who may get but not
- * list a kind receives no watch events for it.
+ * How often a GET read of a related object repeats. Such a read computes the
+ * object's relationships, so it repeats less often than a list; a viewer who
+ * may get but not list a kind receives no watch events for it, so it must
+ * repeat at all.
  */
+export const RELATED_GET_RECHECK_MS = 60_000
+
+/** Reads single objects through the resource GET with useResource's retry rules. */
 export function useRelatedReads(refs: RelatedRef[], enabled = true): RelatedRead[] {
   const cacheScope = getApiBase()
   const results = useQueries({
-    queries: refs.map(ref => resourceQueryOptions<unknown>(ref.kind, ref.namespace ?? '', ref.name, ref.group, { enabled, cacheScope, refetchInterval: RELATED_LIST_RECHECK_MS })),
+    queries: refs.map(ref => resourceQueryOptions<unknown>(ref.kind, ref.namespace ?? '', ref.name, ref.group, { enabled, cacheScope, refetchInterval: RELATED_GET_RECHECK_MS })),
   })
   return results.map(relatedReadFrom)
 }

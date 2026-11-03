@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { RELATED_LIST_RECHECK_MS, useRelatedObjects, type RelatedObjects } from './useRelatedReads'
+import { RELATED_GET_RECHECK_MS, useRelatedObjects, type RelatedObjects } from './useRelatedReads'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
@@ -68,7 +68,7 @@ it('reads each name with a GET when the viewer may get but not list the kind', a
   // No watch events reach a viewer who can't list the kind, so the GETs re-read on their own.
   const present = client.getQueryCache().findAll({ queryKey: ['resource', 'clusterqueues', '', 'present'] })[0]
   const interval = (present?.options as { refetchInterval?: unknown } | undefined)?.refetchInterval
-  expect(typeof interval === 'function' ? interval(present) : interval).toBe(RELATED_LIST_RECHECK_MS)
+  expect(typeof interval === 'function' ? interval(present) : interval).toBe(RELATED_GET_RECHECK_MS)
 })
 
 it('also reads by GET when an older Radar denies the list with an uncoded 403', async () => {

@@ -15,6 +15,7 @@ import {
   getKueueQueueCondition,
   getKueueQueueQuotaRows,
   isKueueConditionStale,
+  isKueueStopOnly,
   type KueueQuotaRow,
 } from '../resource-utils-kueue'
 import { describeKueuePolicy, type KueuePolicyField } from '../../kueue/policy'
@@ -161,11 +162,11 @@ function StaleBanner({ data }: { data: any }) {
   )
 }
 
-function QueueConditions({ data, parentStopped = false }: { data: any; parentStopped?: boolean }) {
+function QueueConditions({ data, clusterQueue = false, parentStopped = false }: { data: any; clusterQueue?: boolean; parentStopped?: boolean }) {
   const tone = (condition: any): ConditionTone => {
     if (isKueueConditionStale(condition, data.metadata?.generation) || condition.type !== 'Active') return 'unknown'
     if (condition.status === 'True') return 'ok'
-    if (condition.status === 'False') return condition.reason === 'Stopped' || (parentStopped && condition.reason === 'ClusterQueueIsInactive') ? 'unknown' : 'warning'
+    if (condition.status === 'False') return isKueueStopOnly(condition, clusterQueue) || (parentStopped && condition.reason === 'ClusterQueueIsInactive') ? 'unknown' : 'warning'
     return 'unknown'
   }
   return <ConditionsSection variant="card" conditions={data.status?.conditions} getConditionTone={tone} defaultExpanded />
@@ -181,7 +182,7 @@ function Situation({ reported, configured }: { reported: ReactNode; configured: 
   )
 }
 
-export function LocalQueueRenderer({ data, onNavigate, reads, workloads }: QueueRendererProps & { reads?: LocalQueueReads; workloads?: ReactNode }) {
+export function LocalQueueRenderer({ data, onNavigate, reads }: QueueRendererProps & { reads?: LocalQueueReads }) {
   const parentName: string | undefined = data.spec?.clusterQueue
   const namespace: string = data.metadata?.namespace ?? ''
   const parentStopped = localQueueInactiveBecauseParentStopped(data, reads?.clusterQueue)
@@ -217,7 +218,6 @@ export function LocalQueueRenderer({ data, onNavigate, reads, workloads }: Queue
           </div>
         </Section>
       )}
-      {workloads}
       <QuotaAccounting data={data} onNavigate={onNavigate} />
       <QueueConditions data={data} parentStopped={parentStopped} />
     </div>
@@ -353,7 +353,7 @@ function RelatedObjects({ data, reads, onNavigate }: QueueRendererProps & { read
   )
 }
 
-export function ClusterQueueRenderer({ data, onNavigate, reads, workloads }: QueueRendererProps & { reads?: ClusterQueueReads; workloads?: ReactNode }) {
+export function ClusterQueueRenderer({ data, onNavigate, reads }: QueueRendererProps & { reads?: ClusterQueueReads }) {
   return (
     <div className="@container/queue space-y-4">
       <StaleBanner data={data} />
@@ -363,11 +363,10 @@ export function ClusterQueueRenderer({ data, onNavigate, reads, workloads }: Que
         </ReportedActive>}
         configured={<ConfiguredStop data={data} />}
       />
-      {workloads}
       <RelatedObjects data={data} reads={reads} onNavigate={onNavigate} />
       <QuotaAccounting data={data} clusterQueue onNavigate={onNavigate} />
       <AdmissionPolicy data={data} />
-      <QueueConditions data={data} />
+      <QueueConditions data={data} clusterQueue />
     </div>
   )
 }

@@ -6,7 +6,7 @@ import type { Relationships } from '../../types'
 import { kindToPluralWithGroup } from '../../utils/navigation'
 import { isKueueConditionStale } from '../resources/resource-utils-kueue'
 import { localQueueStatusWithParent } from './queue-status'
-import { parseFlavorAttempts, type FlavorAttempt, type FlavorAttemptKind } from './flavors-tried'
+import { isFlavorAssignmentMessage, parseFlavorAttempts, type FlavorAttempt, type FlavorAttemptKind } from './flavors-tried'
 import { ClusterQueueReadSummary, KUEUE_GROUP, ReadState, StatusPill, namespaceEligibilityFact, type Navigate } from './QueueEvidence'
 import type { RelatedRead } from './related-read'
 
@@ -30,8 +30,12 @@ function Step({ label, children }: { label: string; children: ReactNode }) {
 const muted = 'text-xs text-theme-text-secondary'
 
 function OwnerStep({ data, relationships, onNavigate }: { data: any; relationships?: Relationships; onNavigate?: Navigate }) {
-  const owner = relationships?.owner
   const coverage = relationships?.ownership
+  // Without the ownership answer (a Radar that predates it), `owner` may come
+  // from display edges; trust it only when an owner reference names it.
+  const controllerRef = (data.metadata?.ownerReferences ?? []).find((ref: any) => ref?.controller)
+  const owner = relationships?.owner && (coverage || (controllerRef && controllerRef.kind === relationships.owner.kind && controllerRef.name === relationships.owner.name))
+    ? relationships.owner : undefined
   const clusterName: string | undefined = data.status?.clusterName
   let body: ReactNode
   if (owner) {
@@ -41,6 +45,8 @@ function OwnerStep({ data, relationships, onNavigate }: { data: any; relationshi
     </div>
   } else if (!relationships) {
     body = <p className={muted}>Owner not read here.</p>
+  } else if (!coverage && controllerRef) {
+    body = <p className={muted}>Controller reference: {controllerRef.kind} {controllerRef.name} (this Radar doesn't resolve owners).</p>
   } else if (coverage?.primaryOwnerState === 'several') {
     body = <p className={muted}>Several owner references; none is the controller.</p>
   } else {
@@ -63,9 +69,10 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
   const configuredRead = configured ? reads?.clusterQueues?.[configured] : undefined
   const eligibility = configured && reads ? namespaceEligibilityFact({ clusterQueue: configured, parent: configuredRead, namespaceRead: reads.namespace }) : undefined
   const assignments: any[] = Array.isArray(data.status?.admission?.podSetAssignments) ? data.status.admission.podSetAssignments : []
-  // The Workload's own pending message, shown verbatim when Radar can't evaluate eligibility itself.
+  // Kueue's own word on why quota isn't reserved, verbatim. Flavor-assignment
+  // messages are left to "Reasons reported per flavor".
   const quota = (data.status?.conditions ?? []).find((condition: any) => condition?.type === 'QuotaReserved')
-  const pendingMessage: string | undefined = quota?.status === 'False' && !isKueueConditionStale(quota, data.metadata?.generation) ? quota.message : undefined
+  const pendingMessage: string | undefined = quota?.status === 'False' && !isKueueConditionStale(quota, data.metadata?.generation) && quota.message && !isFlavorAssignmentMessage(quota.message) ? quota.message : undefined
   return (
     <Section variant="card" title="Admission Path" icon={Route}>
       <ol className="divide-y divide-theme-border">
@@ -84,8 +91,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
             {configured ? <>
               <ClusterQueueReadSummary name={configured} read={configuredRead} onNavigate={onNavigate} />
               <p className="text-xs text-theme-text-tertiary">Configured by LocalQueue {queueName}.</p>
-              {eligibility && <div className="text-xs"><span className="text-theme-text-tertiary">Namespace {namespace}: </span><FactValue fact={eligibility} /><FactSource fact={eligibility} /></div>}
-              {eligibility?.tone === 'unknown' && pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">Controller-reported on QuotaReserved: </span>{pendingMessage}</p>}
+              {eligibility && !reserved && <div className="text-xs"><span className="text-theme-text-tertiary">Namespace {namespace}: </span><FactValue fact={eligibility} /><FactSource fact={eligibility} /></div>}
             </> : <p className={muted}>
               {localQueue?.state === 'found' ? 'The LocalQueue names no ClusterQueue.'
                 : localQueue?.state === 'not_found' ? `None: LocalQueue ${queueName} doesn't exist.`
@@ -100,7 +106,10 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
               ? <ClusterQueueReadSummary name={reserved} read={reads.clusterQueues?.[reserved]} onNavigate={onNavigate} />
               : <div className="break-all [&_button]:text-left"><ResourceLink name={reserved} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} /></div>}
             {configured && configured !== reserved && <p className="text-xs text-warning-text">Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>}
-          </> : <p className={muted}>No reservation reported.</p>}
+          </> : <>
+            <p className={muted}>No reservation reported.</p>
+            {pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">Controller-reported on QuotaReserved: </span>{pendingMessage}</p>}
+          </>}
         </Step>
         {assignments.length > 0 && (
           <Step label="Flavors">
@@ -154,8 +163,8 @@ export function FlavorReasons({ data, onNavigate }: { data: any; onNavigate?: Na
   const conditions: any[] = data.status?.conditions ?? []
   const quota = conditions.find(condition => condition?.type === 'QuotaReserved')
   if (quota?.status !== 'False' || !quota.message || isKueueConditionStale(quota, data.metadata?.generation)) return null
+  if (!isFlavorAssignmentMessage(quota.message)) return null
   const parsed = parseFlavorAttempts(quota.message)
-  if (!parsed && !quota.message.startsWith("couldn't assign flavors") && !quota.message.startsWith('failed to assign flavors')) return null
   return (
     <Section variant="card" title="Reasons Reported per Flavor">
       <p className="mb-3 text-xs text-theme-text-tertiary">From the controller-reported message on QuotaReserved. Kueue lists the reasons alphabetically, not in the order it tried flavors, and may not report every flavor.</p>

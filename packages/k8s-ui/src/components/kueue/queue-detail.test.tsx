@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { ClusterQueueRenderer, LocalQueueRenderer } from '../resources/renderers/KueueQueueRenderers'
 import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
 import { localQueueInactiveBecauseParentStopped, localQueueStatusWithParent } from './queue-status'
+import { getClusterQueueStatus, getLocalQueueStatus } from '../resources/resource-utils-kueue'
 import type { RelatedRead } from './related-read'
 
 const v = 'kueue.x-k8s.io/v1beta2'
@@ -35,6 +36,19 @@ describe('parent-aware LocalQueue tone', () => {
   it('shows the unknown tone, not alert, while the parent read that decides it is in flight', () => {
     expect(localQueueStatusWithParent(inactive, { state: 'loading' }).level).toBe('unknown')
     expect(localQueueStatusWithParent(localQueue(active('False', 'ClusterQueueDoesNotExist', 1)), { state: 'loading' }).level).toBe('alert')
+  })
+
+  it('keeps the alert when the stopped ClusterQueue also reports other causes', () => {
+    // Kueue reports only the first cause as the reason, and Stopped comes first.
+    const both = clusterQueue('parent', active('False', 'Stopped', 1, "Can't admit new workloads: is stopped, references missing ResourceFlavor(s): x."), { stopPolicy: 'Hold' })
+    expect(getClusterQueueStatus(both).level).toBe('alert')
+    expect(getClusterQueueStatus(clusterQueue('parent', active('False', 'Stopped', 1, "Can't admit new workloads: is stopped."))).level).toBe('neutral')
+    expect(localQueueStatusWithParent(inactive, found(both)).level).toBe('alert')
+    expect(getLocalQueueStatus(localQueue(active('False', 'Stopped', 1, 'LocalQueue is stopped'))).level).toBe('neutral')
+  })
+
+  it('keeps the alert when the ClusterQueue can’t be read', () => {
+    expect(localQueueStatusWithParent(inactive, { state: 'unavailable', code: 'user_forbidden' }).level).toBe('alert')
   })
 
   it('never hides the LocalQueue’s own faults behind a stopped parent', () => {
@@ -140,7 +154,7 @@ describe('ClusterQueue related objects', () => {
 
 describe('Workload admission path', () => {
   const workload = (spec: any, status: any = {}, metadata: any = {}) => ({ apiVersion: v, kind: 'Workload', metadata: { name: 'job-x', namespace: 'team', generation: 1, ...metadata }, spec, status })
-  const owner = { relationships: { owner: { kind: 'Job', group: 'batch', namespace: 'team', name: 'x' } } }
+  const owner = { relationships: { owner: { kind: 'Job', group: 'batch', namespace: 'team', name: 'x' }, ownership: { children: { complete: true } } } }
 
   it('follows LocalQueue → configured ClusterQueue → reservation → flavors per PodSet (prototype scenario 1)', () => {
     const data = workload({ queueName: 'lq', podSets: [{ name: 'driver', count: 1 }, { name: 'workers', count: 2 }] }, {
@@ -151,7 +165,9 @@ describe('Workload admission path', () => {
       localQueue: found(localQueue(active('True', 'Ready', 1), 1, 'cq')),
       clusterQueues: { cq: found(clusterQueue('cq', active('True', 'Ready', 1), { namespaceSelector: {} })) },
     }} />)
-    for (const text of ['Admission Path', '>x<', 'Configured by LocalQueue lq', 'Quota reserved in', 'workers', 'memory', 'spot', 'every namespace matches']) expect(html).toContain(text)
+    for (const text of ['Admission Path', '>x<', 'Configured by LocalQueue lq', 'Quota reserved in', 'workers', 'memory', 'spot']) expect(html).toContain(text)
+    // Eligibility explains a missing reservation; once reserved it is left out.
+    expect(html).not.toContain('every namespace matches')
     expect(html).not.toContain('names cq.')
   })
 
@@ -190,6 +206,26 @@ describe('Workload admission path', () => {
     }} />)
     expect(html).toContain('its labels weren’t read (you can’t read it)')
     expect(html).toContain('Controller-reported on QuotaReserved: </span>Workload namespace doesn&#x27;t match ClusterQueue selector')
+  })
+
+  it('shows Kueue’s own pending message on the path unless it is the flavor-assignment message', () => {
+    const msg = (message: string) => workload({ queueName: 'lq' }, { conditions: [{ type: 'QuotaReserved', status: 'False', reason: 'Inadmissible', message, observedGeneration: 1 }] })
+    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={msg('ClusterQueue cq is inactive')} reads={{}} />)).toContain('Controller-reported on QuotaReserved: </span>ClusterQueue cq is inactive')
+    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={msg("couldn't assign flavors to pod set main: flavor a not found")} reads={{}} />)).not.toContain('Controller-reported on QuotaReserved')
+  })
+
+  it('keeps the reserved ClusterQueue’s read state when the LocalQueue can’t be read', () => {
+    const html = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' }, { admission: { clusterQueue: 'cq' } })} reads={{ localQueue: { state: 'unavailable', code: 'user_forbidden' }, clusterQueues: { cq: { state: 'unavailable', code: 'user_forbidden' } } }} />)
+    expect(html).toContain('Unknown until the LocalQueue is read')
+    expect(html.match(/Not read: you can’t read it/g)?.length).toBe(2)
+  })
+
+  it('trusts an owner from a Radar without ownership answers only when an owner reference names it', () => {
+    const owned = workload({}, {}, { ownerReferences: [{ kind: 'Job', name: 'x', controller: true, apiVersion: 'batch/v1', uid: 'u' }] })
+    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={owned} relationships={{ owner: { kind: 'Job', group: 'batch', namespace: 'team', name: 'x' } } as any} />)).toContain('>x<')
+    const html = renderToStaticMarkup(<KueueWorkloadRenderer data={owned} relationships={{ owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'app' } } as any} />)
+    expect(html).not.toContain('>app<')
+    expect(html).toContain('Controller reference: Job x')
   })
 
   it('takes the owner from the ownership answer and keeps its unanswered states', () => {

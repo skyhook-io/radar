@@ -30,6 +30,11 @@ export interface PodSetAttempts {
 
 const podSetPrefix = "couldn't assign flavors to pod set "
 
+/** The message is Kueue's account of assigning flavors, parsed or not. */
+export function isFlavorAssignmentMessage(message: string | undefined): boolean {
+  return !!message && (message.startsWith(podSetPrefix) || message.startsWith('failed to assign flavors to pod set '))
+}
+
 const patterns: { kind: FlavorAttemptKind; re: RegExp; flavor?: number; resource?: number }[] = [
   { kind: 'insufficient_unused_quota', re: /^insufficient unused quota for (\S+) in flavor (\S+), \S+ more needed$/, resource: 1, flavor: 2 },
   { kind: 'insufficient_quota', re: /^insufficient quota for (\S+) in flavor (\S+), (?:previously considered podsets requests \(\S+\) \+ current podset request \(\S+\) > maximum capacity \(\S+\)|request > maximum capacity \(\S+ > \S+\))$/, resource: 1, flavor: 2 },

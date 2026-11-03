@@ -41,12 +41,24 @@ export function getKueueQueueCondition(resource: any): any {
   return findCondition(resource, 'Active')
 }
 
-function queueConditionStatus(resource: any): StatusBadge {
+/**
+ * The queue reports an intentional stop and nothing else. Kueue names only the
+ * first of a ClusterQueue's inactive causes as the reason, and Stopped always
+ * comes first, so a stopped ClusterQueue that is also missing a flavor or a
+ * check still says Stopped; its message lists every cause. A LocalQueue's
+ * Stopped has the one cause.
+ */
+export function isKueueStopOnly(condition: any, clusterQueue: boolean): boolean {
+  if (condition?.status !== 'False' || condition.reason !== 'Stopped') return false
+  return !clusterQueue || !condition.message || /^Can't admit new workloads: is stopped\.?$/.test(condition.message)
+}
+
+function queueConditionStatus(resource: any, clusterQueue: boolean): StatusBadge {
   const active = getKueueQueueCondition(resource)
   if (isKueueConditionStale(active, resource?.metadata?.generation)) {
     return { text: `${active.status === 'True' ? 'Active' : active.reason || 'Unknown'} (stale)`, color: healthColors.unknown, level: 'unknown' }
   }
-  if (active?.status === 'False' && active.reason === 'Stopped') {
+  if (isKueueStopOnly(active, clusterQueue)) {
     return { text: 'Stopped', color: healthColors.neutral, level: 'neutral' }
   }
   return activeConditionStatus(resource)
@@ -124,7 +136,7 @@ function formatWorkloadCount(value: any): string {
 // ============================================================================
 
 export function getClusterQueueStatus(resource: any): StatusBadge {
-  return queueConditionStatus(resource)
+  return queueConditionStatus(resource, true)
 }
 
 export function getClusterQueueCohort(resource: any): string {
@@ -160,7 +172,7 @@ export function getClusterQueueFlavors(resource: any): string {
 // ============================================================================
 
 export function getLocalQueueStatus(resource: any): StatusBadge {
-  return queueConditionStatus(resource)
+  return queueConditionStatus(resource, false)
 }
 
 export function getLocalQueueClusterQueue(resource: any): string {

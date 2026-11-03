@@ -3,7 +3,7 @@ import { KueueWorkloadRenderer as BaseRenderer } from '@skyhook-io/k8s-ui/compon
 import { getProvisioningRequestStatus, getProvisioningRequestMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
 import { Badge, ResourceLink, Section, type Relationships, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { selectorHasTerms } from '@skyhook-io/k8s-ui/components/kueue/eligibility'
-import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/QueueEvidence'
+import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/constants'
 import { useKueueProvisioning } from '../../../api/client'
 import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
 
