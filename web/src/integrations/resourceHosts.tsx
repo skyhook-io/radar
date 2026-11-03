@@ -17,6 +17,7 @@ import { RayClusterRenderer } from '../components/resources/renderers/RayCluster
 import { OpenTelemetryCollectorRenderer } from '../components/resources/renderers/OpenTelemetryCollectorRenderer'
 import { RayServiceRenderer } from '../components/resources/renderers/RayServiceRenderer'
 import { KueueWorkloadRenderer } from '../components/resources/renderers/KueueWorkloadRenderer'
+import { ClusterQueueRenderer, LocalQueueRenderer } from '../components/resources/renderers/KueueQueueRenderers'
 import { PodRenderer } from '../components/resources/renderers/PodRenderer'
 import { KarpenterNodePoolRenderer } from '../components/resources/renderers/KarpenterNodePoolRenderer'
 import { NodeRenderer } from '../components/resources/renderers/NodeRenderer'
@@ -41,7 +42,7 @@ import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxH
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
-  { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
+  { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer, LocalQueueRenderer, ClusterQueueRenderer } },
   { id: 'opentelemetry', renderers: { OpenTelemetryCollectorRenderer } },
   { id: 'ray', renderers: { RayJobRenderer, RayServiceRenderer, RayClusterRenderer } },
   { id: 'capacity', renderers: { KarpenterNodePoolRenderer } },

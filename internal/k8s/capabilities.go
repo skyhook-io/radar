@@ -199,6 +199,9 @@ type FeatureCapabilities struct {
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
+	// GET /api/kueue/clusterqueues/{name}/workloads and
+	// /api/kueue/localqueues/{namespace}/{name}/workloads
+	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

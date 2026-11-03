@@ -188,6 +188,7 @@ export interface FeatureCapabilities {
   argoSyncInheritance?: boolean
   argoEnableSelfHealOff?: boolean
   clusterScopedPlaceholder?: boolean
+  kueueQueueWorkloads?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

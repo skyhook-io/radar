@@ -6,6 +6,7 @@ import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/ut
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
@@ -27,7 +28,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { focusManager, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
+import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
@@ -8159,6 +8160,33 @@ export interface KueueProvisioningResponse {
     spec: { provisioningClassName: string }
     status?: { conditions: Array<{ type: string; status: string; reason?: string; message?: string; observedGeneration?: number }> }
   }>
+}
+
+// The Workloads that belong to a Kueue queue, page by page. Pages chain by
+// cursor; a refetch re-reads them from the first, so a list that changed is
+// traversed again rather than patched.
+export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQueue'; namespace?: string; name: string; uid?: string }, membership: KueueQueueMembership | undefined) {
+  const { guard, gatedKey, support, upgrade } = useRadarFeature('kueueQueueWorkloads')
+  const path = queue.kind === 'ClusterQueue'
+    ? `/kueue/clusterqueues/${encodeURIComponent(queue.name)}/workloads`
+    : `/kueue/localqueues/${encodeURIComponent(queue.namespace ?? '')}/${encodeURIComponent(queue.name)}/workloads`
+  const query = useInfiniteQuery<KueueQueueWorkloadsResponse>({
+    queryKey: ['kueue-queue-workloads', queue.kind, queue.namespace ?? '', queue.name, queue.uid ?? '', membership ?? '', ...gatedKey],
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams()
+      if (membership) params.set('membership', membership)
+      if (typeof pageParam === 'string') params.set('cursor', pageParam)
+      const qs = params.toString()
+      return guard(() => fetchJSON<KueueQueueWorkloadsResponse>(`${path}${qs ? `?${qs}` : ''}`, signal))
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: last => last.workloads?.next,
+    enabled: Boolean(queue.name && queue.uid && (queue.kind === 'ClusterQueue' || queue.namespace)) && support !== 'unsupported',
+    staleTime: 5000,
+    refetchInterval: query => (query.state.error instanceof ApiError && query.state.error.status < 500 ? false : 15000),
+    retry: shouldRetryRadarQuery,
+  })
+  return { ...query, upgrade, support }
 }
 
 export function useKueueProvisioning(namespace: string, name: string, uid: string | undefined, enabled: boolean) {

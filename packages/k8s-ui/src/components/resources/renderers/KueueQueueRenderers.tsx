@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Gauge } from 'lucide-react'
 import { Badge } from '../../ui/Badge'
 import {
@@ -24,6 +25,8 @@ const KUEUE_GROUP = 'kueue.x-k8s.io'
 interface QueueRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
+  /** The queue's Workloads, read by the host (KueueQueueWorkloads). */
+  workloads?: ReactNode
 }
 
 const quantity = (value: string | number | undefined | null) => (value == null ? 'Not reported' : String(value))
@@ -184,11 +187,12 @@ function QuotaRow({ row, clusterQueue, hasCohort }: { row: KueueQuotaRow; cluste
   )
 }
 
-export function LocalQueueRenderer({ data, onNavigate }: QueueRendererProps) {
+export function LocalQueueRenderer({ data, onNavigate, workloads }: QueueRendererProps) {
   const parentInactive = getKueueQueueCondition(data)?.reason === 'ClusterQueueIsInactive'
   return (
     <>
       <QueueStatus data={data} local />
+      {workloads}
       <Section title="Cluster Queue">
         {data.spec?.clusterQueue ? (
           <ResourceLink
@@ -212,7 +216,7 @@ export function LocalQueueRenderer({ data, onNavigate }: QueueRendererProps) {
   )
 }
 
-export function ClusterQueueRenderer({ data, onNavigate }: QueueRendererProps) {
+export function ClusterQueueRenderer({ data, onNavigate, workloads }: QueueRendererProps) {
   const spec = data.spec ?? {}
   const cohort = getClusterQueueCohort(data)
   const checks: { name: string; onFlavors?: string[] }[] = [
@@ -224,6 +228,7 @@ export function ClusterQueueRenderer({ data, onNavigate }: QueueRendererProps) {
   return (
     <>
       <QueueStatus data={data} />
+      {workloads}
       <QuotaAccounting data={data} clusterQueue onNavigate={onNavigate} />
       <Section title="Admission Policy">
         <PropertyList>
