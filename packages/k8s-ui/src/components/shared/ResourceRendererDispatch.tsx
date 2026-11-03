@@ -74,7 +74,7 @@ import {
 } from '../resources/resource-utils-kyverno-exceptions'
 import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassStatus, getResourceSliceStatus } from '../resources/resource-utils-dra'
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
-import { isKueueQueueResource, getKueueQueueCondition, getClusterQueueStatus, getLocalQueueStatus, getKueueWorkloadStatus, getResourceFlavorStatus, getAdmissionCheckStatus, getProvisioningRequestStatus } from '../resources/resource-utils-kueue'
+import { isKueueQueueResource, getClusterQueueStatus, getLocalQueueStatus, getKueueWorkloadStatus, getResourceFlavorStatus, getAdmissionCheckStatus, getProvisioningRequestStatus } from '../resources/resource-utils-kueue'
 import { getRayClusterStatus, getRayJobStatus, getRayServiceStatus, getRayCronJobStatus } from '../resources/resource-utils-ray'
 import { getLeaderWorkerSetStatus, getJobSetStatus, isJobSetV1Alpha2 } from '../resources/resource-utils-jobset-lws'
 import { getInferenceServiceStatus, getServingRuntimeStatus, getInferenceGraphStatus, getTrainedModelStatus, getLLMInferenceServiceStatus } from '../resources/resource-utils-kserve'
@@ -1117,10 +1117,6 @@ export function ResourceRendererDispatch({
 // without a level (we don't assert "Diagnose" when we can't tell → quiet variant).
 export type DiagnoseHealthHint = 'problem' | 'healthy' | 'unknown'
 export function diagnoseHealthHint(kind: string, data: any): DiagnoseHealthHint {
-  // A LocalQueue reporting ClusterQueueIsInactive is inactive because of its
-  // ClusterQueue, which may be stopped on purpose; the ClusterQueue carries
-  // the cause, so this one isn't flagged as a problem to investigate.
-  if (kind === 'localqueues' && isKueueQueueResource(data) && getKueueQueueCondition(data)?.reason === 'ClusterQueueIsInactive') return 'unknown'
   const st = getResourceStatus(kind, data) as { level?: string } | null
   switch (st?.level) {
     case 'unhealthy':

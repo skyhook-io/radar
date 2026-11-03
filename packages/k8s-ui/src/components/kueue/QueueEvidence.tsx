@@ -17,7 +17,7 @@ export function ReadState({ read, found }: { read?: RelatedRead; found?: ReactNo
   if (!read) return null
   if (read.state === 'found') return <>{found ?? <Badge severity="neutral" size="sm">Found</Badge>}</>
   if (read.state === 'not_found') return <Badge severity="error" size="sm">Not found</Badge>
-  if (read.state === 'unconfirmed') return <span className="text-xs text-theme-text-tertiary">Not in Radar’s list; this Radar can’t confirm it’s absent</span>
+  if (read.state === 'unconfirmed') return <span className="text-xs text-theme-text-tertiary">This Radar can’t confirm whether it exists</span>
   return <span className={isDenied(read) ? 'text-xs text-theme-text-secondary' : 'text-xs text-theme-text-tertiary'}>{read.state === 'loading' ? 'Checking…' : `Not read: ${unreadReason(read)}`}</span>
 }
 
@@ -103,7 +103,7 @@ export function ClusterQueueReadSummary({ name, read, onNavigate }: { name: stri
       <ReadState read={read} found={parent ? <StatusPill status={getClusterQueueStatus(parent)} /> : undefined} />
     </div>
     {parent && <p className="text-xs text-theme-text-secondary">
-      Read from the ClusterQueue{condition?.reason && condition.status !== 'True' ? `: ${condition.reason}` : ''}{parent.spec?.stopPolicy && parent.spec.stopPolicy !== 'None' ? ` · stop policy ${parent.spec.stopPolicy}` : ''}
+      Read from the ClusterQueue{condition?.reason && condition.status !== 'True' ? `: ${condition.reason}${isKueueConditionStale(condition, parent.metadata?.generation) ? ' (stale)' : ''}` : ''}{parent.spec?.stopPolicy && parent.spec.stopPolicy !== 'None' ? ` · stop policy ${parent.spec.stopPolicy}` : ''}
     </p>}
     {parent && condition?.message && condition.status !== 'True' && <ReportedMessage condition={condition} generation={parent.metadata?.generation} />}
   </div>

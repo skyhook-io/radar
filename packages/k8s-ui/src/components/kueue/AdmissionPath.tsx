@@ -117,8 +117,8 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
               ? <ClusterQueueReadSummary name={reserved} read={reads.clusterQueues?.[reserved]} onNavigate={onNavigate} />
               : <div className="break-all [&_button]:text-left"><ResourceLink name={reserved} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} /></div>}
             {configured && configured !== reserved && (finished || admitted
-              ? <p className="text-xs text-theme-text-tertiary">Reserved in {reserved}; LocalQueue {queueName} now names {configured}, which new Workloads go to.</p>
-              : <p className="text-xs text-warning-text">Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>)}
+              ? <p className="text-xs text-theme-text-tertiary">Reserved in {reserved}; LocalQueue {queueName}, as it exists now, names {configured}.</p>
+              : <p className="text-xs text-warning-text">Reserved in {reserved}; LocalQueue {queueName}, as it exists now, names {configured}.</p>)}
           </> : <>
             <p className={muted}>No reservation reported.</p>
             {pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">{pendingStale ? `Controller-reported on QuotaReserved for generation ${quota.observedGeneration} (now ${data.metadata?.generation}): ` : 'Controller-reported on QuotaReserved: '}</span>{pendingMessage}</p>}

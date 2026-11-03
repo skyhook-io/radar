@@ -56,9 +56,9 @@ describe('parent-aware LocalQueue tone', () => {
     expect(localQueueStatusWithParent(inactive, { state: 'unavailable', code: 'user_forbidden' }).level).toBe('alert')
   })
 
-  it('doesn’t flag a LocalQueue for investigation when its own report blames its ClusterQueue', () => {
-    expect(diagnoseHealthHint('localqueues', inactive)).toBe('unknown')
-    expect(diagnoseHealthHint('localqueues', localQueue(active('False', 'ClusterQueueDoesNotExist', 1)))).toBe('problem')
+  it('keeps the Investigate hint on the LocalQueue’s own report, which can’t read the parent', () => {
+    // Quieting it would also hide a ClusterQueue that is broken, not just stopped.
+    expect(diagnoseHealthHint('localqueues', inactive)).toBe('problem')
   })
 
   it('never hides the LocalQueue’s own faults behind a stopped parent', () => {
@@ -74,6 +74,8 @@ describe('parent-aware LocalQueue tone', () => {
     expect(html).toContain('stop policy Hold')
     const broken = renderToStaticMarkup(<LocalQueueRenderer data={inactive} reads={{ clusterQueue: brokenParent }} />)
     expect(broken).toContain('Inspect the ClusterQueue')
+    expect(renderToStaticMarkup(<LocalQueueRenderer data={inactive} reads={{ clusterQueue: found(clusterQueue('parent', active('True', 'Ready', 1))) }} />)).toContain('now reports Active; this LocalQueue’s report hasn’t caught up')
+    expect(renderToStaticMarkup(<LocalQueueRenderer data={inactive} reads={{ clusterQueue: { state: 'loading' } }} />)).not.toContain('Inspect the ClusterQueue')
     expect(broken).toContain('references missing ResourceFlavor(s): x.')
   })
 })
@@ -149,7 +151,7 @@ describe('ClusterQueue related objects', () => {
   it('says when the cohort member list may be incomplete or unread', () => {
     expect(renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{ cohortMembers: found([]), cohortMembersCompleteness: 'partial' }} />)).toContain('may be more')
     expect(renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{ cohortMembers: found([]), cohortMembersCompleteness: 'unknown' }} />)).toContain('doesn’t say whether its ClusterQueue list is complete')
-    expect(renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{ flavors: { gone: { state: 'unconfirmed' } } }} />)).toContain('can’t confirm it’s absent')
+    expect(renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{ flavors: { gone: { state: 'unconfirmed' } } }} />)).toContain('can’t confirm whether it exists')
     expect(renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{ cohortMembers: { state: 'unavailable', code: 'user_forbidden' } }} />)).toContain('Other members not read: you can’t read it.')
   })
 
@@ -196,7 +198,7 @@ describe('Workload admission path', () => {
     expect(denied).toContain('Not read: you can’t read it')
     expect(denied).not.toContain('No LocalQueue')
     const moved = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' }, { admission: { clusterQueue: 'old' } })} reads={{ localQueue: found(localQueue(active('True', 'Ready', 1), 1, 'new')), clusterQueues: {} }} />)
-    expect(moved).toContain('Reserved in old; LocalQueue lq names new.')
+    expect(moved).toContain('Reserved in old; LocalQueue lq, as it exists now, names new.')
     const movedRead = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' }, { admission: { clusterQueue: 'old' } })} reads={{ localQueue: found(localQueue(active('True', 'Ready', 1), 1, 'new')), clusterQueues: { new: found(clusterQueue('new', active('True', 'Ready', 1), {})), old: { state: 'not_found' } } }} />)
     expect(movedRead).toContain('Not found')
 

@@ -72,7 +72,7 @@ describe('namespaceEligibility', () => {
 
 describe('describeKueuePolicy', () => {
   it('keeps a dictionary per API version and shows unknown values raw', () => {
-    expect(describeKueuePolicy('kueue.x-k8s.io/v1beta1', 'flavorFungibility.whenCanBorrow', 'Borrow').meaning).toContain('Deprecated spelling of MayStopSearch')
+    expect(describeKueuePolicy('kueue.x-k8s.io/v1beta1', 'flavorFungibility.whenCanBorrow', 'Borrow').meaning).toContain('Equivalent to MayStopSearch in newer Kueue')
     expect(describeKueuePolicy('kueue.x-k8s.io/v1beta2', 'flavorFungibility.whenCanBorrow', 'Borrow')).toEqual({ raw: 'Borrow' })
     expect(describeKueuePolicy('kueue.x-k8s.io/v1beta2', 'admissionScope.admissionMode', 'NoAdmissionFairSharing').meaning).toBeTruthy()
     expect(describeKueuePolicy('kueue.x-k8s.io/v1', 'stopPolicy', 'Hold')).toEqual({ raw: 'Hold' })

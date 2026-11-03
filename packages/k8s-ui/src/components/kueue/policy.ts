@@ -59,12 +59,12 @@ const v1beta1: Dictionary = {
   'flavorFungibility.whenCanBorrow': {
     MayStopSearch: mayStopSearchBorrow,
     TryNextFlavor: 'Try the next flavor before borrowing in this one.',
-    Borrow: `${mayStopSearchBorrow} (Deprecated spelling of MayStopSearch.)`,
+    Borrow: `${mayStopSearchBorrow} (Equivalent to MayStopSearch in newer Kueue.)`,
   },
   'flavorFungibility.whenCanPreempt': {
     MayStopSearch: mayStopSearchPreempt,
     TryNextFlavor: 'Try the next flavor before preempting in this one.',
-    Preempt: `${mayStopSearchPreempt} (Deprecated spelling of MayStopSearch.)`,
+    Preempt: `${mayStopSearchPreempt} (Equivalent to MayStopSearch in newer Kueue.)`,
   },
 }
 
