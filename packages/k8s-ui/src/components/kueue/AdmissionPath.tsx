@@ -33,10 +33,10 @@ const muted = 'text-xs text-theme-text-secondary'
 function OwnerStep({ data, relationships, onNavigate }: { data: any; relationships?: Relationships; onNavigate?: Navigate }) {
   const coverage = relationships?.ownership
   // Without the ownership answer (a Radar that predates it), `owner` may come
-  // from display edges; trust it only when an owner reference names it.
+  // from display edges that check neither group nor UID, so it isn't linked;
+  // the Workload's own controller reference is named instead.
   const controllerRef = (data.metadata?.ownerReferences ?? []).find((ref: any) => ref?.controller)
-  const owner = relationships?.owner && (coverage || (controllerRef && controllerRef.kind === relationships.owner.kind && controllerRef.name === relationships.owner.name))
-    ? relationships.owner : undefined
+  const owner = coverage ? relationships?.owner : undefined
   const clusterName: string | undefined = data.status?.clusterName
   let body: ReactNode
   if (owner) {

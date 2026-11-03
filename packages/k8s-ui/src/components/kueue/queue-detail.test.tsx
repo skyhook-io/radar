@@ -232,12 +232,13 @@ describe('Workload admission path', () => {
     expect(html.match(/Not read: you can’t read it/g)?.length).toBe(2)
   })
 
-  it('trusts an owner from a Radar without ownership answers only when an owner reference names it', () => {
+  it('links no owner from a Radar without ownership answers, naming the controller reference instead', () => {
     const owned = workload({}, {}, { ownerReferences: [{ kind: 'Job', name: 'x', controller: true, apiVersion: 'batch/v1', uid: 'u' }] })
-    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={owned} relationships={{ owner: { kind: 'Job', group: 'batch', namespace: 'team', name: 'x' } } as any} />)).toContain('>x<')
-    const html = renderToStaticMarkup(<KueueWorkloadRenderer data={owned} relationships={{ owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'app' } } as any} />)
-    expect(html).not.toContain('>app<')
-    expect(html).toContain('Controller reference: Job x')
+    for (const owner of [{ kind: 'Job', group: 'batch', namespace: 'team', name: 'x' }, { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'app' }]) {
+      const html = renderToStaticMarkup(<KueueWorkloadRenderer data={owned} relationships={{ owner } as any} />)
+      expect(html).not.toContain(`>${owner.name}</`)
+      expect(html).toContain('Controller reference: Job x')
+    }
   })
 
   it('takes the owner from the ownership answer and keeps its unanswered states', () => {
