@@ -24,7 +24,7 @@ beforeEach(() => {
   element = document.createElement('div')
   document.body.appendChild(element)
   root = createRoot(element)
-  const complete = { status: 'complete', scope: {}, read: {}, gaps: [] }
+  const complete = { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] }
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
     const url = new URL(input, 'http://localhost')
     requests.push(url.pathname)
@@ -72,7 +72,7 @@ it('reads the namespace only when the ClusterQueue selector has terms', async ()
 })
 
 it('tones the header badge like the detail when the ClusterQueue reports Stopped', async () => {
-  queues = [cq('parent', undefined, active('False', 'Stopped'), { stopPolicy: 'Hold' })]
+  queues = [cq('parent', undefined, { ...active('False', 'Stopped'), message: "Can't admit new workloads: is stopped." }, { stopPolicy: 'Hold' })]
   const lq = { apiVersion: v, metadata: { name: 'lq', namespace: 'team', generation: 1 }, spec: { clusterQueue: 'parent' }, status: { conditions: [active('False', 'ClusterQueueIsInactive')] } }
   await render(<LocalQueueStatusBadge data={lq} />, () => expect(element.querySelector('.badge')?.className).toContain('status-neutral'))
   expect(requests).toContain('/api/resources/clusterqueues')

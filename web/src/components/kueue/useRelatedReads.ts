@@ -24,6 +24,8 @@ export function relatedReadFrom(query: { data?: { resource?: unknown }; error: u
   if (error instanceof ApiError) {
     const code = canonicalReadCode(error.data?.error_code)
     if (error.status === 404 && code === 'object_not_found') return { state: 'not_found' }
+    // An older Radar's uncoded 404 can't say the object is absent.
+    if (error.status === 404 && code === undefined) return { state: 'unconfirmed' }
     // An uncoded failure (an older Radar) can't say whose access refused it: Radar's own or the viewer's.
     return { state: 'unavailable', code: typeof code === 'string' ? code : undefined, message: error.message }
   }
@@ -35,14 +37,24 @@ export function relatedReadFrom(query: { data?: { resource?: unknown }; error: u
  * covered everything it was asked for; an older Radar that sends no coverage
  * can confirm presence but not absence.
  */
-export function relatedReadInList(list: { data?: any[]; coverage?: { status: string; gaps?: { code: string }[] }; error: unknown; readBeforeMount?: boolean }, name: string): RelatedRead {
+interface ListCoverage { status: string; scope?: { type?: string; namespaces?: { names?: string[] } }; gaps?: { code: string }[] }
+
+/** The list says it read everything it was asked for, in a scope this client understands. */
+function coversRequest(coverage: ListCoverage | undefined, namespace: string | undefined): boolean {
+  if (coverage?.status !== 'complete') return false
+  const scope = coverage.scope
+  if (scope?.type === 'cluster' || scope?.type === 'all_namespaces') return true
+  return scope?.type === 'namespaces' && !!namespace && !!scope.namespaces?.names?.includes(namespace)
+}
+
+export function relatedReadInList(list: { data?: any[]; coverage?: ListCoverage; error: unknown; readBeforeMount?: boolean; namespace?: string }, name: string): RelatedRead {
   if (list.error) return relatedReadFrom({ error: list.error })
   if (!list.data) return { state: 'loading' }
   const object = list.data.find(item => item?.metadata?.name === name)
   if (object) return { state: 'found', object }
   // A list cached before this view mounted can't prove absence now; its re-read is in flight.
   if (list.readBeforeMount) return { state: 'loading' }
-  if (list.coverage?.status === 'complete') return { state: 'not_found' }
+  if (coversRequest(list.coverage, list.namespace)) return { state: 'not_found' }
   if (list.coverage?.status === 'partial') return { state: 'unavailable', code: list.coverage.gaps?.[0]?.code, message: 'Radar’s list did not cover every object' }
   return { state: 'unconfirmed' }
 }
@@ -76,7 +88,7 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
   const listDenied = error instanceof ApiError && (readActionFor(error.data?.error_code) === 'user_access' || (error.status === 403 && !error.data?.error_code))
   const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied)
   const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data ? { state: 'found', object: data } : { state: 'loading' }
-  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error, readBeforeMount }, name)]))
+  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error, readBeforeMount, namespace }, name)]))
   const completeness = coverage?.status === 'complete' || coverage?.status === 'partial' ? coverage.status : 'unknown'
   return { byName, all, completeness }
 }

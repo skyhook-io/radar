@@ -47,6 +47,8 @@ describe('parent-aware LocalQueue tone', () => {
     expect(getLocalQueueStatus(localQueue(active('False', 'Stopped', 1, 'LocalQueue is stopped'))).level).toBe('neutral')
     // Wording this Radar doesn't recognise keeps the stop rather than inventing an alert.
     expect(getClusterQueueStatus(clusterQueue('parent', active('False', 'Stopped', 1, 'ClusterQueue is stopped by policy'))).level).toBe('neutral')
+    // Lending the stop to a LocalQueue's tone needs Kueue's single-cause wording.
+    expect(localQueueStatusWithParent(inactive, found(clusterQueue('parent', active('False', 'Stopped', 1, 'ClusterQueue is stopped by policy'))))).toMatchObject({ level: 'alert' })
   })
 
   it('keeps the alert when the ClusterQueue can’t be read', () => {
@@ -193,7 +195,7 @@ describe('Workload admission path', () => {
 
   it('tones the path’s LocalQueue by its stopped ClusterQueue like the LocalQueue detail does', () => {
     const lq = localQueue(active('False', 'ClusterQueueIsInactive', 1), 1, 'cq')
-    const stopped = found(clusterQueue('cq', active('False', 'Stopped', 1), { stopPolicy: 'Hold', namespaceSelector: {} }))
+    const stopped = found(clusterQueue('cq', active('False', 'Stopped', 1, "Can't admit new workloads: is stopped."), { stopPolicy: 'Hold', namespaceSelector: {} }))
     const html = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' })} reads={{ localQueue: found(lq), clusterQueues: { cq: stopped } }} />)
     expect(html).toContain('ClusterQueueIsInactive')
     expect(html).not.toContain('status-alert')

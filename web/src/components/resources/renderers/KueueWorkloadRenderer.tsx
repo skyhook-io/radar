@@ -7,7 +7,6 @@ import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/constants'
 import { useKueueProvisioning } from '../../../api/client'
 import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
 
-
 // Reads the Workload's admission path as the viewer: its LocalQueue, the
 // ClusterQueue that LocalQueue names, the ClusterQueue holding a reservation
 // when that differs, and the namespace's labels only when a selector needs them.
@@ -20,7 +19,8 @@ function useAdmissionPathReads(data: any) {
   const names = [...new Set([configured, reserved].filter(Boolean))]
   const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, names, names.length > 0)
   const configuredRead = configured ? queues.byName[configured] : undefined
-  const needsLabels = configuredRead?.state === 'found' && selectorHasTerms(configuredRead.object?.spec?.namespaceSelector)
+  // Eligibility is shown only while unreserved, so a reserved Workload skips the Namespace read.
+  const needsLabels = !reserved && configuredRead?.state === 'found' && selectorHasTerms(configuredRead.object?.spec?.namespaceSelector)
   const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
   return {
     localQueue: queueName ? localQueue : undefined,
@@ -29,7 +29,12 @@ function useAdmissionPathReads(data: any) {
   }
 }
 
-export function KueueWorkloadRenderer({ data, onNavigate, relationships }: { data: any; onNavigate?: (ref: ResourceRef) => void; relationships?: Relationships }) {
+// Keyed by UID so moving the drawer to another Workload starts its reads (and their mount time) afresh.
+export function KueueWorkloadRenderer(props: { data: any; onNavigate?: (ref: ResourceRef) => void; relationships?: Relationships }) {
+  return <KueueWorkloadReads key={props.data.metadata?.uid} {...props} />
+}
+
+function KueueWorkloadReads({ data, onNavigate, relationships }: { data: any; onNavigate?: (ref: ResourceRef) => void; relationships?: Relationships }) {
   const reads = useAdmissionPathReads(data)
   const namespace = data.metadata?.namespace ?? ''
   const uid = data.metadata?.uid

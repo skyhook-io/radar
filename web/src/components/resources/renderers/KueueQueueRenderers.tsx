@@ -15,7 +15,12 @@ import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
 
 type Navigate = (ref: ResourceRef) => void
 
+// Keyed by UID so moving the drawer to another queue starts its reads (and their mount time) afresh.
 export function LocalQueueRenderer({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
+  return <LocalQueueReads key={data.metadata?.uid} data={data} onNavigate={onNavigate} />
+}
+
+function LocalQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const parentName: string = data.spec?.clusterQueue ?? ''
   const namespace: string = data.metadata?.namespace ?? ''
   const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], !!parentName).byName[parentName]
@@ -26,6 +31,10 @@ export function LocalQueueRenderer({ data, onNavigate }: { data: any; onNavigate
 }
 
 export function ClusterQueueRenderer({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
+  return <ClusterQueueReads key={data.metadata?.uid} data={data} onNavigate={onNavigate} />
+}
+
+function ClusterQueueReads({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const names = useMemo(() => clusterQueueRelatedNames(data), [data])
   const cohort = getClusterQueueCohort(data)
   const flavors = useRelatedObjects('resourceflavors', KUEUE_GROUP, undefined, names.flavors, names.flavors.length > 0)

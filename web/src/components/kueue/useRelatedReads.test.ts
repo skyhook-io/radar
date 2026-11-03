@@ -7,7 +7,7 @@ const fail = (status: number, error_code?: string) => new ApiError('failed', sta
 describe('relatedReadFrom', () => {
   it('reports absence only when the server proved it', () => {
     expect(relatedReadFrom({ error: fail(404, 'object_not_found') })).toEqual({ state: 'not_found' })
-    expect(relatedReadFrom({ error: fail(404) })).toMatchObject({ state: 'unavailable', code: undefined })
+    expect(relatedReadFrom({ error: fail(404) })).toEqual({ state: 'unconfirmed' })
     expect(relatedReadFrom({ error: fail(404, 'namespace_not_found') })).toMatchObject({ state: 'unavailable', code: 'namespace_not_found' })
   })
 
@@ -36,20 +36,26 @@ describe('relatedReadFrom', () => {
 describe('relatedReadInList', () => {
   const items = [{ metadata: { name: 'small' } }]
   it('finds a name, and calls it missing only from a complete list', () => {
-    expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: null }, 'small')).toEqual({ state: 'found', object: items[0] })
-    expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: null }, 'gone')).toEqual({ state: 'not_found' })
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'cluster' } }, error: null }, 'small')).toEqual({ state: 'found', object: items[0] })
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'cluster' } }, error: null }, 'gone')).toEqual({ state: 'not_found' })
     expect(relatedReadInList({ data: items, coverage: { status: 'partial', gaps: [{ code: 'radar_namespace_not_collected' }] }, error: null }, 'gone')).toMatchObject({ state: 'unavailable', code: 'radar_namespace_not_collected' })
     // An older Radar sends a bare array, read as unknown coverage.
     expect(relatedReadInList({ data: items, coverage: { status: 'unknown' }, error: null }, 'gone')).toEqual({ state: 'unconfirmed' })
     expect(relatedReadInList({ data: items, coverage: { status: 'unknown' }, error: null }, 'small').state).toBe('found')
   })
+  it('proves absence only within a scope it understands and that holds the asked namespace', () => {
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'namespaces', namespaces: { names: ['team'] } } }, error: null, namespace: 'team' }, 'gone')).toEqual({ state: 'not_found' })
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'namespaces', namespaces: { names: [] } } }, error: null, namespace: 'team' }, 'gone')).toEqual({ state: 'unconfirmed' })
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'galaxy' } }, error: null }, 'gone')).toEqual({ state: 'unconfirmed' })
+  })
+
   it('doesn’t prove absence from a list cached before the view mounted', () => {
-    expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: null, readBeforeMount: true }, 'gone')).toEqual({ state: 'loading' })
-    expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: null, readBeforeMount: true }, 'small').state).toBe('found')
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'cluster' } }, error: null, readBeforeMount: true }, 'gone')).toEqual({ state: 'loading' })
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'cluster' } }, error: null, readBeforeMount: true }, 'small').state).toBe('found')
   })
 
   it('lets a list error outrank the items it kept', () => {
-    expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: fail(403, 'user_forbidden') }, 'small')).toMatchObject({ state: 'unavailable', code: 'user_forbidden' })
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete', scope: { type: 'cluster' } }, error: fail(403, 'user_forbidden') }, 'small')).toMatchObject({ state: 'unavailable', code: 'user_forbidden' })
     expect(relatedReadInList({ error: null }, 'small')).toEqual({ state: 'loading' })
   })
 })

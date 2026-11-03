@@ -54,6 +54,15 @@ export function isKueueStopOnly(condition: any, clusterQueue: boolean): boolean 
   return !clusterQueue || !/^Can't admit new workloads: is stopped, /.test(condition.message ?? '')
 }
 
+/**
+ * The ClusterQueue's message is Kueue's single-cause stop wording. Stricter
+ * than isKueueStopOnly: lending a stop to another object's tone needs the
+ * positive form, not just the absence of more causes.
+ */
+export function isKueueClusterQueueStopOnlyMessage(condition: any): boolean {
+  return isKueueStopOnly(condition, true) && /^Can't admit new workloads: is stopped\.?$/.test(condition.message ?? '')
+}
+
 function queueConditionStatus(resource: any, clusterQueue: boolean): StatusBadge {
   const active = getKueueQueueCondition(resource)
   if (isKueueConditionStale(active, resource?.metadata?.generation)) {

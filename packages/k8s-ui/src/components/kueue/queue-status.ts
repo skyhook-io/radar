@@ -1,5 +1,5 @@
 import { healthColors, type StatusBadge } from '../resources/resource-utils'
-import { getKueueQueueCondition, getLocalQueueStatus, isKueueStopOnly } from '../resources/resource-utils-kueue'
+import { getKueueQueueCondition, getLocalQueueStatus, isKueueClusterQueueStopOnlyMessage } from '../resources/resource-utils-kueue'
 import type { RelatedRead } from './related-read'
 
 /**
@@ -23,7 +23,7 @@ export function localQueueInactiveBecauseParentStopped(localQueue: any, parent: 
   if (!conditionIsCurrent(own, localQueue?.metadata?.generation)) return false
   if (parent?.state !== 'found' || parent.object?.metadata?.name !== localQueue?.spec?.clusterQueue) return false
   const theirs = getKueueQueueCondition(parent.object)
-  return isKueueStopOnly(theirs, true) && conditionIsCurrent(theirs, parent.object?.metadata?.generation)
+  return isKueueClusterQueueStopOnlyMessage(theirs) && conditionIsCurrent(theirs, parent.object?.metadata?.generation)
 }
 
 /**

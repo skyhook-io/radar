@@ -3,6 +3,7 @@ import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { getApiBase } from '../../api/config'
 import { RELATED_GET_RECHECK_MS, useRelatedObjects, type RelatedObjects } from './useRelatedReads'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -25,7 +26,7 @@ beforeEach(() => {
     requests.push(url.pathname)
     if (url.pathname === '/api/resources/clusterqueues') {
       return listStatus === 200
-        ? new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }], coverage: { status: 'complete', scope: {}, read: {}, gaps: [] } }), { status: 200 })
+        ? new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } }), { status: 200 })
         : new Response(JSON.stringify(listStatus === 4030 ? { error: 'insufficient permissions' } : { error: 'no list', error_code: 'user_forbidden' }), { status: 403 })
     }
     if (url.pathname === '/api/resources/clusterqueues/_/present') return new Response(JSON.stringify({ resource: { metadata: { name: 'present' } } }), { status: 200 })
@@ -77,4 +78,17 @@ it('also reads by GET when an older Radar denies the list with an uncoded 403', 
   await render()
   await vi.waitFor(() => expect(latest?.byName.present.state).toBe('found'), { timeout: 6000 })
   expect(latest?.all).toMatchObject({ state: 'unavailable', code: undefined })
+})
+
+it('doesn’t call a name missing from a list cached before the hook mounted, until the re-read lands', async () => {
+  // Another view read the list a moment ago, before the object existed.
+  client.setQueryData(['resources', 'clusterqueues', 'kueue.x-k8s.io', undefined, getApiBase()], { items: [], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } }, { updatedAt: Date.now() - 5000 })
+  let release: (() => void) | undefined
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => {
+    release = () => resolve(new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }, { metadata: { name: 'gone' } }], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } })))
+  })))
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe onRead={read => { latest = read }} /></QueryClientProvider>))
+  expect(latest?.byName.gone).toEqual({ state: 'loading' })
+  await act(async () => release?.())
+  await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))
 })

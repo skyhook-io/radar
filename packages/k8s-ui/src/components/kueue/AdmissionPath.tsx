@@ -74,7 +74,8 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
   // Kueue's own word on why quota isn't reserved, verbatim. Flavor-assignment
   // messages are left to "Reasons reported per flavor".
   const quota = (data.status?.conditions ?? []).find((condition: any) => condition?.type === 'QuotaReserved')
-  const pendingMessage: string | undefined = quota?.status === 'False' && !isKueueConditionStale(quota, data.metadata?.generation) && quota.message && !isFlavorAssignmentMessage(quota.message) ? quota.message : undefined
+  const pendingMessage: string | undefined = quota?.status === 'False' && quota.message && !isFlavorAssignmentMessage(quota.message) ? quota.message : undefined
+  const pendingStale = isKueueConditionStale(quota, data.metadata?.generation)
   return (
     <Section variant="card" title="Admission Path" icon={Route}>
       <ol className="divide-y divide-theme-border">
@@ -113,7 +114,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
             {configured && configured !== reserved && <p className="text-xs text-warning-text">Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>}
           </> : <>
             <p className={muted}>No reservation reported.</p>
-            {pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">Controller-reported on QuotaReserved: </span>{pendingMessage}</p>}
+            {pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">{pendingStale ? `Controller-reported on QuotaReserved for generation ${quota.observedGeneration} (now ${data.metadata?.generation}): ` : 'Controller-reported on QuotaReserved: '}</span>{pendingMessage}</p>}
           </>}
         </Step>
         {assignments.length > 0 && (
@@ -172,7 +173,9 @@ export function FlavorReasons({ data, onNavigate }: { data: any; onNavigate?: Na
   const parsed = parseFlavorAttempts(quota.message)
   return (
     <Section variant="card" title="Reasons Reported per Flavor">
-      <p className="mb-3 text-xs text-theme-text-tertiary">From the controller-reported message on QuotaReserved. Kueue lists the reasons alphabetically, not in the order it tried flavors, and may not report every flavor.</p>
+      <p className="mb-3 text-xs text-theme-text-tertiary">{quota.message.startsWith("couldn't assign")
+        ? 'From the controller-reported message on QuotaReserved. Kueue lists the reasons alphabetically, not in the order it tried flavors, and may not report every flavor.'
+        : 'The controller-reported error on QuotaReserved.'}</p>
       {parsed ? (
         <div className="space-y-3">
           {parsed.map(podSet => (

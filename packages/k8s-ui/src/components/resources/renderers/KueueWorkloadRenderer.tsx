@@ -17,7 +17,6 @@ import { AdmissionPath, FlavorReasons, type KueueWorkloadReads } from '../../kue
 import { KUEUE_GROUP } from '../../kueue/constants'
 import { admissionCheckSeverity, getKueueWorkloadStatus, getKueueWorkloadPriority, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
 
-
 interface KueueWorkloadRendererProps {
   data: any
   provisioning?: ReactNode
