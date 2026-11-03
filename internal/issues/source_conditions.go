@@ -242,6 +242,10 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 
 func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
 	switch gvr.Group {
+	case "cert-manager.io":
+		if kind == "Certificate" {
+			return detectCertificateRenewalFailure(gvr, u, time.Now())
+		}
 	case "flagger.app":
 		if kind == "Canary" {
 			return detectFlaggerCanaryIssues(gvr, u)
