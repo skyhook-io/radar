@@ -57,7 +57,7 @@ func CandidatesForPods(pods []*corev1.Pod, truncated bool) CandidateSet {
 			readiness[id.uid+"/"+id.name] = RelevantReadinessFailure(p, a, id.name)
 			facts := []string{"initialized", "sealed", "standby", "HA connection and cluster removal when reported"}
 			if a == evidence.RabbitMQ {
-				facts = []string{"node disk alarm", "node memory alarm"}
+				facts = []string{"node disk/memory alarms", "disk/memory measurements and watermarks when available"}
 			}
 			if a == evidence.NATS {
 				facts = []string{"JetStream consumer counts", "reported stream/account coverage"}

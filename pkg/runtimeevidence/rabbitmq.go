@@ -10,8 +10,12 @@ import (
 )
 
 type RabbitMQFacts struct {
-	DiskAlarm   bool `json:"diskAlarm"`
-	MemoryAlarm bool `json:"memoryAlarm"`
+	DiskAlarm            bool    `json:"diskAlarm"`
+	MemoryAlarm          bool    `json:"memoryAlarm"`
+	DiskAvailableBytes   *uint64 `json:"diskAvailableBytes,omitempty"`
+	DiskWatermarkBytes   *uint64 `json:"diskWatermarkBytes,omitempty"`
+	ResidentMemoryBytes  *uint64 `json:"residentMemoryBytes,omitempty"`
+	MemoryWatermarkBytes *uint64 `json:"memoryWatermarkBytes,omitempty"`
 }
 
 func parseRabbitMQ(body []byte) (*RabbitMQFacts, error) {
@@ -20,42 +24,67 @@ func parseRabbitMQ(body []byte) (*RabbitMQFacts, error) {
 	if err != nil {
 		return nil, InvalidAlarmMetric
 	}
-	read := func(name string) (bool, error) {
+	readSample := func(name string) (float64, error) {
 		family := families[name]
 		if family == nil || len(family.Metric) == 0 {
-			return false, MissingAlarmMetrics
+			return 0, MissingAlarmMetrics
 		}
 		if len(family.Metric) != 1 {
-			return false, AmbiguousAlarmMetric
+			return 0, AmbiguousAlarmMetric
 		}
 		metric := family.Metric[0]
 		var value float64
 		switch family.GetType() {
 		case dto.MetricType_GAUGE:
 			if metric.Gauge == nil || metric.Gauge.Value == nil {
-				return false, InvalidAlarmMetric
+				return 0, InvalidAlarmMetric
 			}
 			value = metric.Gauge.GetValue()
 		case dto.MetricType_UNTYPED:
 			if metric.Untyped == nil || metric.Untyped.Value == nil {
-				return false, InvalidAlarmMetric
+				return 0, InvalidAlarmMetric
 			}
 			value = metric.Untyped.GetValue()
 		default:
-			return false, InvalidAlarmMetric
+			return 0, InvalidAlarmMetric
 		}
-		if math.IsNaN(value) || math.IsInf(value, 0) || (value != 0 && value != 1) {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, InvalidAlarmMetric
+		}
+		return value, nil
+	}
+	readAlarm := func(name string) (bool, error) {
+		value, err := readSample(name)
+		if err != nil {
+			return false, err
+		}
+		if value != 0 && value != 1 {
 			return false, InvalidAlarmMetric
 		}
 		return value == 1, nil
 	}
-	disk, err := read("rabbitmq_alarms_free_disk_space_watermark")
+	readBytes := func(name string) *uint64 {
+		value, err := readSample(name)
+		// Keep JSON numbers exact for JavaScript consumers.
+		if err != nil || value < 0 || value > 1<<53-1 || math.Trunc(value) != value {
+			return nil
+		}
+		bytes := uint64(value)
+		return &bytes
+	}
+	disk, err := readAlarm("rabbitmq_alarms_free_disk_space_watermark")
 	if err != nil {
 		return nil, err
 	}
-	memory, err := read("rabbitmq_alarms_memory_used_watermark")
+	memory, err := readAlarm("rabbitmq_alarms_memory_used_watermark")
 	if err != nil {
 		return nil, err
 	}
-	return &RabbitMQFacts{DiskAlarm: disk, MemoryAlarm: memory}, nil
+	return &RabbitMQFacts{
+		DiskAlarm: disk, MemoryAlarm: memory,
+		DiskAvailableBytes:   readBytes("rabbitmq_disk_space_available_bytes"),
+		DiskWatermarkBytes:   readBytes("rabbitmq_disk_space_available_limit_bytes"),
+		ResidentMemoryBytes:  readBytes("rabbitmq_process_resident_memory_bytes"),
+		MemoryWatermarkBytes: readBytes("rabbitmq_resident_memory_limit_bytes"),
+	}, nil
 }

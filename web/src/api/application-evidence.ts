@@ -27,24 +27,12 @@ export interface ApplicationEvidenceResult {
   reason?: string
   httpStatus?: number
   facts?: {
-    rabbitmq?: { diskAlarm: boolean; memoryAlarm: boolean }
-    vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean; haConnectionHealthy?: boolean; removedFromCluster?: boolean }
-    nats?: {
-      jetStreamEnabled: boolean
-      totals?: { accounts: number; streams: number; consumers: number; messages: number }
-      consumers: { account: string; stream: string; name: string; pending: number; ackPending: number; redelivered: number }[]
-      coverage: string
-      returnedAccounts: number
-      returnedStreams: number
-      returnedConsumers: number
-      truncated: boolean
+    rabbitmq?: {
+      diskAlarm: boolean
+      memoryAlarm: boolean
+      diskAvailableBytes?: number
+      diskWatermarkBytes?: number
+      residentMemoryBytes?: number
+      memoryWatermarkBytes?: number
     }
-  }
-  limitations: string[]
-}
-export function collectApplicationEvidence(candidate: EvidenceCandidate, context: string, signal: AbortSignal) {
-  return fetchJSON<ApplicationEvidenceResult>('/application-evidence/collect', {
-    method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ application: candidate.application, namespace: candidate.target.namespace, pod: candidate.target.pod, uid: candidate.target.uid, context, confirmNetworkAccess: true }),
-  })
-}
+    vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean; haConnectionHealthy?: boolean; removedFromCluster?: boolean }

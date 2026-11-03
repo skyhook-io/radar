@@ -6,6 +6,7 @@ import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { TimeValue } from '@skyhook-io/k8s-ui/components/ui/ScheduleValue'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
+import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { ApiError, fetchJSON, useClusterInfo, useCapabilities, useRadarFeature } from '../../api/client'
 import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidate, type EvidenceCandidates } from '../../api/application-evidence'
@@ -150,6 +151,7 @@ function EvidenceDialog({ open, data, currentData, refreshing, onClose, onTarget
 
 export function ApplicationEvidenceObservation({ result }: { result: ApplicationEvidenceResult }) {
   const facts = result.outcome === 'observed' ? result.facts : undefined
+  const rabbitmq = facts?.rabbitmq
   const nats = facts?.nats
   const vault = facts?.vault
   return <section aria-label="Application observations" className="card-inner mt-4 p-3 text-sm text-theme-text-primary">
@@ -158,8 +160,18 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
     <p className="mt-1 text-xs text-theme-text-tertiary"><TimeValue timestamp={result.observedAt} /> · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · Endpoint status: HTTP ${result.httpStatus}`}</p>
     {facts && <p className="mt-2 text-xs text-theme-text-secondary">This Pod at collection time; other replicas were not checked.</p>}
     {result.reason && <p className="mt-2">{unavailableReasons[result.reason] ?? `Collection unavailable (${result.reason}).`} No conclusion about application health can be drawn from unavailable evidence.</p>}
-    {facts?.rabbitmq && <dl className="mt-3 grid grid-cols-2 gap-2"><dt>Disk alarm</dt><dd>{facts.rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd><dt>Memory alarm</dt><dd>{facts.rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd></dl>}
-    {facts?.rabbitmq && <p className="mt-2 text-xs text-theme-text-secondary">An alarm on another node can block publishers across the cluster.</p>}
+    {rabbitmq && <>
+      <dl className="mt-3 grid grid-cols-2 gap-2">
+        <dt>Disk alarm</dt><dd>{rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd>
+        <dt>Free disk</dt><dd>{rabbitmq.diskAvailableBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskAvailableBytes)}</dd>
+        <dt>Disk alarm below</dt><dd>{rabbitmq.diskWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskWatermarkBytes)}</dd>
+        <dt>Memory alarm</dt><dd>{rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd>
+        <dt>Resident memory</dt><dd>{rabbitmq.residentMemoryBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.residentMemoryBytes)}</dd>
+        <dt>Memory alarm watermark</dt><dd>{rabbitmq.memoryWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.memoryWatermarkBytes)}</dd>
+      </dl>
+      <p className="mt-2 text-xs text-theme-text-secondary">Values and alarms are reported by RabbitMQ. Its memory alarm may use a different accounting method than resident memory. Unknown values were absent or could not be interpreted.</p>
+      <p className="mt-2 text-xs text-theme-text-secondary">A disk or memory alarm on another node can block publishers across the cluster.</p>
+    </>}
     {vault && <dl className="mt-3 grid grid-cols-2 gap-2">
       <dt>Initialized</dt><dd>{vault.initialized ? 'Yes' : 'No'}</dd>
       <dt>Sealed</dt><dd>{vault.sealed ? 'Yes' : 'No'}</dd>
@@ -171,14 +183,3 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
       {vault.removedFromCluster !== undefined && <><dt>Removal from HA cluster</dt><dd>{vault.removedFromCluster ? 'Reported' : 'Not reported'}</dd></>}
     </dl>}
     {vault?.initialized && !vault.sealed && (vault.standby || vault.performanceStandby) && vault.haConnectionHealthy === undefined && <p className="mt-2 text-xs text-theme-text-secondary">Vault can omit the heartbeat report after a leader change. Connectivity is unknown.</p>}
-    {nats && <div className="mt-3 space-y-2">
-      <p>JetStream: {nats.jetStreamEnabled ? 'Enabled' : 'Disabled'}</p>
-      <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {pluralize(nats.returnedAccounts, 'account')} · {pluralize(nats.returnedStreams, 'stream')} · {pluralize(nats.returnedConsumers, 'consumer')} returned{nats.truncated ? ' · Truncated' : ''}</p>
-      {nats.totals && <p>Node reports {pluralize(nats.totals.messages, 'message')} across {pluralize(nats.totals.streams, 'stream')} and {pluralize(nats.totals.consumers, 'consumer')}.</p>}
-      {nats.consumers.length > 0 && <div className="overflow-x-auto"><table className="w-full min-w-[480px] text-left text-xs"><thead><tr><th className="pr-3">Account / stream / consumer</th><th className="pr-3">Pending</th><th className="pr-3">Ack pending</th><th>Redelivered</th></tr></thead><tbody>{nats.consumers.map(item => <tr key={JSON.stringify([item.account, item.stream, item.name])}><td className="py-2 pr-3 break-all">{item.account} / {item.stream} / {item.name}</td><td>{item.pending}</td><td>{item.ackPending}</td><td>{item.redelivered}</td></tr>)}</tbody></table></div>}
-    </div>}
-    {result.limitations.length > 0 && <Disclosure summary="Collection limits" className="mt-3" summaryClassName="text-xs text-theme-text-secondary">
-      <ul className="mt-2 space-y-1 text-xs text-theme-text-secondary">{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>
-    </Disclosure>}
-  </section>
-}

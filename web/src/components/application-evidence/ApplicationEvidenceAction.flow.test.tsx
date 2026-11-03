@@ -203,3 +203,17 @@ it('keeps background refresh errors quiet for a resource with no eligible endpoi
   expect(state.fetch).toHaveBeenCalledTimes(2)
   expect(host.textContent).toBe('')
 })
+
+it('copies exact RabbitMQ bytes and identity without an additional collection request', async () => {
+  const target = { namespace: 'demo', pod: 'rabbitmq-0', uid: 'rabbit-uid', container: 'rabbitmq' }
+  const observation = { adapter: 'rabbitmq', target, observedAt: '2026-11-03T10:00:00Z', source: 'selected_pod_endpoint', outcome: 'observed', facts: { rabbitmq: { diskAlarm: true, memoryAlarm: false, diskAvailableBytes: 15277850624, diskWatermarkBytes: 1000000000000, residentMemoryBytes: 134975488, memoryWatermarkBytes: 2412409651 } }, limitations: ['Only the selected Pod was checked.'] }
+  state.fetch.mockResolvedValueOnce({ ...candidates, subjectUID: 'rabbit-uid', candidates: [{ application: 'rabbitmq', target, expectedEvidence: ['disk/memory alarms'], coverage: 'One selected Pod.' }] }).mockResolvedValueOnce(observation)
+  await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Pod" namespace="demo" name="rabbitmq-0" uid="rabbit-uid" /></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toContain('Collect RabbitMQ evidence'))
+  act(() => host.querySelector('button')!.click())
+  expect(state.fetch).toHaveBeenCalledTimes(1)
+  await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Collect evidence')!.click())
+  await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Copy observation')!.click())
+  expect(JSON.parse(vi.mocked(copyText).mock.calls.at(-1)![0])).toEqual({ context: 'test-cluster', ...observation })
+  expect(state.fetch).toHaveBeenCalledTimes(2)
+})
