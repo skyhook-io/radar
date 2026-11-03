@@ -93,7 +93,7 @@ describe('membership in words', () => {
   })
 
   it('does not call a finished Workload reserved, nor claim it was admitted', () => {
-    const done = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, admission: { state: 'finished' }, submission: { localQueue: 'lq', localQueueUID: 'u', clusterQueue: 'cq' } })
+    const done = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, admission: { state: 'finished', attention: 'none' }, submission: { localQueue: 'lq', localQueueUID: 'u', clusterQueue: 'cq' } })
     expect(membershipText(done, false, undefined)).toBe('Reservation recorded here · its LocalQueue lq now points to cq')
     expect(membershipText(done, true, 'cq')).toBe('Reservation recorded in cq')
   })
@@ -189,6 +189,6 @@ it('lists a row once when it moved between pages', () => {
   const first = response(members([row('a'), row('b')], complete))
   const second = response(members([row('b'), row('c')], complete))
   expect(uniqueRows([first, second]).map(r => r.name)).toEqual(['a', 'b', 'c'])
-  const finishedLater = response(members([row('a', { admission: { state: 'finished' } })], complete))
+  const finishedLater = response(members([row('a', { admission: { state: 'finished', attention: 'none' } })], complete))
   expect(uniqueRows([first, finishedLater]).map(r => [r.name, r.admission?.state])).toEqual([['a', 'finished'], ['b', undefined]])
 })

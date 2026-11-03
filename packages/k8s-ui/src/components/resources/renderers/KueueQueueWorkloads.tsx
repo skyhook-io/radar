@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ListChecks } from 'lucide-react'
-import { Badge, type BadgeSeverity } from '../../ui/Badge'
-import { kueueAdmissionStatePresentation } from '../resource-utils-kueue'
+import { Badge } from '../../ui/Badge'
+import { kueueAdmissionStateLabel, kueueAdmissionStatePresentation } from '../resource-utils-kueue'
 import { ResourceLink, Section } from '../../ui/drawer-components'
 import { RadarUpgradeNote } from '../../ui/RadarUpgradeNote'
 import { FilterPill } from '../../ui/FilterPill'
@@ -285,35 +285,28 @@ function unresolvedNotice(members: KueueQueueMembers): string | undefined {
   return `Radar couldn't read LocalQueues in ${where}, so Workloads there are listed only when their reservation names this queue.`
 }
 
-const severityOrder: BadgeSeverity[] = ['error', 'alert', 'warning', 'info', 'neutral', 'success']
-
 /**
- * Members grouped by the state the shared classification gives them, worst
- * first. Counts are Radar's, over every member it read for you.
+ * Members grouped by the state the shared classification gives them, largest
+ * first. Counts are Radar's, over every member it read for you; each row's
+ * badge carries how much attention its state needs.
  */
 function StateFilter({ counts, bounded, state, onStateChange }: { counts: Record<string, number>; bounded: boolean; state?: string; onStateChange: (state: string | undefined) => void }) {
   const entries = Object.entries(counts ?? {}).filter(([, n]) => n > 0)
   if (state && !entries.some(([code]) => code === state)) entries.push([state, 0])
   if (entries.length < 2 && !state) return null
-  entries.sort(([a, x], [b, y]) => {
-    const rank = (code: string) => severityOrder.indexOf(kueueAdmissionStatePresentation(code).severity)
-    return rank(a) - rank(b) || y - x || a.localeCompare(b)
-  })
+  entries.sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
   return (
     <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by admission state">
-      {entries.map(([code, n]) => {
-        const { label, severity } = kueueAdmissionStatePresentation(code)
-        const tone = severity === 'error' ? 'danger' : severity === 'alert' ? 'high' : severity === 'warning' ? 'warn' : 'neutral'
-        return <FilterPill key={code} label={chipLabel(label, n, bounded)} count={bounded ? undefined : n} tone={tone} active={state === code} onClick={() => onStateChange(state === code ? undefined : code)} />
-      })}
+      {entries.map(([code, n]) => (
+        <FilterPill key={code} label={chipLabel(kueueAdmissionStateLabel(code), n, bounded)} count={bounded ? undefined : n} active={state === code} onClick={() => onStateChange(state === code ? undefined : code)} />
+      ))}
     </div>
   )
 }
 
 function StateBadge({ row }: { row: KueueQueueWorkload }) {
-  const code = row.admission?.state
-  if (!code) return null
-  const { label, severity } = kueueAdmissionStatePresentation(code)
+  if (!row.admission?.state) return null
+  const { label, severity } = kueueAdmissionStatePresentation(row.admission)
   const fact = row.admission?.blocker ?? row.admission?.inactive ?? row.admission?.disruption
   return (
     <span title={fact?.message || fact?.reason || undefined}>
