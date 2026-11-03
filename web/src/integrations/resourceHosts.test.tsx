@@ -49,7 +49,7 @@ describe('application resource hosts', () => {
   it('retains every existing renderer override at a stable module reference', () => {
     expect(Object.keys(resourceRendererOverrides).sort()).toEqual([
       'RayJobRenderer', 'JobRenderer', 'JobSetRenderer', 'RayServiceRenderer', 'RayClusterRenderer',
-      'KueueWorkloadRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
+      'KueueWorkloadRenderer', 'LocalQueueRenderer', 'ClusterQueueRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
       'NodeRenderer', 'ServiceRenderer', 'WorkloadRenderer', 'CompositeRenderer', 'ServiceAccountRenderer',
       'RoleRenderer', 'RoleBindingRenderer', 'NamespaceRenderer', 'HPARenderer', 'PVCRenderer',
       'RolloutRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',
@@ -61,6 +61,12 @@ describe('application resource hosts', () => {
     expect(resourceDetailSlots({ kind: 'Pod', group: '', namespace: 'db', name: 'pg-1' }, inherited).extraTabs).toEqual(inherited)
     expect(resourceExpandedPath({ ...cluster, group: undefined })).toBeNull()
     expect(resourceDetailRedirect({ ...cluster, group: '' }, new URLSearchParams('tab=events'))).toBeNull()
+  })
+
+  it('owns the LocalQueue header badge and nothing for other Kueue kinds', () => {
+    expect(resourceDetailSlots({ kind: 'LocalQueue', group: 'kueue.x-k8s.io', namespace: 'team', name: 'q' }).renderStatusBadge).toBeTypeOf('function')
+    expect(resourceDetailSlots({ kind: 'ClusterQueue', group: 'kueue.x-k8s.io', namespace: '', name: 'q' }).renderStatusBadge).toBeUndefined()
+    expect(resourceDetailSlots({ kind: 'LocalQueue', group: undefined, namespace: 'team', name: 'q' }).renderStatusBadge).toBeUndefined()
   })
 
   it('keeps query, tab, context and drawer state when redirecting a generic detail link', () => {

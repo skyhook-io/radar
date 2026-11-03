@@ -328,7 +328,9 @@ export interface RendererOverrides {
   RayJobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayClusterRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayServiceRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
-  KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void; relationships?: Relationships }>
+  LocalQueueRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  ClusterQueueRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   PodRenderer?: React.ComponentType<{
     data: any; onCopy: CopyHandler; copied: string | null
     onNavigate?: (ref: ResourceRef) => void
@@ -792,6 +794,8 @@ export function ResourceRendererDispatch({
   const CollectorComp = rendererOverrides?.OpenTelemetryCollectorRenderer ?? OpenTelemetryCollectorRenderer
   const RayServiceComp = rendererOverrides?.RayServiceRenderer ?? RayServiceRenderer
   const KueueWorkloadComp = rendererOverrides?.KueueWorkloadRenderer ?? KueueWorkloadRenderer
+  const LocalQueueComp = rendererOverrides?.LocalQueueRenderer ?? LocalQueueRenderer
+  const ClusterQueueComp = rendererOverrides?.ClusterQueueRenderer ?? ClusterQueueRenderer
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
@@ -863,11 +867,11 @@ export function ResourceRendererDispatch({
         {kind === 'rayjobs' && data?.apiVersion === 'ray.io/v1' && <RayJobComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayclusters' && data?.apiVersion === 'ray.io/v1' && <RayClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayservices' && data?.apiVersion === 'ray.io/v1' && <RayServiceComp data={data} onNavigate={onNavigate} />}
-        {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} />}
+        {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} relationships={relationships} />}
         {kind === 'admissionchecks' && isKueueQueueResource(data) && <AdmissionCheckRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion) && <ProvisioningRequestRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'localqueues' && isKueueQueueResource(data) && <LocalQueueRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'clusterqueues' && isKueueQueueResource(data) && <ClusterQueueRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'localqueues' && isKueueQueueResource(data) && <LocalQueueComp data={data} onNavigate={onNavigate} />}
+        {kind === 'clusterqueues' && isKueueQueueResource(data) && <ClusterQueueComp data={data} onNavigate={onNavigate} />}
         {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetComp data={data} onNavigate={onNavigate} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
