@@ -1865,7 +1865,7 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 | Resource | Group | Status source | Topology |
 |----------|-------|---------------|----------|
 | LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions | No |
-| JobSet | `jobset.x-k8s.io/v1alpha2` | terminalState, then Failed / Completed / Suspended / StartupPolicyInProgress / RestartingJobSet conditions, then reported child counts | Yes: JobSet → member Job → Pod |
+| JobSet | `jobset.x-k8s.io/v1alpha2` | Root terminal state, conditions and reported child counts | Yes: JobSet → member Job → Pod |
 | Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group | No |
 | Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) | No |
 | PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition | No |
@@ -1907,27 +1907,16 @@ Extended-resource requests are declared demand, not GPU/TPU utilization. Logs ca
 scoped to one Job (live) or a role/all current members (bounded snapshots with source
 attribution and read failures). Historical goodput and archived logs are not collected.
 
-**Topology:** the resources view draws every `jobset.x-k8s.io` JobSet as a root, including
-one with no Jobs yet. Only `v1alpha2` is interpreted: a cluster serving JobSets at another
-version shows them with unknown status, without links to their member Jobs, and with a
-topology warning. Its status comes from the same lifecycle as the status badge and
-execution context: only a failed JobSet is unhealthy; starting and recreating are degraded;
-pending, active, suspended and completed are neutral; a JobSet whose controller hasn't
-reported yet is unknown. The node's subtitle shows that state as text (a failed JobSet shows
-its Failed condition's reason) and the number of Jobs its spec declares, which can exceed the
-Jobs created so far. Edges go to the member Jobs the member list shows:
-Jobs whose controller owner reference names this JobSet by API version, name and UID.
-Labels, other owner references and earlier same-named JobSets never link. With Jobs hidden,
-member Pods attach to the JobSet directly. Pods are matched to their Job by UID, for every
-Job: while a recreated Job's predecessor Pods are still terminating, they are grouped apart
-and attached to nothing, so they don't count toward the current Job. Objects a JobSet owns
-that Radar watches, such as its Kueue Workload, attach through the generic owner pass when
-their owner reference names this JobSet's UID. A
-JobSet's Topology tab shows up to 24 member Jobs, failed and active ones first, and says how
-many it left out; clicking a member Job there opens that member in the Overview. The traffic
-view does not draw Jobs, and no scheduling or dependency edges are drawn. A TrainJob that
-creates a JobSet isn't drawn, so its JobSet appears as a root.
+**Topology:** the resources view draws JobSets, including roots with no Jobs,
+and their exact controller-owned member Jobs and Pods. Status uses the same
+root lifecycle as detail; child failures alone do not make the root failed.
+Declared Job counts can exceed created members. Only v1alpha2 is interpreted;
+other served versions show unknown status and a warning without member links.
 
+With Jobs hidden, current member Pods attach to the JobSet. Pods from earlier
+same-named Jobs stay separate. The JobSet Topology tab shows at most 24 members,
+favoring failed and active Jobs, and clicking a member opens its Overview.
+Traffic, scheduling and dependency edges are not provided.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 
