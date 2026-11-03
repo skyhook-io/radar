@@ -59,13 +59,15 @@ describe('Vault HA observations', () => {
   it.each([
     { value: true, text: 'Reported healthy' },
     { value: false, text: 'Reported unhealthy' },
-    { value: undefined, text: 'Not reported' },
+    { value: undefined, text: 'Unknown' },
   ])('keeps standby connection $value distinct from unknown', ({ value, text }) => {
     const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { initialized: true, sealed: false, standby: true, haConnectionHealthy: value } } }} />)
     expect(html).toContain('Connection to active node')
     expect(html).toContain(text)
+    if (value === undefined) expect(html).toContain('Connectivity is unknown')
+    else expect(html).not.toContain('Connectivity is unknown')
     expect(html).toContain('other replicas were not checked')
-    expect(html).not.toContain('Removed from HA cluster')
+    expect(html).not.toContain('Removal from HA cluster')
   })
   it.each([
     { initialized: false, sealed: true, standby: true },
@@ -81,9 +83,9 @@ describe('Vault HA observations', () => {
     expect(html).toContain('Connection to active node')
     expect(html).toContain('Reported unhealthy')
   })
-  it.each([true, false])('shows reported cluster removal %s even while sealed', removedFromCluster => {
-    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { initialized: true, sealed: true, standby: true, removedFromCluster } } }} />)
-    expect(html).toContain(`<dt>Removed from HA cluster</dt><dd>${removedFromCluster ? 'Yes' : 'No'}</dd>`)
+  it.each([{ initialized: true, removedFromCluster: true }, { initialized: true, removedFromCluster: false }, { initialized: false, removedFromCluster: false }])('shows removal $removedFromCluster with initialized=$initialized even while sealed', ({ initialized, removedFromCluster }) => {
+    const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'vault', facts: { vault: { initialized, sealed: true, standby: true, removedFromCluster } } }} />)
+    expect(html).toContain(`<dt>Removal from HA cluster</dt><dd>${removedFromCluster ? 'Reported' : 'Not reported'}</dd>`)
     expect(html).not.toContain('Standby')
     expect(html).not.toContain('Connection to active node')
   })

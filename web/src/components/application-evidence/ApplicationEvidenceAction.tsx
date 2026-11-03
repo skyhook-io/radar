@@ -166,10 +166,11 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
       {vault.initialized && !vault.sealed && <>
         <dt>Standby</dt><dd>{vault.standby ? 'Yes' : 'No'}</dd>
         {vault.performanceStandby !== undefined && <><dt>Performance standby</dt><dd>{vault.performanceStandby ? 'Yes' : 'No'}</dd></>}
-        {(vault.standby || vault.performanceStandby) && <><dt>Connection to active node</dt><dd>{vault.haConnectionHealthy === undefined ? 'Not reported' : vault.haConnectionHealthy ? 'Reported healthy' : 'Reported unhealthy'}</dd></>}
+        {(vault.standby || vault.performanceStandby) && <><dt>Connection to active node</dt><dd>{vault.haConnectionHealthy === undefined ? 'Unknown' : vault.haConnectionHealthy ? 'Reported healthy' : 'Reported unhealthy'}</dd></>}
       </>}
-      {vault.removedFromCluster !== undefined && <><dt>Removed from HA cluster</dt><dd>{vault.removedFromCluster ? 'Yes' : 'No'}</dd></>}
+      {vault.removedFromCluster !== undefined && <><dt>Removal from HA cluster</dt><dd>{vault.removedFromCluster ? 'Reported' : 'Not reported'}</dd></>}
     </dl>}
+    {vault?.initialized && !vault.sealed && (vault.standby || vault.performanceStandby) && vault.haConnectionHealthy === undefined && <p className="mt-2 text-xs text-theme-text-secondary">Vault can omit the heartbeat report after a leader change. Connectivity is unknown.</p>}
     {nats && <div className="mt-3 space-y-2">
       <p>JetStream: {nats.jetStreamEnabled ? 'Enabled' : 'Disabled'}</p>
       <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {pluralize(nats.returnedAccounts, 'account')} · {pluralize(nats.returnedStreams, 'stream')} · {pluralize(nats.returnedConsumers, 'consumer')} returned{nats.truncated ? ' · Truncated' : ''}</p>

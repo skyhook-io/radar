@@ -34,7 +34,7 @@ func parseVault(body []byte) (*VaultFacts, error) {
 	}, nil
 }
 
-// Optional HA facts must not discard valid initialization and seal observations.
+// Malformed connection or removal reports must not discard valid base facts.
 func optionalBool(raw json.RawMessage) *bool {
 	var value *bool
 	if json.Unmarshal(raw, &value) != nil {

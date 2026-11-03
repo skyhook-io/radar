@@ -1607,7 +1607,7 @@ Available through connected full local MCP, outside built-in investigations and 
 | NATS | Port 8222 `/jsz` | JetStream counters, capped at 20 consumer rows with coverage. Backlog is not necessarily a fault; disabled differs from zero activity. |
 | Vault | Port 8200 `/v1/sys/health` | HTTP status, initialization/seal/standby facts, and optional HA connection/removal reports; none establish overall cluster health. |
 
-Vault `haConnectionHealthy` describes the standby connection to the active node; `removedFromCluster` reports HA membership, including when sealed. Absent or malformed optional values stay unknown, not false.
+Vault `haConnectionHealthy` reflects its standby request-forwarding heartbeat; an absent report does not establish connectivity. `removedFromCluster: true` reports removal, including when sealed; `false` does not prove membership. Absent or malformed optional values stay unknown, not false.
 
 `outcome: observed` carries facts; `unavailable` carries a reason without facts. NATS `coverage: partial` means omitted rows cannot be treated as zero. Results describe one endpoint at `observedAt`, not application health. Identity or in-flight context changes discard results, though a replaced Pod may briefly be contacted. Image/identity checks do not attest contents. A manual call without `pod_uid` uses the cluster current at invocation; MCP results do not include its name.
 
