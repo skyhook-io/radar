@@ -425,6 +425,11 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) *IssueIndex {
 		// can't read; without an authorizer it didn't, so count none.
 		if filters.CanReadRelated != nil {
 			for _, ref := range f.AffectedRefs {
+				// Resource detail composes namespaced subjects within their
+				// namespace, which excludes cluster-scoped incident parents.
+				if f.Namespace == "" && ref.Namespace != "" {
+					continue
+				}
 				mark(ref.Group, ref.Kind, ref.Namespace, ref.Name, f.ID)
 			}
 		}
