@@ -1745,184 +1745,20 @@ eviction; an empty list is not evidence that no request was made. The Workload's
 check message remains the primary explanation, and requests are not assigned to
 individual checks by parsing their names.
 
-For a `kueue.x-k8s.io/v1beta2` or `v1beta1` Workload, the REST AI resource endpoint
-and MCP `get_resource` also project a bounded admission summary into
-`resourceContext.scheduling.observations`. The first adapter emits one Kueue
-`admission` observation: a controller-neutral `satisfied`, `unsatisfied`,
-`held`, or `unknown` decision; the most useful native condition; LocalQueue and
-ClusterQueue facts with submission/entitlement roles; AdmissionCheck and
-preemption-gate evidence; and affirmative disruption conditions from the
-current snapshot. Resource names remain useful facts when RBAC withholds an
-optional navigation reference.
-
-`held` requires evidence of an explicit pause: `spec.active=false`, an `OnHold`
-condition, or `AdmissionGated` together with the current non-empty
-`kueue.x-k8s.io/admission-gated-by` annotation. The overloaded
-preemption-gated `AdmissionGated` reason remains `unsatisfied`, as does
-`Suspended` by itself: Kueue uses that reason for an inactive ClusterQueue,
-which may reflect broken dependencies rather than an intentional stop policy.
-
-Typed Kueue detail retains the controller's `pending` / `quota_reserved` /
-`admitted` / `finished` phase, PodsReady and replacement-Pod evidence,
-per-PodSet resource-to-ResourceFlavor assignments and usage, requeue state,
-and an exact concurrent-admission Parent reference for a Variant. Each
-observation carries the Workload's `subjectGeneration`, and projected
-conditions retain `observedGeneration`, so consumers can detect stale
-controller evidence. The compact projection keeps the first eight PodSets in
-name order and up to seven resource assignments per PodSet, prioritizing
-extended resources before core resources; explicit truncation flags point
-consumers back to the returned raw Workload for the complete status. Normal
-unsatisfied admission is scheduling context rather than an operational Issue.
-Radar does not infer feature-gate state, queue position, fairness math, Pod
-placement, or physical capacity. This is a bounded projection of the returned
-Workload's current status, not condition history or queue-wide observation
-coverage. Both served Workload versions share every projected field;
-v1beta2-only fields such as preemption gates are simply absent on v1beta1.
-
 #### Admission state classification
 
-`kueue.admission` sorts what the Workload's own status reports into separate
-axes, so every surface describes a Workload's admission state the same way.
-`schedulinginsight.ClassifyKueueWorkload` is the only place the codes and their
-attention class are decided; Go consumers that list Workloads call it per
-object and ship `KueueAdmissionState` in their own rows (a table column needs a
-server-computed field behind a `FeatureCapabilities` flag, never a browser-side
-reading of conditions), and the UI only maps codes to labels
-(`kueueAdmissionStatePresentation` and `kueueAdmissionStateLabel` in k8s-ui,
-with a short suggestion from `kueueAdmissionStateHint` for states that usually
-need someone), rendering a code it does not know verbatim. Today the admission
-card on Job, JobSet and RayJob detail shows it, leading with the state instead of
-"Pending admission" for a withdrawn Workload. When a different condition decides
-the state (such as requeue backoff), its evidence and transition time lead the
-card, with the earlier primary condition retained in Technical details. MCP
-`get_resource` describes how to interpret state, attention and freshness;
-the Workload's own detail and its
-table Status column still show its most notable native condition, which can
-differ (an Evicted Workload now blocked by a missing LocalQueue). The
-classification is not a causal diagnosis: queues, namespaces and
-AdmissionChecks appear as the Workload names them and are never read, so
-"LocalQueue missing" is the Workload's report, not a NotFound Radar observed.
-The wording rules were checked against Kueue v0.18 through v0.20; an older
-release's wording that differs reads `unrecognized`. Radar reads a Workload as
-v1beta1 only from a Kueue that serves no v1beta2 (v0.14 or older); the fields
-are the same, but classification there is best-effort because older releases'
-behaviour was not checked beyond v0.9's wording (`InactiveWorkload…` eviction
-reasons and "insufficient unused quota in cohort"). With scheduling
-equivalence hashing, Kueue may copy an equivalent Workload's reason with the
-message "Bypassed scheduling evaluation because an equivalent workload recently
-failed"; the code then follows that reason alone.
+Job, JobSet and RayJob admission cards distinguish lifecycle, waiting blockers,
+withdrawal and disruption using the Workload's own status. The Workload table
+and detail retain native condition headlines, which can differ from the card.
+REST AI detail and MCP `get_resource` include the same bounded admission context
+for v1beta2 and v1beta1 Workloads, with explicit truncation markers.
 
-| Axis | Codes | Evidence |
-|------|-------|----------|
-| lifecycle | `kueue.phase`: `pending`, `quota_reserved`, `admitted`, `finished` (result in `kueue.outcome`) | conditions |
-| `inactive`: withdrawn from admission, not waiting | `deactivated` (`spec.active=false`, no cause recorded by Kueue), `deactivated_by_kueue` (cause in the fact's reason: a rejected AdmissionCheck, the requeuing limit, the maximum execution time), `deactivation_pending` (`DeactivationTarget=True`, `spec.active` not yet false), `on_hold` (Kueue v0.20+) | spec or condition |
-| `blocker`: why a Workload still competing is not admitted | `no_decision`, `insufficient_quota`, `exceeds_quota`, `no_matching_flavor`, `resource_unavailable`, `topology_placement_failed`, `waiting_for_preemption`, `preemption_gated`, `admission_gated`, `namespace_not_eligible`, `local_queue_missing`, `local_queue_inactive`, `cluster_queue_missing`, `cluster_queue_inactive`, `admission_check_rejected`, `admission_checks_pending`, `topology_assignment_pending`, `waiting_for_pods_ready`, `requeue_backoff`, `dra_resources_unresolved`, `invalid_workload`, `unrecognized` | condition or AdmissionCheck |
-| `disruption`: an eviction not yet followed by a new quota reservation | `preempted`, `pods_ready_timeout`, `evicted` | `Evicted` / `Preempted` condition |
-
-`state` is the one code to group or count by: `finished`, else the inactive
-code, else the blocker code, else the disruption code, else `admitted` or
-`quota_reserved`. A preempted Workload waiting for quota reads
-`insufficient_quota`, with `preempted` kept as its disruption. A disruption
-does outrank a `no_decision` blocker, an `unrecognized` one whose message
-only repeats the eviction message (what Kueue writes right after an eviction),
-and any blocker while quota is still reserved, since the eviction is releasing
-it. Which facts are reported: a finished Workload has no inactive or
-blocker fact, an inactive one has no blocker, an admitted one has no blocker,
-and a current eviction is always reported. A missing fact is not evidence on
-its own.
-
-`attention` is Radar's guidance for `state`: `none` (reserved, admitted,
-finished), `waiting` (Kueue or another controller is expected to move it on),
-`paused` (withdrawn on purpose, no failure recorded), `action_needed` (as
-reported, it will not be admitted without a change to the Workload, its queue
-or quota, or a controller that should have acted), or `unknown` (the Workload
-alone cannot tell, such as an inactive queue that may be stopped on purpose,
-a request too large for, or not matching, the flavors or topology Kueue last
-tried (another attempt may fit),
-unresolved DRA resources, an unrecognized reason, or a deactivation whose cause
-Kueue did not record).
-It is not a severity or a guarantee: how long waiting may last before it is a
-problem is the consumer's call. Counting, grouping, Issues and headlines read
-`state` and `attention`, not the observation's `decision`, which stays the
-controller-neutral scheduling view: an external admission gate is a `held`
-decision but a waiting blocker, and an inactive queue is an `unsatisfied`
-decision whose attention is `unknown`. Consumers pick their population from the axes:
-Workloads awaiting admission are those whose `phase` is not `admitted` or
-`finished`, that have no `inactive` fact, that name a queue (`spec.queueName`;
-Kueue manages no other) and that are not a concurrent-admission variant;
-`KueueClassification.AwaitingAdmission()` encodes this (and leaves out
-Workloads being deleted), so consumers don't restate it. With concurrent
-admission Kueue schedules a parent's variants, not the parent, so a pending
-parent reads `no_decision` with attention `unknown`; its variants say why.
-Each fact's `since` is its condition's or check's `lastTransitionTime`, for
-"how long" questions; it is when the status last changed, not when Kueue last
-tried.
-
-`stale` marks a `state` decided by evidence written for an earlier
-`metadata.generation` (for a blocker read because quota is reserved, that
-includes the reservation): the last reported state, not a confirmed current one.
-Kueue does not rewrite conditions on every spec change (a WorkloadPriorityClass
-update rewrites `spec.priority` and leaves `Admitted` alone), so a stale
-`admitted` is usually still admitted, but Radar does not claim it. Each
-condition fact also carries its own `stale` flag. An absent `stale` means not
-known to be stale: Kueue may omit `observedGeneration`, and records none for an
-AdmissionCheck state. `spec.active=false` is current by definition, so
-`deactivated` is never stale.
-
-Each fact keeps its native evidence (`source`, `name`, `reason`, `message`,
-where `message` is display text cut to 256 bytes; the Workload holds the full
-text). `unrecognized` is a reason Radar has no code for; the native reason and
-message are what to show. Rules that keep the axes honest:
-
-- A rejected AdmissionCheck is the blocker `admission_check_rejected`, usually
-  briefly: Kueue then sets `DeactivationTarget` (`deactivation_pending`) and
-  `spec.active=false` (`deactivated_by_kueue`, with the cause from the
-  `Evicted` reason `DeactivatedDueTo…`). Kueue keeps an earlier eviction's
-  reason when it records no deactivation target, and v0.18 also for its own
-  causes, so `spec.active=false` with some other `Evicted` reason reads
-  `deactivated` with attention `unknown`, and the admission card says Kueue
-  recorded no cause. Counts of `deactivated` should therefore split by
-  `attention`. The cause in a `deactivated_by_kueue` fact is Kueue's own word:
-  the `DeactivationTarget` reason (`AdmissionCheck`) or, after the eviction, the
-  `Evicted` reason (`DeactivatedDueToAdmissionCheck`). A `DeactivatedDueTo…`
-  eviction older than a later reactivation (`Requeued=True Reactivated`)
-  belongs to the earlier deactivation, so it reads `deactivated` with
-  attention `unknown`.
-- An inactive or stopped ClusterQueue or LocalQueue is a blocker, not an
-  inactive Workload. Kueue words a stopped queue as either "is stopped" or
-  "is inactive" depending on which of its writers ran last, so both read
-  `cluster_queue_inactive` / `local_queue_inactive`; telling a stop policy from
-  broken configuration needs a read of the queue. A Workload drained by a
-  stopped queue reads the same through its `Requeued=False` condition.
-- While pending, a rejected check and an eviction backoff (`Requeued=False`)
-  come first; otherwise the `QuotaReserved` condition decides the blocker.
-  Kueue resets check states to `Pending` on eviction, and `Admitted=False
-  NoReservation…` only restates the missing reservation, so neither decides.
-  Kueue's coarse reasons (`Pending`, `Inadmissible`, `Misconfigured`,
-  `Suspended`, and `PendingEvaluation` for failed checks) carry the cause in
-  their message, which is matched against Kueue's own wording. A
-  flavor-assignment message reads `insufficient_quota` only when every PodSet
-  has a flavor whose only problem is unused quota; a request over the maximum,
-  or a taint, affinity, topology or earlier-slice mismatch rules a flavor out,
-  a flavor named by a clause Radar does not understand (and a PodSet whose
-  failure Radar does not recognize) leaves the blocker `unrecognized` unless
-  another PodSet can never fit, a resource the ClusterQueue does not offer at
-  all reads `resource_unavailable`, a
-  PodSet that fits no flavor outranks one that exceeds quota, and Kueue's notes
-  on in-flight or retried preemptions read `waiting_for_preemption`.
-  A message Kueue cut at its 32 KiB limit proves only its complete PodSet
-  segments; otherwise it reads `unrecognized`. `exceeds_quota` and `no_matching_flavor`
-  describe Kueue's last attempt: with flavor fungibility an
-  attempt can resume past flavors tried before, so another flavor may still fit
-  later.
-- `BlockedOnPreemptionGates=True` is the blocker only while it explains the
-  current `QuotaReserved` (same message, reason `PreemptionGated`, or
-  `AdmissionGated` without the external gate's "Admission is gated by"
-  message): later attempts, including an external admission gate, rewrite
-  `QuotaReserved` but leave the gate condition set. The projection's primary
-  condition and decision follow the same rule.
-- `Evicted` and `Preempted` reset to `False` ("Previously: …") at the next quota
-  reservation, so an old failure after recovery is not a disruption.
+This is a controller report, not a causal diagnosis: named queues and checks
+are not independently verified by the classification. Flavor fit describes only
+Kueue's last attempt. Stale evidence is marked; an absent stale marker does not
+confirm freshness, and transition times do not date scheduling attempts.
+Older Kueue wording is best-effort; unrecognized reasons remain visible.
+Radar does not infer fairness, Pod placement, physical capacity or runtime health.
 
 ### KubeRay
 
