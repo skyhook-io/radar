@@ -91,7 +91,7 @@ func LocalQueueTarget(lq *unstructured.Unstructured) string {
 }
 
 // ClusterQueueMembers returns the workloads that belong to clusterQueue,
-// each once, sorted by Key. workloads may hold any Workloads, members or not,
+// each once, in no particular order: set Finished, then Sort. workloads may hold any Workloads, members or not,
 // and the same Workload more than once.
 func ClusterQueueMembers(clusterQueue string, workloads []*unstructured.Unstructured, localQueues LocalQueues) []Member {
 	members := make([]Member, 0, len(workloads))
@@ -119,12 +119,11 @@ func ClusterQueueMembers(clusterQueue string, workloads []*unstructured.Unstruct
 			members = append(members, m)
 		}
 	}
-	slices.SortFunc(members, compare)
 	return members
 }
 
 // LocalQueueMembers returns the workloads submitted to localQueue, each
-// once, sorted by Key.
+// once, in no particular order: set Finished, then Sort.
 func LocalQueueMembers(localQueue *unstructured.Unstructured, workloads []*unstructured.Unstructured) []Member {
 	namespace, name := localQueue.GetNamespace(), localQueue.GetName()
 	members := make([]Member, 0, len(workloads))
@@ -136,7 +135,6 @@ func LocalQueueMembers(localQueue *unstructured.Unstructured, workloads []*unstr
 		seen[identity(w)] = true
 		members = append(members, Member{Workload: w, Kinds: []Kind{Submission}, QueueName: name, SubmittedTo: LocalQueueTarget(localQueue), LocalQueueUID: string(localQueue.GetUID()), ReservedIn: ReservedIn(w)})
 	}
-	slices.SortFunc(members, compare)
 	return members
 }
 
@@ -215,10 +213,12 @@ func Filter(members []Member, kind Kind, state string, stateOf func(Member) stri
 
 // Page returns up to limit of members (sorted by Key) whose key sorts after
 // after ("" for the first page), and whether more follow. Paging by key
-// rather than position means a member never appears twice while a list is
-// read page by page, however it changes between pages; a member that joins
-// before the key of a page already read is missed until the list is read
-// again from the start.
+// rather than position keeps a member from appearing twice while its key
+// stays the same; a member that joins before the key of a page already read
+// is missed until the list is read again from the start. A member's key
+// changes once, when it finishes: one returned among the unfinished members
+// that finishes before the traversal reaches the finished ones is returned
+// again there, so readers merge pages by UID, keeping the later row.
 func Page(members []Member, after string, limit int) (page []Member, more bool) {
 	start := 0
 	if after != "" {
