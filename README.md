@@ -496,7 +496,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 
 ### Local runtime evidence via MCP
 
-Local MCP clients can explicitly collect evidence from one Pod after operator approval:
+Local MCP clients can explicitly collect evidence from one Pod after operator approval.
 
 These observations describe one Pod endpoint, not overall application health, and do not add automatic Issues detection. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
 
