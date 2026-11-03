@@ -87,7 +87,12 @@ func (r fakeKueueRoots) valid() bool { return !r.p.rootsBroken }
 
 func loadKueueLiveFixture(t *testing.T) []*unstructured.Unstructured {
 	t.Helper()
-	data, err := os.ReadFile("testdata/kueue/rad819-live.json")
+	return loadKueueFixture(t, "testdata/kueue/rad819-live.json")
+}
+
+func loadKueueFixture(t *testing.T, path string) []*unstructured.Unstructured {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -946,5 +951,39 @@ func TestKueueChainReadsTheClassifiedIncarnation(t *testing.T) {
 				t.Fatalf("chain = %+v", got)
 			}
 		})
+	}
+}
+
+// Kueue's real provisioning AdmissionCheck controller reacting to a provider
+// that failed twice (retry limit 1) and to capacity revoked from an admitted
+// run (testdata/kueue/README.md).
+func TestKueueLiveProvisioningOutcomes(t *testing.T) {
+	p := newFakeKueueProvider(loadKueueFixture(t, "testdata/kueue/rad843-provisioning-live.json")...)
+	got := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadEvidence: allowAllEvidence})
+	want := map[string]string{
+		"provisioning-fails": "Failed=True (CapacityUnavailable): RAD-843 fixture provider: no capacity for 1 node (attempt 2)",
+		"capacity-revoked":   "CapacityRevoked=True (CapacityRevoked): RAD-843 fixture provider: the nodes were reclaimed",
+	}
+	seen := 0
+	for _, i := range got {
+		outcome, ok := want[i.Name]
+		if !ok || i.Kind != "Job" {
+			continue
+		}
+		seen++
+		if i.Reason != ReasonKueueAdmissionCheckRejected || i.Category != issuesapi.CategoryQueueAdmissionBlocked {
+			t.Errorf("%s: %s %s", i.Name, i.Reason, i.Category)
+		}
+		var facts []string
+		for _, f := range i.DiagnosticContext.Facts {
+			facts = append(facts, f.Type+": "+f.Message)
+		}
+		joined := strings.Join(facts, " | ")
+		if !strings.Contains(joined, outcome) || !strings.Contains(joined, "AdmissionCheck gpu-night-843-prov (controller kueue.x-k8s.io/provisioning-request): Active=True") {
+			t.Errorf("%s facts: %s", i.Name, joined)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("rows = %v, want both provisioning runs", kueueReasons(got))
 	}
 }
