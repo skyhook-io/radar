@@ -86,8 +86,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryNodeProvisioningFail
 		}
 		switch in.Reason {
-		case ReasonKueueExceedsQuota,
-			ReasonKueueNoMatchingFlavor,
+		case ReasonKueueNoMatchingFlavor,
 			ReasonKueueNamespaceNotEligible,
 			ReasonKueueLocalQueueMissing,
 			ReasonKueueClusterQueueMissing,

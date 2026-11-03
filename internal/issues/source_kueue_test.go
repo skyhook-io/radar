@@ -163,12 +163,9 @@ func TestKueueLiveScenarioFindings(t *testing.T) {
 	want := []kueueRow{
 		{subject: "ClusterQueue /gpu-night-819-missing-flavor", reason: ReasonKueueClusterQueueInactive, category: "queue_admission_blocked"},
 		{subject: "LocalQueue gpu-night-819-missing-flavor/missing-flavor", reason: ReasonKueueClusterQueueInactive, category: "queue_admission_blocked"},
-		{subject: "Workload gpu-night-819-busy-hidden/job-hidden-pending-02368", owner: "batch/Job hidden-pending", reason: ReasonKueueExceedsQuota, category: "queue_admission_blocked"},
 		{subject: "Workload gpu-night-819-busy/job-check-rejected-779e4", owner: "batch/Job check-rejected", reason: ReasonKueueAdmissionCheckRejected, category: "queue_admission_blocked"},
 		{subject: "Workload gpu-night-819-ineligible/job-not-eligible-6abe4", owner: "batch/Job not-eligible", reason: ReasonKueueNamespaceNotEligible, category: "queue_admission_blocked"},
 		{subject: "Workload gpu-night-819-lifecycle/job-no-localqueue-8c90a", owner: "batch/Job no-localqueue", reason: ReasonKueueLocalQueueMissing, category: "queue_admission_blocked"},
-		{subject: "Workload gpu-night-819-lq-denied/job-pending-84d37", owner: "batch/Job pending", reason: ReasonKueueExceedsQuota, category: "queue_admission_blocked"},
-		{subject: "Workload gpu-night-819-quota/job-too-big-215e5", owner: "batch/Job too-big", reason: ReasonKueueExceedsQuota, category: "queue_admission_blocked"},
 	}
 	if rows := kueueRows(got); !equalKueueRows(rows, want) {
 		t.Fatalf("rows:\n%s\nwant:\n%s", formatKueueRows(rows), formatKueueRows(want))
@@ -213,7 +210,7 @@ func TestKueueLiveScenarioGroupedRowsAreRunsAndQueues(t *testing.T) {
 			cq = i
 		}
 	}
-	for _, want := range []string{"Job/too-big", "Job/check-rejected", "Job/not-eligible", "Job/no-localqueue", "Job/hidden-pending", "Job/pending"} {
+	for _, want := range []string{"Job/check-rejected", "Job/not-eligible", "Job/no-localqueue"} {
 		if !subjects[want] {
 			t.Errorf("grouped subjects %v lack %s", subjects, want)
 		}
@@ -330,6 +327,12 @@ func kueueWorkload(namespace, name, queue string, conditions ...map[string]any) 
 	return w
 }
 
+// actionableWorkload reports a missing LocalQueue, which RAD-811 reads as
+// action_needed.
+func actionableWorkload(namespace, name, queue string) *unstructured.Unstructured {
+	return kueueWorkload(namespace, name, queue, kueueCondition("QuotaReserved", "False", "Inadmissible", "LocalQueue "+queue+" doesn't exist", 1))
+}
+
 func exceedsWorkload(namespace, name, queue string) *unstructured.Unstructured {
 	return kueueWorkload(namespace, name, queue, kueueCondition("QuotaReserved", "False", "Pending", kueueExceedsMessage, 1))
 }
@@ -383,14 +386,17 @@ func TestKueueWaitingPauseAndUnknownRaiseNothing(t *testing.T) {
 		kueueCondition("QuotaReserved", "False", "Pending", kueueWaitMessage, 1),
 		kueueCondition("Evicted", "True", "PodsReadyTimeout", "Exceeded the PodsReady timeout", 1))
 	finished := kueueWorkload("team", "finished", "q", kueueCondition("Finished", "True", "Failed", "Job failed", 1))
-	p := newFakeKueueProvider(user, unrecognized, waiting, preempted, podsReady, finished, kueueLocalQueue("team", "q", "cq", "True", "Ready"))
+	// Kueue's message names only the flavors it tried last, so RAD-811 can't
+	// tell "never fits" from "not now".
+	exceeds := exceedsWorkload("team", "exceeds", "q")
+	p := newFakeKueueProvider(user, unrecognized, waiting, preempted, podsReady, finished, exceeds, kueueLocalQueue("team", "q", "cq", "True", "Ready"))
 	if got := kueueReasons(Compose(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})); len(got) != 0 {
 		t.Fatalf("rows = %v, want none", got)
 	}
 }
 
 func TestKueueStaleEvidenceRaisesNothing(t *testing.T) {
-	w := exceedsWorkload("team", "stale", "q")
+	w := actionableWorkload("team", "stale", "q")
 	w.SetGeneration(3) // the condition was written for generation 1
 	cq := brokenClusterQueue("cq")
 	cq.SetGeneration(4)
@@ -648,9 +654,9 @@ func TestKueueReplacedCachesKeepWorkloadsAsAffected(t *testing.T) {
 func TestKueueCronJobRunIsFoundFromItsJob(t *testing.T) {
 	cronJob := kueueTestObject("batch/v1", "CronJob", "team", "nightly")
 	job := ownedBy(kueueJob("team", "nightly-1"), cronJob)
-	p := newFakeKueueProvider(cronJob, job, ownedBy(exceedsWorkload("team", "w", "q"), job))
+	p := newFakeKueueProvider(cronJob, job, ownedBy(actionableWorkload("team", "w", "q"), job))
 	related := RelatedIssues(p, RelatedIssueOptions{Namespaces: []string{"team"}, CanReadRelated: func(Ref) bool { return true }, CanReadEvidence: allowAllEvidence}, "batch", "Job", "team", "nightly-1")
-	if len(related) != 1 || related[0].Kind != "CronJob" || related[0].Reason != ReasonKueueExceedsQuota {
+	if len(related) != 1 || related[0].Kind != "CronJob" || related[0].Reason != ReasonKueueLocalQueueMissing {
 		t.Fatalf("related = %+v", related)
 	}
 }
@@ -663,20 +669,20 @@ func TestKueueRootAttribution(t *testing.T) {
 	jobSet := kueueTestObject("jobset.x-k8s.io/v1alpha2", "JobSet", "team", "trainer")
 	rayJob := kueueTestObject("ray.io/v1", "RayJob", "team", "tune")
 	recreated := kueueJob("team", "recreated")
-	staleOwner := exceedsWorkload("team", "w-recreated", "q")
+	staleOwner := actionableWorkload("team", "w-recreated", "q")
 	controller := true
 	staleOwner.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "recreated", UID: "an-earlier-incarnation", Controller: &controller}})
 	p := newFakeKueueProvider(
 		cronJob, scheduled, jobSet, rayJob, recreated,
-		ownedBy(exceedsWorkload("team", "w-cron", "q"), scheduled),
-		ownedBy(exceedsWorkload("team", "w-jobset", "q"), jobSet),
-		ownedBy(exceedsWorkload("team", "w-ray", "q"), rayJob),
+		ownedBy(actionableWorkload("team", "w-cron", "q"), scheduled),
+		ownedBy(actionableWorkload("team", "w-jobset", "q"), jobSet),
+		ownedBy(actionableWorkload("team", "w-ray", "q"), rayJob),
 		staleOwner,
-		exceedsWorkload("team", "w-standalone", "q"),
+		actionableWorkload("team", "w-standalone", "q"),
 	)
 	owners := map[string]Ref{}
 	for _, i := range Compose(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence}) {
-		if i.Reason == ReasonKueueExceedsQuota {
+		if i.Reason == ReasonKueueLocalQueueMissing {
 			owners[i.Name] = i.Owner
 		}
 	}
@@ -696,7 +702,7 @@ func TestKueueRootAttribution(t *testing.T) {
 
 	p.rootsBroken = true
 	for _, i := range Compose(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence}) {
-		if i.Reason == ReasonKueueExceedsQuota && i.Owner.Kind != "" {
+		if i.Reason == ReasonKueueLocalQueueMissing && i.Owner.Kind != "" {
 			t.Fatalf("owner claimed from replaced caches: %+v", i.Owner)
 		}
 	}
@@ -704,7 +710,7 @@ func TestKueueRootAttribution(t *testing.T) {
 
 func TestKueueRecreatedRootIsNotGivenTheOldRunsFinding(t *testing.T) {
 	job := kueueJob("team", "train")
-	old := exceedsWorkload("team", "w-old", "q")
+	old := actionableWorkload("team", "w-old", "q")
 	controller := true
 	old.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "train", UID: "the-deleted-job", Controller: &controller}})
 	current := ownedBy(kueueWorkload("team", "w-new", "q", kueueCondition("QuotaReserved", "False", "Pending", kueueWaitMessage, 1)), job)
@@ -714,15 +720,15 @@ func TestKueueRecreatedRootIsNotGivenTheOldRunsFinding(t *testing.T) {
 			t.Fatalf("the recreated Job inherited the old run's finding: %+v", i)
 		}
 	}
-	if reasons := kueueReasons(got); reasons["Workload team/w-old"] != ReasonKueueExceedsQuota {
+	if reasons := kueueReasons(got); reasons["Workload team/w-old"] != ReasonKueueLocalQueueMissing {
 		t.Fatalf("rows = %v, want the orphaned Workload's own row", reasons)
 	}
 }
 
 func TestKueueConcurrentAdmissionVariantsRaiseNothing(t *testing.T) {
 	job := kueueJob("team", "train")
-	parent := ownedBy(kueueWorkload("team", "parent", "q", kueueCondition("QuotaReserved", "False", "Pending", kueueExceedsMessage, 1)), job)
-	variant := ownedBy(exceedsWorkload("team", "variant-a", "q"), parent)
+	parent := ownedBy(actionableWorkload("team", "parent", "q"), job)
+	variant := ownedBy(actionableWorkload("team", "variant-a", "q"), parent)
 	got := Compose(newFakeKueueProvider(job, parent, variant), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
 	if reasons := kueueReasons(got); len(reasons) != 0 {
 		t.Fatalf("rows = %v", reasons)
@@ -730,7 +736,7 @@ func TestKueueConcurrentAdmissionVariantsRaiseNothing(t *testing.T) {
 }
 
 func TestKueueConfigurationGrace(t *testing.T) {
-	young := exceedsWorkload("team", "young", "q")
+	young := actionableWorkload("team", "young", "q")
 	young.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-10 * time.Second)))
 	youngLQ := kueueLocalQueue("team", "new", "gone", "False", kueueLocalQueueClusterQueueMissing)
 	youngLQ.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-10 * time.Second)))
@@ -852,7 +858,7 @@ func TestKueueEvidenceOnlyGapsThinTheRowNotTheCoverage(t *testing.T) {
 }
 
 func TestKueueInventoryGapsAreUnchecked(t *testing.T) {
-	p := newFakeKueueProvider(exceedsWorkload("team", "w", "q"))
+	p := newFakeKueueProvider(actionableWorkload("team", "w", "q"))
 	p.gaps[kueueGroup+"/"+kueueWorkloadKind] = issuesapi.UncheckedReasonSyncPending
 	got, stats := ComposeWithStats(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
 	if reasons := kueueReasons(got); len(reasons) != 0 {
@@ -876,7 +882,7 @@ func TestKueueInventoryGapsAreUnchecked(t *testing.T) {
 func TestKueueRowsSurviveRootKindFilter(t *testing.T) {
 	jobSet := kueueTestObject("jobset.x-k8s.io/v1alpha2", "JobSet", "team", "trainer")
 	job := kueueJob("team", "train")
-	p := newFakeKueueProvider(jobSet, job, ownedBy(exceedsWorkload("team", "wj", "q"), job), ownedBy(exceedsWorkload("team", "ws", "q"), jobSet))
+	p := newFakeKueueProvider(jobSet, job, ownedBy(actionableWorkload("team", "wj", "q"), job), ownedBy(actionableWorkload("team", "ws", "q"), jobSet))
 	for kind, name := range map[string]string{"Job": "train", "JobSet": "trainer"} {
 		got := Compose(p, Filters{Limit: NoLimit, Grouped: true, Kinds: []string{kind}, CanReadEvidence: allowAllEvidence})
 		if len(got) != 1 || got[0].Kind != kind || got[0].Name != name {
@@ -887,12 +893,12 @@ func TestKueueRowsSurviveRootKindFilter(t *testing.T) {
 
 func TestKueueRunRowsCarryTheirOwnEvidence(t *testing.T) {
 	job := kueueJob("team", "train")
-	got := Compose(newFakeKueueProvider(job, ownedBy(exceedsWorkload("team", "w", "q"), job)), Filters{Limit: NoLimit, Grouped: true, CanReadEvidence: allowAllEvidence})
+	got := Compose(newFakeKueueProvider(job, ownedBy(actionableWorkload("team", "w", "q"), job)), Filters{Limit: NoLimit, Grouped: true, CanReadEvidence: allowAllEvidence})
 	if len(got) != 1 {
 		t.Fatalf("rows = %+v", got)
 	}
 	i := got[0]
-	if i.Kind != "Job" || len(i.Members) != 1 || i.Members[0].Kind != kueueWorkloadKind || i.Message != kueueExceedsMessage || !i.OnsetUnknown {
+	if i.Kind != "Job" || len(i.Members) != 1 || i.Members[0].Kind != kueueWorkloadKind || i.Message != "LocalQueue q doesn't exist" || !i.OnsetUnknown {
 		t.Fatalf("row = %+v", i)
 	}
 	if !hasFact(&i, factKueueAdmission) {
@@ -914,7 +920,7 @@ func BenchmarkKueueCompose(b *testing.B) {
 			case 1:
 				w = kueueWorkload(ns, job.GetName(), "q", kueueCondition("QuotaReserved", "False", "Pending", kueueWaitMessage, 1))
 			default:
-				w = exceedsWorkload(ns, job.GetName(), "q")
+				w = actionableWorkload(ns, job.GetName(), "q")
 			}
 			objects = append(objects, job, ownedBy(w, job))
 		}
@@ -927,7 +933,7 @@ func BenchmarkKueueCompose(b *testing.B) {
 }
 
 func TestKueueChainReadsTheClassifiedIncarnation(t *testing.T) {
-	w := exceedsWorkload("team", "w", "q")
+	w := actionableWorkload("team", "w", "q")
 	subject := resourceid.Ref{Group: kueueGroup, Kind: kueueWorkloadKind, Namespace: "team", Name: "w"}
 	job := resourceid.Ref{Group: "batch", Kind: "Job", Namespace: "team", Name: "train"}
 	cron := resourceid.Ref{Group: "batch", Kind: "CronJob", Namespace: "team", Name: "nightly"}

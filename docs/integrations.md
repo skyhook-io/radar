@@ -1766,7 +1766,9 @@ Issues reports a Kueue run only when someone has to act. Waiting (for quota,
 preemption, a pending AdmissionCheck, a provisioning retry or an eviction
 backoff), a deliberate pause (a stop policy, an admission or preemption gate,
 `OnHold`, a user's `spec.active=false`) and states Radar can't judge
-(`unrecognized`, `topology_placement_failed`, stale evidence) are not Issues;
+(`unrecognized`, `topology_placement_failed`, a request over the queue's
+maximum, which Kueue's message can't show is permanent, and stale evidence) are
+not Issues;
 they stay in the Workload's admission context. Pending, suspended or Pod-less
 alone is never an Issue. The Workload's own `attention` from the
 classification above decides: `action_needed` is an Issue, the rest is not,
@@ -1774,7 +1776,7 @@ except for an inactive queue, which Radar settles by reading the queue.
 
 | Row | Subject | When | Category |
 |-----|---------|------|----------|
-| `KueueExceedsQuota`, `KueueNoMatchingFlavor`, `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it (RAD-811's `action_needed`) and is at least a minute old | `queue_admission_blocked` |
+| `KueueNoMatchingFlavor`, `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it (RAD-811's `action_needed`) and is at least a minute old | `queue_admission_blocked` |
 | `KueueClusterQueueMissing` | the LocalQueue, or the run when no LocalQueue row explains it | Kueue reports the LocalQueue's ClusterQueue doesn't exist | `queue_admission_blocked` |
 | `KueueAdmissionCheckRejected` | the run | an AdmissionCheck rejected it, through Kueue's deactivation that follows (one row, one ID) | `queue_admission_blocked` |
 | `KueueRequeuingLimitExceeded`, `KueueMaximumExecutionTimeExceeded`, `KueueDeactivatedByKueue` | the run | Kueue deactivated it and recorded why | `batch_run_stopped` (the first two), `queue_admission_blocked` |
