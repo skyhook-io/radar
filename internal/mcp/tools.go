@@ -239,6 +239,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"an application configuration edit; it is a ranking hint, not proof of cause, and unflagged changes may still matter. Application, Kustomization and Flux HelmRelease return " +
 		"status and parsed issues; no logs. " +
 		"KafkaConnector and KafkaConnect (group=kafka.strimzi.io) return cached curated operator findings, not configuration, logs or application endpoint reads. " +
+		"Job, JobSet, RayJob and Kueue Workload return cached resource context, related Issues and resource events; no runtime logs or metrics. Follow Workload references for admission details. " +
 		"Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
 		"API-server proxy reached it, not the live path. Point-in-time freezes this call's result, " +
@@ -1058,6 +1059,10 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 }
 
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
+	return readMCPResource(ctx, input, resourcecontext.TierBasic)
+}
+
+func readMCPResource(ctx context.Context, input getResourceInput, tier resourcecontext.ContextTier) (*mcp.CallToolResult, any, error) {
 	started := currentReadCache()
 	kind := resourceKindName(strings.ToLower(input.Kind), input.Group)
 	group := input.Group
@@ -1210,7 +1215,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
 	if !skipContext {
-		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic, issueSummary)
+		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, tier, issueSummary)
 
 		// State-derived advisory warnings (deletionTimestamp, external manager,
 		// terminating namespace, workload health-condition history, PVC stuck
@@ -1275,6 +1280,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 
 	result := map[string]any{"resource": resourceData}
+	if tier == resourcecontext.TierDiagnostic {
+		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected; an empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
+	}
 	if includes["issues"] {
 		attachRelatedIssueDetails(result, issueRows)
 	}

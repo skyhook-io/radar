@@ -810,8 +810,8 @@ type UncheckedSource struct {
 	// the gap is not limited to particular namespaces.
 	Namespaces []string `json:"namespaces,omitempty"`
 	// Subjects are resources whose own issues this gap may hide, when a
-	// check knows them; a per-resource answer reports the gap only for
-	// these. Internal: never serialized.
+	// check knows them. They supplement kind-wide inventory gaps when
+	// entries merge; they do not narrow those gaps. Never serialized.
 	Subjects []Ref `json:"-"`
 }
 

@@ -1797,11 +1797,13 @@ view adds one row for the ClusterQueue, which the LocalQueue rows name as
 their cause. A stopped (`Hold`, `HoldAndDrain`), terminating or recovered
 ClusterQueue raises nothing; neither does a LocalQueue with its own stop policy.
 
-Evidence on each row: the issue message is Kueue's own message for the deciding
-fact; a `kueue_admission` fact summarizes every classified axis (code, source,
-native reason) and links the Workload, whose status holds the full messages.
+On a run row, the issue message is Kueue's own message for the deciding fact;
+a `kueue_admission` fact summarizes every classified axis (code, source, native
+reason) and links the Workload, whose status holds the full messages. Queue rows
+carry the queue's native message or a Radar-composed explanation labelled as
+such, with queue and affected-run references when available.
 A rejected-check row adds a bounded sample: the AdmissionCheck that rejected
-the run, or the first the Workload lists (with its `Active` condition; Kueue
+the run, or the first by name among those the Workload lists (with its `Active` condition; Kueue
 records no generation for a Workload's check state, so its freshness is not
 established), and the newest retained ProvisioningRequest whose controller owner
 is that Workload incarnation, with its native outcome. A ProvisioningRequest is
@@ -1821,7 +1823,10 @@ list's `unchecked_sources` (`kueue`, `caller_access_denied`), and for the
 LocalQueue, each run's Workload and the controllers above it, in
 `/api/issues/resource`'s `unchecked_sources` and `get_resource`'s
 `issueSummary.unchecked`, so their empty answer reads "can't confirm", not
-"none". Links to runs, AdmissionChecks and ProvisioningRequests are kept only
+"none". List/search summaries qualify affected `issueCount` values with an
+`omitted` entry, retaining any findings that were readable. Findings also keeps
+these read gaps and a batch diagnosis's explicit runtime-collection limit visible.
+Links to runs, AdmissionChecks and ProvisioningRequests are kept only
 when the caller can open them, without counts. ClusterQueue rows appear only in
 answers not narrowed to namespaces. A queue row waits a minute after the queue
 (or its ClusterQueue) was created or its `Active` condition last changed, and
@@ -1839,9 +1844,13 @@ when Radar can't read them, the row says so and no source is marked unchecked.
 
 Not covered: a Workload Kueue never decides about (`no_decision` for as long
 as Kueue is down), a reason a newer Kueue adds (`unrecognized`), MultiKueue
-handoff, and queue position. `diagnose` does not accept batch kinds; agents
-get the same rows from `issues` and from `get_resource` on the run or the
-Workload (`relatedIssues`, beside its `scheduling` admission context).
+handoff, and queue position. `diagnose` accepts Job, JobSet, RayJob and Kueue Workload for cached resource
+evidence, canonical `relatedIssues` and resource events, sharing the
+`get_resource` read and authorization path. It explicitly collects no Pods,
+runtime logs or metrics; an empty Issues list does not establish runtime health.
+Follow the Workload reference for its `scheduling` admission context and Pod
+references for runtime diagnosis. The same rows are available through `issues`
+and `get_resource(include=issues)`.
 
 ### KubeRay
 

@@ -92,10 +92,10 @@ func fmtPodName(i int) string { return fmt.Sprintf("pod-%05d", i) }
 // the moment a user has two operators each shipping a kind named
 // "Cluster" in the same namespace.
 func TestIssueIndexKey_GroupAware(t *testing.T) {
-	idx := IssueIndex{}
+	idx := &IssueIndex{counts: map[string]int{}}
 	// Same kind+ns+name, different groups — must be independent buckets.
-	idx[issueIndexKey("", "Service", "prod", "api")] = 2
-	idx[issueIndexKey("serving.knative.dev", "Service", "prod", "api")] = 5
+	idx.counts[issueIndexKey("", "Service", "prod", "api")] = 2
+	idx.counts[issueIndexKey("serving.knative.dev", "Service", "prod", "api")] = 5
 
 	if got := idx.Count("", "Service", "prod", "api"); got != 2 {
 		t.Errorf("core Service count = %d, want 2 (Knative bucket bleeding through?)", got)
@@ -374,11 +374,11 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 // re-introduce the bug, so we additionally assert no cross-bucket leak.
 func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 	// Build two distinct indexes so we can tell which one was consulted.
-	namespacedIdx := IssueIndex{}
-	namespacedIdx[issueIndexKey("", "Pod", "prod", "api-7")] = 4
+	namespacedIdx := &IssueIndex{counts: map[string]int{}}
+	namespacedIdx.counts[issueIndexKey("", "Pod", "prod", "api-7")] = 4
 
-	clusterIdx := IssueIndex{}
-	clusterIdx[issueIndexKey("", "Node", "", "worker-1")] = 2
+	clusterIdx := &IssueIndex{counts: map[string]int{}}
+	clusterIdx.counts[issueIndexKey("", "Node", "", "worker-1")] = 2
 
 	// Topology is nil — managedBy is nil but issueCount dispatch is
 	// what we're pinning here.

@@ -239,13 +239,14 @@ func (p *CacheProvider) dynamicSyncGap(gvr schema.GroupVersionResource, namespac
 	return issuesapi.UncheckedReasonSyncPending
 }
 
-// UncheckedFor is the part of a compose's gaps that names the resource as a
-// subject, without the subject lists.
+// UncheckedFor projects subject-specific and applicable inventory gaps onto
+// one resource, without exposing the internal subject lists.
 func UncheckedFor(sources []issuesapi.UncheckedSource, group, kind, namespace, name string) []issuesapi.UncheckedSource {
 	wantGroup := resolveGroup(group, kind)
 	var out []issuesapi.UncheckedSource
 	for _, source := range sources {
-		if len(source.Subjects) == 0 && kueueInventoryGapCovers(source, resolveGroup(group, kind), kind) {
+		if kueueInventoryGapCovers(source, wantGroup, kind) {
+			source.Subjects = nil
 			out = append(out, source)
 			continue
 		}
