@@ -81,6 +81,8 @@ var kueueBrokenClusterQueueReasons = map[string]bool{
 	"CohortCycleDetected":                      true,
 }
 
+const kueueMissingClusterQueueAction = "Create the missing ClusterQueue, or resubmit affected runs through another LocalQueue targeting an existing ClusterQueue; LocalQueue.spec.clusterQueue is immutable."
+
 // LocalQueue Active=False reasons (Kueue's localqueue_controller.go).
 const (
 	kueueLocalQueueClusterQueueMissing  = "ClusterQueueDoesNotExist"
@@ -325,7 +327,7 @@ func kueueRunFindingFor(state resourcecontext.KueueAdmissionState) (kueueRunFind
 		return kueueRunFinding{
 			reason: ReasonKueueClusterQueueMissing, fact: state.Blocker, configuration: true,
 			cause:  "Kueue reports that the ClusterQueue this run's LocalQueue points to does not exist, or is being deleted.",
-			action: "Create the ClusterQueue, or point the LocalQueue's spec.clusterQueue at an existing one.",
+			action: kueueMissingClusterQueueAction,
 		}, true
 	case resourcecontext.KueueAdmissionInvalidWorkload:
 		return kueueRunFinding{
@@ -722,7 +724,7 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			issueReason = ReasonKueueClusterQueueMissing
 			message = fmt.Sprintf("Kueue reports ClusterQueue %s does not exist.", cqName)
 			cause = fmt.Sprintf("Kueue reports that ClusterQueue %s, which this LocalQueue points to, does not exist, so it admits no run submitted here.", cqName)
-			action = "Create the ClusterQueue, or point the LocalQueue's spec.clusterQueue at an existing one."
+			action = kueueMissingClusterQueueAction
 		case kueueLocalQueueClusterQueueInactive:
 			if !canReadClusterQueues {
 				// The ClusterQueue decides whether this is a stop or a fault;

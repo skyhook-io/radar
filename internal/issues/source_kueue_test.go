@@ -1230,3 +1230,33 @@ func TestKueueClusterQueueInventoryGapReachesItsOwnPage(t *testing.T) {
 		}
 	}
 }
+
+func TestKueueMissingClusterQueueActionRespectsImmutableTarget(t *testing.T) {
+	for _, queueVisible := range []bool{true, false} {
+		t.Run(fmt.Sprint(queueVisible), func(t *testing.T) {
+			job := kueueJob("team", "train")
+			w := ownedBy(kueueWorkload("team", "w", "q", kueueCondition("QuotaReserved", "False", "Inadmissible", "ClusterQueue gone doesn't exist", 1)), job)
+			objects := []*unstructured.Unstructured{job, w}
+			if queueVisible {
+				objects = append(objects, kueueLocalQueue("team", "q", "gone", "False", kueueLocalQueueClusterQueueMissing))
+			}
+			p := newFakeKueueProvider(objects...)
+			if !queueVisible {
+				p.gaps[kueueGroup+"/"+kueueLocalQueueKind] = issuesapi.UncheckedReasonSyncPending
+			}
+			rows := Compose(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
+			matched := false
+			for _, row := range rows {
+				if row.Reason == ReasonKueueClusterQueueMissing {
+					matched = true
+					if !strings.Contains(row.Action, "immutable") || !strings.Contains(row.Action, "resubmit affected runs") {
+						t.Fatalf("unsafe missing-queue remedy: %q", row.Action)
+					}
+				}
+			}
+			if !matched {
+				t.Fatal("missing ClusterQueue finding was not exercised")
+			}
+		})
+	}
+}
