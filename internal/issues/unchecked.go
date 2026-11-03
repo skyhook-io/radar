@@ -23,7 +23,8 @@ type uncheckedKey struct {
 }
 
 type uncheckedEntry struct {
-	kinds map[issuesapi.UncheckedKind]bool
+	kinds    map[issuesapi.UncheckedKind]bool
+	subjects map[Ref]bool
 	// whole is set when the gap couldn't be pinned to kinds, so listing the
 	// kinds that were pinned would understate it.
 	whole bool
@@ -51,6 +52,22 @@ func (u *uncheckedSet) add(source issuesapi.UncheckedSourceName, reason issuesap
 	}
 }
 
+// addFor records the gap as add does, naming the resources whose own issues
+// it may hide.
+func (u *uncheckedSet) addFor(source issuesapi.UncheckedSourceName, reason issuesapi.UncheckedReason, kind issuesapi.UncheckedKind, subjects []Ref) {
+	if u == nil {
+		return
+	}
+	u.add(source, reason, kind)
+	entry := u.entries[uncheckedKey{source: source, reason: reason}]
+	if entry.subjects == nil {
+		entry.subjects = map[Ref]bool{}
+	}
+	for _, ref := range subjects {
+		entry.subjects[ref] = true
+	}
+}
+
 // list returns the entries in a stable order, kinds sorted.
 func (u *uncheckedSet) list() []issuesapi.UncheckedSource {
 	if u == nil || len(u.entries) == 0 {
@@ -64,6 +81,12 @@ func (u *uncheckedSet) list() []issuesapi.UncheckedSource {
 				source.Kinds = append(source.Kinds, kind)
 			}
 		}
+		for ref := range entry.subjects {
+			source.Subjects = append(source.Subjects, ref)
+		}
+		slices.SortFunc(source.Subjects, func(a, b Ref) int {
+			return strings.Compare(resourceKey(a.Group, a.Kind, a.Namespace, a.Name), resourceKey(b.Group, b.Kind, b.Namespace, b.Name))
+		})
 		slices.SortFunc(source.Kinds, func(a, b issuesapi.UncheckedKind) int {
 			if c := strings.Compare(a.Kind, b.Kind); c != 0 {
 				return c
@@ -214,4 +237,20 @@ func (p *CacheProvider) dynamicSyncGap(gvr schema.GroupVersionResource, namespac
 		return issuesapi.UncheckedReasonSyncFailed
 	}
 	return issuesapi.UncheckedReasonSyncPending
+}
+
+// UncheckedFor is the part of a compose's gaps that names the resource as a
+// subject, without the subject lists.
+func UncheckedFor(sources []issuesapi.UncheckedSource, group, kind, namespace, name string) []issuesapi.UncheckedSource {
+	wantGroup := resolveGroup(group, kind)
+	var out []issuesapi.UncheckedSource
+	for _, source := range sources {
+		if slices.ContainsFunc(source.Subjects, func(ref Ref) bool {
+			return strings.EqualFold(ref.Kind, kind) && ref.Namespace == namespace && ref.Name == name && resolveGroup(ref.Group, ref.Kind) == wantGroup
+		}) {
+			source.Subjects = nil
+			out = append(out, source)
+		}
+	}
+	return out
 }

@@ -36,10 +36,11 @@ func (p *CacheProvider) kueueInventory(group, kind string, namespaces []string) 
 	if gap := p.dynamicSyncGap(gvr, scope); gap != "" {
 		return kueueInventory{Gap: gap}
 	}
+	// Read-only: the detector only reads these objects within this compose.
 	var items []*unstructured.Unstructured
 	switch {
 	case !apiResource.Namespaced:
-		list, err := p.dynamic.List(gvr, "")
+		list, err := p.dynamic.ListReadOnly(gvr, "")
 		if err != nil {
 			return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 		}
@@ -53,7 +54,7 @@ func (p *CacheProvider) kueueInventory(group, kind string, namespaces []string) 
 		items = list
 	default:
 		for _, ns := range namespaces {
-			list, err := p.dynamic.List(gvr, ns)
+			list, err := p.dynamic.ListReadOnly(gvr, ns)
 			if err != nil {
 				return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 			}
@@ -80,33 +81,36 @@ type cacheKueueRoots struct {
 	failed  bool
 }
 
-func (r *cacheKueueRoots) root(w *unstructured.Unstructured) (Ref, bool) {
+func (r *cacheKueueRoots) chain(w *unstructured.Unstructured) []Ref {
 	if r.failed || w == nil || w.GetUID() == "" {
-		return Ref{}, false
+		return nil
 	}
 	if r.view == nil {
 		session, err := k8s.BeginOwnershipRead(r.cache)
 		if err != nil {
 			r.failed = true
-			return Ref{}, false
+			return nil
 		}
 		r.session, r.view = session, ownership.NewView(session, ownership.Unrestricted())
 	}
 	answer := r.view.ControllerChain(resourceid.Ref{Group: kueueGroup, Kind: kueueWorkloadKind, Namespace: w.GetNamespace(), Name: w.GetName()})
-	return kueueChainRoot(answer, w)
+	return kueueChain(answer, w)
 }
 
 func (r *cacheKueueRoots) valid() bool {
 	return r.session == nil || r.session.ValidateCaches() == nil
 }
 
-// kueueChainRoot is the top of the chain read from the same Workload
+// kueueChain is the chain above the Workload, read from the same Workload
 // incarnation that was classified, so a Workload recreated under the same
-// name between the two reads is never given the other's root.
-func kueueChainRoot(answer ownership.ControllerChainAnswer, w *unstructured.Unstructured) (Ref, bool) {
+// name between the two reads is never given the other's run.
+func kueueChain(answer ownership.ControllerChainAnswer, w *unstructured.Unstructured) []Ref {
 	if !answer.Subject.Present() || answer.Subject.Read.Object.UID != w.GetUID() || answer.Cycle || answer.Truncated || len(answer.Chain) < 2 {
-		return Ref{}, false
+		return nil
 	}
-	top := answer.Chain[len(answer.Chain)-1]
-	return Ref{Group: top.Group, Kind: top.Kind, Namespace: top.Namespace, Name: top.Name}, true
+	out := make([]Ref, 0, len(answer.Chain)-1)
+	for _, ref := range answer.Chain[1:] {
+		out = append(out, Ref{Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name})
+	}
+	return out
 }

@@ -191,6 +191,10 @@ describe('issueSubjectState', () => {
   it('reads an empty answer as unconfirmed when RBAC withheld issues about it', () => {
     expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })
   })
+  it('reads an empty answer as unconfirmed when a check about it could not be made for the caller', () => {
+    const unchecked = [{ source: 'kueue', reason: 'caller_access_denied', kinds: [{ group: 'kueue.x-k8s.io', kind: 'ClusterQueue' }] }]
+    expect(issueSubjectState(subject, [], loaded({ unchecked_sources: unchecked }))).toEqual({ state: 'unconfirmed', why: "you can't read ClusterQueues, which this check needs" })
+  })
   it('reads an empty answer under limited visibility as unconfirmed, never none', () => {
     expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'degraded', impact: 'Pods are not readable.' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable (Pods are not readable)" })
     expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'limited' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable" })

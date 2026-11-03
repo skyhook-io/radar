@@ -21,7 +21,7 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// Compose FLAT (uncapped) then group: matching against the flat evidence —
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
-	flat := Compose(p, Filters{
+	flat, stats := ComposeWithStats(p, Filters{
 		SkipPodTemplateContext:  true,
 		Namespaces:              opts.Namespaces,
 		Limit:                   NoLimit,
@@ -32,6 +32,11 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 		AllowUnfilteredEvidence: opts.AllowUnfilteredEvidence,
 		OnEvidenceWithheld:      opts.OnEvidenceWithheld,
 	})
+	if opts.OnUnchecked != nil {
+		if gaps := UncheckedFor(stats.Unchecked, group, kind, namespace, name); len(gaps) > 0 {
+			opts.OnUnchecked(gaps)
+		}
+	}
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
 	// issues get coverage-gated incident_parent pointers — GroupIssues alone only
@@ -86,19 +91,6 @@ func Concerns(i Issue, group, kind, namespace, name string) bool {
 	}
 	return same(i.Group, i.Kind, i.Namespace, i.Name) ||
 		(i.Owner.Kind != "" && same(i.Owner.Group, i.Owner.Kind, i.Owner.Namespace, i.Owner.Name))
-}
-
-// Affects reports whether an issue about another subject names the resource
-// among the resources it affects (AffectedRefs), matched the way Concerns
-// matches.
-func Affects(i Issue, group, kind, namespace, name string) bool {
-	wantGroup := resolveGroup(group, kind)
-	for _, ref := range i.AffectedRefs {
-		if strings.EqualFold(ref.Kind, kind) && ref.Namespace == namespace && ref.Name == name && resolveGroup(ref.Group, ref.Kind) == wantGroup {
-			return true
-		}
-	}
-	return false
 }
 
 // RelatedIssuesFrom is the matching half of RelatedIssues over an

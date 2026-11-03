@@ -1774,7 +1774,7 @@ except for an inactive queue, which Radar settles by reading the queue.
 
 | Row | Subject | When | Category |
 |-----|---------|------|----------|
-| `KueueExceedsQuota`, `KueueNoMatchingFlavor`, `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it and is at least a minute old | `queue_admission_blocked` |
+| `KueueExceedsQuota`, `KueueNoMatchingFlavor`, `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it (RAD-811's `action_needed`) and is at least a minute old | `queue_admission_blocked` |
 | `KueueClusterQueueMissing` | the LocalQueue, or the run when no LocalQueue row explains it | Kueue reports the LocalQueue's ClusterQueue doesn't exist | `queue_admission_blocked` |
 | `KueueAdmissionCheckRejected` | the run | an AdmissionCheck rejected it, through Kueue's deactivation that follows (one row, one ID) | `queue_admission_blocked` |
 | `KueueRequeuingLimitExceeded`, `KueueMaximumExecutionTimeExceeded`, `KueueDeactivatedByKueue` | the run | Kueue deactivated it and recorded why | `batch_run_stopped` (the first two), `queue_admission_blocked` |
@@ -1808,12 +1808,21 @@ for a long time without becoming an Issue.
 Access: rows follow the caller's namespace access; a run row whose root the
 caller can't read falls back to the Workload. A LocalQueue or ClusterQueue
 row about a broken ClusterQueue needs permission to list ClusterQueues; for a
-caller without it, Radar reads no ClusterQueue, raises neither row (a stop and
-a fault would otherwise look different) and says so in `unchecked_sources`
-(`kueue`, `caller_access_denied`); the run's own Issues section counts the row
-as withheld. Links to runs, AdmissionChecks and ProvisioningRequests are kept
-only when the caller can open them, without counts. ClusterQueue rows appear
-only in answers not narrowed to namespaces.
+caller without it, Radar reads no ClusterQueue and raises neither row (a stop
+and a fault would otherwise look different). It says so instead: in the Issues
+list's `unchecked_sources` (`kueue`, `caller_access_denied`), and for the
+LocalQueue, each run's Workload and the controllers above it, in
+`/api/issues/resource`'s `unchecked_sources` and `get_resource`'s
+`issueSummary.unchecked`, so their empty answer reads "can't confirm", not
+"none". Links to runs, AdmissionChecks and ProvisioningRequests are kept only
+when the caller can open them, without counts. ClusterQueue rows appear only in
+answers not narrowed to namespaces. A queue row waits a minute after the queue
+was created or its `Active` condition last changed.
+
+Every page of a run finds its row: the Workload's, the run's root, and any
+controller between them (a CronJob's Job), and a queue row lists both the run
+and its Workload. ProvisioningRequests and AdmissionChecks only add evidence:
+when Radar can't read them, the row says so and no source is marked unchecked.
 
 Not covered: a Workload Kueue never decides about (`no_decision` for as long
 as Kueue is down), a reason a newer Kueue adds (`unrecognized`), MultiKueue

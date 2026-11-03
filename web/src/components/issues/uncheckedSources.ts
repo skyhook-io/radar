@@ -78,3 +78,14 @@ export function uncheckedSourceLines(sources: IssuesResponse["unchecked_sources"
   }
   return unknown ? [...known, UNKNOWN_SOURCE_LINE] : [...known];
 }
+
+/** Why an empty per-resource answer can't be read as "none", for the gaps that name the resource. */
+export function uncheckedSubjectWhy(sources: UncheckedSource[] | undefined): string | undefined {
+  const first = sources?.[0];
+  if (!first) return undefined;
+  const kinds = nameList([...new Set((first.kinds ?? []).map((k) => englishPlural(k.kind)))]);
+  if (first.reason === "caller_access_denied") {
+    return kinds ? `you can't read ${kinds}, which this check needs` : "you can't read what this check needs";
+  }
+  return kinds ? `${kinds} couldn't be checked` : "some checks couldn't run";
+}

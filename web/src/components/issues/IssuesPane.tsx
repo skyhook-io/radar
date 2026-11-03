@@ -25,7 +25,7 @@ import {
 import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
-import { uncheckedSourceLines } from "./uncheckedSources";
+import { uncheckedSourceLines, uncheckedSubjectWhy } from "./uncheckedSources";
 import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
@@ -145,6 +145,8 @@ export function issueSubjectState(
   if (withheld > 0) {
     return { state: "unconfirmed", why: `your permissions withhold ${withheld} ${withheld === 1 ? "issue" : "issues"} about it` };
   }
+  const uncheckedWhy = uncheckedSubjectWhy(data.unchecked_sources);
+  if (uncheckedWhy) return { state: "unconfirmed", why: uncheckedWhy };
   const visibility = data.visibility;
   if (visibility?.state === "degraded" || visibility?.state === "limited") {
     return {

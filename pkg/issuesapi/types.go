@@ -806,6 +806,10 @@ type UncheckedSource struct {
 	// read in the others, so issues outside them are complete. Absent means
 	// the gap is not limited to particular namespaces.
 	Namespaces []string `json:"namespaces,omitempty"`
+	// Subjects are resources whose own issues this gap may hide, when a
+	// check knows them; a per-resource answer reports the gap only for
+	// these. Internal: never serialized.
+	Subjects []Ref `json:"-"`
 }
 
 // UncheckedKind is a resource kind whose issues went unchecked.
