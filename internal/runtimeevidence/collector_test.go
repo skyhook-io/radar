@@ -289,3 +289,13 @@ func TestVaultPlaintextAgainstTLSIsUnavailable(t *testing.T) {
 		t.Fatal("tunnel not closed")
 	}
 }
+
+func TestNATSInterpretationTravelsWithResult(t *testing.T) {
+	result := NewCollector().Collect(t.Context(), nil, nil, evidence.NATS, "lab", "nats")
+	limits := strings.Join(result.Limitations, " ")
+	for _, caveat := range []string{"positions, not lag", "cannot establish a stall", "do not mean never active", "push consumer or non-leader replica"} {
+		if !strings.Contains(limits, caveat) {
+			t.Fatalf("missing agent-facing qualification %q: %v", caveat, result.Limitations)
+		}
+	}
+}

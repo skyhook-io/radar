@@ -91,6 +91,9 @@ func (c *Collector) CollectTarget(ctx context.Context, client kubernetes.Interfa
 	if adapter == evidence.Vault {
 		result.Limitations = append(result.Limitations, "HA connection reflects Vault's standby request-forwarding heartbeat; a missing report does not establish connectivity. A false removal flag does not prove cluster membership.")
 	}
+	if adapter == evidence.NATS {
+		result.Limitations = append(result.Limitations, "Sequences are positions, not lag; a snapshot cannot establish a stall. Missing activity times do not mean never active. Waiting pull requests are node-reported; zero may reflect a push consumer or non-leader replica.")
+	}
 	fail := func(reason string) Result { result.Reason = reason; return result }
 	ep, ok := endpointFor(adapter)
 	if !ok {

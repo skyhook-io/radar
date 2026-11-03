@@ -25,15 +25,15 @@ type NATSTotals struct {
 }
 
 type NATSConsumer struct {
-	Account                 string        `json:"account"`
-	Stream                  string        `json:"stream"`
-	Name                    string        `json:"name"`
-	Pending                 uint64        `json:"pending"`
-	AckPending              uint64        `json:"ackPending"`
-	Redelivered             uint64        `json:"redelivered"`
-	Delivered               *NATSSequence `json:"delivered,omitempty"`
-	AckFloor                *NATSSequence `json:"ackFloor,omitempty"`
-	OutstandingPullRequests *uint64       `json:"outstandingPullRequests,omitempty"`
+	Account             string        `json:"account"`
+	Stream              string        `json:"stream"`
+	Name                string        `json:"name"`
+	Pending             uint64        `json:"pending"`
+	AckPending          uint64        `json:"ackPending"`
+	Redelivered         uint64        `json:"redelivered"`
+	Delivered           *NATSSequence `json:"delivered,omitempty"`
+	AckFloor            *NATSSequence `json:"ackFloor,omitempty"`
+	WaitingPullRequests *uint64       `json:"waitingPullRequests,omitempty"`
 }
 
 type NATSSequence struct {
@@ -106,7 +106,7 @@ func parseNATS(body []byte) (*NATSFacts, error) {
 					var waiting *uint64
 					// Counts remain JSON numbers, so values outside JavaScript exact integer range are unavailable.
 					if json.Unmarshal(consumer.Waiting, &waiting) == nil && waiting != nil && *waiting <= 1<<53-1 {
-						item.OutstandingPullRequests = waiting
+						item.WaitingPullRequests = waiting
 					}
 					result.Consumers = append(result.Consumers, item)
 				}

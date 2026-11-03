@@ -45,7 +45,7 @@ export interface ApplicationEvidenceResult {
     nats?: {
       jetStreamEnabled: boolean
       totals?: { accounts: number; streams: number; consumers: number; messages: number }
-      consumers: { account: string; stream: string; name: string; pending: number; ackPending: number; redelivered: number; delivered?: NATSSequence; ackFloor?: NATSSequence; outstandingPullRequests?: number }[]
+      consumers: { account: string; stream: string; name: string; pending: number; ackPending: number; redelivered: number; delivered?: NATSSequence; ackFloor?: NATSSequence; waitingPullRequests?: number }[]
       coverage: string
       returnedAccounts: number
       returnedStreams: number

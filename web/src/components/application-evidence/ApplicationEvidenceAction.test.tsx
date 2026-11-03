@@ -68,15 +68,15 @@ describe('application observations', () => {
     expect(html).not.toContain('stuck')
   })
   it('preserves exact NATS positions and shows missing activity as unavailable', () => {
-    const facts: ApplicationEvidenceResult['facts'] = { nats: { jetStreamEnabled: true, coverage: 'node_reported', returnedAccounts: 1, returnedStreams: 1, returnedConsumers: 1, truncated: false, consumers: [{ account: '$G', stream: 'events', name: 'worker', pending: 5, ackPending: 0, redelivered: 0, delivered: { consumerSequence: '18446744073709551615', streamSequence: '9007199254740993' }, ackFloor: { consumerSequence: '0', streamSequence: '0', lastActive: '2026-11-03T01:44:18.902568436Z' }, outstandingPullRequests: 0 }] } }
+    const facts: ApplicationEvidenceResult['facts'] = { nats: { jetStreamEnabled: true, coverage: 'node_reported', returnedAccounts: 1, returnedStreams: 1, returnedConsumers: 1, truncated: false, consumers: [{ account: '$G', stream: 'events', name: 'worker', pending: 5, ackPending: 0, redelivered: 0, delivered: { consumerSequence: '18446744073709551615', streamSequence: '9007199254740993' }, ackFloor: { consumerSequence: '0', streamSequence: '0', lastActive: '2026-11-03T01:44:18.902568436Z' }, waitingPullRequests: 0 }] } }
     const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'nats', facts }} />)
     expect(html).toContain('18446744073709551615')
     expect(html).toContain('9007199254740993')
-    expect(html).toContain('2026-11-03T01:44:18.902568436Z')
+    expect(html).toContain(new Date('2026-11-03T01:44:18.902568436Z').toLocaleString())
     expect(html).toContain('Last delivery</dt><dd class="break-words">Unavailable')
-    expect(html).toContain('Waiting pull requests</dt><dd>0')
-    expect(html).toContain('(pull consumers only)')
-    expect(html).toContain('One snapshot cannot establish stalled progress')
+    expect(html).toContain('Waiting pull requests on this node</dt><dd>0')
+    expect(html).toContain('zero can also reflect a push consumer or non-leader replica')
+    expect(html).toContain('one snapshot cannot establish stalled progress')
     expect(html).not.toContain('never active')
     const unavailable = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, adapter: 'nats', outcome: 'unavailable', reason: 'endpoint_denied', facts }} />)
     expect(unavailable).not.toContain('Consumer progress')

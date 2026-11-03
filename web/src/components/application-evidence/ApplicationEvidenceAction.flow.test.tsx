@@ -219,7 +219,7 @@ it('copies exact RabbitMQ bytes and identity without an additional collection re
 })
 
 it('keeps NATS progress collapsed until requested without changing the four-column count table', () => {
-  act(() => root.render(<ApplicationEvidenceObservation result={{ adapter: 'nats', target: { namespace: 'demo', pod: 'nats-0' }, observedAt: '2026-11-03T01:44:19Z', source: 'selected_pod_endpoint', outcome: 'observed', limitations: [], facts: { nats: { jetStreamEnabled: true, coverage: 'node_reported', returnedAccounts: 1, returnedStreams: 1, returnedConsumers: 1, truncated: false, consumers: [{ account: '$G', stream: 'events', name: 'worker', pending: 0, ackPending: 5, redelivered: 0, delivered: { consumerSequence: '5', streamSequence: '5' }, ackFloor: { consumerSequence: '0', streamSequence: '0' }, outstandingPullRequests: 1 }] } } }} />))
+  act(() => root.render(<ApplicationEvidenceObservation result={{ adapter: 'nats', target: { namespace: 'demo', pod: 'nats-0' }, observedAt: '2026-11-03T01:44:19Z', source: 'selected_pod_endpoint', outcome: 'observed', limitations: [], facts: { nats: { jetStreamEnabled: true, coverage: 'node_reported', returnedAccounts: 1, returnedStreams: 1, returnedConsumers: 1, truncated: false, consumers: [{ account: '$G', stream: 'events', name: 'worker', pending: 0, ackPending: 5, redelivered: 0, delivered: { consumerSequence: '5', streamSequence: '5' }, ackFloor: { consumerSequence: '0', streamSequence: '0' }, waitingPullRequests: 1 }] } } }} />))
   const toggle = [...host.querySelectorAll('button')].find(item => item.textContent === 'Consumer progress')!
   expect(toggle.getAttribute('aria-expanded')).toBe('false')
   expect(host.querySelectorAll('th')).toHaveLength(4)
@@ -228,7 +228,7 @@ it('keeps NATS progress collapsed until requested without changing the four-colu
   const details = document.getElementById(toggle.getAttribute('aria-controls')!)!
   expect(details.textContent).toContain('Consumer 5 · Stream 5')
   expect(details.textContent).toContain('Ack floorConsumer 0 · Stream 0')
-  expect(details.textContent).toContain('Waiting pull requests1')
+  expect(details.textContent).toContain('Waiting pull requests on this node1')
   act(() => toggle.click())
   expect(toggle.getAttribute('aria-expanded')).toBe('false')
 })

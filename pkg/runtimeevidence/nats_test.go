@@ -9,11 +9,14 @@ import (
 
 func TestNATSCapturedProgress(t *testing.T) {
 	for _, tc := range []struct {
-		file, position string
-		active         bool
+		file, delivered, ackFloor    string
+		deliveryActive, ackActive    bool
+		pending, ackPending, waiting uint64
 	}{
-		{"nats-backlog.json", "0", false},
-		{"nats-recovered.json", "5", true},
+		{"nats-backlog.json", "0", "0", false, false, 5, 0, 0},
+		{"nats-recovered.json", "5", "5", true, true, 0, 0, 0},
+		{"nats-delivered.json", "5", "0", true, false, 0, 5, 0},
+		{"nats-pull-waiting.json", "5", "5", true, true, 0, 0, 1},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			body, err := os.ReadFile("testdata/" + tc.file)
@@ -24,14 +27,15 @@ func TestNATSCapturedProgress(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			consumer := facts.NATS.Consumers[0]
-			for _, seq := range []*NATSSequence{consumer.Delivered, consumer.AckFloor} {
-				if seq == nil || seq.ConsumerSequence != tc.position || seq.StreamSequence != tc.position || (seq.LastActive != "") != tc.active {
-					t.Fatalf("unexpected progress: %+v", seq)
-				}
+			c := facts.NATS.Consumers[0]
+			if c.Delivered == nil || c.Delivered.ConsumerSequence != tc.delivered || c.Delivered.StreamSequence != tc.delivered || (c.Delivered.LastActive != "") != tc.deliveryActive {
+				t.Fatalf("unexpected delivered: %+v", c.Delivered)
 			}
-			if consumer.OutstandingPullRequests == nil || *consumer.OutstandingPullRequests != 0 {
-				t.Fatalf("reported zero missing: %+v", consumer)
+			if c.AckFloor == nil || c.AckFloor.ConsumerSequence != tc.ackFloor || c.AckFloor.StreamSequence != tc.ackFloor || (c.AckFloor.LastActive != "") != tc.ackActive {
+				t.Fatalf("unexpected ack floor: %+v", c.AckFloor)
+			}
+			if c.WaitingPullRequests == nil || *c.WaitingPullRequests != tc.waiting || c.Pending != tc.pending || c.AckPending != tc.ackPending {
+				t.Fatalf("unexpected counts: %+v", c)
 			}
 		})
 	}
@@ -54,7 +58,7 @@ func TestNATSOptionalProgressPreservesBaseFacts(t *testing.T) {
 				t.Fatal(err)
 			}
 			c := facts.NATS.Consumers[0]
-			if c.Pending != 5 || facts.NATS.Coverage != "node_reported" || c.Delivered != nil || c.AckFloor != nil || c.OutstandingPullRequests != nil {
+			if c.Pending != 5 || facts.NATS.Coverage != "node_reported" || c.Delivered != nil || c.AckFloor != nil || c.WaitingPullRequests != nil {
 				t.Fatalf("invalid optional detail affected facts: %+v", c)
 			}
 		})
@@ -74,7 +78,7 @@ func TestNATSProgressExactPositionsAndIndependentFields(t *testing.T) {
 	if c.AckFloor == nil || c.AckFloor.ConsumerSequence != "" || c.AckFloor.StreamSequence != "0" || c.AckFloor.LastActive != "2026-11-03T01:44:18.902568436Z" {
 		t.Fatalf("valid independent fields lost: %+v", c.AckFloor)
 	}
-	if c.OutstandingPullRequests == nil || *c.OutstandingPullRequests != 1 {
+	if c.WaitingPullRequests == nil || *c.WaitingPullRequests != 1 {
 		t.Fatalf("pull request count lost: %+v", c)
 	}
 	output, err := json.Marshal(facts)
@@ -83,5 +87,13 @@ func TestNATSProgressExactPositionsAndIndependentFields(t *testing.T) {
 	}
 	if !strings.Contains(string(output), `"consumerSequence":"18446744073709551615"`) || strings.Contains(string(output), "secret-sentinel") {
 		t.Fatalf("unsafe serialized evidence: %s", output)
+	}
+}
+
+func TestNATSDuplicateProgressKeysRemainUnavailable(t *testing.T) {
+	body := strings.Replace(natsBody(1, 1, 1, 1, 5), `"num_pending":5`, `"num_pending":5,"delivered":{"consumer_seq":1,"consumer_seq":2}`, 1)
+	facts, err := Parse(NATS, 200, []byte(body))
+	if err != UnexpectedShape || facts != (Facts{}) {
+		t.Fatalf("ambiguous progress leaked facts: %+v, %v", facts, err)
 	}
 }
