@@ -1872,7 +1872,9 @@ summary/compact minification may omit them. No note is not an assurance of safet
 The notes explain sticky active-model and failure history (stopping clears them),
 the child-derived `observedGeneration` (not comparable with the root's generation),
 mode-specific model transitions, unfilled failed-copy/canary-model fields, and
-canary readiness/declared traffic. A last failure may be historical; it is not
+canary readiness/declared traffic. Knative `totalCopies` covers only ready Pods of
+the latest-created predictor revision, excludes older serving revisions and omits
+zero. It cannot establish service-wide capacity. A last failure may be historical; it is not
 necessarily historical. Standard-mode `UpToDate`/`Loaded` can precede a new rollout
 Pod starting. Confirming what serves requires Pod/route/request evidence.
 

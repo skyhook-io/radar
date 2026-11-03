@@ -75,4 +75,3 @@ status:
       message: 'storage initializer: object gs://example-bucket/models/fraud/2.0 not found'
     copies:
       failedCopies: 0
-      totalCopies: 1

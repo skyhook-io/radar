@@ -163,6 +163,7 @@ const (
 	noteTransitionStd     = "Derived from the newest predictor Pod, falling back to the predictor Deployment's availability; UpToDate and Loaded can be reported while a new rollout's Pod has not started."
 	noteTransitionKnative = "Uses the latest created revision's Pods and Knative conditions; Loaded requires root Ready and matching latest-created/latest-ready revisions."
 	noteCopies            = "failedCopies is never written (always 0); totalCopies counts ready predictor Pods, not model copies."
+	noteCopiesKnative     = "failedCopies is never written (always 0); totalCopies counts ready Pods of the latest-created predictor revision only, excludes older serving revisions, and omits zero; it is not service-wide capacity or model copies."
 	noteCanaryReady       = "True when the canary's Deployment has at least one available replica."
 	noteCanaryTraffic     = "The declared spec value, not measured traffic."
 	noteCanaryModelStatus = "Never written for canaries; it does not describe the canary's model."
@@ -197,7 +198,12 @@ func kserveFieldNotes(status map[string]any, mode string) []resourcecontext.Serv
 			add("status.modelStatus.lastFailureInfo", noteLastFailureInfo)
 		}
 		if _, ok := modelStatus["copies"]; ok {
-			add("status.modelStatus.copies", noteCopies)
+			switch mode {
+			case "Knative", "Serverless":
+				add("status.modelStatus.copies", noteCopiesKnative)
+			case "Standard", "RawDeployment":
+				add("status.modelStatus.copies", noteCopies)
+			}
 		}
 	}
 	canaries, _ := status["canaryStatuses"].([]any)

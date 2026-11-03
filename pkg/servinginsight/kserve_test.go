@@ -281,6 +281,9 @@ func checkKServeSnapshotNotes(t *testing.T, file string, notes []resourcecontext
 		if n.Note == "" {
 			t.Fatalf("empty note: %+v", n)
 		}
+		if file == "knative-canary-failed-revision.synthetic.yaml" && n.Field == "status.modelStatus.copies" && n.Note != "failedCopies is never written (always 0); totalCopies counts ready Pods of the latest-created predictor revision only, excludes older serving revisions, and omits zero; it is not service-wide capacity or model copies." {
+			t.Fatalf("Knative revision count scope: %s", n.Note)
+		}
 	}
 	if !reflect.DeepEqual(got, fields) {
 		t.Fatalf("notes: got %v want %v", got, fields)
