@@ -346,6 +346,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A disruption before the container runs must not decide the outcome; the
+  # container's own exit code still does.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -387,6 +394,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A disruption before the container runs must not decide the outcome; the
+  # container's own exit code still does.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:

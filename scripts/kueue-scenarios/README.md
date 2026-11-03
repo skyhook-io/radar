@@ -15,7 +15,7 @@ beside whatever is already there.
 ## Quick start
 
 ```bash
-# Prerequisites: bash, kubectl, jq, curl, and an identity that can:
+# Prerequisites: bash, kubectl 1.24+, jq, curl, and an identity that can:
 #   get CRDs; create and delete namespaces, Jobs, cluster-scoped Kueue objects,
 #   ClusterRoles and ClusterRoleBindings; create LocalQueues, ServiceAccounts and
 #   RoleBindings in the fixture namespaces; grant what the viewer's ClusterRoles
@@ -44,8 +44,9 @@ Everything is named `<prefix>-…` (default prefix `kq-<your user name>`; `--pre
 `KUEUE_SCENARIOS_PREFIX` to change it, at most 32 characters) and labeled
 `radar.skyhook.io/kueue-scenarios=<prefix>` plus `radar.skyhook.io/fixture`
 (`--fixture`, default `kueue-scenarios`). Several people can run the lane on one
-cluster: the default prefix is per user, and on a shared prefix they share one
-copy (`up` says so when it resumes existing fixtures).
+cluster: the default prefix is per user (from the local user name, so a generic
+account such as `ubuntu` or `runner` should pass `--prefix`), and on a shared
+prefix they share one copy (`up` says so when it resumes existing fixtures).
 
 While the scenarios are up, their admitted pause Pods hold about 850m CPU and
 a few hundred MiB of memory on the cluster.
@@ -139,7 +140,7 @@ identities.
 
 ```bash
 ./scripts/kueue-scenarios.sh kubeconfig --kubeconfig "$K" --out /tmp/kueue-viewer.kubeconfig
-P=kq-$(id -un)   # or the --prefix you used
+P=$(bash -c 'source scripts/kueue-scenarios.sh; echo "$PREFIX"')   # the default prefix; or the --prefix you used
 ./radar --kubeconfig /tmp/kueue-viewer.kubeconfig --kubeconfig-dir "" --port 9331 --no-browser \
   --namespaces $P-quota,$P-busy,$P-busy-hidden,$P-held,$P-missing-flavor,$P-lq-denied,$P-empty,$P-lifecycle,$P-drain,$P-ineligible
 RADAR_URL=http://127.0.0.1:9331 ./scripts/kueue-scenarios.sh verify-radar --identity viewer --kubeconfig "$K"

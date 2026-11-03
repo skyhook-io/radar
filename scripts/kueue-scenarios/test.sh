@@ -5,10 +5,11 @@
 
 set -euo pipefail
 
-# The script looks for a kubectl binary before calling its kc wrapper; give it one
-# that can't reach anything, so the tests need only bash and jq.
+# The script checks for a kubectl binary (and its patch --subresource flag) before
+# calling its kc wrapper; give it one that can't reach anything, so the tests
+# need only bash and jq.
 STUB_BIN="$(mktemp -d)"
-printf '#!/bin/sh\nexit 1\n' >"${STUB_BIN}/kubectl"
+printf '#!/bin/sh\n[ "$1 $2" = "patch --help" ] && echo "--subresource=status" && exit 0\nexit 1\n' >"${STUB_BIN}/kubectl"
 chmod +x "${STUB_BIN}/kubectl"
 PATH="${STUB_BIN}:${PATH}"
 

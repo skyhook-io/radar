@@ -74,7 +74,7 @@ kc() {
   local args=()
   [ -n "${KUBECONFIG_ARG}" ] && args+=(--kubeconfig "${KUBECONFIG_ARG}")
   [ -n "${CONTEXT_ARG}" ] && args+=(--context "${CONTEXT_ARG}")
-  kubectl "${args[@]}" --request-timeout=20s "$@"
+  kubectl ${args[@]+"${args[@]}"} --request-timeout=20s "$@"
 }
 
 render() {
@@ -90,6 +90,7 @@ ns() { printf '%s-%s' "${PREFIX}" "$1"; }
 check_args() {
   command -v kubectl >/dev/null || fail "kubectl not found"
   command -v jq >/dev/null || fail "jq not found"
+  kubectl patch --help 2>/dev/null | grep -q -- '--subresource' || fail "kubectl 1.24 or later is required (patch --subresource)"
   [[ "${PREFIX}" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] || fail "--prefix must be a DNS label of at most 32 characters"
   [[ "${FIXTURE}" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$ ]] || fail "--fixture must be a valid label value"
   [ -z "${KUBECONFIG_ARG}" ] || [ -r "${KUBECONFIG_ARG}" ] || fail "cannot read kubeconfig ${KUBECONFIG_ARG}"
@@ -227,13 +228,13 @@ list_json() {
 workload_json() { # workload_json <namespace> <job>
   local jobs job uid list
   jobs="$(list_json jobs.batch "$1")" || return 2
-  job="$(jq -c --arg n "$2" 'first(.items[] | select(.metadata.name == $n)) // empty' <<<"${jobs}")"
+  job="$(jq -c --arg n "$2" 'first(.items[] | select(.metadata.name == $n)) // empty' <<<"${jobs}")" || return 2
   [ -n "${job}" ] || return 3
   [ "$(jq -r --arg l "${OWNER_LABEL}" '.metadata.labels[$l] // ""' <<<"${job}")" = "${PREFIX}" ] || return 3
   uid="$(jq -r '.metadata.uid' <<<"${job}")"
   list="$(list_json workloads.kueue.x-k8s.io "$1")" || return 2
   jq -c --arg uid "${uid}" \
-    'first(.items[] | select(any(.metadata.ownerReferences[]?; .uid == $uid and .kind == "Job" and .controller == true))) // {}' <<<"${list}"
+    'first(.items[] | select(any(.metadata.ownerReferences[]?; .uid == $uid and .kind == "Job" and .controller == true))) // {}' <<<"${list}" || return 2
 }
 
 wl_is() { # wl_is <namespace> <job> <jq predicate over the Workload>
@@ -410,7 +411,8 @@ cmd_up() {
   done
   wait_for "quota/fits admitted" has_cond "$(ns quota)" fits Admitted True
   wait_for "lq-denied/admitted admitted" has_cond "$(ns lq-denied)" admitted Admitted True
-  wait_for "lifecycle/finished finished" has_cond "$(ns lifecycle)" finished Finished True Succeeded
+  # Kueue never recreates the Workload of a finished Job, so these can't be repaired in place.
+  wait_for "lifecycle/finished finished (if this times out, run down and up)" has_cond "$(ns lifecycle)" finished Finished True Succeeded
   wait_for "lifecycle/failed finished" has_cond "$(ns lifecycle)" failed Finished True Failed
 
   step "Busy queue: admit on-spare on ${PREFIX}-spare, then remove that flavor from the queue"
@@ -431,7 +433,7 @@ cmd_up() {
 
   step "Drain queue: a PodsReadyTimeout eviction, then HoldAndDrain"
   local policy
-  policy="$(kc get clusterqueues.kueue.x-k8s.io "${PREFIX}-drain" -o jsonpath='{.spec.stopPolicy}')"
+  policy="$(kc get clusterqueues.kueue.x-k8s.io "${PREFIX}-drain" -o jsonpath='{.spec.stopPolicy}')" || fail "cannot read ClusterQueue ${PREFIX}-drain"
   if [ "${policy}" = "None" ] || [ -z "${policy}" ]; then
     wait_for "drain/drained admitted" has_cond "$(ns drain)" drained Admitted True
     wait_for "drain/pods-ready-timeout admitted" has_cond "$(ns drain)" pods-ready-timeout Admitted True
