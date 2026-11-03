@@ -7747,7 +7747,7 @@ func (b *Builder) createPodOwnerEdges(
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s-earlier-run", jobSetID, targetID),
 						Source: jobSetID, Target: targetID, Type: EdgeUses,
-						Label: "Earlier Job run (same name)",
+						Label: "Same Job name",
 					})
 				}
 				continue

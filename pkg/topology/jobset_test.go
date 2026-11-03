@@ -256,7 +256,7 @@ func TestJobSetPodGroupsSplitByJobIncarnation(t *testing.T) {
 		t.Fatalf("earlier failed run unexplained: %+v", earlier)
 	}
 	context := edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-"+earlier.ID+"-earlier-run")
-	if context == nil || context.Type != EdgeUses || context.Label != "Earlier Job run (same name)" || context.SkipIfKindVisible != "" {
+	if context == nil || context.Type != EdgeUses || context.Label != "Same Job name" || context.SkipIfKindVisible != "" {
 		t.Fatalf("missing contextual earlier run link: %+v", context)
 	}
 }
