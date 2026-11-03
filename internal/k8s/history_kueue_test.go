@@ -251,6 +251,27 @@ func TestKueueWorkloadDiff_MessageRewrites(t *testing.T) {
 	}
 }
 
+func TestKueueWorkloadDiff_GranularQuotaMessageRewrites(t *testing.T) {
+	for _, reason := range []string{"WaitingForQuota", "ExceedsMaxQuota"} {
+		t.Run(reason, func(t *testing.T) {
+			base := kueueWorkload(v1beta2, withConditions(kueueCondition{"QuotaReserved", "False", reason, pendingMsg}))
+			churn := kueueWorkload(v1beta2, withConditions(kueueCondition{"QuotaReserved", "False", reason, strings.Replace(pendingMsg, "50m", "100m", 1)}))
+			if d := ComputeDiff("Workload", base, churn); d != nil {
+				t.Fatalf("quantity-only retry recorded: %+v", d)
+			}
+			for _, changed := range []*unstructured.Unstructured{
+				kueueWorkload(v1beta2, withConditions(kueueCondition{"QuotaReserved", "False", "NoMatchingFlavor", pendingMsg})),
+				kueueWorkload(v1beta2, withConditions(kueueCondition{"QuotaReserved", "False", reason, strings.Replace(pendingMsg, "flavor default", "flavor gpu-a100", 1)})),
+				kueueWorkload(v1beta2, withConditions(kueueCondition{"QuotaReserved", "False", reason, "Workload namespace doesn't match ClusterQueue selector"})),
+			} {
+				if d := ComputeDiff("Workload", base, changed); d == nil {
+					t.Fatal("meaningful quota evidence change was dropped")
+				}
+			}
+		})
+	}
+}
+
 func TestKueueWorkloadDiff_ReasonOnlyAndLongMessage(t *testing.T) {
 	long := strings.Repeat("no quota left ", 40)
 	old := kueueWorkload(v1beta2, withConditions(kueueCondition{"QuotaReserved", "False", "Pending", "a"}))

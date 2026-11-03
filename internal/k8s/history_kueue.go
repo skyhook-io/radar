@@ -329,7 +329,7 @@ func (d *statusDiff) conditions(oldU, newU *unstructured.Unstructured, summarize
 		if !messageChanged {
 			continue
 		}
-		if !signalChanged && newU.GetKind() == "Workload" && typ == "QuotaReserved" && o.status == "False" && o.reason == "Pending" &&
+		if !signalChanged && newU.GetKind() == "Workload" && typ == "QuotaReserved" && o.status == "False" && (o.reason == "Pending" || o.reason == "WaitingForQuota" || o.reason == "ExceedsMaxQuota") &&
 			strings.HasPrefix(o.message, "couldn't assign flavors to pod set ") && strings.HasPrefix(n.message, "couldn't assign flavors to pod set ") && maskQuantities(o.message) == maskQuantities(n.message) {
 			continue
 		}
