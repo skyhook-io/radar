@@ -490,6 +490,15 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		if unchecked == 0 || len(got.Workloads.Items) != 4 {
 			t.Fatalf("over budget: %d unchecked namespaces, members %v", unchecked, memberNames(got.Workloads))
 		}
+		// Paging spends no fresh checks, so the next page reads the same
+		// scope and is accepted, however many namespaces stay unchecked.
+		before := reviews.Load()
+		first := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1", "carol", ""), http.StatusOK)
+		afterFirst := reviews.Load()
+		decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(first.Workloads.Next), "carol", ""), http.StatusOK)
+		if reviews.Load() != afterFirst || afterFirst-before > readscope.MaxAccessChecks {
+			t.Fatalf("reviews: %d on the first page, %d on the next", afterFirst-before, reviews.Load()-afterFirst)
+		}
 	})
 
 	t.Run("a viewer of every namespace with Workload access in some is checked namespace by namespace", func(t *testing.T) {
@@ -536,6 +545,26 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 			if !row.LocalQueueUnread || row.Submission != nil || !slices.Equal(row.Membership, []kueuequeues.Kind{kueuequeues.Reservation}) {
 				t.Fatalf("row claims to know its LocalQueue: %+v", row)
 			}
+		}
+	})
+
+	t.Run("a later page reads the first page's scope, or is refused", func(t *testing.T) {
+		env := setup(t, grants{getCQ: true, workloads: all, localQueues: all})
+		first := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads?limit=1", "alice", ""), http.StatusOK)
+		if first.Workloads.Next == "" {
+			t.Fatal("no second page")
+		}
+		next := "/api/kueue/clusterqueues/cq/workloads?limit=1&cursor=" + url.QueryEscape(first.Workloads.Next)
+		decodeQueueWorkloads(t, env.authGet(t, next, "alice", ""), http.StatusOK)
+		// alice loses Workload access in team-b between pages: the next page
+		// would sit under the first page's counts, so it is refused.
+		env.srv.permCache.Get("alice", nil).SetCanI("list", kueueGroup, "workloads", "team-b", false)
+		response := env.authGet(t, next, "alice", "")
+		defer response.Body.Close()
+		var body map[string]string
+		_ = json.NewDecoder(response.Body).Decode(&body)
+		if response.StatusCode != http.StatusBadRequest || body["error_code"] != kueueCursorInvalid {
+			t.Fatalf("changed read = %d %v", response.StatusCode, body)
 		}
 	})
 

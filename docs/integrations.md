@@ -1784,11 +1784,13 @@ Workloads and inadmissible Workloads make them differ too.
 Before Radar connects, both routes answer the usual 503 `{error}`;
 afterwards a failed request is `{error, error_code, coverage?}`, and a cursor
 issued for another list (another queue, a re-created queue, other filters or
-another cluster context) is refused with 400 `kueue_cursor_invalid`, after
-which a client reads from the first page again.
+another cluster context, or a read that no longer matches the first page's)
+is refused with 400 `kueue_cursor_invalid`, after which a client reads from
+the first page again. A later page decides access only from the answers the
+first page's permission checks cached, so it reads the same scope.
 
 Rows are paged by key: unfinished Workloads first, finished ones after
-(Kueue keeps them until their owner goes), each by namespace and name so that
+(by default Kueue keeps them until their owner goes), each by namespace and name so that
 no order is mistaken for admission order. A cursor belongs to its queue (by UID), filter
 and cluster context. A member that keeps its key is never returned twice while a list is paged;
 a member that joins behind the cursor appears when the list is read again

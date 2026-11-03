@@ -154,19 +154,9 @@ describe('paging', () => {
     expect(html).toContain('Refresh')
   })
 
-  it('stops paging when a later page could place members differently, though its coverage reads the same', () => {
-    const first = response(members([row('a')], complete, { next: 'x' }))
-    const lostLocalQueues = response(members([row('b')], complete, { submissionUnresolved: { count: 1, names: ['team-a'] } }))
-    expect(render({ pages: [first, lostLocalQueues], onRetry: () => {} })).toContain('what Radar could read changed while paging')
-    const otherScope = response(members([row('b')], yours))
-    expect(render({ pages: [first, otherScope], onRetry: () => {} })).toContain('what Radar could read changed while paging')
-  })
-
-  it('stops paging when access changed between pages', () => {
-    const first = response(members([row('a')], complete, { next: 'x' }))
-    const narrowed = response(members([row('b')], partial))
-    const html = render({ pages: [first, narrowed], hasMore: true, onLoadMore: () => {}, onRetry: () => {} })
-    expect(html).toContain('Could not read the next page: what Radar could read changed while paging')
+  it('dims the previous filter\'s rows and offers no Load more while the new filter loads', () => {
+    const html = render({ pages: [response(members([row('a')], complete, { next: 'x' }))], hasMore: true, onLoadMore: () => {}, stale: true })
+    expect(html).toContain('aria-busy="true"')
     expect(html).not.toContain('Load more')
   })
 
