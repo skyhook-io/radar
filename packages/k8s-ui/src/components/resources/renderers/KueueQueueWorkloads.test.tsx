@@ -126,7 +126,7 @@ describe('scenarios', () => {
 
   it('never implies admission order and says how many of the matching rows are shown', () => {
     const html = render({ pages: [response(members([row('a'), row('b')], complete, { matching: 5, next: 'x' }))], hasMore: true, onLoadMore: () => {} })
-    expect(html).toContain('Showing 2 of 5 · sorted by namespace and name, not admission order')
+    expect(html).toContain('Showing 2 of 5 · sorted by namespace and name, finished last; not admission order')
     expect(html).toContain('Load more')
   })
 

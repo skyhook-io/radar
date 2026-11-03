@@ -58,6 +58,8 @@ type Member struct {
 	LocalQueueUnread bool
 	// ReservedIn is the ClusterQueue the Workload reports its admission in.
 	ReservedIn string
+	// Finished members sort after the others (see Key).
+	Finished bool
 }
 
 // Has reports whether the member belongs in kind's way.
@@ -147,11 +149,21 @@ func identity(w *unstructured.Unstructured) string {
 	return w.GetNamespace() + "/" + w.GetName()
 }
 
-// Key orders members: namespace, then name, then UID. Alphabetical on
-// purpose, so that no order of the list is mistaken for the order Kueue
-// admits Workloads in.
+// Key orders members: unfinished before finished, then namespace, name and
+// UID. Alphabetical on purpose within each, so that no order of the list is
+// mistaken for the order Kueue admits Workloads in; Kueue keeps finished
+// Workloads until their owner goes, so they would otherwise bury the rest.
 func Key(m Member) string {
-	return strings.Join([]string{m.Workload.GetNamespace(), m.Workload.GetName(), string(m.Workload.GetUID())}, "\x00")
+	rank := "0"
+	if m.Finished {
+		rank = "1"
+	}
+	return strings.Join([]string{rank, m.Workload.GetNamespace(), m.Workload.GetName(), string(m.Workload.GetUID())}, "\x00")
+}
+
+// Sort orders members by Key, after their Finished flags are set.
+func Sort(members []Member) {
+	slices.SortFunc(members, compare)
 }
 
 func compare(a, b Member) int {
