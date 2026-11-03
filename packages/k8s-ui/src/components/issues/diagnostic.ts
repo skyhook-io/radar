@@ -29,7 +29,7 @@ export function diagnosticFactLabel(type: string): string {
     case 'evicted_from_node':
       return 'Evicted by node';
     case 'owner_rollup':
-      return 'Grouped from pods';
+      return 'Grouped resources';
     case 'selected_backend_issue':
       return 'Backend pods';
     case 'service_config_mismatch':
