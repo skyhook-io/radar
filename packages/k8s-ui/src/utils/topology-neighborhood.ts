@@ -355,7 +355,7 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
         const source = nodeById.get(sourceId)
         const fanout = limitedFanouts.get(sourceId)
         if (fanout?.members) {
-          return `Topology view: showing ${JOBSET_MEMBER_LIMIT} of ${fanout.total} member Jobs of ${source?.kind ?? 'JobSet'}/${source?.name ?? sourceId}, failed and active first. The Overview lists every member.`
+          return `Topology view: showing ${JOBSET_MEMBER_LIMIT} of ${fanout.total} member Jobs of ${source?.kind ?? 'JobSet'}/${source?.name ?? sourceId}, failed and active first. Find any member in the Overview's member list.`
         }
         const activeNote = fanout && fanout.activeTotal > fanout.activeShown ? ` showing the ${fanout.activeShown - 1} newest and oldest of ${fanout.activeTotal} active runs plus representative completed runs` : ' showing active and representative completed runs'
         return `Topology view:${activeNote} from ${fanout?.total ?? BATCH_RUN_FANOUT_LIMIT} retained ${fanout?.kind ?? 'batch'} runs for ${source?.kind ?? 'workload'}/${source?.name ?? sourceId}. Use Run history for the full retained set.`

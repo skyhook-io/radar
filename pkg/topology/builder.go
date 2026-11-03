@@ -362,7 +362,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	jobToCronJob := make(map[string]string) // jobKey -> cronJobID (for shortcut edges)
 	scaledJobIDs := make(map[string]string)
 	jobToScaledJob := make(map[string]string) // jobKey -> scaledJobID (for shortcut edges)
-	jobToJobSet := make(map[types.UID]string) // member Job UID -> JobSet ID (for shortcut edges)
+	jobIncarnation := jobIncarnations{uids: map[string]types.UID{}, jobSets: map[types.UID]string{}}
 	workflowIDs := make(map[string]string)
 	cronWorkflowIDs := make(map[string]string)
 	workflowToCronWorkflow := make(map[string]string) // workflowKey -> cronWorkflowID (for shortcut edges)
@@ -2934,6 +2934,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		jobID := fmt.Sprintf("job/%s/%s", job.Namespace, job.Name)
 		jobIDs[job.Namespace+"/"+job.Name] = jobID
+		jobIncarnation.uids[job.Namespace+"/"+job.Name] = job.UID
 
 		// Determine status
 		status := getJobStatus(job)
@@ -2978,7 +2979,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Type:   EdgeManages,
 			})
 			if job.UID != "" {
-				jobToJobSet[job.UID] = jobSetID
+				jobIncarnation.jobSets[job.UID] = jobSetID
 			}
 		}
 
@@ -3276,7 +3277,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !opts.MatchesNamespaceFilter(pod.Namespace) {
 				continue
 			}
-			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, workflowIDs)
+			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobIncarnation, workflowIDs)
 			if workloadID == "" {
 				addPodHealth(orphanByNS, pod.Namespace, pod)
 				orphanRestarts[pod.Namespace] += ComputePodRestarts(pod)
@@ -3312,7 +3313,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					nodes = append(nodes, podNode)
 
 					// Connect to owner (resources view specific)
-					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobToJobSet, workflowIDs, workflowToCronWorkflow)...)
+					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobIncarnation, workflowIDs, workflowToCronWorkflow)...)
 				}
 			} else {
 				// Large group - create PodGroup
@@ -3343,7 +3344,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						podRoleByKey[p.Namespace+"/"+p.Name] = role
 					}
 					for _, ref := range p.OwnerReferences {
-						ownerKey := p.Namespace + "/" + ref.Kind + "/" + ref.Name
+						ownerKey := podOwnerKey(p.Namespace, ref)
 						if _, ok := ownerReps[ownerKey]; !ok {
 							ownerReps[ownerKey] = p
 						}
@@ -3365,7 +3366,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				// below and pod_grouping.go's "ownerKey" on each pod.
 				ownerKeyToSourceIDs := map[string][]string{}
 				for ownerKey, p := range ownerReps {
-					for _, e := range b.createPodOwnerEdges(p, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobToJobSet, workflowIDs, workflowToCronWorkflow) {
+					for _, e := range b.createPodOwnerEdges(p, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobIncarnation, workflowIDs, workflowToCronWorkflow) {
 						ownerKeyToSourceIDs[ownerKey] = append(ownerKeyToSourceIDs[ownerKey], e.Source)
 						if !seenEdgeID[e.ID] {
 							seenEdgeID[e.ID] = true
@@ -7500,6 +7501,7 @@ func (b *Builder) resolvePodWorkloadID(
 	replicaSetToDeployment map[string]string,
 	replicaSetToRollout map[string]string,
 	jobIDs map[string]string,
+	jobs jobIncarnations,
 	workflowIDs map[string]string,
 ) string {
 	if workflowName := pod.Labels["workflows.argoproj.io/workflow"]; workflowName != "" {
@@ -7545,7 +7547,7 @@ func (b *Builder) resolvePodWorkloadID(
 			}
 			return ""
 		case "Job":
-			if jobID, ok := jobIDs[ownerKey]; ok {
+			if jobID, ok := jobIDs[ownerKey]; ok && jobs.current(ownerKey, ownerRef) {
 				return jobID
 			}
 			return ""
@@ -7612,7 +7614,7 @@ func (b *Builder) createPodOwnerEdges(
 	jobIDs map[string]string,
 	jobToCronJob map[string]string,
 	jobToScaledJob map[string]string,
-	jobToJobSet map[types.UID]string,
+	jobs jobIncarnations,
 	workflowIDs map[string]string,
 	workflowToCronWorkflow map[string]string,
 ) []Edge {
@@ -7736,7 +7738,7 @@ func (b *Builder) createPodOwnerEdges(
 				Type:   EdgeManages,
 			})
 		case "Job":
-			if ownerID, ok := jobIDs[ownerKey]; ok {
+			if ownerID, ok := jobIDs[ownerKey]; ok && jobs.current(ownerKey, ownerRef) {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
 					Source: ownerID,
@@ -7762,10 +7764,7 @@ func (b *Builder) createPodOwnerEdges(
 						SkipIfKindVisible: string(KindJob),
 					})
 				}
-				// Keyed by the member Job's UID, not its name, so a Pod left
-				// over from an earlier Job of the same name doesn't attach to
-				// the current JobSet.
-				if jobSetID, ok := jobToJobSet[ownerRef.UID]; ok && ownerRef.UID != "" {
+				if jobSetID, ok := jobs.jobSets[ownerRef.UID]; ok && ownerRef.UID != "" {
 					edges = append(edges, Edge{
 						ID:                fmt.Sprintf("%s-to-%s-shortcut", jobSetID, targetID),
 						Source:            jobSetID,

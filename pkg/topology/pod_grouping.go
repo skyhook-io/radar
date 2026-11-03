@@ -258,7 +258,7 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 		// which pod goes with which owner.
 		if len(pod.OwnerReferences) > 0 {
 			ref := pod.OwnerReferences[0]
-			detail["ownerKey"] = pod.Namespace + "/" + ref.Kind + "/" + ref.Name
+			detail["ownerKey"] = podOwnerKey(pod.Namespace, ref)
 		}
 		podDetails = append(podDetails, detail)
 	}

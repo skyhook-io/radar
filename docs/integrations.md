@@ -1908,7 +1908,8 @@ scoped to one Job (live) or a role/all current members (bounded snapshots with s
 attribution and read failures). Historical goodput and archived logs are not collected.
 
 **Topology:** the resources view draws every `jobset.x-k8s.io` JobSet as a root, including
-one with no Jobs yet. Its status comes from the same lifecycle as the status badge and
+one with no Jobs yet. Only `v1alpha2` is interpreted: a cluster serving JobSets at another
+version shows them with unknown status, without their Jobs, and with a topology warning. Its status comes from the same lifecycle as the status badge and
 execution context: only a failed JobSet is unhealthy; starting and recreating are degraded;
 pending, active, suspended and completed are neutral; a JobSet whose controller hasn't
 reported yet is unknown. The node shows that state and the number of Jobs its spec declares,

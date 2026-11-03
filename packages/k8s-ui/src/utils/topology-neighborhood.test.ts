@@ -539,6 +539,6 @@ describe('JobSet member cap', () => {
     expect(out.nodes.filter((n) => n.kind === 'Pod')).toHaveLength(24)
     // Other things the JobSet owns aren't capped as members.
     expect(ids.has('workload/ml/big')).toBe(true)
-    expect(out.warnings).toEqual(['Topology view: showing 24 of 40 member Jobs of JobSet/big, failed and active first. The Overview lists every member.'])
+    expect(out.warnings).toEqual(['Topology view: showing 24 of 40 member Jobs of JobSet/big, failed and active first. Find any member in the Overview\'s member list.'])
   })
 })

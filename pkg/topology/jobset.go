@@ -7,6 +7,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/jobset"
 )
@@ -38,13 +39,20 @@ func (b *Builder) addJobSetNodes(nodes []Node, warnings []string, opts BuildOpti
 		log.Printf("WARNING [topology] Failed to list JobSets: %v", err)
 		warnings = append(warnings, fmt.Sprintf("Failed to list JobSets: %v", err))
 	}
+	uninterpreted := ""
 	for _, item := range items {
 		ns := item.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
 			continue
 		}
+		if !jobset.Supported(item) {
+			uninterpreted = item.GetAPIVersion()
+		}
 		roots[ns+"/"+item.GetName()] = item
 		nodes = append(nodes, jobSetNode(item))
+	}
+	if uninterpreted != "" {
+		warnings = append(warnings, fmt.Sprintf("JobSets are served as %s, which Radar doesn't interpret: they show with unknown status and without their Jobs.", uninterpreted))
 	}
 	return nodes, warnings, roots
 }
@@ -114,4 +122,30 @@ func (roots jobSetRoots) controllerOf(job *batchv1.Job) (*unstructured.Unstructu
 		return nil, false
 	}
 	return root, true
+}
+
+// jobIncarnations tells the drawn Job apart from an earlier Job of the same
+// name: a JobSet recreates its member Jobs under the same names, and the
+// earlier Job's Pods can linger while they terminate.
+type jobIncarnations struct {
+	uids    map[string]types.UID // namespace/name -> drawn Job's UID
+	jobSets map[types.UID]string // member Job UID -> JobSet node ID
+}
+
+// current reports whether ref names the drawn Job under ownerKey. An unknown
+// UID on either side can't contradict it.
+func (j jobIncarnations) current(ownerKey string, ref metav1.OwnerReference) bool {
+	uid := j.uids[ownerKey]
+	return uid == "" || ref.UID == "" || uid == ref.UID
+}
+
+// podOwnerKey names the owner a Pod in a PodGroup belongs to. A Job owner
+// includes its UID, so a group holding Pods of two incarnations of a Job keeps
+// them apart.
+func podOwnerKey(namespace string, ref metav1.OwnerReference) string {
+	key := namespace + "/" + ref.Kind + "/" + ref.Name
+	if ref.Kind == "Job" && ref.UID != "" {
+		key += "/" + string(ref.UID)
+	}
+	return key
 }

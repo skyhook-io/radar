@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -200,6 +201,56 @@ func TestJobSetPodShortcutsFollowExactMemberJob(t *testing.T) {
 	}
 	if edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-job/ml/train-workers-0") == nil {
 		t.Fatal("missing JobSet → Job edge")
+	}
+	// With Jobs shown, the visible path is JobSet → Job → Pod: the earlier
+	// Job's Pod must not hang off the current Job either.
+	if edgeByID(topo.Edges, "job/ml/train-workers-0-to-pod/ml/train-workers-0-abc") == nil {
+		t.Fatal("missing Job → Pod edge for the current Job's Pod")
+	}
+	for _, e := range topo.Edges {
+		if e.Target == "pod/ml/train-workers-0-old" && e.Type == EdgeManages {
+			t.Fatalf("earlier Job's Pod linked: %+v", e)
+		}
+	}
+}
+
+// In a PodGroup, an earlier incarnation's Pod must not be the one that
+// decides the group's owner edges.
+func TestJobSetPodGroupWithEarlierIncarnationKeepsCurrentEdges(t *testing.T) {
+	root := testJobSetRoot("ml", "train", "jobset-uid", nil, nil)
+	provider := &mockProvider{jobs: []*batchv1.Job{memberJob("ml", "train-workers-0", "job-current", jobSetOwnerRef("train", "jobset-uid"))}}
+	// The earlier incarnation's Pod sorts first.
+	provider.pods = append(provider.pods, jobPod("ml", "train-workers-0-aaa-old", "train-workers-0", "job-earlier"))
+	for i := 0; i < 4; i++ {
+		provider.pods = append(provider.pods, jobPod("ml", fmt.Sprintf("train-workers-0-b%d", i), "train-workers-0", "job-current"))
+	}
+	opts := DefaultBuildOptions()
+	opts.MaxIndividualPods = 2
+	topo := buildJobSetTopology(t, provider, jobSetTestDynamic(root), opts)
+
+	var group *Node
+	for i := range topo.Nodes {
+		if topo.Nodes[i].Kind == KindPodGroup {
+			group = &topo.Nodes[i]
+		}
+	}
+	if group == nil {
+		t.Fatalf("no PodGroup: %+v", topo.Nodes)
+	}
+	if edgeByID(topo.Edges, "job/ml/train-workers-0-to-"+group.ID) == nil {
+		t.Fatalf("current Job lost its PodGroup edge: %+v", topo.Edges)
+	}
+	if edgeByID(topo.Edges, "jobset/ml/train/jobset.x-k8s.io-to-"+group.ID+"-shortcut") == nil {
+		t.Fatalf("JobSet lost its PodGroup shortcut: %+v", topo.Edges)
+	}
+	for _, pd := range group.Data["pods"].([]map[string]any) {
+		_, linked := pd["ownerIds"]
+		if pd["name"] == "train-workers-0-aaa-old" && linked {
+			t.Fatalf("earlier incarnation's Pod resolved to the current Job: %+v", pd)
+		}
+		if pd["name"] != "train-workers-0-aaa-old" && !linked {
+			t.Fatalf("current Pod has no owner: %+v", pd)
+		}
 	}
 }
 
@@ -430,3 +481,32 @@ func TestJobSetUnderUndrawnTrainJobIsOneRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestJobSetUninterpretedVersionWarns(t *testing.T) {
+	beta := schema.GroupVersionResource{Group: "jobset.x-k8s.io", Version: "v1beta1", Resource: "jobsets"}
+	root := testJobSetRoot("ml", "train", "jobset-uid", nil, map[string]any{"terminalState": "Failed"})
+	root.SetAPIVersion("jobset.x-k8s.io/v1beta1")
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{beta},
+		kinds:     map[schema.GroupVersionResource]string{beta: "JobSet"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{beta: {root}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	provider := &mockProvider{jobs: []*batchv1.Job{memberJob("ml", "train-0", "job-uid", metav1.OwnerReference{
+		APIVersion: "jobset.x-k8s.io/v1beta1", Kind: "JobSet", Name: "train", UID: "jobset-uid", Controller: ptrTo(true),
+	})}}
+	topo := buildJobSetTopology(t, provider, dynamic, DefaultBuildOptions())
+
+	node := nodeByID(topo.Nodes, "jobset/ml/train/jobset.x-k8s.io")
+	if node == nil || node.Status != StatusUnknown {
+		t.Fatalf("uninterpreted JobSet = %+v, want an unknown-status node", node)
+	}
+	if targets := managesTargets(topo, node.ID); len(targets) != 0 {
+		t.Fatalf("uninterpreted JobSet manages %v", targets)
+	}
+	if !slices.ContainsFunc(topo.Warnings, func(w string) bool { return strings.Contains(w, "jobset.x-k8s.io/v1beta1") }) {
+		t.Fatalf("no warning names the uninterpreted version: %v", topo.Warnings)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
