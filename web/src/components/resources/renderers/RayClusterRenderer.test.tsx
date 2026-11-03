@@ -4,7 +4,6 @@ import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { RayClusterRenderer } from './RayClusterRenderer'
-import { logsContainer } from '../../logs/RayClusterLogsTab'
 const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewLogs: true, opened: [] as any[], support: 'supported' as string }))
 vi.mock('../../../api/client', () => ({
   ApiError: class ApiError extends Error { constructor(message: string, public status: number) { super(message) } },
@@ -53,24 +52,4 @@ describe('RayCluster host evidence', () => {
     const html = renderToStaticMarkup(<RayClusterRenderer data={root} />)
     expect(mock.calls[0][2]).toBe('')
     expect(html).toContain('RayCluster runtime Pods'); expect(html).toContain('v1.15')
-  })
-  it('opens a Pod whose init containers finished on its first application container, not a later container', () => {
-    expect(logsContainer({ name: 'p', ready: true, containers: ['init-a', 'init-b', 'ray-worker', 'log-shipper'], containerStatuses: [{ name: 'init-a', init: true, ready: true, restartCount: 0 }, { name: 'init-b', init: true, ready: true, restartCount: 0 }] })).toBe('ray-worker')
-  })
-  it('opens a worker stuck waiting on the head in its running init container', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Pending', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [{ name: 'wait-gcs-ready', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('wait-gcs-ready')
-  })
-  it('prefers a crashing application container over an unready native sidecar', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 4 }] })).toBe('ray-worker')
-  })
-  it('opens a running but unready application, not an unready native sidecar', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('ray-worker')
-  })
-  it('opens the application container of a finished Pod even when its native sidecar is unready', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['istio-proxy', 'ray-worker'], containerStatuses: [{ name: 'istio-proxy', init: true, ready: false, restartCount: 0 }, { name: 'ray-worker', ready: false, restartCount: 0 }] })).toBe('ray-worker')
-  })
-  it('leaves the container choice to the viewer when statuses are not reported yet', () => {
-    expect(logsContainer({ ...worker, containerStatuses: undefined })).toBeUndefined()
-    expect(logsContainer({ name: 'p', ready: true, containers: ['main'], containerStatuses: [{ name: 'main', ready: true, restartCount: 0 }] })).toBe('main')
-  })
-})
+  })})

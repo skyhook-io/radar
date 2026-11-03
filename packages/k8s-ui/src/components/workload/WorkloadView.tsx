@@ -2182,6 +2182,7 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'clusterworkflowtemplates',
   'scaledjobs',
   'jobsets',
+  'rayclusters',
   'clusters',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
@@ -2198,6 +2199,10 @@ export function supportsLogsWithoutPods(
   if (normalizedKind === 'jobs') return isCoreBatchJob(kind, group)
   if (normalizedKind === 'jobsets') {
     return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
+  }
+  // A KubeRay RayCluster's tab reads the Pods it owns now, not recorded ones.
+  if (normalizedKind === 'rayclusters') {
+    return apiVersion ? apiVersion === 'ray.io/v1' : group === 'ray.io'
   }
   // A CloudNativePG Cluster's instance Pods are its children, not related
   // Pods, and its logs are resolved server-side from the Cluster itself.

@@ -17,7 +17,7 @@ vi.mock('@skyhook-io/k8s-ui', () => ({
   RadarUpgradeNote: ({ requirement }: any) => <div>upgrade:{requirement.feature} {requirement.minimumVersion}</div>,
 }))
 const { ApiError } = await import('../../api/client') as any
-const { RayClusterLogsTab, isKubeRayCluster } = await import('./RayClusterLogsTab')
+const { RayClusterLogsTab, isKubeRayCluster, logsContainer } = await import('./RayClusterLogsTab')
 
 const history = [{ kind: 'Pod', namespace: 'ml', name: 'deleted-worker' }, { kind: 'Pod', namespace: 'ml', name: 'cluster-head' }]
 const started = (name: string, init = false, ready = true) => ({ name, init, ready, restartCount: 0 })
@@ -53,7 +53,7 @@ describe('RayClusterLogsTab', () => {
     state.query = { data: { ...owned, total: 250, truncated: true } }
     const html = render()
     expect(html).toContain('Showing the 2 least healthy of 250 Pods')
-    expect(html).toContain('Choosing a worker group under Runtime Pods on Overview narrows the list there')
+    expect(html).toContain('Runtime Pods on Overview can narrow the list to the head or one worker group')
   })
 
   it('falls back to the recorded Pods with the reason when the current list is denied', () => {
@@ -70,6 +70,15 @@ describe('RayClusterLogsTab', () => {
     const html = render()
     expect(html).toContain('pods:cluster-head,cluster-worker-b')
     expect(html).not.toContain('Current Pods unavailable')
+    expect(html).toContain('Pod list not refreshed: Showing the last list Radar read. Cluster connection changed')
+  })
+
+  it('opens the deep-linked container only on a Pod that has it', () => {
+    state.query = { data: owned }
+    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-worker-b" onSelectPod={() => {}} initialContainer="ray-head" />)
+    expect(state.tab.initialContainer).toBe('wait-gcs-ready')
+    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-head" onSelectPod={() => {}} initialContainer="ray-head" />)
+    expect(state.tab.initialContainer).toBe('ray-head')
   })
 
   it('asks for a newer Radar instead of requesting a list it cannot serve', () => {
@@ -107,5 +116,24 @@ describe('RayClusterLogsTab', () => {
     expect(isKubeRayCluster('RayCluster', 'ray.io', 'ray.io/v1alpha1')).toBe(false)
     expect(isKubeRayCluster('RayCluster', 'example.io', 'example.io/v1')).toBe(false)
     expect(isKubeRayCluster('RayJob', 'ray.io', 'ray.io/v1')).toBe(false)
+  })
+})
+
+describe('logsContainer', () => {
+  const status = (name: string, extra: Record<string, unknown> = {}) => ({ name, ready: false, restartCount: 0, ...extra })
+  it('opens a Pending worker in the regular init container it waits on, past a started native sidecar', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] })).toBe('wait-gcs-ready')
+  })
+  it('opens the regular init container that failed in a Failed Pod', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['setup', 'ray-worker'], containerStatuses: [status('setup', { init: true }), status('ray-worker')] })).toBe('setup')
+  })
+  it('opens the application of a running Pod, never an unready native sidecar', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['proxy', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('ray-worker')] })).toBe('ray-worker')
+  })
+  it('opens the application of a Failed Pod whose init containers finished', () => {
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('setup', { init: true, ready: true }), status('ray-worker')] })).toBe('ray-worker')
+  })
+  it('leaves the choice to the viewer when no status is reported', () => {
+    expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] })).toBeUndefined()
   })
 })

@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { RayClusterRenderer as BaseRenderer, type RayClusterPodSelection } from '@skyhook-io/k8s-ui/components/resources/renderers/RayClusterRenderer'
 import type { ResourceRef, WorkloadPodInfo } from '@skyhook-io/k8s-ui'
-import { ApiError, useRadarFeature, useWorkloadPods } from '../../../api/client'
+import { useRadarFeature, useWorkloadPods } from '../../../api/client'
 import { useNamespacedCapabilities } from '../../../contexts/CapabilitiesContext'
 import { useOpenLogs } from '../../dock'
-import { logsContainer } from '../../logs/RayClusterLogsTab'
+import { logsContainer, rayClusterPodsError } from '../../logs/RayClusterLogsTab'
 
 export function RayClusterRenderer(props: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
   return <RayClusterEvidence key={props.data.metadata.uid} {...props} />
@@ -25,5 +25,5 @@ function RayClusterEvidence({ data, onNavigate }: { data: any; onNavigate?: (ref
     containers: pod.containers,
     containerName: logsContainer(pod),
   })
-  return <BaseRenderer data={data} onNavigate={onNavigate} selection={selection} onSelectPods={setSelection} podEvidence={query.data} podsLoading={query.isLoading} podsError={query.error instanceof ApiError && query.error.status === 400 && support !== 'supported' ? 'This Radar may not list a RayCluster\'s Pods; Radar v1.15 and later do.' : query.error?.message} onOpenPodLogs={canViewLogs ? openPodLogs : undefined} podsUpgrade={support === 'unsupported' ? upgrade : null} />
+  return <BaseRenderer data={data} onNavigate={onNavigate} selection={selection} onSelectPods={setSelection} podEvidence={query.data} podsLoading={query.isLoading} podsError={rayClusterPodsError(query.error, support)} onOpenPodLogs={canViewLogs ? openPodLogs : undefined} podsUpgrade={support === 'unsupported' ? upgrade : null} />
 }

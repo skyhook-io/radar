@@ -1770,6 +1770,8 @@ export interface ImageMetadata {
 export interface WorkloadPodContainerInfo {
   name: string
   init?: boolean
+  /** An init container with restartPolicy Always. Absent from older Radars. */
+  sidecar?: boolean
   ready: boolean
   restartCount: number
 }
