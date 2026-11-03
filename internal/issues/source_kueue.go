@@ -516,14 +516,15 @@ func kueueObjectActiveText(kind, name string, u *unstructured.Unstructured) stri
 	if u == nil {
 		return fmt.Sprintf("%s %s does not exist.", kind, name)
 	}
+	label := kind + " " + name
 	if controller, _, _ := unstructured.NestedString(u.Object, "spec", "controllerName"); controller != "" {
-		kind += " (controller " + controller + ")"
+		label += " (controller " + controller + ")"
 	}
 	status, reason, message, current := kueueActive(u)
 	if status == "" {
-		return fmt.Sprintf("%s %s reports no Active condition.", kind, name)
+		return label + " reports no Active condition."
 	}
-	text := fmt.Sprintf("%s %s: Active=%s", kind, name, status)
+	text := fmt.Sprintf("%s: Active=%s", label, status)
 	if reason != "" {
 		text += " (" + reason + ")"
 	}
