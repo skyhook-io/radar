@@ -14,7 +14,7 @@ type RabbitMQFacts struct {
 	MemoryAlarm          bool    `json:"memoryAlarm"`
 	DiskAvailableBytes   *uint64 `json:"diskAvailableBytes,omitempty"`
 	DiskWatermarkBytes   *uint64 `json:"diskWatermarkBytes,omitempty"`
-	ResidentMemoryBytes  *uint64 `json:"residentMemoryBytes,omitempty"`
+	MemoryUsedBytes      *uint64 `json:"memoryUsedBytes,omitempty"`
 	MemoryWatermarkBytes *uint64 `json:"memoryWatermarkBytes,omitempty"`
 }
 
@@ -84,7 +84,7 @@ func parseRabbitMQ(body []byte) (*RabbitMQFacts, error) {
 		DiskAlarm: disk, MemoryAlarm: memory,
 		DiskAvailableBytes:   readBytes("rabbitmq_disk_space_available_bytes"),
 		DiskWatermarkBytes:   readBytes("rabbitmq_disk_space_available_limit_bytes"),
-		ResidentMemoryBytes:  readBytes("rabbitmq_process_resident_memory_bytes"),
+		MemoryUsedBytes:      readBytes("rabbitmq_process_resident_memory_bytes"),
 		MemoryWatermarkBytes: readBytes("rabbitmq_resident_memory_limit_bytes"),
 	}, nil
 }

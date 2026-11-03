@@ -2,22 +2,17 @@ package runtimeevidence
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
 
 func TestRabbitMQResourceValues(t *testing.T) {
-	body := alarms + `
-# TYPE rabbitmq_disk_space_available_bytes gauge
-rabbitmq_disk_space_available_bytes 15277850624
-# TYPE rabbitmq_disk_space_available_limit_bytes gauge
-rabbitmq_disk_space_available_limit_bytes 50000000
-# TYPE rabbitmq_process_resident_memory_bytes gauge
-rabbitmq_process_resident_memory_bytes 134975488
-# TYPE rabbitmq_resident_memory_limit_bytes gauge
-rabbitmq_resident_memory_limit_bytes 2412409651
-`
-	facts, reason := Parse(RabbitMQ, 200, []byte(body))
+	body, err := os.ReadFile("testdata/rabbitmq-4.3.4-metrics.prom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, reason := Parse(RabbitMQ, 200, body)
 	if reason != nil || facts.RabbitMQ == nil {
 		t.Fatalf("Parse = %+v, %s", facts, reason)
 	}
@@ -26,10 +21,10 @@ rabbitmq_resident_memory_limit_bytes 2412409651
 		got  *uint64
 		want uint64
 	}{
-		"disk":             {got.DiskAvailableBytes, 15277850624},
-		"disk watermark":   {got.DiskWatermarkBytes, 50000000},
-		"resident memory":  {got.ResidentMemoryBytes, 134975488},
-		"memory watermark": {got.MemoryWatermarkBytes, 2412409651},
+		"disk":                 {got.DiskAvailableBytes, 15277850624},
+		"disk watermark":       {got.DiskWatermarkBytes, 50000000},
+		"RabbitMQ memory used": {got.MemoryUsedBytes, 134975488},
+		"memory watermark":     {got.MemoryWatermarkBytes, 2412409651},
 	} {
 		if pair.got == nil || *pair.got != pair.want {
 			t.Errorf("%s = %v, want %d", name, pair.got, pair.want)
@@ -68,7 +63,7 @@ func TestRabbitMQOptionalBytesDoNotEraseAlarms(t *testing.T) {
 				t.Fatalf("Parse = %+v, %s", facts, reason)
 			}
 			got := facts.RabbitMQ
-			if !got.DiskAlarm || got.MemoryAlarm || got.ResidentMemoryBytes == nil || *got.ResidentMemoryBytes != 128 {
+			if !got.DiskAlarm || got.MemoryAlarm || got.MemoryUsedBytes == nil || *got.MemoryUsedBytes != 128 {
 				t.Fatalf("unrelated evidence lost: %+v", got)
 			}
 			if (got.DiskAvailableBytes == nil) != (tc.want == nil) || tc.want != nil && *got.DiskAvailableBytes != *tc.want {

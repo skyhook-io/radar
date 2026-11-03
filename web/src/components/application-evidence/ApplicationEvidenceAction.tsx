@@ -32,7 +32,7 @@ const unavailableReasons: Record<string, string> = {
   collection_cancelled: 'Collection was cancelled or timed out.',
   response_too_large: 'The endpoint response exceeded the collection size limit.',
   missing_alarm_metrics: 'The response did not include the required RabbitMQ alarm metrics.',
-  invalid_alarm_metric: 'The endpoint returned an invalid alarm value.',
+  invalid_alarm_metric: 'The endpoint returned invalid RabbitMQ metrics.',
   ambiguous_alarm_metric: 'The endpoint returned conflicting alarm values.',
   unexpected_shape: 'The response did not match the supported application format.',
   unexpected_http_status: 'The endpoint returned an unsupported HTTP status.',
@@ -163,13 +163,13 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
     {rabbitmq && <>
       <dl className="mt-3 grid grid-cols-2 gap-2">
         <dt>Disk alarm</dt><dd>{rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd>
-        <dt>Free disk</dt><dd>{rabbitmq.diskAvailableBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskAvailableBytes)}</dd>
-        <dt>Disk alarm below</dt><dd>{rabbitmq.diskWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskWatermarkBytes)}</dd>
+        <dt>Free disk</dt><dd title={rabbitmq.diskAvailableBytes === undefined ? undefined : `${rabbitmq.diskAvailableBytes} bytes`}>{rabbitmq.diskAvailableBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskAvailableBytes)}</dd>
+        <dt>Disk alarm below</dt><dd title={rabbitmq.diskWatermarkBytes === undefined ? undefined : `${rabbitmq.diskWatermarkBytes} bytes`}>{rabbitmq.diskWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.diskWatermarkBytes)}</dd>
         <dt>Memory alarm</dt><dd>{rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd>
-        <dt>Resident memory</dt><dd>{rabbitmq.residentMemoryBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.residentMemoryBytes)}</dd>
-        <dt>Memory alarm watermark</dt><dd>{rabbitmq.memoryWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.memoryWatermarkBytes)}</dd>
+        <dt>Memory used (RabbitMQ)</dt><dd title={rabbitmq.memoryUsedBytes === undefined ? undefined : `${rabbitmq.memoryUsedBytes} bytes`}>{rabbitmq.memoryUsedBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.memoryUsedBytes)}</dd>
+        <dt>Memory alarm above</dt><dd title={rabbitmq.memoryWatermarkBytes === undefined ? undefined : `${rabbitmq.memoryWatermarkBytes} bytes`}>{rabbitmq.memoryWatermarkBytes === undefined ? 'Unknown' : formatMemoryBytes(rabbitmq.memoryWatermarkBytes)}</dd>
       </dl>
-      <p className="mt-2 text-xs text-theme-text-secondary">Values and alarms are reported by RabbitMQ. Its memory alarm may use a different accounting method than resident memory. Unknown values were absent or could not be interpreted.</p>
+      <p className="mt-2 text-xs text-theme-text-secondary">Measurements are RabbitMQ’s periodic statistics and can lag the alarm state. Unknown values were absent or could not be interpreted.</p>
       <p className="mt-2 text-xs text-theme-text-secondary">A disk or memory alarm on another node can block publishers across the cluster.</p>
     </>}
     {vault && <dl className="mt-3 grid grid-cols-2 gap-2">

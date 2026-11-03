@@ -92,6 +92,9 @@ func TestHTTPBoundaries(t *testing.T) {
 			if (res.Facts != nil) != (tc.reason == "") {
 				t.Fatal("facts on unavailable or missing on observed")
 			}
+			if !strings.Contains(strings.Join(res.Limitations, " "), "can lag the alarm state") {
+				t.Fatal("RabbitMQ statistics caveat missing from exported evidence")
+			}
 			if !closed.Load() || hits.Load() != 1 {
 				t.Fatal("tunnel cleanup or redirect boundary failed")
 			}

@@ -32,7 +32,7 @@ export interface ApplicationEvidenceResult {
       memoryAlarm: boolean
       diskAvailableBytes?: number
       diskWatermarkBytes?: number
-      residentMemoryBytes?: number
+      memoryUsedBytes?: number
       memoryWatermarkBytes?: number
     }
     vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean; haConnectionHealthy?: boolean; removedFromCluster?: boolean }

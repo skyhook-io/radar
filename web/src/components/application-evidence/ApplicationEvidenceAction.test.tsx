@@ -21,15 +21,15 @@ describe('application observations', () => {
   it('shows reported resource values without inferring alarms or percentages', () => {
     const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, facts: { rabbitmq: {
       diskAlarm: false, memoryAlarm: true, diskAvailableBytes: 0, diskWatermarkBytes: 50 * 1024 * 1024,
-      residentMemoryBytes: 128 * 1024 * 1024, memoryWatermarkBytes: 512 * 1024 * 1024,
+      memoryUsedBytes: 128 * 1024 * 1024, memoryWatermarkBytes: 512 * 1024 * 1024,
     } } }} />)
-    expect(html).toContain('Free disk</dt><dd>0 B')
-    expect(html).toContain('Disk alarm below</dt><dd>50 MiB')
-    expect(html).toContain('Resident memory</dt><dd>128 MiB')
-    expect(html).toContain('Memory alarm watermark</dt><dd>512 MiB')
+    expect(html).toContain('Free disk</dt><dd title="0 bytes">0 B')
+    expect(html).toContain('Disk alarm below</dt><dd title="52428800 bytes">50 MiB')
+    expect(html).toContain('Memory used (RabbitMQ)</dt><dd title="134217728 bytes">128 MiB')
+    expect(html).toContain('Memory alarm above</dt><dd title="536870912 bytes">512 MiB')
     expect(html).toContain('Disk alarm</dt><dd>Not reported')
     expect(html).toContain('Memory alarm</dt><dd>Reported')
-    expect(html).toContain('different accounting method')
+    expect(html).toContain('can lag the alarm state')
     expect(html).not.toContain('%')
   })
   it('keeps absent measurements unknown while preserving alarms and handles large exact values', () => {

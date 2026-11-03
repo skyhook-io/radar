@@ -86,7 +86,7 @@ func (c *Collector) CollectTarget(ctx context.Context, client kubernetes.Interfa
 	namespace, pod := target.Namespace, target.Pod
 	result := Result{Adapter: adapter, Target: Target{Namespace: namespace, Pod: pod}, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Source: "selected_pod_endpoint", Outcome: "unavailable", Limitations: []string{"One selected Pod endpoint only; unavailable evidence is not absence of a problem.", "Image and Pod identity checks do not attest endpoint contents; a same-name Pod replacement can be contacted before the final identity check.", "Plaintext default endpoint only; credentials, custom ports and TLS endpoints are not supported."}}
 	if adapter == evidence.RabbitMQ {
-		result.Limitations = append(result.Limitations, "Alarms describe this node only; an alarm on another node can block publishers across the cluster.")
+		result.Limitations = append(result.Limitations, "Alarms describe this node only; an alarm on another node can block publishers across the cluster.", "Disk/memory measurements are periodic RabbitMQ statistics and can lag the alarm state; use the reported alarms, not a comparison of measurements, to identify this node’s resource alarms. Missing measurements are unknown.")
 	}
 	if adapter == evidence.Vault {
 		result.Limitations = append(result.Limitations, "HA connection reflects Vault's standby request-forwarding heartbeat; a missing report does not establish connectivity. A false removal flag does not prove cluster membership.")
