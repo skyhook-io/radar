@@ -394,6 +394,32 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionWaitingForPreemption,
 		},
 		{
+			name: "a PodSet that fits nowhere outranks one that exceeds quota",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set launcher: untolerated taint {gpu true NoSchedule <nil>} in flavor a100; couldn't assign flavors to pod set workers: insufficient quota for cpu in flavor default, previously considered podsets requests (0) + current podset request (8) > maximum capacity (4)")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoMatchingFlavor,
+			blocker: rc.KueueAdmissionNoMatchingFlavor,
+		},
+		{
+			name:    "preemption failed and will be retried (v0.18 wording)",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyUnusedQuota+". Preempting 1 workload(s) failed, will retry.")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionWaitingForPreemption,
+			blocker: rc.KueueAdmissionWaitingForPreemption,
+		},
+		{
+			name: "evicted while quota is still reserved: the eviction decides",
+			spec: workloadSpec{
+				conditions: []condition{reserved, {kind: "Evicted", status: "True", reason: "AdmissionCheck", message: "At least one admission check is false"}},
+				checks:     []map[string]any{{"name": "provision", "state": "Retry", "message": "Retrying"}},
+			},
+			phase:      rc.KueuePhaseQuotaReserved,
+			state:      rc.KueueAdmissionEvicted,
+			blocker:    rc.KueueAdmissionChecksPending,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
@@ -1078,5 +1104,31 @@ func TestPendingChecksCiteTheCheck(t *testing.T) {
 	}).Admission
 	if got.Blocker == nil || got.Blocker.Source != rc.KueueFactSourceAdmissionCheck || got.Blocker.Name != "provision" || got.Blocker.Message != "Waiting for capacity" {
 		t.Fatalf("blocker = %+v", got.Blocker)
+	}
+}
+
+// decision is the controller-neutral scheduling view and keeps its own
+// meaning; these pairs are where it and the classification deliberately
+// differ, so consumers know to read state and attention instead.
+func TestDecisionAndStateDisagreeOnlyWhereDocumented(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		spec      workloadSpec
+		decision  rc.SchedulingDecision
+		state     rc.KueueAdmissionCode
+		attention rc.KueueAttention
+	}{
+		{"inactive queue", workloadSpec{conditions: []condition{pending("Inadmissible", "ClusterQueue gpu-team is inactive")}}, rc.SchedulingDecisionUnsatisfied, rc.KueueAdmissionClusterQueueInactive, rc.KueueAttentionUnknown},
+		{"external admission gate", workloadSpec{annotations: map[string]string{admissionGatedByAnnotation: "example.com/gate"}, conditions: []condition{pending("AdmissionGated", "Admission is gated by: example.com/gate")}}, rc.SchedulingDecisionHeld, rc.KueueAdmissionAdmissionGated, rc.KueueAttentionWaiting},
+		{"Kueue is deactivating", workloadSpec{conditions: []condition{reserved, {kind: "DeactivationTarget", status: "True", reason: "AdmissionCheck"}}}, rc.SchedulingDecisionUnknown, rc.KueueAdmissionDeactivationPending, rc.KueueAttentionActionNeeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			u := buildWorkload(test.spec)
+			observation := onlyObservation(t, ForResource(u, rc.TierBasic))
+			admission := observation.Kueue.Admission
+			if observation.Decision != test.decision || admission.State != test.state || admission.Attention != test.attention {
+				t.Fatalf("decision=%s state=%s attention=%s", observation.Decision, admission.State, admission.Attention)
+			}
+		})
 	}
 }

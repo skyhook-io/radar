@@ -9,8 +9,9 @@ package resourcecontext
 // KueueScheduling.Phase is the lifecycle axis. State is the one code to
 // group or count by, resolved in this order: finished, then Inactive, then
 // Blocker, then Disruption, then admitted or quota_reserved. A Disruption
-// outranks a no_decision Blocker, and an unrecognized one that only repeats
-// the eviction message, which is what Kueue writes right after an eviction.
+// outranks a no_decision Blocker, an unrecognized one that only repeats the
+// eviction message (what Kueue writes right after an eviction), and any
+// Blocker while quota is still reserved, since the eviction is releasing it.
 // Attention classifies State.
 //
 // Inactive, Blocker and Disruption are the facts behind State; each carries
@@ -19,6 +20,12 @@ package resourcecontext
 // Blocker; an admitted one has no Blocker; Disruption is reported whenever an
 // eviction is current. A missing fact is therefore not evidence on its own:
 // no Blocker on an inactive Workload says nothing about its queue.
+//
+// Consumers that count, group, raise Issues or write headlines read State
+// and Attention. The observation's Decision is the controller-neutral
+// scheduling view and keeps its own meaning, so the two can differ: an
+// external admission gate is a held Decision but a waiting blocker, and an
+// inactive queue is an unsatisfied Decision whose Attention is unknown.
 //
 // Stale is set when the evidence that decided State was written for an
 // earlier metadata.generation: State is then the last reported state, not a
@@ -55,8 +62,10 @@ const (
 	// that should have acted.
 	KueueAttentionActionNeeded KueueAttention = "action_needed"
 	// KueueAttentionUnknown means the Workload alone cannot tell: an inactive
-	// queue can be a stop policy or broken configuration, and an unrecognized
-	// reason is not known to be actionable.
+	// queue can be a stop policy or broken configuration, unresolved DRA
+	// resources can be the claims or the cluster, an unrecognized reason is
+	// not known to be actionable, and a deactivation may have no recorded
+	// cause.
 	KueueAttentionUnknown KueueAttention = "unknown"
 )
 
@@ -75,7 +84,7 @@ func (s KueueAdmissionState) Clone() KueueAdmissionState {
 
 // KueueAdmissionFact is one classified fact and the native evidence it was
 // read from. Name is the condition type, the AdmissionCheck name or the spec
-// field, by Source; Reason is the condition's reason or the check's state.
+// field's name (active), by Source; Reason is the condition's reason or the check's state.
 // Message is display text: trimmed, and cut to 256 bytes with an ellipsis;
 // the Workload's own status holds the complete message. Stale is set only
 // for condition evidence whose observedGeneration is behind the Workload's
@@ -102,7 +111,7 @@ const (
 	// KueueFactSourceAdmissionCheck is a status.admissionChecks entry: Name is
 	// the check, Reason its native state.
 	KueueFactSourceAdmissionCheck KueueFactSource = "admission_check"
-	// KueueFactSourceSpec is a spec field: Name is the field path.
+	// KueueFactSourceSpec is a spec field: Name is the field's name.
 	KueueFactSourceSpec KueueFactSource = "spec"
 )
 
@@ -154,9 +163,10 @@ const (
 	// KueueAdmissionInsufficientQuota means Kueue reports at least one flavor
 	// for every PodSet that could fit once quota is released.
 	KueueAdmissionInsufficientQuota KueueAdmissionCode = "insufficient_quota"
-	// KueueAdmissionExceedsQuota means Kueue reports a PodSet that no flavor
-	// could fit even with all quota free: a request over the most the queue
-	// or cohort can provide.
+	// KueueAdmissionExceedsQuota means that in its last attempt Kueue found a
+	// PodSet that none of the flavors it tried could fit even with all quota
+	// free. With flavor fungibility an attempt can resume past flavors tried
+	// before, so another flavor may still fit in a later attempt.
 	KueueAdmissionExceedsQuota KueueAdmissionCode = "exceeds_quota"
 	// KueueAdmissionNoMatchingFlavor means no ResourceFlavor can hold the
 	// Workload: taints, node affinity or topology rule them out, or the

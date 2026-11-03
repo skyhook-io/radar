@@ -126,6 +126,11 @@ describe('Kueue admission investigation', () => {
     expect(check).not.toContain('capacity · Rejected')
   })
 
+  it('does not repeat an eviction the supporting evidence already lists', () => {
+    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'QuotaReserved', message: 'Quota reserved' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'Preempted', message: 'Preempted to accommodate a workload' }], kueue: { phase: 'quota_reserved', admission: { state: 'preempted', attention: 'waiting', disruption: { code: 'preempted', source: 'condition', name: 'Evicted', reason: 'Preempted', message: 'Preempted to accommodate a workload' } } } }))
+    expect(html).not.toContain('Evicted · Preempted')
+  })
+
   it('lets the classified state carry the tone instead of a warning phase badge', () => {
     const waiting = render(response({ decision: 'unsatisfied', kueue: { phase: 'pending', admission: { state: 'insufficient_quota', attention: 'waiting' } } }))
     expect(waiting).not.toContain('bg-amber')

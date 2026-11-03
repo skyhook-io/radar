@@ -128,7 +128,8 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   // Show the condition behind the state when nothing else on the card says
   // it: backoff or Kueue's deactivation cause. Checks have their own card.
   const decidingFact = admission && [admission.inactive, admission.blocker, admission.disruption].find((fact) => fact?.code === admission.state)
-  const factEvidence = reason && decidingFact?.source === 'condition' && decidingFact.name !== condition?.type && decidingFact.message !== condition?.message
+  const factEvidence = reason && decidingFact?.source === 'condition' && decidingFact.name !== condition?.type && decidingFact.message !== condition?.message &&
+    !observation.disruptions?.some((entry) => entry.type === decidingFact.name)
     ? decidingFact : undefined
   const qualifier = admission ? null : observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
@@ -147,7 +148,7 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
         {stale && (admission
-          ? <p className="text-xs text-warning-text">Reported before the Workload's spec last changed; it may not reflect the current spec.</p>
+          ? <p className={`text-xs ${reason ? 'text-warning-text' : 'text-theme-text-tertiary'}`}>Reported before the Workload's spec last changed; it may not reflect the current spec.</p>
           : <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>)}
         {hint && <p className="max-w-3xl text-xs text-theme-text-secondary">{hint}</p>}
         {factEvidence && <p className="max-w-3xl whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{factEvidence.name}{factEvidence.reason && ` · ${factEvidence.reason}`}{factEvidence.message && `: ${factEvidence.message}`}</p>}

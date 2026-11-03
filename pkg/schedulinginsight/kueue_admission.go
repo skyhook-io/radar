@@ -25,7 +25,7 @@ type KueueClassification struct {
 // Workload (how Radar's dynamic cache holds it). ok is false, with a zero
 // result, for anything else; true says only that the object was classified.
 // It is the single authority for Kueue admission-state codes: list, Issues
-// and Capacity consumers call it per Workload instead of interpreting
+// and Capacity consumers must call it per Workload rather than interpret
 // conditions themselves.
 func ClassifyKueueWorkload(obj runtime.Object) (classification KueueClassification, ok bool) {
 	u, isUnstructured := obj.(*unstructured.Unstructured)
@@ -60,7 +60,9 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 		state.State, state.Stale = rc.KueueAdmissionFinished, c.staleCondition("Finished")
 	case state.Inactive != nil:
 		decided = state.Inactive
-	case state.Blocker != nil && (state.Disruption == nil || !c.uninformative(state.Blocker)):
+	// With quota still reserved, a current eviction is releasing it; the
+	// blocker it leaves behind (checks reset to Pending) is not news yet.
+	case state.Blocker != nil && (state.Disruption == nil || (phase != rc.KueuePhaseQuotaReserved && !c.uninformative(state.Blocker))):
 		decided = state.Blocker
 	case state.Disruption != nil:
 		decided = state.Disruption
@@ -339,7 +341,8 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 	case strings.HasPrefix(message, "AdmissionGatedBy cleared"):
 		return rc.KueueAdmissionNoDecision
 	case strings.Contains(message, "but will fit after these preemptions complete"),
-		strings.Contains(message, "Pending the preemption of"):
+		strings.Contains(message, "Pending the preemption of"),
+		strings.Contains(message, "workload(s) failed, will retry"):
 		// The same state the granular reason WaitingForPreemptedWorkloads names.
 		return rc.KueueAdmissionWaitingForPreemption
 	case strings.HasPrefix(message, "Workload no longer fits after processing another workload"),
@@ -407,11 +410,13 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 		}
 		switch {
 		case couldFit:
+		case mismatch && !exceeded && !unexplained:
+			// No placement at all outranks too little quota, as in Kueue's own
+			// most-severe-reason ranking: more quota would not help.
+			neverFits = rc.KueueAdmissionNoMatchingFlavor
 		case exceeded:
-			neverFits = rc.KueueAdmissionExceedsQuota
-		case mismatch && !unexplained:
 			if neverFits == "" {
-				neverFits = rc.KueueAdmissionNoMatchingFlavor
+				neverFits = rc.KueueAdmissionExceedsQuota
 			}
 		default:
 			undecided = true
@@ -427,11 +432,32 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 }
 
 // flavorMentions counts the clauses that name flavor, in either word order
-// Kueue uses ("in flavor F", "flavor F doesn't", "F flavor since").
+// Kueue uses ("in flavor F,", "flavor F doesn't", `Flavor "F"`, "F flavor
+// since"). It scans strings rather than compiling a pattern per flavor,
+// because list consumers classify every Workload on each request.
 func flavorMentions(segment, flavor string) int {
-	name := regexp.QuoteMeta(flavor)
-	pattern := regexp.MustCompile(`(?i)flavor "?` + name + `"?(?:[,\s]|$)|(?:^|\s)` + name + ` flavor\b`)
-	return len(pattern.FindAllStringIndex(segment, -1))
+	count := 0
+	lower := strings.ToLower(segment)
+	for _, prefix := range []string{"flavor " + strings.ToLower(flavor), `flavor "` + strings.ToLower(flavor) + `"`} {
+		for rest := lower; ; {
+			i := strings.Index(rest, prefix)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(prefix):]
+			if rest == "" || rest[0] == ',' || rest[0] == ' ' || rest[0] == ';' || strings.HasPrefix(prefix, `flavor "`) {
+				count++
+			}
+		}
+	}
+	return count + strings.Count(segment, " "+flavor+" flavor ") + boolCount(strings.HasPrefix(segment, flavor+" flavor "))
+}
+
+func boolCount(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func queueMessageCode(message string, missing, inactive rc.KueueAdmissionCode) rc.KueueAdmissionCode {

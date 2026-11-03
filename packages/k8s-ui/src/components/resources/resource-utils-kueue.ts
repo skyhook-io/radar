@@ -259,7 +259,7 @@ const kueueAttentionSeverity: Record<string, BadgeSeverity> = {
 // What the reported state usually asks of someone, worded as a suggestion:
 // the classification reads only the Workload, never its queue.
 const kueueAdmissionHints: Record<string, string> = {
-  exceeds_quota: 'The requests are larger than the queue can ever provide. Reduce them, or ask an admin to raise its quota.',
+  exceeds_quota: "Kueue found the requests too large for every flavor it tried. Reduce them, or ask an admin to raise the queue's quota.",
   no_matching_flavor: "No flavor in the queue fits the Workload's node selectors, tolerations or resources.",
   namespace_not_eligible: "The ClusterQueue does not accept this namespace. Use another LocalQueue, or ask an admin.",
   local_queue_missing: "Check the job's queue name, or ask an admin to create the LocalQueue.",

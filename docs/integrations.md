@@ -1812,9 +1812,10 @@ behaviour was not checked.
 code, else the blocker code, else the disruption code, else `admitted` or
 `quota_reserved`. A preempted Workload waiting for quota reads
 `insufficient_quota`, with `preempted` kept as its disruption. A disruption
-does outrank a `no_decision` blocker, and an `unrecognized` one whose message
-only repeats the eviction message, which is what Kueue writes right after an
-eviction. Which facts are reported: a finished Workload has no inactive or
+does outrank a `no_decision` blocker, an `unrecognized` one whose message
+only repeats the eviction message (what Kueue writes right after an eviction),
+and any blocker while quota is still reserved, since the eviction is releasing
+it. Which facts are reported: a finished Workload has no inactive or
 blocker fact, an inactive one has no blocker, an admitted one has no blocker,
 and a current eviction is always reported. A missing fact is not evidence on
 its own.
@@ -1825,9 +1826,14 @@ finished), `waiting` (Kueue or another controller is expected to move it on),
 reported, it will not be admitted without a change to the Workload, its queue
 or quota, or a controller that should have acted), or `unknown` (the Workload
 alone cannot tell, such as an inactive queue that may be stopped on purpose,
-an unrecognized reason, or a deactivation whose cause Kueue did not record).
+unresolved DRA resources, an unrecognized reason, or a deactivation whose cause
+Kueue did not record).
 It is not a severity or a guarantee: how long waiting may last before it is a
-problem is the consumer's call. Consumers pick their population from the axes:
+problem is the consumer's call. Counting, grouping, Issues and headlines read
+`state` and `attention`, not the observation's `decision`, which stays the
+controller-neutral scheduling view: an external admission gate is a `held`
+decision but a waiting blocker, and an inactive queue is an `unsatisfied`
+decision whose attention is `unknown`. Consumers pick their population from the axes:
 Workloads awaiting admission are those whose `phase` is not `admitted` or
 `finished` and that have no `inactive` fact.
 
@@ -1870,8 +1876,12 @@ message are what to show. Rules that keep the axes honest:
   has a flavor whose only problem is unused quota; a request over the maximum,
   or a taint, affinity, topology or earlier-slice mismatch rules a flavor out,
   a clause Radar does not understand keeps its flavor from counting, a PodSet
-  whose failure Radar does not recognize leaves the blocker `unrecognized`, and
-  "Pending the preemption of N workload(s)" reads `waiting_for_preemption`.
+  whose failure Radar does not recognize leaves the blocker `unrecognized`, a
+  PodSet that fits no flavor outranks one that exceeds quota, and Kueue's notes
+  on in-flight or retried preemptions read `waiting_for_preemption`.
+  `exceeds_quota` describes Kueue's last attempt: with flavor fungibility an
+  attempt can resume past flavors tried before, so another flavor may still fit
+  later.
 - `BlockedOnPreemptionGates=True` is the blocker only while it explains the
   current `QuotaReserved` (same message, reason `PreemptionGated`, or
   `AdmissionGated` without the external gate's "Admission is gated by"
@@ -1880,10 +1890,6 @@ message are what to show. Rules that keep the axes honest:
   condition and decision follow the same rule.
 - `Evicted` and `Preempted` reset to `False` ("Previously: …") at the next quota
   reservation, so an old failure after recovery is not a disruption.
-
-The decision keeps its own meaning: an `admission_gated` Workload's decision is
-`held`, while its state is a blocker, because the Workload is still competing
-once the external controller clears the gate.
 
 ### KubeRay
 
