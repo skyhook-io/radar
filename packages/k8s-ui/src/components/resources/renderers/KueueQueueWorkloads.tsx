@@ -214,7 +214,7 @@ function MemberList({
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by membership">
           <FilterPill label={chipLabel('All', members.counts.members, membersLowerBound(members))} count={chip(members.counts.members, membersLowerBound(members))} active={!membership} onClick={() => onMembershipChange(undefined)} tooltip="Every Workload submitted here or whose admission names this queue" />
           <FilterPill label={chipLabel('Submitted here', members.counts.submission, membersLowerBound(members, 'submission'))} count={chip(members.counts.submission, membersLowerBound(members, 'submission'))} active={membership === 'submission'} onClick={() => onMembershipChange('submission')} tooltip="Workloads whose LocalQueue points at this ClusterQueue now" />
-          <FilterPill label={chipLabel('Admission here', members.counts.reservation, isLowerBound(members.coverage))} count={chip(members.counts.reservation, isLowerBound(members.coverage))} active={membership === 'reservation'} onClick={() => onMembershipChange('reservation')} tooltip="Workloads whose admission record names this ClusterQueue, finished ones included" />
+          <FilterPill label={chipLabel('Reserved here', members.counts.reservation, isLowerBound(members.coverage))} count={chip(members.counts.reservation, isLowerBound(members.coverage))} active={membership === 'reservation'} onClick={() => onMembershipChange('reservation')} tooltip="Workloads whose quota reservation is recorded in this ClusterQueue, admitted or not, finished ones included" />
         </div>
       )}
       {onStateChange && <StateFilter counts={members.counts.states} bounded={lowerBound} state={state} onStateChange={onStateChange} />}
@@ -233,7 +233,7 @@ function MemberList({
       {rows.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-theme-text-tertiary">
           <span>
-            {showingText(rows.length, members.matching, lowerBound)} · sorted by {local ? 'name' : 'namespace and name'}, not admission order
+            {showingText(rows.length, members.matching, lowerBound)} · sorted by {local ? 'name' : 'namespace and name'}, finished last; not admission order
           </span>
           <span className="flex gap-2">
             {paged && onRefresh && (
@@ -271,7 +271,7 @@ function unresolvedNotice(members: KueueQueueMembers): string | undefined {
   const where = set.extent === 'all'
     ? 'any namespace it read Workloads in'
     : names.length > 0 && names.length <= 3 && names.length === set.count ? names.join(', ') : 'some namespaces'
-  return `Radar couldn't read LocalQueues in ${where}, so Workloads there are listed only when their admission names this queue.`
+  return `Radar couldn't read LocalQueues in ${where}, so Workloads there are listed only when their reservation names this queue.`
 }
 
 const severityOrder: BadgeSeverity[] = ['error', 'alert', 'warning', 'info', 'neutral', 'success']

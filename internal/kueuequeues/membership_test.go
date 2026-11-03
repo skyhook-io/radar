@@ -244,7 +244,27 @@ func TestPagingWhileMembershipChanges(t *testing.T) {
 		t.Fatalf("second page = %v, want d and g", got)
 	}
 	// A cursor past every member ends the list.
-	if page, more := Page(build(names), "team\x00z", 2); len(page) != 0 || more {
+	if page, more := Page(build(names), "0\x00team\x00z", 2); len(page) != 0 || more {
 		t.Fatalf("past the end = %v, %v", summary(page), more)
+	}
+}
+
+func TestFinishedMembersSortLast(t *testing.T) {
+	lqs := readLocalQueues{targets: map[string]string{"a/lq": "cq", "b/lq": "cq"}, read: map[string]bool{"a": true, "b": true}}
+	members := ClusterQueueMembers("cq", []*unstructured.Unstructured{
+		workload("a", "done", queue("lq")), workload("a", "running", queue("lq")), workload("b", "waiting", queue("lq")),
+	}, lqs)
+	members[0].Finished = true // a/done
+	Sort(members)
+	var got []string
+	for _, m := range members {
+		got = append(got, m.Workload.GetNamespace()+"/"+m.Workload.GetName())
+	}
+	if !slices.Equal(got, []string{"a/running", "b/waiting", "a/done"}) {
+		t.Fatalf("order = %v", got)
+	}
+	page, more := Page(members, Key(members[1]), 5)
+	if more || len(page) != 1 || page[0].Workload.GetName() != "done" {
+		t.Fatalf("page after b/waiting = %v", summary(page))
 	}
 }

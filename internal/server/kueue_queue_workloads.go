@@ -270,11 +270,13 @@ func (s *Server) writeKueueQueuePageError(w http.ResponseWriter, err error) {
 	s.writeError(w, http.StatusBadRequest, err.Error())
 }
 
-// newKueueAccessBudget bounds the fresh permission checks one request makes,
-// across both kinds it reads.
-func newKueueAccessBudget() *atomic.Int32 {
+// newKueueAccessBudget bounds the fresh permission checks one request makes
+// for one kind. A ClusterQueue request reads two kinds and gives each half of
+// readscope.MaxAccessChecks, so the LocalQueue read can't spend the checks
+// the Workload read needs.
+func newKueueAccessBudget(kinds int32) *atomic.Int32 {
 	budget := new(atomic.Int32)
-	budget.Store(readscope.MaxAccessChecks)
+	budget.Store(readscope.MaxAccessChecks / kinds)
 	return budget
 }
 
@@ -311,10 +313,9 @@ func (s *Server) handleKueueClusterQueueWorkloads(w http.ResponseWriter, r *http
 		return
 	}
 	response := KueueQueueWorkloadsResponse{Queue: identity}
-	budget := newKueueAccessBudget()
 
 	target, code := s.namespaceListTarget(r, h.cache, nil)
-	localQueues, lqFailure := s.readKueueIndexed(r, h, budget, target, code, "LocalQueue", "localqueues", []string{k8score.KueueLocalQueueTargetKey(name)})
+	localQueues, lqFailure := s.readKueueIndexed(r, h, newKueueAccessBudget(2), target, code, "LocalQueue", "localqueues", []string{k8score.KueueLocalQueueTargetKey(name)})
 	keys := []string{k8score.KueueReservationKey(name)}
 	pointing := map[string]*unstructured.Unstructured{}
 	if lqFailure != nil {
@@ -328,7 +329,7 @@ func (s *Server) handleKueueClusterQueueWorkloads(w http.ResponseWriter, r *http
 			}
 		}
 	}
-	workloads, wlFailure := s.readKueueIndexed(r, h, budget, target, code, "Workload", "workloads", keys)
+	workloads, wlFailure := s.readKueueIndexed(r, h, newKueueAccessBudget(2), target, code, "Workload", "workloads", keys)
 	if wlFailure != nil {
 		body, _ := readErrorBody("workloads", wlFailure.err, &wlFailure.target)
 		response.WorkloadsError = &body
@@ -336,11 +337,12 @@ func (s *Server) handleKueueClusterQueueWorkloads(w http.ResponseWriter, r *http
 		lqs := kueueReadLocalQueues{pointing: pointing, read: func(string) bool { return false }}
 		if lqFailure == nil {
 			lqs.read = localQueues.covers
-			lqs.get = func(namespace, name string) *unstructured.Unstructured {
-				if lq, found, ok := h.dynamic.ReadableObject(localQueues.gvr, namespace, name); found && ok {
-					return lq
+			lqs.get = func(namespace, name string) (*unstructured.Unstructured, bool) {
+				lq, found, ok := h.dynamic.ReadableObject(localQueues.gvr, namespace, name)
+				if !found {
+					lq = nil
 				}
-				return nil
+				return lq, ok
 			}
 		}
 		members := kueuequeues.ClusterQueueMembers(name, workloads.objects, lqs)
@@ -395,7 +397,7 @@ func (s *Server) handleKueueLocalQueueWorkloads(w http.ResponseWriter, r *http.R
 	}
 	response := KueueQueueWorkloadsResponse{Queue: identity}
 	target, code := s.namespaceListTarget(r, h.cache, []string{namespace})
-	workloads, failure := s.readKueueIndexed(r, h, newKueueAccessBudget(), target, code, "Workload", "workloads", []string{k8score.KueueSubmissionKey(namespace, name)})
+	workloads, failure := s.readKueueIndexed(r, h, newKueueAccessBudget(1), target, code, "Workload", "workloads", []string{k8score.KueueSubmissionKey(namespace, name)})
 	if failure != nil {
 		body, _ := readErrorBody("workloads", failure.err, &failure.target)
 		response.WorkloadsError = &body
@@ -429,7 +431,7 @@ func (s *Server) writeKueueQueueGetError(w http.ResponseWriter, kind, name strin
 type kueueReadLocalQueues struct {
 	pointing map[string]*unstructured.Unstructured
 	read     func(namespace string) bool
-	get      func(namespace, name string) *unstructured.Unstructured
+	get      func(namespace, name string) (*unstructured.Unstructured, bool)
 }
 
 func (l kueueReadLocalQueues) Get(namespace, name string) (*unstructured.Unstructured, bool) {
@@ -439,16 +441,19 @@ func (l kueueReadLocalQueues) Get(namespace, name string) (*unstructured.Unstruc
 	if lq, ok := l.pointing[namespace+"/"+name]; ok {
 		return lq, true
 	}
-	return l.get(namespace, name), true
+	// A store that isn't complete now can't say the LocalQueue is absent.
+	return l.get(namespace, name)
 }
 
 func kueueQueueMembersPage(members []kueuequeues.Member, page kueueQueuePage, coverage resourceapi.Coverage) *KueueQueueMembers {
 	classified := make(map[*unstructured.Unstructured]resourcecontext.KueueWorkloadClassification, len(members))
-	for _, m := range members {
+	for i, m := range members {
 		if c, ok := schedulinginsight.ClassifyKueueWorkload(m.Workload); ok {
 			classified[m.Workload] = c
+			members[i].Finished = c.Phase == resourcecontext.KueuePhaseFinished
 		}
 	}
+	kueuequeues.Sort(members)
 	stateOf := func(m kueuequeues.Member) string {
 		if c, ok := classified[m.Workload]; ok {
 			return string(c.Admission.State)
@@ -652,9 +657,13 @@ func (s *Server) readKueueIndexed(r *http.Request, h kueueQueueHandles, budget *
 		}
 		// A cluster-wide store serves every namespace: read it once, rather
 		// than once per namespace.
-		_, clusterWide := h.dynamic.ReadSource(gvr, "")
-		if objs, code := readKueueIndexChecked(h.dynamic, gvr, "", keys); clusterWide && code == "" {
-			for _, u := range objs {
+		var clusterObjs []*unstructured.Unstructured
+		clusterCode := readreason.Code("unread")
+		if _, clusterWide := h.dynamic.ReadSource(gvr, ""); clusterWide {
+			clusterObjs, clusterCode = readKueueIndexChecked(h.dynamic, gvr, "", keys)
+		}
+		if clusterCode == "" {
+			for _, u := range clusterObjs {
 				if wanted[u.GetNamespace()] {
 					out.objects = append(out.objects, u)
 				}
@@ -759,9 +768,17 @@ func (s *Server) kueueListAccess(r *http.Request, cache *k8s.ResourceCache, budg
 		case !slices.Contains(denied, ""):
 			return nil, target, nil
 		}
+		// Every namespace is visible to this caller, so naming the ones they
+		// can't list discloses nothing (unlike listScope's candidates, which
+		// can exceed what a restricted caller was shown).
 		candidates := namespaceNamesInCache(cache)
 		if len(candidates) == 0 {
-			return nil, target, permissionFailure(true, fmt.Sprintf("insufficient permissions to list %s in every namespace", resource))
+			// Radar's identity may not list Namespaces: check the namespaces
+			// it collects in instead.
+			candidates, _ = k8s.GetAccessibleNamespaces(r.Context())
+		}
+		if len(candidates) == 0 {
+			return nil, target, readFailuref(readreason.RadarNamespaceNotCollected, "Radar can't enumerate namespaces to check where you may list %s", resource)
 		}
 		target.namespaces = candidates
 		allowed, denied, unchecked = readscope.ClusterFirstNamespaceAccess(r.Context(), candidates, budget, cached, check)

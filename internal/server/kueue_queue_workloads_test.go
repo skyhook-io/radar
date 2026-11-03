@@ -175,7 +175,7 @@ func TestKueueClusterQueueWorkloadsWithoutAuth(t *testing.T) {
 	if got.Queue.Kind != "ClusterQueue" || got.Queue.Name != "cq" || got.Queue.UID == "" {
 		t.Fatalf("queue = %+v", got.Queue)
 	}
-	want := []string{"team-a/both", "team-a/deleting", "team-a/finished", "team-a/submitted", "team-b/hidden", "team-c/reserved-only"}
+	want := []string{"team-a/both", "team-a/deleting", "team-a/submitted", "team-b/hidden", "team-c/reserved-only", "team-a/finished"}
 	if !slices.Equal(memberNames(got.Workloads), want) {
 		t.Fatalf("members = %v, want %v", memberNames(got.Workloads), want)
 	}
@@ -266,7 +266,7 @@ func TestKueueQueueWorkloadsPaging(t *testing.T) {
 		cursor = got.Workloads.Next
 		path = "/api/kueue/clusterqueues/cq/workloads?limit=2&membership=reservation&cursor=" + url.QueryEscape(cursor)
 	}
-	if !slices.Equal(read, []string{"team-a/both", "team-a/finished", "team-b/hidden", "team-c/reserved-only"}) {
+	if !slices.Equal(read, []string{"team-a/both", "team-b/hidden", "team-c/reserved-only", "team-a/finished"}) {
 		t.Fatalf("paged reservation members = %v", read)
 	}
 	// A cursor belongs to its queue and filter.
@@ -329,7 +329,7 @@ func TestKueueLocalQueueWorkloads(t *testing.T) {
 	if got.Queue.ClusterQueue != "cq" || got.LocalQueues != nil {
 		t.Fatalf("queue = %+v, local queues %+v", got.Queue, got.LocalQueues)
 	}
-	if want := []string{"team-a/both", "team-a/deleting", "team-a/finished", "team-a/submitted"}; !slices.Equal(memberNames(got.Workloads), want) {
+	if want := []string{"team-a/both", "team-a/deleting", "team-a/submitted", "team-a/finished"}; !slices.Equal(memberNames(got.Workloads), want) {
 		t.Fatalf("members = %v, want %v", memberNames(got.Workloads), want)
 	}
 	validCoverage(t, got.Workloads.Coverage)
@@ -381,7 +381,7 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 	t.Run("scenario 2: a namespace whose Workloads the viewer can't list", func(t *testing.T) {
 		env := setup(t, grants{getCQ: true, workloads: without("team-b"), localQueues: all})
 		got := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "alice", ""), http.StatusOK)
-		if want := []string{"team-a/both", "team-a/deleting", "team-a/finished", "team-a/submitted", "team-c/reserved-only"}; !slices.Equal(memberNames(got.Workloads), want) {
+		if want := []string{"team-a/both", "team-a/deleting", "team-a/submitted", "team-c/reserved-only", "team-a/finished"}; !slices.Equal(memberNames(got.Workloads), want) {
 			t.Fatalf("members = %v, want %v", memberNames(got.Workloads), want)
 		}
 		cov := got.Workloads.Coverage
@@ -406,7 +406,7 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		got := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "alice", ""), http.StatusOK)
 		// team-a's submitted-only and deleting Workloads can't be placed;
 		// its reserved ones still can.
-		if want := []string{"team-a/both", "team-a/finished", "team-b/hidden", "team-c/reserved-only"}; !slices.Equal(memberNames(got.Workloads), want) {
+		if want := []string{"team-a/both", "team-b/hidden", "team-c/reserved-only", "team-a/finished"}; !slices.Equal(memberNames(got.Workloads), want) {
 			t.Fatalf("members = %v, want %v", memberNames(got.Workloads), want)
 		}
 		if u := got.Workloads.SubmissionUnresolved; u == nil || !slices.Equal(u.Names, []string{"team-a"}) {
@@ -505,7 +505,7 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		}
 		env.srv.permCache.Set("dave", nil, permissions)
 		got := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "dave", ""), http.StatusOK)
-		if want := []string{"team-a/both", "team-a/deleting", "team-a/finished", "team-a/submitted"}; !slices.Equal(memberNames(got.Workloads), want) {
+		if want := []string{"team-a/both", "team-a/deleting", "team-a/submitted", "team-a/finished"}; !slices.Equal(memberNames(got.Workloads), want) {
 			t.Fatalf("members = %v, want %v", memberNames(got.Workloads), want)
 		}
 		validCoverage(t, got.Workloads.Coverage)

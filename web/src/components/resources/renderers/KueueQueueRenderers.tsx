@@ -34,7 +34,9 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       kind={kind}
       queue={data}
       pages={pages?.length ? pages : undefined}
-      loading={query.isPending}
+      // A response for a re-created queue's predecessor (or successor) is
+      // still being replaced: keep reading rather than claim nothing was read.
+      loading={query.isPending || (!!query.data && !pages?.length)}
       error={query.error ? query.error.message : null}
       nextPageError={query.isFetchNextPageError ? query.error?.message ?? null : null}
       upgrade={query.upgrade}
