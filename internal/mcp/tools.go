@@ -240,7 +240,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"an application configuration edit; it is a ranking hint, not proof of cause, and unflagged changes may still matter. Application, Kustomization and Flux HelmRelease return " +
 		"status and parsed issues; no logs. " +
 		"KafkaConnector and KafkaConnect (group=kafka.strimzi.io) return cached curated operator findings, not configuration, logs or application endpoint reads. " +
-		"Job, JobSet, RayJob and Kueue Workload return cached resource context, related Issues and resource events; no runtime logs or metrics. Follow Workload references for admission details. " +
+		"Batch kinds return cached context, Issues and events without runtime logs or metrics. " +
 		"Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
 		"API-server proxy reached it, not the live path. Point-in-time freezes this call's result, " +
