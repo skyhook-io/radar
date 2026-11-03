@@ -1545,6 +1545,7 @@ function LogsTabContent({
         namespace={namespace}
         name={name}
         uid={resource?.metadata?.uid}
+        suspendRequested={resource?.spec?.suspend === true}
         rootLoading={resourceLoading}
         rootError={resourceError}
         historyPods={pods}

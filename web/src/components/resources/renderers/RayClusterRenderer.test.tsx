@@ -8,6 +8,8 @@ const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewL
 vi.mock('../../../api/client', () => ({
   ApiError: class ApiError extends Error { constructor(message: string, public status: number) { super(message) } },
   useWorkloadPods: (...args: any[]) => { mock.calls.push(args); return mock.result },
+  useCapabilities: () => ({ data: { features: { rayClusterPods: true } } }),
+  isStableClientError: () => false,
   useRadarFeature: () => ({ support: mock.support, upgrade: mock.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
 }))
 vi.mock('../../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: mock.canViewLogs }) }))

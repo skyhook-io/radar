@@ -60,6 +60,7 @@ describe('MultiPodLogsTab', () => {
     state.logs['gone-pod'] = { data: { containers: ['app'] } }
     act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod="gone-pod" onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
     expect(host.textContent).toContain('viewer:gone-pod')
+    expect(host.textContent).toContain('gone-pod· no longer listed')
     expect(host.textContent).not.toContain('This RayCluster has no Pods right now.')
   })
 
@@ -67,6 +68,14 @@ describe('MultiPodLogsTab', () => {
     const onSelect = vi.fn()
     act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod={null} onSelectPod={onSelect} defaultPod="live-pod" />))
     expect(onSelect).toHaveBeenCalledWith('live-pod')
+  })
+
+  it('shows the caller\'s reason instead of a viewer for a Pod with no output yet', () => {
+    state.logs['live-pod'] = { data: { containers: ['app'] } }
+    act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod="live-pod" onSelectPod={vi.fn()} selectedPodNote="Not scheduled" />))
+    expect(host.textContent).toContain('No logs for live-pod yet')
+    expect(host.textContent).toContain('Not scheduled')
+    expect(host.textContent).not.toContain('viewer:live-pod')
   })
 
   it('uses the caller\'s empty message when there are no Pods', () => {

@@ -6,8 +6,9 @@ import { expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({ query: {} as any }))
 vi.mock('../../api/client', () => {
   class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
-  return { ApiError, useRadarFeature: () => ({ support: 'supported', upgrade: null }), useWorkloadPods: () => state.query }
+  return { ApiError, isStableClientError: (e: any) => e instanceof ApiError && [400, 403, 404, 409].includes(e.status), useCapabilities: () => ({ data: { features: { rayClusterPods: true } } }), useRadarFeature: () => ({ support: 'supported', upgrade: null }), useWorkloadPods: () => state.query }
 })
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: true }) }))
 vi.mock('./MultiPodLogsTab', () => ({ MultiPodLogsTab: () => null }))
 vi.mock('@skyhook-io/k8s-ui', () => ({ AlertBanner: () => null, PaneLoader: () => null, RadarUpgradeNote: () => null }))
 const { RayClusterLogsTab } = await import('./RayClusterLogsTab')
@@ -19,7 +20,7 @@ const owned = { pods: [{ name: 'failing-worker', ready: false, containers: [] },
 function mount(selectedPod: string, onSelectPod = vi.fn()) {
   const host = document.createElement('div')
   const root = createRoot(host)
-  const render = () => act(() => root.render(<RayClusterLogsTab namespace="ml" name="c" uid="u" rootLoading={false} rootError={null} historyPods={history} selectedPod={selectedPod} onSelectPod={onSelectPod} initialContainer={null} />))
+  const render = () => act(() => root.render(<RayClusterLogsTab namespace="ml" name="c" uid="u" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod={selectedPod} onSelectPod={onSelectPod} initialContainer={null} />))
   return { render, onSelectPod, unmount: () => act(() => root.unmount()) }
 }
 

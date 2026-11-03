@@ -194,3 +194,8 @@ export function rayJobIsLocal(resource: any): boolean {
 export function rayJobSubmissionMode(resource: any): string {
   return resource.spec?.submissionMode || 'K8sJobMode'
 }
+
+/** The KubeRay RayCluster Radar reads Pods for: `ray.io/v1`, or group `ray.io` before the object loads. */
+export function isKubeRayClusterIdentity(group: string | undefined, apiVersion: string | undefined): boolean {
+  return apiVersion ? apiVersion === 'ray.io/v1' : group === 'ray.io'
+}

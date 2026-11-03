@@ -4,7 +4,7 @@ import type { ResourceRef, WorkloadPodInfo } from '@skyhook-io/k8s-ui'
 import { useRadarFeature, useWorkloadPods } from '../../../api/client'
 import { useNamespacedCapabilities } from '../../../contexts/CapabilitiesContext'
 import { useOpenLogs } from '../../dock'
-import { logsContainer, rayClusterPodsError } from '../../logs/RayClusterLogsTab'
+import { logsContainer, rayClusterPodsError, useSidecarsMarked } from '../../logs/RayClusterLogsTab'
 
 export function RayClusterRenderer(props: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
   return <RayClusterEvidence key={props.data.metadata.uid} {...props} />
@@ -19,11 +19,12 @@ function RayClusterEvidence({ data, onNavigate }: { data: any; onNavigate?: (ref
   })
   const { canViewLogs } = useNamespacedCapabilities(data.metadata.namespace)
   const openLogs = useOpenLogs()
+  const sidecarsMarked = useSidecarsMarked()
   const openPodLogs = (pod: WorkloadPodInfo) => openLogs({
     namespace: data.metadata.namespace,
     podName: pod.name,
     containers: pod.containers,
-    containerName: logsContainer(pod),
+    containerName: logsContainer(pod, sidecarsMarked),
   })
   return <BaseRenderer data={data} onNavigate={onNavigate} selection={selection} onSelectPods={setSelection} podEvidence={query.data} podsLoading={query.isLoading} podsError={rayClusterPodsError(query.error, support)} onOpenPodLogs={canViewLogs ? openPodLogs : undefined} podsUpgrade={support === 'unsupported' ? upgrade : null} />
 }

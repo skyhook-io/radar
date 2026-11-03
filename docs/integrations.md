@@ -1800,8 +1800,9 @@ not read, and nothing is kept once a Pod is deleted.
 
 - **Logs tab.** A `ray.io/v1` RayCluster's tab lists the Pods its current
   incarnation owns, through the same owner-UID request as Runtime Pods, and opens
-  the least healthy one. Past 200 Pods it keeps the least healthy; Runtime Pods can
-  narrow the list to the head or one worker group. The tab doesn't need Radar to
+  the least healthy one. Past 200 Pods it keeps the least healthy; to reach the
+  others, narrow Runtime Pods to the head or one worker group and use a Pod's Logs
+  button. The tab doesn't need Radar to
   have recorded any Pods.
 - **Fallback.** When the owned list can't be read (it needs `get rayclusters` and
   `list pods`), the Radar is older than v1.15, or the RayCluster itself can't be
@@ -1814,7 +1815,9 @@ not read, and nothing is kept once a Pod is deleted.
 - **Container.** While a Pod is Pending, or after it failed, the button and the tab
   open the first regular init container that isn't done (a worker waiting on the
   head sits in KubeRay's `wait-gcs-ready`). Otherwise they open the first
-  application container. Native sidecars are never chosen first.
+  application container. Native sidecars are never chosen first; a Radar older than
+  the one that advertises `rayClusterPods` doesn't mark sidecars, so there an init
+  container is chosen only in a Pending Pod where it is the sole unready one.
 - A RayCluster served only as a version older than `ray.io/v1` keeps the generic
   Logs tab, because Radar reads RayCluster Pods through `ray.io/v1`.
 

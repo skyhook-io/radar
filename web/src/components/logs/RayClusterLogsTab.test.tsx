@@ -1,11 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any }))
+const state = vi.hoisted(() => ({ support: 'supported' as string, query: {} as any, calls: [] as any[], tab: null as any, flag: true, canViewLogs: true }))
+vi.mock('../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canViewLogs: state.canViewLogs }) }))
 vi.mock('../../api/client', () => {
   class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
   return {
     ApiError,
+    isStableClientError: (e: any) => e instanceof ApiError && [400, 403, 404, 409].includes(e.status),
+    useCapabilities: () => ({ data: { features: { rayClusterPods: state.flag } } }),
     useRadarFeature: () => ({ support: state.support, upgrade: state.support === 'unsupported' ? { feature: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0' } : null }),
     useWorkloadPods: (...args: any[]) => { state.calls.push(args); return state.query },
   }
@@ -27,11 +30,11 @@ const owned = { pods: [
 ], total: 2, truncated: false }
 const render = (uid: string | undefined = 'uid-1', selectedPod: string | null = null) => renderUID(uid, selectedPod)
 const renderUID = (uid: string | undefined, selectedPod: string | null = null, root: { loading?: boolean; error?: Error | null } = {}) => renderToStaticMarkup(
-  <RayClusterLogsTab namespace="ml" name="cluster" uid={uid} rootLoading={root.loading ?? false} rootError={root.error ?? null} historyPods={history} selectedPod={selectedPod} onSelectPod={() => {}} initialContainer={null} />,
+  <RayClusterLogsTab namespace="ml" name="cluster" uid={uid} suspendRequested={false} rootLoading={root.loading ?? false} rootError={root.error ?? null} historyPods={history} selectedPod={selectedPod} onSelectPod={() => {}} initialContainer={null} />,
 )
 
 describe('RayClusterLogsTab', () => {
-  beforeEach(() => { state.support = 'supported'; state.query = {}; state.calls = []; state.tab = null })
+  beforeEach(() => { state.support = 'supported'; state.query = {}; state.calls = []; state.tab = null; state.flag = true; state.canViewLogs = true })
 
   it('lists the Pods the current incarnation owns, by name, not the ones history recalls', () => {
     state.query = { data: owned }
@@ -53,7 +56,7 @@ describe('RayClusterLogsTab', () => {
     state.query = { data: { ...owned, total: 250, truncated: true } }
     const html = render()
     expect(html).toContain('Showing the 2 least healthy of 250 Pods')
-    expect(html).toContain('Runtime Pods on Overview can narrow the list to the head or one worker group')
+    expect(html).toContain('To reach the others, narrow Runtime Pods on Overview to the head or one worker group')
   })
 
   it('falls back to the recorded Pods with the reason when the current list is denied', () => {
@@ -75,9 +78,9 @@ describe('RayClusterLogsTab', () => {
 
   it('opens the deep-linked container only on a Pod that has it', () => {
     state.query = { data: owned }
-    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-worker-b" onSelectPod={() => {}} initialContainer="ray-head" />)
+    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-worker-b" onSelectPod={() => {}} initialContainer="ray-head" />)
     expect(state.tab.initialContainer).toBe('wait-gcs-ready')
-    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-head" onSelectPod={() => {}} initialContainer="ray-head" />)
+    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod="cluster-head" onSelectPod={() => {}} initialContainer="ray-head" />)
     expect(state.tab.initialContainer).toBe('ray-head')
   })
 
@@ -110,6 +113,24 @@ describe('RayClusterLogsTab', () => {
     expect(html).not.toContain('only deployments')
   })
 
+  it('shows why a selected Pod has no output instead of an empty viewer', () => {
+    state.query = { data: { pods: [{ name: 'pending-worker', ready: false, containers: ['ray-worker'] }], total: 1, truncated: false } }
+    render('uid-1', 'pending-worker')
+    expect(state.tab.selectedPodNote).toBe('Not scheduled')
+  })
+
+  it('says once, up front, when Pod logs are not readable here', () => {
+    state.canViewLogs = false
+    state.query = { data: owned }
+    expect(render()).toContain('needs get on pods/log')
+  })
+
+  it('names a requested suspension when the cluster has no Pods', () => {
+    state.query = { data: { pods: [], total: 0, truncated: false } }
+    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested rootLoading={false} rootError={null} historyPods={history} selectedPod={null} onSelectPod={() => {}} initialContainer={null} />)
+    expect(state.tab.emptyMessage).toBe('This RayCluster has no Pods right now. Its suspension is requested.')
+  })
+
   it('applies only to the KubeRay ray.io/v1 RayCluster', () => {
     expect(isKubeRayCluster('RayCluster', 'ray.io', 'ray.io/v1')).toBe(true)
     expect(isKubeRayCluster('RayCluster', 'ray.io', undefined)).toBe(true)
@@ -122,18 +143,26 @@ describe('RayClusterLogsTab', () => {
 describe('logsContainer', () => {
   const status = (name: string, extra: Record<string, unknown> = {}) => ({ name, ready: false, restartCount: 0, ...extra })
   it('opens a Pending worker in the regular init container it waits on, past a started native sidecar', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] })).toBe('wait-gcs-ready')
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] }, true)).toBe('wait-gcs-ready')
   })
   it('opens the regular init container that failed in a Failed Pod', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['setup', 'ray-worker'], containerStatuses: [status('setup', { init: true }), status('ray-worker')] })).toBe('setup')
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['setup', 'ray-worker'], containerStatuses: [status('setup', { init: true }), status('ray-worker')] }, true)).toBe('setup')
   })
   it('opens the application of a running Pod, never an unready native sidecar', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['proxy', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('ray-worker')] })).toBe('ray-worker')
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Running', containers: ['proxy', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('ray-worker')] }, true)).toBe('ray-worker')
   })
   it('opens the application of a Failed Pod whose init containers finished', () => {
-    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('setup', { init: true, ready: true }), status('ray-worker')] })).toBe('ray-worker')
+    expect(logsContainer({ name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true, sidecar: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }, true)).toBe('ray-worker')
   })
   it('leaves the choice to the viewer when no status is reported', () => {
-    expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] })).toBeUndefined()
+    expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, true)).toBeUndefined()
+  })
+  it('on a Radar that does not mark sidecars, picks an init container only when it is the sole unready one in a Pending Pod', () => {
+    const proxyFirst = { name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] }
+    expect(logsContainer(proxyFirst, false)).toBe('ray-worker')
+    const onlyWait = { name: 'p', ready: false, phase: 'Pending', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [status('wait-gcs-ready', { init: true }), status('ray-worker')] }
+    expect(logsContainer(onlyWait, false)).toBe('wait-gcs-ready')
+    const failedWithStoppedSidecar = { name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }
+    expect(logsContainer(failedWithStoppedSidecar, false)).toBe('ray-worker')
   })
 })

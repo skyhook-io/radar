@@ -237,8 +237,10 @@ export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
 }
 
-function isStableClientError(error: unknown): boolean {
-  return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429
+// Answers that won't change on the next poll: a rejected request, a denial, a
+// missing or recreated root. A 401 (an expired session) can recover.
+export function isStableClientError(error: unknown): boolean {
+  return error instanceof ApiError && [400, 403, 404, 409].includes(error.status)
 }
 
 export function isNotFoundError(error: unknown): boolean {

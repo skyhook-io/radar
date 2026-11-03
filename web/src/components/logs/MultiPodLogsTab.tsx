@@ -13,6 +13,7 @@ export function MultiPodLogsTab({
   onSelectPod,
   initialContainer,
   defaultPod,
+  selectedPodNote,
   emptyMessage = 'No pods available',
 }: {
   pods: ResourceRef[]
@@ -22,6 +23,8 @@ export function MultiPodLogsTab({
   initialContainer?: string | null
   /** Opened when nothing is selected; the first Pod otherwise. */
   defaultPod?: string
+  /** Shown instead of the viewer when the caller knows the selected Pod has no output yet. */
+  selectedPodNote?: string
   emptyMessage?: string
 }) {
   useEffect(() => {
@@ -62,7 +65,7 @@ export function MultiPodLogsTab({
 
   return (
     <div className="h-full flex flex-col">
-      {chips.length > 1 && (
+      {(chips.length > 1 || unlisted) && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
           {chips.map((pod) => (
             <button
@@ -82,10 +85,17 @@ export function MultiPodLogsTab({
           ))}
         </div>
       )}
-      {selectedPod && containersError && !logsData && (
+      {selectedPod && selectedPodNote && (
+        <div role="status" className="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-theme-text-tertiary">
+          <Terminal className="mb-3 h-12 w-12 opacity-50" />
+          <p className="text-sm font-medium text-theme-text-secondary">No logs for {selectedPod} yet</p>
+          <p className="text-sm">{selectedPodNote}</p>
+        </div>
+      )}
+      {selectedPod && !selectedPodNote && containersError && !logsData && (
         <PodLogsUnavailable podName={selectedPod} error={containersError} />
       )}
-      {selectedPod && containers.length > 0 && (
+      {selectedPod && !selectedPodNote && containers.length > 0 && (
         <div className="flex-1 min-h-0">
           <LogsViewer
             key={selectedPod}

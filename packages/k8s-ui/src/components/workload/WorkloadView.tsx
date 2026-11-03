@@ -1,4 +1,5 @@
 import { dedupeResourceRefs } from '../../utils/resource-refs'
+import { isKubeRayClusterIdentity } from '../resources/resource-utils-ray'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
 import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
@@ -2201,9 +2202,7 @@ export function supportsLogsWithoutPods(
     return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
   }
   // A KubeRay RayCluster's tab reads the Pods it owns now, not recorded ones.
-  if (normalizedKind === 'rayclusters') {
-    return apiVersion ? apiVersion === 'ray.io/v1' : group === 'ray.io'
-  }
+  if (normalizedKind === 'rayclusters') return isKubeRayClusterIdentity(group, apiVersion)
   // A CloudNativePG Cluster's instance Pods are its children, not related
   // Pods, and its logs are resolved server-side from the Cluster itself.
   if (normalizedKind === 'clusters') {
