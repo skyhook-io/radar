@@ -151,7 +151,7 @@ func TestClusterQueueMembership(t *testing.T) {
 func TestLocalQueueMembership(t *testing.T) {
 	workloads := []*unstructured.Unstructured{
 		workload("team", "a", queue("lq"), reserved("cq")),
-		// Edge case 1 on the LocalQueue: reserved in the ClusterQueue it used to point at.
+		// Edge case 1 on the LocalQueue: reserved in a ClusterQueue other than the one it points at now.
 		workload("team", "b", queue("lq"), reserved("old-cq")),
 		workload("team", "c", queue("lq"), finished(), reserved("cq")),
 		workload("team", "d", queue("lq"), deleting()),

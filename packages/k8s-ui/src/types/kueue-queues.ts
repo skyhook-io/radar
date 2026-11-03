@@ -14,7 +14,7 @@ export interface KueueQueueWorkload {
   apiVersion: string
   createdAt: string | null
   deleting: boolean
-  /** The shared classification of the Workload (RAD-811); absent when Radar doesn't classify it. */
+  /** The Workload's shared admission classification (schedulinginsight.ClassifyKueueWorkload); absent when Radar doesn't classify it. */
   phase?: 'pending' | 'quota_reserved' | 'admitted' | 'finished' | (string & {})
   admission?: KueueAdmissionState
   /** Why the Workload is in this queue. */

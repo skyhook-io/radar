@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"net/http"
 	"slices"
@@ -490,6 +491,9 @@ func (s *Server) writeKueueQueueGetError(w http.ResponseWriter, kind, name strin
 		failure = readFailuref(readreason.ObjectNotFound, "%s %s not found", kind, name)
 	default:
 		failure = collectionFailure(strings.ToLower(kind)+"s", err)
+		if failure.code == readreason.ReadError {
+			log.Printf("[kueue] Failed to read %s %s: %v", kind, name, err)
+		}
 	}
 	s.writeCollectionFailure(w, strings.ToLower(kind)+"s", failure)
 }

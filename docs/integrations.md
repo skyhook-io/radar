@@ -1751,7 +1751,7 @@ independent ways, and each row says which:
 
 A LocalQueue's Workloads are those in its namespace whose `spec.queueName`
 names it. The cases the two ways disagree on are listed as reported: a
-Workload still reserved in the ClusterQueue its LocalQueue used to point at
+Workload still reserved in a ClusterQueue its LocalQueue no longer points at
 (`spec.clusterQueue` is immutable, so this follows deleting and re-creating
 the LocalQueue) belongs to the old ClusterQueue by reservation and the new one
 by submission, and its row names both; a finished Workload that still reports
