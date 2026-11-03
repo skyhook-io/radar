@@ -30,6 +30,12 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
   // Refresh reads the list again from its first page, dropping the pages
   // loaded since: replaying them all would reread the queue once per page.
   const restart = () => void queryClient.resetQueries({ queryKey: ['kueue-queue-workloads', kind, data.metadata?.namespace ?? '', data.metadata?.name ?? '', data.metadata?.uid ?? ''] })
+  // Reopening a queue whose list was paged reads it again from the first
+  // page: the loaded pages aren't polled, so they could be stale.
+  useEffect(() => {
+    if ((query.data?.pages.length ?? 0) > 1) restart()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on mount only
+  }, [])
   // A cursor issued for another list (a re-created queue, another cluster
   // context) is refused: read the list again from its first page.
   useEffect(() => {
@@ -47,16 +53,16 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       error={query.error ? query.error.message : null}
       nextPageError={query.isFetchNextPageError ? query.error?.message ?? null : null}
       stale={query.isPlaceholderData}
-      notice={restarted ? 'The list restarted from its first page: what Radar read changed since the first page.' : null}
+      notice={restarted ? 'The list restarted from its first page.' : null}
       upgrade={query.upgrade}
       membership={membership}
-      onMembershipChange={setMembership}
+      onMembershipChange={next => { setRestarted(false); setMembership(next) }}
       state={state}
-      onStateChange={setState}
+      onStateChange={next => { setRestarted(false); setState(next) }}
       hasMore={query.hasNextPage}
       loadingMore={query.isFetchingNextPage}
       onLoadMore={() => { setRestarted(false); void query.fetchNextPage() }}
-      onRetry={pages && pages.length > 1 ? restart : () => void refetch()}
+      onRetry={() => { setRestarted(false); if (pages && pages.length > 1) restart(); else void refetch() }}
       onNavigate={onNavigate}
     />
   )

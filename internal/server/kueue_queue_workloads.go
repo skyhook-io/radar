@@ -303,16 +303,6 @@ func kueueReadFingerprint(parts ...kueueKindRead) string {
 	return hex.EncodeToString(h.Sum(nil)[:12])
 }
 
-// laterPageBudget is the permission-check budget of one kind's read: none on
-// a later page, which decides access only from the answers the first page's
-// checks cached, so it reads the scope the first page read.
-func laterPageBudget(page kueueQueuePage, kinds int32) *atomic.Int32 {
-	if page.after != "" {
-		return new(atomic.Int32)
-	}
-	return newKueueAccessBudget(kinds)
-}
-
 func (s *Server) writeKueueQueuePageError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errKueueQueueCursor) {
 		s.writeErrorCode(w, http.StatusBadRequest, kueueCursorInvalid, err.Error())
@@ -367,7 +357,7 @@ func (s *Server) handleKueueClusterQueueWorkloads(w http.ResponseWriter, r *http
 	response := KueueQueueWorkloadsResponse{Queue: identity}
 
 	target, code := s.namespaceListTarget(r, h.cache, nil)
-	localQueues, lqFailure := s.readKueueIndexed(r, h, laterPageBudget(page, 2), target, code, "LocalQueue", "localqueues", []string{k8score.KueueLocalQueueTargetKey(name)})
+	localQueues, lqFailure := s.readKueueIndexed(r, h, newKueueAccessBudget(2), target, code, "LocalQueue", "localqueues", []string{k8score.KueueLocalQueueTargetKey(name)})
 	keys := []string{k8score.KueueReservationKey(name)}
 	pointing := map[string]*unstructured.Unstructured{}
 	if lqFailure != nil {
@@ -381,7 +371,7 @@ func (s *Server) handleKueueClusterQueueWorkloads(w http.ResponseWriter, r *http
 			}
 		}
 	}
-	workloads, wlFailure := s.readKueueIndexed(r, h, laterPageBudget(page, 2), target, code, "Workload", "workloads", keys)
+	workloads, wlFailure := s.readKueueIndexed(r, h, newKueueAccessBudget(2), target, code, "Workload", "workloads", keys)
 	if wlFailure != nil && page.after != "" {
 		// A later page that reads nothing (its permission answers expired,
 		// a store is reloading) can't continue the first page's list.
@@ -460,7 +450,7 @@ func (s *Server) handleKueueLocalQueueWorkloads(w http.ResponseWriter, r *http.R
 	}
 	response := KueueQueueWorkloadsResponse{Queue: identity}
 	target, code := s.namespaceListTarget(r, h.cache, []string{namespace})
-	workloads, failure := s.readKueueIndexed(r, h, laterPageBudget(page, 1), target, code, "Workload", "workloads", []string{k8score.KueueSubmissionKey(namespace, name)})
+	workloads, failure := s.readKueueIndexed(r, h, newKueueAccessBudget(1), target, code, "Workload", "workloads", []string{k8score.KueueSubmissionKey(namespace, name)})
 	if failure != nil && page.after != "" {
 		s.writeKueueQueuePageError(w, errKueueQueueReadChanged)
 		return
@@ -537,7 +527,7 @@ func kueueQueueMembersPage(members []kueuequeues.Member, page kueueQueuePage, co
 	}
 	matching := kueuequeues.Filter(members, page.membership, page.state, stateOf)
 	rows, more := kueuequeues.Page(matching, page.after, page.limit)
-	counts := kueuequeues.Count(members, stateOf)
+	counts := kueuequeues.Count(members, nil)
 	counts.States = kueuequeues.Count(kueuequeues.Filter(members, page.membership, "", stateOf), stateOf).States
 	out := &KueueQueueMembers{Items: make([]KueueQueueWorkload, 0, len(rows)), Matching: len(matching), Counts: counts, Coverage: coverage}
 	for _, m := range rows {
@@ -582,7 +572,17 @@ func submissionUnresolved(workloads, localQueues kueueKindRead, localQueuesFaile
 		return nil
 	}
 	if workloads.all {
-		return resourceapi.UnknownNames()
+		// Every namespace's Workloads were read; when each namespace whose
+		// LocalQueues weren't is named by a gap, name them.
+		lqCov := localQueues.coverage
+		named := !slices.Contains(lqCov.NarrowedBy, resourceapi.NarrowedByNamespaceCollection)
+		for _, gap := range lqCov.Gaps {
+			named = named && gap.Namespaces != nil && gap.Namespaces.Extent == ""
+		}
+		if !named {
+			return resourceapi.UnknownNames()
+		}
+		return resourceapi.Names(slices.Sorted(maps.Keys(localQueues.unread)), resourceapi.RESTSetLimit)
 	}
 	var unresolved []string
 	for _, ns := range workloads.namespaces() {
