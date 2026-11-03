@@ -1,11 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { AlertBanner, PaneLoader, RadarUpgradeNote } from '@skyhook-io/k8s-ui'
 import { logsContainer, podLogsUnavailableReason } from '@skyhook-io/k8s-ui/components/resources/resource-utils-ray'
-import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
-import { isStableClientError, useCapabilities, useRadarFeature, useWorkloadPods } from '../../api/client'
+import { isStableClientError, useRadarFeature, useWorkloadPods } from '../../api/client'
 import type { ResourceRef } from '../../types'
 import { MultiPodLogsTab } from './MultiPodLogsTab'
-import { rayClusterPodsError, useSidecarsMarked } from './rayClusterPods'
+import { rayClusterPodsError, useLogsReadability, useSidecarsMarked } from './rayClusterPods'
 
 // The generic Logs tab lists Pods recalled from history, deleted ones
 // included. A RayCluster's tab lists the Pods its current incarnation owns
@@ -22,7 +21,6 @@ export function RayClusterLogsTab({
   historyPods,
   selectedPod,
   onSelectPod,
-  initialContainer,
 }: {
   namespace: string
   name: string
@@ -33,15 +31,11 @@ export function RayClusterLogsTab({
   historyPods: ResourceRef[]
   selectedPod: string | null
   onSelectPod: (name: string | null) => void
-  initialContainer: string | null
 }) {
   const { support, upgrade } = useRadarFeature('rayClusterPods')
   const sidecarsMarked = useSidecarsMarked()
-  const { canViewLogs, logsUnknown } = useNamespacedCapabilities(namespace)
-  const capabilities = useCapabilities()
-  // A failed refetch keeps serving the last answer; only no answer at all is unknown.
-  const capabilitiesFailed = capabilities.isError && !capabilities.data
-  const logsDenied = !canViewLogs && !logsUnknown && !capabilitiesFailed
+  const readability = useLogsReadability(namespace)
+  const logsDenied = readability === 'denied'
   const unsupported = support === 'unsupported'
   const query = useWorkloadPods('rayclusters', namespace, uid && !unsupported ? name : '', { ownerUID: uid, limit: 200, refetchInterval: 5000 })
   const owned = !unsupported && uid && query.data && !isStableClientError(query.error) ? query.data : undefined
@@ -68,7 +62,7 @@ export function RayClusterLogsTab({
     ? [...owned.pods].sort((a, b) => a.name.localeCompare(b.name)).map(pod => ({ kind: 'Pod', namespace, name: pod.name }))
     : historyPods
   const selected = owned?.pods.find(pod => pod.name === selectedPod)
-  const container = selected ? logsContainer(selected, sidecarsMarked) : initialContainer
+  const container = selected ? logsContainer(selected, sidecarsMarked) : undefined
   const reason = unsupported ? '' : !uid ? rootError?.message ?? 'The RayCluster could not be read.' : rayClusterPodsError(query.error, support) ?? 'Its current Pods could not be read.'
   const refreshError = owned && query.error ? rayClusterPodsError(query.error, support) : undefined
   const sentence = (text: string) => /[.!?]$/.test(text) ? text : `${text}.`
@@ -81,7 +75,7 @@ export function RayClusterLogsTab({
           <AlertBanner variant="info" title="Pod list capped" message={`Showing the ${owned.pods.length} least healthy of ${owned.total} Pods. Runtime Pods on Overview can narrow to the head or one worker group (each view is capped at 200), with a Logs button on each Pod.`} />
         </div>
       )}
-      {!canViewLogs && (
+      {readability !== 'allowed' && (
         <div className="shrink-0 px-4 pt-3">
           {logsDenied
             ? <AlertBanner variant="warning" title="Pod logs not readable" message="Reading a Pod's logs in this namespace needs get on pods/log, which you don't have. The Pods are listed so you can see which exist." />

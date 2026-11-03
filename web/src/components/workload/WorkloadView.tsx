@@ -1552,7 +1552,6 @@ function LogsTabContent({
         historyPods={pods}
         selectedPod={selectedPod}
         onSelectPod={onSelectPod}
-        initialContainer={initialContainer}
       />
     )
   }

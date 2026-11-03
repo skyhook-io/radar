@@ -1796,7 +1796,8 @@ that owned-Pod list. Missing access, cache warming and recreated roots are expli
 no RayCluster-wide log stream or lifecycle actions are added.
 
 Logs are read per Pod, as container output; Ray session logs under `/tmp/ray` are
-not read, and nothing is kept once a Pod is deleted.
+not read. Kubernetes cannot serve a deleted Pod's logs; a viewer may still hold
+lines it already loaded.
 
 - **Logs tab.** A `ray.io/v1` RayCluster's tab lists the Pods its current
   incarnation owns, through the same owner-UID request as Runtime Pods, and opens
@@ -1817,8 +1818,8 @@ not read, and nothing is kept once a Pod is deleted.
   on the first regular init container that isn't done (a worker waiting on the
   head sits in KubeRay's `wait-gcs-ready`). Otherwise they open the first
   application container. Native sidecars are never chosen first; a Radar that doesn't
-  advertise `podSidecarMarks` doesn't mark sidecars, so there an init
-  container is chosen only in a Pending Pod where it is the sole unready one.
+  advertise `podSidecarMarks` doesn't mark sidecars, so there the first
+  application container opens.
 - A RayCluster served only as a version older than `ray.io/v1` keeps the generic
   Logs tab, because Radar reads RayCluster Pods through `ray.io/v1`.
 

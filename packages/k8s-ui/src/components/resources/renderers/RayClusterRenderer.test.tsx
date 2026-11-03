@@ -40,7 +40,7 @@ describe('RayCluster Pod log links', () => {
   })
   it('says why a Pod with no reported container status has no logs instead of offering a button', () => {
     const html = renderToStaticMarkup(<RayClusterRenderer data={root} onSelectPods={() => {}} podEvidence={evidence} onOpenPodLogs={() => {}} />)
-    expect(html).toContain('Logs for cluster-cpu-worker-new: </span>Not scheduled'); expect(html).toContain('Logs for cluster-cpu-worker-bound: </span>No status yet'); expect(html).toContain('Logs for cluster-cpu-worker-evicted: </span>Ended before starting'); expect(html).toContain('Logs for cluster-cpu-worker-sidecar-only: </span>No status yet')
+    expect(html).toContain('Logs for cluster-cpu-worker-new: </span>Not scheduled'); expect(html).toContain('Logs for cluster-cpu-worker-bound: </span>No status yet'); expect(html).toContain('Logs for cluster-cpu-worker-evicted: </span>Ended before starting'); expect(html).toContain('Logs for cluster-cpu-worker-sidecar-only: </span>Waiting to start')
     expect(html).not.toContain('Open logs for cluster-cpu-worker-new'); expect(html).not.toContain('Open logs for cluster-cpu-worker-bound')
   })
   it('opens the clicked row\'s Pod', () => {

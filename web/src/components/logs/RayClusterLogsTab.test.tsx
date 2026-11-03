@@ -30,7 +30,7 @@ const owned = { pods: [
 ], total: 2, truncated: false }
 const render = (uid: string | undefined = 'uid-1', selectedPod: string | null = null) => renderUID(uid, selectedPod)
 const renderUID = (uid: string | undefined, selectedPod: string | null = null, root: { loading?: boolean; error?: Error | null } = {}) => renderToStaticMarkup(
-  <RayClusterLogsTab namespace="ml" name="cluster" uid={uid} suspendRequested={false} rootLoading={root.loading ?? false} rootError={root.error ?? null} historyPods={history} selectedPod={selectedPod} onSelectPod={() => {}} initialContainer={null} />,
+  <RayClusterLogsTab namespace="ml" name="cluster" uid={uid} suspendRequested={false} rootLoading={root.loading ?? false} rootError={root.error ?? null} historyPods={history} selectedPod={selectedPod} onSelectPod={() => {}} />,
 )
 
 describe('RayClusterLogsTab', () => {
@@ -146,14 +146,14 @@ describe('RayClusterLogsTab', () => {
 
   it('says what happened when an older Radar has no recorded Pods either', () => {
     state.support = 'unsupported'
-    const html = renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={[]} selectedPod={null} onSelectPod={() => {}} initialContainer={null} />)
+    const html = renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested={false} rootLoading={false} rootError={null} historyPods={[]} selectedPod={null} onSelectPod={() => {}} />)
     expect(state.tab.emptyMessage).toBe('Radar hasn\'t recorded any Pods for this RayCluster.')
     expect(html).not.toContain('Showing recorded Pods')
   })
 
   it('names a requested suspension when the cluster has no Pods', () => {
     state.query = { data: { pods: [], total: 0, truncated: false } }
-    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested rootLoading={false} rootError={null} historyPods={history} selectedPod={null} onSelectPod={() => {}} initialContainer={null} />)
+    renderToStaticMarkup(<RayClusterLogsTab namespace="ml" name="cluster" uid="uid-1" suspendRequested rootLoading={false} rootError={null} historyPods={history} selectedPod={null} onSelectPod={() => {}} />)
     expect(state.tab.emptyMessage).toBe('This RayCluster has no Pods right now. Its suspension is requested.')
   })
 

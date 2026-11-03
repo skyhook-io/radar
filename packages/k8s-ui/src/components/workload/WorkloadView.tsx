@@ -585,7 +585,7 @@ export function WorkloadView({
   // even for one render. A UID arriving with the first load is not a change.
   const selectionIdentity = `${kind}\u0000${namespace}\u0000${name}`
   // A host can briefly pass the previous resource with the new name.
-  const selectionUID = resource?.metadata?.name === name ? resource?.metadata?.uid as string | undefined : undefined
+  const selectionUID = resource?.metadata?.name === name && (resource?.metadata?.namespace ?? '') === (namespace ?? '') ? resource?.metadata?.uid as string | undefined : undefined
   const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID })
   if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
     const recreated = selectionScope.identity === selectionIdentity && selectionScope.uid !== undefined

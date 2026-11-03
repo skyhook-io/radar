@@ -1,5 +1,6 @@
 import { isKubeRayClusterIdentity } from '@skyhook-io/k8s-ui/components/resources/resource-utils-ray'
 import { ApiError, useCapabilities } from '../../api/client'
+import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
 import type { RadarFeatureSupport } from '../../api/radarFeatures'
 
 export function isKubeRayCluster(kind: string, group: string | undefined, apiVersion: string | undefined): boolean {
@@ -18,4 +19,14 @@ export function rayClusterPodsError(error: unknown, support: RadarFeatureSupport
   if (!error) return undefined
   if (error instanceof ApiError && error.status === 400 && support !== 'supported' && /^only deployments/.test(error.message)) return 'This Radar may not list a RayCluster\'s Pods; Radar v1.15 and later do.'
   return error instanceof Error ? error.message : 'The Pod list could not be read.'
+}
+
+// Whether this viewer can read Pod logs in a namespace. Unknown while the
+// namespace answer is pending or failed, or when no capabilities answer ever
+// arrived (a failed refetch keeps the last answer).
+export function useLogsReadability(namespace: string): 'allowed' | 'denied' | 'unknown' {
+  const { canViewLogs, logsUnknown } = useNamespacedCapabilities(namespace)
+  const capabilities = useCapabilities()
+  if (canViewLogs) return 'allowed'
+  return logsUnknown || (capabilities.isError && !capabilities.data) ? 'unknown' : 'denied'
 }

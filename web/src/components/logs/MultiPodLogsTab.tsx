@@ -70,26 +70,31 @@ export function MultiPodLogsTab({
         <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
           {chips.map((pod) => (
             <Tooltip key={pod.name} content={pod.name} disabled={pod.name.length <= 40}>
-            <button
-              onClick={() => onSelectPod(pod.name)}
-              aria-pressed={selectedPod === pod.name}
-              aria-label={pod.name.length > 40 ? `${pod.name}${pod.name === unlisted ? ', not in this list' : ''}` : undefined}
-              className={clsx(
-                'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
-                selectedPod === pod.name
-                  ? 'selection-strong selection-text'
-                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover',
-              )}
-            >
-              {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
-              {pod.name === unlisted && <span className="ml-1.5 text-xs opacity-75">· not in this list</span>}
-            </button>
+              <button
+                onClick={() => onSelectPod(pod.name)}
+                aria-pressed={selectedPod === pod.name}
+                aria-label={
+                  pod.name.length > 40 ? `${pod.name}${pod.name === unlisted ? ', not in this list' : ''}` : undefined
+                }
+                className={clsx(
+                  'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
+                  selectedPod === pod.name
+                    ? 'selection-strong selection-text'
+                    : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover',
+                )}
+              >
+                {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
+                {pod.name === unlisted && <span className="ml-1.5 text-xs opacity-75">· not in this list</span>}
+              </button>
             </Tooltip>
           ))}
         </div>
       )}
       {selectedPod && selectedPodNote && (
-        <div role="status" className="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-theme-text-tertiary">
+        <div
+          role="status"
+          className="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center text-theme-text-tertiary"
+        >
           <Terminal className="mb-3 h-12 w-12 opacity-50" />
           <p className="text-sm font-medium text-theme-text-secondary">No logs shown for {selectedPod}</p>
           <p className="text-sm">{selectedPodNote}</p>

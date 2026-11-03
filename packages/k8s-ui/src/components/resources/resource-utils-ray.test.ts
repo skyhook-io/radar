@@ -113,11 +113,11 @@ describe('logsContainer', () => {
   it('leaves the choice to the viewer when no status is reported', () => {
     expect(logsContainer({ name: 'p', ready: false, containers: ['wait-gcs-ready', 'ray-worker'] }, true)).toBeUndefined()
   })
-  it('on a Radar that does not mark sidecars, picks an init container only when it is the sole unready one in a Pending Pod', () => {
-    const proxyFirst = { name: 'p', ready: false, phase: 'Pending', containers: ['proxy', 'wait-gcs-ready', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('wait-gcs-ready', { init: true }), status('ray-worker')] }
-    expect(logsContainer(proxyFirst, false)).toBe('ray-worker')
+  it('on a Radar that does not mark sidecars, opens the first application container', () => {
     const onlyWait = { name: 'p', ready: false, phase: 'Pending', containers: ['wait-gcs-ready', 'ray-worker'], containerStatuses: [status('wait-gcs-ready', { init: true }), status('ray-worker')] }
-    expect(logsContainer(onlyWait, false)).toBe('wait-gcs-ready')
+    expect(logsContainer(onlyWait, false)).toBe('ray-worker')
+    const loneSidecar = { name: 'p', ready: false, phase: 'Pending', containers: ['setup', 'proxy', 'ray-worker'], containerStatuses: [status('setup', { init: true, ready: true }), status('proxy', { init: true }), status('ray-worker')] }
+    expect(logsContainer(loneSidecar, false)).toBe('ray-worker')
     const failedWithStoppedSidecar = { name: 'p', ready: false, phase: 'Failed', containers: ['proxy', 'setup', 'ray-worker'], containerStatuses: [status('proxy', { init: true }), status('setup', { init: true, ready: true }), status('ray-worker')] }
     expect(logsContainer(failedWithStoppedSidecar, false)).toBe('ray-worker')
   })
@@ -128,7 +128,7 @@ describe('podLogsUnavailableReason', () => {
     expect(podLogsUnavailableReason({ name: 'p', ready: false, containers: ['c'] })).toBe('Not scheduled')
     expect(podLogsUnavailableReason({ name: 'p', ready: false, nodeName: 'n', containers: ['c'] })).toBe('No status yet')
     expect(podLogsUnavailableReason({ name: 'p', ready: false, phase: 'Failed', containers: ['c'] })).toBe('Ended before starting')
-    expect(podLogsUnavailableReason({ name: 'p', ready: false, nodeName: 'n', containers: ['proxy', 'c'], containerStatuses: [{ name: 'proxy', init: true, sidecar: true, ready: true, restartCount: 0 }] })).toBe('No status yet')
+    expect(podLogsUnavailableReason({ name: 'p', ready: false, nodeName: 'n', containers: ['proxy', 'c'], containerStatuses: [{ name: 'proxy', init: true, sidecar: true, ready: true, restartCount: 0 }] })).toBe('Waiting to start')
     expect(podLogsUnavailableReason({ name: 'p', ready: true, containers: ['c'], containerStatuses: [{ name: 'c', ready: true, restartCount: 0 }] })).toBeUndefined()
   })
 })

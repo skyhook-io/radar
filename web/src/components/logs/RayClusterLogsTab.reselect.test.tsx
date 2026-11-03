@@ -22,7 +22,7 @@ const owned = { pods: [{ name: 'failing-worker', ready: false, containers: [] },
 function mount(selectedPod: string, onSelectPod = vi.fn()) {
   const host = document.createElement('div')
   const root = createRoot(host)
-  const render = () => act(() => root.render(<RayClusterLogsTab namespace="ml" name="c" uid="u" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod={selectedPod} onSelectPod={onSelectPod} initialContainer={null} />))
+  const render = () => act(() => root.render(<RayClusterLogsTab namespace="ml" name="c" uid="u" suspendRequested={false} rootLoading={false} rootError={null} historyPods={history} selectedPod={selectedPod} onSelectPod={onSelectPod} />))
   return { render, onSelectPod, unmount: () => act(() => root.unmount()) }
 }
 
@@ -40,6 +40,27 @@ it('leaves a selection alone when the owned list was showing all along', () => {
   state.query = { data: owned }
   const view = mount('gone-after-selection')
   view.render()
+  view.render()
+  expect(view.onSelectPod).not.toHaveBeenCalled()
+  view.unmount()
+})
+
+
+it('keeps a recorded selection that is still in the current owned list', () => {
+  state.query = { error: new Error('cache warming') }
+  const view = mount('head')
+  view.render()
+  state.query = { data: owned }
+  view.render()
+  expect(view.onSelectPod).not.toHaveBeenCalled()
+  view.unmount()
+})
+
+it('keeps a pre-existing selection while the owned list is initially loading', () => {
+  state.query = { isLoading: true }
+  const view = mount('gone-after-selection')
+  view.render()
+  state.query = { data: owned }
   view.render()
   expect(view.onSelectPod).not.toHaveBeenCalled()
   view.unmount()
