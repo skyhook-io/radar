@@ -622,6 +622,21 @@ func TestParseCaseRequestReportsAMalformedEvidenceEnvelope(t *testing.T) {
 
 // A fence that carries no verdict field is the agent quoting something; the
 // answer is prose and keeps it, and nothing in it is handed back as a field.
+// The prompt calls it "the fenced ```json verdict block"; a model that writes
+// that label into the fence still wrote the verdict.
+func TestParse_FenceLabelAfterJSON(t *testing.T) {
+	for _, open := range []string{"```json verdict\n", "```json\tverdict block\n", "```json \n", "```json "} {
+		d := Parse("Story.\n\n" + open + `{"summary": "s", "root_cause": "x", "nested": {"a": 1}}` + "\n```").Verdict
+		if d.RootCause != "x" || d.Report != "Story." {
+			t.Errorf("fence %q: root cause %q report %q", open, d.RootCause, d.Report)
+		}
+	}
+	// No space after json is another language, not a label.
+	if d := Parse("```jsonc\n{\"root_cause\": \"x\"}\n```").Verdict; d.RootCause != "" {
+		t.Errorf("```jsonc read as the verdict: %q", d.RootCause)
+	}
+}
+
 func TestParse_AnswerWithOnlyAQuotedFenceIsProse(t *testing.T) {
 	text := "Set it like this:\n\n```json\n{\"spec\": {\"replicas\": 2}}\n```\n\nThen wait."
 	p := Parse(text)

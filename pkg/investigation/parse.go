@@ -9,7 +9,11 @@ import (
 )
 
 var (
-	jsonBlockRe = regexp.MustCompile("(?s)```json\\s*(\\{.*?\\})\\s*```")
+	// The fence may carry a label after json on its opening line ("```json
+	// verdict"): the prompt names "the fenced ```json verdict block", and some
+	// models copy that phrase into the fence. The label stops before a brace
+	// so a one-line block keeps its whole object.
+	jsonBlockRe = regexp.MustCompile("(?s)```json(?:[ \\t][^\\n`{]*)?\\s*(\\{.*?\\})\\s*```")
 	// The ledger marks each tool result with [[radar:evidence-ref=ev_…]]; an
 	// agent that copies that form into the story meant the placement marker,
 	// so a ref that names a cited item becomes [[radar:evidence=N]] and reads
