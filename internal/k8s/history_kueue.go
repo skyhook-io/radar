@@ -257,7 +257,6 @@ func conditionValue(c observedCondition, ok bool) any {
 	return fmt.Sprintf("%s (%s)", c.status, c.reason)
 }
 
-// conditionSummary phrases one condition's transition for the row summary.
 type conditionSummary func(typ string, old observedCondition, oldOK bool, cur observedCondition, curOK bool) string
 
 func genericConditionSummary(typ string, _ observedCondition, _ bool, cur observedCondition, curOK bool) string {
