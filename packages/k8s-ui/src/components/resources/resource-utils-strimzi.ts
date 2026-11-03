@@ -29,7 +29,7 @@ export function getStrimziConnectorColumnValue(data: any, column: string): strin
     case 'status': return getStrimziConnectorStatus(data).text
     case 'connectCluster': return data.metadata?.labels?.['strimzi.io/cluster'] ?? ''
     case 'connectorClass': return data.spec?.class ?? ''
-    case 'connectorTasks': return `${Array.isArray(data.status?.connectorStatus?.tasks) ? data.status.connectorStatus.tasks.length : 'Unknown'} / ${data.spec?.tasksMax ?? 'Unknown'}`
+    case 'connectorTasks': return `${Array.isArray(data.status?.connectorStatus?.tasks) ? data.status.connectorStatus.tasks.length : 'Unknown'} / ${data.spec?.tasksMax ?? 'Not specified'}`
     default: return undefined
   }
 }
