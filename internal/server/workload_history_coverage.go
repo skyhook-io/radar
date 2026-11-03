@@ -43,8 +43,12 @@ var kueueHistoryKinds = []resourceapi.KindRef{
 func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveIdentity, knownDependency bool) (gaps []resourceapi.Gap, watchedSince time.Time) {
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
+	var unknown []kueueHistoryKindRead
 	if discovery == nil || dynamicCache == nil {
-		return nil, time.Time{}
+		for _, ref := range kueueHistoryKinds {
+			unknown = append(unknown, kueueHistoryKindRead{ref: ref, allowed: true, authoritative: true, uncollected: []readreason.Code{readreason.KindSyncPending}})
+		}
+		return kueueReadGaps(namespace, unknown)
 	}
 	type servedKind struct {
 		ref resourceapi.KindRef
@@ -54,10 +58,21 @@ func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveI
 	for _, ref := range kueueHistoryKinds {
 		if gvr, ok := discovery.GetGVRWithGroup(ref.Kind, ref.Group); ok {
 			served = append(served, servedKind{ref, gvr})
+			continue
+		}
+		var code readreason.Code
+		switch {
+		case discovery.LastRefreshFailed() || discovery.GroupHadPartialDiscovery(ref.Group):
+			code = readreason.ReadError
+		case dynamicCache.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete:
+			code = readreason.KindSyncPending
+		}
+		if code != "" {
+			unknown = append(unknown, kueueHistoryKindRead{ref: ref, allowed: true, authoritative: true, uncollected: []readreason.Code{code}})
 		}
 	}
 	if len(served) == 0 || served[0].ref.Kind != "Workload" {
-		return nil, time.Time{}
+		return kueueReadGaps(namespace, unknown)
 	}
 	allowed, authoritative := s.canReadDecision(r, served[0].gvr.Group, served[0].gvr.Resource, namespace, "list")
 	// When affiliation cannot be checked, qualify the possible dependency
@@ -65,7 +80,7 @@ func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveI
 	if !knownDependency && !kueueManagedRoot(dynamicCache, served[0].gvr, namespace, live, allowed && authoritative) {
 		return nil, time.Time{}
 	}
-	reads := make([]kueueHistoryKindRead, 0, len(served))
+	reads := unknown
 	for _, kind := range served {
 		read := kueueHistoryKindRead{ref: kind.ref}
 		read.allowed, read.authoritative = s.canReadDecision(r, kind.gvr.Group, kind.gvr.Resource, namespace, "list")

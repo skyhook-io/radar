@@ -137,8 +137,9 @@ func kueueTimelineObject(u *unstructured.Unstructured) *unstructured.Unstructure
 		items, found, _ := unstructured.NestedSlice(out.Object, "status", "conditions")
 		if found {
 			for _, item := range items {
-				if m, ok := item.(map[string]any); ok && m["type"] == "QuotaReserved" && m["status"] == "False" && m["reason"] == "Pending" {
-					if message, ok := m["message"].(string); ok && strings.HasPrefix(message, "couldn't assign flavors to pod set ") {
+				if m, ok := item.(map[string]any); ok && m["type"] == "QuotaReserved" && m["status"] == "False" {
+					reason, _ := m["reason"].(string)
+					if message, ok := m["message"].(string); ok && kueueQuotaRetryReason(reason) && strings.HasPrefix(message, "couldn't assign flavors to pod set ") {
 						m["message"] = maskQuantities(message)
 					}
 				}
@@ -329,7 +330,7 @@ func (d *statusDiff) conditions(oldU, newU *unstructured.Unstructured, summarize
 		if !messageChanged {
 			continue
 		}
-		if !signalChanged && newU.GetKind() == "Workload" && typ == "QuotaReserved" && o.status == "False" && (o.reason == "Pending" || o.reason == "WaitingForQuota" || o.reason == "ExceedsMaxQuota") &&
+		if !signalChanged && newU.GetKind() == "Workload" && typ == "QuotaReserved" && o.status == "False" && kueueQuotaRetryReason(o.reason) &&
 			strings.HasPrefix(o.message, "couldn't assign flavors to pod set ") && strings.HasPrefix(n.message, "couldn't assign flavors to pod set ") && maskQuantities(o.message) == maskQuantities(n.message) {
 			continue
 		}
@@ -602,6 +603,15 @@ var kueueQuantitySlots = []struct {
 }{
 	{regexp.MustCompile(`\(\d[\d.]*[A-Za-z]*\)`), "(#)"},
 	{regexp.MustCompile(`\b\d[\d.]*[A-Za-z]*( more needed)`), "#$1"},
+}
+
+func kueueQuotaRetryReason(reason string) bool {
+	switch reason {
+	case "Pending", "WaitingForQuota", "ExceedsMaxQuota":
+		return true
+	default:
+		return false
+	}
 }
 
 func maskQuantities(message string) string {
