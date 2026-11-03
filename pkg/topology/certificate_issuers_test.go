@@ -181,7 +181,7 @@ func TestIssuanceIssuerJoinsEnrolledStagesFromEnrollmentReads(t *testing.T) {
 	}
 	nodes := []Node{{ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}}}
 	b := &Builder{dynamic: provider}
-	nodes, edges, issuance := b.enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+	nodes, edges, issuance := b.enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 	if len(issuance) != 90 {
 		t.Fatalf("enrolled stages yielded %d issuer dependencies", len(issuance))
 	}

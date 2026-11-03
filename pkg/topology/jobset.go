@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/jobset"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // jobSetNodeID uses the generic CRD pass's ID form for a custom resource. The
@@ -108,6 +109,16 @@ func jobSetTopologyStatus(state jobset.State) (HealthStatus, string) {
 		return StatusNeutral, "Pending"
 	}
 	return StatusUnknown, "Unknown"
+}
+
+// uids keys each drawn JobSet's UID by its resource key, for the generic
+// owner pass to tell it from an earlier JobSet of the same name.
+func (roots jobSetRoots) uids() map[string]types.UID {
+	out := make(map[string]types.UID, len(roots))
+	for _, root := range roots {
+		out[resourceid.ResourceKey(jobset.Group, jobset.Kind, root.GetNamespace(), root.GetName())] = root.GetUID()
+	}
+	return out
 }
 
 // controllerOf returns the drawn JobSet that controls job, judged by

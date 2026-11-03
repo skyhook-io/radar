@@ -5771,7 +5771,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {
 		var issuance []declaredDependency
-		nodes, edges, issuance = b.enrollGenericCRDNodes(nodes, edges, opts)
+		nodes, edges, issuance = b.enrollGenericCRDNodes(nodes, edges, opts, jobSets.uids())
 		var issuerWarnings []string
 		nodes, edges, issuerWarnings = addObservedDependencyEdges(nodes, edges, issuance, b.dynamic, opts)
 		warnings = append(warnings, issuerWarnings...)
@@ -8760,14 +8760,18 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 // multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
 // intermediate nodes only become resolvable after their parents are added.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
-	nodes, edges, _ = b.enrollGenericCRDNodes(nodes, edges, opts)
+	nodes, edges, _ = b.enrollGenericCRDNodes(nodes, edges, opts, nil)
 	return nodes, edges
 }
 
 // enrollGenericCRDNodes is addGenericCRDNodes that also returns the issuer
 // dependencies of the cert-manager issuance stages it admitted, parsed from
 // the objects enrollment already read so the issuer join lists nothing again.
-func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge, []declaredDependency) {
+//
+// ownerUIDs (resource key -> UID) names the incarnation of owners the caller
+// drew from their objects; an owner reference naming another UID for one of
+// them, an earlier same-named owner's, draws no edge.
+func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions, ownerUIDs map[string]types.UID) ([]Node, []Edge, []declaredDependency) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
 	if dynamicCache == nil || resourceDiscovery == nil {
@@ -8812,6 +8816,7 @@ func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOp
 		nodeID      string
 		node        Node
 		ownerRefs   []ResourceRef
+		ownerUIDs   []types.UID
 		resourceKey string
 		typeKey     string
 		existing    bool
@@ -8894,10 +8899,12 @@ func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOp
 			}
 
 			var ownerResources []ResourceRef
+			var ownerResourceUIDs []types.UID
 			for _, ref := range ownerRefs {
 				if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
 					continue
 				}
+				ownerResourceUIDs = append(ownerResourceUIDs, ref.UID)
 				ownerResources = append(ownerResources, ResourceRef{
 					Group: resourceid.GroupFromAPIVersion(ref.APIVersion), Kind: ref.Kind, Namespace: ns, Name: ref.Name,
 				})
@@ -8919,6 +8926,7 @@ func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOp
 					},
 				},
 				ownerRefs:   ownerResources,
+				ownerUIDs:   ownerResourceUIDs,
 				resourceKey: resourceKey,
 				typeKey:     typeKey,
 				existing:    existing,
@@ -8937,10 +8945,15 @@ func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOp
 			}
 
 			var ownerEdges []Edge
-			for _, owner := range c.ownerRefs {
-				ownerID, ok := existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, owner.Namespace, owner.Name)]
+			for i, owner := range c.ownerRefs {
+				ownerKey := resourceid.ResourceKey(owner.Group, owner.Kind, owner.Namespace, owner.Name)
+				ownerID, ok := existingResourceIDs[ownerKey]
 				if !ok && owner.Namespace != "" {
-					ownerID, ok = existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, "", owner.Name)]
+					ownerKey = resourceid.ResourceKey(owner.Group, owner.Kind, "", owner.Name)
+					ownerID, ok = existingResourceIDs[ownerKey]
+				}
+				if drawn := ownerUIDs[ownerKey]; ok && drawn != "" && c.ownerUIDs[i] != "" && c.ownerUIDs[i] != drawn {
+					ok = false
 				}
 				if ok {
 					ownerEdges = append(ownerEdges, Edge{

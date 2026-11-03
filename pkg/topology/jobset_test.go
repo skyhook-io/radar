@@ -447,6 +447,29 @@ func TestJobSetOwnedWorkloadAttachesThroughGenericPass(t *testing.T) {
 	}
 }
 
+// A Workload left by an earlier JobSet of the same name names that JobSet's
+// UID: it doesn't attach to the current one.
+func TestJobSetIgnoresEarlierIncarnationsWorkload(t *testing.T) {
+	workloadGVR := schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads"}
+	root := testJobSetRoot("ml", "train", "jobset-current", nil, nil)
+	current := genericIdentityObject(workloadGVR, "Workload", "ml", "jobset-train-new", jobSetOwnerRef("train", "jobset-current"))
+	earlier := genericIdentityObject(workloadGVR, "Workload", "ml", "jobset-train-old", jobSetOwnerRef("train", "jobset-earlier"))
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{jobSetTestGVR, workloadGVR},
+		kinds:     map[schema.GroupVersionResource]string{jobSetTestGVR: "JobSet", workloadGVR: "Workload"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{jobSetTestGVR: {root}, workloadGVR: {current, earlier}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	topo := buildJobSetTopology(t, &mockProvider{}, dynamic, DefaultBuildOptions())
+
+	if got := managesTargets(topo, "jobset/ml/train/jobset.x-k8s.io"); !slices.Equal(got, []string{"workload/ml/jobset-train-new/kueue.x-k8s.io"}) {
+		t.Fatalf("JobSet manages %v, want only the current incarnation's Workload", got)
+	}
+	if nodeByID(topo.Nodes, "workload/ml/jobset-train-old/kueue.x-k8s.io") != nil {
+		t.Fatal("earlier incarnation's Workload drawn under the current JobSet")
+	}
+}
+
 // A root TrainJob isn't drawn (the generic pass only adds owned objects), so
 // its JobSet is still one node, with no owner edge.
 func TestJobSetUnderUndrawnTrainJobIsOneRoot(t *testing.T) {

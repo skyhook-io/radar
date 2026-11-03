@@ -1919,7 +1919,8 @@ Labels, other owner references and earlier same-named JobSets never link. With J
 member Pods attach to the JobSet directly. Pods are matched to their Job by UID, for every
 Job: while a recreated Job's predecessor Pods are still terminating, they are grouped apart
 and attached to nothing, so they don't count toward the current Job. Objects a JobSet owns
-that Radar watches, such as its Kueue Workload, attach through the generic owner pass. A
+that Radar watches, such as its Kueue Workload, attach through the generic owner pass when
+their owner reference names this JobSet's UID. A
 JobSet's Topology tab shows up to 24 member Jobs, failed and active ones first, and says how
 many it left out; clicking a member Job there opens that member in the Overview. The traffic
 view does not draw Jobs, and no scheduling or dependency edges are drawn. A TrainJob that
