@@ -97,6 +97,9 @@ describe('LocalQueue parent and namespace eligibility', () => {
   it('does not decide eligibility when the ClusterQueue itself was not read', () => {
     const html = renderToStaticMarkup(<LocalQueueRenderer data={lq} reads={{ clusterQueue: { state: 'unavailable', code: 'user_forbidden' } }} />)
     expect(html).toContain('Unknown: ClusterQueue not read (you can’t read it)')
+    const inactive = renderToStaticMarkup(<LocalQueueRenderer data={localQueue(active('False', 'ClusterQueueIsInactive', 1))} reads={{ clusterQueue: { state: 'unavailable', code: 'user_forbidden' } }} />)
+    expect(inactive).toContain('a cluster administrator can check it')
+    expect(inactive).not.toContain('Inspect the ClusterQueue')
     expect(html).not.toContain('no namespace matches')
     const missing = renderToStaticMarkup(<LocalQueueRenderer data={lq} reads={{ clusterQueue: { state: 'not_found' } }} />)
     expect(missing).toContain('points at a ClusterQueue that doesn&#x27;t exist')

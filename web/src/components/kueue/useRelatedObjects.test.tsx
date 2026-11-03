@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { getApiBase } from '../../api/config'
+import { ApiError } from '../../api/client'
 import { RELATED_GET_RECHECK_MS, useRelatedObjects, type RelatedObjects } from './useRelatedReads'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -165,4 +166,18 @@ it('doesn’t serve a GET result cached before mount as current, found or not', 
   expect(latest?.byName.present).toEqual({ state: 'loading' })
   await act(async () => release?.())
   await vi.waitFor(() => expect(latest?.byName.present).toEqual({ state: 'found', object: { metadata: { name: 'present' } } }))
+})
+
+it('doesn’t show a list error cached before mount as current', async () => {
+  const key = ['resources', 'clusterqueues', 'kueue.x-k8s.io', undefined, getApiBase()]
+  await client.prefetchQuery({ queryKey: key, queryFn: () => Promise.reject(new ApiError('timed out', 503, { error_code: 'kind_sync_timed_out' })), retry: false })
+  let release: (() => void) | undefined
+  vi.mocked(fetch).mockImplementation(() => new Promise<Response>(resolve => {
+    release = () => resolve(new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }], coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } })))
+  }))
+  await new Promise(resolve => setTimeout(resolve, 5))
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe onRead={read => { latest = read }} /></QueryClientProvider>))
+  expect(latest?.byName.present).toEqual({ state: 'loading' })
+  await act(async () => release?.())
+  await vi.waitFor(() => expect(latest?.byName.present.state).toBe('found'))
 })

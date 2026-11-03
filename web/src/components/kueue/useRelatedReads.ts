@@ -108,9 +108,7 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
   const [mountedAt] = useState(Date.now)
   const [refused, setRefused] = useState(false)
   const list = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: refused ? false : RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
-  const { data, coverage, error, dataUpdatedAt, refetch } = list
-  // A refused list isn't polled: the names are read one by one instead.
-  if (listRefused(error) !== refused) setRefused(listRefused(error))
+  const { data, coverage, dataUpdatedAt, errorUpdatedAt, refetch } = list
   // The object on screen updates live. When its relevant state changes (the
   // caller's key: the names it points at and the conditions that decide what
   // is shown, not every status write), a read from before can no longer prove
@@ -124,9 +122,15 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
   useEffect(() => {
     if (enabled && subjectChangedAt > mountedAt) void refetch()
   }, [enabled, subjectChangedAt, mountedAt, refetch])
-  const readBeforeMount = dataUpdatedAt < Math.max(mountedAt, subjectChangedAt)
+  const freshAfter = Math.max(mountedAt, subjectChangedAt)
+  const readBeforeMount = dataUpdatedAt < freshAfter
+  // An error cached before mount or before the subject changed is no answer either; its re-read is in flight.
+  const error = list.error && errorUpdatedAt >= freshAfter ? list.error : null
+  // A refused list isn't polled: the names are read one by one instead (the
+  // GETs carry their own freshness guard, so even a cached refusal routes there).
+  if (listRefused(list.error) !== refused) setRefused(listRefused(list.error))
   // An older Radar answers a list denial with an uncoded 403; a GET still says what the viewer may open.
-  const listDenied = listRefused(error)
+  const listDenied = listRefused(list.error)
   const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied, subjectChangedAt)
   const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data && !readBeforeMount ? { state: 'found', object: data } : { state: 'loading' }
   // A list read before mount or before the subject last changed answers nothing yet, present or absent: it may lend a tone.

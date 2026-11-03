@@ -70,6 +70,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
   const configured: string | undefined = localQueue?.state === 'found' ? localQueue.object?.spec?.clusterQueue : undefined
   const reserved: string | undefined = data.status?.admission?.clusterQueue
   const finished = (data.status?.conditions ?? []).some((condition: any) => condition?.type === 'Finished' && condition.status === 'True')
+  const admitted = (data.status?.conditions ?? []).some((condition: any) => condition?.type === 'Admitted' && condition.status === 'True')
   const configuredRead = configured ? reads?.clusterQueues?.[configured] : undefined
   const eligibility = configured && reads ? namespaceEligibilityFact({ clusterQueue: configured, parent: configuredRead, namespaceRead: reads.namespace }) : undefined
   const assignments: any[] = Array.isArray(data.status?.admission?.podSetAssignments) ? data.status.admission.podSetAssignments : []
@@ -115,7 +116,9 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
             {reads && reserved !== configured
               ? <ClusterQueueReadSummary name={reserved} read={reads.clusterQueues?.[reserved]} onNavigate={onNavigate} />
               : <div className="break-all [&_button]:text-left"><ResourceLink name={reserved} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} /></div>}
-            {configured && configured !== reserved && <p className={finished ? 'text-xs text-theme-text-tertiary' : 'text-xs text-warning-text'}>Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>}
+            {configured && configured !== reserved && (finished || admitted
+              ? <p className="text-xs text-theme-text-tertiary">Reserved in {reserved}; LocalQueue {queueName} now names {configured}, which new Workloads go to.</p>
+              : <p className="text-xs text-warning-text">Reserved in {reserved}; LocalQueue {queueName} names {configured}.</p>)}
           </> : <>
             <p className={muted}>No reservation reported.</p>
             {pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">{pendingStale ? `Controller-reported on QuotaReserved for generation ${quota.observedGeneration} (now ${data.metadata?.generation}): ` : 'Controller-reported on QuotaReserved: '}</span>{pendingMessage}</p>}

@@ -19,7 +19,7 @@ import {
   type KueueQuotaRow,
 } from '../resource-utils-kueue'
 import { describeKueuePolicy, type KueuePolicyField } from '../../kueue/policy'
-import { unreadReason, type RelatedRead } from '../../kueue/related-read'
+import { isDenied, unreadReason, type RelatedRead } from '../../kueue/related-read'
 import { localQueueInactiveBecauseParentStopped, localQueueStatusWithParent } from '../../kueue/queue-status'
 import {
   AdmissionCheckRow,
@@ -194,7 +194,9 @@ export function LocalQueueRenderer({ data, onNavigate, reads }: QueueRendererPro
       <Situation
         reported={<ReportedActive data={data} status={localQueueStatusWithParent(data, reads?.clusterQueue)}>
           {parentStopped && <p className="text-xs text-theme-text-secondary">ClusterQueue {parentName} reports Stopped (read from the ClusterQueue), so this LocalQueue's inactivity follows an intentional stop.</p>}
-          {reportsParentInactive && !parentStopped && <p className="text-xs text-theme-text-secondary">Inspect the ClusterQueue for the cause of its reported inactivity.</p>}
+          {reportsParentInactive && !parentStopped && <p className="text-xs text-theme-text-secondary">{isDenied(reads?.clusterQueue)
+            ? `The cause is on ClusterQueue ${parentName}, which you can’t read; a cluster administrator can check it.`
+            : 'Inspect the ClusterQueue for the cause of its reported inactivity.'}</p>}
           <div className="border-t border-theme-border pt-3"><QueueCounts data={data} kind="LocalQueue" /></div>
         </ReportedActive>}
         configured={<div className="space-y-3">
