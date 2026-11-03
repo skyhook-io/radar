@@ -119,9 +119,10 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
       : observation.decision === 'satisfied' ? 'success' : admission ? 'neutral' : 'warning'
   // The phase badge already says these states. A withdrawn Workload is not
-  // waiting, so its state replaces the pending phase rather than following it.
+  // waiting, so its state replaces the pending phase rather than following it;
+  // one still admitted keeps its phase until it releases the quota.
   const reason = admission && !phaseStates.has(admission.state) ? kueueAdmissionStatePresentation(admission) : null
-  const withdrawn = !!admission?.inactive
+  const withdrawn = !!admission?.inactive && kueue?.phase === 'pending'
   // An unrecognized reason is Kueue's own word; say that rather than Radar's.
   // Kueue's coarse reasons (Pending, Inadmissible) repeat what the phase and
   // the primary condition already say, so name only a reason that adds to it.

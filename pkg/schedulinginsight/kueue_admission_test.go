@@ -446,6 +446,29 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionUnrecognized,
 		},
 		{
+			name: "a variant's disallowed flavors are out of the running, not unexplained",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor default, 1 more needed, skipping flavor spot due to WorkloadAllowedResourceFlavorAnnotation annotation")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionInsufficientQuota,
+			blocker: rc.KueueAdmissionInsufficientQuota,
+		},
+		{
+			name: "a flavor without the requested topology level is ruled out",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				`couldn't assign flavors to pod set main: Flavor "default" does not contain the requested level`)}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoMatchingFlavor,
+			blocker: rc.KueueAdmissionNoMatchingFlavor,
+		},
+		{
+			name: "v0.20 Deactivated reason left behind after reactivation",
+			spec: workloadSpec{active: boolPtr(true), conditions: []condition{pending("Deactivated", "The workload is deactivated")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoDecision,
+			blocker: rc.KueueAdmissionNoDecision,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
@@ -939,6 +962,15 @@ func TestClassifyKueueWorkloadStaleEvidence(t *testing.T) {
 			t.Fatalf("admission = %+v", got)
 		}
 	})
+	t.Run("a stale reservation does not discount a current backoff", func(t *testing.T) {
+		quota := pending("Pending", "Exceeded the PodsReady timeout")
+		quota.observedGeneration = 1
+		got := classify(t, workloadSpec{generation: 2, conditions: []condition{quota,
+			{kind: "Requeued", status: "False", reason: "PodsReadyTimeout", observedGeneration: 2}}}).Admission
+		if got.State != rc.KueueAdmissionRequeueBackoff || got.Stale {
+			t.Fatalf("admission = %+v", got)
+		}
+	})
 	t.Run("stale finish", func(t *testing.T) {
 		got := classify(t, workloadSpec{generation: 4, conditions: []condition{{kind: "Finished", status: "True", reason: "Succeeded", observedGeneration: 3}}}).Admission
 		if got.State != rc.KueueAdmissionFinished || !got.Stale {
@@ -1003,6 +1035,8 @@ func TestEveryAdmissionCodeHasAnAttentionClass(t *testing.T) {
 	deliberatelyUnknown := map[rc.KueueAdmissionCode]bool{
 		rc.KueueAdmissionUnrecognized: true, rc.KueueAdmissionLocalQueueInactive: true, rc.KueueAdmissionClusterQueueInactive: true,
 		rc.KueueAdmissionDRAResourcesUnresolved: true,
+		// The message covers only the flavors Kueue tried in its last attempt.
+		rc.KueueAdmissionExceedsQuota: true,
 	}
 	for _, code := range allAdmissionCodes {
 		if got := attention(code); got == rc.KueueAttentionUnknown && !deliberatelyUnknown[code] {

@@ -76,9 +76,11 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 		// fact cites for its cause; Kueue's own flip of spec.active also bumps
 		// the generation past the condition that recorded the cause.
 		state.State, state.Stale = decided.Code, decided.Stale && !(decided == state.Inactive && c.specInactive())
-		// The phase chose which blocker rules applied, so a stale
-		// QuotaReserved makes any blocker it led to stale too.
-		if decided == state.Blocker && c.staleCondition("QuotaReserved") {
+		// A blocker read because quota is reserved rests on that reservation,
+		// so a stale QuotaReserved makes it stale too. A rejected check or a
+		// backoff stands on its own evidence.
+		if decided == state.Blocker && phase == rc.KueuePhaseQuotaReserved && c.staleCondition("QuotaReserved") &&
+			decided.Code != rc.KueueAdmissionCheckRejected && decided.Code != rc.KueueAdmissionRequeueBackoff {
 			state.Stale = true
 		}
 	}
@@ -134,7 +136,7 @@ func attention(code rc.KueueAdmissionCode) rc.KueueAttention {
 		rc.KueueAdmissionChecksPending, rc.KueueAdmissionTopologyAssignmentPending, rc.KueueAdmissionWaitingForPodsReady,
 		rc.KueueAdmissionRequeueBackoff, rc.KueueAdmissionPreempted, rc.KueueAdmissionPodsReadyTimeout, rc.KueueAdmissionEvicted:
 		return rc.KueueAttentionWaiting
-	case rc.KueueAdmissionExceedsQuota, rc.KueueAdmissionNoMatchingFlavor, rc.KueueAdmissionNamespaceNotEligible,
+	case rc.KueueAdmissionNoMatchingFlavor, rc.KueueAdmissionNamespaceNotEligible,
 		rc.KueueAdmissionLocalQueueMissing, rc.KueueAdmissionClusterQueueMissing, rc.KueueAdmissionCheckRejected,
 		rc.KueueAdmissionDeactivationPending, rc.KueueAdmissionDeactivatedByKueue, rc.KueueAdmissionInvalidWorkload:
 		return rc.KueueAttentionActionNeeded
@@ -313,6 +315,10 @@ func (c classifier) quotaBlockerCode(quota workloadCondition) rc.KueueAdmissionC
 		return rc.KueueAdmissionNoDecision
 	case "Waiting", "WaitingForPodsReady":
 		return rc.KueueAdmissionWaitingForPodsReady
+	case "Deactivated":
+		// Left behind for a moment after reactivation; an inactive Workload
+		// never reaches the blocker.
+		return rc.KueueAdmissionNoDecision
 	case "DRAResourcesUnresolved":
 		return rc.KueueAdmissionDRAResourcesUnresolved
 	case "UnrecordableResourceUsage":
@@ -369,6 +375,7 @@ var (
 		regexp.MustCompile(`untolerated taint \{[^}]*\} in flavor ([^,\s]+)`),
 		regexp.MustCompile(`flavor (\S+) doesn't match node affinity`),
 		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not support TopologyAwareScheduling`),
+		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not contain the requested level`),
 		regexp.MustCompile(`could not assign (\S+) flavor since the original workload is assigned`),
 	}
 )
@@ -405,6 +412,12 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 			understood[match[1]]++
 		}
 		mismatch := false
+		// A flavor this Workload may not use (concurrent-admission variants,
+		// nomination) is out of the running but says nothing about a fit.
+		for _, match := range skippedFlavorClause.FindAllStringSubmatch(segment, -1) {
+			ruledOut[match[1]] = true
+			understood[match[1]]++
+		}
 		for _, pattern := range mismatchClauses {
 			for _, match := range pattern.FindAllStringSubmatch(segment, -1) {
 				ruledOut[match[1]], mismatch = true, true
@@ -457,6 +470,8 @@ const (
 	kueueMaxConditionMessage = 32 * 1024
 	kueueTruncationSuffix    = " ..."
 )
+
+var skippedFlavorClause = regexp.MustCompile(`skipping flavor (\S+) (?:due to|as it is not found)`)
 
 var anyFlavor = regexp.MustCompile(`(?i)\bflavor "?([^"\s,;]+)|(\S+) flavor since`)
 

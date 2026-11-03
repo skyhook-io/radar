@@ -1785,8 +1785,12 @@ v1beta2-only fields such as preemption gates are simply absent on v1beta1.
 axes, so every surface describes a Workload's admission state the same way.
 `schedulinginsight.ClassifyKueueWorkload` is the only place the codes and their
 attention class are decided; Go consumers that list Workloads call it per
-object, and the UI only maps codes to labels (`kueueAdmissionStatePresentation`
-in k8s-ui, with a short suggestion for states that usually need someone),
+object and ship `KueueAdmissionState` in their own rows (a table column needs a
+server-computed field behind a `FeatureCapabilities` flag, never a browser-side
+reading of conditions), and the UI only maps codes to labels
+(`kueueAdmissionStatePresentation` and `kueueAdmissionStateLabel` in k8s-ui,
+with a short suggestion from `kueueAdmissionStateHint` for states that usually
+need someone),
 rendering a code it does not know verbatim. Today the admission card on Job,
 JobSet and RayJob detail shows it, leading with the state instead of
 "Pending admission" for a withdrawn Workload; the Workload's own detail and its
@@ -1826,6 +1830,7 @@ finished), `waiting` (Kueue or another controller is expected to move it on),
 reported, it will not be admitted without a change to the Workload, its queue
 or quota, or a controller that should have acted), or `unknown` (the Workload
 alone cannot tell, such as an inactive queue that may be stopped on purpose,
+a request too large for the flavors Kueue last tried (another may fit),
 unresolved DRA resources, an unrecognized reason, or a deactivation whose cause
 Kueue did not record).
 It is not a severity or a guarantee: how long waiting may last before it is a
@@ -1838,7 +1843,8 @@ Workloads awaiting admission are those whose `phase` is not `admitted` or
 `finished` and that have no `inactive` fact.
 
 `stale` marks a `state` decided by evidence written for an earlier
-`metadata.generation`: the last reported state, not a confirmed current one.
+`metadata.generation` (for a blocker read because quota is reserved, that
+includes the reservation): the last reported state, not a confirmed current one.
 Kueue does not rewrite conditions on every spec change (a WorkloadPriorityClass
 update rewrites `spec.priority` and leaves `Admitted` alone), so a stale
 `admitted` is usually still admitted, but Radar does not claim it. Each

@@ -141,6 +141,12 @@ describe('Kueue admission investigation', () => {
     expect(render(response({ decision: 'unsatisfied', kueue: { phase: 'pending' } }))).toMatch(/Pending admission/)
   })
 
+  it('keeps the admitted phase for a Workload deactivated while still admitted', () => {
+    const html = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
+    expect(html).toContain('>Admitted<')
+    expect(html).toContain('>Deactivated<')
+  })
+
   it('flags a deactivation whose cause Kueue did not record', () => {
     const html = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' }], kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'unknown', inactive: { code: 'deactivated', source: 'condition', name: 'Evicted', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
     expect(html).toContain('>Deactivated<')

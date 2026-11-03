@@ -28,8 +28,9 @@ package resourcecontext
 // inactive queue is an unsatisfied Decision whose Attention is unknown.
 //
 // Stale is set when the evidence that decided State was written for an
-// earlier metadata.generation: State is then the last reported state, not a
-// confirmed current one. Its absence means not known to be stale, not
+// earlier metadata.generation, or, for a blocker read because quota is
+// reserved, when that reservation was: State is then the last reported state,
+// not a confirmed current one. Its absence means not known to be stale, not
 // confirmed current: Kueue may omit observedGeneration, and AdmissionCheck
 // states carry none.
 type KueueAdmissionState struct {
@@ -62,7 +63,8 @@ const (
 	// that should have acted.
 	KueueAttentionActionNeeded KueueAttention = "action_needed"
 	// KueueAttentionUnknown means the Workload alone cannot tell: an inactive
-	// queue can be a stop policy or broken configuration, unresolved DRA
+	// queue can be a stop policy or broken configuration, a request too large
+	// for the flavors Kueue last tried may fit another one, unresolved DRA
 	// resources can be the claims or the cluster, an unrecognized reason is
 	// not known to be actionable, and a deactivation may have no recorded
 	// cause.
