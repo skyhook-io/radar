@@ -559,6 +559,23 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		// alice loses Workload access in team-b between pages: the next page
 		// would sit under the first page's counts, so it is refused.
 		env.srv.permCache.Get("alice", nil).SetCanI("list", kueueGroup, "workloads", "team-b", false)
+		refused := func(response *http.Response) {
+			t.Helper()
+			defer response.Body.Close()
+			var body map[string]string
+			_ = json.NewDecoder(response.Body).Decode(&body)
+			if response.StatusCode != http.StatusBadRequest || body["error_code"] != kueueCursorInvalid {
+				t.Fatalf("got %d %v, want 400 %s", response.StatusCode, body, kueueCursorInvalid)
+			}
+		}
+		refused(env.authGet(t, next, "alice", ""))
+		// A later page that reads nothing at all (access gone, or its cached
+		// answers expired, since it spends no fresh checks) is refused too:
+		// the client rereads from the first page, which checks again.
+		for _, ns := range []string{"team-a", "team-b", "team-c"} {
+			env.srv.permCache.Get("alice", nil).SetCanI("list", kueueGroup, "workloads", ns, false)
+		}
+		refused(env.authGet(t, next, "alice", ""))
 		response := env.authGet(t, next, "alice", "")
 		defer response.Body.Close()
 		var body map[string]string

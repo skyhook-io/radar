@@ -374,6 +374,12 @@ func (s *Server) handleKueueClusterQueueWorkloads(w http.ResponseWriter, r *http
 		}
 	}
 	workloads, wlFailure := s.readKueueIndexed(r, h, laterPageBudget(page, 2), target, code, "Workload", "workloads", keys)
+	if wlFailure != nil && page.after != "" {
+		// A later page that reads nothing (its permission answers expired,
+		// a store is reloading) can't continue the first page's list.
+		s.writeKueueQueuePageError(w, errKueueQueueReadChanged)
+		return
+	}
 	if wlFailure != nil {
 		body, _ := readErrorBody("workloads", wlFailure.err, &wlFailure.target)
 		response.WorkloadsError = &body
@@ -447,6 +453,10 @@ func (s *Server) handleKueueLocalQueueWorkloads(w http.ResponseWriter, r *http.R
 	response := KueueQueueWorkloadsResponse{Queue: identity}
 	target, code := s.namespaceListTarget(r, h.cache, []string{namespace})
 	workloads, failure := s.readKueueIndexed(r, h, laterPageBudget(page, 1), target, code, "Workload", "workloads", []string{k8score.KueueSubmissionKey(namespace, name)})
+	if failure != nil && page.after != "" {
+		s.writeKueueQueuePageError(w, errKueueQueueReadChanged)
+		return
+	}
 	if failure != nil {
 		body, _ := readErrorBody("workloads", failure.err, &failure.target)
 		response.WorkloadsError = &body

@@ -23,7 +23,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
   )
   // A cached list of an earlier queue with the same name is never shown.
   const pages = query.data?.pages.filter(page => page.queue.uid === data.metadata?.uid)
-  const cursorRejected = query.isFetchNextPageError && (query.error as { data?: { error_code?: string } } | null)?.data?.error_code === 'kueue_cursor_invalid'
+  const cursorRejected = (query.error as { data?: { error_code?: string } } | null)?.data?.error_code === 'kueue_cursor_invalid'
   const { refetch } = query
   const queryClient = useQueryClient()
   // Refresh reads the list again from its first page, dropping the pages
