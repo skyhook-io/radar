@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -41,13 +41,14 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-function Probe() {
-  latest = useRelatedObjects('clusterqueues', 'kueue.x-k8s.io', undefined, ['present', 'gone'])
+function Probe({ onRead }: { onRead: (read: RelatedObjects) => void }) {
+  const read = useRelatedObjects('clusterqueues', 'kueue.x-k8s.io', undefined, ['present', 'gone'])
+  useEffect(() => onRead(read))
   return null
 }
 
 async function render() {
-  await act(async () => root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>))
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe onRead={read => { latest = read }} /></QueryClientProvider>))
   await vi.waitFor(() => expect(latest?.byName.gone.state).not.toBe('loading'), { timeout: 6000 })
 }
 
