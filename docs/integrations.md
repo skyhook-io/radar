@@ -1778,6 +1778,47 @@ placement, or physical capacity. This is a bounded projection of the returned
 Workload's current status, not condition history, queue-wide observation
 coverage, or support for other Kueue API versions.
 
+**Admission history.** A Job, JobSet, RayJob or other root Kueue queues has its
+Workload as a controller-owned child, and the Workload owns its
+ProvisioningRequests, so the root's Timeline
+(`/api/workloads/{kind}/{ns}/{name}/history`) includes both by owner UID. While
+Radar runs, each Workload update it observes is recorded as one row naming what
+changed: condition transitions (type, status, reason, and the message when it
+changed), the admission assignment (ClusterQueue; per PodSet its flavors, count
+and usage), admission-check states with their retry count and message, the
+scheduled requeue, `spec.active` and `spec.queueName`, Kueue's annotations, and
+any other status field by path. Two kinds of update record nothing: cumulative
+counters (`schedulingStats`, `accumulatedPastExecutionTimeSeconds`) and the
+spec mirror `resourceRequests`, and a condition message whose only change is a
+quantity Kueue rewrites between scheduling attempts (a parenthesized amount,
+"N more needed"); a message that names a different flavor, resource or blocker
+records. ProvisioningRequest updates record their conditions the same way.
+These are the transitions Radar saw: updates that happen while Radar isn't
+watching, or between two watch events, are not reconstructed, and each request
+is its own resource; nothing numbers attempts from names or list order.
+
+When Radar first sees a Workload or ProvisioningRequest, it adds rows from its
+status (source `historical`, shown as "from metadata"): its creation and, for
+each condition and admission check, the time of its last state change with the
+state alone (`QuotaReserved=True`, `Check prov=Pending`). A
+`lastTransitionTime` dates the status change, not the current reason or message,
+so those are not attached. A persistent store adds these rows only for
+resources it hasn't seen before.
+
+The history response says what it can't cover. `historyCoverage` (the shared
+`issuesapi.HistoryCoverage`) is present when Radar may not hold every change
+since the workload was created: it started observing later, began watching the
+Workload or ProvisioningRequest kind later, or deleted rows to stay within its
+limits; an earlier incarnation under the same name makes the start unknown.
+`complete_since` is sent only to callers who can read every namespace. For a
+root Kueue queues (the `kueue.x-k8s.io/queue-name` label, or a cached Workload
+it controls), `gaps` (the shared `resourceapi.Gap` with `pkg/readreason` codes)
+name Workloads or ProvisioningRequests the caller may not list in the namespace
+(`user_forbidden`) or Radar doesn't collect there. Gaps follow from access and
+collection, not from which rows were dropped, so every page carries the same
+gaps. Queue-scoped history (a ClusterQueue's or LocalQueue's Workloads over
+time) is not provided.
+
 ### KubeRay
 
 | Resource | Group | Status source |
