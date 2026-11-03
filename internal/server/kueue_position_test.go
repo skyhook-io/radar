@@ -348,3 +348,41 @@ func TestKueuePositionDropsAnswerAfterConnectionChange(t *testing.T) {
 		t.Fatal("request did not complete")
 	}
 }
+
+func TestProxyAuth_KueuePositionNamespaceCheckFailureIsRetryable(t *testing.T) {
+	visibility := setupKueuePosition(t, true)
+	fakeNamespaceAPIServer(t, http.StatusOK, http.StatusInternalServerError, "default")
+	env := newAuthTestServer(t)
+	response := env.authGet(t, "/api/kueue/position/default/pending", "alice", "")
+	defer response.Body.Close()
+	var body map[string]any
+	_ = json.NewDecoder(response.Body).Decode(&body)
+	if response.StatusCode != http.StatusServiceUnavailable || body["error_code"] != string(readreason.UserPermissionCheckFailed) {
+		t.Fatalf("got %d %v", response.StatusCode, body)
+	}
+	if visibility.count() != 0 {
+		t.Fatal("an unchecked namespace must not reach Kueue")
+	}
+}
+
+func TestKueuePositionRespectsNamespacePin(t *testing.T) {
+	visibility := setupKueuePosition(t, true)
+	previous := k8s.ForceNamespaceScope
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("other")
+	t.Cleanup(func() { k8s.ForceNamespaceScope = previous; k8s.SetFallbackNamespace("") })
+	env := newAuthTestServer(t)
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+	permissions.SetCanI("get", kueueGroup, "workloads", "default", true)
+	env.srv.permCache.Set("alice", nil, permissions)
+	response := env.authGet(t, "/api/kueue/position/default/pending", "alice", "")
+	defer response.Body.Close()
+	var body map[string]any
+	_ = json.NewDecoder(response.Body).Decode(&body)
+	if response.StatusCode != http.StatusConflict || body["error_code"] != string(readreason.OutsideNamespacePin) {
+		t.Fatalf("got %d %v", response.StatusCode, body)
+	}
+	if visibility.count() != 0 {
+		t.Fatal("a pinned-out namespace must not reach Kueue")
+	}
+}

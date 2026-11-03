@@ -8,7 +8,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/kueuevisibility"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
@@ -41,8 +40,13 @@ func (s *Server) handleKueuePosition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
-		s.writeErrorCode(w, http.StatusForbidden, string(readreason.UserNamespaceNotVisible), "no access to this namespace")
+	selection, code := s.requestNamespaceSelection(r, k8s.GetResourceCache(), []string{namespace})
+	if code != "" {
+		s.writeReadFailure(w, "workloads", readFailuref(code, "Radar could not determine your namespace access; retry shortly"), nil)
+		return
+	}
+	if len(selection.Gaps) > 0 {
+		s.writeReadFailure(w, "workloads", readFailuref(selection.Gaps[0].Code, "namespace %q is outside this read's scope", namespace), nil)
 		return
 	}
 	allowed, checked := s.canReadDecision(r, kueueGroup, "workloads", namespace, "get")
