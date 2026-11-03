@@ -1,4 +1,5 @@
 import { dedupeResourceRefs } from '../../utils/resource-refs'
+import { isKubeRayClusterIdentity } from '../resources/resource-utils-ray'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
 import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
@@ -587,6 +588,21 @@ export function WorkloadView({
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
+  // Hosts reuse this view across resources, and a resource can be recreated
+  // under the same name: a Pod picked for one must not reach the next, not
+  // even for one render. A UID arriving with the first load is not a change.
+  const selectionIdentity = `${kind}\u0000${namespace}\u0000${name}`
+  // A host can briefly pass the previous resource with the new name.
+  const selectionUID = resource?.metadata?.name === name && (resource?.metadata?.namespace ?? '') === (namespace ?? '') ? resource?.metadata?.uid as string | undefined : undefined
+  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID })
+  if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
+    const recreated = selectionScope.identity === selectionIdentity && selectionScope.uid !== undefined
+    setSelectionScope({ identity: selectionIdentity, uid: selectionUID })
+    if (selectionScope.identity !== selectionIdentity || recreated) {
+      setSelectedPod(null)
+      setInitialContainer(null)
+    }
+  }
   const [copied, setCopied] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [recentImageSave, setRecentImageSave] = useState(false)
@@ -2196,6 +2212,7 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'clusterworkflowtemplates',
   'scaledjobs',
   'jobsets',
+  'rayclusters',
   'clusters',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
@@ -2213,6 +2230,8 @@ export function supportsLogsWithoutPods(
   if (normalizedKind === 'jobsets') {
     return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
   }
+  // A KubeRay RayCluster's tab reads the Pods it owns now, not recorded ones.
+  if (normalizedKind === 'rayclusters') return isKubeRayClusterIdentity(group, apiVersion)
   // A CloudNativePG Cluster's instance Pods are its children, not related
   // Pods, and its logs are resolved server-side from the Cluster itself.
   if (normalizedKind === 'clusters') {

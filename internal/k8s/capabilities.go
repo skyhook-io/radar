@@ -205,6 +205,12 @@ type FeatureCapabilities struct {
 	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
 	// GET /api/kueue/position/{namespace}/{name}
 	KueuePendingPosition bool `json:"kueuePendingPosition"`
+	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
+	// from v1.15.0 serve the route without advertising this flag.
+	RayClusterPods bool `json:"rayClusterPods"`
+	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
+	// without this, an absent mark doesn't mean "not a sidecar".
+	PodSidecarMarks bool `json:"podSidecarMarks"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
