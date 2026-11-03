@@ -61,7 +61,7 @@ export interface KueueQueueWorkloadsProps {
  */
 export function KueueQueueWorkloads(props: KueueQueueWorkloadsProps) {
   return (
-    <Section title="Workloads" icon={ListChecks} defaultExpanded>
+    <Section title="Workloads" icon={ListChecks} defaultExpanded={true}>
       <KueueQueueWorkloadsBody {...props} />
     </Section>
   )
