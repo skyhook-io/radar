@@ -34,7 +34,7 @@ const (
 )
 
 const (
-	ReasonKueueNoMatchingFlavor             = "KueueNoMatchingFlavor"
+	ReasonKueueResourceUnavailable          = "KueueResourceUnavailable"
 	ReasonKueueNamespaceNotEligible         = "KueueNamespaceNotEligible"
 	ReasonKueueLocalQueueMissing            = "KueueLocalQueueMissing"
 	ReasonKueueClusterQueueMissing          = "KueueClusterQueueMissing"
@@ -62,9 +62,10 @@ var kueueGroupGVR = schema.GroupVersionResource{Group: kueueGroup}
 // quota it names, and Kueue re-evaluates within seconds once they exist.
 const kueueConfigurationGrace = time.Minute
 
-// maxKueueLinkedObjects bounds the ProvisioningRequests and AdmissionChecks
-// linked on one row.
-const maxKueueLinkedObjects = 3
+// maxKueueLinkedObjects bounds the AdmissionChecks and ProvisioningRequests
+// linked on one row: a row holds at most four facts, and the admission summary
+// and the run's rollup take two.
+const maxKueueLinkedObjects = 1
 
 // kueueBrokenClusterQueueReasons are the ClusterQueue Active=False reasons
 // Kueue (v0.18-v0.20, apis/kueue/v1beta2/clusterqueue_types.go) sets for a
@@ -94,7 +95,10 @@ const (
 type kueueInventory struct {
 	Items []*unstructured.Unstructured
 	OK    bool
-	Gap   issuesapi.UncheckedReason
+	// Partial: OK for the namespaces it holds, while others in scope weren't
+	// read; Gap says why. An absence in it proves nothing.
+	Partial bool
+	Gap     issuesapi.UncheckedReason
 }
 
 type kueueIssueProvider interface {
@@ -179,6 +183,10 @@ func detectKueueIssues(p Provider, f Filters, unchecked *uncheckedSet) []Issue {
 				dependent[key] = append(dependent[key], kueueRun{workload: w, state: state})
 			}
 		case state.Attention == resourcecontext.KueueAttentionActionNeeded:
+			if state.State == resourcecontext.KueueAdmissionLocalQueueMissing && d.localQueuePresent(w) {
+				// The LocalQueue exists now: the Workload's report is behind.
+				continue
+			}
 			if issue, ok := d.runIssue(w, state); ok {
 				out = append(out, issue)
 			}
@@ -260,7 +268,7 @@ func isKueueWorkloadOwner(owner metav1.OwnerReference) bool {
 // when it is incomplete. ok is false when the kind can't be answered.
 func (d *kueueDetector) read(group, kind string) ([]*unstructured.Unstructured, bool) {
 	inv := d.readEvidence(group, kind)
-	if !inv.OK && inv.Gap != "" {
+	if inv.Gap != "" {
 		d.unchecked.add(issuesapi.UncheckedSourceKueue, inv.Gap, issuesapi.UncheckedKind{Group: group, Kind: kind})
 	}
 	return inv.Items, inv.OK
@@ -316,11 +324,11 @@ type kueueRunFinding struct {
 // deactivation cause is the reason RAD-811 kept on the fact.
 func kueueRunFindingFor(state resourcecontext.KueueAdmissionState) (kueueRunFinding, bool) {
 	switch state.State {
-	case resourcecontext.KueueAdmissionNoMatchingFlavor:
+	case resourcecontext.KueueAdmissionResourceUnavailable:
 		return kueueRunFinding{
-			reason: ReasonKueueNoMatchingFlavor, fact: state.Blocker, configuration: true,
-			cause:  "Kueue reports that no ResourceFlavor in the ClusterQueue can hold this run: taints, node affinity or topology rule every flavor out, or the queue offers no quota for a requested resource.",
-			action: "Compare the run's node selectors, tolerations and requested resources with the ClusterQueue's flavors, then change the run or add a flavor and quota that fit it.",
+			reason: ReasonKueueResourceUnavailable, fact: state.Blocker, configuration: true,
+			cause:  "Kueue reports that the ClusterQueue offers no quota for a resource this run requests, so it will not be admitted as configured.",
+			action: "Remove the resource from the run's requests, or add it, with quota, to one of the ClusterQueue's flavors.",
 		}, true
 	case resourcecontext.KueueAdmissionNamespaceNotEligible:
 		return kueueRunFinding{
@@ -354,26 +362,33 @@ func kueueRunFindingFor(state resourcecontext.KueueAdmissionState) (kueueRunFind
 			return kueueRunFinding{}, false
 		}
 		cause := strings.TrimPrefix(fact.Reason, "DeactivatedDueTo")
+		// deactivation_pending: Kueue decided, but spec.active is not false yet.
+		deactivated := "Kueue deactivated this run (spec.active=false)"
+		reactivate := "then set the Workload's spec.active to true or resubmit the run"
+		if state.State == resourcecontext.KueueAdmissionDeactivationPending {
+			deactivated = "Kueue is deactivating this run"
+			reactivate = "then, once Kueue has deactivated it, set the Workload's spec.active to true or resubmit the run"
+		}
 		switch cause {
 		case "AdmissionCheck":
 			return kueueAdmissionCheckFinding(fact), true
 		case "RequeuingLimitExceeded":
 			return kueueRunFinding{
 				reason: ReasonKueueRequeuingLimitExceeded, fact: fact,
-				cause:  "Kueue deactivated this run (spec.active=false) after evicting and requeuing it the most times its configuration allows, usually because its Pods did not become ready in time.",
-				action: "Find why the run's Pods weren't ready (image pulls, scheduling, crashes) and fix it, then set the Workload's spec.active to true or resubmit the run.",
+				cause:  deactivated + " after evicting and requeuing it the most times its configuration allows, usually because its Pods did not become ready in time.",
+				action: "Find why the run's Pods weren't ready (image pulls, scheduling, crashes) and fix it, " + reactivate + ".",
 			}, true
 		case "MaximumExecutionTimeExceeded":
 			return kueueRunFinding{
 				reason: ReasonKueueMaximumExecutionTimeExceeded, fact: fact,
-				cause:  "Kueue deactivated this run (spec.active=false) because it ran past its maximum execution time.",
+				cause:  deactivated + " because it ran past its maximum execution time.",
 				action: "If the run needs longer, raise its maximum execution time (kueue.x-k8s.io/max-exec-time-seconds) and resubmit; otherwise find why it ran long.",
 			}, true
 		}
 		return kueueRunFinding{
 			reason: ReasonKueueDeactivatedByKueue, fact: fact,
-			cause:  "Kueue deactivated this run (spec.active=false) for the reason in the message.",
-			action: "Fix the cause in the message, then set the Workload's spec.active to true or resubmit the run.",
+			cause:  deactivated + " for the reason in the message.",
+			action: "Fix the cause in the message, " + reactivate + ".",
 		}, true
 	}
 	return kueueRunFinding{}, false
@@ -552,11 +567,11 @@ func (d *kueueDetector) admissionCheckFacts(w *unstructured.Unstructured, blocki
 	facts := make([]issuesapi.DiagnosticFact, 0, len(names))
 	for _, name := range names {
 		ref := Ref{Group: kueueGroup, Kind: kueueAdmissionCheckKind, Name: name}
-		message := fmt.Sprintf("AdmissionCheck %s: Radar couldn't read it.", name)
+		fact := issuesapi.DiagnosticFact{Type: factKueueAdmissionCheck, Message: fmt.Sprintf("AdmissionCheck %s: Radar couldn't read it.", name), Refs: []Ref{ref}}
 		if ok {
-			message = kueueObjectActiveText(kueueAdmissionCheckKind, name, byName[name])
+			fact.Message, fact.Confidence = kueueObjectActiveText(kueueAdmissionCheckKind, name, byName[name]), issuesapi.ConfidenceHigh
 		}
-		facts = append(facts, issuesapi.DiagnosticFact{Type: factKueueAdmissionCheck, Message: message, Confidence: issuesapi.ConfidenceHigh, Refs: []Ref{ref}})
+		facts = append(facts, fact)
 	}
 	return facts
 }
@@ -687,11 +702,19 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			continue
 		}
 		status, reason, lqMessage, current := kueueActive(lq)
+		cqName, _, _ := unstructured.NestedString(lq.Object, "spec", "clusterQueue")
+		runs := dependent[lq.GetNamespace()+"/"+lq.GetName()]
+		if status == "True" && current {
+			// The queue reports itself active now: a run still saying
+			// otherwise is behind, and recovery wins.
+			for _, run := range runs {
+				covered[run.workload.GetUID()] = true
+			}
+			continue
+		}
 		if status != "False" {
 			continue
 		}
-		cqName, _, _ := unstructured.NestedString(lq.Object, "spec", "clusterQueue")
-		runs := dependent[lq.GetNamespace()+"/"+lq.GetName()]
 		if !current || d.inGrace(lq) {
 			// Not settled yet: its runs wait with it rather than raising
 			// their own rows.
@@ -727,12 +750,15 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 			}
 			cq := clusterQueues[cqName]
 			if cq == nil {
-				issueReason = ReasonKueueClusterQueueMissing
-				message = fmt.Sprintf("ClusterQueue %s was not found.", cqName)
-				cause = fmt.Sprintf("Kueue reports this LocalQueue inactive, and its ClusterQueue %s is not in Radar's complete ClusterQueue inventory.", cqName)
-				action = "Create the ClusterQueue, or point the LocalQueue's spec.clusterQueue at an existing one."
-				requiredReads = []EvidenceRead{{Group: kueueGroup, Resource: "clusterqueues", Verb: "list"}}
-				break
+				// Kueue says inactive, Radar's inventory says absent: one of
+				// them is behind.
+				continue
+			}
+			if d.inGrace(cq) {
+				for _, run := range runs {
+					covered[run.workload.GetUID()] = true
+				}
+				continue
 			}
 			cqReason, cqMessage, broken := kueueBrokenClusterQueue(cq)
 			if !broken {
@@ -986,4 +1012,20 @@ func (d *kueueDetector) inGrace(u *unstructured.Unstructured) bool {
 		}
 	}
 	return !since.IsZero() && d.now.Sub(since) < kueueConfigurationGrace
+}
+
+// localQueuePresent reports that the LocalQueue the Workload names is in
+// Radar's inventory and not being deleted.
+func (d *kueueDetector) localQueuePresent(w *unstructured.Unstructured) bool {
+	queue, _, _ := unstructured.NestedString(w.Object, "spec", "queueName")
+	localQueues, ok := d.read(kueueGroup, kueueLocalQueueKind)
+	if !ok || queue == "" {
+		return false
+	}
+	for _, lq := range localQueues {
+		if lq.GetNamespace() == w.GetNamespace() && lq.GetName() == queue && lq.GetDeletionTimestamp() == nil {
+			return true
+		}
+	}
+	return false
 }

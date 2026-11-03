@@ -364,9 +364,10 @@ type ResourceIssuesResponse struct {
 	Coverage   string                  `json:"coverage"`
 	Withheld   *ResourceIssuesWithheld `json:"withheld,omitempty"`
 	Visibility *k8s.VisibilitySummary  `json:"visibility,omitempty"`
-	// Unchecked lists checks about this resource Radar couldn't make for the
-	// caller, such as a Kueue queue check that needs ClusterQueues the caller
-	// can't read; with it, an empty list is not "none".
+	// Unchecked lists checks Radar couldn't make that it attributes to this
+	// resource, such as a Kueue queue check that needs ClusterQueues the caller
+	// can't read; with it, an empty list is not "none". Its absence is not a
+	// completeness guarantee: read it with coverage, withheld and visibility.
 	Unchecked []issuesapi.UncheckedSource `json:"unchecked_sources,omitempty"`
 }
 

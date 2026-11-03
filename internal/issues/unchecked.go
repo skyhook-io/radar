@@ -245,6 +245,10 @@ func UncheckedFor(sources []issuesapi.UncheckedSource, group, kind, namespace, n
 	wantGroup := resolveGroup(group, kind)
 	var out []issuesapi.UncheckedSource
 	for _, source := range sources {
+		if len(source.Subjects) == 0 && kueueInventoryGapCovers(source, resolveGroup(group, kind), kind) {
+			out = append(out, source)
+			continue
+		}
 		if slices.ContainsFunc(source.Subjects, func(ref Ref) bool {
 			return strings.EqualFold(ref.Kind, kind) && ref.Namespace == namespace && ref.Name == name && resolveGroup(ref.Group, ref.Kind) == wantGroup
 		}) {
@@ -253,4 +257,36 @@ func UncheckedFor(sources []issuesapi.UncheckedSource, group, kind, namespace, n
 		}
 	}
 	return out
+}
+
+// kueueRunKinds are the kinds whose own page can hold a Kueue run row.
+var kueueRunKinds = map[string]bool{
+	"kueue.x-k8s.io/Workload":   true,
+	"kueue.x-k8s.io/LocalQueue": true,
+	"batch/Job":                 true,
+	"batch/CronJob":             true,
+	"jobset.x-k8s.io/JobSet":    true,
+	"ray.io/RayJob":             true,
+}
+
+// kueueInventoryGapCovers: when Radar couldn't read Workloads or LocalQueues
+// it can't tell which runs that hides, so the gap concerns every page a
+// Kueue run row could be on.
+func kueueInventoryGapCovers(source issuesapi.UncheckedSource, group, kind string) bool {
+	if source.Source != issuesapi.UncheckedSourceKueue || !kueueRunKinds[group+"/"+canonicalKueueKind(kind)] {
+		return false
+	}
+	return slices.ContainsFunc(source.Kinds, func(k issuesapi.UncheckedKind) bool {
+		return k.Group == "kueue.x-k8s.io" && (k.Kind == "Workload" || k.Kind == "LocalQueue")
+	})
+}
+
+func canonicalKueueKind(kind string) string {
+	for key := range kueueRunKinds {
+		_, k, _ := strings.Cut(key, "/")
+		if strings.EqualFold(k, kind) {
+			return k
+		}
+	}
+	return kind
 }

@@ -389,7 +389,8 @@ func TestKueueWaitingPauseAndUnknownRaiseNothing(t *testing.T) {
 	// Kueue's message names only the flavors it tried last, so RAD-811 can't
 	// tell "never fits" from "not now".
 	exceeds := exceedsWorkload("team", "exceeds", "q")
-	p := newFakeKueueProvider(user, unrecognized, waiting, preempted, podsReady, finished, exceeds, kueueLocalQueue("team", "q", "cq", "True", "Ready"))
+	mismatch := kueueWorkload("team", "mismatch", "q", kueueCondition("QuotaReserved", "False", "Pending", "couldn't assign flavors to pod set main: flavor default doesn't match node affinity", 1))
+	p := newFakeKueueProvider(user, unrecognized, waiting, preempted, podsReady, finished, exceeds, mismatch, kueueLocalQueue("team", "q", "cq", "True", "Ready"))
 	if got := kueueReasons(Compose(p, Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})); len(got) != 0 {
 		t.Fatalf("rows = %v, want none", got)
 	}
@@ -1033,7 +1034,7 @@ func TestKueueRejectedCheckIsLinkedFirst(t *testing.T) {
 			linked = append(linked, f.Refs[0].Name)
 		}
 	}
-	if len(linked) != maxKueueLinkedObjects || linked[0] != "z-capacity" {
+	if len(linked) != 1 || linked[0] != "z-capacity" {
 		t.Fatalf("linked checks = %v", linked)
 	}
 }
@@ -1069,5 +1070,48 @@ func TestUncheckedForMatchesOnlyNamedSubjects(t *testing.T) {
 	}
 	if got := UncheckedFor(sources, "batch", "Job", "team", "other"); len(got) != 0 {
 		t.Fatalf("other Job got %+v", got)
+	}
+}
+
+func TestKueueResourceTheQueueDoesNotOfferIsRaised(t *testing.T) {
+	job := kueueJob("team", "train")
+	w := ownedBy(kueueWorkload("team", "w", "q", kueueCondition("QuotaReserved", "False", "Pending", "couldn't assign flavors to pod set main: resource nvidia.com/gpu unavailable in ClusterQueue", 1)), job)
+	got := Compose(newFakeKueueProvider(job, w), Filters{Limit: NoLimit, Grouped: true, CanReadEvidence: allowAllEvidence})
+	if len(got) != 1 || got[0].Reason != ReasonKueueResourceUnavailable || got[0].Kind != "Job" || got[0].Category != issuesapi.CategoryQueueAdmissionBlocked {
+		t.Fatalf("rows = %+v", got)
+	}
+}
+
+func TestKueueRecoveredQueueOutranksALaggingRun(t *testing.T) {
+	job := kueueJob("team", "train")
+	for name, objects := range map[string][]*unstructured.Unstructured{
+		"LocalQueue active again": {job, kueueLocalQueue("team", "q", "gpu", "True", "Ready"),
+			ownedBy(kueueWorkload("team", "w", "q", kueueCondition("QuotaReserved", "False", "Inadmissible", "ClusterQueue gpu doesn't exist", 1)), job)},
+		"LocalQueue created since": {job, kueueLocalQueue("team", "q", "gpu", "True", "Ready"), ownedBy(actionableWorkload("team", "w", "q"), job)},
+		"ClusterQueue just changed": {job, func() *unstructured.Unstructured {
+			cq := brokenClusterQueue("gpu")
+			active := kueueCondition("Active", "False", "FlavorNotFound", "Can't admit new workloads: references missing ResourceFlavor(s): gpu.", 1)
+			active["lastTransitionTime"] = time.Now().Add(-5 * time.Second).UTC().Format(time.RFC3339)
+			kueueSetConditions(cq, active)
+			return cq
+		}(), kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive), ownedBy(inactiveQueueWorkload("team", "w", "q", "gpu"), job)},
+	} {
+		if reasons := kueueReasons(Compose(newFakeKueueProvider(objects...), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})); len(reasons) != 0 {
+			t.Errorf("%s: rows = %v", name, reasons)
+		}
+	}
+}
+
+func TestKueueWorkloadInventoryGapReachesRunPages(t *testing.T) {
+	p := newFakeKueueProvider(kueueJob("team", "train"))
+	p.gaps[kueueGroup+"/"+kueueWorkloadKind] = issuesapi.UncheckedReasonSyncPending
+	for _, page := range []Ref{{Group: "batch", Kind: "Job", Namespace: "team", Name: "train"}, {Group: "apps", Kind: "Deployment", Namespace: "team", Name: "web"}} {
+		var gaps []issuesapi.UncheckedSource
+		RelatedIssues(p, RelatedIssueOptions{Namespaces: []string{"team"}, CanReadRelated: func(Ref) bool { return true }, CanReadEvidence: allowAllEvidence,
+			OnUnchecked: func(g []issuesapi.UncheckedSource) { gaps = g }}, page.Group, page.Kind, page.Namespace, page.Name)
+		want := page.Kind == "Job"
+		if got := len(gaps) == 1 && gaps[0].Reason == issuesapi.UncheckedReasonSyncPending; got != want {
+			t.Fatalf("%s page: gaps = %+v, want reported=%v", page.Kind, gaps, want)
+		}
 	}
 }
