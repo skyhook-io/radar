@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { ListChecks } from 'lucide-react'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
+import { kueueAdmissionStatePresentation } from '../resource-utils-kueue'
 import { ResourceLink, Section } from '../../ui/drawer-components'
 import { RadarUpgradeNote } from '../../ui/RadarUpgradeNote'
 import { FilterPill } from '../../ui/FilterPill'
@@ -26,13 +27,19 @@ export interface KueueQueueWorkloadsProps {
   kind: 'ClusterQueue' | 'LocalQueue'
   /** The queue object itself: its own reported counts are the evidence shown when its Workloads can't be listed. */
   queue: any
-  /** Pages read so far, oldest first. The newest page's counts and coverage describe the list. */
+  /**
+   * Pages read so far, first page first. The first page's counts, coverage and
+   * LocalQueues describe the list; later pages only add rows.
+   */
   pages?: KueueQueueWorkloadsResponse[]
   loading?: boolean
   error?: string | null
   upgrade?: RadarUpgradeRequirement | null
   membership?: KueueQueueMembership
   onMembershipChange?: (membership: KueueQueueMembership | undefined) => void
+  /** An admission state code to filter by. */
+  state?: string
+  onStateChange?: (state: string | undefined) => void
   hasMore?: boolean
   loadingMore?: boolean
   onLoadMore?: () => void
@@ -55,36 +62,41 @@ export function KueueQueueWorkloads(props: KueueQueueWorkloadsProps) {
 }
 
 function KueueQueueWorkloadsBody({
-  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, hasMore, loadingMore, onLoadMore, onRetry, onNavigate,
+  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, onRetry, onNavigate,
 }: KueueQueueWorkloadsProps) {
   if (upgrade) return <RadarUpgradeNote requirement={upgrade} />
-  const latest = pages?.[pages.length - 1]
-  if (!latest) {
+  const first = pages?.[0]
+  if (!first) {
     if (error) return <Retryable message={`Could not read this queue's Workloads: ${error}`} onRetry={onRetry} />
     return <p className="text-sm text-theme-text-tertiary">{loading ? 'Reading Workloads…' : 'Workloads not read yet.'}</p>
   }
   const local = kind === 'LocalQueue'
   return (
     <div className="space-y-3">
-      {latest.workloads ? (
+      {first.workloads ? (
         <MemberList
           local={local}
-          namespace={latest.queue.namespace}
-          clusterQueue={latest.queue.clusterQueue}
-          members={latest.workloads}
+          namespace={first.queue.namespace}
+          clusterQueue={first.queue.clusterQueue}
+          members={first.workloads}
           rows={uniqueRows(pages ?? [])}
+          paged={(pages?.length ?? 0) > 1}
+          laterPageError={pages?.slice(1).find(page => page.workloadsError)?.workloadsError?.error}
+          onRefresh={onRetry}
           membership={membership}
           onMembershipChange={onMembershipChange}
+          state={state}
+          onStateChange={onStateChange}
           hasMore={hasMore}
           loadingMore={loadingMore}
           onLoadMore={onLoadMore}
           onNavigate={onNavigate}
         />
       ) : (
-        <WorkloadsUnread local={local} queue={queue} code={latest.workloadsError?.error_code} message={latest.workloadsError?.error} />
+        <WorkloadsUnread local={local} queue={queue} code={first.workloadsError?.error_code} message={first.workloadsError?.error} />
       )}
       {error && <Retryable message={`Could not refresh: ${error}`} onRetry={onRetry} />}
-      {!local && <LocalQueueList response={latest} onNavigate={onNavigate} />}
+      {!local && <LocalQueueList response={first} onNavigate={onNavigate} />}
     </div>
   )
 }
@@ -112,17 +124,27 @@ export function uniqueRows(pages: KueueQueueWorkloadsResponse[]): KueueQueueWork
   return rows
 }
 
-/** The headline count, as a sourced fact: "≥N" when the read was partial or narrowed by Radar's collection. */
+/**
+ * Whether the member counts are lower bounds: the Workload read was partial
+ * or narrowed by Radar's collection, or LocalQueues weren't read somewhere,
+ * so Workloads submitted there can't be placed. Reservation counts depend on
+ * the Workload read alone.
+ */
+export function membersLowerBound(members: KueueQueueMembers, membership?: KueueQueueMembership): boolean {
+  return isLowerBound(members.coverage) || (membership !== 'reservation' && members.submissionUnresolved != null)
+}
+
+/** The headline count, as a sourced fact: "≥N" when it is a lower bound. */
 export function listedFact(members: KueueQueueMembers, local: boolean): Fact {
   const coverage = members.coverage
   const narrowedToYou = coverage.narrowedBy?.includes('user_access') ?? false
-  const text = boundedCountLabel(members.counts.members, isLowerBound(coverage))
+  const text = boundedCountLabel(members.counts.members, membersLowerBound(members))
   return {
     text: text === '–' ? 'None in what Radar read' : text,
     tone: 'neutral',
     source: local
-      ? "Radar's read of this namespace's Workloads. Not the controller's count above."
-      : `Radar's read of Workloads${narrowedToYou ? ' in the namespaces you can see' : ''}. Not the controller's count above.`,
+      ? "Radar's read of this namespace's Workloads, finished ones included. Not the controller's count above."
+      : `Radar's read of Workloads${narrowedToYou ? ' in the namespaces Radar shows you' : ''}, finished ones included. Not the controller's count above.`,
   }
 }
 
@@ -130,38 +152,56 @@ export function listedFact(members: KueueQueueMembers, local: boolean): Fact {
 export function emptyMessage(members: KueueQueueMembers, local: boolean, filtered: boolean): string {
   if (filtered && members.counts.members > 0) return 'No Workloads match this filter.'
   const { status, narrowedBy } = members.coverage
-  if (status === 'partial') return 'No Workloads found in the namespaces Radar could read.'
+  if (status === 'partial' || members.submissionUnresolved) return 'No Workloads found where Radar could read.'
   if (narrowedBy?.includes('namespace_collection')) return 'No Workloads in the namespaces Radar collects.'
-  if (narrowedBy?.includes('user_access')) return 'No Workloads in the namespaces you can see.'
+  if (narrowedBy?.includes('namespace_pin')) return 'No Workloads in the namespace Radar is pinned to.'
+  if (narrowedBy?.includes('user_access')) return 'No Workloads in the namespaces Radar shows you.'
   return local ? 'No Workloads are submitted to this queue.' : 'No Workloads belong to this queue.'
 }
 
-function confirmedEmptyNote(coverage: ResourceReadCoverage, local: boolean): string | undefined {
-  if (coverage.status !== 'complete' || coverage.narrowedBy?.length) return undefined
-  return local ? 'Radar read every Workload in this namespace.' : 'Radar read Workloads in every namespace.'
+function confirmedEmptyNote(members: KueueQueueMembers, local: boolean): string | undefined {
+  const coverage = members.coverage
+  if (coverage.status !== 'complete' || coverage.narrowedBy?.length || members.submissionUnresolved) return undefined
+  return local ? 'Radar read every Workload in this namespace.' : 'Radar read Workloads and LocalQueues in every namespace.'
 }
 
+/** Why the read covers fewer namespaces than the cluster has, when nothing else on screen says so. */
+function scopeNotice(coverage: ResourceReadCoverage): string | undefined {
+  if (coverage.narrowedBy?.includes('namespace_pin')) return "Radar is pinned to one namespace (--namespace-scope); Workloads elsewhere aren't read."
+  return undefined
+}
+
+
 function MemberList({
-  local, namespace, clusterQueue, members, rows, membership, onMembershipChange, hasMore, loadingMore, onLoadMore, onNavigate,
+  local, namespace, clusterQueue, members, rows, paged, laterPageError, onRefresh, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, onNavigate,
 }: {
   local: boolean
   namespace?: string
   clusterQueue?: string
   members: KueueQueueMembers
   rows: KueueQueueWorkload[]
+  paged?: boolean
+  laterPageError?: string
+  onRefresh?: () => void
   membership?: KueueQueueMembership
   onMembershipChange?: (membership: KueueQueueMembership | undefined) => void
+  state?: string
+  onStateChange?: (state: string | undefined) => void
   hasMore?: boolean
   loadingMore?: boolean
   onLoadMore?: () => void
   onNavigate?: (ref: NavigateRef) => void
 }) {
+  const filtered = !!membership || !!state
   const fact = listedFact(members, local)
   const notices = [
     resourceCoverageNotice(members.coverage, 'Workloads'),
     resourceNarrowedNotice(members.coverage),
+    scopeNotice(members.coverage),
     unresolvedNotice(members),
   ].filter(Boolean) as string[]
+  const lowerBound = membersLowerBound(members, membership)
+  const chip = (count: number, bounded: boolean) => (bounded ? undefined : count)
   const unresolved = new Set(members.submissionUnresolved?.names ?? [])
   return (
     <div className="space-y-3">
@@ -174,15 +214,16 @@ function MemberList({
       {notices.map(notice => <p key={notice} className="text-xs text-warning-text">{notice}</p>)}
       {!local && onMembershipChange && members.counts.members > 0 && (
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by membership">
-          <FilterPill label="All" count={members.counts.members} active={!membership} onClick={() => onMembershipChange(undefined)} tooltip="Every Workload submitted here or reserving quota here" />
-          <FilterPill label="Submitted here" count={members.counts.submission} active={membership === 'submission'} onClick={() => onMembershipChange('submission')} tooltip="Workloads whose LocalQueue points at this ClusterQueue now" />
-          <FilterPill label="Reserved here" count={members.counts.reservation} active={membership === 'reservation'} onClick={() => onMembershipChange('reservation')} tooltip="Workloads that report their admission in this ClusterQueue" />
+          <FilterPill label={chipLabel('All', members.counts.members, membersLowerBound(members))} count={chip(members.counts.members, membersLowerBound(members))} active={!membership} onClick={() => onMembershipChange(undefined)} tooltip="Every Workload submitted here or whose admission names this queue" />
+          <FilterPill label={chipLabel('Submitted here', members.counts.submission, membersLowerBound(members, 'submission'))} count={chip(members.counts.submission, membersLowerBound(members, 'submission'))} active={membership === 'submission'} onClick={() => onMembershipChange('submission')} tooltip="Workloads whose LocalQueue points at this ClusterQueue now" />
+          <FilterPill label={chipLabel('Admission here', members.counts.reservation, isLowerBound(members.coverage))} count={chip(members.counts.reservation, isLowerBound(members.coverage))} active={membership === 'reservation'} onClick={() => onMembershipChange('reservation')} tooltip="Workloads whose admission record names this ClusterQueue, finished ones included" />
         </div>
       )}
+      {onStateChange && <StateFilter counts={members.counts.states} state={state} onStateChange={onStateChange} />}
       {rows.length === 0 ? (
         <div>
-          <p className="text-sm text-theme-text-secondary">{emptyMessage(members, local, !!membership)}</p>
-          {!membership && confirmedEmptyNote(members.coverage, local) && <p className="mt-1 text-xs text-theme-text-tertiary">{confirmedEmptyNote(members.coverage, local)}</p>}
+          <p className="text-sm text-theme-text-secondary">{emptyMessage(members, local, filtered)}</p>
+          {!filtered && confirmedEmptyNote(members, local) && <p className="mt-1 text-xs text-theme-text-tertiary">{confirmedEmptyNote(members, local)}</p>}
         </div>
       ) : (
         <ul className="divide-y divide-theme-border">
@@ -194,17 +235,35 @@ function MemberList({
       {rows.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-theme-text-tertiary">
           <span>
-            Showing {rows.length.toLocaleString()} of {members.matching.toLocaleString()} · sorted by {local ? 'name' : 'namespace and name'}, not admission order
+            {showingText(rows.length, members.matching, lowerBound)} · sorted by {local ? 'name' : 'namespace and name'}, not admission order
           </span>
-          {hasMore && onLoadMore && (
-            <button type="button" className="btn-secondary px-2 py-1 text-xs" disabled={loadingMore} onClick={onLoadMore}>
-              {loadingMore ? 'Loading…' : 'Load more'}
-            </button>
-          )}
+          <span className="flex gap-2">
+            {paged && onRefresh && (
+              <button type="button" className="btn-secondary px-2 py-1 text-xs" onClick={onRefresh} title="Pages are read at different moments; reread the list from the start">
+                Refresh
+              </button>
+            )}
+            {hasMore && onLoadMore && !laterPageError && (
+              <button type="button" className="btn-secondary px-2 py-1 text-xs" disabled={loadingMore} onClick={onLoadMore}>
+                {loadingMore ? 'Loading…' : 'Load more'}
+              </button>
+            )}
+          </span>
         </div>
       )}
+      {laterPageError && <p className="text-xs text-warning-text">Could not read the next page: {laterPageError}. Refresh to start over.</p>}
     </div>
   )
+}
+
+function chipLabel(label: string, count: number, bounded: boolean): string {
+  return bounded && count > 0 ? `${label} (≥${count.toLocaleString()})` : label
+}
+
+/** "Showing X of N", where N is as of the first page: rows loaded later can outnumber it when the list grew. */
+export function showingText(shown: number, matching: number, lowerBound: boolean): string {
+  if (shown > matching) return `Showing ${shown.toLocaleString()}; the list changed while paging`
+  return `Showing ${shown.toLocaleString()} of ${lowerBound ? '≥' : ''}${matching.toLocaleString()}`
 }
 
 function unresolvedNotice(members: KueueQueueMembers): string | undefined {
@@ -215,19 +274,39 @@ function unresolvedNotice(members: KueueQueueMembers): string | undefined {
   return `Radar couldn't read LocalQueues in ${where}, so Workloads there are listed only when their reservation names this queue.`
 }
 
-const phases: Record<string, { text: string; severity: BadgeSeverity }> = {
-  pending: { text: 'Pending', severity: 'neutral' },
-  quota_reserved: { text: 'Quota reserved', severity: 'info' },
-  admitted: { text: 'Admitted', severity: 'success' },
-  finished: { text: 'Finished', severity: 'neutral' },
+const severityOrder: BadgeSeverity[] = ['error', 'alert', 'warning', 'info', 'neutral', 'success']
+
+/**
+ * Members grouped by the state the shared classification gives them, worst
+ * first. Counts are Radar's, over every member it read for you.
+ */
+function StateFilter({ counts, state, onStateChange }: { counts: Record<string, number>; state?: string; onStateChange: (state: string | undefined) => void }) {
+  const entries = Object.entries(counts ?? {}).filter(([, n]) => n > 0)
+  if (state && !entries.some(([code]) => code === state)) entries.push([state, 0])
+  if (entries.length < 2 && !state) return null
+  entries.sort(([a, x], [b, y]) => {
+    const rank = (code: string) => severityOrder.indexOf(kueueAdmissionStatePresentation(code).severity)
+    return rank(a) - rank(b) || y - x || a.localeCompare(b)
+  })
+  return (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by admission state">
+      {entries.map(([code, n]) => {
+        const { label, severity } = kueueAdmissionStatePresentation(code)
+        const tone = severity === 'error' ? 'danger' : severity === 'alert' ? 'high' : severity === 'warning' ? 'warn' : 'neutral'
+        return <FilterPill key={code} label={label} count={n} tone={tone} active={state === code} onClick={() => onStateChange(state === code ? undefined : code)} />
+      })}
+    </div>
+  )
 }
 
-function PhaseBadge({ row }: { row: KueueQueueWorkload }) {
-  if (!row.phase) return null
-  const phase = phases[row.phase] ?? { text: row.phase, severity: 'neutral' as const }
+function StateBadge({ row }: { row: KueueQueueWorkload }) {
+  const code = row.admission?.state
+  if (!code) return null
+  const { label, severity } = kueueAdmissionStatePresentation(code)
+  const fact = row.admission?.blocker ?? row.admission?.inactive ?? row.admission?.disruption
   return (
-    <span title={row.phaseStale ? 'Reported for an older generation of this Workload' : undefined}>
-      <Badge severity={row.phaseStale ? 'neutral' : phase.severity} size="sm">{phase.text}{row.phaseStale ? ' (older generation)' : ''}</Badge>
+    <span title={fact?.message || fact?.reason || undefined}>
+      <Badge severity={severity} size="sm">{label}</Badge>
     </span>
   )
 }
@@ -235,17 +314,20 @@ function PhaseBadge({ row }: { row: KueueQueueWorkload }) {
 /** How this row belongs to the queue, in words, naming both queues when they disagree. */
 export function membershipText(row: KueueQueueWorkload, local: boolean, clusterQueue: string | undefined, unresolved: boolean): string {
   const reservedIn = row.reservation?.clusterQueue
+  const finished = row.admission?.state === 'finished' || row.phase === 'finished'
+  const reservedWord = finished ? 'was admitted' : 'reserved'
   if (local) {
     if (!reservedIn) return 'No reservation'
-    if (clusterQueue && reservedIn !== clusterQueue) return `Reserved in ${reservedIn} · this LocalQueue now points to ${clusterQueue}`
-    return `Reserved in ${reservedIn}`
+    const cap = finished ? 'Was admitted' : 'Reserved'
+    if (clusterQueue && reservedIn !== clusterQueue) return `${cap} in ${reservedIn} · this LocalQueue now points to ${clusterQueue}`
+    return `${cap} in ${reservedIn}`
   }
   const parts: string[] = []
   const submitted = row.membership.includes('submission')
   const reserved = row.membership.includes('reservation')
   if (submitted) parts.push(`Submitted through ${row.queueName}`)
-  if (reserved) parts.push('reserved here')
-  else if (reservedIn) parts.push(`reserved in ${reservedIn}`)
+  if (reserved) parts.push(`${reservedWord} here`)
+  else if (reservedIn) parts.push(`${reservedWord} in ${reservedIn}`)
   else parts.push('no reservation')
   if (!submitted && row.queueName) {
     if (row.submission) parts.push(`its LocalQueue ${row.queueName} now points to ${row.submission.clusterQueue}`)
@@ -271,7 +353,7 @@ function WorkloadRow({ row, local, clusterQueue, unresolved, onNavigate }: {
           <ResourceLink name={row.name} kind="workloads" namespace={row.namespace} group={KUEUE_GROUP} onNavigate={onNavigate} />
         </span>
         {!local && <span className="break-all text-xs text-theme-text-tertiary">{row.namespace}</span>}
-        <PhaseBadge row={row} />
+        <StateBadge row={row} />
         {row.deleting && <Badge severity="neutral" size="sm">Deleting</Badge>}
       </div>
       <p className="mt-0.5 break-words text-xs text-theme-text-secondary">
@@ -280,6 +362,21 @@ function WorkloadRow({ row, local, clusterQueue, unresolved, onNavigate }: {
       </p>
     </li>
   )
+}
+
+/** Why a LocalQueue's Workloads aren't in the list, by the code of the gap that left them out. */
+export function unreadWorkloadsText(lq: KueueQueueLocalQueue): string {
+  const where = `in ${lq.namespace}`
+  switch (lq.workloadsGap) {
+    case 'user_forbidden': return `You can't list Workloads ${where}, so its Workloads aren't listed above.`
+    case 'user_permission_check_failed': return `Radar couldn't confirm you may list Workloads ${where}; retrying.`
+    case 'kind_sync_pending': return `Workloads ${where} are still loading.`
+    case 'kind_sync_timed_out': return `Workloads ${where} haven't finished loading.`
+    case 'radar_forbidden':
+    case 'radar_credentials_rejected':
+    case 'radar_namespace_not_collected': return `Radar's own access doesn't cover Workloads ${where}, so its Workloads aren't listed above.`
+    default: return `Radar didn't read Workloads ${where}, so its Workloads aren't listed above.`
+  }
 }
 
 function reportedText(reported: KueueQueueLocalQueue['reported']): string {
@@ -343,13 +440,7 @@ function LocalQueueList({ response, onNavigate }: { response: KueueQueueWorkload
                 <ResourceLink name={lq.name} label={`${lq.namespace}/${lq.name}`} kind="localqueues" namespace={lq.namespace} group={KUEUE_GROUP} onNavigate={onNavigate} />
               </span>
               <p className="text-xs text-theme-text-secondary">Controller reports {reportedText(lq.reported)}</p>
-              {!lq.workloadsRead && (
-                <p className="text-xs text-theme-text-tertiary">
-                  {lq.workloadsGap === 'user_forbidden'
-                    ? `You can't list Workloads in ${lq.namespace}, so its Workloads aren't listed above.`
-                    : `Radar didn't read Workloads in ${lq.namespace}, so its Workloads aren't listed above.`}
-                </p>
-              )}
+              {!lq.workloadsRead && <p className="text-xs text-theme-text-tertiary">{unreadWorkloadsText(lq)}</p>}
             </li>
           ))}
         </ul>

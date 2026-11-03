@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { KueueQueueWorkloads, emptyMessage, listedFact, membershipText, uniqueRows } from './KueueQueueWorkloads'
+import { KueueQueueWorkloads, emptyMessage, listedFact, membershipText, showingText, uniqueRows, unreadWorkloadsText } from './KueueQueueWorkloads'
+import { kueueQueueRetryable } from '../../../utils/kueue-queue-workloads'
 import type { KueueQueueMembers, KueueQueueWorkload, KueueQueueWorkloadsResponse } from '../../../types/kueue-queues'
 import type { ResourceReadCoverage } from '../../../types/resource-coverage'
 
@@ -17,11 +18,11 @@ const partial: ResourceReadCoverage = {
 
 const row = (name: string, extra: Partial<KueueQueueWorkload> = {}): KueueQueueWorkload => ({
   namespace: 'team-a', name, uid: `uid-${name}`, apiVersion: 'kueue.x-k8s.io/v1beta2', createdAt: null, deleting: false,
-  membership: ['submission'], queueName: 'lq', submission: { localQueue: 'lq', clusterQueue: 'cq' }, ...extra,
+  membership: ['submission'], queueName: 'lq', submission: { localQueue: 'lq', localQueueUID: 'lq-uid', clusterQueue: 'cq' }, ...extra,
 })
 
 const members = (items: KueueQueueWorkload[], coverage: ResourceReadCoverage, extra: Partial<KueueQueueMembers> = {}): KueueQueueMembers => ({
-  items, matching: items.length, counts: { members: items.length, submission: items.length, reservation: 0 }, coverage, ...extra,
+  items, matching: items.length, counts: { members: items.length, submission: items.length, reservation: 0, states: {} }, coverage, ...extra,
 })
 
 const response = (workloads: KueueQueueMembers | undefined, extra: Partial<KueueQueueWorkloadsResponse> = {}): KueueQueueWorkloadsResponse => ({
@@ -34,7 +35,7 @@ const render = (props: Partial<Parameters<typeof KueueQueueWorkloads>[0]>) =>
 describe('the count Radar lists', () => {
   it('is exact when the read was complete and says whose namespaces it covers', () => {
     expect(listedFact(members([row('a')], complete), false)).toMatchObject({ text: '1' })
-    expect(listedFact(members([row('a')], yours), false).source).toContain('namespaces you can see')
+    expect(listedFact(members([row('a')], yours), false).source).toContain('namespaces Radar shows you')
     expect(listedFact(members([row('a')], complete), false).source).toContain("Not the controller's count")
   })
 
@@ -42,26 +43,37 @@ describe('the count Radar lists', () => {
     expect(listedFact(members([row('a')], partial), false).text).toBe('≥1')
     expect(listedFact(members([], partial), false).text).toBe('None in what Radar read')
   })
+
+  it('is a lower bound when LocalQueues went unread somewhere, though the Workload read was complete', () => {
+    const unresolved = members([row('a')], complete, { submissionUnresolved: { count: 1, names: ['team-b'] } })
+    expect(listedFact(unresolved, false).text).toBe('≥1')
+    const html = render({ pages: [response(unresolved)], onMembershipChange: () => {} })
+    expect(html).toContain('All (≥1)')
+    expect(html).toContain('Showing 1 of ≥1')
+    expect(html).toContain("Radar couldn&#x27;t read LocalQueues in team-b")
+    expect(emptyMessage(members([], complete, { submissionUnresolved: { count: 1, names: ['team-b'] } }), false, false)).toBe('No Workloads found where Radar could read.')
+    expect(render({ pages: [response(members([], complete, { submissionUnresolved: { extent: 'unknown' } }))] })).not.toContain('every namespace')
+  })
 })
 
 describe('empty answers', () => {
   it('keeps confirmed empty apart from empty where Radar or you could read', () => {
     expect(emptyMessage(members([], complete), false, false)).toBe('No Workloads belong to this queue.')
     expect(emptyMessage(members([], complete), true, false)).toBe('No Workloads are submitted to this queue.')
-    expect(emptyMessage(members([], yours), false, false)).toBe('No Workloads in the namespaces you can see.')
-    expect(emptyMessage(members([], partial), false, false)).toBe('No Workloads found in the namespaces Radar could read.')
-    expect(emptyMessage(members([], complete, { counts: { members: 3, submission: 3, reservation: 0 } }), false, true)).toBe('No Workloads match this filter.')
+    expect(emptyMessage(members([], yours), false, false)).toBe('No Workloads in the namespaces Radar shows you.')
+    expect(emptyMessage(members([], partial), false, false)).toBe('No Workloads found where Radar could read.')
+    expect(emptyMessage(members([], complete, { counts: { members: 3, submission: 3, reservation: 0, states: {} } }), false, true)).toBe('No Workloads match this filter.')
   })
 
   it('renders scenario 7 as confirmed empty only when nothing narrowed the read', () => {
-    expect(render({ pages: [response(members([], complete))] })).toContain('Radar read Workloads in every namespace.')
+    expect(render({ pages: [response(members([], complete))] })).toContain('Radar read Workloads and LocalQueues in every namespace.')
     expect(render({ pages: [response(members([], yours))] })).not.toContain('every namespace')
   })
 })
 
 describe('membership in words', () => {
   it('names both queues when the reservation and the LocalQueue disagree', () => {
-    const stale = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, submission: { localQueue: 'lq', clusterQueue: 'new-cq' } })
+    const stale = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, submission: { localQueue: 'lq', localQueueUID: 'lq-uid', clusterQueue: 'new-cq' } })
     expect(membershipText(stale, false, undefined, false)).toBe('Reserved here · its LocalQueue lq now points to new-cq')
     expect(membershipText(row('w', { reservation: { clusterQueue: 'old-cq' } }), true, 'cq', false)).toBe('Reserved in old-cq · this LocalQueue now points to cq')
   })
@@ -71,6 +83,12 @@ describe('membership in words', () => {
     expect(membershipText(reserved, false, undefined, true)).toBe('Reserved here · LocalQueue lq not read')
     expect(membershipText(reserved, false, undefined, false)).toBe('Reserved here · LocalQueue lq not found')
     expect(membershipText(row('w', { membership: ['submission', 'reservation'], reservation: { clusterQueue: 'cq' } }), false, undefined, false)).toBe('Submitted through lq · reserved here')
+  })
+
+  it('does not call a finished Workload reserved', () => {
+    const done = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, admission: { state: 'finished' }, submission: { localQueue: 'lq', localQueueUID: 'u', clusterQueue: 'cq' } })
+    expect(membershipText(done, false, undefined, false)).toBe('Was admitted here · its LocalQueue lq now points to cq')
+    expect(membershipText(done, true, 'cq', false)).toBe('Was admitted in cq')
   })
 })
 
@@ -109,6 +127,38 @@ describe('scenarios', () => {
     const html = render({ upgrade: { feature: 'Workload lists on Kueue queues' } })
     expect(html).toContain('Workload lists on Kueue queues')
   })
+})
+
+describe('paging', () => {
+  it('takes counts from the first page and never shows more rows than it says there are', () => {
+    const first = response(members([row('a')], complete, { matching: 1, next: 'x', counts: { members: 1, submission: 1, reservation: 0, states: {} } }))
+    const second = response(members([row('b')], complete, { matching: 9, counts: { members: 9, submission: 9, reservation: 0, states: {} } }))
+    const html = render({ pages: [first, second], onRetry: () => {} })
+    expect(html).toContain('Showing 2; the list changed while paging')
+    expect(html).toContain('Refresh')
+    expect(showingText(2, 5, false)).toBe('Showing 2 of 5')
+  })
+
+  it('stops paging and says so when a later page could not be read', () => {
+    const first = response(members([row('a')], complete, { next: 'x' }))
+    const failed = response(undefined, { workloadsError: { error: 'still loading', error_code: 'kind_sync_pending' } })
+    const html = render({ pages: [first, failed], hasMore: true, onLoadMore: () => {}, onRetry: () => {} })
+    expect(html).toContain('Could not read the next page: still loading')
+    expect(html).not.toContain('Load more')
+  })
+
+  it('polls sooner only while a retry can complete the answer', () => {
+    expect(kueueQueueRetryable(response(members([], { ...partial, gaps: [{ code: 'kind_sync_pending', namespaces: { count: 1, names: ['team-b'] } }] })))).toBe(true)
+    expect(kueueQueueRetryable(response(members([], partial)))).toBe(false)
+    expect(kueueQueueRetryable(response(undefined, { workloadsError: { error: 'x', error_code: 'user_permission_check_failed' } }))).toBe(true)
+  })
+})
+
+it('says why a LocalQueue\'s Workloads are missing by who can fix it', () => {
+  const lq = { namespace: 'team-b', name: 'lq', reported: { pending: 1, reserving: null, admitted: null }, workloadsRead: false }
+  expect(unreadWorkloadsText({ ...lq, workloadsGap: 'user_forbidden' })).toContain("You can't list Workloads in team-b")
+  expect(unreadWorkloadsText({ ...lq, workloadsGap: 'radar_forbidden' })).toContain("Radar's own access")
+  expect(unreadWorkloadsText({ ...lq, workloadsGap: 'kind_sync_pending' })).toBe('Workloads in team-b are still loading.')
 })
 
 it('lists a row once when it moved between pages', () => {

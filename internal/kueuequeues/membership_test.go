@@ -56,11 +56,23 @@ type readLocalQueues struct {
 	read    map[string]bool
 }
 
-func (l readLocalQueues) Target(namespace, name string) (string, bool) {
+func (l readLocalQueues) Get(namespace, name string) (*unstructured.Unstructured, bool) {
 	if !l.read[namespace] {
-		return "", false
+		return nil, false
 	}
-	return l.targets[namespace+"/"+name], true
+	target, ok := l.targets[namespace+"/"+name]
+	if !ok {
+		return nil, true
+	}
+	return localQueue(namespace, name, target), true
+}
+
+func localQueue(namespace, name, target string) *unstructured.Unstructured {
+	lq := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kueue.x-k8s.io/v1beta2", "kind": "LocalQueue", "spec": map[string]any{"clusterQueue": target}}}
+	lq.SetNamespace(namespace)
+	lq.SetName(name)
+	lq.SetUID(types.UID("lq-" + namespace + "-" + name))
+	return lq
 }
 
 func summary(members []Member) []string {
@@ -120,8 +132,13 @@ func TestClusterQueueMembership(t *testing.T) {
 		t.Fatalf("members of new-cq:\n got %q\nwant %q", got, want)
 	}
 
-	counts := Count(ClusterQueueMembers("cq", workloads, lqs))
-	if counts != (Counts{Members: 7, Submission: 3, Reservation: 5}) {
+	counts := Count(ClusterQueueMembers("cq", workloads, lqs), func(m Member) string {
+		if m.Workload.GetDeletionTimestamp() != nil {
+			return "deleting"
+		}
+		return ""
+	})
+	if counts.Members != 7 || counts.Submission != 3 || counts.Reservation != 5 || len(counts.States) != 1 || counts.States["deleting"] != 1 {
 		t.Fatalf("counts = %+v", counts)
 	}
 }
@@ -138,7 +155,7 @@ func TestLocalQueueMembership(t *testing.T) {
 		workload("team", "no-queue"),
 	}
 	workloads = append(workloads, workloads[0])
-	got := summary(LocalQueueMembers("team", "lq", "cq", workloads))
+	got := summary(LocalQueueMembers(localQueue("team", "lq", "cq"), workloads))
 	want := []string{
 		"team/a [submission] submitted=cq reserved=cq",
 		"team/b [submission] submitted=cq reserved=old-cq",
@@ -148,7 +165,7 @@ func TestLocalQueueMembership(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("members of team/lq:\n got %q\nwant %q", got, want)
 	}
-	if got := LocalQueueMembers("team", "", "cq", workloads); len(got) != 0 {
+	if got := LocalQueueMembers(localQueue("team", "", "cq"), workloads); len(got) != 0 {
 		t.Fatalf("a LocalQueue without a name has no members: %v", summary(got))
 	}
 }
@@ -164,11 +181,19 @@ func TestFilterAndPageByKey(t *testing.T) {
 	}
 	lqs := readLocalQueues{targets: map[string]string{"team/lq": "cq"}, read: map[string]bool{"team": true}}
 	members := ClusterQueueMembers("cq", workloads, lqs)
-	if got := len(Filter(members, Reservation)); got != 4 {
+	none := func(Member) string { return "" }
+	if got := len(Filter(members, Reservation, "", none)); got != 4 {
 		t.Fatalf("reservation members = %d, want 4", got)
 	}
-	if got := len(Filter(members, "")); got != 7 {
+	if got := len(Filter(members, "", "", none)); got != 7 {
 		t.Fatalf("all members = %d, want 7", got)
+	}
+	named := func(m Member) string { return m.Workload.GetName() }
+	if got := Filter(members, Reservation, "w2", named); len(got) != 1 || got[0].Workload.GetName() != "w2" {
+		t.Fatalf("w2 by state = %v", summary(got))
+	}
+	if got := len(Filter(members, Submission, "missing", named)); got != 0 {
+		t.Fatalf("a state no member has kept %d members", got)
 	}
 
 	var read []string

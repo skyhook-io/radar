@@ -15,9 +15,10 @@ interface Props {
 
 function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueue' | 'LocalQueue' }) {
   const [membership, setMembership] = useState<KueueQueueMembership | undefined>()
+  const [state, setState] = useState<string | undefined>()
   const query = useKueueQueueWorkloads(
     { kind, namespace: data.metadata?.namespace, name: data.metadata?.name ?? '', uid: data.metadata?.uid },
-    membership,
+    { membership, state },
   )
   // A cached list of an earlier queue with the same name is never shown.
   const pages = query.data?.pages.filter(page => page.queue.uid === data.metadata?.uid)
@@ -31,6 +32,8 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       upgrade={query.upgrade}
       membership={membership}
       onMembershipChange={setMembership}
+      state={state}
+      onStateChange={setState}
       hasMore={query.hasNextPage}
       loadingMore={query.isFetchingNextPage}
       onLoadMore={() => void query.fetchNextPage()}

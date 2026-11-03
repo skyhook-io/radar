@@ -7,6 +7,7 @@ import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
+import { kueueQueueRetryable } from '@skyhook-io/k8s-ui/utils/kueue-queue-workloads'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
@@ -8165,16 +8166,18 @@ export interface KueueProvisioningResponse {
 // The Workloads that belong to a Kueue queue, page by page. Pages chain by
 // cursor; a refetch re-reads them from the first, so a list that changed is
 // traversed again rather than patched.
-export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQueue'; namespace?: string; name: string; uid?: string }, membership: KueueQueueMembership | undefined) {
+export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQueue'; namespace?: string; name: string; uid?: string }, filters: { membership?: KueueQueueMembership; state?: string }) {
+  const { membership, state } = filters
   const { guard, gatedKey, support, upgrade } = useRadarFeature('kueueQueueWorkloads')
   const path = queue.kind === 'ClusterQueue'
     ? `/kueue/clusterqueues/${encodeURIComponent(queue.name)}/workloads`
     : `/kueue/localqueues/${encodeURIComponent(queue.namespace ?? '')}/${encodeURIComponent(queue.name)}/workloads`
   const query = useInfiniteQuery<KueueQueueWorkloadsResponse>({
-    queryKey: ['kueue-queue-workloads', queue.kind, queue.namespace ?? '', queue.name, queue.uid ?? '', membership ?? '', ...gatedKey],
+    queryKey: ['kueue-queue-workloads', queue.kind, queue.namespace ?? '', queue.name, queue.uid ?? '', membership ?? '', state ?? '', ...gatedKey],
     queryFn: ({ pageParam, signal }) => {
       const params = new URLSearchParams()
       if (membership) params.set('membership', membership)
+      if (state) params.set('state', state)
       if (typeof pageParam === 'string') params.set('cursor', pageParam)
       const qs = params.toString()
       return guard(() => fetchJSON<KueueQueueWorkloadsResponse>(`${path}${qs ? `?${qs}` : ''}`, signal))
@@ -8183,7 +8186,16 @@ export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQue
     getNextPageParam: last => last.workloads?.next,
     enabled: Boolean(queue.name && queue.uid && (queue.kind === 'ClusterQueue' || queue.namespace)) && support !== 'unsupported',
     staleTime: 5000,
-    refetchInterval: query => (query.state.error instanceof ApiError && query.state.error.status < 500 ? false : 15000),
+    // Poll the first page only: refetching an infinite query rereads every
+    // loaded page, so a list paged further waits for an explicit refresh.
+    // A part a retry can complete (still loading, a check that failed) is
+    // polled sooner.
+    refetchInterval: query => {
+      if (query.state.error instanceof ApiError && query.state.error.status < 500) return false
+      const pages = query.state.data?.pages ?? []
+      if (pages.length > 1) return false
+      return kueueQueueRetryable(pages[0]) ? 3000 : 15000
+    },
     retry: shouldRetryRadarQuery,
   })
   return { ...query, upgrade, support }

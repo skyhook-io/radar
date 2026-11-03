@@ -16,7 +16,7 @@ const page = (names: string[], next?: string) => ({
   queue: { kind: 'ClusterQueue', name: 'cq', uid: 'cq-uid' },
   workloads: {
     items: names.map(name => ({ namespace: 'team-a', name, uid: name, apiVersion: 'kueue.x-k8s.io/v1beta2', createdAt: null, deleting: false, membership: ['reservation'] })),
-    matching: 3, counts: { members: 3, submission: 0, reservation: 3 }, next,
+    matching: 3, counts: { members: 3, submission: 0, reservation: 3, states: {} }, next,
     coverage: { status: 'complete', scope: { type: 'all_namespaces' }, read: { type: 'all_namespaces' }, gaps: [] },
   },
 })
@@ -36,7 +36,7 @@ it.each(['supported', 'older'] as const)('reads queue Workloads page by page onl
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   let result!: ReturnType<typeof useKueueQueueWorkloads>
   function Probe() {
-    result = useKueueQueueWorkloads({ kind: 'ClusterQueue', name: 'cq', uid: 'cq-uid' }, 'reservation')
+    result = useKueueQueueWorkloads({ kind: 'ClusterQueue', name: 'cq', uid: 'cq-uid' }, { membership: 'reservation' })
     return null
   }
   const host = document.createElement('div')
