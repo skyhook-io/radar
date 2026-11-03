@@ -9,8 +9,9 @@ import { describeKueuePolicy } from './policy'
 import { isDenied, unreadReason, type RelatedRead } from './related-read'
 import { namespaceEligibility } from './eligibility'
 
-export { KUEUE_GROUP } from './constants'
 import { KUEUE_GROUP } from './constants'
+
+export { KUEUE_GROUP }
 export type Navigate = (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 
 /** One related object's name with what Radar's read of it found. Without a read, the name alone. */

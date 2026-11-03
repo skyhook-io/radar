@@ -66,6 +66,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
   const localQueue = reads?.localQueue
   const configured: string | undefined = localQueue?.state === 'found' ? localQueue.object?.spec?.clusterQueue : undefined
   const reserved: string | undefined = data.status?.admission?.clusterQueue
+  const finished = (data.status?.conditions ?? []).some((condition: any) => condition?.type === 'Finished' && condition.status === 'True')
   const configuredRead = configured ? reads?.clusterQueues?.[configured] : undefined
   const eligibility = configured && reads ? namespaceEligibilityFact({ clusterQueue: configured, parent: configuredRead, namespaceRead: reads.namespace }) : undefined
   const assignments: any[] = Array.isArray(data.status?.admission?.podSetAssignments) ? data.status.admission.podSetAssignments : []
@@ -83,7 +84,9 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
               <ResourceLink name={queueName} kind="localqueues" namespace={namespace} group={KUEUE_GROUP} onNavigate={onNavigate} />
               <ReadState read={localQueue} missing="Not found" found={localQueue?.state === 'found' ? <StatusPill status={localQueueStatusWithParent(localQueue.object, configuredRead)} /> : undefined} />
             </div>
-            {localQueue?.state === 'not_found' && <p className={muted}>No LocalQueue {queueName} exists in namespace {namespace}. Kueue can't admit this Workload until it does.</p>}
+            {localQueue?.state === 'not_found' && <p className={muted}>{reserved
+              ? `No LocalQueue ${queueName} exists in namespace ${namespace} now; the reservation below was made through it earlier.`
+              : `No LocalQueue ${queueName} exists in namespace ${namespace}. Kueue can't admit this Workload until it does.`}</p>}
           </>}
         </Step>
         {queueName && reads && (
@@ -101,7 +104,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
         )}
         <Step label="Reservation">
           {reserved ? <>
-            <p className="text-xs text-theme-text-tertiary">Quota reserved in</p>
+            <p className="text-xs text-theme-text-tertiary">{finished ? 'Reservation recorded in (the Workload finished, so its quota was released)' : 'Quota reserved in'}</p>
             {reads && reserved !== configured
               ? <ClusterQueueReadSummary name={reserved} read={reads.clusterQueues?.[reserved]} onNavigate={onNavigate} />
               : <div className="break-all [&_button]:text-left"><ResourceLink name={reserved} kind="clusterqueues" group={KUEUE_GROUP} onNavigate={onNavigate} /></div>}

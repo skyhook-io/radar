@@ -45,6 +45,8 @@ describe('parent-aware LocalQueue tone', () => {
     expect(getClusterQueueStatus(clusterQueue('parent', active('False', 'Stopped', 1, "Can't admit new workloads: is stopped."))).level).toBe('neutral')
     expect(localQueueStatusWithParent(inactive, found(both)).level).toBe('alert')
     expect(getLocalQueueStatus(localQueue(active('False', 'Stopped', 1, 'LocalQueue is stopped'))).level).toBe('neutral')
+    // Wording this Radar doesn't recognise keeps the stop rather than inventing an alert.
+    expect(getClusterQueueStatus(clusterQueue('parent', active('False', 'Stopped', 1, 'ClusterQueue is stopped by policy'))).level).toBe('neutral')
   })
 
   it('keeps the alert when the ClusterQueue can’t be read', () => {
@@ -212,6 +214,14 @@ describe('Workload admission path', () => {
     const msg = (message: string) => workload({ queueName: 'lq' }, { conditions: [{ type: 'QuotaReserved', status: 'False', reason: 'Inadmissible', message, observedGeneration: 1 }] })
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={msg('ClusterQueue cq is inactive')} reads={{}} />)).toContain('Controller-reported on QuotaReserved: </span>ClusterQueue cq is inactive')
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={msg("couldn't assign flavors to pod set main: flavor a not found")} reads={{}} />)).not.toContain('Controller-reported on QuotaReserved')
+  })
+
+  it('doesn’t claim a reserved Workload can’t be admitted when its LocalQueue was deleted later', () => {
+    const html = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'gone' }, { admission: { clusterQueue: 'cq' } })} reads={{ localQueue: { state: 'not_found' }, clusterQueues: { cq: found(clusterQueue('cq', active('True', 'Ready', 1))) } }} />)
+    expect(html).toContain('the reservation below was made through it earlier')
+    expect(html).not.toContain('can&#x27;t admit this Workload')
+    const finished = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' }, { admission: { clusterQueue: 'cq' }, conditions: [{ type: 'Finished', status: 'True', reason: 'Succeeded', observedGeneration: 1 }] })} />)
+    expect(finished).toContain('the Workload finished, so its quota was released')
   })
 
   it('keeps the reserved ClusterQueue’s read state when the LocalQueue can’t be read', () => {

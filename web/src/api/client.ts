@@ -3031,7 +3031,7 @@ export function useResources<T>(
   kind: string,
   namespace?: string,
   group?: string,
-  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
+  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string; refetchOnMount?: boolean | 'always' },
 ) {
   const loadingInterval = useMemo(() => createListRefetchInterval(options?.refetchInterval), [options?.refetchInterval])
   const query = useQuery<ResourceListResult<T>>({
@@ -3039,6 +3039,7 @@ export function useResources<T>(
     queryFn: ({ signal }) => fetchResourceList<T>(kind, { namespaces: namespace ? [namespace] : [], group, signal }),
     enabled: (options?.enabled ?? true) && Boolean(kind),
     staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
+    ...(options?.refetchOnMount !== undefined ? { refetchOnMount: options.refetchOnMount } : {}),
     refetchInterval: loadingInterval,
     // Kind still completing its initial sync (progressive shell, or a
     // deferred kind shortly after connect): keep polling instead of

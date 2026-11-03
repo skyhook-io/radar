@@ -50,7 +50,8 @@ export function getKueueQueueCondition(resource: any): any {
  */
 export function isKueueStopOnly(condition: any, clusterQueue: boolean): boolean {
   if (condition?.status !== 'False' || condition.reason !== 'Stopped') return false
-  return !clusterQueue || !condition.message || /^Can't admit new workloads: is stopped\.?$/.test(condition.message)
+  // Only Kueue's multi-cause wording ("is stopped, <more>") counts as more; unfamiliar wording keeps the stop.
+  return !clusterQueue || !/^Can't admit new workloads: is stopped, /.test(condition.message ?? '')
 }
 
 function queueConditionStatus(resource: any, clusterQueue: boolean): StatusBadge {

@@ -1,10 +1,11 @@
+import { useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import type { RelatedRead } from '@skyhook-io/k8s-ui/components/kueue/related-read'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import { ApiError, isStillLoadingError, resourceQueryOptions, useResources } from '../../api/client'
 import { getApiBase } from '../../api/config'
 
-export interface RelatedRef {
+interface RelatedRef {
   kind: string
   group?: string
   namespace?: string
@@ -34,11 +35,13 @@ export function relatedReadFrom(query: { data?: { resource?: unknown }; error: u
  * covered everything it was asked for; an older Radar that sends no coverage
  * can confirm presence but not absence.
  */
-export function relatedReadInList(list: { data?: any[]; coverage?: { status: string; gaps?: { code: string }[] }; error: unknown }, name: string): RelatedRead {
+export function relatedReadInList(list: { data?: any[]; coverage?: { status: string; gaps?: { code: string }[] }; error: unknown; readBeforeMount?: boolean }, name: string): RelatedRead {
   if (list.error) return relatedReadFrom({ error: list.error })
   if (!list.data) return { state: 'loading' }
   const object = list.data.find(item => item?.metadata?.name === name)
   if (object) return { state: 'found', object }
+  // A list cached before this view mounted can't prove absence now; its re-read is in flight.
+  if (list.readBeforeMount) return { state: 'loading' }
   if (list.coverage?.status === 'complete') return { state: 'not_found' }
   if (list.coverage?.status === 'partial') return { state: 'unavailable', code: list.coverage.gaps?.[0]?.code, message: 'Radar’s list did not cover every object' }
   return { state: 'unconfirmed' }
@@ -66,12 +69,14 @@ export interface RelatedObjects {
  * different objects.
  */
 export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true): RelatedObjects {
-  const { data, coverage, error } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS })
+  const [mountedAt] = useState(Date.now)
+  const { data, coverage, error, dataUpdatedAt } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS, refetchOnMount: 'always' })
+  const readBeforeMount = dataUpdatedAt < mountedAt
   // An older Radar answers a list denial with an uncoded 403; a GET still says what the viewer may open.
   const listDenied = error instanceof ApiError && (readActionFor(error.data?.error_code) === 'user_access' || (error.status === 403 && !error.data?.error_code))
   const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied)
   const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data ? { state: 'found', object: data } : { state: 'loading' }
-  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error }, name)]))
+  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error, readBeforeMount }, name)]))
   const completeness = coverage?.status === 'complete' || coverage?.status === 'partial' ? coverage.status : 'unknown'
   return { byName, all, completeness }
 }

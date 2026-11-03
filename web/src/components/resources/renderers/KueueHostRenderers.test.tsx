@@ -74,8 +74,16 @@ it('reads the namespace only when the ClusterQueue selector has terms', async ()
 it('tones the header badge like the detail when the ClusterQueue reports Stopped', async () => {
   queues = [cq('parent', undefined, active('False', 'Stopped'), { stopPolicy: 'Hold' })]
   const lq = { apiVersion: v, metadata: { name: 'lq', namespace: 'team', generation: 1 }, spec: { clusterQueue: 'parent' }, status: { conditions: [active('False', 'ClusterQueueIsInactive')] } }
-  await render(<LocalQueueStatusBadge data={lq} />, () => expect(element.querySelector('.badge')?.className).not.toContain('status-alert'))
+  await render(<LocalQueueStatusBadge data={lq} />, () => expect(element.querySelector('.badge')?.className).toContain('status-neutral'))
+  expect(requests).toContain('/api/resources/clusterqueues')
   expect(element.textContent).toBe('ClusterQueueIsInactive')
+})
+
+it('keeps the header badge alert when the stopped ClusterQueue reports other causes too', async () => {
+  queues = [cq('parent', undefined, { ...active('False', 'Stopped'), message: "Can't admit new workloads: is stopped, references missing ResourceFlavor(s): x." }, { stopPolicy: 'Hold' })]
+  const lq = { apiVersion: v, metadata: { name: 'lq', namespace: 'team', generation: 1 }, spec: { clusterQueue: 'parent' }, status: { conditions: [active('False', 'ClusterQueueIsInactive')] } }
+  await render(<LocalQueueStatusBadge data={lq} />, () => expect(element.querySelector('.badge')?.className).toContain('status-alert'))
+  expect(requests).toContain('/api/resources/clusterqueues')
 })
 
 it('follows a Workload to its LocalQueue and that LocalQueue’s ClusterQueue through list reads', async () => {

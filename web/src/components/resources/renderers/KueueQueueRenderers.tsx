@@ -20,8 +20,9 @@ type Navigate = (ref: ResourceRef) => void
 export function LocalQueueRenderer({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
   const parentName: string = data.spec?.clusterQueue ?? ''
   const namespace: string = data.metadata?.namespace ?? ''
-  const clusterQueue = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], !!parentName).byName[parentName]
-  const needsLabels = clusterQueue.state === 'found' && selectorHasTerms(clusterQueue.object?.spec?.namespaceSelector)
+  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], !!parentName).byName[parentName]
+  const clusterQueue = parentName ? parentRead : undefined
+  const needsLabels = clusterQueue?.state === 'found' && selectorHasTerms(clusterQueue.object?.spec?.namespaceSelector)
   const [namespaceRead] = useRelatedReads([{ kind: 'namespaces', name: namespace }], needsLabels && !!namespace)
   return <BaseLocalQueueRenderer data={data} onNavigate={onNavigate} reads={{ clusterQueue, namespace: needsLabels ? namespaceRead : undefined }} />
 }
@@ -54,7 +55,8 @@ export function ClusterQueueRenderer({ data, onNavigate }: { data: any; onNaviga
 export function LocalQueueStatusBadge({ data }: { data: any }) {
   const parentName: string = data?.spec?.clusterQueue ?? ''
   const supported = isKueueQueueResource(data)
-  const parent = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], supported && !!parentName).byName[parentName]
+  const parentRead = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [parentName], supported && !!parentName).byName[parentName]
+  const parent = parentName ? parentRead : undefined
   const status = localQueueStatusWithParent(data, supported ? parent : undefined)
   return <span className={`badge ${status.color}`}>{status.text}</span>
 }

@@ -43,6 +43,11 @@ describe('relatedReadInList', () => {
     expect(relatedReadInList({ data: items, coverage: { status: 'unknown' }, error: null }, 'gone')).toEqual({ state: 'unconfirmed' })
     expect(relatedReadInList({ data: items, coverage: { status: 'unknown' }, error: null }, 'small').state).toBe('found')
   })
+  it('doesn’t prove absence from a list cached before the view mounted', () => {
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: null, readBeforeMount: true }, 'gone')).toEqual({ state: 'loading' })
+    expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: null, readBeforeMount: true }, 'small').state).toBe('found')
+  })
+
   it('lets a list error outrank the items it kept', () => {
     expect(relatedReadInList({ data: items, coverage: { status: 'complete' }, error: fail(403, 'user_forbidden') }, 'small')).toMatchObject({ state: 'unavailable', code: 'user_forbidden' })
     expect(relatedReadInList({ error: null }, 'small')).toEqual({ state: 'loading' })
