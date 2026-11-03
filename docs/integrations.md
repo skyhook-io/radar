@@ -1781,13 +1781,22 @@ evidence Radar shows of Workloads the caller can't list. Radar never
 subtracts its own count from a controller count: cache lag, finished
 Workloads and inadmissible Workloads make them differ too.
 
+Before Radar connects, both routes answer the usual 503 `{error}`;
+afterwards a failed request is `{error, error_code, coverage?}`, and a cursor
+issued for another list (another queue, a re-created queue, other filters or
+another cluster context) is refused with 400 `kueue_cursor_invalid`, after
+which a client reads from the first page again.
+
 Rows are paged by key: unfinished Workloads first, finished ones after
 (Kueue keeps them until their owner goes), each by namespace and name so that
 no order is mistaken for admission order. A cursor belongs to its queue (by UID), filter
-and cluster context. A member is never returned twice while a list is paged;
+and cluster context. A member that keeps its key is never returned twice while a list is paged;
 a member that joins behind the cursor appears when the list is read again
-from the start. Counts and coverage describe every member Radar read for the
-caller as of each page's read, not just the page; the UI takes them, and the
+from the start. A member's key changes once, when it finishes, so one
+returned among the unfinished members that finishes before the traversal
+reaches the finished ones is returned again there: readers merge pages by
+UID. Counts and coverage describe every member Radar read for the caller as
+of each page's read, not just the page; the UI takes them, and the
 LocalQueues (sent with the first page only), from the first page. Each row
 carries the shared admission classification (`phase`, `admission`), and
 `counts.states` counts the members by `admission.state`, so a list can be

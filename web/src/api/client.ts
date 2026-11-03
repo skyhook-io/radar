@@ -8165,7 +8165,8 @@ export interface KueueProvisioningResponse {
 
 // The Workloads that belong to a Kueue queue, page by page. Pages chain by
 // cursor; a refetch re-reads them from the first, so a list that changed is
-// traversed again rather than patched.
+// traversed again rather than patched. Nothing is read until the queue's UID
+// is known, nor for a LocalQueue without its namespace.
 export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQueue'; namespace?: string; name: string; uid?: string }, filters: { membership?: KueueQueueMembership; state?: string }) {
   const { membership, state } = filters
   const { guard, gatedKey, support, upgrade } = useRadarFeature('kueueQueueWorkloads')
