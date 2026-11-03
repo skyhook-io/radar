@@ -261,15 +261,19 @@ jobs:
 
   # Offline: kubectl is stubbed, so this needs only bash and jq.
   kueue-scenarios:
-    name: Kueue scenarios script
+    name: Kueue scenarios script (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.kueue_scenarios == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # macOS runs it under /bin/bash 3.2, which the script supports.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Offline tests
-        run: bash scripts/kueue-scenarios/test.sh
+        run: ${{ matrix.os == 'macos-latest' && '/bin/bash' || 'bash' }} scripts/kueue-scenarios/test.sh
 
   frontend:
     name: Frontend

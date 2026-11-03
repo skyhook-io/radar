@@ -212,6 +212,11 @@ KC_FAIL=''
 KC_FAIL="wait --for=delete"
 check "down exits 2 when it can't confirm the deletions" 2 cmd_down
 KC_FAIL=''
+# Called outside check(), where errexit applies: an empty inventory (nothing to
+# delete) must not stop the run.
+OWNED='{}'
+cmd_down >/dev/null
+check "down with nothing to delete completes under errexit" 0 true
 
 echo "==> create_missing creates only what is absent"
 DRY_RUN='{"kind":"Job","apiVersion":"batch/v1","metadata":{"name":"j1","namespace":"t-busy"}}

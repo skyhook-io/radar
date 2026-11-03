@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES_DIR="${SCRIPT_DIR}/kueue-scenarios"
 # Per-user default, so two people who don't pass --prefix get separate copies.
-DEFAULT_PREFIX="kq-$(id -un 2>/dev/null | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | cut -c1-20 | sed -e 's/-*$//')"
+DEFAULT_PREFIX="kq-$({ id -un 2>/dev/null || true; } | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | cut -c1-20 | sed -e 's/-*$//')"
 [ "${DEFAULT_PREFIX}" != "kq-" ] || DEFAULT_PREFIX=radar-kueue
 PREFIX="${KUEUE_SCENARIOS_PREFIX:-${DEFAULT_PREFIX}}"
 FIXTURE="${KUEUE_SCENARIOS_FIXTURE:-kueue-scenarios}"
@@ -90,7 +90,9 @@ ns() { printf '%s-%s' "${PREFIX}" "$1"; }
 check_args() {
   command -v kubectl >/dev/null || fail "kubectl not found"
   command -v jq >/dev/null || fail "jq not found"
-  kubectl patch --help 2>/dev/null | grep -q -- '--subresource' || fail "kubectl 1.24 or later is required (patch --subresource)"
+  local help
+  help="$(kubectl patch --help 2>/dev/null)" || true
+  [[ "${help}" == *--subresource* ]] || fail "kubectl 1.24 or later is required (patch --subresource)"
   [[ "${PREFIX}" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] || fail "--prefix must be a DNS label of at most 32 characters"
   [[ "${FIXTURE}" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$ ]] || fail "--fixture must be a valid label value"
   [ -z "${KUBECONFIG_ARG}" ] || [ -r "${KUBECONFIG_ARG}" ] || fail "cannot read kubeconfig ${KUBECONFIG_ARG}"
@@ -247,9 +249,10 @@ wl_is() { # wl_is <namespace> <job> <jq predicate over the Workload>
 
 # pred <jq predicate> <json>: 0 true, 1 false, 4 the predicate itself failed (an
 # object shape this script doesn't expect, e.g. after a Kueue API change).
-pred() {
-  local rc=0
-  jq -e "$1" <<<"$2" >/dev/null 2>&1 || rc=$?
+pred() { # pred <predicate> <json> [extra jq args]
+  local rc=0 program="$1" input="$2"
+  shift 2
+  jq -e "$@" "${program}" <<<"${input}" >/dev/null 2>&1 || rc=$?
   case "${rc}" in 0) return 0 ;; 1) return 1 ;; *) return 4 ;; esac
 }
 
@@ -541,14 +544,15 @@ cohort_is_ours() {
   cqs="$(kc get clusterqueues.kueue.x-k8s.io -o json)" || return 2
   cohorts="$(kc get cohorts.kueue.x-k8s.io -o json)" || return 2
   pred "[.items[] | select(.spec.cohortName == \"${PREFIX}-cohort\") | .metadata.name] | sort == [\"${PREFIX}-busy\", \"${PREFIX}-lender\"]" "${cqs}" || return $?
-  pred "all(.items[]; .spec.parentName != \"${PREFIX}-cohort\")" "${cohorts}"
+  pred "all(.items[]; .spec.parentName != \"${PREFIX}-cohort\") and all(.items[] | select(.metadata.name == \"${PREFIX}-cohort\"); (.spec.parentName // \"\") == \"\")" "${cohorts}"
 }
 
-# No LocalQueue outside the fixture namespaces feeds a fixture ClusterQueue.
+# Only this run's LocalQueues feed this run's ClusterQueues.
 fixture_lqs_are_ours() {
-  local json
-  json="$(kc get localqueues.kueue.x-k8s.io -A -o json)" || return 2
-  pred "all(.items[] | select(.spec.clusterQueue | startswith(\"${PREFIX}-\")); .metadata.namespace | startswith(\"${PREFIX}-\"))" "${json}"
+  local cqs lqs
+  cqs="$(kc get clusterqueues.kueue.x-k8s.io -l "${OWNER_LABEL}=${PREFIX}" -o json)" || return 2
+  lqs="$(kc get localqueues.kueue.x-k8s.io -A -o json)" || return 2
+  pred "([\$cqs[0].items[].metadata.name]) as \$ours | all(.items[] | select(.spec.clusterQueue | IN(\$ours[])); .metadata.labels[\"${OWNER_LABEL}\"] == \"${PREFIX}\")" "${lqs}" --slurpfile cqs <(printf '%s' "${cqs}")
 }
 
 # Asks the API server, as both viewer identities, whether they may do something.
@@ -600,8 +604,8 @@ cmd_verify() {
     "($(cond_pred Admitted True)) and all(.status.admission.podSetAssignments[].flavors[]; . == \"${PREFIX}-spare\")"
   local entry=0
   cq_is "${PREFIX}-busy" "all(.spec.resourceGroups[].flavors[]; .name != \"${PREFIX}-spare\") and any(.status.flavorsReservation[]?; .name == \"${PREFIX}-spare\")" || entry=$?
-  if [ "${entry}" -eq 2 ]; then
-    FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ %s${C_RESET}\n" "removed-flavor status entry (could not read)"
+  if [ "${entry}" -ge 2 ]; then
+    FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ %s${C_RESET}\n" "removed-flavor status entry (could not read, or unexpected shape)"
   elif [ "${entry}" -eq 0 ]; then
     warn "this Kueue keeps a ClusterQueue status entry for the removed flavor (v0.18.0 drops it)"
   else
@@ -809,10 +813,11 @@ cmd_kubeconfig() {
   tmp="$(mktemp "$(dirname "${OUT_PATH}")/.kueue-viewer.XXXXXX")"
   trap 'rm -f -- "${tmp}"' EXIT
   chmod 600 "${tmp}"
-  jq -n --argjson cluster "${cluster}" --arg token "${token}" --arg p "${PREFIX}" --arg ns "$(ns busy)" '{
+  # The token goes through the environment, not argv, so ps doesn't show it.
+  VIEWER_TOKEN="${token}" jq -n --argjson cluster "${cluster}" --arg p "${PREFIX}" --arg ns "$(ns busy)" '{
     apiVersion: "v1", kind: "Config",
     clusters: [{name: ($p + "-cluster"), cluster: $cluster}],
-    users: [{name: ($p + "-viewer"), user: {token: $token}}],
+    users: [{name: ($p + "-viewer"), user: {token: env.VIEWER_TOKEN}}],
     contexts: [{name: ($p + "-viewer"), context: {cluster: ($p + "-cluster"), user: ($p + "-viewer"), namespace: $ns}}],
     "current-context": ($p + "-viewer")}' >"${tmp}"
   mv -f "${tmp}" "${OUT_PATH}"
@@ -848,10 +853,12 @@ cmd_down() {
   # everything in them; then cluster-scoped objects.
   rows="$(owned_names jobs.batch -A)" || fail "cannot list Jobs"
   while IFS='|' read -r namespace name; do
-    [ -n "${name}" ] && delete_owned job.batch "${name}" "${namespace}" --wait=false
+    if [ -n "${name}" ]; then delete_owned job.batch "${name}" "${namespace}" --wait=false; fi
   done <<<"${rows}"
   rows="$(owned_names namespaces)" || fail "cannot list namespaces"
-  while IFS='|' read -r namespace name; do [ -n "${name}" ] && namespaces+=("${name}"); done <<<"${rows}"
+  while IFS='|' read -r namespace name; do
+    if [ -n "${name}" ]; then namespaces+=("${name}"); fi
+  done <<<"${rows}"
   [ "${#namespaces[@]}" -eq 0 ] || warn "deleting namespaces with everything in them: ${namespaces[*]}"
   if [ "${#namespaces[@]}" -gt 0 ]; then
     for name in "${namespaces[@]}"; do delete_owned namespaces "${name}" "" --wait=false; done
@@ -872,7 +879,7 @@ cmd_down() {
   for resource in clusterrolebindings.rbac.authorization.k8s.io clusterroles.rbac.authorization.k8s.io; do
     rows="$(owned_names "${resource}")" || fail "cannot list ${resource}"
     while IFS='|' read -r namespace name; do
-      [ -n "${name}" ] && delete_owned "${resource}" "${name}" ""
+      if [ -n "${name}" ]; then delete_owned "${resource}" "${name}" ""; fi
     done <<<"${rows}"
   done
   # Kueue finalizes queues and flavors; `up` refuses objects still being deleted,
