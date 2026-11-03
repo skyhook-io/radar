@@ -43,9 +43,9 @@ type diagnoseCommonInput struct {
 	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes as applicable. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. Uses direct TCP when Radar is in-cluster, K8s API server proxy from a laptop - the same call works either way. Probes can escalate the static verdict when failures are unanimous on a hop, but never soften broken or unknown. Probe failures attributable to the vantage (e.g. NetworkPolicy blocking Radar's path) can produce false-positive escalations; the per-hop chip carries the granular signal. Costs 0-3s wall time. No effect for non-network kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Container string `json:"container,omitempty" jsonschema:"for targets that collect logs only (ignored for batch resource evidence): container name; defaults to all containers; diagnose a child to choose its own container"`
-	TailLines int    `json:"tail_lines,omitempty" jsonschema:"for targets that collect logs only (ignored for batch resource evidence): lines per Pod/container per stream; default 100, max 1000"`
-	Since     string `json:"since,omitempty" jsonschema:"for targets that collect logs only (ignored for batch resource evidence): duration (e.g. 30s, 10m, 1h); empty = full available log history"`
+	Container string `json:"container,omitempty" jsonschema:"for targets that collect logs only: container name; defaults to all containers; diagnose a child to choose its own container"`
+	TailLines int    `json:"tail_lines,omitempty" jsonschema:"for targets that collect logs only: lines per Pod/container per stream; default 100, max 1000"`
+	Since     string `json:"since,omitempty" jsonschema:"for targets that collect logs only: duration (e.g. 30s, 10m, 1h); empty = full available log history"`
 }
 
 // diagnoseInput is the full /mcp contract. InCluster is the only mutating
