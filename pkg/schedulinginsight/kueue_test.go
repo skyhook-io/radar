@@ -15,7 +15,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
-func TestForResourceRequiresExactKueueWorkloadGVK(t *testing.T) {
+func TestForResourceSupportsKueueWorkloadVersions(t *testing.T) {
 	base := loadFixture(t, "waiting-granular.yaml")
 	tests := []struct {
 		name       string

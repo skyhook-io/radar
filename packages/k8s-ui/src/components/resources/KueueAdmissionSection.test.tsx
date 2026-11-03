@@ -166,7 +166,7 @@ describe('Kueue admission investigation', () => {
   it('flags a deactivation whose cause Kueue did not record', () => {
     const html = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' }], kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'unknown', inactive: { code: 'deactivated', source: 'condition', name: 'Evicted', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
     expect(html).toContain('>Deactivated<')
-    expect(html).toContain('Kueue recorded no cause for this deactivation')
+    expect(html).toContain('doesn&#x27;t say whether Kueue or a person deactivated it')
     expect(html).toContain('Exceeded the PodsReady timeout')
   })
 

@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -14,11 +13,25 @@ import (
 
 // KueueClassification is one Workload's lifecycle phase, terminal outcome and
 // admission state. Outcome is empty until Phase is finished, and also for a
-// finish reason Kueue does not name as success or failure.
+// finish reason Kueue does not name as success or failure. QueueName is the
+// submission LocalQueue (empty when the Workload names none), and Variant
+// marks a concurrent-admission variant, whose parent Workload stands for the
+// same job.
 type KueueClassification struct {
 	Phase     rc.KueuePhase
 	Outcome   rc.KueueOutcome
 	Admission rc.KueueAdmissionState
+	QueueName string
+	Variant   bool
+}
+
+// AwaitingAdmission reports whether the Workload counts as waiting for
+// admission: it names a queue, is not a concurrent-admission variant, is not
+// admitted or finished, and is not withdrawn. Consumers that count waiting
+// Workloads use this rather than restating the rule.
+func (c KueueClassification) AwaitingAdmission() bool {
+	return c.QueueName != "" && !c.Variant && c.Admission.Inactive == nil &&
+		c.Phase != rc.KueuePhaseAdmitted && c.Phase != rc.KueuePhaseFinished
 }
 
 // ClassifyKueueWorkload classifies one Workload from its own object, as an
@@ -38,10 +51,13 @@ func ClassifyKueueWorkload(obj runtime.Object) (classification KueueClassificati
 
 func classifyWorkload(u *unstructured.Unstructured, conditions map[string]workloadCondition) KueueClassification {
 	phase := workloadPhase(conditions)
+	queueName, _, _ := unstructured.NestedString(u.Object, "spec", "queueName")
 	return KueueClassification{
 		Phase:     phase,
 		Outcome:   workloadOutcome(conditions),
 		Admission: admissionState(u, conditions, phase),
+		QueueName: queueName,
+		Variant:   concurrentAdmission(u) != nil,
 	}
 }
 
@@ -132,7 +148,7 @@ func attention(code rc.KueueAdmissionCode) rc.KueueAttention {
 		return rc.KueueAttentionNone
 	case rc.KueueAdmissionDeactivated, rc.KueueAdmissionOnHold:
 		return rc.KueueAttentionPaused
-	case rc.KueueAdmissionNoDecision, rc.KueueAdmissionInsufficientQuota, rc.KueueAdmissionTopologyPlacementFailed,
+	case rc.KueueAdmissionNoDecision, rc.KueueAdmissionInsufficientQuota,
 		rc.KueueAdmissionWaitingForPreemption, rc.KueueAdmissionPreemptionGated, rc.KueueAdmissionAdmissionGated,
 		rc.KueueAdmissionChecksPending, rc.KueueAdmissionTopologyAssignmentPending, rc.KueueAdmissionWaitingForPodsReady,
 		rc.KueueAdmissionRequeueBackoff, rc.KueueAdmissionPreempted, rc.KueueAdmissionPodsReadyTimeout, rc.KueueAdmissionEvicted:
@@ -211,15 +227,19 @@ func (c classifier) inactive() *rc.KueueAdmissionFact {
 // reactivatedSince reports whether the Workload was reactivated after this
 // eviction was recorded. Kueue keeps an eviction's reason across a
 // reactivation and a later manual deactivation, so its cause then belongs to
-// the earlier deactivation.
+// the earlier deactivation. Generations order the two writes: a condition
+// rewritten in place keeps its transition time but takes the current
+// generation. Without both generations the order is unknown, so the cause is
+// not trusted either.
 func (c classifier) reactivatedSince(evicted workloadCondition) bool {
 	requeued, ok := trueCondition(c.conditions, "Requeued")
 	if !ok || requeued.Reason != "Reactivated" {
 		return false
 	}
-	reactivated, err1 := time.Parse(time.RFC3339, requeued.LastTransitionTime)
-	evictedAt, err2 := time.Parse(time.RFC3339, evicted.LastTransitionTime)
-	return err1 == nil && err2 == nil && reactivated.After(evictedAt)
+	if evicted.ObservedGeneration == 0 || requeued.ObservedGeneration == 0 {
+		return true
+	}
+	return evicted.ObservedGeneration < requeued.ObservedGeneration
 }
 
 // disruption reports a current eviction. Kueue resets Evicted and Preempted
@@ -261,7 +281,7 @@ func (c classifier) blocker(phase rc.KueuePhase) *rc.KueueAdmissionFact {
 			return check.fact(rc.KueueAdmissionCheckRejected)
 		}
 	}
-	if requeued, ok := c.conditions["Requeued"]; ok && requeued.Status == "False" &&
+	if requeued, ok := c.conditions["Requeued"]; ok && phase == rc.KueuePhasePending && requeued.Status == "False" &&
 		(requeued.Reason == "PodsReadyTimeout" || requeued.Reason == "AdmissionCheck") {
 		return c.conditionFact(rc.KueueAdmissionRequeueBackoff, requeued)
 	}
@@ -377,7 +397,10 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 		strings.Contains(message, "workload(s) failed, will retry"):
 		// The same state the granular reason WaitingForPreemptedWorkloads names.
 		return rc.KueueAdmissionWaitingForPreemption
-	case strings.HasPrefix(message, "Workload no longer fits after processing another workload"),
+	case strings.HasPrefix(message, "A more favorable variant is already admitted"):
+		return rc.KueueAdmissionNoDecision
+	case strings.HasPrefix(message, "Workload was evaluated mid-cycle and is deferred to the next scheduling cycle"),
+		strings.HasPrefix(message, "Workload no longer fits after processing another workload"),
 		strings.HasPrefix(message, "Workload has overlapping preemption targets with another workload"):
 		// Skipped in favour of another Workload in the same cycle; Kueue's
 		// granular reason for this is WaitingForQuota.

@@ -117,7 +117,10 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const split = presentation === 'card' && (visible.length > 0 || preemption.length > 0)
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
-      : observation.decision === 'satisfied' ? 'success' : admission ? 'neutral' : 'warning'
+      // With a classification, the state badge carries the tone unless the
+      // state is the phase itself.
+      : admission ? admission.state === 'admitted' ? 'success' : 'neutral'
+        : observation.decision === 'satisfied' ? 'success' : 'warning'
   // The phase badge already says these states. A withdrawn Workload is not
   // waiting, so its state replaces the pending phase rather than following it;
   // one still admitted keeps its phase until it releases the quota.

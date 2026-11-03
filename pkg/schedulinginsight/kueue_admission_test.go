@@ -483,6 +483,23 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionResourceUnavailable,
 		},
 		{
+			name:    "deferred mid-cycle (v0.20 wording, granular reasons off)",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", "Workload was evaluated mid-cycle and is deferred to the next scheduling cycle")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionInsufficientQuota,
+			blocker: rc.KueueAdmissionInsufficientQuota,
+		},
+		{
+			name: "backoff left behind after quota was reserved again",
+			spec: workloadSpec{
+				conditions: []condition{reserved, {kind: "Requeued", status: "False", reason: "PodsReadyTimeout"}},
+				checks:     []map[string]any{{"name": "provision", "state": "Pending"}},
+			},
+			phase:   rc.KueuePhaseQuotaReserved,
+			state:   rc.KueueAdmissionChecksPending,
+			blocker: rc.KueueAdmissionChecksPending,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
@@ -1033,12 +1050,43 @@ func TestDeactivationCauseFromBeforeAReactivationIsNotThisDeactivationsCause(t *
 		{kind: "Requeued", status: "True", reason: "Reactivated", message: "The workload was reactivated"},
 	}})
 	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
-	conditions[0].(map[string]any)["lastTransitionTime"] = "2026-11-01T10:00:00Z"
-	conditions[1].(map[string]any)["lastTransitionTime"] = "2026-11-01T11:00:00Z"
+	conditions[0].(map[string]any)["observedGeneration"] = int64(1)
+	conditions[1].(map[string]any)["observedGeneration"] = int64(2)
 	_ = unstructured.SetNestedSlice(u.Object, conditions, "status", "conditions")
+	u.SetGeneration(3)
 	got, _ := ClassifyKueueWorkload(u)
 	if got.Admission.State != rc.KueueAdmissionDeactivated || got.Admission.Attention != rc.KueueAttentionUnknown {
 		t.Fatalf("admission = %+v", got.Admission)
+	}
+
+	// Kueue deactivated it again after the reactivation and rewrote the
+	// already-True Evicted condition: same transition time, newer generation.
+	conditions[0].(map[string]any)["observedGeneration"] = int64(3)
+	_ = unstructured.SetNestedSlice(u.Object, conditions, "status", "conditions")
+	got, _ = ClassifyKueueWorkload(u)
+	if got.Admission.State != rc.KueueAdmissionDeactivatedByKueue {
+		t.Fatalf("rewritten cause = %+v", got.Admission)
+	}
+}
+
+func TestAwaitingAdmissionEncodesTheDocumentedPopulation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		u    *unstructured.Unstructured
+		want bool
+	}{
+		{"waiting for quota", buildWorkload(workloadSpec{conditions: []condition{pending("Pending", legacyUnusedQuota)}}), true},
+		{"no queue name", buildWorkload(workloadSpec{noQueue: true}), false},
+		{"admitted", buildWorkload(workloadSpec{conditions: []condition{reserved, admitted}}), false},
+		{"deactivated", buildWorkload(workloadSpec{active: boolPtr(false)}), false},
+		{"concurrent-admission variant", loadFixture(t, "concurrent-variant.yaml"), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, _ := ClassifyKueueWorkload(test.u)
+			if got.AwaitingAdmission() != test.want {
+				t.Fatalf("AwaitingAdmission = %t, classification %+v", got.AwaitingAdmission(), got)
+			}
+		})
 	}
 }
 
@@ -1067,7 +1115,7 @@ func TestEveryAdmissionCodeHasAnAttentionClass(t *testing.T) {
 		rc.KueueAdmissionUnrecognized: true, rc.KueueAdmissionLocalQueueInactive: true, rc.KueueAdmissionClusterQueueInactive: true,
 		rc.KueueAdmissionDRAResourcesUnresolved: true,
 		// The message covers only the flavors Kueue tried in its last attempt.
-		rc.KueueAdmissionExceedsQuota: true, rc.KueueAdmissionNoMatchingFlavor: true,
+		rc.KueueAdmissionExceedsQuota: true, rc.KueueAdmissionNoMatchingFlavor: true, rc.KueueAdmissionTopologyPlacementFailed: true,
 	}
 	for _, code := range allAdmissionCodes {
 		if got := attention(code); got == rc.KueueAttentionUnknown && !deliberatelyUnknown[code] {

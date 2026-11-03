@@ -276,7 +276,7 @@ const kueueAdmissionHints: Record<string, string> = {
 
 export function kueueAdmissionStateHint(admission: Pick<KueueAdmissionState, 'state' | 'attention'>): string | undefined {
   if (admission.state === 'deactivated' && admission.attention === 'unknown') {
-    return 'Kueue recorded no cause for this deactivation. The earlier eviction it still reports may or may not be why.'
+    return "The Workload doesn't say whether Kueue or a person deactivated it. The earlier eviction it still reports may or may not be why."
   }
   return kueueAdmissionHints[admission.state]
 }

@@ -63,12 +63,11 @@ const (
 	// that should have acted.
 	KueueAttentionActionNeeded KueueAttention = "action_needed"
 	// KueueAttentionUnknown means the Workload alone cannot tell: an inactive
-	// queue can be a stop policy or broken configuration, a request too large
-	// for (or not matching) the flavors Kueue last tried may fit another one,
-	// unresolved DRA
-	// resources can be the claims or the cluster, an unrecognized reason is
-	// not known to be actionable, and a deactivation may have no recorded
-	// cause.
+	// queue can be a stop policy or broken configuration; a request too large
+	// for, or not matching, the flavors or topology Kueue last tried may fit
+	// another attempt; unresolved DRA resources can be the claims or the
+	// cluster; an unrecognized reason is not known to be actionable; and a
+	// deactivation may have no recorded cause.
 	KueueAttentionUnknown KueueAttention = "unknown"
 )
 
@@ -183,8 +182,9 @@ const (
 	// KueueAdmissionResourceUnavailable means the ClusterQueue offers no quota
 	// at all for a resource the Workload requests.
 	KueueAdmissionResourceUnavailable KueueAdmissionCode = "resource_unavailable"
-	// KueueAdmissionTopologyPlacementFailed means topology requirements
-	// could not be placed.
+	// KueueAdmissionTopologyPlacementFailed means topology requirements could
+	// not be placed in Kueue's last attempt; a busy domain may free up, or the
+	// request may be larger than any domain.
 	KueueAdmissionTopologyPlacementFailed KueueAdmissionCode = "topology_placement_failed"
 	// KueueAdmissionWaitingForPreemption means Kueue preempted other
 	// Workloads for this one and waits for them to release their quota.

@@ -1790,9 +1790,8 @@ server-computed field behind a `FeatureCapabilities` flag, never a browser-side
 reading of conditions), and the UI only maps codes to labels
 (`kueueAdmissionStatePresentation` and `kueueAdmissionStateLabel` in k8s-ui,
 with a short suggestion from `kueueAdmissionStateHint` for states that usually
-need someone),
-rendering a code it does not know verbatim. Today the admission card on Job,
-JobSet and RayJob detail shows it, leading with the state instead of
+need someone), rendering a code it does not know verbatim. Today the admission
+card on Job, JobSet and RayJob detail shows it, leading with the state instead of
 "Pending admission" for a withdrawn Workload; the Workload's own detail and its
 table Status column still show its most notable native condition, which can
 differ (an Evicted Workload now blocked by a missing LocalQueue). The
@@ -1830,8 +1829,8 @@ finished), `waiting` (Kueue or another controller is expected to move it on),
 reported, it will not be admitted without a change to the Workload, its queue
 or quota, or a controller that should have acted), or `unknown` (the Workload
 alone cannot tell, such as an inactive queue that may be stopped on purpose,
-a request too large for, or not matching, the flavors Kueue last tried (another
-may fit),
+a request too large for, or not matching, the flavors or topology Kueue last
+tried (another attempt may fit),
 unresolved DRA resources, an unrecognized reason, or a deactivation whose cause
 Kueue did not record).
 It is not a severity or a guarantee: how long waiting may last before it is a
@@ -1841,8 +1840,10 @@ controller-neutral scheduling view: an external admission gate is a `held`
 decision but a waiting blocker, and an inactive queue is an `unsatisfied`
 decision whose attention is `unknown`. Consumers pick their population from the axes:
 Workloads awaiting admission are those whose `phase` is not `admitted` or
-`finished`, that have no `inactive` fact, and that name a queue
-(`spec.queueName`; Kueue manages no other).
+`finished`, that have no `inactive` fact, that name a queue (`spec.queueName`;
+Kueue manages no other) and that are not a concurrent-admission variant;
+`KueueClassification.AwaitingAdmission()` encodes this, so consumers don't
+restate it.
 
 `stale` marks a `state` decided by evidence written for an earlier
 `metadata.generation` (for a blocker read because quota is reserved, that

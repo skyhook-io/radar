@@ -54,7 +54,8 @@ export interface SchedulingObservation {
 // not known to be stale).
 export interface KueueAdmissionFact {
   code: string
-  source?: 'condition' | 'admission_check' | 'spec'
+  // Open like code: a newer Radar may send a source this UI doesn't know.
+  source?: 'condition' | 'admission_check' | 'spec' | (string & {})
   name?: string
   reason?: string
   message?: string
