@@ -176,7 +176,7 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
         <dt>Memory used (RabbitMQ)</dt><RabbitMQMeasurement value={rabbitmq.memoryUsedBytes} />
         <dt>Memory alarm above</dt><RabbitMQMeasurement value={rabbitmq.memoryWatermarkBytes} />
       </dl>
-      <p className="mt-2 text-xs text-theme-text-secondary">Measurements are RabbitMQ’s periodic statistics and can lag the alarm state. Unknown values were absent or could not be interpreted.</p>
+      <p className="mt-2 text-xs text-theme-text-secondary">Measurements are RabbitMQ’s periodic statistics and can lag the alarm state. Its memory watermark is not the container memory limit; the container can be OOM-killed before this alarm fires. Unknown values were absent or could not be interpreted.</p>
       <p className="mt-2 text-xs text-theme-text-secondary">A disk or memory alarm on another node can block publishers across the cluster.</p>
     </>}
     {vault && <dl className="mt-3 grid grid-cols-2 gap-2">
@@ -190,3 +190,14 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
       {vault.removedFromCluster !== undefined && <><dt>Removal from HA cluster</dt><dd>{vault.removedFromCluster ? 'Reported' : 'Not reported'}</dd></>}
     </dl>}
     {vault?.initialized && !vault.sealed && (vault.standby || vault.performanceStandby) && vault.haConnectionHealthy === undefined && <p className="mt-2 text-xs text-theme-text-secondary">Vault can omit the heartbeat report after a leader change. Connectivity is unknown.</p>}
+    {nats && <div className="mt-3 space-y-2">
+      <p>JetStream: {nats.jetStreamEnabled ? 'Enabled' : 'Disabled'}</p>
+      <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {pluralize(nats.returnedAccounts, 'account')} · {pluralize(nats.returnedStreams, 'stream')} · {pluralize(nats.returnedConsumers, 'consumer')} returned{nats.truncated ? ' · Truncated' : ''}</p>
+      {nats.totals && <p>Node reports {pluralize(nats.totals.messages, 'message')} across {pluralize(nats.totals.streams, 'stream')} and {pluralize(nats.totals.consumers, 'consumer')}.</p>}
+      {nats.consumers.length > 0 && <div className="overflow-x-auto"><table className="w-full min-w-[480px] text-left text-xs"><thead><tr><th className="pr-3">Account / stream / consumer</th><th className="pr-3">Pending</th><th className="pr-3">Ack pending</th><th>Redelivered</th></tr></thead><tbody>{nats.consumers.map(item => <tr key={JSON.stringify([item.account, item.stream, item.name])}><td className="py-2 pr-3 break-all">{item.account} / {item.stream} / {item.name}</td><td>{item.pending}</td><td>{item.ackPending}</td><td>{item.redelivered}</td></tr>)}</tbody></table></div>}
+    </div>}
+    {result.limitations.length > 0 && <Disclosure summary="Collection limits" className="mt-3" summaryClassName="text-xs text-theme-text-secondary">
+      <ul className="mt-2 space-y-1 text-xs text-theme-text-secondary">{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>
+    </Disclosure>}
+  </section>
+}
