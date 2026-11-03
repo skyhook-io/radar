@@ -233,7 +233,7 @@ overrides a saved `"mcp": false`. `radar diagnose --standalone`
 honors the saved and environment MCP mode; a disabled mode rejects startup.
 
 This exposes the same tool and resource catalog over stdio without starting the HTTP UI server.
-The stdio mode is intended only for catalog introspection; normal Radar sessions use the HTTP endpoint above.
+The stdio mode is intended only for catalog introspection; normal Radar sessions use the HTTP endpoint above. Catalog-only entrypoints have no established Kubernetes connection and omit active application evidence collection; use the connected local HTTP server for that tool.
 
 ## Setup Instructions
 
@@ -1365,7 +1365,7 @@ Modern worker attribution requires cached `StrimziPodSet` objects (`core.strimzi
 
 ## Security
 
-- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, the exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool is annotated `readOnlyHint: false` and `destructiveHint: false`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
+- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, one exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool is annotated `readOnlyHint: false` and `destructiveHint: false`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. `collect_application_evidence` also sets both hints to false, so clients must obtain operator approval explicitly; see [local runtime evidence](#explicit-local-runtime-evidence). Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
 - **RBAC-aware** — every call enforces RBAC at the same boundary as the REST API:
   - **Local binary**: the cache uses your kubeconfig identity, so MCP can only see what `kubectl` can see for that user
   - **In-cluster (auth enabled)**: read tools intersect namespaced reads with the calling user's RBAC-allowed namespaces; cluster-scoped reads (Nodes, PVs, ClusterRoles, cluster-scoped CRDs) are gated per-kind via SubjectAccessReview, so cluster-wide pod visibility doesn't implicitly grant Node read; write tools, exec, and logs are fully impersonated so the apiserver enforces the user's RBAC end-to-end
@@ -1594,6 +1594,22 @@ values are omitted from ordinary tool-argument logs.
 
 
 Confirmation tokens are process-local. Use a single Radar replica or session affinity so preview and confirmation reach the same process; a restart invalidates outstanding tokens. `/mcp-apply` is an authenticated subset of writable `/mcp`, intended for built-in agents, not a private network endpoint.
+
+## Explicit local runtime evidence
+
+After operator approval, call `collect_application_evidence` with `application`, `namespace`, `pod` and `confirm_network_access: true`. Include the suggested `pod_uid` to reject replacements. Radar checks the flag; the client obtains approval. Collection uses a temporary localhost-only Kubernetes port-forward and requires Pod-read/port-forward permissions.
+
+Available through connected full local MCP, outside built-in investigations and Apply. Requires one recognized application container with its default plaintext port declared. Host-network Pods, ambiguous targets, custom ports, credentials, TLS and remote/authenticated/hosted/in-cluster use are unsupported. RabbitMQ metrics and NATS monitoring must be enabled.
+
+| Application | Source | Interpretation |
+|---|---|---|
+| RabbitMQ | Port 15692 `/metrics` | Node-local disk/memory alarms; another node’s alarm can still block publishers. Both samples must be unambiguous; payloads over 256 KiB are unavailable. |
+| NATS | Port 8222 `/jsz` | JetStream counters, capped at 20 consumer rows with coverage. Backlog is not necessarily a fault; disabled differs from zero activity. |
+| Vault | Port 8200 `/v1/sys/health` | HTTP status and initialization/seal/standby facts; standby or HTTP 200 alone does not establish health. |
+
+`outcome: observed` carries facts; `unavailable` carries a reason without facts. NATS `coverage: partial` means omitted rows cannot be treated as zero. Results describe one endpoint at `observedAt`, not application health. Identity or in-flight context changes discard results, though a replaced Pod may briefly be contacted. Image/identity checks do not attest contents. A manual call without `pod_uid` uses the cluster current at invocation; MCP results do not include its name.
+
+`diagnose` suggests collection only for recognized Vault readiness or RabbitMQ alarm-check failures. Suggestions do not authorize collection. Returned suggestions use `coverageLimited` and `candidatesTruncated` to describe discovery limits; at most three candidates are returned. A missing suggestion is not an all-clear. NATS collection is explicit-only.
 
 ## Native operator summaries
 

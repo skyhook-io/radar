@@ -20,6 +20,7 @@ export interface MCPToolParam {
 export interface MCPToolInfo {
   name: string
   write?: boolean
+  localOnly?: boolean
   desc: string
   params: MCPToolParam[]
 }
@@ -318,6 +319,18 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'kind', desc: 'pod (default), Deployment, StatefulSet, DaemonSet, Job, ReplicaSet or Rollout; workload targets require a Running, Ready pod of the desired revision' },
       { arg: 'container', desc: 'default-container annotation, then first non-mesh app container' },
       { arg: 'timeout_seconds', desc: 'one deadline for resolution and execution; default 30, max 45 seconds; 64 KiB per output stream' },
+    ],
+  },
+  {
+    name: 'collect_application_evidence',
+    localOnly: true,
+    desc: 'Read one Pod’s RabbitMQ alarms, NATS JetStream counters or Vault seal/init state. Local only, with operator approval and Pod-read/port-forward permissions. Unavailable evidence is not a health verdict.',
+    params: [
+      { arg: 'application', required: true, desc: 'rabbitmq, nats, or vault' },
+      { arg: 'namespace', required: true, desc: 'Pod namespace' },
+      { arg: 'pod', required: true, desc: 'one explicitly selected Pod' },
+      { arg: 'pod_uid', desc: 'expected Pod UID from a diagnosis suggestion' },
+      { arg: 'confirm_network_access', required: true, desc: 'true after operator authorization to collect endpoint evidence' },
     ],
   },
   {

@@ -13,6 +13,7 @@ interface MCPSetupDialogProps {
   onClose: () => void
   readOnly?: boolean
   execTools?: boolean
+  applicationEvidenceAvailable?: boolean
   mcpUrl: string
   /** Opens Radar's own investigation composer. Omit where investigations can't run. */
   onInvestigate?: () => void
@@ -55,7 +56,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, onInvestigate }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, onInvestigate, applicationEvidenceAvailable = false }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -129,7 +130,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
   const currentPort = Number(window.location.port) || 80
 
   const tools = MCP_TOOL_CATALOG
-    .filter((tool) => (!readOnly || !tool.write) && (tool.name !== 'exec_pod' || execTools))
+    .filter((tool) => (!readOnly || !tool.write) && (tool.name !== 'exec_pod' || execTools) && (!tool.localOnly || (!readOnly && applicationEvidenceAvailable)))
     .map((tool) => readOnly && tool.name === 'diagnose'
       ? { ...tool, params: tool.params.filter((param) => param.arg !== 'in_cluster') }
       : tool)

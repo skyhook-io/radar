@@ -1,6 +1,6 @@
-# CRD Integrations
+# Ecosystem Integrations
 
-Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
+Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar adds dedicated capabilities described below, including detail views, topology edges, smart table columns, and AI-optimized summaries. Coverage varies by integration.
 
 Operational Issues in an open resource detail view refresh after observed root
 resource changes, coalesced to limit expensive checks. A once-per-minute visible-tab
@@ -1918,6 +1918,20 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 | DeviceConfig (AMD GPU Operator) | `amd.com/v1alpha1` | Ready condition + component DaemonSet rollout counts |
 
 ---
+
+## Local runtime evidence: RabbitMQ, NATS and Vault
+
+When Radar runs locally, MCP clients can use `collect_application_evidence` to read one Pod endpoint after operator approval:
+
+| Integration | Endpoint | Evidence |
+|---|---|---|
+| RabbitMQ | Port 15692, `/metrics` | Node-reported disk and memory alarms |
+| NATS | Port 8222, `/jsz` | JetStream pending, acknowledgement-pending and redelivery counts |
+| Vault | Port 8200, `/v1/sys/health` | HTTP status and initialization, seal and standby state |
+
+Requires Pod-read/port-forward permissions, a recognized application image and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must already be enabled. Credentials, TLS, custom ports, authenticated/remote/hosted/in-cluster deployments and built-in investigations are unsupported.
+
+These are selected-endpoint observations, not automatic Issues or an application health verdict. See [MCP collection and result semantics](mcp.md#explicit-local-runtime-evidence).
 
 ## Any Other CRD
 
