@@ -1008,7 +1008,7 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
 }
 
 // ownershipUnanswered says why Owner and Children couldn't be answered at all.
-export function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | undefined {
+function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | undefined {
   const reason = coverage?.unavailableReason
   if (!reason) return undefined
   if (reason === 'user_forbidden') return "Owner and children aren't shown: your access lets you open this object, but not list its kind here."

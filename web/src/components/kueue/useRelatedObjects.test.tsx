@@ -181,3 +181,39 @@ it('doesn’t show a list error cached before mount as current', async () => {
   await act(async () => release?.())
   await vi.waitFor(() => expect(latest?.byName.present.state).toBe('found'))
 })
+
+it('doesn’t take a list read that started before the subject changed as the answer after it', async () => {
+  const pending: ((names: string[]) => void)[] = []
+  vi.mocked(fetch).mockImplementation(() => new Promise<Response>(resolve => {
+    pending.push(names => resolve(new Response(JSON.stringify({ items: names.map(name => ({ metadata: { name } })), coverage: { status: 'complete', scope: { type: 'cluster' }, read: {}, gaps: [] } }))))
+  }))
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="1" onRead={read => { latest = read }} /></QueryClientProvider>))
+  expect(pending).toHaveLength(1)
+  // The subject changes while the first read is still in flight.
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="2" onRead={read => { latest = read }} /></QueryClientProvider>))
+  await act(async () => pending[0](['present']))
+  expect(latest?.byName.gone).toEqual({ state: 'loading' })
+  await vi.waitFor(() => expect(pending).toHaveLength(2))
+  await act(async () => pending[1](['present', 'gone']))
+  await vi.waitFor(() => expect(latest?.byName.gone.state).toBe('found'))
+})
+
+it('doesn’t take a GET that started before the subject changed as the answer after it', async () => {
+  listStatus = 403
+  const pending: (() => void)[] = []
+  vi.mocked(fetch).mockImplementation((input: any) => {
+    const path = new URL(String(input), 'http://localhost').pathname
+    requests.push(path)
+    if (path === '/api/resources/clusterqueues') return Promise.resolve(new Response(JSON.stringify({ error: 'no', error_code: 'user_forbidden' }), { status: 403 }))
+    if (path === '/api/resources/clusterqueues/_/gone') return new Promise<Response>(resolve => { pending.push(() => resolve(new Response(JSON.stringify({ error: 'gone', error_code: 'object_not_found' }), { status: 404 }))) })
+    return Promise.resolve(new Response(JSON.stringify({ resource: { metadata: { name: 'present' } } })))
+  })
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="1" onRead={read => { latest = read }} /></QueryClientProvider>))
+  await vi.waitFor(() => expect(pending).toHaveLength(1))
+  await act(async () => root.render(<QueryClientProvider client={client}><Probe version="2" onRead={read => { latest = read }} /></QueryClientProvider>))
+  await act(async () => pending[0]())
+  expect(latest?.byName.gone).toEqual({ state: 'loading' })
+  await vi.waitFor(() => expect(pending).toHaveLength(2))
+  await act(async () => pending[1]())
+  await vi.waitFor(() => expect(latest?.byName.gone).toEqual({ state: 'not_found' }))
+})

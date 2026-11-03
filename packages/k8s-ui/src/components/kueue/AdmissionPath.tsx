@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Route } from 'lucide-react'
-import { ResourceLink, Section, ownerNote, ownershipUnanswered } from '../ui/drawer-components'
+import { ResourceLink, Section, ownerNote } from '../ui/drawer-components'
+import { gapReasonText } from '../../utils/read-actions'
 import { FactSource, FactValue } from '../facts'
 import type { Relationships } from '../../types'
 import { kindToPluralWithGroup } from '../../utils/navigation'
@@ -53,7 +54,10 @@ function OwnerStep({ data, relationships, onNavigate }: { data: any; relationshi
   } else if (coverage?.primaryOwnerState === 'several') {
     body = <p className={muted}>Several owner references; none is the controller.</p>
   } else {
-    const unanswered = ownershipUnanswered(coverage)
+    const reason = coverage?.unavailableReason
+    const unanswered = !reason ? undefined
+      : reason === 'user_forbidden' ? "The owner isn't shown: your access lets you open this Workload, but not list its kind here."
+        : `The owner couldn't be read: ${gapReasonText(reason)}.`
     const note = ownerNote(coverage)
     body = <p className={muted}>{unanswered ?? note?.text ?? (data.metadata?.ownerReferences?.length ? 'Owner not resolved.' : 'No owner reference: this Workload was created directly.')}</p>
   }

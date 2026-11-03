@@ -194,9 +194,9 @@ export function LocalQueueRenderer({ data, onNavigate, reads }: QueueRendererPro
       <Situation
         reported={<ReportedActive data={data} status={localQueueStatusWithParent(data, reads?.clusterQueue)}>
           {parentStopped && <p className="text-xs text-theme-text-secondary">ClusterQueue {parentName} reports Stopped (read from the ClusterQueue), so this LocalQueue's inactivity follows an intentional stop.</p>}
-          {reportsParentInactive && !parentStopped && reads?.clusterQueue?.state !== 'loading' && <p className="text-xs text-theme-text-secondary">{isDenied(reads?.clusterQueue)
+          {reportsParentInactive && !parentStopped && reads?.clusterQueue?.state !== 'loading' && reads?.clusterQueue?.state !== 'not_found' && <p className="text-xs text-theme-text-secondary">{isDenied(reads?.clusterQueue)
             ? `The cause is on ClusterQueue ${parentName}, which you can’t read; a cluster administrator can check it.`
-            : reads?.clusterQueue?.state === 'found' && getKueueQueueCondition(reads.clusterQueue.object)?.status === 'True'
+            : reads?.clusterQueue?.state === 'found' && getKueueQueueCondition(reads.clusterQueue.object)?.status === 'True' && !isKueueConditionStale(getKueueQueueCondition(reads.clusterQueue.object), reads.clusterQueue.object?.metadata?.generation)
               ? `ClusterQueue ${parentName} now reports Active; this LocalQueue’s report hasn’t caught up.`
               : 'Inspect the ClusterQueue for the cause of its reported inactivity.'}</p>}
           <div className="border-t border-theme-border pt-3"><QueueCounts data={data} kind="LocalQueue" /></div>

@@ -47,13 +47,11 @@ function coversRequest(coverage: ListCoverage | undefined, namespace: string | u
   return scope?.type === 'namespaces' && !!namespace && !!scope.namespaces?.names?.includes(namespace)
 }
 
-export function relatedReadInList(list: { data?: any[]; coverage?: ListCoverage; error: unknown; readBeforeMount?: boolean; namespace?: string }, name: string): RelatedRead {
+export function relatedReadInList(list: { data?: any[]; coverage?: ListCoverage; error: unknown; namespace?: string }, name: string): RelatedRead {
   if (list.error) return relatedReadFrom({ error: list.error })
   if (!list.data) return { state: 'loading' }
   const object = list.data.find(item => item?.metadata?.name === name)
   if (object) return { state: 'found', object }
-  // A list cached before this view mounted can't prove absence now; its re-read is in flight.
-  if (list.readBeforeMount) return { state: 'loading' }
   if (coversRequest(list.coverage, list.namespace)) return { state: 'not_found' }
   if (list.coverage?.status === 'partial') {
     const gaps = list.coverage.gaps ?? []
@@ -105,38 +103,59 @@ export interface RelatedObjects {
  * different objects.
  */
 export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true, subjectState?: string): RelatedObjects {
-  const [mountedAt] = useState(Date.now)
+  const queryClient = useQueryClient()
+  const cacheScope = getApiBase()
   const [refused, setRefused] = useState(false)
-  const list = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: refused ? false : RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
-  const { data, coverage, dataUpdatedAt, errorUpdatedAt, refetch } = list
+  const listKey = ['resources', kind, group, namespace, cacheScope]
+  // Marked before this hook's own observer starts, so a fetch someone else began earlier counts as old.
+  const [mark, setMark] = useState(() => markFor(queryClient.getQueryState(listKey)))
+  const list = useResources<any>(kind, namespace, group, { enabled, cacheScope, refetchInterval: refused ? false : RELATED_LIST_RECHECK_MS, refetchOnMount: 'always', staleTime: 0 })
+  const { data, coverage, refetch } = list
   // The object on screen updates live. When its relevant state changes (the
   // caller's key: the names it points at and the conditions that decide what
-  // is shown, not every status write), a read from before can no longer prove
-  // absence, so re-read it.
-  const [subjectChangedAt, setSubjectChangedAt] = useState(mountedAt)
+  // is shown, not every status write), a read from before the change can't
+  // answer for after it, so mark the change and re-read.
   const [seenState, setSeenState] = useState(subjectState)
+  const [changes, setChanges] = useState(0)
   if (subjectState !== seenState) {
     setSeenState(subjectState)
-    setSubjectChangedAt(Date.now())
+    setMark(markFor(queryClient.getQueryState(listKey)))
+    setChanges(changes + 1)
   }
+  const fresh = answered(queryClient.getQueryState(listKey), mark)
   useEffect(() => {
-    if (enabled && subjectChangedAt > mountedAt) void refetch()
-  }, [enabled, subjectChangedAt, mountedAt, refetch])
-  const freshAfter = Math.max(mountedAt, subjectChangedAt)
-  const readBeforeMount = dataUpdatedAt < freshAfter
-  // An error cached before mount or before the subject changed is no answer either; its re-read is in flight.
-  const error = list.error && errorUpdatedAt >= freshAfter ? list.error : null
-  // A refused list isn't polled: the names are read one by one instead (the
-  // GETs carry their own freshness guard, so even a cached refusal routes there).
+    if (enabled && !fresh && !list.isFetching) void refetch()
+  }, [enabled, fresh, list.isFetching, refetch])
+  // An error read before the mark is no answer either.
+  const error = fresh ? list.error : null
+  // A refused list isn't polled again: the names are read one by one instead
+  // (with their own freshness marks), and it is re-read when the subject changes.
   if (listRefused(list.error) !== refused) setRefused(listRefused(list.error))
   // An older Radar answers a list denial with an uncoded 403; a GET still says what the viewer may open.
   const listDenied = listRefused(list.error)
-  const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied, subjectChangedAt)
-  const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data && !readBeforeMount ? { state: 'found', object: data } : { state: 'loading' }
-  // A list read before mount or before the subject last changed answers nothing yet, present or absent: it may lend a tone.
-  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : readBeforeMount && !error ? { state: 'loading' } as RelatedRead : relatedReadInList({ data, coverage, error, readBeforeMount, namespace }, name)]))
+  const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied, changes)
+  const all: RelatedRead<any[]> = !fresh ? { state: 'loading' } : error ? relatedReadFrom({ error }) : data ? { state: 'found', object: data } : { state: 'loading' }
+  // Until a read started after the mark lands, the list answers nothing, present or absent: it may lend a tone.
+  const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : !fresh ? { state: 'loading' } as RelatedRead : relatedReadInList({ data, coverage, error, namespace }, name)]))
   const completeness = coverage?.status === 'complete' || coverage?.status === 'partial' ? coverage.status : 'unknown'
   return { byName, all, completeness }
+}
+
+interface QueryProgress { dataUpdateCount: number; errorUpdateCount: number; fetchStatus?: string; isFetching?: boolean }
+interface ReadMark { settled: number; inFlight: boolean }
+
+/** Where a query stood at a moment that later answers must postdate. */
+function markFor(state: QueryProgress | undefined): ReadMark {
+  return { settled: (state?.dataUpdateCount ?? 0) + (state?.errorUpdateCount ?? 0), inFlight: state?.isFetching ?? state?.fetchStatus === 'fetching' }
+}
+
+/**
+ * A read started after the mark has settled: one more settled read than at
+ * the mark, or two when a read was already in flight then (that one started
+ * before the mark, so its answer may predate it).
+ */
+function answered(state: QueryProgress | undefined, mark: ReadMark): boolean {
+  return (state?.dataUpdateCount ?? 0) + (state?.errorUpdateCount ?? 0) >= mark.settled + (mark.inFlight ? 2 : 1)
 }
 
 /**
@@ -150,15 +169,24 @@ export const RELATED_GET_RECHECK_MS = 60_000
 /**
  * Reads single objects through the resource GET, re-reading on mount whatever
  * the host QueryClient's defaults. A coded denial is final for the view: it
- * isn't retried or polled. `changedAt` is when the object on screen last
- * changed: a read older than that or than mount is re-run, and until it lands
- * it can't prove absence.
+ * isn't retried or polled. `changes` counts changes of the object on screen;
+ * each one marks every read, and until a read started after the mark lands
+ * the object reads as loading, found or not.
  */
-export function useRelatedReads(refs: RelatedRef[], enabled = true, changedAt = 0): RelatedRead[] {
+export function useRelatedReads(refs: RelatedRef[], enabled = true, changes = 0): RelatedRead[] {
   const cacheScope = getApiBase()
-  const [mountedAt] = useState(Date.now)
-  const freshAfter = Math.max(mountedAt, changedAt)
+  const queryClient = useQueryClient()
   const bases = refs.map(ref => resourceQueryOptions<unknown>(ref.kind, ref.namespace ?? '', ref.name, ref.group, { enabled, cacheScope, refetchInterval: RELATED_GET_RECHECK_MS }))
+  const keys = bases.map(base => JSON.stringify(base.queryKey))
+  // Marked before this hook's observers start, and again at each subject change.
+  const [marks, setMarks] = useState<Record<string, ReadMark>>(() => Object.fromEntries(bases.map((base, index) => [keys[index], markFor(queryClient.getQueryState(base.queryKey))])))
+  const [seenChanges, setSeenChanges] = useState(changes)
+  const unmarked = keys.filter(key => !marks[key])
+  if (changes !== seenChanges || unmarked.length > 0) {
+    const remark = changes !== seenChanges
+    setSeenChanges(changes)
+    setMarks(Object.fromEntries(bases.map((base, index) => [keys[index], remark || !marks[keys[index]] ? markFor(queryClient.getQueryState(base.queryKey)) : marks[keys[index]]])))
+  }
   const results = useQueries({
     queries: bases.map(base => ({
       ...base,
@@ -168,15 +196,10 @@ export function useRelatedReads(refs: RelatedRef[], enabled = true, changedAt = 
       refetchInterval: (query: { state: { error: unknown } }) => denied(query.state.error) ? false : base.refetchInterval(query),
     })),
   })
-  const queryClient = useQueryClient()
-  const signature = JSON.stringify(refs.map(ref => [ref.kind, ref.namespace ?? '', ref.name, ref.group ?? null]))
+  const stale = results.map((_, index) => !marks[keys[index]] || !answered(queryClient.getQueryState(bases[index].queryKey), marks[keys[index]]))
+  const idleStale = JSON.stringify(keys.filter((_, index) => enabled && stale[index] && !results[index].isFetching))
   useEffect(() => {
-    if (!enabled || changedAt <= mountedAt) return
-    for (const [kind, namespace, name, group] of JSON.parse(signature) as [string, string, string, string | null][]) {
-      void queryClient.refetchQueries({ queryKey: resourceQueryOptions(kind, namespace, name, group ?? undefined, { cacheScope }).queryKey, exact: true })
-    }
-  }, [enabled, changedAt, mountedAt, signature, cacheScope, queryClient])
-  // Like a list, a GET read before mount or before the subject last changed
-  // answers nothing yet, found or not: a cached parent could lend a tone.
-  return results.map(result => result.dataUpdatedAt < freshAfter && result.errorUpdatedAt < freshAfter ? { state: 'loading' } : relatedReadFrom(result))
+    for (const key of JSON.parse(idleStale) as string[]) void queryClient.refetchQueries({ queryKey: JSON.parse(key), exact: true })
+  }, [idleStale, queryClient])
+  return results.map((result, index) => stale[index] ? { state: 'loading' } : relatedReadFrom(result))
 }
