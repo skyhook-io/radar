@@ -42,6 +42,12 @@ export function MultiPodLogsTab({
   const phase = selectedPodResource?.status?.phase
   const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
 
+  // A selected Pod that left the list (deleted, replaced, or not in a newer
+  // list) stays selectable so its loaded lines aren't thrown away, but is
+  // marked, and the other Pods stay one click away.
+  const unlisted = selectedPod && !pods.some((p) => p.name === selectedPod) ? selectedPod : null
+  const chips = unlisted ? [...pods, { kind: 'Pod', namespace: podNamespace, name: unlisted }] : pods
+
   if (pods.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
@@ -53,20 +59,22 @@ export function MultiPodLogsTab({
 
   return (
     <div className="h-full flex flex-col">
-      {pods.length > 1 && (
+      {chips.length > 1 && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
-          {pods.map((pod) => (
+          {chips.map((pod) => (
             <button
               key={pod.name}
               onClick={() => onSelectPod(pod.name)}
+              aria-pressed={selectedPod === pod.name}
               className={clsx(
                 'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
                 selectedPod === pod.name
-                  ? 'bg-blue-500 text-theme-text-primary'
+                  ? 'selection-strong selection-text'
                   : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover',
               )}
             >
               {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
+              {pod.name === unlisted && <span className="ml-1.5 text-xs opacity-75">· no longer listed</span>}
             </button>
           ))}
         </div>

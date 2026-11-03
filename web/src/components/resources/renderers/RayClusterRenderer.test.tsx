@@ -3,7 +3,8 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { RayClusterRenderer, logsContainer } from './RayClusterRenderer'
+import { RayClusterRenderer } from './RayClusterRenderer'
+import { logsContainer } from '../../logs/RayClusterLogsTab'
 const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[], canViewLogs: true, opened: [] as any[], support: 'supported' as string }))
 vi.mock('../../../api/client', () => ({
   useWorkloadPods: (...args: any[]) => { mock.calls.push(args); return mock.result },

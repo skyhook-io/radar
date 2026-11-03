@@ -44,6 +44,18 @@ describe('MultiPodLogsTab', () => {
     expect(host.textContent).not.toContain("can't find")
   })
 
+  it('keeps a selected Pod that left the list selectable, marked, beside the one that remains', () => {
+    state.logs['gone-pod'] = { data: { containers: ['app'] } }
+    const onSelect = vi.fn()
+    act(() => root.render(<MultiPodLogsTab pods={[pods[1]]} namespace="ml" selectedPod="gone-pod" onSelectPod={onSelect} />))
+    const chips = [...host.querySelectorAll('button')].map(button => button.textContent)
+    expect(chips).toEqual(['live-pod', 'gone-pod· no longer listed'])
+    expect(host.textContent).toContain('viewer:gone-pod')
+    expect(onSelect).not.toHaveBeenCalled()
+    act(() => [...host.querySelectorAll('button')][0].click())
+    expect(onSelect).toHaveBeenCalledWith('live-pod')
+  })
+
   it('uses the caller\'s empty message when there are no Pods', () => {
     act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod={null} onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
     expect(host.textContent).toContain('This RayCluster has no Pods right now.')

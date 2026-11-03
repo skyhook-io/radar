@@ -237,6 +237,10 @@ export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
 }
 
+function isStableClientError(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429
+}
+
 export function isNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
 }
@@ -7756,8 +7760,9 @@ export function useWorkloadPods(
       fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods${queryString}`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
-    refetchInterval: options?.refetchInterval ?? false,
-    retry: options?.ownerUID ? (count, error) => !(error instanceof ApiError && error.status === 409) && count < 2 : undefined,
+    // A denied, missing or recreated root answers the same way on every poll.
+    refetchInterval: (query) => isStableClientError(query.state.error) ? false : options?.refetchInterval ?? false,
+    retry: options?.ownerUID ? (count, error) => !isStableClientError(error) && count < 2 : undefined,
   });
 }
 

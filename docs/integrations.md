@@ -1799,7 +1799,8 @@ Logs are read per Pod. The RayCluster's Logs tab lists the Pods its current
 incarnation owns (the same owner-UID list, capped at 200, failures first), not the
 Pods Radar recalls from history. When that list can't be read (it needs
 `get rayclusters` and `list pods`, a Radar older than v1.15 doesn't serve it, or
-the request fails), the tab falls back to the recorded Pods and says why. Each Pod
+the request fails), the tab falls back to the recorded Pods and says why. The tab is not narrowed by
+the Runtime Pods selection on Overview. Each Pod
 in the Runtime Pods list also has a Logs button (when the namespace allows
 `pods/log`) that opens that Pod in the log dock; a Pod that isn't scheduled or has
 no container status yet shows that instead. While no application container has
