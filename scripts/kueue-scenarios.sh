@@ -174,7 +174,9 @@ check_ownership() {
 
 # Creates the objects of a manifest file that do not exist yet. Existing ones were
 # already proven owned by check_ownership and are left alone, because `up` changes
-# some of them on purpose.
+# some of them on purpose. Nothing is ever applied over an existing object: if
+# someone else creates a same-named object after check_ownership read it, the
+# create fails with AlreadyExists instead of adopting it.
 create_missing() {
   local file="$1" objects groups resource namespace names existing missing
   objects="$(render "${file}" | kc create --dry-run=client -o json -f - | jq -cs '[.[] | if .kind == "List" then .items[] else . end]')" || \
@@ -237,6 +239,7 @@ known() {
   "$@" || rc=$?
   case "${rc}" in
     0|1) return "${rc}" ;;
+    3) fail "a fixture Job is missing or not this prefix's (${*:2:2}); run '$0 down' and 'up' again" ;;
     *) fail "could not read the cluster for: $*" ;;
   esac
 }
@@ -330,13 +333,10 @@ cmd_up() {
   check_ownership
   ok "nothing in the way belongs to anyone else"
 
-  step "Applying namespaces, ResourceFlavors, Cohort, priority classes, AdmissionCheck, queues and viewer RBAC"
-  render 00-namespaces.yaml | kc apply -f - >/dev/null
-  render 10-cluster.yaml | kc apply -f - >/dev/null
-  create_missing 15-staged-queues.yaml
-  render 20-localqueues.yaml | kc apply -f - >/dev/null
-  render 50-viewer-rbac.yaml | kc apply -f - >/dev/null
-  ok "configuration applied"
+  step "Creating namespaces, ResourceFlavors, Cohort, priority classes, AdmissionCheck, queues and viewer RBAC"
+  local file
+  for file in "${CONFIG_FILES[@]}"; do create_missing "${file}"; done
+  ok "configuration in place"
 
   step "Reporting ${PREFIX}-check Active, as its controller would"
   local generation
@@ -591,11 +591,17 @@ radar_get() { # radar_get <path>: prints the body, then the HTTP status on its o
 }
 
 radar_expect() { # radar_expect <description> <path> <HTTP status> <jq predicate over the body>
-  local out status body
-  if ! out="$(radar_get "$2")"; then
-    FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ %s (Radar unreachable)${C_RESET}\n" "$1"; return
-  fi
-  status="${out##*$'\n'}"; body="${out%$'\n'*}"
+  local out status body attempt
+  # An answer whose action is "retry" asks for exactly that; Radar gives them
+  # while it is still settling what it can read, especially right after startup.
+  for attempt in 1 2 3 4 5 6; do
+    if ! out="$(radar_get "$2")"; then
+      FAILURES=$((FAILURES + 1)); printf "${C_RED}    ✗ %s (Radar unreachable)${C_RESET}\n" "$1"; return
+    fi
+    status="${out##*$'\n'}"; body="${out%$'\n'*}"
+    jq -e 'any(.coverage.gaps[]?; .action == "retry")' <<<"${body}" >/dev/null 2>&1 || break
+    sleep 5
+  done
   if [ "${status}" = "$3" ] && jq -e --argjson uids "${JOB_UIDS}" "$4" <<<"${body}" >/dev/null 2>&1; then
     ok "$1"
   else
@@ -656,13 +662,8 @@ cmd_verify_radar() {
         "${complete} and $(jobs_are "${denied}/admitted" "${denied}/pending")"
       ;;
     viewer)
-      radar_expect "2: busy Workloads partial, ${hidden} not read" "$(wl_path "${busy},${hidden}")" 200 \
-        ".coverage.status == \"partial\" and .coverage.read.namespaces.names == [\"${busy}\"] and (.coverage.gaps | length == 1) and .coverage.gaps[0].namespaces.names == [\"${hidden}\"] and (.coverage.gaps[0].code | IN(\"radar_forbidden\", \"read_error\")) and ${busy_jobs}"
-      local gap
-      gap="$(radar_get "$(wl_path "${busy},${hidden}")" | sed '$d' | jq -r '.coverage.gaps[0].code // empty' 2>/dev/null)" || true
-      if [ "${gap}" = "read_error" ]; then
-        warn "2: that gap is coded read_error, while ${hidden} read alone is radar_forbidden (known inconsistency; see the README)"
-      fi
+      radar_expect "2: busy Workloads partial, ${hidden} Radar-forbidden" "$(wl_path "${busy},${hidden}")" 200 \
+        ".coverage.status == \"partial\" and .coverage.read.namespaces.names == [\"${busy}\"] and .coverage.gaps == [{code: \"radar_forbidden\", action: \"radar_config\", namespaces: {count: 1, names: [\"${hidden}\"]}}] and ${busy_jobs}"
       radar_expect "2: ${hidden} alone: Radar's identity cannot read it" "$(wl_path "${hidden}")" 503 \
         ".error_code == \"radar_forbidden\" and .coverage.gaps[0].code == \"radar_forbidden\""
       radar_expect "6: Workloads in ${denied}: Radar's identity cannot read them" "$(wl_path "${denied}")" 503 \
@@ -713,36 +714,24 @@ cmd_status() {
 cmd_kubeconfig() {
   check_args
   [ -n "${OUT_PATH}" ] || fail "--out PATH is required"
-  local namespace token ca server tmp
+  local namespace token cluster tmp
   namespace="$(ns viewer)"
   [ "$(owner_of serviceaccount viewer "${namespace}")" = "${PREFIX}" ] || fail "ServiceAccount ${namespace}/viewer is missing or not owned; run '$0 up' first"
   token="$(kc create token viewer -n "${namespace}" --duration="${TOKEN_DURATION}")" || fail "TokenRequest for ${namespace}/viewer failed"
-  server="$(kc config view --minify --raw --flatten -o jsonpath='{.clusters[0].cluster.server}')"
-  ca="$(kc config view --minify --raw --flatten -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
-  [ -n "${ca}" ] || fail "the source kubeconfig names no certificate authority to copy"
+  # The whole cluster entry (server, CA, tls-server-name, proxy-url) carries over;
+  # only the user changes. kubectl reads JSON kubeconfigs.
+  cluster="$(kc config view --minify --raw --flatten -o json | jq -c '.clusters[0].cluster')" || fail "cannot read the source kubeconfig's cluster"
   tmp="$(mktemp "$(dirname "${OUT_PATH}")/.kueue-viewer.XXXXXX")"
+  trap 'rm -f -- "${tmp}"' EXIT
   chmod 600 "${tmp}"
-  cat >"${tmp}" <<EOF
-apiVersion: v1
-kind: Config
-clusters:
-  - name: ${PREFIX}-cluster
-    cluster:
-      server: ${server}
-      certificate-authority-data: ${ca}
-users:
-  - name: ${PREFIX}-viewer
-    user:
-      token: ${token}
-contexts:
-  - name: ${PREFIX}-viewer
-    context:
-      cluster: ${PREFIX}-cluster
-      user: ${PREFIX}-viewer
-      namespace: $(ns busy)
-current-context: ${PREFIX}-viewer
-EOF
+  jq -n --argjson cluster "${cluster}" --arg token "${token}" --arg p "${PREFIX}" --arg ns "$(ns busy)" '{
+    apiVersion: "v1", kind: "Config",
+    clusters: [{name: ($p + "-cluster"), cluster: $cluster}],
+    users: [{name: ($p + "-viewer"), user: {token: $token}}],
+    contexts: [{name: ($p + "-viewer"), context: {cluster: ($p + "-cluster"), user: ($p + "-viewer"), namespace: $ns}}],
+    "current-context": ($p + "-viewer")}' >"${tmp}"
   mv -f "${tmp}" "${OUT_PATH}"
+  trap - EXIT
   ok "wrote ${OUT_PATH} (ServiceAccount ${namespace}/viewer; token valid for ${TOKEN_DURATION} unless the API server caps it)"
 }
 
@@ -809,6 +798,7 @@ main() {
   shift
   case "${COMMAND}" in -h|--help|help) usage; exit 0 ;; esac
   while [ $# -gt 0 ]; do
+    case "$1" in --kubeconfig|--context|--prefix|--fixture|--out|--identity) [ $# -ge 2 ] || fail "$1 needs a value" ;; esac
     case "$1" in
       --kubeconfig) KUBECONFIG_ARG="$2"; shift 2 ;;
       --context) CONTEXT_ARG="$2"; shift 2 ;;

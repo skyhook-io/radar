@@ -16,7 +16,7 @@ FAILED=0
 JOBS='' WORKLOADS='' GET_JSON='' CAN_I='' KC_FAIL=''
 KC_LOG="$(mktemp)"
 
-DRY_RUN='' CREATED="$(mktemp)" CRDS='' OWNED='{}' DEPLOYMENTS='{"items":[]}'
+DRY_RUN='' CREATED="$(mktemp)" CRDS='' OWNED='{}' DEPLOYMENTS='{"items":[]}' CREATE_ERROR='' CONFIG_VIEW='{}'
 # Answers to successive patch calls, one per line ("ok" or an error); kc runs in
 # command substitutions, so the queue lives in a file.
 PATCH_ANSWERS="$(mktemp)"
@@ -33,7 +33,11 @@ kc() {
     "get workloads.kueue.x-k8s.io -n "*) printf '%s' "${WORKLOADS}" ;;
     "auth can-i "*) printf '%s\n' "${CAN_I}"; [ "${CAN_I}" = yes ] ;;
     "create --dry-run=client "*) cat >/dev/null; printf '%s' "${DRY_RUN}" ;;
-    "create -f -") cat >>"${CREATED}" ;;
+    "create -f -")
+      cat >>"${CREATED}"
+      [ -z "${CREATE_ERROR}" ] || { echo "${CREATE_ERROR}" >&2; return 1; } ;;
+    "create token "*) echo "token-123" ;;
+    "config view "*) printf '%s' "${CONFIG_VIEW}" ;;
     "get crd "*) [[ " ${CRDS} " == *" ${3%%.*} "* ]] && echo "customresourcedefinition/$3"; return 0 ;;
     *" -l radar.skyhook.io/kueue-scenarios=t -o json") jq -c --arg r "${2}" '.[$r] // {items: []}' <<<"${OWNED}" ;;
     "patch "*)
@@ -89,6 +93,7 @@ KC_FAIL="get workloads"
 check "failed Workload read is unreadable, not no" 2 has_cond t-busy j Admitted True
 check "released needs a successful read" 2 released t-busy j
 check "known stops on an unreadable answer" 1 known has_cond t-busy j Admitted True
+check "known stops on a missing Job" 1 known has_cond t-busy other Admitted True
 KC_FAIL=''
 
 echo "==> The check controller keeps what Kueue recorded"
@@ -190,6 +195,25 @@ GET_JSON='{"kind":"List","items":[{"metadata":{"name":"j1"}},{"metadata":{"name"
 : >"${CREATED}"
 create_missing 30-jobs-first.yaml
 check "creates nothing when everything exists" 0 test ! -s "${CREATED}"
+GET_JSON='{"kind":"List","items":[]}'
+CREATE_ERROR='Error from server (AlreadyExists): jobs.batch "j1" already exists'
+check "an object someone else created after the check makes up stop, not adopt it" 1 create_missing 30-jobs-first.yaml
+CREATE_ERROR=''
+
+echo "==> The viewer kubeconfig"
+OUT_DIR="$(mktemp -d)"
+OUT_PATH="${OUT_DIR}/viewer.kubeconfig"
+CONFIG_VIEW='{"clusters":[{"cluster":{"server":"https://example:443","certificate-authority-data":"Q0E=","tls-server-name":"internal.example"}}]}'
+GET_JSON='{"metadata":{"name":"viewer","labels":{"radar.skyhook.io/kueue-scenarios":"t"}}}'
+cmd_kubeconfig >/dev/null
+check "keeps the whole cluster entry, tls-server-name included" 0 jq -e '.clusters[0].cluster["tls-server-name"] == "internal.example" and .clusters[0].cluster.server == "https://example:443"' "${OUT_PATH}"
+check "uses the requested token" 0 jq -e '.users[0].user.token == "token-123"' "${OUT_PATH}"
+check "is readable by its owner only" 0 test "$(stat -f '%Lp' "${OUT_PATH}" 2>/dev/null || stat -c '%a' "${OUT_PATH}")" = 600
+check "leaves no temporary file" 0 test "$(find "${OUT_DIR}" -name '.kueue-viewer.*' | wc -l | tr -d ' ')" = 0
+rm -rf -- "${OUT_DIR}"
+
+echo "==> Arguments"
+check "a flag without its value is refused" 1 main up --kubeconfig
 
 echo "==> Permission answers"
 CAN_I=yes; check "yes is yes" 0 viewer_can yes list workloads t-busy

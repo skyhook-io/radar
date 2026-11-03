@@ -15,10 +15,12 @@ beside whatever is already there.
 ## Quick start
 
 ```bash
-# Prerequisites: bash, kubectl, jq, curl, and an identity that can create
-# namespaces, cluster-scoped Kueue objects, ClusterRoles and ClusterRoleBindings,
-# patch Workload and AdmissionCheck status, list Jobs and LocalQueues across
-# namespaces, create ServiceAccount tokens, and impersonate (verify uses --as).
+# Prerequisites: bash, kubectl, jq, curl, and an identity that can:
+#   get CRDs; create namespaces, cluster-scoped Kueue objects, ClusterRoles and
+#   ClusterRoleBindings; patch ClusterQueue spec, Workload spec and the status of
+#   Workloads and AdmissionChecks; list Jobs and LocalQueues across namespaces;
+#   create ServiceAccount tokens; impersonate users and ServiceAccounts (verify
+#   uses --as). Listing Deployments cluster-wide is optional (version report).
 K=/path/to/cluster.kubeconfig          # or use --context NAME instead
 ./scripts/kueue-scenarios.sh up     --kubeconfig "$K"   # ~10 minutes on a remote cluster
 ./scripts/kueue-scenarios.sh verify --kubeconfig "$K"
@@ -166,7 +168,7 @@ listener: proxy mode trusts that header.
 | Workloads in `<p>-quota`, `<p>-held` | complete, with Kueue's reasons | same | same |
 | Workloads in `<p>-empty` (7) | complete, 0 items | complete, 0 items | complete, 0 items |
 | LocalQueues in `<p>-lq-denied` | complete | complete | complete |
-| Workloads in `<p>-busy` + `<p>-busy-hidden` (2) | complete, 9 | 200, partial: read `<p>-busy` (6 items), one gap for `<p>-busy-hidden` | 200, partial: read `<p>-busy` (6 items), gap `user_namespace_not_visible` for `<p>-busy-hidden` |
+| Workloads in `<p>-busy` + `<p>-busy-hidden` (2) | complete, 9 | 200, partial: read `<p>-busy` (6 items), gap `radar_forbidden` for `<p>-busy-hidden` | 200, partial: read `<p>-busy` (6 items), gap `user_namespace_not_visible` for `<p>-busy-hidden` |
 | Workloads in `<p>-busy-hidden` alone | — | 503 `radar_forbidden` | — |
 | Workloads in `<p>-lq-denied` (6) | complete, 2 | 503 `radar_forbidden` | either complete, 2 (warns) or 403 (see below) |
 
@@ -186,16 +188,19 @@ a warning, and also a refusal. A queue read that promises per-kind coverage has
 to check `list workloads.kueue.x-k8s.io` itself; that is the case this scenario
 exists to catch.
 
-In the `viewer` column, the gap for `<p>-busy-hidden` in a two-namespace read is
-currently coded `read_error` (retry), while the same namespace read alone is
-`radar_forbidden`. `verify-radar` accepts either code there and warns on
-`read_error`; any other code fails.
+Right after Radar starts, a namespace its identity can't read can come back as a
+`read_error` with the action `retry` (an 8-second request-budget timeout) before
+it settles on `radar_forbidden`. `verify-radar` retries any answer whose action
+is `retry` for up to 30 seconds, then expects the exact codes in the table.
 
 ## Up, re-runs and cleanup
 
 `up` checks every object it is about to create first, and stops if any of them
-exists without this prefix's ownership label or can't be read. It then applies the configuration,
-submits the Jobs in two batches, and drives each scenario to its end state:
+exists without this prefix's ownership label, is still being deleted, or can't
+be read. It then creates whatever is missing; it never applies over an existing
+object, so a foreign object created in the meantime makes the create fail rather
+than be adopted, and a changed manifest takes effect only after `down` and `up`.
+Next it submits the Jobs in two batches and drives each scenario to its end state:
 answers checks, removes the spare flavor, deactivates one Workload, and stops the
 drain queue. Each step checks the cluster before acting, so re-running `up` after
 it finished, or after it was interrupted, resumes instead of repeating a step
