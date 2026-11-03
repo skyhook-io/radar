@@ -41,7 +41,7 @@ import type { GitOpsStatus } from '../../types/gitops'
 import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
-import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
+import { jobSetMemberRunKey, neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, managerChipCoversGroup, managerChipPresentation, managerListing, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
@@ -360,6 +360,10 @@ interface WorkloadViewProps {
     /** Place resource notices within the replacement layout's content area. */
     leadContent?: ReactNode
   }) => ReactNode
+  /** Called instead of navigating when a Topology-tab click lands on a member
+   *  Job of the JobSet this view shows, with the member's selection key, so
+   *  the host can open the member in place. Omit to navigate as for any node. */
+  onSelectTopologyMember?: (memberKey: string) => void
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render the Diagnose tab content - a path-shaped trace for network
@@ -509,6 +513,7 @@ export function WorkloadView({
   renderDiagnoseTab,
   reachableVia,
   renderExpandedOverview,
+  onSelectTopologyMember,
   renderSummary,
   extraTabs,
   tabOrder,
@@ -667,6 +672,13 @@ export function WorkloadView({
   const yamlObject = yamlObjectId ? yamlObjects.find((o) => o.id === yamlObjectId) : undefined
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
+      const memberKey = onSelectTopologyMember && topology && neighborhoodFocusId
+        ? jobSetMemberRunKey(topology, neighborhoodFocusId, node)
+        : undefined
+      if (memberKey) {
+        onSelectTopologyMember?.(memberKey)
+        return
+      }
       const resourceKind = topologyNodeResourceKind(node)
       if (!onNavigateToResource || !resourceKind || !node.name) return
       const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
@@ -677,7 +689,7 @@ export function WorkloadView({
         group,
       })
     },
-    [onNavigateToResource],
+    [onNavigateToResource, onSelectTopologyMember, topology, neighborhoodFocusId],
   )
 
   // Flatten events from hierarchy

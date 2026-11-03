@@ -9,6 +9,13 @@ describe('baseSubtitle', () => {
     expect(baseSubtitle('ServiceMonitor', { endpointCount: 1 })).toBe('1 scrape endpoint')
   })
 
+  it('describes a JobSet by its lifecycle and the Jobs it declares, not Jobs it has created', () => {
+    expect(baseSubtitle('JobSet', { phase: 'Active', declaredJobs: 8 })).toBe('Active • 8 Jobs declared')
+    expect(baseSubtitle('JobSet', { phase: 'Pending', declaredJobs: 1 })).toBe('Pending • 1 Job declared')
+    expect(baseSubtitle('JobSet', { phase: 'Unknown' })).toBe('Unknown')
+    expect(baseSubtitle('JobSet', {})).toBe('Unknown')
+  })
+
   it('describes a Service by its first port, capping additional ports to a count', () => {
     expect(baseSubtitle('Service', { type: 'ClusterIP', ports: [] })).toBe('ClusterIP')
     expect(baseSubtitle('Service', { type: 'ClusterIP', ports: [{ port: 80 }] })).toBe('ClusterIP :80')

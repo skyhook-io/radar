@@ -243,6 +243,7 @@ export type CoreNodeKind =
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'JobSet' // jobset.x-k8s.io JobSet
   | 'Workflow'
   | 'CronWorkflow'
   | 'WorkflowTemplate'

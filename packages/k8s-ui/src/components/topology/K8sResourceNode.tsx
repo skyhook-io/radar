@@ -267,6 +267,7 @@ export const NODE_DIMENSIONS: Record<
   HorizontalPodAutoscaler: { width: 280, height: 84 },
   Job: { width: 300, height: 84 },
   CronJob: { width: 200, height: 84 },
+  JobSet: { width: 260, height: 84 },
   Workflow: { width: 400, height: 84 },
   CronWorkflow: { width: 240, height: 84 },
   WorkflowTemplate: { width: 240, height: 84 },
@@ -534,6 +535,13 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
     case "Node": {
       const instanceType = nodeData.instanceType as string;
       return instanceType || "";
+    }
+    case "JobSet": {
+      // Declared, not observed: a JobSet holding roles behind dependencies
+      // has created fewer Jobs than its spec asks for.
+      const phase = (nodeData.phase as string) || "Unknown";
+      const declared = nodeData.declaredJobs as number | undefined;
+      return typeof declared === "number" ? `${phase} • ${declared} ${declared === 1 ? "Job" : "Jobs"} declared` : phase;
     }
     case "AnalysisRun": {
       const phase = (nodeData.phase as string) || "Unknown";
