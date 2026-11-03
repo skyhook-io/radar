@@ -29,20 +29,17 @@ func (p *CacheProvider) kueueInventory(group, kind string, namespaces []string) 
 		}
 		return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 	}
-	scope := namespaces
-	if !apiResource.Namespaced {
-		scope = []string{""}
-	}
-	if gap := p.dynamicSyncGap(gvr, scope); gap != "" {
-		return kueueInventory{Gap: gap}
-	}
-	// Read-only: the detector only reads these objects within this compose.
+	// List first: a read is what starts a namespace's informer, so checking
+	// sync before it would leave a never-read namespace unsynced for good.
 	var items []*unstructured.Unstructured
 	switch {
 	case !apiResource.Namespaced:
 		list, err := p.dynamic.ListReadOnly(gvr, "")
 		if err != nil {
 			return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
+		}
+		if gap := p.dynamicSyncGap(gvr, []string{""}); gap != "" {
+			return kueueInventory{Gap: gap}
 		}
 		items = list
 	case len(namespaces) == 0:
@@ -51,14 +48,28 @@ func (p *CacheProvider) kueueInventory(group, kind string, namespaces []string) 
 		if err != nil {
 			return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 		}
+		if gap := p.dynamicSyncGap(gvr, nil); gap != "" {
+			return kueueInventory{Gap: gap}
+		}
 		items = list
 	default:
+		// Each namespace answers on its own: one slow namespace doesn't hide
+		// the others, and the gap is still recorded.
+		var gap issuesapi.UncheckedReason
 		for _, ns := range namespaces {
 			list, err := p.dynamic.ListReadOnly(gvr, ns)
 			if err != nil {
-				return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
+				gap = issuesapi.UncheckedReasonReadFailed
+				continue
+			}
+			if nsGap := p.dynamicSyncGap(gvr, []string{ns}); nsGap != "" {
+				gap = nsGap
+				continue
 			}
 			items = append(items, list...)
+		}
+		if gap != "" {
+			return kueueInventory{Items: items, OK: true, Partial: true, Gap: gap}
 		}
 	}
 	return kueueInventory{Items: items, OK: true}

@@ -681,15 +681,7 @@ func TestResourceIssuesReportAKueueQueueCheckTheCallerCannotMake(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	dc := k8s.GetDynamicResourceCache()
-	for _, gvr := range []schema.GroupVersionResource{lqGVR, wlGVR} {
-		if _, err := dc.ListBlocking(gvr, "team", 2*time.Second); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := dc.EnsureWatching(cqGVR); err != nil || !dc.WaitForSync(cqGVR, 2*time.Second) {
-		t.Fatalf("ClusterQueue cache: %v", err)
-	}
+	// No pre-warm: the Issues read itself starts the namespace informers.
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 	perms.SetCanI("list", cqGVR.Group, cqGVR.Resource, "", false)
@@ -699,13 +691,20 @@ func TestResourceIssuesReportAKueueQueueCheckTheCallerCannotMake(t *testing.T) {
 		"/api/issues/resource/LocalQueue/team/q?coverage=1&group=kueue.x-k8s.io",
 		"/api/issues/resource/Workload/team/w?coverage=1&group=kueue.x-k8s.io",
 	} {
-		w := resourceIssuesRequest(t, s, path)
-		if w.Code != http.StatusOK {
-			t.Fatalf("%s: status=%d body=%s", path, w.Code, w.Body.String())
-		}
+		var w *httptest.ResponseRecorder
 		var response ResourceIssuesResponse
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatal(err)
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+			w = resourceIssuesRequest(t, s, path)
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: status=%d body=%s", path, w.Code, w.Body.String())
+			}
+			response = ResourceIssuesResponse{}
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Unchecked) == 1 && response.Unchecked[0].Reason == issuesapi.UncheckedReasonCallerAccessDenied || time.Now().After(deadline) {
+				break
+			}
 		}
 		if len(response.Issues) != 0 || len(response.Unchecked) != 1 || response.Unchecked[0].Source != issuesapi.UncheckedSourceKueue || response.Unchecked[0].Reason != issuesapi.UncheckedReasonCallerAccessDenied {
 			t.Fatalf("%s: want an unchecked Kueue queue check, not an all-clear: %s", path, w.Body.String())
@@ -718,10 +717,22 @@ func TestResourceIssuesReportAKueueQueueCheckTheCallerCannotMake(t *testing.T) {
 	// With the permission, the LocalQueue row shows and nothing is unchecked.
 	perms.SetCanI("list", cqGVR.Group, cqGVR.Resource, "", true)
 	perms.SetCanI("get", cqGVR.Group, cqGVR.Resource, "", true)
-	w := resourceIssuesRequest(t, s, "/api/issues/resource/LocalQueue/team/q?coverage=1&group=kueue.x-k8s.io")
+	// The first ClusterQueue read starts its informer; until it syncs the
+	// LocalQueue page says so instead of "none".
+	var w *httptest.ResponseRecorder
 	var response ResourceIssuesResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		w = resourceIssuesRequest(t, s, "/api/issues/resource/LocalQueue/team/q?coverage=1&group=kueue.x-k8s.io")
+		response = ResourceIssuesResponse{}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Issues) > 0 || time.Now().After(deadline) {
+			break
+		}
+		if len(response.Unchecked) != 1 || response.Unchecked[0].Reason != issuesapi.UncheckedReasonSyncPending {
+			t.Fatalf("while ClusterQueues load the page must say so: %s", w.Body.String())
+		}
 	}
 	if len(response.Issues) != 1 || response.Issues[0].Reason != issues.ReasonKueueClusterQueueInactive || len(response.Unchecked) != 0 {
 		t.Fatalf("a caller who can list ClusterQueues gets the row: %s", w.Body.String())

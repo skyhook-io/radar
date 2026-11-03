@@ -163,7 +163,10 @@ const REASON_TITLE: Record<string, string> = {
   KueueLocalQueueMissing: 'LocalQueue missing',
   KueueRequeuingLimitExceeded: 'Kueue stopped retrying the run',
   KueueMaximumExecutionTimeExceeded: 'Run hit its maximum execution time',
-  KueueDeactivatedByKueue: 'Kueue deactivated the run',
+  KueueDeactivatedByKueue: 'Kueue withdrew the run',
+  KueueResourceUnavailable: 'Queue offers no quota for a requested resource',
+  KueueNamespaceNotEligible: "Queue doesn't admit this namespace",
+  KueueInvalidWorkload: "Kueue can't admit the run's spec",
 };
 
 /** The title a reason has wherever it is shown, when its category's label would name the wrong operation. */

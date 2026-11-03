@@ -60,7 +60,8 @@ const (
 	CategoryJobFailed         Category = "job_failed"
 	CategoryCronJobFailed     Category = "cronjob_failed"
 	// CategoryBatchRunStopped is a batch run its queueing controller stopped
-	// after it ran: too many requeues, or past its maximum execution time.
+	// trying: too many requeues, or past its maximum execution time. It does
+	// not establish that the run's Pods ever ran.
 	CategoryBatchRunStopped Category = "batch_run_stopped"
 
 	CategoryMissingConfigRef         Category = "missing_config_ref"
@@ -284,7 +285,7 @@ type IncidentParent struct {
 	Ref        Ref        `json:"ref"` // parent subject, for display + deep-link
 	Category   Category   `json:"category,omitempty"`
 	Confidence Confidence `json:"confidence,omitempty"`
-	FactType   string     `json:"fact_type,omitempty"` // node_blast_radius | pvc_blast_radius | apiservice_hpa | secret_not_ready
+	FactType   string     `json:"fact_type,omitempty"` // the diagnostic fact type that establishes the link; an open vocabulary (e.g. pvc_blast_radius, kueue_queue)
 }
 
 type IssueRef struct {
@@ -799,7 +800,9 @@ func (c *ClusterScopedChanges) Informative() bool {
 type UncheckedSource struct {
 	Source UncheckedSourceName `json:"source"`
 	Reason UncheckedReason     `json:"reason"`
-	// Kinds names the kinds within the source that went unchecked. Absent
+	// Kinds names the kinds within the source that couldn't be read or
+	// checked. Findings on other resources that depend on them (a run whose
+	// queue is one of them) may be missing too. Absent
 	// means the whole source, or that Radar can't tell which kinds.
 	Kinds []UncheckedKind `json:"kinds,omitempty"`
 	// Namespaces names the namespaces whose read failed when the source was
@@ -812,7 +815,8 @@ type UncheckedSource struct {
 	Subjects []Ref `json:"-"`
 }
 
-// UncheckedKind is a resource kind whose issues went unchecked.
+// UncheckedKind is a resource kind that couldn't be read or checked as input
+// to an issue source.
 type UncheckedKind struct {
 	Group string `json:"group,omitempty"`
 	Kind  string `json:"kind"`
@@ -836,8 +840,8 @@ const (
 	// UncheckedSourceKarpenter is the Karpenter NodePool, NodeClass and
 	// NodeClaim checks.
 	UncheckedSourceKarpenter UncheckedSourceName = "karpenter"
-	// UncheckedSourceKueue is the Kueue checks: Workloads Kueue will not
-	// admit, and LocalQueues and ClusterQueues that admit nothing.
+	// UncheckedSourceKueue is the Kueue checks: runs Kueue will not admit or
+	// stopped, and LocalQueues and ClusterQueues that admit nothing.
 	UncheckedSourceKueue UncheckedSourceName = "kueue"
 )
 
