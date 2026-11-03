@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/topology"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,6 +58,12 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 	if _, err := cache.ListBlocking(gvr, "alpha", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	graphCalls := 0
+	SetRelationshipTopologySource(func() (*topology.Topology, *topology.RelationshipsIndex) {
+		graphCalls++
+		return &topology.Topology{}, nil
+	})
+	t.Cleanup(func() { SetRelationshipTopologySource(nil) })
 	input := diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Kind: "Workload", Namespace: "alpha", Name: "blocked"}}
 	result, _, err := handleDiagnose(context.Background(), nil, input)
 	if err != nil {
@@ -75,8 +82,15 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 	if len(body.RelatedIssues) != 1 || body.RelatedIssues[0].Reason != issues.ReasonKueueLocalQueueMissing || body.ResourceContext == nil || body.ResourceContext.Scheduling == nil {
 		t.Fatalf("missing canonical Issue/admission context: %s", raw)
 	}
-	if body.Pods != nil || !strings.Contains(body.Coverage, "runtime logs and metrics were not collected") {
+	if body.Pods != nil || !strings.Contains(body.Coverage, "runtime logs and metrics were not collected") || !strings.Contains(body.Coverage, "Graph-derived") {
 		t.Fatalf("invented runtime coverage: %s", raw)
+	}
+	foundGraphOmission := false
+	for _, field := range body.ResourceContext.Omitted {
+		foundGraphOmission = foundGraphOmission || field.Field == "exposes" && field.Reason == resourcecontext.OmittedUnavailable
+	}
+	if !foundGraphOmission {
+		t.Fatal("uncollected graph relationships were not qualified")
 	}
 	jobInput := diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Kind: "Job", Namespace: "alpha", Name: "run"}}
 	jobResult, _, err := handleDiagnose(context.Background(), nil, jobInput)
@@ -92,6 +106,15 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 	}
 	if len(jobBody.RelatedIssues) != 1 || jobBody.RelatedIssues[0].Reason != issues.ReasonKueueLocalQueueMissing || jobBody.Coverage == "" {
 		t.Fatalf("Job did not find its Workload finding: %s", renderContent(jobResult.Content))
+	}
+	if graphCalls != 0 {
+		t.Fatal("batch diagnosis requested a global relationship graph")
+	}
+	if _, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: "Job", Namespace: "alpha", Name: "run"}); err != nil {
+		t.Fatal(err)
+	}
+	if graphCalls == 0 {
+		t.Fatal("get_resource stopped using its relationship graph")
 	}
 	ctx := withTestUserPerms(t, "other-team", nil, []string{"other"})
 	if _, _, err := handleDiagnose(ctx, nil, input); err == nil {
