@@ -133,7 +133,7 @@ func checkJSONValue(decoder *json.Decoder, depth int) error {
 			if err != nil || !ok {
 				return UnexpectedShape
 			}
-			key = strings.ToLower(key)
+			key = foldJSONKey(key)
 			if seen[key] {
 				return UnexpectedShape
 			}
@@ -155,4 +155,17 @@ func checkJSONValue(decoder *json.Decoder, depth int) error {
 		return UnexpectedShape
 	}
 	return nil
+}
+
+// Match encoding/json's field-name equivalence, including non-ASCII case variants.
+func foldJSONKey(key string) string {
+	return strings.Map(func(r rune) rune {
+		minimum := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < minimum {
+				minimum = next
+			}
+		}
+		return minimum
+	}, key)
 }
