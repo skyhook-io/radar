@@ -15,6 +15,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -56,6 +63,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -96,6 +110,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -136,6 +157,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -176,6 +204,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -216,6 +251,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -257,6 +299,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -379,6 +428,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -419,6 +475,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -459,6 +522,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -499,6 +569,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:
@@ -539,6 +616,13 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
   template:
     metadata:
       labels:

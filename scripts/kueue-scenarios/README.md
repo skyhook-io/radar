@@ -107,6 +107,9 @@ whether some states appear or last:
   restore them: run `down` and `up`, or use a fresh `--prefix`.
 - `waitForPodsReady`, fair sharing and admission fair sharing change eviction and
   ordering behavior; the expectations assume they are off.
+- The long-running pause Jobs ignore Pod disruptions (`podFailurePolicy`), so a
+  node drain, consolidation or spot interruption reschedules the Pod instead of
+  failing the Job and silently releasing its quota.
 - Finished and Failed need the busybox image to pull and run, and the evictions
   wait for their Pods to stop. The pending and blocked scenarios need no Pods,
   so node capacity doesn't affect them. Pods run as a non-root user with no
@@ -221,8 +224,13 @@ and `up` again, or use another prefix.
 named with the prefix (or, for Jobs, sit in a namespace named with it): the
 Jobs, the namespaces (with everything in them, including anything someone added
 later), the cluster-scoped Kueue objects, and the viewer's ClusterRoles and
-ClusterRoleBindings. Each delete names the object and requires the label at the
-moment of deletion. It waits for them to go, because `up` refuses objects that
+ClusterRoleBindings. Each delete names the object and uses the label as a
+selector, so an object that lost the label, or was recreated without it, by the
+time kubectl looks it up is left alone. kubectl can't send UID preconditions, so
+a swap in the instant between kubectl's lookup and its delete call isn't
+covered; a namespace can't be replaced while it is terminating. The label holds
+the prefix, not who ran `up`: on a shared prefix, `down` removes the shared
+copy, and it lists the namespaces it is deleting. It waits for them to go, because `up` refuses objects that
 are still being deleted, and exits with status 2 if they haven't gone. If Kueue's CRDs are gone it
 skips those kinds. If Kueue's controller is gone but its CRDs remain, Kueue's
 finalizers can keep them terminating; `down` warns instead of waiting forever.

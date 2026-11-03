@@ -104,11 +104,19 @@ KC_FAIL=''
 echo "==> The check controller keeps what Kueue recorded"
 WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending","retryCount":1},{"name":"other","state":"Ready"}]}' | list)"
 : >"${KC_LOG}"
-set_check t-busy j Retry "again" >/dev/null
+set_check t-busy j Ready "fine" >/dev/null
 patch="$(grep '^patch ' "${KC_LOG}" | sed -e 's/.*-p //')"
-check "Retry keeps retryCount" 0 jq -e 'any(.status.admissionChecks[]; .name == "t-check" and .state == "Retry" and .retryCount == 1)' <<<"${patch}"
-check "Retry keeps the other check" 0 jq -e 'any(.status.admissionChecks[]; .name == "other" and .state == "Ready")' <<<"${patch}"
+check "a check write keeps retryCount" 0 jq -e 'any(.status.admissionChecks[]; .name == "t-check" and .state == "Ready" and .retryCount == 1)' <<<"${patch}"
+check "a check write keeps the other check" 0 jq -e 'any(.status.admissionChecks[]; .name == "other" and .state == "Ready")' <<<"${patch}"
 check "already retried" 0 retried t-busy j
+: >"${KC_LOG}"
+set_check t-busy j Retry "again" >/dev/null
+check "Retry is not requested again once Kueue counted one (same snapshot)" 1 grep -q '^patch ' "${KC_LOG}"
+WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending"}]}' | jq -c '.spec.active = false' | list)"
+: >"${KC_LOG}"
+set_check t-busy j Rejected "no" >/dev/null
+check "Rejected is not requested again once Kueue deactivated the Workload" 1 grep -q '^patch ' "${KC_LOG}"
+WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending","retryCount":1},{"name":"other","state":"Ready"}]}' | list)"
 check "the write carries the resourceVersion it read" 0 jq -e '.metadata | has("resourceVersion")' <<<"${patch}"
 printf '%s\n' 'Error from server (Conflict): the object has been modified; please apply your changes to the latest version' ok >"${PATCH_ANSWERS}"
 : >"${KC_LOG}"

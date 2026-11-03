@@ -303,7 +303,8 @@ wait_for() { # wait_for <description> <command...>
 # prefix's (a Workload through its owning Job), builds a merge patch from what it
 # read, and sends it with that read's resourceVersion: if the object changed or
 # was replaced since, the write is refused instead of landing on it. Retries on
-# conflict only.
+# conflict only. A program that yields null means "already done" on that snapshot,
+# and nothing is written.
 write_owned() {
   local resource="$1" namespace="$2" target="$3" sub="$4" program="$5" attempt json name patch out
   local args=()
@@ -321,8 +322,9 @@ write_owned() {
     fi
     name="$(jq -r '.metadata.name' <<<"${json}")"
     # Merge patches replace lists whole, so programs carry every list entry they keep.
-    patch="$(jq -c "$@" "{metadata: {resourceVersion: .metadata.resourceVersion}} + (${program})" <<<"${json}")" || \
+    patch="$(jq -c "$@" "(${program}) as \$p | if \$p == null then null else {metadata: {resourceVersion: .metadata.resourceVersion}} + \$p end" <<<"${json}")" || \
       fail "cannot build the patch for ${resource} ${name}"
+    [ "${patch}" != null ] || return 0
     out="$(kc patch "${resource}" "${name}" ${args[@]+"${args[@]}"} --type=merge -p "${patch}" 2>&1 >/dev/null)" && return 0
     [[ "${out}" == *"the object has been modified"* || "${out}" == *Conflict* ]] || fail "writing ${resource} ${name} failed: ${out}"
     sleep 1
@@ -332,10 +334,20 @@ write_owned() {
 
 # The script is the controller for ${PREFIX}-check: it writes one check state,
 # keeping every other entry and the fields Kueue keeps in its own (retryCount).
-set_check() { # set_check <namespace> <job> <Pending|Ready|Retry|Rejected> <message>
+# The write is skipped when the same snapshot shows it already happened, so a
+# state Kueue finished handling between earlier reads and this write is never
+# requested twice: Ready once Ready, Rejected once rejected or deactivated, Retry
+# once Kueue counted a retry or one is outstanding.
+set_check() { # set_check <namespace> <job> <Ready|Retry|Rejected> <message>
   write_owned workloads.kueue.x-k8s.io "$1" "$2" status \
-    '{status: {admissionChecks: ([.status.admissionChecks[]? | select(.name != $n)]
-      + [((first(.status.admissionChecks[]? | select(.name == $n)) // {name: $n}) + {state: $s, message: $m, lastTransitionTime: $t})])}}' \
+    '(first(.status.admissionChecks[]? | select(.name == $n)) // {name: $n}) as $c
+     | if $c.state == $s
+          or ($s == "Rejected" and .spec.active == false)
+          or ($s == "Retry" and ($c.retryCount // 0) >= 1)
+       then null
+       else {status: {admissionChecks: ([.status.admissionChecks[]? | select(.name != $n)]
+         + [$c + {state: $s, message: $m, lastTransitionTime: $t}])}}
+       end' \
     --arg n "${PREFIX}-check" --arg s "$3" --arg m "$4" --arg t "$(now)"
 }
 
@@ -360,7 +372,9 @@ cmd_up() {
   step "Checking ownership of every object this run would create (prefix ${PREFIX})"
   check_ownership
   ok "nothing in the way belongs to anyone else"
-  if [ -n "$(owner_of namespace "$(ns quota)" "")" ]; then
+  local existing
+  existing="$(owner_of namespace "$(ns quota)" "")"
+  if [ -n "${existing}" ]; then
     warn "fixtures for prefix ${PREFIX} already exist, so this run resumes them; if they aren't yours, use another --prefix"
   fi
 
@@ -752,7 +766,9 @@ cmd_kubeconfig() {
   [ -n "${OUT_PATH}" ] || fail "--out PATH is required"
   local namespace token cluster tmp
   namespace="$(ns viewer)"
-  [ "$(owner_of serviceaccount viewer "${namespace}")" = "${PREFIX}" ] || fail "ServiceAccount ${namespace}/viewer is missing or not owned; run '$0 up' first"
+  local owner
+  owner="$(owner_of serviceaccount viewer "${namespace}")"
+  [ "${owner}" = "${PREFIX}" ] || fail "ServiceAccount ${namespace}/viewer is missing or not owned; run '$0 up' first"
   token="$(kc create token viewer -n "${namespace}" --duration="${TOKEN_DURATION}")" || fail "TokenRequest for ${namespace}/viewer failed"
   # The whole cluster entry (server, CA, tls-server-name, proxy-url) carries over;
   # only the user changes. kubectl reads JSON kubeconfigs.
@@ -780,9 +796,10 @@ owned_names() { # owned_names <resource> [-A]
     | jq -r --arg p "${PREFIX}-" '.items[] | select((.metadata.namespace // .metadata.name) | startswith($p)) | [.metadata.namespace // "", .metadata.name] | join("|")'
 }
 
-# Deletes by name only while the object still carries this prefix's label: the
-# selector is evaluated at delete time, so an object recreated under the same
-# name without the label is left alone. (kubectl has no UID preconditions.)
+# Deletes by name with this prefix's label as a selector, so an object that lost
+# the label or was recreated without it by the time kubectl looks it up is left
+# alone. kubectl sends no UID precondition, so a swap between its own lookup and
+# its delete call is not covered.
 delete_owned() { # delete_owned <resource> <name> <namespace|""> [kubectl delete flags]
   local resource="$1" name="$2" namespace="$3"
   shift 3
@@ -802,6 +819,7 @@ cmd_down() {
   done <<<"${rows}"
   rows="$(owned_names namespaces)" || fail "cannot list namespaces"
   while IFS='|' read -r namespace name; do [ -n "${name}" ] && namespaces+=("${name}"); done <<<"${rows}"
+  [ "${#namespaces[@]}" -eq 0 ] || warn "deleting namespaces with everything in them: ${namespaces[*]}"
   if [ "${#namespaces[@]}" -gt 0 ]; then
     for name in "${namespaces[@]}"; do delete_owned namespaces "${name}" "" --wait=false; done
   fi
