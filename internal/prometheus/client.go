@@ -140,8 +140,10 @@ func (c *Client) headersRequireURLLocked() bool {
 
 // Global client instance
 var (
-	globalClient *Client
-	clientMu     sync.RWMutex
+	globalClient     *Client
+	clientMu         sync.RWMutex
+	retiredManualURL string
+	retiredHeaders   map[string]string
 )
 
 // discoveryGate serializes Prometheus discovery across the whole process. Per-
@@ -177,6 +179,11 @@ func discoveryDiagnosticsSuppressed(ctx context.Context) bool {
 func Initialize(client kubernetes.Interface, config *rest.Config, contextName string) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
+	// Initialize starts a fresh application client. Context-switch recovery uses
+	// Reinitialize instead, so settings retained by Retire must not leak into a
+	// new initialization.
+	retiredManualURL = ""
+	retiredHeaders = nil
 
 	globalClient = &Client{
 		k8sClient:     client,
@@ -404,6 +411,11 @@ func Retire() {
 	defer clientMu.Unlock()
 	if globalClient != nil {
 		globalClient.mu.Lock()
+		// Retire removes the context-bound client, but the manual endpoint and
+		// headers are process configuration (for example --prometheus-url). Keep
+		// a detached copy so a later Reinitialize cannot fall back to discovery.
+		retiredManualURL = globalClient.manualURL
+		retiredHeaders = copyHeaders(globalClient.headers)
 		if globalClient.workloadScope != nil {
 			log.Print("[prometheus] Workload metrics scope cleared: connection retired; restart with a fresh scope assertion")
 		}
@@ -423,8 +435,8 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	clientMu.Lock()
 	defer clientMu.Unlock()
 
-	manualURL := ""
-	var headers map[string]string
+	manualURL := retiredManualURL
+	headers := copyHeaders(retiredHeaders)
 	var workloadScope *prom.WorkloadMetricsScope
 	var connectedIdentity string
 	var workloadScopeEverSet bool
@@ -455,6 +467,8 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		globalClient.cancelWorkloadAttributionsLocked()
 		globalClient.mu.Unlock()
 	}
+	retiredManualURL = ""
+	retiredHeaders = nil
 	if oldCancel != nil {
 		oldCancel() // stop the outgoing client's detached discovery, if any
 	}
