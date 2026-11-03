@@ -117,7 +117,7 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
       : observation.decision === 'satisfied' ? 'success' : 'warning'
   const admission = kueue?.admission
   // The phase badge and the inactive badge already say these states.
-  const reason = admission && !phaseStates.has(admission.state) ? kueueAdmissionStatePresentation(admission.state) : null
+  const reason = admission && (admission.stale || !phaseStates.has(admission.state)) ? kueueAdmissionStatePresentation(admission) : null
   const unrecognizedReason = admission?.state === 'unrecognized' ? admission.blocker?.reason : undefined
   const qualifier = admission ? null : observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">

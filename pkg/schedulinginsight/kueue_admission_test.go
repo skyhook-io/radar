@@ -20,6 +20,11 @@ const (
 	legacyTaintMismatch = "couldn't assign flavors to pod set main: untolerated taint {spot true NoSchedule <nil>} in flavor spot"
 	legacyNoGPUResource = "couldn't assign flavors to pod set main: resource nvidia.com/gpu unavailable in ClusterQueue"
 	namespaceMismatch   = "Workload namespace doesn't match ClusterQueue selector"
+	// One flavor: memory is only short now, but cpu is over the maximum, so
+	// waiting cannot make this flavor fit.
+	legacyCoRequisite = "couldn't assign flavors to pod set main: insufficient unused quota for memory in flavor default, 1Gi more needed, insufficient quota for cpu in flavor default, previously considered podsets requests (0) + current podset request (4) > maximum capacity (2)"
+	// Two PodSets: the second fits nowhere, so the Workload never fits.
+	legacyTwoPodSets = "couldn't assign flavors to pod set driver: insufficient unused quota for cpu in flavor default, 1 more needed; couldn't assign flavors to pod set workers: insufficient quota for nvidia.com/gpu in flavor a10, previously considered podsets requests (0) + current podset request (8) > maximum capacity (4)"
 )
 
 type condition struct {
@@ -34,6 +39,7 @@ type workloadSpec struct {
 	annotations map[string]string
 	conditions  []condition
 	checks      []map[string]any
+	noQueue     bool
 }
 
 func buildWorkload(spec workloadSpec) *unstructured.Unstructured {
@@ -47,6 +53,9 @@ func buildWorkload(spec workloadSpec) *unstructured.Unstructured {
 		"metadata":   map[string]any{"name": "train", "namespace": "ml"},
 		"spec":       map[string]any{"queueName": "gpu"},
 	}}
+	if spec.noQueue {
+		unstructured.RemoveNestedField(u.Object, "spec", "queueName")
+	}
 	if spec.generation != 0 {
 		u.SetGeneration(spec.generation)
 	}
@@ -114,6 +123,13 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 		disruption rc.KueueAdmissionCode
 	}{
 		{
+			name:    "no queue name and no conditions",
+			spec:    workloadSpec{noQueue: true},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoDecision,
+			blocker: rc.KueueAdmissionNoDecision,
+		},
+		{
 			name:    "no conditions yet",
 			spec:    workloadSpec{},
 			phase:   rc.KueuePhasePending,
@@ -163,6 +179,83 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionExceedsQuota,
 		},
 		{
+			name:    "a resource over the maximum rules out the flavor even when another resource is only short",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyCoRequisite)}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionExceedsQuota,
+			blocker: rc.KueueAdmissionExceedsQuota,
+		},
+		{
+			name:    "one PodSet that fits nowhere decides",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTwoPodSets)}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionExceedsQuota,
+			blocker: rc.KueueAdmissionExceedsQuota,
+		},
+		{
+			name:    "granular topology placement failure",
+			spec:    workloadSpec{conditions: []condition{pending("TopologyPlacementFailed", "cannot fit in topology")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionTopologyPlacementFailed,
+			blocker: rc.KueueAdmissionTopologyPlacementFailed,
+		},
+		{
+			name:    "DRA resources Kueue could not resolve are not blamed on the Workload",
+			spec:    workloadSpec{conditions: []condition{pending("DRAResourcesUnresolved", "failed to list ResourceSlices: timeout")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionDRAResourcesUnresolved,
+			blocker: rc.KueueAdmissionDRAResourcesUnresolved,
+		},
+		{
+			name:    "usage Kueue cannot record",
+			spec:    workloadSpec{conditions: []condition{pending("UnrecordableResourceUsage", "total exceeds the recordable maximum")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionInvalidWorkload,
+			blocker: rc.KueueAdmissionInvalidWorkload,
+		},
+		{
+			name:    "pending evaluation blocked by retrying checks (v0.20 wording)",
+			spec:    workloadSpec{conditions: []condition{pending("PendingEvaluation", "The workload has failed admission checks")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionChecksPending,
+			blocker: rc.KueueAdmissionChecksPending,
+		},
+		{
+			name: "v0.20 admitted reason for unready checks",
+			spec: workloadSpec{
+				conditions: []condition{reserved, {kind: "Admitted", status: "False", reason: "UnsatisfiedAdmissionChecks"}},
+				checks:     []map[string]any{{"name": "provision", "state": "Ready"}},
+			},
+			phase:   rc.KueuePhaseQuotaReserved,
+			state:   rc.KueueAdmissionChecksPending,
+			blocker: rc.KueueAdmissionChecksPending,
+		},
+		{
+			name: "v0.19 preemption gating wrote QuotaReserved AdmissionGated with its own message",
+			spec: workloadSpec{conditions: []condition{
+				pending("AdmissionGated", "Workload requires preemption but preemption is gated"),
+				{kind: "BlockedOnPreemptionGates", status: "True", reason: "PreemptionGated", message: "Workload could free quota by preemption but a gate is closed"},
+			}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionPreemptionGated,
+			blocker: rc.KueueAdmissionPreemptionGated,
+		},
+		{
+			name: "backoff outranks checks reset to Pending",
+			spec: workloadSpec{
+				conditions: []condition{
+					pending("Pending", "The workload has failed admission checks"),
+					{kind: "Evicted", status: "True", reason: "AdmissionCheck", message: "At least one admission check is false"},
+					{kind: "Requeued", status: "False", reason: "AdmissionCheck", message: "At least one admission check is false"},
+				},
+				checks: []map[string]any{{"name": "provision", "state": "Pending", "message": "Reset to Pending after eviction. Previously: Retry"}},
+			},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionRequeueBackoff,
+			blocker:    rc.KueueAdmissionRequeueBackoff,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
@@ -198,11 +291,11 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionLocalQueueMissing,
 		},
 		{
-			name:    "stopped LocalQueue",
+			name:    "stopped LocalQueue reads the same as inactive",
 			spec:    workloadSpec{conditions: []condition{pending("Suspended", "LocalQueue gpu is stopped")}},
 			phase:   rc.KueuePhasePending,
-			state:   rc.KueueAdmissionLocalQueueStopped,
-			blocker: rc.KueueAdmissionLocalQueueStopped,
+			state:   rc.KueueAdmissionLocalQueueInactive,
+			blocker: rc.KueueAdmissionLocalQueueInactive,
 		},
 		{
 			name:    "inactive LocalQueue",
@@ -226,11 +319,11 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionClusterQueueInactive,
 		},
 		{
-			name:    "stopped ClusterQueue",
+			name:    "stopped ClusterQueue in the Workload controller's wording",
 			spec:    workloadSpec{conditions: []condition{pending("Suspended", "ClusterQueue gpu-team is stopped")}},
 			phase:   rc.KueuePhasePending,
-			state:   rc.KueueAdmissionClusterQueueStopped,
-			blocker: rc.KueueAdmissionClusterQueueStopped,
+			state:   rc.KueueAdmissionClusterQueueInactive,
+			blocker: rc.KueueAdmissionClusterQueueInactive,
 		},
 		{
 			name:    "namespace not eligible (v0.18)",
@@ -393,14 +486,77 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			inactive: rc.KueueAdmissionDeactivated,
 		},
 		{
-			name: "deactivated and evicted by Kueue",
+			name: "deactivated by Kueue after a rejected check",
 			spec: workloadSpec{active: boolPtr(false), conditions: []condition{
 				pending("Pending", "The workload is deactivated due to Admission check(s): [capacity], were in the Rejected state"),
 				{kind: "Evicted", status: "True", reason: "DeactivatedDueToAdmissionCheck", message: "The workload is deactivated due to Admission check(s): [capacity], were in the Rejected state"},
 			}},
 			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionDeactivatedByKueue,
+			inactive:   rc.KueueAdmissionDeactivatedByKueue,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name: "deactivated by Kueue at the requeuing limit",
+			spec: workloadSpec{active: boolPtr(false), conditions: []condition{
+				{kind: "Evicted", status: "True", reason: "DeactivatedDueToRequeuingLimitExceeded", message: "The workload is deactivated due to exceeding the maximum number of re-queuing retries"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionDeactivatedByKueue,
+			inactive:   rc.KueueAdmissionDeactivatedByKueue,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name: "deactivated by a person and acknowledged",
+			spec: workloadSpec{active: boolPtr(false), conditions: []condition{
+				{kind: "Evicted", status: "True", reason: "Deactivated", message: "The workload is deactivated"},
+			}},
+			phase:      rc.KueuePhasePending,
 			state:      rc.KueueAdmissionDeactivated,
 			inactive:   rc.KueueAdmissionDeactivated,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name: "spec.active false while Kueue's own target is still set",
+			spec: workloadSpec{active: boolPtr(false), conditions: []condition{
+				{kind: "DeactivationTarget", status: "True", reason: "MaximumExecutionTimeExceeded", message: "exceeding the maximum execution time"},
+			}},
+			phase:    rc.KueuePhasePending,
+			state:    rc.KueueAdmissionDeactivatedByKueue,
+			inactive: rc.KueueAdmissionDeactivatedByKueue,
+		},
+		{
+			name: "right after an eviction QuotaReserved carries the eviction message",
+			spec: workloadSpec{conditions: []condition{
+				pending("Pending", "Preempted to accommodate a workload"),
+				{kind: "Evicted", status: "True", reason: "Preempted", message: "Preempted to accommodate a workload"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionPreempted,
+			blocker:    rc.KueueAdmissionUnrecognized,
+			disruption: rc.KueueAdmissionPreempted,
+		},
+		{
+			name: "pending evaluation right after an eviction",
+			spec: workloadSpec{conditions: []condition{
+				pending("PendingEvaluation", "Workload is pending evaluation in the scheduling queue"),
+				{kind: "Evicted", status: "True", reason: "ClusterQueueStopped", message: "The ClusterQueue is stopped"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionEvicted,
+			blocker:    rc.KueueAdmissionNoDecision,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name: "reactivated with the old QuotaReserved unchanged",
+			spec: workloadSpec{active: boolPtr(true), conditions: []condition{
+				pending("Pending", "The workload is deactivated"),
+				{kind: "Evicted", status: "True", reason: "Deactivated", message: "The workload is deactivated"},
+				{kind: "Requeued", status: "True", reason: "Reactivated", message: "The workload was reactivated"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionEvicted,
+			blocker:    rc.KueueAdmissionUnrecognized,
 			disruption: rc.KueueAdmissionEvicted,
 		},
 		{
@@ -545,25 +701,35 @@ func TestClassifyKueueWorkloadKeepsNativeEvidence(t *testing.T) {
 }
 
 func TestClassifyKueueWorkloadStaleEvidence(t *testing.T) {
-	t.Run("stale negative condition is not a confident blocker", func(t *testing.T) {
+	t.Run("stale negative condition is not a confirmed blocker", func(t *testing.T) {
 		quota := pending("Pending", legacyUnusedQuota)
 		quota.observedGeneration = 1
 		got := classify(t, workloadSpec{generation: 2, conditions: []condition{quota}}).Admission
-		if got.State != rc.KueueAdmissionStale || got.Blocker == nil || got.Blocker.Code != rc.KueueAdmissionInsufficientQuota || !got.Blocker.Stale {
+		if got.State != rc.KueueAdmissionInsufficientQuota || !got.Stale || got.Blocker == nil || !got.Blocker.Stale {
 			t.Fatalf("admission = %+v", got)
 		}
 	})
-	t.Run("stale positive condition is not a confident admission", func(t *testing.T) {
+	t.Run("stale positive condition is not a confirmed admission", func(t *testing.T) {
+		// Kueue rewrites spec.priority when a WorkloadPriorityClass changes and
+		// leaves Admitted untouched; the code survives, flagged as last reported.
 		quota, admit := reserved, admitted
 		quota.observedGeneration, admit.observedGeneration = 2, 2
 		got := classify(t, workloadSpec{generation: 3, conditions: []condition{quota, admit}}).Admission
-		if got.State != rc.KueueAdmissionStale {
+		if got.State != rc.KueueAdmissionAdmitted || !got.Stale || got.Attention != rc.KueueAttentionNone {
+			t.Fatalf("admission = %+v", got)
+		}
+	})
+	t.Run("a stale reservation makes the blocker it selected stale", func(t *testing.T) {
+		quota := reserved
+		quota.observedGeneration = 1
+		got := classify(t, workloadSpec{generation: 2, conditions: []condition{quota}, checks: []map[string]any{{"name": "provision", "state": "Pending"}}}).Admission
+		if got.State != rc.KueueAdmissionChecksPending || !got.Stale {
 			t.Fatalf("admission = %+v", got)
 		}
 	})
 	t.Run("stale finish", func(t *testing.T) {
 		got := classify(t, workloadSpec{generation: 4, conditions: []condition{{kind: "Finished", status: "True", reason: "Succeeded", observedGeneration: 3}}}).Admission
-		if got.State != rc.KueueAdmissionStale {
+		if got.State != rc.KueueAdmissionFinished || !got.Stale {
 			t.Fatalf("admission = %+v", got)
 		}
 	})
@@ -571,20 +737,64 @@ func TestClassifyKueueWorkloadStaleEvidence(t *testing.T) {
 		got := classify(t, workloadSpec{generation: 3, active: boolPtr(false), conditions: []condition{
 			{kind: "Evicted", status: "True", reason: "Preempted", observedGeneration: 2},
 		}}).Admission
-		if got.State != rc.KueueAdmissionDeactivated || got.Disruption == nil || !got.Disruption.Stale {
+		if got.State != rc.KueueAdmissionDeactivated || got.Stale || got.Disruption == nil || !got.Disruption.Stale {
 			t.Fatalf("admission = %+v", got)
 		}
 	})
 	t.Run("current generation and unreported generation are not stale", func(t *testing.T) {
 		quota := pending("Pending", legacyUnusedQuota)
 		quota.observedGeneration = 2
-		if got := classify(t, workloadSpec{generation: 2, conditions: []condition{quota}}).Admission; got.State != rc.KueueAdmissionInsufficientQuota || got.Blocker.Stale {
+		if got := classify(t, workloadSpec{generation: 2, conditions: []condition{quota}}).Admission; got.Stale || got.Blocker.Stale {
 			t.Fatalf("current generation = %+v", got)
 		}
-		if got := classify(t, workloadSpec{generation: 2, conditions: []condition{pending("Pending", legacyUnusedQuota)}}).Admission; got.State != rc.KueueAdmissionInsufficientQuota {
+		if got := classify(t, workloadSpec{generation: 2, conditions: []condition{pending("Pending", legacyUnusedQuota)}}).Admission; got.Stale {
 			t.Fatalf("unreported generation = %+v", got)
 		}
 	})
+}
+
+func TestClassifyKueueWorkloadAttention(t *testing.T) {
+	for _, test := range []struct {
+		spec      workloadSpec
+		attention rc.KueueAttention
+	}{
+		{workloadSpec{conditions: []condition{reserved, admitted}}, rc.KueueAttentionNone},
+		{workloadSpec{conditions: []condition{pending("Pending", legacyUnusedQuota)}}, rc.KueueAttentionWaiting},
+		{workloadSpec{active: boolPtr(false)}, rc.KueueAttentionPaused},
+		{workloadSpec{conditions: []condition{pending("Inadmissible", "LocalQueue gpu doesn't exist")}}, rc.KueueAttentionActionNeeded},
+		{workloadSpec{conditions: []condition{pending("Inadmissible", "ClusterQueue gpu-team is inactive")}}, rc.KueueAttentionUnknown},
+		{workloadSpec{conditions: []condition{pending("SomethingNew", "x")}}, rc.KueueAttentionUnknown},
+	} {
+		if got := classify(t, test.spec).Admission; got.Attention != test.attention {
+			t.Errorf("state %s attention = %s, want %s", got.State, got.Attention, test.attention)
+		}
+	}
+}
+
+func TestEveryAdmissionCodeHasAnAttentionClass(t *testing.T) {
+	// unrecognized and the queue-inactive codes are deliberately unknown; any
+	// other code falling through to the default was forgotten.
+	deliberatelyUnknown := map[rc.KueueAdmissionCode]bool{
+		rc.KueueAdmissionUnrecognized: true, rc.KueueAdmissionLocalQueueInactive: true, rc.KueueAdmissionClusterQueueInactive: true,
+		rc.KueueAdmissionDRAResourcesUnresolved: true,
+	}
+	for _, code := range allAdmissionCodes {
+		if got := attention(code); got == rc.KueueAttentionUnknown && !deliberatelyUnknown[code] {
+			t.Errorf("code %s has no attention class", code)
+		}
+	}
+}
+
+var allAdmissionCodes = []rc.KueueAdmissionCode{
+	rc.KueueAdmissionFinished, rc.KueueAdmissionAdmitted, rc.KueueAdmissionQuotaReserved,
+	rc.KueueAdmissionDeactivated, rc.KueueAdmissionDeactivatedByKueue, rc.KueueAdmissionDeactivationPending, rc.KueueAdmissionOnHold,
+	rc.KueueAdmissionNoDecision, rc.KueueAdmissionInsufficientQuota, rc.KueueAdmissionExceedsQuota, rc.KueueAdmissionNoMatchingFlavor,
+	rc.KueueAdmissionTopologyPlacementFailed, rc.KueueAdmissionWaitingForPreemption, rc.KueueAdmissionPreemptionGated,
+	rc.KueueAdmissionAdmissionGated, rc.KueueAdmissionNamespaceNotEligible, rc.KueueAdmissionLocalQueueMissing,
+	rc.KueueAdmissionLocalQueueInactive, rc.KueueAdmissionClusterQueueMissing, rc.KueueAdmissionClusterQueueInactive,
+	rc.KueueAdmissionCheckRejected, rc.KueueAdmissionChecksPending, rc.KueueAdmissionTopologyAssignmentPending,
+	rc.KueueAdmissionWaitingForPodsReady, rc.KueueAdmissionRequeueBackoff, rc.KueueAdmissionInvalidWorkload, rc.KueueAdmissionDRAResourcesUnresolved,
+	rc.KueueAdmissionUnrecognized, rc.KueueAdmissionPreempted, rc.KueueAdmissionPodsReadyTimeout, rc.KueueAdmissionEvicted,
 }
 
 func TestClassifyKueueWorkloadPreservesExistingDecision(t *testing.T) {
@@ -620,5 +830,22 @@ func TestClassifyKueueWorkloadRejectsOtherObjects(t *testing.T) {
 	}
 	if _, ok := ClassifyKueueWorkload(&corev1.Pod{}); ok {
 		t.Fatal("typed object was classified")
+	}
+}
+
+func TestPrimaryConditionFollowsTheCurrentAttempt(t *testing.T) {
+	lingering := buildWorkload(workloadSpec{conditions: []condition{
+		pending("Inadmissible", "LocalQueue gpu doesn't exist"),
+		{kind: "BlockedOnPreemptionGates", status: "True", reason: "PreemptionGated", message: legacyUnusedQuota},
+	}})
+	if primary := onlyObservation(t, ForResource(lingering, rc.TierBasic)).PrimaryCondition; primary == nil || primary.Type != "QuotaReserved" {
+		t.Fatalf("lingering preemption gate became the primary condition: %+v", primary)
+	}
+	withChecks := buildWorkload(workloadSpec{conditions: []condition{
+		pending("Pending", legacyUnusedQuota),
+		{kind: "Admitted", status: "False", reason: "NoReservationUnsatisfiedChecks", message: "The workload has no reservation and not all checks ready"},
+	}})
+	if primary := onlyObservation(t, ForResource(withChecks, rc.TierBasic)).PrimaryCondition; primary == nil || primary.Type != "QuotaReserved" {
+		t.Fatalf("generic NoReservationUnsatisfiedChecks hid the quota reason: %+v", primary)
 	}
 }

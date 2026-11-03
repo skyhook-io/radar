@@ -85,24 +85,28 @@ describe('Kueue admission investigation', () => {
   })
 
   it('shows the server-classified admission state instead of the generic qualifier', () => {
-    const html = render(response({ decision: 'unsatisfied', kueue: { phase: 'pending', admission: { state: 'local_queue_missing', blocker: { code: 'local_queue_missing', source: 'condition', name: 'QuotaReserved', reason: 'Inadmissible', message: "LocalQueue gpu doesn't exist" } } } }))
+    const html = render(response({ decision: 'unsatisfied', kueue: { phase: 'pending', admission: { state: 'local_queue_missing', attention: 'action_needed', blocker: { code: 'local_queue_missing', source: 'condition', name: 'QuotaReserved', reason: 'Inadmissible', message: "LocalQueue gpu doesn't exist" } } } }))
     expect(html).toContain('Pending admission')
     expect(html).toContain('LocalQueue missing')
   })
 
   it('names an unrecognized reason verbatim and renders unknown codes as sent', () => {
-    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'unrecognized', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'SomethingNew' } } } })))
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'unrecognized', attention: 'unknown', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'SomethingNew' } } } })))
       .toContain('Unrecognized reason: <code>SomethingNew</code>')
-    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'a_future_code' } } }))).toContain('a_future_code')
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'a_future_code', attention: 'a_future_class' } } }))).toContain('a_future_code')
   })
 
   it('does not repeat states the phase and inactive badges already show', () => {
-    const admitted = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted' } } }))
+    const admitted = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none' } } }))
     expect(admitted.match(/>Admitted</g)).toHaveLength(1)
-    const deactivated = render(response({ decision: 'held', kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
+    const deactivated = render(response({ decision: 'held', kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
     expect(deactivated).toContain('Workload inactive')
     expect(deactivated).not.toContain('Deactivated')
     expect(deactivated).not.toContain('Admission held')
+  })
+
+  it('marks a stale state as last reported, even for a phase-like code', () => {
+    expect(render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none', stale: true } } }))).toContain('Admitted (stale)')
   })
 
   it('keeps the generic qualifier when an older Radar sends no admission state', () => {

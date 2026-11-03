@@ -62,6 +62,8 @@ export interface KueueAdmissionFact {
 
 export interface KueueAdmissionState {
   state: string
+  attention: string
+  stale?: boolean
   inactive?: KueueAdmissionFact
   blocker?: KueueAdmissionFact
   disruption?: KueueAdmissionFact

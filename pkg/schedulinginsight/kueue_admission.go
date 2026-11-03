@@ -1,6 +1,7 @@
 package schedulinginsight
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
@@ -41,25 +42,77 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 		}
 	}
 
-	stale := false
+	decided := (*rc.KueueAdmissionFact)(nil)
 	switch {
 	case phase == rc.KueuePhaseFinished:
-		state.State, stale = rc.KueueAdmissionFinished, c.staleCondition("Finished")
+		state.State, state.Stale = rc.KueueAdmissionFinished, c.staleCondition("Finished")
 	case state.Inactive != nil:
-		state.State, stale = state.Inactive.Code, state.Inactive.Stale
-	case state.Blocker != nil:
-		state.State, stale = state.Blocker.Code, state.Blocker.Stale
+		decided = state.Inactive
+	case state.Blocker != nil && (state.Disruption == nil || !uninformativeBlocker(state.Blocker.Code)):
+		decided = state.Blocker
 	case state.Disruption != nil:
-		state.State, stale = state.Disruption.Code, state.Disruption.Stale
+		decided = state.Disruption
 	case phase == rc.KueuePhaseAdmitted:
-		state.State, stale = rc.KueueAdmissionAdmitted, c.staleCondition("Admitted")
+		state.State, state.Stale = rc.KueueAdmissionAdmitted, c.staleCondition("Admitted")
 	default:
-		state.State, stale = rc.KueueAdmissionQuotaReserved, c.staleCondition("QuotaReserved")
+		state.State, state.Stale = rc.KueueAdmissionQuotaReserved, c.staleCondition("QuotaReserved")
 	}
-	if stale {
-		state.State = rc.KueueAdmissionStale
+	if decided != nil {
+		state.State, state.Stale = decided.Code, decided.Stale
+		// The phase chose which blocker rules applied, so a stale
+		// QuotaReserved makes any blocker it led to stale too.
+		if decided == state.Blocker && c.staleCondition("QuotaReserved") {
+			state.Stale = true
+		}
 	}
+	state.Attention = attention(state.State)
 	return state
+}
+
+// preemptionGateIsCurrent reports whether BlockedOnPreemptionGates explains
+// the current attempt. Kueue writes it together with QuotaReserved (v0.18
+// with the same message, v0.19 with QuotaReserved reason AdmissionGated) and
+// leaves it True after later attempts rewrite QuotaReserved for another
+// reason. With AdmissionGated it outranks the admission-gated-by annotation,
+// matching workloadDecision.
+func preemptionGateIsCurrent(conditions map[string]workloadCondition) bool {
+	gate, ok := trueCondition(conditions, "BlockedOnPreemptionGates")
+	if !ok {
+		return false
+	}
+	quota, ok := conditions["QuotaReserved"]
+	if !ok || quota.Status != "False" {
+		return false
+	}
+	return quota.Reason == "PreemptionGated" || gate.Message == quota.Message ||
+		quota.Reason == "AdmissionGated"
+}
+
+// uninformativeBlocker is what Kueue writes into QuotaReserved right after an
+// eviction (the eviction message, or pending evaluation); the eviction itself
+// says more until the scheduler reports a real reason.
+func uninformativeBlocker(code rc.KueueAdmissionCode) bool {
+	return code == rc.KueueAdmissionNoDecision || code == rc.KueueAdmissionUnrecognized
+}
+
+func attention(code rc.KueueAdmissionCode) rc.KueueAttention {
+	switch code {
+	case rc.KueueAdmissionAdmitted, rc.KueueAdmissionQuotaReserved, rc.KueueAdmissionFinished:
+		return rc.KueueAttentionNone
+	case rc.KueueAdmissionDeactivated, rc.KueueAdmissionOnHold:
+		return rc.KueueAttentionPaused
+	case rc.KueueAdmissionNoDecision, rc.KueueAdmissionInsufficientQuota, rc.KueueAdmissionTopologyPlacementFailed,
+		rc.KueueAdmissionWaitingForPreemption, rc.KueueAdmissionPreemptionGated, rc.KueueAdmissionAdmissionGated,
+		rc.KueueAdmissionChecksPending, rc.KueueAdmissionTopologyAssignmentPending, rc.KueueAdmissionWaitingForPodsReady,
+		rc.KueueAdmissionRequeueBackoff, rc.KueueAdmissionPreempted, rc.KueueAdmissionPodsReadyTimeout, rc.KueueAdmissionEvicted:
+		return rc.KueueAttentionWaiting
+	case rc.KueueAdmissionExceedsQuota, rc.KueueAdmissionNoMatchingFlavor, rc.KueueAdmissionNamespaceNotEligible,
+		rc.KueueAdmissionLocalQueueMissing, rc.KueueAdmissionClusterQueueMissing, rc.KueueAdmissionCheckRejected,
+		rc.KueueAdmissionDeactivationPending, rc.KueueAdmissionDeactivatedByKueue, rc.KueueAdmissionInvalidWorkload:
+		return rc.KueueAttentionActionNeeded
+	default:
+		return rc.KueueAttentionUnknown
+	}
 }
 
 type classifier struct {
@@ -90,6 +143,15 @@ func (c classifier) conditionFact(code rc.KueueAdmissionCode, condition workload
 
 func (c classifier) inactive() *rc.KueueAdmissionFact {
 	if active, found, _ := unstructured.NestedBool(c.u.Object, "spec", "active"); found && !active {
+		// Kueue records its own cause as DeactivationTarget until it flips
+		// spec.active, then as the Evicted reason DeactivatedDueTo<Cause>; a
+		// plain Deactivated eviction is someone else's change.
+		if target, ok := trueCondition(c.conditions, "DeactivationTarget"); ok {
+			return c.conditionFact(rc.KueueAdmissionDeactivatedByKueue, target)
+		}
+		if evicted, ok := trueCondition(c.conditions, "Evicted"); ok && strings.HasPrefix(evicted.Reason, "DeactivatedDueTo") {
+			return c.conditionFact(rc.KueueAdmissionDeactivatedByKueue, evicted)
+		}
 		return &rc.KueueAdmissionFact{Code: rc.KueueAdmissionDeactivated, Source: rc.KueueFactSourceSpec, Name: "active"}
 	}
 	if target, ok := trueCondition(c.conditions, "DeactivationTarget"); ok {
@@ -174,9 +236,7 @@ func (c classifier) reservedBlocker(checks []checkState) *rc.KueueAdmissionFact 
 }
 
 func (c classifier) quotaBlockerCode(quota workloadCondition) rc.KueueAdmissionCode {
-	if gate, ok := trueCondition(c.conditions, "BlockedOnPreemptionGates"); ok && gate.Message == quota.Message {
-		// The scheduler writes both conditions with one message; later attempts
-		// rewrite QuotaReserved but leave the gate condition True.
+	if preemptionGateIsCurrent(c.conditions) {
 		return rc.KueueAdmissionPreemptionGated
 	}
 	switch quota.Reason {
@@ -193,10 +253,16 @@ func (c classifier) quotaBlockerCode(quota workloadCondition) rc.KueueAdmissionC
 	case "PreemptionGated":
 		return rc.KueueAdmissionPreemptionGated
 	case "PendingEvaluation":
+		// The scheduler also uses it when Retry checks block nomination.
+		if code := messageBlockerCode(quota.Message); code == rc.KueueAdmissionChecksPending {
+			return code
+		}
 		return rc.KueueAdmissionNoDecision
 	case "Waiting", "WaitingForPodsReady":
 		return rc.KueueAdmissionWaitingForPodsReady
-	case "DRAResourcesUnresolved", "UnrecordableResourceUsage":
+	case "DRAResourcesUnresolved":
+		return rc.KueueAdmissionDRAResourcesUnresolved
+	case "UnrecordableResourceUsage":
 		return rc.KueueAdmissionInvalidWorkload
 	case "AdmissionGated":
 		if c.u.GetAnnotations()[admissionGatedByAnnotation] != "" {
@@ -221,9 +287,9 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 	case strings.Contains(message, "namespace doesn't match ClusterQueue selector"):
 		return rc.KueueAdmissionNamespaceNotEligible
 	case strings.HasPrefix(message, "LocalQueue "):
-		return queueMessageCode(message, rc.KueueAdmissionLocalQueueMissing, rc.KueueAdmissionLocalQueueStopped, rc.KueueAdmissionLocalQueueInactive)
+		return queueMessageCode(message, rc.KueueAdmissionLocalQueueMissing, rc.KueueAdmissionLocalQueueInactive)
 	case strings.HasPrefix(message, "ClusterQueue "):
-		return queueMessageCode(message, rc.KueueAdmissionClusterQueueMissing, rc.KueueAdmissionClusterQueueStopped, rc.KueueAdmissionClusterQueueInactive)
+		return queueMessageCode(message, rc.KueueAdmissionClusterQueueMissing, rc.KueueAdmissionClusterQueueInactive)
 	case strings.Contains(message, "has failed admission checks"):
 		return rc.KueueAdmissionChecksPending
 	case strings.Contains(message, "waiting for all admitted workloads to be in PodsReady condition"):
@@ -233,27 +299,72 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 	case strings.HasPrefix(message, "resources validation failed"), strings.HasPrefix(message, "resources didn't satisfy LimitRange constraints"):
 		return rc.KueueAdmissionInvalidWorkload
 	}
-	// A flavor-assignment message joins one clause per flavor and resource
-	// across PodSets. Claiming the Workload can never fit needs every quota
-	// clause to say so, so any clause that could fit later wins.
+	return flavorAssignmentCode(message)
+}
+
+var (
+	unusedQuotaClause = regexp.MustCompile(`insufficient unused quota for \S+ in flavor (\S+?),`)
+	maxQuotaClause    = regexp.MustCompile(`insufficient quota for \S+ in flavor (\S+?),`)
+	taintClause       = regexp.MustCompile(`untolerated taint .* in flavor (\S+?)(?:,|$)`)
+	affinityClause    = regexp.MustCompile(`flavor (\S+) doesn't match node affinity`)
+)
+
+// flavorAssignmentCode reads a scheduler flavor-assignment message: one
+// "couldn't assign flavors to pod set" segment per PodSet that did not fit,
+// listing clauses per flavor and resource. A flavor could fit later only if
+// its only clauses are about unused quota; a resource over the maximum or a
+// taint or affinity mismatch rules that flavor out. Every PodSet must fit, so
+// one PodSet with no flavor that could fit later decides the code.
+func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
+	segments := strings.Split(message, "; couldn't assign flavors to pod set ")
+	sawQuota, sawFlavorMismatch := false, false
+	neverFits := rc.KueueAdmissionCode("")
+	for _, segment := range segments {
+		waiting := map[string]bool{}
+		for _, match := range unusedQuotaClause.FindAllStringSubmatch(segment, -1) {
+			waiting[match[1]] = true
+		}
+		ruledOut := map[string]bool{}
+		exceeded := false
+		for _, match := range maxQuotaClause.FindAllStringSubmatch(segment, -1) {
+			ruledOut[match[1]], exceeded = true, true
+		}
+		mismatch := strings.Contains(segment, "unavailable in ClusterQueue")
+		for _, pattern := range []*regexp.Regexp{taintClause, affinityClause} {
+			for _, match := range pattern.FindAllStringSubmatch(segment, -1) {
+				ruledOut[match[1]], mismatch = true, true
+			}
+		}
+		sawQuota = sawQuota || exceeded || len(waiting) > 0
+		sawFlavorMismatch = sawFlavorMismatch || mismatch
+		couldFit := false
+		for flavor := range waiting {
+			couldFit = couldFit || !ruledOut[flavor]
+		}
+		switch {
+		case couldFit:
+		case exceeded:
+			neverFits = rc.KueueAdmissionExceedsQuota
+		case mismatch && neverFits == "":
+			neverFits = rc.KueueAdmissionNoMatchingFlavor
+		}
+	}
 	switch {
-	case strings.Contains(message, "insufficient unused quota"):
+	case neverFits != "":
+		return neverFits
+	case sawQuota:
 		return rc.KueueAdmissionInsufficientQuota
-	case strings.Contains(message, "insufficient quota"):
-		return rc.KueueAdmissionExceedsQuota
-	case strings.Contains(message, "untolerated taint"), strings.Contains(message, "doesn't match node affinity"), strings.Contains(message, "unavailable in ClusterQueue"):
+	case sawFlavorMismatch:
 		return rc.KueueAdmissionNoMatchingFlavor
 	}
 	return ""
 }
 
-func queueMessageCode(message string, missing, stopped, inactive rc.KueueAdmissionCode) rc.KueueAdmissionCode {
+func queueMessageCode(message string, missing, inactive rc.KueueAdmissionCode) rc.KueueAdmissionCode {
 	switch {
 	case strings.HasSuffix(message, " doesn't exist"), strings.HasSuffix(message, " not found"), strings.HasSuffix(message, " is terminating or missing"):
 		return missing
-	case strings.HasSuffix(message, " is stopped"):
-		return stopped
-	case strings.HasSuffix(message, " is inactive"):
+	case strings.HasSuffix(message, " is stopped"), strings.HasSuffix(message, " is inactive"):
 		return inactive
 	}
 	return ""

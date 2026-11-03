@@ -220,11 +220,11 @@ func primaryCondition(conditions map[string]workloadCondition, inactive bool) *r
 			return conditionSummaryIfPresent(conditions, "DeactivationTarget", maxPrimaryMessageBytes)
 		}
 	}
-	if _, ok := trueCondition(conditions, "BlockedOnPreemptionGates"); ok {
+	if preemptionGateIsCurrent(conditions) {
 		return conditionSummaryIfPresent(conditions, "BlockedOnPreemptionGates", maxPrimaryMessageBytes)
 	}
 	if admitted, ok := conditions["Admitted"]; ok {
-		if admitted.Status == "False" && admitted.Reason == "NoReservation" {
+		if admitted.Status == "False" && strings.HasPrefix(admitted.Reason, "NoReservation") {
 			if _, hasQuota := conditions["QuotaReserved"]; hasQuota {
 				return conditionSummaryIfPresent(conditions, "QuotaReserved", maxPrimaryMessageBytes)
 			}

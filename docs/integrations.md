@@ -1783,51 +1783,74 @@ v1beta2-only fields such as preemption gates are simply absent on v1beta1.
 
 `kueue.admission` sorts what the Workload's own status reports into separate
 axes, so every surface describes a Workload's admission state the same way.
-`schedulinginsight.ClassifyKueueWorkload` is the only place the codes are
-decided; Go consumers that list Workloads call it per object, and the UI only
-maps codes to labels (`kueueAdmissionStatePresentation` in k8s-ui), rendering a
-code it does not know verbatim. It is not a causal diagnosis: queues,
-namespaces and AdmissionChecks appear as the Workload names them and are never
-read, so "LocalQueue missing" is the Workload's report, not a NotFound Radar
-observed.
+`schedulinginsight.ClassifyKueueWorkload` is the only place the codes and their
+attention class are decided; Go consumers that list Workloads call it per
+object, and the UI only maps codes to labels (`kueueAdmissionStatePresentation`
+in k8s-ui), rendering a code it does not know verbatim. It is not a causal
+diagnosis: queues, namespaces and AdmissionChecks appear as the Workload names
+them and are never read, so "LocalQueue missing" is the Workload's report, not
+a NotFound Radar observed.
 
 | Axis | Codes | Evidence |
 |------|-------|----------|
-| lifecycle | `kueue.phase`: `pending`, `quota_reserved`, `admitted`, `finished` | conditions |
-| `inactive`: withdrawn from admission, not waiting | `deactivated` (`spec.active=false`), `deactivation_pending` (`DeactivationTarget=True`, cause in its reason), `on_hold` | spec or condition |
-| `blocker`: why a Workload still competing is not admitted | `no_decision`, `insufficient_quota`, `exceeds_quota`, `no_matching_flavor`, `topology_placement_failed`, `waiting_for_preemption`, `preemption_gated`, `admission_gated`, `namespace_not_eligible`, `local_queue_missing` / `_stopped` / `_inactive`, `cluster_queue_missing` / `_stopped` / `_inactive`, `admission_check_rejected`, `admission_checks_pending`, `topology_assignment_pending`, `waiting_for_pods_ready`, `requeue_backoff`, `invalid_workload`, `unrecognized` | condition or AdmissionCheck |
-| `disruption`: a current eviction | `preempted`, `pods_ready_timeout`, `evicted` | `Evicted` / `Preempted` condition |
+| lifecycle | `kueue.phase`: `pending`, `quota_reserved`, `admitted`, `finished` (result in `kueue.outcome`) | conditions |
+| `inactive`: withdrawn from admission, not waiting | `deactivated` (`spec.active=false`, no cause recorded by Kueue), `deactivated_by_kueue` (cause in the fact's reason: a rejected AdmissionCheck, the requeuing limit, the maximum execution time), `deactivation_pending` (`DeactivationTarget=True`, `spec.active` not yet false), `on_hold` (Kueue v0.20+) | spec or condition |
+| `blocker`: why a Workload still competing is not admitted | `no_decision`, `insufficient_quota`, `exceeds_quota`, `no_matching_flavor`, `topology_placement_failed`, `waiting_for_preemption`, `preemption_gated`, `admission_gated`, `namespace_not_eligible`, `local_queue_missing`, `local_queue_inactive`, `cluster_queue_missing`, `cluster_queue_inactive`, `admission_check_rejected`, `admission_checks_pending`, `topology_assignment_pending`, `waiting_for_pods_ready`, `requeue_backoff`, `dra_resources_unresolved`, `invalid_workload`, `unrecognized` | condition or AdmissionCheck |
+| `disruption`: an eviction not yet followed by a new quota reservation | `preempted`, `pods_ready_timeout`, `evicted` | `Evicted` / `Preempted` condition |
 
 `state` is the one code to group or count by: `finished`, else the inactive
 code, else the blocker code, else the disruption code (an eviction still
 releasing quota), else `admitted` or `quota_reserved`. A preempted Workload
-waiting for quota therefore reads `insufficient_quota`, with `preempted` kept
-as its disruption. `state` becomes `stale` when the evidence that decided it
-has an `observedGeneration` behind `metadata.generation`; each condition fact
-also carries its own `stale` flag. Spec facts are current by definition; Kueue
-records no generation for an AdmissionCheck state, so its freshness is not
-established.
+waiting for quota reads `insufficient_quota`, with `preempted` kept as its
+disruption; a disruption does outrank a `no_decision` or `unrecognized`
+blocker, which is what Kueue writes right after an eviction.
+
+`attention` classifies `state`: `none` (reserved, admitted, finished),
+`waiting` (normal waiting another controller resolves), `paused` (withdrawn on
+purpose), `action_needed` (will not be admitted until someone changes the
+Workload, its queue or quota), or `unknown` (the Workload alone cannot tell,
+such as an inactive queue that may be stopped on purpose). It is not a
+severity: how long waiting may last before it is a problem is the consumer's
+call. Consumers pick their population from the axes: Workloads awaiting
+admission are those whose `phase` is not `admitted` or `finished` and that
+have no `inactive` fact.
+
+`stale` marks a `state` decided by evidence written for an earlier
+`metadata.generation`: the last reported state, not a confirmed current one.
+Kueue does not rewrite conditions on every spec change (a WorkloadPriorityClass
+update rewrites `spec.priority` and leaves `Admitted` alone), so a stale
+`admitted` is usually still admitted, but Radar does not claim it. Each
+condition fact also carries its own `stale` flag; spec facts are current by
+definition, and Kueue records no generation for an AdmissionCheck state, so its
+freshness is not established.
 
 Each fact keeps its native evidence (`source`, `name`, `reason`, `message`).
 `unrecognized` is a reason Radar has no code for; the native reason and message
 are what to show. Rules that keep the axes honest:
 
-- A rejected AdmissionCheck is the blocker `admission_check_rejected`; it
-  becomes inactive only once Kueue sets `DeactivationTarget` or `spec.active`
-  turns false. Kueue's acknowledgment of a deactivation is the separate
-  `Evicted` disruption with a `Deactivated…` reason.
+- A rejected AdmissionCheck is the blocker `admission_check_rejected`, usually
+  briefly: Kueue then sets `DeactivationTarget` (`deactivation_pending`) and
+  `spec.active=false` (`deactivated_by_kueue`, with the cause from the
+  `Evicted` reason `DeactivatedDueTo…`).
 - An inactive or stopped ClusterQueue or LocalQueue is a blocker, not an
-  inactive Workload. `cluster_queue_inactive` can be a stop policy or broken
-  configuration; the Workload alone does not say which.
+  inactive Workload. Kueue words a stopped queue as either "is stopped" or
+  "is inactive" depending on which of its writers ran last, so both read
+  `cluster_queue_inactive` / `local_queue_inactive`; telling a stop policy from
+  broken configuration needs a read of the queue.
 - While pending, only the `QuotaReserved` condition decides the blocker:
   Kueue resets check states to `Pending` on eviction, and `Admitted=False
-  NoReservation` only restates the missing reservation. Kueue's coarse reasons
-  (`Pending`, `Inadmissible`, `Misconfigured`, `Suspended`) carry the cause in
-  their message, which is matched against Kueue's own wording; a quota message
-  reads `exceeds_quota` only when no clause could fit later.
-- `BlockedOnPreemptionGates=True` is the blocker only while its message matches
-  the current `QuotaReserved` message: later scheduling attempts rewrite
-  `QuotaReserved` but leave the gate condition set.
+  NoReservation…` only restates the missing reservation. Kueue's coarse reasons
+  (`Pending`, `Inadmissible`, `Misconfigured`, `Suspended`, and
+  `PendingEvaluation` for failed checks) carry the cause in their message,
+  which is matched against Kueue's own wording. A flavor-assignment message
+  reads `insufficient_quota` only when every PodSet has a flavor whose only
+  problem is unused quota; a request over the maximum, a taint or an affinity
+  mismatch rules a flavor out.
+- `BlockedOnPreemptionGates=True` is the blocker only while it explains the
+  current `QuotaReserved` (same message, or reason `PreemptionGated` /
+  `AdmissionGated`): later scheduling attempts rewrite `QuotaReserved` but leave
+  the gate condition set. The projection's primary condition follows the same
+  rule.
 - `Evicted` and `Preempted` reset to `False` ("Previously: …") at the next quota
   reservation, so an old failure after recovery is not a disruption.
 

@@ -205,46 +205,55 @@ export interface KueueAdmissionStatePresentation {
   severity: BadgeSeverity
 }
 
-// Presentation only: the server decides every code (pkg/schedulinginsight).
-// Normal waiting and deliberate pauses are neutral; problems in the queue or
-// Workload configuration are alerts; rejection and invalid input are errors.
-const kueueAdmissionStates: Record<string, KueueAdmissionStatePresentation> = {
-  stale: { label: 'Reported state is out of date', severity: 'neutral' },
-  finished: { label: 'Finished', severity: 'neutral' },
-  admitted: { label: 'Admitted', severity: 'success' },
-  quota_reserved: { label: 'Quota reserved', severity: 'neutral' },
-  deactivated: { label: 'Deactivated', severity: 'neutral' },
-  deactivation_pending: { label: 'Being deactivated', severity: 'warning' },
-  on_hold: { label: 'On hold', severity: 'neutral' },
-  no_decision: { label: 'Not evaluated yet', severity: 'neutral' },
-  insufficient_quota: { label: 'Waiting for quota', severity: 'neutral' },
-  exceeds_quota: { label: 'Requests exceed quota limits', severity: 'alert' },
-  no_matching_flavor: { label: 'No matching flavor', severity: 'alert' },
-  topology_placement_failed: { label: 'Topology placement failed', severity: 'warning' },
-  waiting_for_preemption: { label: 'Waiting for preempted workloads', severity: 'neutral' },
-  preemption_gated: { label: 'Preemption gated', severity: 'neutral' },
-  admission_gated: { label: 'Admission gated', severity: 'neutral' },
-  namespace_not_eligible: { label: 'Namespace not eligible', severity: 'alert' },
-  local_queue_missing: { label: 'LocalQueue missing', severity: 'alert' },
-  local_queue_stopped: { label: 'LocalQueue stopped', severity: 'neutral' },
-  local_queue_inactive: { label: 'LocalQueue inactive', severity: 'alert' },
-  cluster_queue_missing: { label: 'ClusterQueue missing', severity: 'alert' },
-  cluster_queue_stopped: { label: 'ClusterQueue stopped', severity: 'neutral' },
-  cluster_queue_inactive: { label: 'ClusterQueue inactive', severity: 'alert' },
-  admission_check_rejected: { label: 'Admission check rejected', severity: 'error' },
-  admission_checks_pending: { label: 'Waiting for admission checks', severity: 'neutral' },
-  topology_assignment_pending: { label: 'Waiting for topology assignment', severity: 'neutral' },
-  waiting_for_pods_ready: { label: "Waiting for other workloads' Pods", severity: 'neutral' },
-  requeue_backoff: { label: 'Waiting to requeue', severity: 'warning' },
-  invalid_workload: { label: 'Invalid workload', severity: 'error' },
-  unrecognized: { label: 'Unrecognized reason', severity: 'neutral' },
-  preempted: { label: 'Preempted', severity: 'warning' },
-  pods_ready_timeout: { label: 'Pods not ready in time', severity: 'warning' },
-  evicted: { label: 'Evicted', severity: 'warning' },
+// Presentation only: the server decides every code and its attention class
+// (pkg/schedulinginsight). A code or class this UI does not know renders as
+// sent, in a neutral tone.
+const kueueAdmissionLabels: Record<string, string> = {
+  finished: 'Finished',
+  admitted: 'Admitted',
+  quota_reserved: 'Quota reserved',
+  deactivated: 'Deactivated',
+  deactivated_by_kueue: 'Deactivated by Kueue',
+  deactivation_pending: 'Being deactivated',
+  on_hold: 'On hold',
+  no_decision: 'Not evaluated yet',
+  insufficient_quota: 'Waiting for quota',
+  exceeds_quota: 'Requests exceed quota limits',
+  no_matching_flavor: 'No matching flavor',
+  topology_placement_failed: 'Topology placement failed',
+  waiting_for_preemption: 'Waiting for preempted workloads',
+  preemption_gated: 'Preemption gated',
+  admission_gated: 'Admission gated',
+  namespace_not_eligible: 'Namespace not eligible',
+  local_queue_missing: 'LocalQueue missing',
+  local_queue_inactive: 'LocalQueue inactive',
+  cluster_queue_missing: 'ClusterQueue missing',
+  cluster_queue_inactive: 'ClusterQueue inactive',
+  admission_check_rejected: 'Admission check rejected',
+  admission_checks_pending: 'Waiting for admission checks',
+  topology_assignment_pending: 'Waiting for topology assignment',
+  waiting_for_pods_ready: "Waiting for other workloads' Pods",
+  requeue_backoff: 'Waiting to requeue',
+  dra_resources_unresolved: 'DRA resources unresolved',
+  invalid_workload: 'Invalid workload',
+  unrecognized: 'Unrecognized reason',
+  preempted: 'Preempted',
+  pods_ready_timeout: 'Pods not ready in time',
+  evicted: 'Evicted',
 }
 
-export function kueueAdmissionStatePresentation(code: string): KueueAdmissionStatePresentation {
-  return kueueAdmissionStates[code] ?? { label: code, severity: 'neutral' }
+const kueueAttentionSeverity: Record<string, BadgeSeverity> = {
+  none: 'neutral',
+  waiting: 'neutral',
+  paused: 'neutral',
+  action_needed: 'alert',
+  unknown: 'warning',
+}
+
+export function kueueAdmissionStatePresentation(admission: { state: string; attention?: string; stale?: boolean }): KueueAdmissionStatePresentation {
+  const label = kueueAdmissionLabels[admission.state] ?? admission.state
+  if (admission.stale) return { label: `${label} (stale)`, severity: 'neutral' }
+  return { label, severity: kueueAttentionSeverity[admission.attention ?? ''] ?? 'neutral' }
 }
 
 export function getKueueWorkloadQueueName(resource: any): string {
