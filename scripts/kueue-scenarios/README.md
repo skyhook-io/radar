@@ -119,6 +119,12 @@ whether some states appear or last:
 - The long-running pause Jobs ignore Pod disruptions (`podFailurePolicy`), so a
   node drain, consolidation or spot interruption reschedules the Pod instead of
   failing the Job and silently releasing its quota.
+- No fixture requests `nvidia.com/gpu` or any accelerator, and none may tolerate
+  `nvidia.com/gpu`: on a cluster whose autoscaler provisions GPU nodes for pods
+  that request GPUs and tolerate that taint, an admitted fixture would launch real
+  GPU capacity. Model quota scenarios with CPU, memory or a fake extended
+  resource. If a future scenario must request `nvidia.com/gpu`, keep it
+  suspended, held or quota-blocked so it never gets a Pod.
 - Finished and Failed need the busybox image to pull and run, and the evictions
   wait for their Pods to stop. The pending and blocked scenarios need no Pods,
   so node capacity doesn't affect them. Pods run as a non-root user with no
