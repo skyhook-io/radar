@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"sort"
 	"strings"
 	"sync"
@@ -10,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	topo "github.com/skyhook-io/radar/pkg/topology"

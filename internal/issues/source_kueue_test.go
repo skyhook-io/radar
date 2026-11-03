@@ -993,3 +993,81 @@ func TestKueueLiveProvisioningOutcomes(t *testing.T) {
 		t.Fatalf("rows = %v, want both provisioning runs", kueueReasons(got))
 	}
 }
+
+func TestKueueClusterQueueInventoryGapReachesTheRunPages(t *testing.T) {
+	job := kueueJob("team", "train")
+	p := newFakeKueueProvider(job, kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive), ownedBy(inactiveQueueWorkload("team", "w", "q", "gpu"), job))
+	p.gaps[kueueGroup+"/"+kueueClusterQueueKind] = issuesapi.UncheckedReasonCollectorAccessDenied
+	var gaps []issuesapi.UncheckedSource
+	related := RelatedIssues(p, RelatedIssueOptions{Namespaces: []string{"team"}, CanReadRelated: func(Ref) bool { return true }, CanReadEvidence: allowAllEvidence,
+		OnUnchecked: func(g []issuesapi.UncheckedSource) { gaps = g }}, "batch", "Job", "team", "train")
+	if len(related) != 0 || len(gaps) != 1 || gaps[0].Reason != issuesapi.UncheckedReasonCollectorAccessDenied || gaps[0].Kinds[0].Kind != kueueClusterQueueKind {
+		t.Fatalf("related = %+v gaps = %+v", related, gaps)
+	}
+}
+
+func TestKueueRunsWaitWithALocalQueueThatHasNotSettled(t *testing.T) {
+	lq := kueueLocalQueue("team", "q", "gone", "False", kueueLocalQueueClusterQueueMissing)
+	active := kueueCondition("Active", "False", kueueLocalQueueClusterQueueMissing, "Can't submit new workloads to clusterQueue", 1)
+	active["lastTransitionTime"] = time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339)
+	kueueSetConditions(lq, active)
+	w := kueueWorkload("team", "w", "q", kueueCondition("QuotaReserved", "False", "Inadmissible", "ClusterQueue gone doesn't exist", 1))
+	if reasons := kueueReasons(Compose(newFakeKueueProvider(lq, w), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})); len(reasons) != 0 {
+		t.Fatalf("rows = %v: the run raised its own row while its LocalQueue was still in its grace", reasons)
+	}
+}
+
+func TestKueueRejectedCheckIsLinkedFirst(t *testing.T) {
+	w := kueueWorkload("team", "w", "q", kueueCondition("QuotaReserved", "True", "QuotaReserved", "reserved", 1))
+	_ = unstructured.SetNestedSlice(w.Object, []any{
+		map[string]any{"name": "a", "state": "Ready"}, map[string]any{"name": "b", "state": "Ready"},
+		map[string]any{"name": "c", "state": "Ready"}, map[string]any{"name": "z-capacity", "state": "Rejected", "message": "no capacity"},
+	}, "status", "admissionChecks")
+	got := Compose(newFakeKueueProvider(w), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
+	if len(got) != 1 {
+		t.Fatalf("rows = %+v", got)
+	}
+	var linked []string
+	for _, f := range got[0].DiagnosticContext.Facts {
+		if f.Type == factKueueAdmissionCheck {
+			linked = append(linked, f.Refs[0].Name)
+		}
+	}
+	if len(linked) != maxKueueLinkedObjects || linked[0] != "z-capacity" {
+		t.Fatalf("linked checks = %v", linked)
+	}
+}
+
+func TestKueueBlockedRunsReadRunByRun(t *testing.T) {
+	jobA, jobB := kueueJob("team", "a"), kueueJob("team", "b")
+	p := newFakeKueueProvider(brokenClusterQueue("gpu"), jobA, jobB, kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive),
+		ownedBy(inactiveQueueWorkload("team", "wb", "q", "gpu"), jobB), ownedBy(inactiveQueueWorkload("team", "wa", "q", "gpu"), jobA))
+	for _, i := range Compose(p, Filters{Limit: NoLimit, Namespaces: []string{"team"}, CanReadEvidence: allowAllEvidence}) {
+		if i.Kind != kueueLocalQueueKind {
+			continue
+		}
+		var names []string
+		for _, ref := range i.AffectedRefs {
+			names = append(names, ref.Kind+"/"+ref.Name)
+		}
+		if strings.Join(names, ",") != "Job/a,Workload/wa,Job/b,Workload/wb" {
+			t.Fatalf("affected = %v", names)
+		}
+		return
+	}
+	t.Fatal("no LocalQueue row")
+}
+
+func TestUncheckedForMatchesOnlyNamedSubjects(t *testing.T) {
+	sources := []issuesapi.UncheckedSource{
+		{Source: issuesapi.UncheckedSourceKueue, Reason: issuesapi.UncheckedReasonCallerAccessDenied, Subjects: []Ref{{Group: "batch", Kind: "Job", Namespace: "team", Name: "train"}}},
+		{Source: issuesapi.UncheckedSourceCustomResources, Reason: issuesapi.UncheckedReasonSyncPending},
+	}
+	got := UncheckedFor(sources, "batch", "job", "team", "train")
+	if len(got) != 1 || got[0].Source != issuesapi.UncheckedSourceKueue || got[0].Subjects != nil {
+		t.Fatalf("got = %+v", got)
+	}
+	if got := UncheckedFor(sources, "batch", "Job", "team", "other"); len(got) != 0 {
+		t.Fatalf("other Job got %+v", got)
+	}
+}

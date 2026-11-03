@@ -94,7 +94,7 @@ var categoryDescription = map[Category]string{
 	CategoryUnschedulable:            "Pods can't be placed on any node — none satisfies their CPU/memory requests, node selector, affinity, taints, or topology constraints.",
 	CategoryQuotaExceeded:            "A ResourceQuota or LimitRange rejected the workload — the namespace is out of its CPU, memory, or object budget.",
 	CategoryAdmissionWebhookBlocking: "An admission webhook denied the request or its call failed, or the API server timed out creating the resource (for example while waiting on slow webhooks), blocking resource creation.",
-	CategoryQueueAdmissionBlocked:    "Kueue will not admit a batch run as configured (its requests exceed the queue, no flavor fits, its queue is missing, or an admission check rejected it), or a queue admits nothing because its configuration is broken.",
+	CategoryQueueAdmissionBlocked:    "Kueue will not admit a batch run as configured (no flavor fits, its namespace or queue is wrong, or an admission check rejected it), or a queue admits nothing because its configuration is broken.",
 	// Startup
 	CategoryImagePullFailed:     "A container image can't be pulled — wrong name/tag, a private registry without credentials, or the registry is unreachable (ImagePullBackOff).",
 	CategoryContainerWaiting:    "A container is stuck Waiting and never reached Running — blocked on config, secrets, volumes, its image, or a pod sandbox / IP from the CNI.",

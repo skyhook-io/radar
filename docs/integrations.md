@@ -1787,7 +1787,8 @@ Job, JobSet or RayJob, or the CronJob above a Job), read through the ownership
 view from the same Workload incarnation that was classified; with no
 followable controller, the Workload is the subject. Ownership is never inferred
 from a queue or a name. Concurrent-admission variants and their parent are
-skipped: a losing variant is expected.
+skipped: a losing variant is expected, and the parent's own status reports the
+race, not one blocked run.
 
 A broken ClusterQueue is one incident, not one row per run: each LocalQueue
 pointing to it gets a row listing the runs submitted there that Kueue reports
