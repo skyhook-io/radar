@@ -11,7 +11,7 @@ import (
 
 // PodGroup represents a collection of pods grouped by app label or owner
 type PodGroup struct {
-	Key        string          // Unique key: namespace/groupKind/groupName
+	Key        string          // Unique key: namespace/groupKind/groupName, plus /<uid> for an earlier same-named Job's Pods (see PodGroupingOptions.JobUIDs)
 	GroupKind  string          // "app", "ReplicaSet", "DaemonSet", etc.
 	GroupName  string          // App name or owner name
 	Namespace  string          // Namespace of the pods
@@ -39,7 +39,8 @@ type PodGroupingOptions struct {
 	ServiceIDs      map[string]string                     // svcKey -> serviceID
 	// JobUIDs (namespace/name -> UID of the drawn Job) puts the Pods of an
 	// earlier Job with the same name in a group of their own, so a recreated
-	// Job's group counts only its own Pods.
+	// Job's group counts only its own Pods. A nil map, a missing entry or an
+	// unknown UID on either side leaves grouping as it was.
 	JobUIDs map[string]types.UID
 }
 

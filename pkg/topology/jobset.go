@@ -53,13 +53,16 @@ func (b *Builder) addJobSetNodes(nodes []Node, warnings []string, opts BuildOpti
 		nodes = append(nodes, jobSetNode(item))
 	}
 	if uninterpreted != "" {
-		warnings = append(warnings, fmt.Sprintf("JobSets are served as %s, which Radar doesn't interpret: they show with unknown status and without their Jobs.", uninterpreted))
+		warnings = append(warnings, fmt.Sprintf("JobSets are served as %s, which Radar doesn't interpret: they show with unknown status, and their Jobs aren't linked to them.", uninterpreted))
 	}
 	return nodes, warnings, roots
 }
 
 func jobSetNode(item *unstructured.Unstructured) Node {
 	status, phase := jobSetTopologyStatus(jobset.Lifecycle(item))
+	// phase is display text (it can be a Failed condition's reason), not
+	// jobset.Phase; health is the node's status. declaredJobs is absent, not
+	// zero, when the version isn't interpreted.
 	data := map[string]any{
 		"namespace":  item.GetNamespace(),
 		"labels":     item.GetLabels(),

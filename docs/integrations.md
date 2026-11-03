@@ -1909,11 +1909,13 @@ attribution and read failures). Historical goodput and archived logs are not col
 
 **Topology:** the resources view draws every `jobset.x-k8s.io` JobSet as a root, including
 one with no Jobs yet. Only `v1alpha2` is interpreted: a cluster serving JobSets at another
-version shows them with unknown status, without their Jobs, and with a topology warning. Its status comes from the same lifecycle as the status badge and
+version shows them with unknown status, without links to their member Jobs, and with a
+topology warning. Its status comes from the same lifecycle as the status badge and
 execution context: only a failed JobSet is unhealthy; starting and recreating are degraded;
 pending, active, suspended and completed are neutral; a JobSet whose controller hasn't
-reported yet is unknown. The node shows that state and the number of Jobs its spec declares,
-which can exceed the Jobs created so far. Edges go to the member Jobs the member list shows:
+reported yet is unknown. The node's subtitle shows that state as text (a failed JobSet shows
+its Failed condition's reason) and the number of Jobs its spec declares, which can exceed the
+Jobs created so far. Edges go to the member Jobs the member list shows:
 Jobs whose controller owner reference names this JobSet by API version, name and UID.
 Labels, other owner references and earlier same-named JobSets never link. With Jobs hidden,
 member Pods attach to the JobSet directly. Pods are matched to their Job by UID, for every

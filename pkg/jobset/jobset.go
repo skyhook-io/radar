@@ -45,7 +45,12 @@ func Controls(jobSet *unstructured.Unstructured, child metav1.Object) bool {
 type Phase string
 
 const (
-	PhasePending   Phase = "pending"
+	// PhasePending: the controller reported role status with no Job
+	// activity yet. An unreported status is PhaseUnknown, not pending.
+	PhasePending Phase = "pending"
+	// PhaseActive: not finished, with reported child Jobs in any state
+	// (including failed or succeeded ones) or a startup or recreation in
+	// progress. It doesn't establish that Jobs or Pods are running.
 	PhaseActive    Phase = "active"
 	PhaseSuspended Phase = "suspended"
 	PhaseFinished  Phase = "finished"
@@ -160,7 +165,11 @@ func trueConditions(u *unstructured.Unstructured) conditionSet {
 
 // Declared returns the roles spec.replicatedJobs declares and the Jobs they
 // ask for, counting an omitted replicas as the controller's default of one.
+// Anything but a supported JobSet declares none.
 func Declared(u *unstructured.Unstructured) (roles, jobs int64) {
+	if !Supported(u) {
+		return 0, 0
+	}
 	replicatedJobs, _, _ := unstructured.NestedSlice(u.Object, "spec", "replicatedJobs")
 	for _, item := range replicatedJobs {
 		roles++
@@ -192,8 +201,12 @@ func (c ChildCounts) any() bool {
 }
 
 // ObservedChildren returns the controller's reported child Job counts, or nil
-// when status.replicatedJobsStatus is absent: unreported is not zero.
+// when status.replicatedJobsStatus is absent (unreported is not zero) or u
+// isn't a supported JobSet.
 func ObservedChildren(u *unstructured.Unstructured) *ChildCounts {
+	if !Supported(u) {
+		return nil
+	}
 	statuses, observed, _ := unstructured.NestedSlice(u.Object, "status", "replicatedJobsStatus")
 	if !observed {
 		return nil

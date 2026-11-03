@@ -339,7 +339,6 @@ export function expandPodGroup(
     trafficRole?: string
   }>
 
-  // Find edges pointing to this pod group
   const edgesToGroup = topoEdges.filter(e => e.target === podGroupId)
   const sourceIds = edgesToGroup.map(e => e.source)
   // Homogeneous per build — resources-view feeds `manages` ownership
@@ -347,11 +346,9 @@ export function expandPodGroup(
   // edge's type applies to the whole group.
   const edgeType = edgesToGroup[0]?.type ?? 'routes-to'
 
-  // Remove the PodGroup node and its edges
   const newNodes = topoNodes.filter(n => n.id !== podGroupId)
   const newEdges = topoEdges.filter(e => e.target !== podGroupId)
 
-  // Add individual pod nodes
   for (const pod of pods) {
     const podId = `pod/${pod.namespace}/${pod.name}`
     newNodes.push({

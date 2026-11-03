@@ -361,8 +361,10 @@ interface WorkloadViewProps {
     leadContent?: ReactNode
   }) => ReactNode
   /** Called instead of navigating when a Topology-tab click lands on a member
-   *  Job of the JobSet this view shows, with the member's selection key, so
-   *  the host can open the member in place. Omit to navigate as for any node. */
+   *  Job of the JobSet this view shows, so the host can open the member in
+   *  place. `memberKey` is the member list's run key, `jobs/<namespace>/<name>`
+   *  (see `jobSetMemberRunKey`), not a node ID or UID. Omit to navigate as for
+   *  any node. */
   onSelectTopologyMember?: (memberKey: string) => void
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
