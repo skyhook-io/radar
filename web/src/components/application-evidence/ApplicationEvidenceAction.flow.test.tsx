@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { guardRadarFeature, radarFeatureSupport } from '../../api/radarFeatures'
 import { ApiError } from '../../api/client'
-import { ApplicationEvidenceAction } from './ApplicationEvidenceAction'
+import { ApplicationEvidenceAction, ApplicationEvidenceObservation } from './ApplicationEvidenceAction'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 
 vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({ copyText: vi.fn().mockResolvedValue(true) }))
@@ -35,7 +35,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); client.clear(); host.remove() })
 it('keeps limitations expandable and in copied observations, with guidance for omitted Pods', async () => {
   const limitations = ['One selected Pod only.', 'Identity checks do not attest endpoint contents.']
-  const observation = { adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'observed', httpStatus: 501, facts: { vault: { initialized: false, sealed: true, standby: true } }, limitations }
+  const observation = { adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'observed', httpStatus: 501, facts: { vault: { initialized: false, sealed: true, standby: true, removedFromCluster: false } }, limitations }
   state.fetch.mockResolvedValueOnce({ ...candidates, coverageLimited: true }).mockResolvedValueOnce(observation)
   await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Service" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
   await vi.waitFor(() => expect(host.textContent).toContain('Collect Vault evidence'))
@@ -202,4 +202,33 @@ it('keeps background refresh errors quiet for a resource with no eligible endpoi
   await act(async () => { await client.invalidateQueries({ queryKey: ['application-evidence-candidates'] }) })
   expect(state.fetch).toHaveBeenCalledTimes(2)
   expect(host.textContent).toBe('')
+})
+
+it('copies exact RabbitMQ bytes and identity without an additional collection request', async () => {
+  const target = { namespace: 'demo', pod: 'rabbitmq-0', uid: 'rabbit-uid', container: 'rabbitmq' }
+  const observation = { adapter: 'rabbitmq', target, observedAt: '2026-11-03T10:00:00Z', source: 'selected_pod_endpoint', outcome: 'observed', facts: { rabbitmq: { diskAlarm: true, memoryAlarm: false, diskAvailableBytes: 15277850624, diskWatermarkBytes: 1000000000000, memoryUsedBytes: 134975488, memoryWatermarkBytes: 2412409651 } }, limitations: ['Only the selected Pod was checked.'] }
+  state.fetch.mockResolvedValueOnce({ ...candidates, subjectUID: 'rabbit-uid', candidates: [{ application: 'rabbitmq', target, expectedEvidence: ['disk/memory alarms'], coverage: 'One selected Pod.' }] }).mockResolvedValueOnce(observation)
+  await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Pod" namespace="demo" name="rabbitmq-0" uid="rabbit-uid" /></QueryClientProvider>))
+  await vi.waitFor(() => expect(host.textContent).toContain('Collect RabbitMQ evidence'))
+  act(() => host.querySelector('button')!.click())
+  expect(state.fetch).toHaveBeenCalledTimes(1)
+  await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Collect evidence')!.click())
+  await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Copy observation')!.click())
+  expect(JSON.parse(vi.mocked(copyText).mock.calls.at(-1)![0])).toEqual({ context: 'test-cluster', ...observation })
+  expect(state.fetch).toHaveBeenCalledTimes(2)
+})
+
+it('keeps NATS progress collapsed until requested without changing the four-column count table', () => {
+  act(() => root.render(<ApplicationEvidenceObservation result={{ adapter: 'nats', target: { namespace: 'demo', pod: 'nats-0' }, observedAt: '2026-11-03T01:44:19Z', source: 'selected_pod_endpoint', outcome: 'observed', limitations: [], facts: { nats: { jetStreamEnabled: true, coverage: 'node_reported', returnedAccounts: 1, returnedStreams: 1, returnedConsumers: 1, truncated: false, consumers: [{ account: '$G', stream: 'events', name: 'worker', pending: 0, ackPending: 5, redelivered: 0, delivered: { consumerSequence: '5', streamSequence: '5' }, ackFloor: { consumerSequence: '0', streamSequence: '0' }, waitingPullRequests: 1 }] } } }} />))
+  const toggle = [...host.querySelectorAll('button')].find(item => item.textContent === 'Consumer progress')!
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(host.querySelectorAll('th')).toHaveLength(4)
+  act(() => toggle.click())
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  const details = document.getElementById(toggle.getAttribute('aria-controls')!)!
+  expect(details.textContent).toContain('Consumer seq 5 · Stream seq 5')
+  expect(details.textContent).toContain('Ack floorConsumer seq 0 · Stream seq 0')
+  expect(details.textContent).toContain('Waiting pull requests on this node1')
+  act(() => toggle.click())
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
 })

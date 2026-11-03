@@ -6,11 +6,12 @@ import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { TimeValue } from '@skyhook-io/k8s-ui/components/ui/ScheduleValue'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
+import { Tooltip } from '@skyhook-io/k8s-ui/components/ui/Tooltip'
+import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { ApiError, fetchJSON, useClusterInfo, useCapabilities, useRadarFeature } from '../../api/client'
 import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidate, type EvidenceCandidates } from '../../api/application-evidence'
 
-const vaultNames: Record<string, string> = { initialized: 'Initialized', sealed: 'Sealed', standby: 'Standby', performanceStandby: 'Performance standby' }
 const unavailableReasons: Record<string, string> = {
   pod_not_running: 'The selected Pod is no longer running.',
   container_not_running: 'The selected application container is not running.',
@@ -32,7 +33,7 @@ const unavailableReasons: Record<string, string> = {
   collection_cancelled: 'Collection was cancelled or timed out.',
   response_too_large: 'The endpoint response exceeded the collection size limit.',
   missing_alarm_metrics: 'The response did not include the required RabbitMQ alarm metrics.',
-  invalid_alarm_metric: 'The endpoint returned an invalid alarm value.',
+  invalid_alarm_metric: 'The endpoint returned invalid RabbitMQ metrics.',
   ambiguous_alarm_metric: 'The endpoint returned conflicting alarm values.',
   unexpected_shape: 'The response did not match the supported application format.',
   unexpected_http_status: 'The endpoint returned an unsupported HTTP status.',
@@ -149,8 +150,16 @@ function EvidenceDialog({ open, data, currentData, refreshing, onClose, onTarget
   </DialogPortal>
 }
 
+function RabbitMQMeasurement({ value }: { value: number | undefined }) {
+  return <dd className="break-words">{value === undefined ? 'Unknown' : <>
+    <span className="block">{formatMemoryBytes(value)}</span>
+    <span className="block text-xs text-theme-text-tertiary">{value.toLocaleString()} bytes</span>
+  </>}</dd>
+}
+
 export function ApplicationEvidenceObservation({ result }: { result: ApplicationEvidenceResult }) {
   const facts = result.outcome === 'observed' ? result.facts : undefined
+  const rabbitmq = facts?.rabbitmq
   const nats = facts?.nats
   const vault = facts?.vault
   return <section aria-label="Application observations" className="card-inner mt-4 p-3 text-sm text-theme-text-primary">
@@ -159,14 +168,48 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
     <p className="mt-1 text-xs text-theme-text-tertiary"><TimeValue timestamp={result.observedAt} /> · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · Endpoint status: HTTP ${result.httpStatus}`}</p>
     {facts && <p className="mt-2 text-xs text-theme-text-secondary">This Pod at collection time; other replicas were not checked.</p>}
     {result.reason && <p className="mt-2">{unavailableReasons[result.reason] ?? `Collection unavailable (${result.reason}).`} No conclusion about application health can be drawn from unavailable evidence.</p>}
-    {facts?.rabbitmq && <dl className="mt-3 grid grid-cols-2 gap-2"><dt>Disk alarm</dt><dd>{facts.rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd><dt>Memory alarm</dt><dd>{facts.rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd></dl>}
-    {facts?.rabbitmq && <p className="mt-2 text-xs text-theme-text-secondary">An alarm on another node can block publishers across the cluster.</p>}
-    {vault && <dl className="mt-3 grid grid-cols-2 gap-2">{Object.entries(vault).filter(([key]) => key === 'initialized' || key === 'sealed' || vault.initialized && !vault.sealed).map(([key, value]) => <div key={key} className="contents"><dt>{vaultNames[key]}</dt><dd>{value ? 'Yes' : 'No'}</dd></div>)}</dl>}
+    {rabbitmq && <>
+      <dl className="mt-3 grid grid-cols-2 gap-2">
+        <dt>Disk alarm</dt><dd>{rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd>
+        <dt>Free disk</dt><RabbitMQMeasurement value={rabbitmq.diskAvailableBytes} />
+        <dt>Disk alarm below</dt><RabbitMQMeasurement value={rabbitmq.diskWatermarkBytes} />
+        <dt>Memory alarm</dt><dd>{rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd>
+        <dt>Memory used (RabbitMQ)</dt><RabbitMQMeasurement value={rabbitmq.memoryUsedBytes} />
+        <dt>Memory alarm above</dt><RabbitMQMeasurement value={rabbitmq.memoryWatermarkBytes} />
+      </dl>
+      <p className="mt-2 text-xs text-theme-text-secondary">Measurements are RabbitMQ’s periodic statistics and can lag the alarm state. Its memory watermark is not the container memory limit; the container can be OOM-killed before this alarm fires. Unknown values were absent or could not be interpreted.</p>
+      <p className="mt-2 text-xs text-theme-text-secondary">A disk or memory alarm on another node can block publishers across the cluster.</p>
+    </>}
+    {vault && <dl className="mt-3 grid grid-cols-2 gap-2">
+      <dt>Initialized</dt><dd>{vault.initialized ? 'Yes' : 'No'}</dd>
+      <dt>Sealed</dt><dd>{vault.sealed ? 'Yes' : 'No'}</dd>
+      {vault.initialized && !vault.sealed && <>
+        <dt>Standby</dt><dd>{vault.standby ? 'Yes' : 'No'}</dd>
+        {vault.performanceStandby !== undefined && <><dt>Performance standby</dt><dd>{vault.performanceStandby ? 'Yes' : 'No'}</dd></>}
+        {(vault.standby || vault.performanceStandby) && <><dt>Connection to active node</dt><dd>{vault.haConnectionHealthy === undefined ? 'Unknown' : vault.haConnectionHealthy ? 'Reported healthy' : 'Reported unhealthy'}</dd></>}
+      </>}
+      {vault.removedFromCluster !== undefined && <><dt>Removal from HA cluster</dt><dd>{vault.removedFromCluster ? 'Reported' : 'Not reported'}</dd></>}
+    </dl>}
+    {vault?.initialized && !vault.sealed && (vault.standby || vault.performanceStandby) && vault.haConnectionHealthy === undefined && <p className="mt-2 text-xs text-theme-text-secondary">Vault can omit the heartbeat report after a leader change. Connectivity is unknown.</p>}
     {nats && <div className="mt-3 space-y-2">
       <p>JetStream: {nats.jetStreamEnabled ? 'Enabled' : 'Disabled'}</p>
       <p className="text-xs text-theme-text-secondary">Coverage: {nats.coverage.replaceAll('_', ' ')} · {pluralize(nats.returnedAccounts, 'account')} · {pluralize(nats.returnedStreams, 'stream')} · {pluralize(nats.returnedConsumers, 'consumer')} returned{nats.truncated ? ' · Truncated' : ''}</p>
       {nats.totals && <p>Node reports {pluralize(nats.totals.messages, 'message')} across {pluralize(nats.totals.streams, 'stream')} and {pluralize(nats.totals.consumers, 'consumer')}.</p>}
       {nats.consumers.length > 0 && <div className="overflow-x-auto"><table className="w-full min-w-[480px] text-left text-xs"><thead><tr><th className="pr-3">Account / stream / consumer</th><th className="pr-3">Pending</th><th className="pr-3">Ack pending</th><th>Redelivered</th></tr></thead><tbody>{nats.consumers.map(item => <tr key={JSON.stringify([item.account, item.stream, item.name])}><td className="py-2 pr-3 break-all">{item.account} / {item.stream} / {item.name}</td><td>{item.pending}</td><td>{item.ackPending}</td><td>{item.redelivered}</td></tr>)}</tbody></table></div>}
+      {nats.consumers.length > 0 && <p className="text-xs text-theme-text-secondary">Counts are node-reported; a non-leader replica can report zero pending messages.</p>}
+      {nats.consumers.length > 0 && <Disclosure summary="Consumer progress" summaryClassName="text-xs text-theme-text-secondary">
+        <p className="mt-2 text-xs text-theme-text-secondary">Positions are not lag; one snapshot cannot establish stalled progress. Missing or invalid values are unavailable, not proof of inactivity. Waiting requests apply to pull consumers; zero can also reflect a push consumer or non-leader replica.</p>
+        <div className="mt-2 space-y-3">{nats.consumers.map(item => <div key={JSON.stringify([item.account, item.stream, item.name])} className="card-inner p-2 text-xs">
+          <p className="break-all font-medium">{item.account} / {item.stream} / {item.name}</p>
+          <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+            <dt>Delivered</dt><dd className="break-words">Consumer seq {item.delivered?.consumerSequence ?? 'unavailable'} · Stream seq {item.delivered?.streamSequence ?? 'unavailable'}</dd>
+            <dt>Last delivery</dt><dd className="break-words">{item.delivered?.lastActive ? <Tooltip content={item.delivered.lastActive}><span>{new Date(item.delivered.lastActive).toLocaleString()}</span></Tooltip> : 'Unavailable'}</dd>
+            <dt>Ack floor</dt><dd className="break-words">Consumer seq {item.ackFloor?.consumerSequence ?? 'unavailable'} · Stream seq {item.ackFloor?.streamSequence ?? 'unavailable'}</dd>
+            <dt>Last ack</dt><dd className="break-words">{item.ackFloor?.lastActive ? <Tooltip content={item.ackFloor.lastActive}><span>{new Date(item.ackFloor.lastActive).toLocaleString()}</span></Tooltip> : 'Unavailable'}</dd>
+            <dt className="max-w-36">Waiting pull requests on this node</dt><dd>{item.waitingPullRequests ?? 'Unavailable'}</dd>
+          </dl>
+        </div>)}</div>
+      </Disclosure>}
     </div>}
     {result.limitations.length > 0 && <Disclosure summary="Collection limits" className="mt-3" summaryClassName="text-xs text-theme-text-secondary">
       <ul className="mt-2 space-y-1 text-xs text-theme-text-secondary">{result.limitations.map(item => <li key={item}>{item}</li>)}</ul>

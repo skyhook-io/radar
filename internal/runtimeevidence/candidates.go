@@ -55,12 +55,12 @@ func CandidatesForPods(pods []*corev1.Pod, truncated bool) CandidateSet {
 				continue
 			}
 			readiness[id.uid+"/"+id.name] = RelevantReadinessFailure(p, a, id.name)
-			facts := []string{"initialized", "sealed", "standby"}
+			facts := []string{"initialized", "sealed", "standby", "HA connection and cluster removal when reported"}
 			if a == evidence.RabbitMQ {
-				facts = []string{"node disk alarm", "node memory alarm"}
+				facts = []string{"node disk/memory alarms", "disk/memory measurements and watermarks when available"}
 			}
 			if a == evidence.NATS {
-				facts = []string{"JetStream consumer counts", "reported stream/account coverage"}
+				facts = []string{"JetStream consumer counts and progress", "reported stream/account coverage"}
 			}
 			result.Candidates = append(result.Candidates, Candidate{Application: a, Target: Target{Namespace: p.Namespace, Pod: p.Name, UID: id.uid, Container: id.name}, ExpectedEvidence: facts, Coverage: "Selected Pod endpoint only; other replicas and client network paths are not covered."})
 		}

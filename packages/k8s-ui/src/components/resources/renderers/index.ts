@@ -195,3 +195,5 @@ export { RayJobRenderer } from './RayJobRenderer'
 
 export { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from './OpenTelemetryRenderers'
 export { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from './FlaggerRenderers'
+
+export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'

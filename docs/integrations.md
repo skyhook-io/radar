@@ -1021,6 +1021,8 @@ They roll up under three categories, split by what you'd go and look at: `backup
 
 ## Strimzi Kafka connectors
 
+Connector details separate desired settings from the operator-reported connector and task states, show worker addresses and optional automatic-restart history, and link to KafkaConnect. Failed tasks override an otherwise Ready badge; stale, paused or incomplete observations never establish health. The view reads the existing custom resource without contacting Kafka Connect or requiring application credentials.
+
 Radar surfaces failure evidence from `KafkaConnector` resources in `kafka.strimzi.io` through Issues, including the API and MCP. A connector can remain `RUNNING` while an individual task is `FAILED`; Radar checks both. Explicit connector/task failures and `NotReady=True` produce one warning per connector, attributed to Strimzi's operator snapshot. Task IDs are bounded; configurations, exception messages and stack traces are not included in the issue.
 
 Radar's collector needs Kubernetes read access to the connector CRs, with no Kafka credentials or additional settings. Connectors managed only through the Connect REST API are outside this coverage. Radar does not connect to Connect or Kafka directly. Radar Cloud's default integration-read role does not add `kafkaconnectors` access because full connector objects can contain credentials. Radar's resource views and curated findings follow its [namespace-level read policy](authentication.md#read-granularity-namespace-level); withholding a full-object Kubernetes grant does not independently restrict those views.
@@ -2016,9 +2018,9 @@ When Radar runs locally, MCP clients can use `collect_application_evidence` to r
 
 | Integration | Endpoint | Evidence |
 |---|---|---|
-| RabbitMQ | Port 15692, `/metrics` | Node-reported disk and memory alarms |
-| NATS | Port 8222, `/jsz` | JetStream pending, acknowledgement-pending and redelivery counts |
-| Vault | Port 8200, `/v1/sys/health` | HTTP status and initialization, seal and standby state |
+| RabbitMQ | Port 15692, `/metrics` | Node-reported disk/memory alarms, optional resource measurements and watermarks |
+| NATS | Port 8222, `/jsz` | JetStream pending, acknowledgement-pending and redelivery counts; delivery/acknowledgement positions, activity times and waiting pull requests when reported |
+| Vault | Port 8200, `/v1/sys/health` | HTTP status, initialization/seal/standby state, and HA connection/removal facts when reported |
 
 Requires Pod-read/port-forward permissions, a recognized application image and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must already be enabled. Credentials, TLS, custom ports, authenticated/remote/hosted/in-cluster deployments and built-in investigations are unsupported.
 

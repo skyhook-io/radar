@@ -92,6 +92,9 @@ func TestHTTPBoundaries(t *testing.T) {
 			if (res.Facts != nil) != (tc.reason == "") {
 				t.Fatal("facts on unavailable or missing on observed")
 			}
+			if !strings.Contains(strings.Join(res.Limitations, " "), "can lag the alarm state") {
+				t.Fatal("RabbitMQ statistics caveat missing from exported evidence")
+			}
 			if !closed.Load() || hits.Load() != 1 {
 				t.Fatal("tunnel cleanup or redirect boundary failed")
 			}
@@ -284,5 +287,15 @@ func TestVaultPlaintextAgainstTLSIsUnavailable(t *testing.T) {
 	}
 	if !closed.Load() {
 		t.Fatal("tunnel not closed")
+	}
+}
+
+func TestNATSInterpretationTravelsWithResult(t *testing.T) {
+	result := NewCollector().Collect(t.Context(), nil, nil, evidence.NATS, "lab", "nats")
+	limits := strings.Join(result.Limitations, " ")
+	for _, caveat := range []string{"positions, not lag", "cannot establish a stall", "do not mean never active", "Pending and waiting pull-request counts are node-reported", "non-leader replica can report zero", "waiting zero may also reflect a push consumer"} {
+		if !strings.Contains(limits, caveat) {
+			t.Fatalf("missing agent-facing qualification %q: %v", caveat, result.Limitations)
+		}
 	}
 }

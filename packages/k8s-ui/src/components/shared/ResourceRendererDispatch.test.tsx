@@ -1136,3 +1136,18 @@ describe('Flux kind collisions', () => {
     }
   })
 })
+
+describe('Strimzi KafkaConnector exact group', () => {
+  const data = {apiVersion: 'kafka.strimzi.io/v1', kind: 'KafkaConnector', metadata: {name:'connector',generation:1}, spec: {class:'Example'}, status:{observedGeneration:1,conditions:[{type:'Ready',status:'True'}],connectorStatus:{connector:{state:'RUNNING'},tasks:[{id:0,state:'FAILED'}]}}}
+  it('shows failed tasks despite Ready=True', () => {
+    expect(getResourceStatus('kafkaconnectors', data)?.text).toBe('Tasks failed')
+    expect(renderKind('kafkaconnectors', data)).toContain('Reported Runtime')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['other.io/v1', 'fake.kafka.strimzi.io/v1']) {
+      const other = {...data,apiVersion}
+      expect(getResourceStatus('kafkaconnectors',other)?.text).not.toBe('Tasks failed')
+      expect(renderKind('kafkaconnectors',other)).not.toContain('Reported Runtime')
+    }
+  })
+})

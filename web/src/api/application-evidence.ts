@@ -18,6 +18,12 @@ export interface EvidenceCandidates {
   truncated?: boolean
   coverageLimited?: boolean
 }
+export interface NATSSequence {
+  /** Decimal uint64 identifiers, preserved without JavaScript number rounding. */
+  consumerSequence?: string
+  streamSequence?: string
+  lastActive?: string
+}
 export interface ApplicationEvidenceResult {
   adapter: EvidenceApplication
   target: EvidenceTarget
@@ -27,12 +33,19 @@ export interface ApplicationEvidenceResult {
   reason?: string
   httpStatus?: number
   facts?: {
-    rabbitmq?: { diskAlarm: boolean; memoryAlarm: boolean }
-    vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean }
+    rabbitmq?: {
+      diskAlarm: boolean
+      memoryAlarm: boolean
+      diskAvailableBytes?: number
+      diskWatermarkBytes?: number
+      memoryUsedBytes?: number
+      memoryWatermarkBytes?: number
+    }
+    vault?: { initialized: boolean; sealed: boolean; standby: boolean; performanceStandby?: boolean; haConnectionHealthy?: boolean; removedFromCluster?: boolean }
     nats?: {
       jetStreamEnabled: boolean
       totals?: { accounts: number; streams: number; consumers: number; messages: number }
-      consumers: { account: string; stream: string; name: string; pending: number; ackPending: number; redelivered: number }[]
+      consumers: { account: string; stream: string; name: string; pending: number; ackPending: number; redelivered: number; delivered?: NATSSequence; ackFloor?: NATSSequence; waitingPullRequests?: number }[]
       coverage: string
       returnedAccounts: number
       returnedStreams: number
