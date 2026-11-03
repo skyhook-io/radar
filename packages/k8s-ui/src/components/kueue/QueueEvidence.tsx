@@ -103,7 +103,7 @@ export function ClusterQueueReadSummary({ name, read, onNavigate }: { name: stri
       <ReadState read={read} found={parent ? <StatusPill status={getClusterQueueStatus(parent)} /> : undefined} />
     </div>
     {parent && <p className="text-xs text-theme-text-secondary">
-      Read from the ClusterQueue{condition?.reason ? `: ${condition.reason}` : ''}{parent.spec?.stopPolicy && parent.spec.stopPolicy !== 'None' ? ` · stop policy ${parent.spec.stopPolicy}` : ''}
+      Read from the ClusterQueue{condition?.reason && condition.status !== 'True' ? `: ${condition.reason}` : ''}{parent.spec?.stopPolicy && parent.spec.stopPolicy !== 'None' ? ` · stop policy ${parent.spec.stopPolicy}` : ''}
     </p>}
     {parent && condition?.message && condition.status !== 'True' && <ReportedMessage condition={condition} generation={parent.metadata?.generation} />}
   </div>
@@ -114,7 +114,7 @@ export function ClusterQueueReadSummary({ name, read, onNavigate }: { name: stri
  * selector is only known from a ClusterQueue that was read; the namespace's
  * labels are needed only when the selector has terms.
  */
-export function namespaceEligibilityFact({ namespace, clusterQueue, parent, namespaceRead }: { namespace: string; clusterQueue: string; parent?: RelatedRead; namespaceRead?: RelatedRead }): Fact {
+export function namespaceEligibilityFact({ clusterQueue, parent, namespaceRead }: { clusterQueue: string; parent?: RelatedRead; namespaceRead?: RelatedRead }): Fact {
   const source = `ClusterQueue ${clusterQueue} namespaceSelector`
   if (parent?.state !== 'found') {
     const why = !parent ? 'Unknown: the ClusterQueue was not read'
@@ -128,12 +128,12 @@ export function namespaceEligibilityFact({ namespace, clusterQueue, parent, name
   const result = namespaceEligibility(selector, labels)
   switch (result.state) {
     case 'eligible':
-      return { text: result.basis === 'all' ? 'Eligible: the selector is empty ({}), so every namespace matches' : `Eligible: namespace ${namespace}'s labels match the selector`, tone: 'healthy', source }
+      return { text: result.basis === 'all' ? 'Eligible: the selector is empty ({}), so every namespace matches' : 'Eligible: its labels match the selector', tone: 'healthy', source }
     case 'not_eligible':
-      return { text: result.basis === 'none' ? 'Not eligible: the ClusterQueue sets no namespaceSelector, so no namespace matches' : `Not eligible: namespace ${namespace}'s labels don't match the selector`, tone: 'unhealthy', source }
+      return { text: result.basis === 'none' ? 'Not eligible: the ClusterQueue sets no namespaceSelector, so no namespace matches' : 'Not eligible: its labels don’t match the selector', tone: 'unhealthy', source }
     default:
       if (result.why === 'unsupported_operator') return { text: `Unknown: the selector uses operator ${result.operator || '(none)'}, which Radar doesn't evaluate`, tone: 'unknown', source }
-      return { text: namespaceRead?.state === 'not_found' ? `Unknown: namespace ${namespace} was not found` : `Unknown: namespace labels not read (${unreadReason(namespaceRead)})`, tone: 'unknown', source }
+      return { text: namespaceRead?.state === 'not_found' ? 'Unknown: the Namespace was not found' : `Unknown: its labels weren’t read (${unreadReason(namespaceRead)})`, tone: 'unknown', source }
   }
 }
 

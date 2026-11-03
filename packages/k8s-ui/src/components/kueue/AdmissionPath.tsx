@@ -61,7 +61,7 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
   const configured: string | undefined = localQueue?.state === 'found' ? localQueue.object?.spec?.clusterQueue : undefined
   const reserved: string | undefined = data.status?.admission?.clusterQueue
   const configuredRead = configured ? reads?.clusterQueues?.[configured] : undefined
-  const eligibility = configured && reads ? namespaceEligibilityFact({ namespace, clusterQueue: configured, parent: configuredRead, namespaceRead: reads.namespace }) : undefined
+  const eligibility = configured && reads ? namespaceEligibilityFact({ clusterQueue: configured, parent: configuredRead, namespaceRead: reads.namespace }) : undefined
   const assignments: any[] = Array.isArray(data.status?.admission?.podSetAssignments) ? data.status.admission.podSetAssignments : []
   // The Workload's own pending message, shown verbatim when Radar can't evaluate eligibility itself.
   const quota = (data.status?.conditions ?? []).find((condition: any) => condition?.type === 'QuotaReserved')

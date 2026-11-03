@@ -66,8 +66,8 @@ describe('LocalQueue parent and namespace eligibility', () => {
   it('evaluates a selector against the namespace labels and says when they were not read', () => {
     const selector = withSelector({ matchLabels: { team: 'a' } })
     expect(renderToStaticMarkup(<LocalQueueRenderer data={lq} reads={{ clusterQueue: selector, namespace: found({ metadata: { labels: { team: 'a' } } }) }} />)).toContain('labels match the selector')
-    expect(renderToStaticMarkup(<LocalQueueRenderer data={lq} reads={{ clusterQueue: selector, namespace: found({ metadata: { labels: {} } }) }} />)).toContain('labels don&#x27;t match the selector')
-    expect(renderToStaticMarkup(<LocalQueueRenderer data={lq} reads={{ clusterQueue: selector, namespace: { state: 'unavailable', code: 'user_forbidden' } }} />)).toContain('namespace labels not read (you can’t read it)')
+    expect(renderToStaticMarkup(<LocalQueueRenderer data={lq} reads={{ clusterQueue: selector, namespace: found({ metadata: { labels: {} } }) }} />)).toContain('labels don’t match the selector')
+    expect(renderToStaticMarkup(<LocalQueueRenderer data={lq} reads={{ clusterQueue: selector, namespace: { state: 'unavailable', code: 'user_forbidden' } }} />)).toContain('its labels weren’t read (you can’t read it)')
   })
 
   it('does not decide eligibility when the ClusterQueue itself was not read', () => {
@@ -188,7 +188,7 @@ describe('Workload admission path', () => {
       clusterQueues: { cq: found(clusterQueue('cq', active('True', 'Ready', 1), { namespaceSelector: { matchLabels: { team: 'a' } } })) },
       namespace: { state: 'unavailable', code: 'user_forbidden' },
     }} />)
-    expect(html).toContain('namespace labels not read (you can’t read it)')
+    expect(html).toContain('its labels weren’t read (you can’t read it)')
     expect(html).toContain('Controller-reported on QuotaReserved: </span>Workload namespace doesn&#x27;t match ClusterQueue selector')
   })
 

@@ -186,7 +186,7 @@ export function LocalQueueRenderer({ data, onNavigate, reads, workloads }: Queue
   const namespace: string = data.metadata?.namespace ?? ''
   const parentStopped = localQueueInactiveBecauseParentStopped(data, reads?.clusterQueue)
   const reportsParentInactive = getKueueQueueCondition(data)?.reason === 'ClusterQueueIsInactive'
-  const eligibility = parentName && reads ? namespaceEligibilityFact({ namespace, clusterQueue: parentName, parent: reads.clusterQueue, namespaceRead: reads.namespace }) : undefined
+  const eligibility = parentName && reads ? namespaceEligibilityFact({ clusterQueue: parentName, parent: reads.clusterQueue, namespaceRead: reads.namespace }) : undefined
   return (
     <div className="@container/queue space-y-4">
       <StaleBanner data={data} />
