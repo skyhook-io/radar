@@ -1,7 +1,13 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/discovery"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
@@ -194,4 +200,66 @@ func TestWorkloadHistory_ExpiredOwnershipAlwaysQualifiesScope(t *testing.T) {
 	if code != 200 || !resp.Incomplete {
 		t.Fatalf("status=%d incomplete=%v; expired ancestry must remain unknown independently of current root age", code, resp.Incomplete)
 	}
+}
+
+func TestKueueHistoryDiscoveryPendingIsNotAbsence(t *testing.T) {
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	srv := &Server{}
+	req := httptest.NewRequest("GET", "/api/workloads/jobs/ml/train/history", nil)
+	live := liveObject("job", time.Now(), map[string]string{kueueQueueNameLabel: "team"})
+	gaps, _ := srv.kueueHistoryReads(req, "ml", live, true)
+	if len(gaps) != 1 || gaps[0].Code != readreason.KindSyncPending || gaps[0].Kinds.Count != 2 {
+		t.Fatalf("pending discovery read as complete: %+v", gaps)
+	}
+	cache := k8s.GetDynamicResourceCache()
+	cache.DiscoverAllCRDs()
+	deadline := time.Now().Add(5 * time.Second)
+	for cache.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if cache.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
+		t.Fatal("discovery never completed")
+	}
+	gaps, _ = srv.kueueHistoryReads(req, "ml", live, true)
+	if len(gaps) != 0 {
+		t.Fatalf("confirmed absence retained gaps: %+v", gaps)
+	}
+}
+
+func TestKueueHistoryMissingCacheQualifiesKnownDependency(t *testing.T) {
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	srv := &Server{}
+	gaps, _ := srv.kueueHistoryReads(httptest.NewRequest("GET", "/", nil), "ml", liveIdentity{}, true)
+	if len(gaps) != 1 || gaps[0].Code != readreason.KindSyncPending || gaps[0].Kinds.Count != 2 {
+		t.Fatalf("missing cache read as complete: %+v", gaps)
+	}
+}
+
+type partialKueueHistoryDiscovery struct{ discovery.DiscoveryInterface }
+
+func (partialKueueHistoryDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	return nil, []*metav1.APIResourceList{{GroupVersion: "kueue.x-k8s.io/v1beta2", APIResources: []metav1.APIResource{{Name: "workloads", Kind: "Workload", Namespaced: true, Verbs: []string{"list", "watch"}}}}}, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{{Group: "autoscaling.x-k8s.io", Version: "v1"}: errors.New("discovery unavailable")}}
+}
+func TestKueueHistoryPartialProvisioningDiscoveryStaysQualified(t *testing.T) {
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	restore, err := k8s.SetTestResourceDiscovery(partialKueueHistoryDiscovery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	srv := &Server{}
+	gaps, _ := srv.kueueHistoryReads(httptest.NewRequest("GET", "/", nil), "ml", liveIdentity{}, true)
+	for _, gap := range gaps {
+		if gap.Code == readreason.ReadError && slices.Contains(gap.Kinds.Names, kueueHistoryKinds[1]) {
+			return
+		}
+	}
+	t.Fatalf("partial ProvisioningRequest discovery read as absence: %+v", gaps)
 }
