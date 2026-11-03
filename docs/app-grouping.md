@@ -72,7 +72,9 @@ same repo — because each is released and versioned on its own. Climbing to the
 shared repo/parent would collapse every separately-released service into one giant
 "shop" blob, which has no operational value. We refuse to do that. (Workloads with
 **no manager** resolve instead to their **topmost ownerRef** — a Deployment, or an
-operator CR like a CNPG `Cluster`.)
+operator CR like a CNPG `Cluster`. A JobSet's member Jobs resolve to the JobSet, which the
+topology draws as their exact controller-owned root, so one JobSet run is one app rather than
+one app per Job. The JobSet itself isn't yet listed as a workload; its member Jobs are.)
 
 The weaker labels (`part-of`, `name`) are a fallback for loose/raw workloads, not
 an umbrella over independently-released ones. **One honest caveat to the absolute
