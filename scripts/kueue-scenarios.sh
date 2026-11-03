@@ -89,7 +89,7 @@ check_args() {
   command -v jq >/dev/null || fail "jq not found"
   [[ "${PREFIX}" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] || fail "--prefix must be a DNS label of at most 32 characters"
   [[ "${FIXTURE}" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$ ]] || fail "--fixture must be a valid label value"
-  [ -z "${KUBECONFIG_ARG}" ] || [ -r "${KUBECONFIG_ARG}" ] || fail "cannot read kubeconfig ${KUBECONFIG_ARG} (give a path the shell expands, not a quoted ~)"
+  [ -z "${KUBECONFIG_ARG}" ] || [ -r "${KUBECONFIG_ARG}" ] || fail "cannot read kubeconfig ${KUBECONFIG_ARG}"
   local out
   out="$(kc version 2>&1 >/dev/null)" || fail "cannot reach the cluster with the given --kubeconfig/--context: ${out}"
 }
@@ -110,10 +110,15 @@ report_kueue_version() {
   local image
   image="$(kc get deployments -A -l control-plane=controller-manager -o json 2>/dev/null \
     | jq -r '[.items[].spec.template.spec.containers[].image | select(test("/kueue(@|:)"))][0] // empty')" || true
-  local tag="${image%@*}"
-  tag="${tag##*:}"
+  # The tag lives in the last path segment, before any digest; a registry port
+  # (host:5000/...) is not a tag.
+  local tag="${image##*/}"
+  tag="${tag%@*}"
+  case "${tag}" in *:*) tag="${tag##*:}" ;; *) tag='' ;; esac
   if [ -z "${image}" ]; then
     warn "could not find the Kueue controller Deployment; expectations were validated on Kueue ${VALIDATED_KUEUE}x"
+  elif [ -z "${tag}" ]; then
+    warn "Kueue controller ${image##*/} is pinned by digest only, so its version is unknown; expectations were validated on ${VALIDATED_KUEUE}x"
   elif [[ "${tag}" == ${VALIDATED_KUEUE}* ]]; then
     ok "Kueue controller ${image##*/} (API kueue.x-k8s.io/v1beta2)"
   else
@@ -277,7 +282,12 @@ lq_is() { # lq_is <namespace> <localqueue> <jq predicate>
 wait_for() { # wait_for <description> <command...>
   local desc="$1" deadline=$((SECONDS + WAIT_SECONDS))
   shift
-  until "$@"; do
+  local rc
+  while :; do
+    rc=0
+    "$@" || rc=$?
+    [ "${rc}" -ne 0 ] || break
+    [ "${rc}" -ne 3 ] || fail "a fixture Job is missing or not this prefix's (${*:2:2}); run '$0 down' and 'up' again"
     if [ "${SECONDS}" -ge "${deadline}" ]; then
       fail "Timed out after ${WAIT_SECONDS}s waiting for ${desc}. Inspect with: $0 status"
     fi
@@ -350,6 +360,9 @@ cmd_up() {
   step "Checking ownership of every object this run would create (prefix ${PREFIX})"
   check_ownership
   ok "nothing in the way belongs to anyone else"
+  if [ -n "$(owner_of namespace "$(ns quota)" "")" ]; then
+    warn "fixtures for prefix ${PREFIX} already exist, so this run resumes them; if they aren't yours, use another --prefix"
+  fi
 
   step "Creating namespaces, ResourceFlavors, Cohort, priority classes, AdmissionCheck, queues and viewer RBAC"
   local file
@@ -767,6 +780,16 @@ owned_names() { # owned_names <resource> [-A]
     | jq -r --arg p "${PREFIX}-" '.items[] | select((.metadata.namespace // .metadata.name) | startswith($p)) | [.metadata.namespace // "", .metadata.name] | join("|")'
 }
 
+# Deletes by name only while the object still carries this prefix's label: the
+# selector is evaluated at delete time, so an object recreated under the same
+# name without the label is left alone. (kubectl has no UID preconditions.)
+delete_owned() { # delete_owned <resource> <name> <namespace|""> [kubectl delete flags]
+  local resource="$1" name="$2" namespace="$3"
+  shift 3
+  kc delete "${resource}" ${namespace:+-n "${namespace}"} -l "${OWNER_LABEL}=${PREFIX}" \
+    --field-selector "metadata.name=${name}" --ignore-not-found "$@" >/dev/null
+}
+
 cmd_down() {
   check_args
   local resource namespace name rows namespaces=() crd
@@ -775,12 +798,12 @@ cmd_down() {
   # everything in them; then cluster-scoped objects.
   rows="$(owned_names jobs.batch -A)" || fail "cannot list Jobs"
   while IFS='|' read -r namespace name; do
-    [ -n "${name}" ] && kc delete job.batch "${name}" -n "${namespace}" --ignore-not-found --wait=false >/dev/null
+    [ -n "${name}" ] && delete_owned job.batch "${name}" "${namespace}" --wait=false
   done <<<"${rows}"
   rows="$(owned_names namespaces)" || fail "cannot list namespaces"
   while IFS='|' read -r namespace name; do [ -n "${name}" ] && namespaces+=("${name}"); done <<<"${rows}"
   if [ "${#namespaces[@]}" -gt 0 ]; then
-    kc delete namespaces "${namespaces[@]}" --ignore-not-found --wait=false >/dev/null
+    for name in "${namespaces[@]}"; do delete_owned namespaces "${name}" "" --wait=false; done
   fi
   local present
   local deleting=()
@@ -791,23 +814,28 @@ cmd_down() {
     rows="$(owned_names "${resource}")" || fail "cannot list ${resource}"
     while IFS='|' read -r namespace name; do
       [ -n "${name}" ] || continue
-      kc delete "${resource}" "${name}" --ignore-not-found --wait=false >/dev/null
+      delete_owned "${resource}" "${name}" "" --wait=false
       deleting+=("${resource}/${name}")
     done <<<"${rows}"
   done
   for resource in clusterrolebindings.rbac.authorization.k8s.io clusterroles.rbac.authorization.k8s.io; do
     rows="$(owned_names "${resource}")" || fail "cannot list ${resource}"
     while IFS='|' read -r namespace name; do
-      [ -n "${name}" ] && kc delete "${resource}" "${name}" --ignore-not-found >/dev/null
+      [ -n "${name}" ] && delete_owned "${resource}" "${name}" ""
     done <<<"${rows}"
   done
   # Kueue finalizes queues and flavors; `up` refuses objects still being deleted,
   # so wait here rather than leave the next `up` to trip over them.
   if [ "${#namespaces[@]}" -gt 0 ] || [ "${#deleting[@]}" -gt 0 ]; then
-    if ! kc wait --for=delete ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --timeout="${WAIT_SECONDS}s" >/dev/null 2>&1; then
-      warn "still being deleted after ${WAIT_SECONDS}s: $(kc get ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --ignore-not-found -o name 2>/dev/null | tr '\n' ' ')"
-      warn "run 'down' again to wait longer; finalizers only clear while Kueue's controller runs"
-      return 0
+    local out
+    if ! out="$(kc wait --for=delete ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --timeout="${WAIT_SECONDS}s" 2>&1 >/dev/null)"; then
+      if [[ "${out}" == *"timed out"* ]]; then
+        warn "still being deleted after ${WAIT_SECONDS}s: $(kc get ${namespaces[@]+"${namespaces[@]/#/namespace/}"} ${deleting[@]+"${deleting[@]}"} --ignore-not-found -o name 2>/dev/null | tr '\n' ' ')"
+        warn "run 'down' again to wait longer; finalizers only clear while Kueue's controller runs"
+      else
+        warn "could not confirm the deletions: ${out}"
+      fi
+      exit 2
     fi
   fi
   ok "removed"

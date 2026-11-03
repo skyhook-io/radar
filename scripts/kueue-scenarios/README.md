@@ -44,7 +44,8 @@ Everything is named `<prefix>-…` (default prefix `radar-kueue`; `--prefix` or
 `KUEUE_SCENARIOS_PREFIX` to change it, at most 32 characters) and labeled
 `radar.skyhook.io/kueue-scenarios=<prefix>` plus `radar.skyhook.io/fixture`
 (`--fixture`, default `kueue-scenarios`). Several people can run the lane on one
-cluster with different prefixes.
+cluster with different prefixes; on the same prefix they share one copy, and
+`up` says so when it resumes existing fixtures.
 
 While the scenarios are up, their admitted pause Pods hold about 850m CPU and
 a few hundred MiB of memory on the cluster.
@@ -220,8 +221,9 @@ and `up` again, or use another prefix.
 named with the prefix (or, for Jobs, sit in a namespace named with it): the
 Jobs, the namespaces (with everything in them, including anything someone added
 later), the cluster-scoped Kueue objects, and the viewer's ClusterRoles and
-ClusterRoleBindings. It waits for them to go, because `up` refuses objects that
-are still being deleted. If Kueue's CRDs are gone it
+ClusterRoleBindings. Each delete names the object and requires the label at the
+moment of deletion. It waits for them to go, because `up` refuses objects that
+are still being deleted, and exits with status 2 if they haven't gone. If Kueue's CRDs are gone it
 skips those kinds. If Kueue's controller is gone but its CRDs remain, Kueue's
 finalizers can keep them terminating; `down` warns instead of waiting forever.
 

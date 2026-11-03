@@ -95,6 +95,11 @@ check "released needs a successful read" 2 released t-busy j
 check "known stops on an unreadable answer" 1 known has_cond t-busy j Admitted True
 check "known stops on a missing Job" 1 known has_cond t-busy other Admitted True
 KC_FAIL=''
+WAIT_SECONDS=600
+check "waiting stops at once on a missing Job" 1 wait_for "never" has_cond t-busy other Admitted True
+WAIT_SECONDS=240
+KC_FAIL="get workloads"
+KC_FAIL=''
 
 echo "==> The check controller keeps what Kueue recorded"
 WORKLOADS="$(workload wl uid-1 Job true '{"admissionChecks":[{"name":"t-check","state":"Pending","retryCount":1},{"name":"other","state":"Ready"}]}' | list)"
@@ -138,6 +143,8 @@ version_line() { DEPLOYMENTS="$(jq -cn --arg i "$1" '{items: [{spec: {template: 
 check "a tag in the validated series is accepted" 0 grep -q '✓' <<<"$(version_line registry.k8s.io/kueue/kueue:v0.18.0)"
 check "a digest-pinned tag is read by its tag" 0 grep -q '✓' <<<"$(version_line registry.k8s.io/kueue/kueue:v0.18.1@sha256:abcd)"
 check "another release warns" 0 grep -q '!' <<<"$(version_line registry.k8s.io/kueue/kueue:v0.19.2)"
+check "a registry port is not a tag" 0 grep -q '✓' <<<"$(version_line registry.example:5000/kueue/kueue:v0.18.0)"
+check "a digest without a tag reads as unknown" 0 grep -q 'version is unknown' <<<"$(version_line registry.example:5000/kueue/kueue@sha256:abcd)"
 
 echo "==> Ownership and cleanup stay inside the prefix"
 objects_in() {
@@ -174,14 +181,18 @@ CRDS="clusterqueues"
 : >"${KC_LOG}"
 cmd_down >/dev/null
 deletes="$(grep '^delete ' "${KC_LOG}")"
-check "deletes the owned Job" 0 grep -q '^delete job.batch j1 -n t-busy ' <<<"${deletes}"
-check "deletes the owned namespace" 0 grep -q '^delete namespaces t-busy ' <<<"${deletes}"
-check "deletes the owned ClusterQueue" 0 grep -q '^delete clusterqueues.kueue.x-k8s.io t-busy ' <<<"${deletes}"
-check "deletes the owned ClusterRole" 0 grep -q '^delete clusterroles.rbac.authorization.k8s.io t-viewer-cluster ' <<<"${deletes}"
+sel='-l radar.skyhook.io/kueue-scenarios=t --field-selector metadata.name='
+check "deletes the owned Job, still requiring the label" 0 grep -qF "delete job.batch -n t-busy ${sel}j1 " <<<"${deletes}"
+check "deletes the owned namespace" 0 grep -qF "delete namespaces ${sel}t-busy " <<<"${deletes}"
+check "deletes the owned ClusterQueue" 0 grep -qF "delete clusterqueues.kueue.x-k8s.io ${sel}t-busy " <<<"${deletes}"
+check "deletes the owned ClusterRole" 0 grep -qF "delete clusterroles.rbac.authorization.k8s.io ${sel}t-viewer-cluster " <<<"${deletes}"
 check "leaves everything else alone" 0 test "$(grep -cE 'j2|copied-label|gpu-cluster-queue' <<<"${deletes}")" = 0
 check "skips kinds whose CRD is gone" 1 grep -q 'resourceflavors' <<<"${deletes}"
 KC_FAIL="get crd cohorts"
 check "an unreadable CRD stops down instead of skipping the kind" 1 cmd_down
+KC_FAIL=''
+KC_FAIL="wait --for=delete"
+check "down exits 2 when it can't confirm the deletions" 2 cmd_down
 KC_FAIL=''
 
 echo "==> create_missing creates only what is absent"
@@ -222,7 +233,7 @@ GET_JSON='{"metadata":{"name":"viewer","labels":{"radar.skyhook.io/kueue-scenari
 cmd_kubeconfig >/dev/null
 check "keeps the whole cluster entry, tls-server-name included" 0 jq -e '.clusters[0].cluster["tls-server-name"] == "internal.example" and .clusters[0].cluster.server == "https://example:443"' "${OUT_PATH}"
 check "uses the requested token" 0 jq -e '.users[0].user.token == "token-123"' "${OUT_PATH}"
-check "is readable by its owner only" 0 test "$(stat -f '%Lp' "${OUT_PATH}" 2>/dev/null || stat -c '%a' "${OUT_PATH}")" = 600
+check "is readable by its owner only" 0 test "$(stat -c '%a' "${OUT_PATH}" 2>/dev/null || stat -f '%Lp' "${OUT_PATH}")" = 600
 check "leaves no temporary file" 0 test "$(find "${OUT_DIR}" -name '.kueue-viewer.*' | wc -l | tr -d ' ')" = 0
 rm -rf -- "${OUT_DIR}"
 
