@@ -258,7 +258,7 @@ func parseKueueQueuePage(r *http.Request, scope string, clusterQueue bool) (kueu
 	if err := decoder.Decode(&cursor); err != nil || decoder.More() {
 		return page, errKueueQueueCursor
 	}
-	if cursor.Version != kueueQueueCursorVersion || cursor.Scope != scope || cursor.Membership != string(page.membership) || cursor.State != page.state || cursor.Context != k8s.ActiveClusterContext() || cursor.After == "" || cursor.Read == "" {
+	if cursor.Version != kueueQueueCursorVersion || cursor.Scope != scope || cursor.Membership != string(page.membership) || cursor.State != page.state || cursor.Context != kueueCursorContext() || cursor.After == "" || cursor.Read == "" {
 		return page, errKueueQueueCursor
 	}
 	page.after, page.read = cursor.After, cursor.Read
@@ -266,8 +266,15 @@ func parseKueueQueuePage(r *http.Request, scope string, clusterQueue bool) (kueu
 }
 
 func (p kueueQueuePage) cursor(after, read string) string {
-	raw, _ := json.Marshal(kueueQueueCursor{Version: kueueQueueCursorVersion, Scope: p.scope, Membership: string(p.membership), State: p.state, Context: k8s.ActiveClusterContext(), After: after, Read: read})
+	raw, _ := json.Marshal(kueueQueueCursor{Version: kueueQueueCursorVersion, Scope: p.scope, Membership: string(p.membership), State: p.state, Context: kueueCursorContext(), After: after, Read: read})
 	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// kueueCursorContext identifies the cluster context a cursor was issued in
+// without carrying its kubeconfig name into URLs and proxy logs.
+func kueueCursorContext() string {
+	sum := sha256.Sum256([]byte(k8s.ActiveClusterContext()))
+	return hex.EncodeToString(sum[:8])
 }
 
 // errKueueQueueReadChanged refuses a later page whose read differs from the

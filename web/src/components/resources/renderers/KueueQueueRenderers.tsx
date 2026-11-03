@@ -17,6 +17,7 @@ interface Props {
 function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueue' | 'LocalQueue' }) {
   const [membership, setMembership] = useState<KueueQueueMembership | undefined>()
   const [state, setState] = useState<string | undefined>()
+  const [restarted, setRestarted] = useState(false)
   const query = useKueueQueueWorkloads(
     { kind, namespace: data.metadata?.namespace, name: data.metadata?.name ?? '', uid: data.metadata?.uid },
     { membership, state },
@@ -32,6 +33,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
   // A cursor issued for another list (a re-created queue, another cluster
   // context) is refused: read the list again from its first page.
   useEffect(() => {
+    if (cursorRejected) setRestarted(true)
     if (cursorRejected) void queryClient.resetQueries({ queryKey: ['kueue-queue-workloads', kind, data.metadata?.namespace ?? '', data.metadata?.name ?? '', data.metadata?.uid ?? ''] })
   }, [cursorRejected, queryClient, kind, data.metadata?.namespace, data.metadata?.name, data.metadata?.uid])
   return (
@@ -45,6 +47,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       error={query.error ? query.error.message : null}
       nextPageError={query.isFetchNextPageError ? query.error?.message ?? null : null}
       stale={query.isPlaceholderData}
+      notice={restarted ? 'The list restarted from its first page because what Radar could read for you changed.' : null}
       upgrade={query.upgrade}
       membership={membership}
       onMembershipChange={setMembership}
@@ -52,7 +55,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       onStateChange={setState}
       hasMore={query.hasNextPage}
       loadingMore={query.isFetchingNextPage}
-      onLoadMore={() => void query.fetchNextPage()}
+      onLoadMore={() => { setRestarted(false); void query.fetchNextPage() }}
       onRetry={pages && pages.length > 1 ? restart : () => void refetch()}
       onNavigate={onNavigate}
     />

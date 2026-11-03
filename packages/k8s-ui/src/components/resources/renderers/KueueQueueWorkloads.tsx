@@ -47,6 +47,8 @@ export interface KueueQueueWorkloadsProps {
   nextPageError?: string | null
   /** The pages shown belong to the previous filter while the new one loads. */
   stale?: boolean
+  /** Shown above the list, e.g. why it restarted from the first page. */
+  notice?: string | null
   onRetry?: () => void
   onNavigate?: (ref: NavigateRef) => void
 }
@@ -66,7 +68,7 @@ export function KueueQueueWorkloads(props: KueueQueueWorkloadsProps) {
 }
 
 function KueueQueueWorkloadsBody({
-  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, nextPageError, stale, onRetry, onNavigate,
+  kind, queue, pages, loading, error, upgrade, membership, onMembershipChange, state, onStateChange, hasMore, loadingMore, onLoadMore, nextPageError, stale, notice, onRetry, onNavigate,
 }: KueueQueueWorkloadsProps) {
   if (upgrade) return <RadarUpgradeNote requirement={upgrade} />
   const first = pages?.[0]
@@ -77,6 +79,7 @@ function KueueQueueWorkloadsBody({
   const local = kind === 'LocalQueue'
   return (
     <div className="space-y-3">
+      {notice && <p className="text-xs text-theme-text-tertiary">{notice}</p>}
       {first.workloads ? (
         <MemberList
           local={local}
@@ -84,7 +87,7 @@ function KueueQueueWorkloadsBody({
           members={first.workloads}
           rows={uniqueRows(pages ?? [])}
           paged={(pages?.length ?? 0) > 1}
-          laterPageError={nextPageError ?? laterPageProblem(pages ?? [])}
+          laterPageError={nextPageError ?? undefined}
           onRefresh={onRetry}
           membership={membership}
           onMembershipChange={onMembershipChange}
@@ -97,7 +100,7 @@ function KueueQueueWorkloadsBody({
           onNavigate={onNavigate}
         />
       ) : (
-        <WorkloadsUnread local={local} queue={queue} code={first.workloadsError?.error_code} message={first.workloadsError?.error} />
+        <WorkloadsUnread local={local} queue={queue} code={first.workloadsError?.error_code} message={first.workloadsError?.error} unenumerated={first.workloadsError?.coverage?.gaps.some(gap => gap.namespaces?.extent === 'unknown')} />
       )}
       {error && !nextPageError && <Retryable message={`Could not refresh: ${error}`} onRetry={onRetry} />}
       {!local && <LocalQueueList response={first} onNavigate={onNavigate} />}
@@ -114,14 +117,6 @@ function Retryable({ message, onRetry }: { message: string; onRetry?: () => void
   )
 }
 
-/**
- * Why a page after the first couldn't be added to it. A later page that read
- * a different scope never arrives: the server refuses its cursor
- * (kueue_cursor_invalid) and the host rereads from the first page.
- */
-export function laterPageProblem(pages: KueueQueueWorkloadsResponse[]): string | undefined {
-  return pages.slice(1).find(page => page.workloadsError)?.workloadsError?.error
-}
 
 /**
  * Rows across pages, once each, in first-seen position with the latest data:
@@ -395,11 +390,13 @@ function queueReported(queue: any): KueueQueueLocalQueue['reported'] {
   return { pending: value(queue?.status?.pendingWorkloads), reserving: value(queue?.status?.reservingWorkloads), admitted: value(queue?.status?.admittedWorkloads) }
 }
 
-function WorkloadsUnread({ local, queue, code, message }: { local: boolean; queue: any; code?: string; message?: string }) {
+function WorkloadsUnread({ local, queue, code, message, unenumerated }: { local: boolean; queue: any; code?: string; message?: string; unenumerated?: boolean }) {
   const namespace = queue?.metadata?.namespace
   let headline: ReactNode = message ?? 'Radar could not read Workloads for this queue.'
   if (code === 'user_forbidden') {
-    headline = local ? `You can't list Workloads in ${namespace}.` : "You can't list Workloads in any namespace Radar shows you."
+    headline = local
+      ? `You can't list Workloads in ${namespace}.`
+      : unenumerated ? "You can't list Workloads in any namespace Radar checked; Radar couldn't list every namespace." : "You can't list Workloads in any namespace Radar shows you."
   } else if (code === 'user_no_namespace_access') {
     headline = "You don't have access to any namespace, so Radar can't list this queue's Workloads for you."
   }
