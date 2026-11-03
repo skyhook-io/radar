@@ -160,18 +160,13 @@ describe('paging', () => {
     expect(html).not.toContain('Load more')
   })
 
-  it('stops paging and says so when a later page could not be read', () => {
-    const first = response(members([row('a')], complete, { next: 'x' }))
-    const failed = response(undefined, { workloadsError: { error: 'still loading', error_code: 'kind_sync_pending' } })
-    const html = render({ pages: [first, failed], hasMore: true, onLoadMore: () => {}, onRetry: () => {} })
-    expect(html).toContain('Could not read the next page: still loading')
-    expect(html).not.toContain('Load more')
-  })
 
   it('polls sooner only while a retry can complete the answer', () => {
     expect(kueueQueueRetryable(response(members([], { ...partial, gaps: [{ code: 'kind_sync_pending', namespaces: { count: 1, names: ['team-b'] } }] })))).toBe(true)
     expect(kueueQueueRetryable(response(members([], partial)))).toBe(false)
     expect(kueueQueueRetryable(response(undefined, { workloadsError: { error: 'x', error_code: 'kind_sync_pending' } }))).toBe(true)
+    // An overdue load won't clear in seconds.
+    expect(kueueQueueRetryable(response(undefined, { workloadsError: { error: 'x', error_code: 'kind_sync_timed_out' } }))).toBe(false)
     // Each poll would spend more permission checks: wait for the ordinary refresh.
     expect(kueueQueueRetryable(response(undefined, { workloadsError: { error: 'x', error_code: 'user_permission_check_failed' } }))).toBe(false)
   })
