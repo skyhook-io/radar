@@ -1,4 +1,4 @@
-import { admissionCheckSeverity, isKueueConditionStale } from './resource-utils-kueue'
+import { admissionCheckSeverity, isKueueConditionStale, kueueAdmissionStatePresentation } from './resource-utils-kueue'
 import { Disclosure } from '../ui/Disclosure'
 import { formatRelativeAgeTime } from '../../utils/format'
 import { Badge } from '../ui/Badge'
@@ -20,6 +20,7 @@ interface KueueAdmissionSectionProps {
 }
 
 const phases = { pending: 'Pending admission', quota_reserved: 'Quota reserved', admitted: 'Admitted', finished: 'Finished' }
+const phaseStates = new Set(['admitted', 'quota_reserved', 'finished', 'deactivated'])
 
 export function KueueAdmissionSection({ presentation = 'card', data, loading, error, forbidden, hinted, externalExecution, hasOwner, onRetry, onNavigate }: KueueAdmissionSectionProps) {
   if (!loading && !error && data && data.workloads.length === 0 && !hinted) return null
@@ -114,7 +115,11 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
       : observation.decision === 'satisfied' ? 'success' : 'warning'
-  const qualifier = observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
+  const admission = kueue?.admission
+  // The phase badge and the inactive badge already say these states.
+  const reason = admission && !phaseStates.has(admission.state) ? kueueAdmissionStatePresentation(admission.state) : null
+  const unrecognizedReason = admission?.state === 'unrecognized' ? admission.blocker?.reason : undefined
+  const qualifier = admission ? null : observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
     <div className={split ? 'grid min-w-0 items-start gap-4 @min-[1024px]/admission:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]' : 'space-y-4'}>
     <div className="min-w-0 space-y-4">
@@ -124,6 +129,7 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium break-all">{identity}</span>
         <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>
+        {reason && <Badge severity={reason.severity}>{reason.label}{unrecognizedReason && <>: <code>{unrecognizedReason}</code></>}</Badge>}
         {qualifier && <span className="text-xs text-theme-text-secondary">{qualifier}</span>}
         {kueue?.active === false && <Badge severity="neutral">Workload inactive</Badge>}
         {deleting && <Badge severity="alert">Deleting</Badge>}

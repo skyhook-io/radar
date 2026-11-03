@@ -24,7 +24,8 @@ func TestForResourceRequiresExactKueueWorkloadGVK(t *testing.T) {
 		want       bool
 	}{
 		{name: "supported", apiVersion: "kueue.x-k8s.io/v1beta2", kind: "Workload", want: true},
-		{name: "old served version is not a compatibility fallback", apiVersion: "kueue.x-k8s.io/v1beta1", kind: "Workload"},
+		{name: "v1beta1 shares every projected field", apiVersion: "kueue.x-k8s.io/v1beta1", kind: "Workload", want: true},
+		{name: "unknown future version", apiVersion: "kueue.x-k8s.io/v1", kind: "Workload"},
 		{name: "same kind in another group", apiVersion: "example.io/v1beta2", kind: "Workload"},
 		{name: "other Kueue kind", apiVersion: "kueue.x-k8s.io/v1beta2", kind: "LocalQueue"},
 	}
@@ -82,8 +83,12 @@ func TestForResourceProjectsOneKueueAdmissionObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, retiredField := range []string{`"stage"`, `"blocker"`, `"controller"`, `"reasonPrecision"`} {
-		if strings.Contains(string(wire), retiredField) {
+	var topLevel map[string]json.RawMessage
+	if err := json.Unmarshal(wire, &topLevel); err != nil {
+		t.Fatal(err)
+	}
+	for _, retiredField := range []string{"stage", "blocker", "controller", "reasonPrecision"} {
+		if _, found := topLevel[retiredField]; found {
 			t.Fatalf("retired universal lifecycle field %s remains in %s", retiredField, wire)
 		}
 	}
@@ -559,12 +564,26 @@ func TestForResourceConcurrentAdmissionUsesExactControllerOwner(t *testing.T) {
 		t.Fatalf("concurrent admission = %+v", details.ConcurrentAdmission)
 	}
 
+	// Conversion keeps owner references, so a v1beta1 Workload can name its
+	// parent with either served version; group and kind are the identity.
+	servedAsV1beta1 := variant.DeepCopy()
+	servedAsV1beta1.SetAPIVersion("kueue.x-k8s.io/v1beta1")
+	if got := onlyObservation(t, ForResource(servedAsV1beta1, resourcecontext.TierBasic)).Kueue.ConcurrentAdmission; got == nil || got.ParentName != "training-parent" {
+		t.Fatalf("v1beta1 Workload lost its v1beta2 parent reference: %+v", got)
+	}
 	oldVersion := variant.DeepCopy()
 	owners := oldVersion.GetOwnerReferences()
 	owners[0].APIVersion = "kueue.x-k8s.io/v1beta1"
 	oldVersion.SetOwnerReferences(owners)
-	if got := onlyObservation(t, ForResource(oldVersion, resourcecontext.TierBasic)).Kueue.ConcurrentAdmission; got != nil {
-		t.Fatalf("unsupported owner version was treated as a parent: %+v", got)
+	if got := onlyObservation(t, ForResource(oldVersion, resourcecontext.TierBasic)).Kueue.ConcurrentAdmission; got == nil || got.ParentName != "training-parent" {
+		t.Fatalf("v1beta1 owner reference was not treated as the same parent: %+v", got)
+	}
+	foreign := variant.DeepCopy()
+	owners = foreign.GetOwnerReferences()
+	owners[0].APIVersion = "example.io/v1beta2"
+	foreign.SetOwnerReferences(owners)
+	if got := onlyObservation(t, ForResource(foreign, resourcecontext.TierBasic)).Kueue.ConcurrentAdmission; got != nil {
+		t.Fatalf("same kind in another group was treated as a parent: %+v", got)
 	}
 
 	ordinary := onlyObservation(t, ForResource(loadFixture(t, "waiting-granular.yaml"), resourcecontext.TierBasic))

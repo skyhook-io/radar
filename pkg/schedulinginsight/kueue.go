@@ -10,15 +10,22 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-var kueueWorkloadV1Beta2 = schema.GroupVersionKind{
-	Group:   "kueue.x-k8s.io",
-	Version: "v1beta2",
-	Kind:    "Workload",
+const (
+	kueueGroup        = "kueue.x-k8s.io"
+	kueueWorkloadKind = "Workload"
+)
+
+// isKueueWorkload accepts the served Workload versions whose status shapes
+// this package reads. v1beta1 and v1beta2 share every classified field;
+// v1beta2-only fields are simply absent from v1beta1 objects.
+func isKueueWorkload(u *unstructured.Unstructured) bool {
+	gvk := u.GroupVersionKind()
+	return gvk.Group == kueueGroup && gvk.Kind == kueueWorkloadKind && (gvk.Version == "v1beta2" || gvk.Version == "v1beta1")
 }
 
 const (
@@ -41,14 +48,16 @@ type workloadCondition struct {
 	LastTransitionTime string
 }
 
-// ForResource returns a scheduling summary only for an exact supported GVK.
+// ForResource returns a scheduling summary only for a supported Kueue
+// Workload version.
 func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resourcecontext.SchedulingSummary {
 	u, ok := obj.(*unstructured.Unstructured)
-	if !ok || u.GroupVersionKind() != kueueWorkloadV1Beta2 {
+	if !ok || !isKueueWorkload(u) {
 		return nil
 	}
 
 	conditions := workloadConditions(u)
+	classification := classifyWorkload(u, conditions)
 	admissionGates, hasIncompleteAdmissionCheck := admissionChecks(u, tier)
 	gates := append(admissionGates, preemptionGates(u)...)
 	sortSchedulingGates(gates)
@@ -57,8 +66,9 @@ func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resource
 	admissionGatedByController := isAdmissionGatedByController(u, conditions)
 
 	kueue := &resourcecontext.KueueScheduling{
-		Phase:                     workloadPhase(conditions),
-		Outcome:                   workloadOutcome(conditions),
+		Phase:                     classification.Phase,
+		Outcome:                   classification.Outcome,
+		Admission:                 &classification.Admission,
 		PodsReady:                 conditionSummaryIfPresent(conditions, "PodsReady", maxPrimaryMessageBytes),
 		WaitingForReplacementPods: conditionSummaryIfPresent(conditions, "WaitingForReplacementPods", maxPrimaryMessageBytes),
 		RequeueState:              requeueState(u),
@@ -74,8 +84,8 @@ func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resource
 		Domain:            resourcecontext.SchedulingDomainAdmission,
 		SubjectGeneration: u.GetGeneration(),
 		Subject: resourcecontext.ContextRef{
-			Kind:      kueueWorkloadV1Beta2.Kind,
-			Group:     kueueWorkloadV1Beta2.Group,
+			Kind:      kueueWorkloadKind,
+			Group:     kueueGroup,
 			Namespace: u.GetNamespace(),
 			Name:      u.GetName(),
 		},
@@ -259,7 +269,7 @@ func queueRefs(u *unstructured.Unstructured) []resourcecontext.SchedulingQueue {
 			Roles: []resourcecontext.SchedulingQueueRole{resourcecontext.SchedulingQueueSubmission},
 			Ref: &resourcecontext.ContextRef{
 				Kind:      "LocalQueue",
-				Group:     kueueWorkloadV1Beta2.Group,
+				Group:     kueueGroup,
 				Namespace: u.GetNamespace(),
 				Name:      queueName,
 			},
@@ -271,7 +281,7 @@ func queueRefs(u *unstructured.Unstructured) []resourcecontext.SchedulingQueue {
 			Roles: []resourcecontext.SchedulingQueueRole{resourcecontext.SchedulingQueueEntitlement},
 			Ref: &resourcecontext.ContextRef{
 				Kind:  "ClusterQueue",
-				Group: kueueWorkloadV1Beta2.Group,
+				Group: kueueGroup,
 				Name:  clusterQueue,
 			},
 		})
@@ -305,7 +315,7 @@ func admissionChecks(u *unstructured.Unstructured, tier resourcecontext.ContextT
 			Name: name,
 			Ref: &resourcecontext.ContextRef{
 				Kind:  "AdmissionCheck",
-				Group: kueueWorkloadV1Beta2.Group,
+				Group: kueueGroup,
 				Name:  name,
 			},
 			NativeState: nativeState,
@@ -530,7 +540,7 @@ func resourceAssignments(state map[string]any) ([]resourcecontext.KueueResourceA
 			assignment.Flavor = flavorName
 			assignment.FlavorRef = &resourcecontext.ContextRef{
 				Kind:  "ResourceFlavor",
-				Group: kueueWorkloadV1Beta2.Group,
+				Group: kueueGroup,
 				Name:  flavorName,
 			}
 		}
@@ -547,14 +557,16 @@ func concurrentAdmission(u *unstructured.Unstructured) *resourcecontext.KueueCon
 		if owner.Controller == nil || !*owner.Controller {
 			continue
 		}
-		if owner.APIVersion != kueueWorkloadV1Beta2.GroupVersion().String() || owner.Kind != kueueWorkloadV1Beta2.Kind {
+		// Version is not identity: conversion keeps owner references, so a
+		// v1beta1 Workload can name a parent by its v1beta2 apiVersion.
+		if resourceid.GroupFromAPIVersion(owner.APIVersion) != kueueGroup || owner.Kind != kueueWorkloadKind {
 			return nil
 		}
 		return &resourcecontext.KueueConcurrentAdmission{
 			ParentName: owner.Name,
 			ParentRef: &resourcecontext.ContextRef{
 				Kind:      owner.Kind,
-				Group:     kueueWorkloadV1Beta2.Group,
+				Group:     kueueGroup,
 				Namespace: u.GetNamespace(),
 				Name:      owner.Name,
 			},

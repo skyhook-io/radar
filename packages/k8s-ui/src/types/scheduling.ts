@@ -45,7 +45,26 @@ export interface SchedulingObservation {
     waitingForReplacementPods?: SchedulingCondition
     requeueState?: { count?: number; requeueAt?: string }
     concurrentAdmission?: { parentName: string; parentRef?: SchedulingRef }
+    admission?: KueueAdmissionState
   }
+}
+
+// Mirrors resourcecontext.KueueAdmissionState. The server is the only place
+// codes are decided; a code this UI does not know still renders verbatim.
+export interface KueueAdmissionFact {
+  code: string
+  source?: 'condition' | 'admission_check' | 'spec'
+  name?: string
+  reason?: string
+  message?: string
+  stale?: boolean
+}
+
+export interface KueueAdmissionState {
+  state: string
+  inactive?: KueueAdmissionFact
+  blocker?: KueueAdmissionFact
+  disruption?: KueueAdmissionFact
 }
 
 export interface KueueAdmissionWorkload {
