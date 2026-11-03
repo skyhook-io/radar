@@ -8185,6 +8185,9 @@ export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQue
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: last => last.workloads?.next,
+    // A changed filter keeps the previous list on screen until the new one
+    // arrives; the renderer drops pages of another queue (by UID).
+    placeholderData: previous => previous,
     enabled: Boolean(queue.name && queue.uid && (queue.kind === 'ClusterQueue' || queue.namespace)) && support !== 'unsupported',
     staleTime: 5000,
     // Poll the first page only: refetching an infinite query rereads every

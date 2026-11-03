@@ -192,7 +192,6 @@ export function LocalQueueRenderer({ data, onNavigate, workloads }: QueueRendere
   return (
     <>
       <QueueStatus data={data} local />
-      {workloads}
       <Section title="Cluster Queue">
         {data.spec?.clusterQueue ? (
           <ResourceLink
@@ -211,6 +210,7 @@ export function LocalQueueRenderer({ data, onNavigate, workloads }: QueueRendere
         )}
       </Section>
       <QuotaAccounting data={data} onNavigate={onNavigate} />
+      {workloads}
       <QueueConditions data={data} />
     </>
   )
@@ -228,8 +228,8 @@ export function ClusterQueueRenderer({ data, onNavigate, workloads }: QueueRende
   return (
     <>
       <QueueStatus data={data} />
-      {workloads}
       <QuotaAccounting data={data} clusterQueue onNavigate={onNavigate} />
+      {workloads}
       <Section title="Admission Policy">
         <PropertyList>
           <Property

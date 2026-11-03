@@ -92,10 +92,10 @@ describe('membership in words', () => {
     expect(membershipText(row('w', { membership: ['submission', 'reservation'], reservation: { clusterQueue: 'cq' } }), false, undefined)).toBe('Submitted through lq · reserved here')
   })
 
-  it('does not call a finished Workload reserved', () => {
+  it('does not call a finished Workload reserved, nor claim it was admitted', () => {
     const done = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, admission: { state: 'finished' }, submission: { localQueue: 'lq', localQueueUID: 'u', clusterQueue: 'cq' } })
-    expect(membershipText(done, false, undefined)).toBe('Was admitted here · its LocalQueue lq now points to cq')
-    expect(membershipText(done, true, 'cq')).toBe('Was admitted in cq')
+    expect(membershipText(done, false, undefined)).toBe('Reservation recorded here · its LocalQueue lq now points to cq')
+    expect(membershipText(done, true, 'cq')).toBe('Reservation recorded in cq')
   })
 })
 
@@ -151,6 +151,15 @@ describe('paging', () => {
     expect(html).toContain('Could not read the next page: the cursor belongs to another list')
     expect(html).not.toContain('Load more')
     expect(html).not.toContain('Could not refresh')
+    expect(html).toContain('Refresh')
+  })
+
+  it('stops paging when a later page could place members differently, though its coverage reads the same', () => {
+    const first = response(members([row('a')], complete, { next: 'x' }))
+    const lostLocalQueues = response(members([row('b')], complete, { submissionUnresolved: { count: 1, names: ['team-a'] } }))
+    expect(render({ pages: [first, lostLocalQueues], onRetry: () => {} })).toContain('what Radar could read changed while paging')
+    const otherScope = response(members([row('b')], yours))
+    expect(render({ pages: [first, otherScope], onRetry: () => {} })).toContain('what Radar could read changed while paging')
   })
 
   it('stops paging when access changed between pages', () => {
