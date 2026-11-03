@@ -500,7 +500,7 @@ func (l kueueReadLocalQueues) Get(namespace, name string) (*unstructured.Unstruc
 }
 
 func kueueQueueMembersPage(members []kueuequeues.Member, page kueueQueuePage, coverage resourceapi.Coverage, read string) *KueueQueueMembers {
-	classified := make(map[*unstructured.Unstructured]resourcecontext.KueueWorkloadClassification, len(members))
+	classified := make(map[*unstructured.Unstructured]schedulinginsight.KueueClassification, len(members))
 	for i, m := range members {
 		if c, ok := schedulinginsight.ClassifyKueueWorkload(m.Workload); ok {
 			classified[m.Workload] = c
