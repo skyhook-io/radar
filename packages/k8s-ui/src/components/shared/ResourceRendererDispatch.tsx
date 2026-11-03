@@ -1,3 +1,5 @@
+import { getStrimziConnectorStatus } from '../resources/resource-utils-strimzi'
+import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnectorRenderer'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
@@ -456,6 +458,7 @@ export interface RendererOverrides {
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
 const KNOWN_KINDS = new Set([
+  'kafkaconnectors',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
@@ -720,6 +723,7 @@ export function ResourceRendererDispatch({
   const isFluxKind = ['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind)
   const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
   const isGroupGatedKind =
+    kind === 'kafkaconnectors' ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
@@ -731,6 +735,7 @@ export function ResourceRendererDispatch({
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
+    (kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io')) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (isFluxKind && isFluxResource)
@@ -1069,6 +1074,7 @@ export function ResourceRendererDispatch({
         {(isCrossplaneXR || isCrossplaneClaim) && <CompositeComp data={data} onNavigate={onNavigate} />}
 
         {kind === 'opentelemetrycollectors' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <CollectorComp data={data} onNavigate={onNavigate} active={active} />}
+        {kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io') && <StrimziConnectorRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
@@ -1129,6 +1135,7 @@ export function diagnoseHealthHint(kind: string, data: any): DiagnoseHealthHint 
 export function getResourceStatus(kind: string, data: any): { text: string; color: string } | null {
   if (!data) return null
   const k = kind.toLowerCase()
+  if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
 
   if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)
