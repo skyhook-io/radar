@@ -53,6 +53,13 @@ describe('the count Radar lists', () => {
     expect(html).toContain("Radar couldn&#x27;t read LocalQueues in team-b")
     expect(emptyMessage(members([], complete, { submissionUnresolved: { count: 1, names: ['team-b'] } }), false, false)).toBe('No Workloads found where Radar could read.')
     expect(render({ pages: [response(members([], complete, { submissionUnresolved: { extent: 'unknown' } }))] })).not.toContain('every namespace')
+    expect(render({ pages: [response(members([row('a')], complete, { submissionUnresolved: { extent: 'all' } }))] })).toContain('any namespace it read Workloads in')
+  })
+
+  it('bounds the state pills too, and never shows an exact count for a lower bound', () => {
+    const html = render({ pages: [response(members([row('a')], partial, { counts: { members: 1, submission: 1, reservation: 0, states: { insufficient_quota: 3, admitted: 2 } } }))], onStateChange: () => {} })
+    expect(html).toContain('Waiting for quota (≥3)')
+    expect(html).toContain('Admitted (≥2)')
   })
 })
 
@@ -74,21 +81,21 @@ describe('empty answers', () => {
 describe('membership in words', () => {
   it('names both queues when the reservation and the LocalQueue disagree', () => {
     const stale = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, submission: { localQueue: 'lq', localQueueUID: 'lq-uid', clusterQueue: 'new-cq' } })
-    expect(membershipText(stale, false, undefined, false)).toBe('Reserved here · its LocalQueue lq now points to new-cq')
-    expect(membershipText(row('w', { reservation: { clusterQueue: 'old-cq' } }), true, 'cq', false)).toBe('Reserved in old-cq · this LocalQueue now points to cq')
+    expect(membershipText(stale, false, undefined)).toBe('Reserved here · its LocalQueue lq now points to new-cq')
+    expect(membershipText(row('w', { reservation: { clusterQueue: 'old-cq' } }), true, 'cq')).toBe('Reserved in old-cq · this LocalQueue now points to cq')
   })
 
   it('says when a LocalQueue was not read rather than calling it missing', () => {
     const reserved = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, submission: undefined })
-    expect(membershipText(reserved, false, undefined, true)).toBe('Reserved here · LocalQueue lq not read')
-    expect(membershipText(reserved, false, undefined, false)).toBe('Reserved here · LocalQueue lq not found')
-    expect(membershipText(row('w', { membership: ['submission', 'reservation'], reservation: { clusterQueue: 'cq' } }), false, undefined, false)).toBe('Submitted through lq · reserved here')
+    expect(membershipText({ ...reserved, localQueueUnread: true }, false, undefined)).toBe('Reserved here · LocalQueue lq not read')
+    expect(membershipText(reserved, false, undefined)).toBe('Reserved here · LocalQueue lq not found')
+    expect(membershipText(row('w', { membership: ['submission', 'reservation'], reservation: { clusterQueue: 'cq' } }), false, undefined)).toBe('Submitted through lq · reserved here')
   })
 
   it('does not call a finished Workload reserved', () => {
     const done = row('w', { membership: ['reservation'], reservation: { clusterQueue: 'cq' }, admission: { state: 'finished' }, submission: { localQueue: 'lq', localQueueUID: 'u', clusterQueue: 'cq' } })
-    expect(membershipText(done, false, undefined, false)).toBe('Was admitted here · its LocalQueue lq now points to cq')
-    expect(membershipText(done, true, 'cq', false)).toBe('Was admitted in cq')
+    expect(membershipText(done, false, undefined)).toBe('Was admitted here · its LocalQueue lq now points to cq')
+    expect(membershipText(done, true, 'cq')).toBe('Was admitted in cq')
   })
 })
 
@@ -137,6 +144,13 @@ describe('paging', () => {
     expect(html).toContain('Showing 2; the list changed while paging')
     expect(html).toContain('Refresh')
     expect(showingText(2, 5, false)).toBe('Showing 2 of 5')
+  })
+
+  it('stops paging when the next-page request itself failed', () => {
+    const html = render({ pages: [response(members([row('a')], complete, { next: 'x' }))], hasMore: true, onLoadMore: () => {}, onRetry: () => {}, error: 'the cursor belongs to another list', nextPageError: 'the cursor belongs to another list' })
+    expect(html).toContain('Could not read the next page: the cursor belongs to another list')
+    expect(html).not.toContain('Load more')
+    expect(html).not.toContain('Could not refresh')
   })
 
   it('stops paging and says so when a later page could not be read', () => {

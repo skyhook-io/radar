@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ResourceRef } from '@skyhook-io/k8s-ui'
 import {
   ClusterQueueRenderer as BaseClusterQueueRenderer,
@@ -22,6 +22,13 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
   )
   // A cached list of an earlier queue with the same name is never shown.
   const pages = query.data?.pages.filter(page => page.queue.uid === data.metadata?.uid)
+  const cursorRejected = query.isFetchNextPageError && (query.error as { data?: { error_code?: string } } | null)?.data?.error_code === 'kueue_cursor_invalid'
+  const { refetch } = query
+  // A cursor issued for another list (a re-created queue, another cluster
+  // context) is refused: read the list again from its first page.
+  useEffect(() => {
+    if (cursorRejected) void refetch()
+  }, [cursorRejected, refetch])
   return (
     <KueueQueueWorkloads
       kind={kind}
@@ -29,6 +36,7 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
       pages={pages?.length ? pages : undefined}
       loading={query.isPending}
       error={query.error ? query.error.message : null}
+      nextPageError={query.isFetchNextPageError ? query.error?.message ?? null : null}
       upgrade={query.upgrade}
       membership={membership}
       onMembershipChange={setMembership}

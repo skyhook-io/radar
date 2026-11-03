@@ -1765,10 +1765,14 @@ Workloads and LocalQueues are each read only where the caller may `list`
 that kind in the namespace (a SubjectAccessReview per namespace, not
 inferred from Pod access), and the response carries `pkg/resourceapi`
 coverage for each read: a namespace the caller can't list is a
-`user_forbidden` gap, one Radar hasn't loaded `kind_sync_pending`, and an
-empty list with complete coverage is a queue confirmed empty. Where Workloads
-were read but LocalQueues weren't, only reservation can place a Workload, and
-`submissionUnresolved` names those namespaces. A denied Workload read does not
+`user_forbidden` gap, one Radar hasn't loaded `kind_sync_pending`. Where
+Workloads were read but LocalQueues weren't, only the admission record can
+place a Workload: `submissionUnresolved` names those namespaces, each such row
+says `localQueueUnread`, and the member counts are lower bounds. An empty list
+is a queue confirmed empty only when the coverage is complete, nothing
+narrowed it, and `submissionUnresolved` is absent. A caller who sees every
+namespace but may list Workloads only in some is checked namespace by
+namespace (within one budget of permission checks per request). A denied Workload read does not
 fail the response: the ClusterQueue answer still lists the LocalQueues
 pointing at it with the counts their controller reports, which is the only
 evidence Radar shows of Workloads the caller can't list. Radar never
@@ -1780,7 +1784,11 @@ mistaken for admission order. A cursor belongs to its queue (by UID), filter
 and cluster context. A member is never returned twice while a list is paged;
 a member that joins behind the cursor appears when the list is read again
 from the start. Counts and coverage describe every member Radar read for the
-caller as of each page's read, not just the page.
+caller as of each page's read, not just the page; the UI takes them, and the
+LocalQueues (sent with the first page only), from the first page. Each row
+carries the shared admission classification (`phase`, `admission`), and
+`counts.states` counts the members by `admission.state`, so a list can be
+filtered to one state with `state=`.
 
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest

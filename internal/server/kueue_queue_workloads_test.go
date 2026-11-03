@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -91,7 +92,7 @@ func kueueQueueFixture() []runtime.Object {
 	}
 }
 
-func initKueueQueueCache(t *testing.T, objects []runtime.Object, configure func(*dynamicfake.FakeDynamicClient)) {
+func initKueueQueueCache(t *testing.T, objects []runtime.Object, configure func(*dynamicfake.FakeDynamicClient)) *dynamicfake.FakeDynamicClient {
 	t.Helper()
 	var namespaces []runtime.Object
 	for _, ns := range []string{"team-a", "team-b", "team-c"} {
@@ -128,6 +129,7 @@ func initKueueQueueCache(t *testing.T, objects []runtime.Object, configure func(
 	if !cache.WaitForSync(kueueClusterQueueGVR, 5*time.Second) {
 		t.Fatal("ClusterQueue cache did not sync")
 	}
+	return dyn
 }
 
 func decodeQueueWorkloads(t *testing.T, response *http.Response, wantStatus int) KueueQueueWorkloadsResponse {
@@ -240,7 +242,7 @@ func TestKueueClusterQueueWorkloadsWithoutAuth(t *testing.T) {
 }
 
 func TestKueueQueueWorkloadsPaging(t *testing.T) {
-	initKueueQueueCache(t, kueueQueueFixture(), nil)
+	dyn := initKueueQueueCache(t, kueueQueueFixture(), nil)
 	get := func(path string, status int) KueueQueueWorkloadsResponse {
 		t.Helper()
 		response, err := http.Get(testServer.URL + path)
@@ -298,6 +300,22 @@ func TestKueueQueueWorkloadsPaging(t *testing.T) {
 	}
 	get("/api/kueue/localqueues/team-a/lq/workloads?membership=reservation", http.StatusBadRequest)
 	get("/api/kueue/clusterqueues/missing/workloads", http.StatusNotFound)
+	// A ClusterQueue re-created under the same name is another list: its old
+	// cursor starts nothing.
+	stale := get("/api/kueue/clusterqueues/cq/workloads?limit=1", http.StatusOK)
+	ctx := context.Background()
+	if err := dyn.Resource(kueueClusterQueueGVR).Delete(ctx, "cq", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	recreated := kueueTestObject("ClusterQueue", "", "cq", nil)
+	recreated.SetUID("ClusterQueue--cq-again")
+	if _, err := dyn.Resource(kueueClusterQueueGVR).Create(ctx, recreated, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		return get("/api/kueue/clusterqueues/cq/workloads", http.StatusOK).Queue.UID == "ClusterQueue--cq-again"
+	})
+	get("/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(stale.Workloads.Next), http.StatusBadRequest)
 	get("/api/kueue/localqueues/team-a/missing/workloads", http.StatusNotFound)
 }
 
@@ -471,6 +489,53 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		}
 		if unchecked == 0 || len(got.Workloads.Items) != 4 {
 			t.Fatalf("over budget: %d unchecked namespaces, members %v", unchecked, memberNames(got.Workloads))
+		}
+	})
+
+	t.Run("a viewer of every namespace with Workload access in some is checked namespace by namespace", func(t *testing.T) {
+		initKueueQueueCache(t, kueueQueueFixture(), nil)
+		env := newAuthTestServer(t)
+		permissions := &auth.UserPermissions{}
+		permissions.SetCanI("get", kueueGroup, "clusterqueues", "", true)
+		for _, resource := range []string{"workloads", "localqueues"} {
+			permissions.SetCanI("list", kueueGroup, resource, "", false)
+			permissions.SetCanI("list", kueueGroup, resource, "team-a", true)
+			permissions.SetCanI("list", kueueGroup, resource, "team-b", false)
+			permissions.SetCanI("list", kueueGroup, resource, "team-c", false)
+		}
+		env.srv.permCache.Set("dave", nil, permissions)
+		got := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "dave", ""), http.StatusOK)
+		if want := []string{"team-a/both", "team-a/deleting", "team-a/finished", "team-a/submitted"}; !slices.Equal(memberNames(got.Workloads), want) {
+			t.Fatalf("members = %v, want %v", memberNames(got.Workloads), want)
+		}
+		validCoverage(t, got.Workloads.Coverage)
+		if got.Workloads.Coverage.Status != resourceapi.CoveragePartial || got.Workloads.Coverage.Gaps[0].Code != readreason.UserForbidden {
+			t.Fatalf("coverage = %+v", got.Workloads.Coverage)
+		}
+	})
+
+	t.Run("no LocalQueue readable anywhere: rows say their LocalQueue was not read", func(t *testing.T) {
+		initKueueQueueCache(t, kueueQueueFixture(), nil)
+		env := newAuthTestServer(t)
+		permissions := &auth.UserPermissions{}
+		permissions.SetCanI("get", kueueGroup, "clusterqueues", "", true)
+		permissions.SetCanI("list", kueueGroup, "workloads", "", true)
+		permissions.SetCanI("list", kueueGroup, "localqueues", "", false)
+		for _, ns := range []string{"team-a", "team-b", "team-c"} {
+			permissions.SetCanI("list", kueueGroup, "localqueues", ns, false)
+		}
+		env.srv.permCache.Set("erin", nil, permissions)
+		got := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "erin", ""), http.StatusOK)
+		if got.LocalQueuesError == nil || got.LocalQueues != nil {
+			t.Fatalf("local queues = %+v, error %+v", got.LocalQueues, got.LocalQueuesError)
+		}
+		if u := got.Workloads.SubmissionUnresolved; u == nil || u.Extent != resourceapi.ExtentAll {
+			t.Fatalf("submission unresolved = %+v", u)
+		}
+		for _, row := range got.Workloads.Items {
+			if !row.LocalQueueUnread || row.Submission != nil || !slices.Equal(row.Membership, []kueuequeues.Kind{kueuequeues.Reservation}) {
+				t.Fatalf("row claims to know its LocalQueue: %+v", row)
+			}
 		}
 	})
 
