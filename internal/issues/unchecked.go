@@ -270,11 +270,19 @@ var kueueRunKinds = map[string]bool{
 	"ray.io/RayJob":             true,
 }
 
-// kueueInventoryGapCovers: when Radar couldn't read Workloads or LocalQueues
-// it can't tell which runs that hides, so the gap concerns every page a
-// Kueue run row could be on.
+// kueueInventoryGapCovers includes a kind's own failed inventory. When Radar
+// couldn't read Workloads or LocalQueues it can't tell which runs that hides,
+// so the gap also concerns every page a Kueue run row could be on.
 func kueueInventoryGapCovers(source issuesapi.UncheckedSource, group, kind string) bool {
-	if source.Source != issuesapi.UncheckedSourceKueue || !kueueRunKinds[group+"/"+canonicalKueueKind(kind)] {
+	if source.Source != issuesapi.UncheckedSourceKueue {
+		return false
+	}
+	if slices.ContainsFunc(source.Kinds, func(k issuesapi.UncheckedKind) bool {
+		return k.Group == group && strings.EqualFold(k.Kind, kind)
+	}) {
+		return true
+	}
+	if !kueueRunKinds[group+"/"+canonicalKueueKind(kind)] {
 		return false
 	}
 	return slices.ContainsFunc(source.Kinds, func(k issuesapi.UncheckedKind) bool {

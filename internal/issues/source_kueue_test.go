@@ -1214,3 +1214,19 @@ func TestKueueMissingQueueRecoveryDoesNotUseUnreadableInventory(t *testing.T) {
 		t.Fatalf("unreadable recovery influenced native evidence: rows=%+v reads=%v", rows, p.reads)
 	}
 }
+
+func TestKueueClusterQueueInventoryGapReachesItsOwnPage(t *testing.T) {
+	p := newFakeKueueProvider()
+	p.gaps[kueueGroup+"/"+kueueClusterQueueKind] = issuesapi.UncheckedReasonSyncPending
+	for _, group := range []string{kueueGroup, "unrelated.io"} {
+		var gaps []issuesapi.UncheckedSource
+		RelatedIssues(p, RelatedIssueOptions{CanReadEvidence: allowAllEvidence, OnUnchecked: func(g []issuesapi.UncheckedSource) { gaps = g }}, group, kueueClusterQueueKind, "", "gpu")
+		if group == kueueGroup {
+			if len(gaps) != 1 || gaps[0].Reason != issuesapi.UncheckedReasonSyncPending || len(gaps[0].Subjects) != 0 {
+				t.Fatalf("ClusterQueue own inventory failure lost: %+v", gaps)
+			}
+		} else if len(gaps) != 0 {
+			t.Fatalf("same kind in another group inherited Kueue gap: %+v", gaps)
+		}
+	}
+}
