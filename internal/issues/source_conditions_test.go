@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -993,6 +994,85 @@ func TestGenericConditionsDuringDeletion(t *testing.T) {
 						t.Fatalf("want one termination root, got %+v", got)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestKServeIntentionalStopConditions(t *testing.T) {
+	for _, tc := range []struct {
+		name, annotation, stopped, group, kind string
+		failureType, failureReason, want       string
+		failureFirst                           bool
+	}{
+		{name: "acknowledged stop", annotation: "true", stopped: "True"},
+		{name: "missing intent", stopped: "True", want: "Ready: Stopped"},
+		{name: "false intent", annotation: "false", stopped: "True", want: "Ready: Stopped"},
+		{name: "noncanonical intent", annotation: "True", stopped: "True", want: "Ready: Stopped"},
+		{name: "missing acknowledgment", annotation: "true", want: "Ready: Stopped"},
+		{name: "unacknowledged stop", annotation: "true", stopped: "False", want: "Ready: Stopped"},
+		{name: "unknown stop", annotation: "true", stopped: "Unknown", want: "Ready: Stopped"},
+		{name: "wrong group", annotation: "true", stopped: "True", group: "serving.kserve.io.example.com", want: "Ready: Stopped"},
+		{name: "wrong kind", annotation: "true", stopped: "True", kind: "LLMInferenceService", want: "Ready: Stopped"},
+		{name: "transformer failure after stop", annotation: "true", stopped: "True", failureType: "TransformerReady", failureReason: "RevisionFailed", want: "TransformerReady: RevisionFailed"},
+		{name: "transformer failure before stop", annotation: "true", stopped: "True", failureType: "TransformerReady", failureReason: "RevisionFailed", failureFirst: true, want: "TransformerReady: RevisionFailed"},
+		{name: "runtime failure", annotation: "true", stopped: "True", failureType: "PredictorReady", failureReason: "RuntimeUnhealthy", want: "PredictorReady: RuntimeUnhealthy"},
+		{name: "explainer failure", annotation: "true", stopped: "True", failureType: "ExplainerReady", failureReason: "RevisionFailed", want: "ExplainerReady: RevisionFailed"},
+		{name: "canary failure", annotation: "true", stopped: "True", failureType: "CanaryPredictorReady", failureReason: "CanariesNotReady", want: "CanaryPredictorReady: CanariesNotReady"},
+		{name: "teardown failure", annotation: "true", stopped: "False", failureType: "Ready", failureReason: "StopFailed", failureFirst: true, want: "Ready: StopFailed"},
+		{name: "teardown failure despite acknowledgment", annotation: "true", stopped: "True", failureType: "PredictorReady", failureReason: "StopFailed", want: "PredictorReady: StopFailed"},
+		{name: "generic independent failure", annotation: "true", stopped: "True", failureType: "Synced", failureReason: "ReconcileError", want: "Synced: ReconcileError"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conds := []map[string]any{{"type": "Ready", "status": "False", "reason": "Stopped"}}
+			for _, typ := range []string{"PredictorReady", "TransformerReady", "ExplainerReady", "CanaryPredictorReady"} {
+				conds = append(conds, map[string]any{"type": typ, "status": "False", "reason": "Stopped"})
+			}
+			if tc.stopped != "" {
+				conds = append(conds, map[string]any{"type": "Stopped", "status": tc.stopped})
+			}
+			if tc.failureType != "" {
+				for i := range conds {
+					if conds[i]["type"] == tc.failureType {
+						conds = append(conds[:i], conds[i+1:]...)
+						break
+					}
+				}
+				failure := map[string]any{"type": tc.failureType, "status": "False", "reason": tc.failureReason}
+				if tc.failureFirst {
+					conds = append([]map[string]any{failure}, conds...)
+				} else {
+					conds = append(conds, failure)
+				}
+			}
+			u := rolloutWithConditions(conds)
+			u.SetName("iris")
+			u.SetNamespace("test")
+			u.SetAnnotations(map[string]string{"serving.kserve.io/stop": tc.annotation})
+			group, kind := tc.group, tc.kind
+			if group == "" {
+				group = "serving.kserve.io"
+			}
+			if kind == "" {
+				kind = "InferenceService"
+			}
+			u.SetAPIVersion(group + "/v1beta1")
+			u.SetKind(kind)
+			before := u.DeepCopy()
+			gvr := schema.GroupVersionResource{Group: group, Version: "v1beta1", Resource: "inferenceservices"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: kind}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			for _, grouped := range []bool{false, true} {
+				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
+				if tc.want == "" {
+					if len(got) != 0 {
+						t.Fatalf("expected quiet stop, got %+v", got)
+					}
+				} else if len(got) != 1 || got[0].Reason != tc.want || got[0].Severity != SeverityWarning || got[0].Group != group {
+					t.Fatalf("expected warning %q in %s, got %+v", tc.want, group, got)
+				}
+			}
+			if !reflect.DeepEqual(before.Object, u.Object) {
+				t.Fatal("condition detection mutated the resource")
 			}
 		})
 	}

@@ -174,7 +174,22 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
-			condition, ok := findActionableCondition(u)
+			condTypes := conditions.DefaultFalseConditionTypes
+			if gvr.Group == "serving.kserve.io" && kind == "InferenceService" {
+				condTypes = append(slices.Clone(condTypes), "PredictorReady", "TransformerReady", "ExplainerReady", "CanaryPredictorReady")
+				stopped, _ := conditions.Find(u, "Stopped")
+				if u.GetAnnotations()["serving.kserve.io/stop"] == "true" && stopped.Status == "True" {
+					// Skip only acknowledged stop conditions; independent component failures remain actionable.
+					condTypes = slices.DeleteFunc(condTypes, func(condType string) bool {
+						if condType != "Ready" && condType != "PredictorReady" && condType != "TransformerReady" && condType != "ExplainerReady" && condType != "CanaryPredictorReady" {
+							return false
+						}
+						condition, _ := conditions.Find(u, condType)
+						return condition.Status == "False" && condition.Reason == "Stopped"
+					})
+				}
+			}
+			condition, ok := findActionableCondition(u, condTypes...)
 			if !ok {
 				continue
 			}
