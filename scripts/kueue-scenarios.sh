@@ -535,6 +535,22 @@ only_lq_for() { # only_lq_for <clusterqueue> <namespace/name>
   jq -e --arg cq "$1" --arg want "$2" '[.items[] | select(.spec.clusterQueue == $cq) | "\(.metadata.namespace)/\(.metadata.name)"] == [$want]' <<<"${json}" >/dev/null
 }
 
+# Nothing outside the lane joins its cohort (a member ClusterQueue or a child Cohort).
+cohort_is_ours() {
+  local cqs cohorts
+  cqs="$(kc get clusterqueues.kueue.x-k8s.io -o json)" || return 2
+  cohorts="$(kc get cohorts.kueue.x-k8s.io -o json)" || return 2
+  pred "[.items[] | select(.spec.cohortName == \"${PREFIX}-cohort\") | .metadata.name] | sort == [\"${PREFIX}-busy\", \"${PREFIX}-lender\"]" "${cqs}" || return $?
+  pred "all(.items[]; .spec.parentName != \"${PREFIX}-cohort\")" "${cohorts}"
+}
+
+# No LocalQueue outside the fixture namespaces feeds a fixture ClusterQueue.
+fixture_lqs_are_ours() {
+  local json
+  json="$(kc get localqueues.kueue.x-k8s.io -A -o json)" || return 2
+  pred "all(.items[] | select(.spec.clusterQueue | startswith(\"${PREFIX}-\")); .metadata.namespace | startswith(\"${PREFIX}-\"))" "${json}"
+}
+
 # Asks the API server, as both viewer identities, whether they may do something.
 viewer_can() { # viewer_can <yes|no> <verb> <resource> <namespace>
   local subject answer
@@ -595,6 +611,9 @@ cmd_verify() {
   expect "hidden-2 admitted in ${hidden}" has_cond "${hidden}" hidden-2 Admitted True
   expect "hidden-pending pending beyond what the cohort can lend" msg_matches "${hidden}" hidden-pending QuotaReserved "maximum capacity"
   expect "${hidden}/busy counts: pending 1, reserving 2, admitted 2" lq_counts_are "${hidden}" busy 1 2 2
+
+  expect "the cohort holds only ${PREFIX}-busy and ${PREFIX}-lender" cohort_is_ours
+  expect "every LocalQueue on a fixture ClusterQueue is in a fixture namespace" fixture_lqs_are_ours
 
   step "3. Stopped with Hold (${PREFIX}-held)"
   expect "ClusterQueue Active=False/Stopped" cq_is "${PREFIX}-held" "$(cond_pred Active False Stopped)"

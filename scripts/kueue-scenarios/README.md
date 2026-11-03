@@ -108,6 +108,13 @@ whether some states appear or last:
   restore them: run `down` and `up`, or use a fresh `--prefix`.
 - `waitForPodsReady`, fair sharing and admission fair sharing change eviction and
   ordering behavior; the expectations assume they are off.
+- RBAC bound to groups every identity has (`system:authenticated`,
+  `system:serviceaccounts`) can give the viewer access the fixtures deny, and
+  then scenarios 2 and 6 can't exist; `verify`'s viewer checks fail. Find the
+  binding with `kubectl auth can-i --list -n <namespace> --as <subject>`.
+- A ClusterQueue or Cohort outside the lane that joins `<prefix>-cohort`, or a
+  LocalQueue outside the fixture namespaces that points at a fixture
+  ClusterQueue, changes borrowing and counts; `verify` checks for both.
 - The long-running pause Jobs ignore Pod disruptions (`podFailurePolicy`), so a
   node drain, consolidation or spot interruption reschedules the Pod instead of
   failing the Job and silently releasing its quota.
