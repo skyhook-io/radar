@@ -38,14 +38,14 @@ import (
 // endpoints. Workloads resolve to a pod set for log fan-out; GitOps reconcilers
 // take a no-pods status path.
 type diagnoseCommonInput struct {
-	Kind      string `json:"kind" jsonschema:"pod/deployment/statefulset/daemonset/Argo Rollout: logs, events and startup blockers; OpenTelemetryCollector/Canary: reconciliation and owned workloads (Canary also shows target); application/kustomization/Flux HelmRelease: sync/health and failure cause; KafkaConnector/KafkaConnect: cached operator evidence; service/ingress/httproute/grpcroute/gateway: network path"`
+	Kind      string `json:"kind" jsonschema:"pod/deployment/statefulset/daemonset/Argo Rollout: logs, events and startup blockers; Job/JobSet/RayJob/Kueue Workload: cached context, related Issues and resource events only; OpenTelemetryCollector/Canary: reconciliation and owned workloads (Canary also shows target); application/kustomization/Flux HelmRelease: sync/health and failure cause; KafkaConnector/KafkaConnect: cached operator evidence; service/ingress/httproute/grpcroute/gateway: network path"`
 	Group     string `json:"group,omitempty" jsonschema:"target API group; set for CRDs or kind collisions (argoproj.io for Rollout); built-ins are inferred"`
 	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes as applicable. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. Uses direct TCP when Radar is in-cluster, K8s API server proxy from a laptop - the same call works either way. Probes can escalate the static verdict when failures are unanimous on a hop, but never soften broken or unknown. Probe failures attributable to the vantage (e.g. NetworkPolicy blocking Radar's path) can produce false-positive escalations; the per-hop chip carries the granular signal. Costs 0-3s wall time. No effect for non-network kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Container string `json:"container,omitempty" jsonschema:"container name to use in each selected workload; defaults to all containers; diagnose a child to choose its own container"`
-	TailLines int    `json:"tail_lines,omitempty" jsonschema:"log lines per Pod/container per stream in each selected workload; default 100, max 1000"`
-	Since     string `json:"since,omitempty" jsonschema:"only fetch logs newer than this duration (e.g. 30s, 10m, 1h); empty = full available history"`
+	Container string `json:"container,omitempty" jsonschema:"for targets that collect logs only (ignored for batch resource evidence): container name; defaults to all containers; diagnose a child to choose its own container"`
+	TailLines int    `json:"tail_lines,omitempty" jsonschema:"for targets that collect logs only (ignored for batch resource evidence): lines per Pod/container per stream; default 100, max 1000"`
+	Since     string `json:"since,omitempty" jsonschema:"for targets that collect logs only (ignored for batch resource evidence): duration (e.g. 30s, 10m, 1h); empty = full available log history"`
 }
 
 // diagnoseInput is the full /mcp contract. InCluster is the only mutating
@@ -266,6 +266,12 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if input.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
+	if kind, group, ok := batchDiagnoseTarget(input.Kind); ok {
+		if input.Group != "" && input.Group != group {
+			return nil, nil, fmt.Errorf("invalid group %q for %s: expected %q", input.Group, input.Kind, group)
+		}
+		return readMCPResource(ctx, getResourceInput{Kind: kind, Group: group, Namespace: input.Namespace, Name: input.Name, Include: "issues,events"}, resourcecontext.TierDiagnostic)
+	}
 	if kind, ok := strimziDiagnoseKind(input.Kind); ok {
 		return handleStrimziDiagnose(ctx, input, kind)
 	}
@@ -313,7 +319,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 func diagnoseWorkload(ctx context.Context, input diagnoseInput, expectedOwner *ownership.Observation) (*diagnoseResponse, error) {
 	kindNorm := normalizeDiagnoseKind(input.Kind)
 	if kindNorm == "" {
-		return nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, Argo Rollout, OpenTelemetryCollector, Canary, application, kustomization, Flux HelmRelease, Strimzi KafkaConnector or KafkaConnect, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
+		return nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, Argo Rollout, Job, JobSet, RayJob, Kueue Workload, OpenTelemetryCollector, Canary, application, kustomization, Flux HelmRelease, Strimzi KafkaConnector or KafkaConnect, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
 	}
 	expectedGroup := workloadDiagnoseGroup(kindNorm)
 	if input.Group != "" && !strings.EqualFold(input.Group, expectedGroup) {
@@ -574,6 +580,20 @@ func diagnoseWorkload(ctx context.Context, input diagnoseInput, expectedOwner *o
 	metricsWG.Wait()
 	resp.Metrics = metrics
 	return &resp, nil
+}
+
+func batchDiagnoseTarget(kind string) (canonical, group string, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "job", "jobs":
+		return "Job", "batch", true
+	case "jobset", "jobsets":
+		return "JobSet", "jobset.x-k8s.io", true
+	case "rayjob", "rayjobs":
+		return "RayJob", "ray.io", true
+	case "workload", "workloads":
+		return "Workload", "kueue.x-k8s.io", true
+	}
+	return "", "", false
 }
 
 // gitopsDiagnoseTarget recognizes the GitOps reconciler kinds diagnose handles

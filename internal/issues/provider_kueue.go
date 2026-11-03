@@ -1,6 +1,7 @@
 package issues
 
 import (
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -13,21 +14,23 @@ import (
 
 func (p *CacheProvider) kueueInventory(group, kind string, namespaces []string) kueueInventory {
 	if p == nil || p.discovery == nil || p.dynamic == nil {
-		return kueueInventory{}
+		return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 	}
 	apiResource, ok := p.discovery.GetResourceWithGroup(kind, group)
 	if !ok {
-		if p.discovery.GroupHadPartialDiscovery(group) {
+		if p.discovery.LastRefreshFailed() || p.discovery.GroupHadPartialDiscovery(group) {
 			return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 		}
 		return kueueInventory{}
 	}
 	gvr := schema.GroupVersionResource{Group: apiResource.Group, Version: apiResource.Version, Resource: apiResource.Name}
-	if err := p.dynamic.EnsureWatching(gvr); err != nil {
-		if p.dynamic.Observation(gvr).State == k8score.DynamicObservationDenied {
-			return kueueInventory{Gap: issuesapi.UncheckedReasonCollectorAccessDenied}
+	if !apiResource.Namespaced || len(namespaces) == 0 {
+		if err := p.dynamic.EnsureWatching(gvr); err != nil {
+			if p.dynamic.Observation(gvr).State == k8score.DynamicObservationDenied {
+				return kueueInventory{Gap: issuesapi.UncheckedReasonCollectorAccessDenied}
+			}
+			return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 		}
-		return kueueInventory{Gap: issuesapi.UncheckedReasonReadFailed}
 	}
 	// List first: a read is what starts a namespace's informer, so checking
 	// sync before it would leave a never-read namespace unsynced for good.
@@ -60,6 +63,9 @@ func (p *CacheProvider) kueueInventory(group, kind string, namespaces []string) 
 			list, err := p.dynamic.ListReadOnly(gvr, ns)
 			if err != nil {
 				gap = issuesapi.UncheckedReasonReadFailed
+				if apierrors.IsForbidden(err) {
+					gap = issuesapi.UncheckedReasonCollectorAccessDenied
+				}
 				continue
 			}
 			if nsGap := p.dynamicSyncGap(gvr, []string{ns}); nsGap != "" {

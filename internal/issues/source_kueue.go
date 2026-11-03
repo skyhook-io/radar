@@ -13,7 +13,6 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
 )
 
@@ -148,38 +147,22 @@ func detectKueueIssues(p Provider, f Filters, unchecked *uncheckedSet) []Issue {
 	// still read, and without LocalQueues the ClusterQueues are.
 	workloads, _ := d.read(kueueGroup, kueueWorkloadKind)
 
-	// Concurrent admission: Kueue makes variant Workloads that are expected to
-	// lose, and the parent's own status reports the race, not one blocked run,
-	// so neither can say on its own that the run needs action.
-	variantParents := map[types.UID]bool{}
-	for _, w := range workloads {
-		if owner := metav1.GetControllerOf(w); owner != nil && isKueueWorkloadOwner(*owner) {
-			variantParents[owner.UID] = true
-		}
-	}
-
 	var out []Issue
 	// Runs that report an inactive or missing queue, by namespace/LocalQueue.
 	dependent := map[string][]kueueRun{}
 	for _, w := range workloads {
-		if w == nil || w.GetDeletionTimestamp() != nil || variantParents[w.GetUID()] {
-			continue
-		}
-		if owner := metav1.GetControllerOf(w); owner != nil && isKueueWorkloadOwner(*owner) {
-			// A concurrent-admission variant is expected to lose; its own
-			// state says nothing about whether the run is blocked.
+		if w == nil {
 			continue
 		}
 		classified, ok := schedulinginsight.ClassifyKueueWorkload(w)
-		if !ok || classified.Admission.Stale {
+		if !ok || classified.Deleting || classified.Parent || classified.Variant || classified.Admission.Stale {
 			continue
 		}
 		state := classified.Admission
 		switch {
 		case isKueueQueueDependency(state.State):
-			queue, _, _ := unstructured.NestedString(w.Object, "spec", "queueName")
-			if queue != "" {
-				key := w.GetNamespace() + "/" + queue
+			if classified.AwaitingAdmission() {
+				key := w.GetNamespace() + "/" + classified.QueueName
 				dependent[key] = append(dependent[key], kueueRun{workload: w, state: state})
 			}
 		case state.Attention == resourcecontext.KueueAttentionActionNeeded:
@@ -258,10 +241,6 @@ func isKueueQueueDependency(code resourcecontext.KueueAdmissionCode) bool {
 		return true
 	}
 	return false
-}
-
-func isKueueWorkloadOwner(owner metav1.OwnerReference) bool {
-	return resourceid.GroupFromAPIVersion(owner.APIVersion) == kueueGroup && owner.Kind == kueueWorkloadKind
 }
 
 // read returns a kind's inventory for the compose's scope, recording a gap
@@ -441,13 +420,13 @@ func (d *kueueDetector) runIssue(w *unstructured.Unstructured, state resourcecon
 }
 
 // kueueFactTransition is when the fact's evidence last changed, when that
-// dates this finding: an Evicted or DeactivationTarget condition, or a
-// check's state. A QuotaReserved condition can stay False while its reason
-// changes, so its transition doesn't date the current reason.
+// dates this finding: a DeactivationTarget condition or a check's state.
+// QuotaReserved can stay False and Evicted can stay True while their reasons
+// change, so their transitions don't date the current finding.
 func kueueFactTransition(w *unstructured.Unstructured, fact *resourcecontext.KueueAdmissionFact) (time.Time, bool) {
 	switch fact.Source {
 	case resourcecontext.KueueFactSourceCondition:
-		if fact.Name != "Evicted" && fact.Name != "DeactivationTarget" {
+		if fact.Name != "DeactivationTarget" {
 			return time.Time{}, false
 		}
 		if cm, ok := kueueConditionMap(w, fact.Name); ok {
@@ -509,10 +488,9 @@ func kueueAdmissionFact(w *unstructured.Unstructured, state resourcecontext.Kueu
 		parts = append(parts, axis.name+": "+kueueFactText(axis.fact)+".")
 	}
 	return issuesapi.DiagnosticFact{
-		Type:       factKueueAdmission,
-		Message:    strings.Join(parts, " "),
-		Confidence: issuesapi.ConfidenceHigh,
-		Refs:       []Ref{kueueWorkloadRef(w)},
+		Type:    factKueueAdmission,
+		Message: strings.Join(parts, " "),
+		Refs:    []Ref{kueueWorkloadRef(w)},
 	}
 }
 
@@ -698,12 +676,18 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 		return localQueues[i].GetNamespace()+"/"+localQueues[i].GetName() < localQueues[j].GetNamespace()+"/"+localQueues[j].GetName()
 	})
 	for _, lq := range localQueues {
-		if lq == nil || lq.GetDeletionTimestamp() != nil || kueueStopped(lq) {
+		if lq == nil {
+			continue
+		}
+		runs := dependent[lq.GetNamespace()+"/"+lq.GetName()]
+		if lq.GetDeletionTimestamp() != nil || kueueStopped(lq) {
+			for _, run := range runs {
+				covered[run.workload.GetUID()] = true
+			}
 			continue
 		}
 		status, reason, lqMessage, current := kueueActive(lq)
 		cqName, _, _ := unstructured.NestedString(lq.Object, "spec", "clusterQueue")
-		runs := dependent[lq.GetNamespace()+"/"+lq.GetName()]
 		if status == "True" && current {
 			// The queue reports itself active now: a run still saying
 			// otherwise is behind, and recovery wins.
@@ -753,6 +737,11 @@ func (d *kueueDetector) queueIssues(dependent map[string][]kueueRun) ([]Issue, m
 				// Kueue says inactive, Radar's inventory says absent: one of
 				// them is behind.
 				continue
+			}
+			// A missing-queue report cannot outvote the queue we just read,
+			// even while the LocalQueue's own condition catches up.
+			for _, run := range runs {
+				covered[run.workload.GetUID()] = true
 			}
 			if d.inGrace(cq) {
 				for _, run := range runs {

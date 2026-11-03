@@ -496,6 +496,13 @@ Pause is separate from recorded readiness, operational issues and audit findings
 
 ## `diagnose` evidence limits
 
+Job, JobSet, RayJob and Kueue Workload diagnosis returns cached resource context,
+canonical related Issues and a bounded sample of resource events through the
+same reads and authorization as `get_resource`. Its `coverage` text states that
+Pods, runtime logs and metrics were not collected. An empty Issues list does not
+establish runtime health. Follow Workload references for admission context and
+Pod references for runtime diagnosis.
+
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
 
 Warning events in workload `diagnose` exclude events whose `involvedObject.uid` belongs to an earlier incarnation of the resource or its current Pods. `get_resource(include=events)` applies the same check to the requested resource only. UID-less events cannot establish which incarnation they describe. Core Node events that use the Node name as their UID are treated as UID-less; mirror Pod events may use the static UID from `kubernetes.io/config.mirror`. When Warning events were excluded this way, `warnings` says how many (cached Event objects, not occurrences) and that they may still explain what happened before, so an empty list is not read as nothing ever having failed; it covers only the resource and its current Pod names, and its absence does not prove that no predecessor failed. `get_events` can include events from earlier incarnations. `get_workload_logs`, generic metric scope and the live Pod inventory and OOM evidence of single-workload rightsizing apply the same current membership rule as `diagnose`; each reads it at its own time, and rightsizing recommendations still come from retained ownership history. `get_workload_logs` reports a workload the synced cache does not hold as not found rather than as zero Pods.

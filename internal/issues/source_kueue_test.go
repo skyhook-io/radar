@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/schedulinginsight"
 )
 
 // fakeKueueProvider serves Kueue inventories from a fixed object set and
@@ -729,6 +730,7 @@ func TestKueueRecreatedRootIsNotGivenTheOldRunsFinding(t *testing.T) {
 func TestKueueConcurrentAdmissionVariantsRaiseNothing(t *testing.T) {
 	job := kueueJob("team", "train")
 	parent := ownedBy(actionableWorkload("team", "parent", "q"), job)
+	parent.SetLabels(map[string]string{"kueue.x-k8s.io/concurrent-admission-parent": "true"})
 	variant := ownedBy(actionableWorkload("team", "variant-a", "q"), parent)
 	got := Compose(newFakeKueueProvider(job, parent, variant), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
 	if reasons := kueueReasons(got); len(reasons) != 0 {
@@ -784,8 +786,8 @@ func TestKueueExecutionStopsAreTheirOwnCategory(t *testing.T) {
 		if len(got) != 1 || got[0].Reason != reason || got[0].Category != issuesapi.CategoryBatchRunStopped || got[0].CategoryGroup != issuesapi.GroupRuntime {
 			t.Fatalf("%s: rows = %+v", cause, got)
 		}
-		if got[0].OnsetUnknown {
-			t.Fatalf("%s: the eviction dates the stop", cause)
+		if !got[0].OnsetUnknown || !got[0].FirstSeen.IsZero() {
+			t.Fatalf("%s: an eviction transition does not date the stop: %+v", cause, got[0])
 		}
 	}
 }
@@ -1113,5 +1115,71 @@ func TestKueueWorkloadInventoryGapReachesRunPages(t *testing.T) {
 		if got := len(gaps) == 1 && gaps[0].Reason == issuesapi.UncheckedReasonSyncPending; got != want {
 			t.Fatalf("%s page: gaps = %+v, want reported=%v", page.Kind, gaps, want)
 		}
+	}
+}
+
+func TestKueueAttemptLocalFlavorFailuresAreUnknownNotIssues(t *testing.T) {
+	for _, scenario := range []struct{ message, state string }{
+		{kueueExceedsMessage, "exceeds_quota"},
+		{"couldn't assign flavors to pod set main: flavor default doesn't match node affinity", "no_matching_flavor"},
+	} {
+		w := kueueWorkload("team", "w", "q", kueueCondition("QuotaReserved", "False", "Pending", scenario.message, 1))
+		classification, ok := schedulinginsight.ClassifyKueueWorkload(w)
+		if !ok || string(classification.Admission.State) != scenario.state || classification.Admission.Attention != "unknown" {
+			t.Fatalf("attempt-local evidence must remain unknown: %+v", classification)
+		}
+		if reasons := kueueReasons(Compose(newFakeKueueProvider(w), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})); len(reasons) != 0 {
+			t.Fatalf("attempt-local evidence raised an Issue: %v", reasons)
+		}
+	}
+}
+
+func TestKueueDeletingRunIsNotAffectedByQueueIssue(t *testing.T) {
+	w := inactiveQueueWorkload("team", "w", "q", "gpu")
+	at := metav1.Now()
+	w.SetDeletionTimestamp(&at)
+	rows := Compose(newFakeKueueProvider(w, brokenClusterQueue("gpu"), kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive)), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
+	for _, row := range rows {
+		if len(row.AffectedRefs) != 0 || row.Kind == kueueWorkloadKind {
+			t.Fatalf("deleting run was claimed: %+v", row)
+		}
+	}
+}
+
+func TestKueueInventoryGapSurvivesSubjectSpecificQueueGap(t *testing.T) {
+	p := newFakeKueueProvider(kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive))
+	p.gaps[kueueGroup+"/"+kueueWorkloadKind] = issuesapi.UncheckedReasonSyncPending
+	p.gaps[kueueGroup+"/"+kueueClusterQueueKind] = issuesapi.UncheckedReasonSyncPending
+	_, stats := ComposeWithStats(p, Filters{Namespaces: []string{"team"}, Limit: NoLimit, CanReadEvidence: allowAllEvidence})
+	gaps := UncheckedFor(stats.Unchecked, "batch", "Job", "team", "unlisted-run")
+	if len(gaps) != 1 || gaps[0].Reason != issuesapi.UncheckedReasonSyncPending || len(gaps[0].Subjects) != 0 {
+		t.Fatalf("Workload inventory gap lost when merged with a LocalQueue subject: %+v", gaps)
+	}
+	if gaps := UncheckedFor(stats.Unchecked, "apps", "Deployment", "team", "web"); len(gaps) != 0 {
+		t.Fatalf("unrelated page unchecked: %+v", gaps)
+	}
+}
+
+func TestKueueMissingQueueFallbackDoesNotOutvotePauseOrRecovery(t *testing.T) {
+	for _, stopped := range []bool{false, true} {
+		lq := kueueLocalQueue("team", "q", "gpu", "False", kueueLocalQueueClusterQueueInactive)
+		if stopped {
+			_ = unstructured.SetNestedField(lq.Object, "Hold", "spec", "stopPolicy")
+		}
+		cq := kueueClusterQueue("gpu", "None", "True", "Ready", "Can admit new workloads")
+		w := kueueWorkload("team", "lagging", "q", kueueCondition("QuotaReserved", "False", "Inadmissible", "ClusterQueue gpu doesn't exist", 1))
+		rows := kueueReasons(Compose(newFakeKueueProvider(w, lq, cq), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence}))
+		if len(rows) != 0 {
+			t.Fatalf("stopped=%v: lagging missing-queue report overrode current queue: %v", stopped, rows)
+		}
+	}
+}
+
+func TestKueueDeactivationDoesNotReuseEarlierEvictionOnset(t *testing.T) {
+	w := kueueWorkload("team", "stopped", "q", kueueCondition("Evicted", "True", "DeactivatedDueToRequeuingLimitExceeded", "requeuing limit reached", 1))
+	_ = unstructured.SetNestedField(w.Object, false, "spec", "active")
+	rows := Compose(newFakeKueueProvider(w), Filters{Limit: NoLimit, CanReadEvidence: allowAllEvidence})
+	if len(rows) != 1 || rows[0].Reason != ReasonKueueRequeuingLimitExceeded || !rows[0].FirstSeen.IsZero() || !rows[0].OnsetUnknown || rows[0].IssueTiming != "" {
+		t.Fatalf("retained eviction timestamp was asserted as deactivation onset: %+v", rows)
 	}
 }
