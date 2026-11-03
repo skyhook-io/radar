@@ -32,6 +32,7 @@ jobs:
       web: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.web == 'true' }}
       app: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.app == 'true' }}
       helm: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.helm == 'true' }}
+      kueue_scenarios: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.kueue_scenarios == 'true' }}
     steps:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         if: github.event_name == 'pull_request'
@@ -105,6 +106,9 @@ jobs:
             helm:
               - 'deploy/helm/**'
               - 'scripts/test-chart.sh'
+            kueue_scenarios:
+              - 'scripts/kueue-scenarios.sh'
+              - 'scripts/kueue-scenarios/**'
 
   pkg:
     name: pkg (shared library)
@@ -254,6 +258,22 @@ jobs:
 
       - name: Check for effort-note paths
         run: go test ./internal/server -run '^TestNoEffortNotesReferencedFromSource$'
+
+  # Offline: kubectl is stubbed, so this needs only bash and jq.
+  kueue-scenarios:
+    name: Kueue scenarios script (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.kueue_scenarios == 'true'
+    strategy:
+      matrix:
+        # macOS runs it under /bin/bash 3.2, which the script supports.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Offline tests
+        run: ${{ matrix.os == 'macos-latest' && '/bin/bash' || 'bash' }} scripts/kueue-scenarios/test.sh
 
   frontend:
     name: Frontend
