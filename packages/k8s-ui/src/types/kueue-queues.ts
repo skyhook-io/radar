@@ -2,6 +2,7 @@
 // GET /api/kueue/{clusterqueues/{name},localqueues/{namespace}/{name}}/workloads
 // serializes it (internal/server/kueue_queue_workloads.go).
 import type { ReadNameSet } from './read-coverage'
+import type { KueueAdmissionState } from './scheduling'
 import type { ResourceReadCoverage, ResourceReadErrorBody } from './resource-coverage'
 
 export type KueueQueueMembership = 'submission' | 'reservation'
@@ -13,25 +14,24 @@ export interface KueueQueueWorkload {
   apiVersion: string
   createdAt: string | null
   deleting: boolean
-  /** Radar's projection of Kueue's lifecycle; absent for API versions it doesn't project. */
+  /** The shared classification of the Workload (RAD-811); absent when Radar doesn't classify it. */
   phase?: 'pending' | 'quota_reserved' | 'admitted' | 'finished' | (string & {})
-  /** The condition behind `phase` describes an older generation of the Workload. */
-  phaseStale?: boolean
+  admission?: KueueAdmissionState
   /** Why the Workload is in this queue. */
   membership: KueueQueueMembership[]
   queueName?: string
   /** Where the Workload's LocalQueue points now, when Radar read it. Not where it pointed at submission. */
-  submission?: { localQueue: string; clusterQueue: string }
+  submission?: { localQueue: string; localQueueUID: string; clusterQueue: string }
   /** The ClusterQueue the Workload reports its admission in. */
   reservation?: { clusterQueue: string }
 }
 
 export interface KueueQueueMembers {
   items: KueueQueueWorkload[]
-  /** Members the membership filter keeps, across all pages. */
+  /** Members the filters keep, across all pages. */
   matching: number
-  /** Over every member Radar read for you; submission and reservation overlap. */
-  counts: { members: number; submission: number; reservation: number }
+  /** Over every member Radar read for you; submission and reservation overlap. `states` counts by admission state. */
+  counts: { members: number; submission: number; reservation: number; states: Record<string, number> }
   next?: string
   coverage: ResourceReadCoverage
   /** Namespaces whose Workloads Radar read but whose LocalQueues it didn't: only reservations place Workloads there. */

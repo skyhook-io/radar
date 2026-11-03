@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/kueuequeues"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
@@ -174,7 +177,7 @@ func TestKueueClusterQueueWorkloadsWithoutAuth(t *testing.T) {
 	if !slices.Equal(memberNames(got.Workloads), want) {
 		t.Fatalf("members = %v, want %v", memberNames(got.Workloads), want)
 	}
-	if got.Workloads.Counts != (kueuequeues.Counts{Members: 6, Submission: 5, Reservation: 4}) || got.Workloads.Matching != 6 {
+	if c := got.Workloads.Counts; c.Members != 6 || c.Submission != 5 || c.Reservation != 4 || got.Workloads.Matching != 6 || c.States["finished"] != 1 || c.States["quota_reserved"] != 3 {
 		t.Fatalf("counts = %+v, matching %d", got.Workloads.Counts, got.Workloads.Matching)
 	}
 	validCoverage(t, got.Workloads.Coverage)
@@ -195,7 +198,7 @@ func TestKueueClusterQueueWorkloadsWithoutAuth(t *testing.T) {
 				t.Fatalf("deleting = %+v", row)
 			}
 		case "finished":
-			if row.Phase != "finished" {
+			if row.Phase != "finished" || row.Admission == nil || row.Admission.State != "finished" {
 				t.Fatalf("finished = %+v", row)
 			}
 		case "both":
@@ -216,16 +219,23 @@ func TestKueueClusterQueueWorkloadsWithoutAuth(t *testing.T) {
 	}
 	validCoverage(t, got.LocalQueues.Coverage)
 
-	// A page on another site gets nothing.
-	request, _ := http.NewRequest(http.MethodGet, testServer.URL+"/api/kueue/clusterqueues/cq/workloads", nil)
-	request.Header.Set("Sec-Fetch-Site", "cross-site")
-	crossSite, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
+	// A page on another site gets nothing from either route.
+	for _, path := range []string{"/api/kueue/clusterqueues/cq/workloads", "/api/kueue/localqueues/team-a/lq/workloads"} {
+		request, _ := http.NewRequest(http.MethodGet, testServer.URL+path, nil)
+		request.Header.Set("Sec-Fetch-Site", "cross-site")
+		crossSite, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		crossSite.Body.Close()
+		if crossSite.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-site read of %s = %d", path, crossSite.StatusCode)
+		}
 	}
-	crossSite.Body.Close()
-	if crossSite.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-site read = %d", crossSite.StatusCode)
+	for _, row := range got.Workloads.Items {
+		if row.Submission != nil && row.Submission.LocalQueueUID == "" {
+			t.Fatalf("submission without the LocalQueue's UID: %+v", row)
+		}
 	}
 }
 
@@ -260,8 +270,32 @@ func TestKueueQueueWorkloadsPaging(t *testing.T) {
 	// A cursor belongs to its queue and filter.
 	get("/api/kueue/clusterqueues/cq/workloads?limit=2&cursor="+url.QueryEscape(cursor), http.StatusBadRequest)
 	get("/api/kueue/clusterqueues/other/workloads?limit=2&membership=reservation&cursor="+url.QueryEscape(cursor), http.StatusBadRequest)
-	get("/api/kueue/clusterqueues/cq/workloads?cursor=garbage", http.StatusBadRequest)
+	response, err := http.Get(testServer.URL + "/api/kueue/clusterqueues/cq/workloads?cursor=garbage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]string
+	_ = json.NewDecoder(response.Body).Decode(&body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest || body["error_code"] != kueueCursorInvalid {
+		t.Fatalf("garbage cursor = %d %v", response.StatusCode, body)
+	}
+	// Later pages don't repeat the LocalQueues.
+	if first := get("/api/kueue/clusterqueues/cq/workloads?limit=1", http.StatusOK); first.LocalQueues == nil || first.Workloads.Next == "" {
+		t.Fatalf("first page = %+v", first)
+	} else if second := get("/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(first.Workloads.Next), http.StatusOK); second.LocalQueues != nil {
+		t.Fatalf("second page repeats the LocalQueues: %+v", second.LocalQueues)
+	}
 	get("/api/kueue/clusterqueues/cq/workloads?limit=0", http.StatusBadRequest)
+	// The state filter applies with membership, across pages, and its cursor carries it.
+	byState := get("/api/kueue/clusterqueues/cq/workloads?state=quota_reserved&membership=reservation&limit=1", http.StatusOK)
+	if byState.Workloads.Matching != 3 || len(byState.Workloads.Items) != 1 || byState.Workloads.Items[0].Admission.State != "quota_reserved" || byState.Workloads.Next == "" {
+		t.Fatalf("by state = %+v", byState.Workloads)
+	}
+	get("/api/kueue/clusterqueues/cq/workloads?membership=reservation&limit=1&cursor="+url.QueryEscape(byState.Workloads.Next), http.StatusBadRequest)
+	if none := get("/api/kueue/clusterqueues/cq/workloads?state=a_code_from_a_newer_radar", http.StatusOK); none.Workloads.Matching != 0 || len(none.Workloads.Items) != 0 {
+		t.Fatalf("unknown state = %+v", none.Workloads)
+	}
 	get("/api/kueue/localqueues/team-a/lq/workloads?membership=reservation", http.StatusBadRequest)
 	get("/api/kueue/clusterqueues/missing/workloads", http.StatusNotFound)
 	get("/api/kueue/localqueues/team-a/missing/workloads", http.StatusNotFound)
@@ -379,6 +413,64 @@ func TestProxyAuth_KueueQueueWorkloads(t *testing.T) {
 		}
 		if got.LocalQueues == nil || len(got.LocalQueues.Items) != 3 || got.LocalQueues.Items[0].WorkloadsGap != readreason.UserForbidden {
 			t.Fatalf("local queues = %+v", got.LocalQueues)
+		}
+	})
+
+	t.Run("two users on one Radar each get only their own counts", func(t *testing.T) {
+		env := setup(t, grants{getCQ: true, workloads: without("team-a"), localQueues: all})
+		bob := &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}}
+		bob.SetCanI("get", kueueGroup, "clusterqueues", "", true)
+		bob.SetCanI("list", kueueGroup, "workloads", "", false)
+		bob.SetCanI("list", kueueGroup, "localqueues", "", false)
+		bob.SetCanI("list", kueueGroup, "workloads", "team-a", true)
+		bob.SetCanI("list", kueueGroup, "localqueues", "team-a", true)
+		env.srv.permCache.Set("bob", nil, bob)
+		alice := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "alice", ""), http.StatusOK)
+		bobs := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "bob", ""), http.StatusOK)
+		if want := []string{"team-b/hidden", "team-c/reserved-only"}; !slices.Equal(memberNames(alice.Workloads), want) || alice.Workloads.Counts.Members != 2 {
+			t.Fatalf("alice = %v %+v", memberNames(alice.Workloads), alice.Workloads.Counts)
+		}
+		if bobs.Workloads.Counts.Members != 4 || bobs.Workloads.Coverage.Status != resourceapi.CoverageComplete {
+			t.Fatalf("bob = %v %+v", memberNames(bobs.Workloads), bobs.Workloads)
+		}
+		for _, lq := range bobs.LocalQueues.Items {
+			if lq.Namespace != "team-a" {
+				t.Fatalf("bob sees a LocalQueue outside his namespaces: %+v", lq)
+			}
+		}
+	})
+
+	t.Run("fresh permission checks stop at the request's budget", func(t *testing.T) {
+		initKueueQueueCache(t, kueueQueueFixture(), nil)
+		env := newAuthTestServer(t)
+		var namespaces []string
+		for i := range readscope.MaxAccessChecks + 10 {
+			namespaces = append(namespaces, fmt.Sprintf("ns-%03d", i))
+		}
+		namespaces = append(namespaces, "team-a")
+		permissions := &auth.UserPermissions{AllowedNamespaces: namespaces}
+		permissions.SetCanI("get", kueueGroup, "clusterqueues", "", true)
+		permissions.SetCanI("list", kueueGroup, "workloads", "team-a", true)
+		permissions.SetCanI("list", kueueGroup, "localqueues", "team-a", true)
+		env.srv.permCache.Set("carol", nil, permissions)
+		var reviews atomic.Int32
+		fakeSARServer(t, func(authv1.ResourceAttributes) bool {
+			reviews.Add(1)
+			return false
+		})
+		got := decodeQueueWorkloads(t, env.authGet(t, "/api/kueue/clusterqueues/cq/workloads", "carol", ""), http.StatusOK)
+		if n := reviews.Load(); n > readscope.MaxAccessChecks {
+			t.Fatalf("%d fresh reviews, budget %d", n, readscope.MaxAccessChecks)
+		}
+		validCoverage(t, got.Workloads.Coverage)
+		var unchecked int
+		for _, gap := range got.Workloads.Coverage.Gaps {
+			if gap.Code == readreason.UserPermissionCheckFailed {
+				unchecked += gap.Namespaces.Count
+			}
+		}
+		if unchecked == 0 || len(got.Workloads.Items) != 4 {
+			t.Fatalf("over budget: %d unchecked namespaces, members %v", unchecked, memberNames(got.Workloads))
 		}
 	})
 

@@ -48,8 +48,10 @@ type Member struct {
 	// QueueName is the Workload's spec.queueName as written.
 	QueueName string
 	// SubmittedTo is the ClusterQueue the Workload's LocalQueue points at now,
-	// when Radar read that LocalQueue.
-	SubmittedTo string
+	// when Radar read that LocalQueue, and LocalQueueUID that LocalQueue's
+	// UID: a LocalQueue re-created under the same name is another one.
+	SubmittedTo   string
+	LocalQueueUID string
 	// ReservedIn is the ClusterQueue the Workload reports its admission in.
 	ReservedIn string
 }
@@ -57,13 +59,11 @@ type Member struct {
 // Has reports whether the member belongs in kind's way.
 func (m Member) Has(kind Kind) bool { return slices.Contains(m.Kinds, kind) }
 
-// LocalQueues says where each Workload's LocalQueue points, as far as Radar
-// read them.
+// LocalQueues finds the LocalQueues Radar read.
 type LocalQueues interface {
-	// Target returns the ClusterQueue LocalQueue namespace/name points at, and
-	// whether Radar read the LocalQueues in namespace. A LocalQueue Radar
-	// read none of in a namespace it read doesn't exist.
-	Target(namespace, name string) (clusterQueue string, read bool)
+	// Get returns LocalQueue namespace/name, nil when it doesn't exist, and
+	// whether Radar read the LocalQueues in namespace at all.
+	Get(namespace, name string) (localQueue *unstructured.Unstructured, read bool)
 }
 
 // QueueName is a Workload's spec.queueName.
@@ -85,7 +85,7 @@ func LocalQueueTarget(lq *unstructured.Unstructured) string {
 }
 
 // ClusterQueueMembers returns the workloads that belong to clusterQueue,
-// each once, sorted by Less. workloads may hold any Workloads, members or not,
+// each once, sorted by Key. workloads may hold any Workloads, members or not,
 // and the same Workload more than once.
 func ClusterQueueMembers(clusterQueue string, workloads []*unstructured.Unstructured, localQueues LocalQueues) []Member {
 	members := make([]Member, 0, len(workloads))
@@ -97,8 +97,8 @@ func ClusterQueueMembers(clusterQueue string, workloads []*unstructured.Unstruct
 		seen[identity(w)] = true
 		m := Member{Workload: w, QueueName: QueueName(w), ReservedIn: ReservedIn(w)}
 		if m.QueueName != "" {
-			if target, read := localQueues.Target(w.GetNamespace(), m.QueueName); read {
-				m.SubmittedTo = target
+			if lq, _ := localQueues.Get(w.GetNamespace(), m.QueueName); lq != nil {
+				m.SubmittedTo, m.LocalQueueUID = LocalQueueTarget(lq), string(lq.GetUID())
 			}
 		}
 		if clusterQueue != "" && m.SubmittedTo == clusterQueue {
@@ -115,10 +115,10 @@ func ClusterQueueMembers(clusterQueue string, workloads []*unstructured.Unstruct
 	return members
 }
 
-// LocalQueueMembers returns the workloads submitted to LocalQueue
-// namespace/name, each once, sorted by Less. target is the ClusterQueue the
-// LocalQueue points at now.
-func LocalQueueMembers(namespace, name, target string, workloads []*unstructured.Unstructured) []Member {
+// LocalQueueMembers returns the workloads submitted to localQueue, each
+// once, sorted by Key.
+func LocalQueueMembers(localQueue *unstructured.Unstructured, workloads []*unstructured.Unstructured) []Member {
+	namespace, name := localQueue.GetNamespace(), localQueue.GetName()
 	members := make([]Member, 0, len(workloads))
 	seen := make(map[string]bool, len(workloads))
 	for _, w := range workloads {
@@ -126,7 +126,7 @@ func LocalQueueMembers(namespace, name, target string, workloads []*unstructured
 			continue
 		}
 		seen[identity(w)] = true
-		members = append(members, Member{Workload: w, Kinds: []Kind{Submission}, QueueName: name, SubmittedTo: target, ReservedIn: ReservedIn(w)})
+		members = append(members, Member{Workload: w, Kinds: []Kind{Submission}, QueueName: name, SubmittedTo: LocalQueueTarget(localQueue), LocalQueueUID: string(localQueue.GetUID()), ReservedIn: ReservedIn(w)})
 	}
 	slices.SortFunc(members, compare)
 	return members
@@ -154,16 +154,18 @@ func compare(a, b Member) int {
 
 // Counts are the numbers of members, each way. A member that belongs both
 // ways counts once in Members and once in each of the others, so Submission
-// and Reservation don't add up to Members.
+// and Reservation don't add up to Members. States counts members by the
+// state stateOf gives them; a member without one isn't counted there.
 type Counts struct {
-	Members     int `json:"members"`
-	Submission  int `json:"submission"`
-	Reservation int `json:"reservation"`
+	Members     int            `json:"members"`
+	Submission  int            `json:"submission"`
+	Reservation int            `json:"reservation"`
+	States      map[string]int `json:"states"`
 }
 
 // Count counts members.
-func Count(members []Member) Counts {
-	c := Counts{Members: len(members)}
+func Count(members []Member, stateOf func(Member) string) Counts {
+	c := Counts{Members: len(members), States: map[string]int{}}
 	for _, m := range members {
 		if m.Has(Submission) {
 			c.Submission++
@@ -171,19 +173,22 @@ func Count(members []Member) Counts {
 		if m.Has(Reservation) {
 			c.Reservation++
 		}
+		if state := stateOf(m); state != "" {
+			c.States[state]++
+		}
 	}
 	return c
 }
 
-// Filter keeps the members that belong in kind's way; an empty kind keeps
-// them all.
-func Filter(members []Member, kind Kind) []Member {
-	if kind == "" {
+// Filter keeps the members that belong in kind's way ("" for any) and whose
+// state stateOf gives is state ("" for any).
+func Filter(members []Member, kind Kind, state string, stateOf func(Member) string) []Member {
+	if kind == "" && state == "" {
 		return members
 	}
 	out := make([]Member, 0, len(members))
 	for _, m := range members {
-		if m.Has(kind) {
+		if (kind == "" || m.Has(kind)) && (state == "" || stateOf(m) == state) {
 			out = append(out, m)
 		}
 	}
