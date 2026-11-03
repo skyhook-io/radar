@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,14 +123,14 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 		s.writeTimelineQueryError(w, err)
 		return
 	}
-	gaps, collectedSince := s.kueueHistoryReads(r, namespace, live, hasEarlierIncarnation(r.Context(), store, clusterContext, key, live.UID))
+	gaps, collectedSince := s.kueueHistoryReads(r, namespace, live, key.Group == "kueue.x-k8s.io" && key.Kind == "Workload" || hasEarlierIncarnation(r.Context(), store, clusterContext, key, live.UID))
 	resp := workloadHistoryResponse{
 		Events:          events,
 		Incomplete:      incomplete,
 		Gaps:            gaps,
 		HistoryCoverage: workloadHistoryCoverage(r.Context(), store, clusterContext, key, live, collectedSince, s.callerReadsAllNamespaces(r)),
 	}
-	if resp.HistoryCoverage != nil && slices.Contains(resp.HistoryCoverage.Reasons, issuesapi.HistoryEventsEvicted) {
+	if !timeline.HistoryEvictedThrough().IsZero() {
 		resp.Incomplete = true
 	}
 	if len(events) > limit {

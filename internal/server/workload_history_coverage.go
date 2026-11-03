@@ -40,7 +40,7 @@ var kueueHistoryKinds = []resourceapi.KindRef{
 // same on every page and say nothing about whether hidden rows exist.
 // watchedSince is when Radar began watching the kinds it does collect, when
 // that is later than this process's observation start.
-func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveIdentity, historicalScope bool) (gaps []resourceapi.Gap, watchedSince time.Time) {
+func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveIdentity, knownDependency bool) (gaps []resourceapi.Gap, watchedSince time.Time) {
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
 	if discovery == nil || dynamicCache == nil {
@@ -62,7 +62,7 @@ func (s *Server) kueueHistoryReads(r *http.Request, namespace string, live liveI
 	allowed, authoritative := s.canReadDecision(r, served[0].gvr.Group, served[0].gvr.Resource, namespace, "list")
 	// When affiliation cannot be checked, qualify the possible dependency
 	// independently of hidden inventory. A gap never asserts an object exists.
-	if !historicalScope && !kueueManagedRoot(dynamicCache, served[0].gvr, namespace, live, allowed && authoritative) {
+	if !knownDependency && !kueueManagedRoot(dynamicCache, served[0].gvr, namespace, live, allowed && authoritative) {
 		return nil, time.Time{}
 	}
 	reads := make([]kueueKindRead, 0, len(served))

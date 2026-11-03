@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -165,5 +166,21 @@ func TestKueueManagedRoot_UnreadableOrDeletedDoesNotConsultInventory(t *testing.
 		if !kueueManagedRoot(nil, schema.GroupVersionResource{}, "ml", live, false) {
 			t.Fatal("unknown affiliation must qualify independently of hidden inventory")
 		}
+	}
+}
+
+func TestWorkloadHistory_ExpiredOwnershipAlwaysQualifiesScope(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	for i := 0; i < 1001; i++ {
+		if err := store.Append(t.Context(), timeline.TimelineEvent{ID: fmt.Sprintf("event-%d", i), Timestamp: time.Now().Add(-time.Hour), ClusterContext: k8s.ActiveClusterContext(), Kind: "ConfigMap", APIVersion: "v1", Namespace: "ml", Name: "noise", UID: "noise"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if timeline.HistoryEvictedThrough().IsZero() {
+		t.Fatal("test did not evict")
+	}
+	code, resp := getWorkloadHistory(t, "/api/workloads/jobs/ml/train/history")
+	if code != 200 || !resp.Incomplete {
+		t.Fatalf("status=%d incomplete=%v; expired ancestry must remain unknown independently of current root age", code, resp.Incomplete)
 	}
 }
