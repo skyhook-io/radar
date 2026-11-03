@@ -85,6 +85,20 @@ func Classify(in classifyInput) issuesapi.Category {
 			ReasonKarpenterNodeClaimProvisioningFailed:
 			return issuesapi.CategoryNodeProvisioningFail
 		}
+		switch in.Reason {
+		case ReasonKueueExceedsQuota,
+			ReasonKueueNoMatchingFlavor,
+			ReasonKueueNamespaceNotEligible,
+			ReasonKueueLocalQueueMissing,
+			ReasonKueueClusterQueueMissing,
+			ReasonKueueClusterQueueInactive,
+			ReasonKueueInvalidWorkload,
+			ReasonKueueAdmissionCheckRejected,
+			ReasonKueueDeactivatedByKueue:
+			return issuesapi.CategoryQueueAdmissionBlocked
+		case ReasonKueueRequeuingLimitExceeded, ReasonKueueMaximumExecutionTimeExceeded:
+			return issuesapi.CategoryBatchRunStopped
+		}
 		// Generic CRD .status.conditions[]=False fallback. Discriminate the
 		// well-known controller families by API group.
 		g := strings.ToLower(in.APIGroup)
