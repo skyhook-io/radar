@@ -63,6 +63,9 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
   const configuredRead = configured ? reads?.clusterQueues?.[configured] : undefined
   const eligibility = configured && reads ? namespaceEligibilityFact({ namespace, clusterQueue: configured, parent: configuredRead, namespaceRead: reads.namespace }) : undefined
   const assignments: any[] = Array.isArray(data.status?.admission?.podSetAssignments) ? data.status.admission.podSetAssignments : []
+  // The Workload's own pending message, shown verbatim when Radar can't evaluate eligibility itself.
+  const quota = (data.status?.conditions ?? []).find((condition: any) => condition?.type === 'QuotaReserved')
+  const pendingMessage: string | undefined = quota?.status === 'False' && !isKueueConditionStale(quota, data.metadata?.generation) ? quota.message : undefined
   return (
     <Section variant="card" title="Admission Path" icon={Route}>
       <ol className="divide-y divide-theme-border">
@@ -82,8 +85,11 @@ export function AdmissionPath({ data, reads, relationships, onNavigate }: { data
               <ClusterQueueReadSummary name={configured} read={configuredRead} onNavigate={onNavigate} />
               <p className="text-xs text-theme-text-tertiary">Configured by LocalQueue {queueName}.</p>
               {eligibility && <div className="text-xs"><span className="text-theme-text-tertiary">Namespace {namespace}: </span><FactValue fact={eligibility} /><FactSource fact={eligibility} /></div>}
+              {eligibility?.tone === 'unknown' && pendingMessage && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary"><span className="text-theme-text-tertiary">Controller-reported on QuotaReserved: </span>{pendingMessage}</p>}
             </> : <p className={muted}>
-              {localQueue?.state === 'found' ? 'The LocalQueue names no ClusterQueue.' : localQueue?.state === 'loading' ? 'Checking…' : 'Unknown until the LocalQueue is read.'}
+              {localQueue?.state === 'found' ? 'The LocalQueue names no ClusterQueue.'
+                : localQueue?.state === 'not_found' ? `None: LocalQueue ${queueName} doesn't exist.`
+                  : localQueue?.state === 'loading' ? 'Checking…' : 'Unknown until the LocalQueue is read.'}
             </p>}
           </Step>
         )}

@@ -28,7 +28,10 @@ export function localQueueInactiveBecauseParentStopped(localQueue: any, parent: 
  */
 export function localQueueStatusWithParent(localQueue: any, parent: RelatedRead | undefined): StatusBadge {
   const own = getLocalQueueStatus(localQueue)
-  return localQueueInactiveBecauseParentStopped(localQueue, parent)
-    ? { ...own, color: healthColors.neutral, level: 'neutral' }
-    : own
+  if (localQueueInactiveBecauseParentStopped(localQueue, parent)) return { ...own, color: healthColors.neutral, level: 'neutral' }
+  // While the parent read that decides the tone is in flight, don't flash the alert tone first.
+  if (parent?.state === 'loading' && own.level === 'alert' && getKueueQueueCondition(localQueue)?.reason === 'ClusterQueueIsInactive') {
+    return { ...own, color: healthColors.unknown, level: 'unknown' }
+  }
+  return own
 }

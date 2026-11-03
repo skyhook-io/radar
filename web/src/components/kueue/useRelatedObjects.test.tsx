@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { useRelatedObjects, type RelatedObjects } from './useRelatedReads'
+import { RELATED_LIST_RECHECK_MS, useRelatedObjects, type RelatedObjects } from './useRelatedReads'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
@@ -26,7 +26,7 @@ beforeEach(() => {
     if (url.pathname === '/api/resources/clusterqueues') {
       return listStatus === 200
         ? new Response(JSON.stringify({ items: [{ metadata: { name: 'present' } }], coverage: { status: 'complete', scope: {}, read: {}, gaps: [] } }), { status: 200 })
-        : new Response(JSON.stringify({ error: 'no list', error_code: 'user_forbidden' }), { status: 403 })
+        : new Response(JSON.stringify(listStatus === 4030 ? { error: 'insufficient permissions' } : { error: 'no list', error_code: 'user_forbidden' }), { status: 403 })
     }
     if (url.pathname === '/api/resources/clusterqueues/_/present') return new Response(JSON.stringify({ resource: { metadata: { name: 'present' } } }), { status: 200 })
     if (url.pathname === '/api/resources/clusterqueues/_/gone') return new Response(JSON.stringify({ error: 'gone', error_code: 'object_not_found' }), { status: 404 })
@@ -65,4 +65,15 @@ it('reads each name with a GET when the viewer may get but not list the kind', a
   expect(latest?.byName.gone).toEqual({ state: 'not_found' })
   expect(latest?.all).toMatchObject({ state: 'unavailable', code: 'user_forbidden' })
   expect(requests).toEqual(expect.arrayContaining(['/api/resources/clusterqueues/_/present', '/api/resources/clusterqueues/_/gone']))
+  // No watch events reach a viewer who can't list the kind, so the GETs re-read on their own.
+  const present = client.getQueryCache().findAll({ queryKey: ['resource', 'clusterqueues', '', 'present'] })[0]
+  const interval = (present?.options as { refetchInterval?: unknown } | undefined)?.refetchInterval
+  expect(typeof interval === 'function' ? interval(present) : interval).toBe(RELATED_LIST_RECHECK_MS)
+})
+
+it('also reads by GET when an older Radar denies the list with an uncoded 403', async () => {
+  listStatus = 4030
+  await render()
+  await vi.waitFor(() => expect(latest?.byName.present.state).toBe('found'), { timeout: 6000 })
+  expect(latest?.all).toMatchObject({ state: 'unavailable', code: undefined })
 })

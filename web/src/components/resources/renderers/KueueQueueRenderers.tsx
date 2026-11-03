@@ -11,9 +11,9 @@ import { selectorHasTerms } from '@skyhook-io/k8s-ui/components/kueue/eligibilit
 import { localQueueStatusWithParent } from '@skyhook-io/k8s-ui/components/kueue/queue-status'
 import { isKueueQueueResource } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
 import type { RelatedRead } from '@skyhook-io/k8s-ui/components/kueue/related-read'
+import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/QueueEvidence'
 import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
 
-const KUEUE_GROUP = 'kueue.x-k8s.io'
 
 type Navigate = (ref: ResourceRef) => void
 
@@ -32,15 +32,15 @@ export function ClusterQueueRenderer({ data, onNavigate }: { data: any; onNaviga
   const flavors = useRelatedObjects('resourceflavors', KUEUE_GROUP, undefined, names.flavors, names.flavors.length > 0)
   const checks = useRelatedObjects('admissionchecks', KUEUE_GROUP, undefined, names.admissionChecks, names.admissionChecks.length > 0)
   const queues = useRelatedObjects('clusterqueues', KUEUE_GROUP, undefined, [], cohort !== '-')
-  const members = useMemo((): RelatedRead<string[]> | undefined => {
-    if (cohort === '-') return undefined
-    if (queues.all.state !== 'found') return queues.all as RelatedRead<string[]>
-    const others = queues.all.object
-      .filter(queue => queue?.metadata?.name !== data.metadata?.name && getClusterQueueCohort(queue) === cohort)
-      .map(queue => String(queue.metadata.name))
-      .sort()
-    return { state: 'found', object: others }
-  }, [cohort, queues, data.metadata?.name])
+  const members: RelatedRead<string[]> | undefined = cohort === '-' ? undefined
+    : queues.all.state !== 'found' ? queues.all as RelatedRead<string[]>
+      : {
+          state: 'found',
+          object: queues.all.object
+            .filter(queue => queue?.metadata?.name !== data.metadata?.name && getClusterQueueCohort(queue) === cohort)
+            .map(queue => String(queue.metadata.name))
+            .sort(),
+        }
   const reads: ClusterQueueReads = {
     flavors: flavors.byName,
     admissionChecks: checks.byName,

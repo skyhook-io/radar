@@ -3,10 +3,10 @@ import { KueueWorkloadRenderer as BaseRenderer } from '@skyhook-io/k8s-ui/compon
 import { getProvisioningRequestStatus, getProvisioningRequestMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kueue'
 import { Badge, ResourceLink, Section, type Relationships, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { selectorHasTerms } from '@skyhook-io/k8s-ui/components/kueue/eligibility'
+import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/QueueEvidence'
 import { useKueueProvisioning } from '../../../api/client'
 import { useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
 
-const KUEUE_GROUP = 'kueue.x-k8s.io'
 
 // Reads the Workload's admission path as the viewer: its LocalQueue, the
 // ClusterQueue that LocalQueue names, the ClusterQueue holding a reservation

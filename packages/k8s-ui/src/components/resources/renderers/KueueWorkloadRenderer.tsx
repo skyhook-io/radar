@@ -14,9 +14,9 @@ import {
 import { formatResources } from '../resource-utils'
 import type { Relationships } from '../../../types'
 import { AdmissionPath, FlavorReasons, type KueueWorkloadReads } from '../../kueue/AdmissionPath'
+import { KUEUE_GROUP } from '../../kueue/QueueEvidence'
 import { admissionCheckSeverity, getKueueWorkloadStatus, getKueueWorkloadPriority, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
 
-const KUEUE_GROUP = 'kueue.x-k8s.io'
 
 interface KueueWorkloadRendererProps {
   data: any

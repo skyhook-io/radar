@@ -4,7 +4,7 @@ import { ResourceLink } from '../ui/drawer-components'
 import { TimeValue } from '../ui/ScheduleValue'
 import { FactGrid, FactRow, FactValue, type Fact } from '../facts'
 import type { StatusBadge } from '../resources/resource-utils'
-import { getAdmissionCheckStatus, getClusterQueueStatus, getKueueQueueCondition } from '../resources/resource-utils-kueue'
+import { getAdmissionCheckStatus, getClusterQueueStatus, getKueueQueueCondition, isKueueConditionStale } from '../resources/resource-utils-kueue'
 import { describeKueuePolicy } from './policy'
 import { isDenied, unreadReason, type RelatedRead } from './related-read'
 import { namespaceEligibility } from './eligibility'
@@ -85,6 +85,14 @@ export function ConfiguredStop({ data }: { data: any }) {
   </div>
 }
 
+/** A related object's condition message; one describing an earlier generation says so. */
+function ReportedMessage({ condition, generation }: { condition: any; generation?: number }) {
+  return <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary">
+    {isKueueConditionStale(condition, generation) && <span className="text-theme-text-tertiary">Reported for generation {condition.observedGeneration} (now {generation}): </span>}
+    {condition.message}
+  </p>
+}
+
 /** A ClusterQueue as read from its own object: link, reported state and stop policy. */
 export function ClusterQueueReadSummary({ name, read, onNavigate }: { name: string; read?: RelatedRead; onNavigate?: Navigate }) {
   const parent = read?.state === 'found' ? read.object : undefined
@@ -97,7 +105,7 @@ export function ClusterQueueReadSummary({ name, read, onNavigate }: { name: stri
     {parent && <p className="text-xs text-theme-text-secondary">
       Read from the ClusterQueue{condition?.reason ? `: ${condition.reason}` : ''}{parent.spec?.stopPolicy && parent.spec.stopPolicy !== 'None' ? ` · stop policy ${parent.spec.stopPolicy}` : ''}
     </p>}
-    {parent && condition?.message && condition.status !== 'True' && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{condition.message}</p>}
+    {parent && condition?.message && condition.status !== 'True' && <ReportedMessage condition={condition} generation={parent.metadata?.generation} />}
   </div>
 }
 
@@ -139,6 +147,6 @@ export function AdmissionCheckRow({ name, onFlavors, read, onNavigate }: { name:
       <ReadState read={read} found={check ? <StatusPill status={getAdmissionCheckStatus(check)} /> : undefined} />
     </div>
     <p className="break-words text-xs text-theme-text-secondary">{onFlavors?.length ? `Applies to flavors: ${onFlavors.join(', ')}` : 'Applies to all flavors'}</p>
-    {condition?.message && condition.status !== 'True' && <p className="whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{condition.message}</p>}
+    {condition?.message && condition.status !== 'True' && <ReportedMessage condition={condition} generation={check.metadata?.generation} />}
   </div>
 }

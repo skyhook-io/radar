@@ -32,6 +32,11 @@ describe('parent-aware LocalQueue tone', () => {
     expect(localQueueInactiveBecauseParentStopped(inactive, found(clusterQueue('other', active('False', 'Stopped', 1))))).toBe(false)
   })
 
+  it('shows the unknown tone, not alert, while the parent read that decides it is in flight', () => {
+    expect(localQueueStatusWithParent(inactive, { state: 'loading' }).level).toBe('unknown')
+    expect(localQueueStatusWithParent(localQueue(active('False', 'ClusterQueueDoesNotExist', 1)), { state: 'loading' }).level).toBe('alert')
+  })
+
   it('never hides the LocalQueue’s own faults behind a stopped parent', () => {
     expect(localQueueStatusWithParent(localQueue(active('False', 'ClusterQueueDoesNotExist', 1)), stoppedParent).level).toBe('alert')
     expect(localQueueStatusWithParent(localQueue(active('False', 'Stopped', 1)), stoppedParent).level).toBe('neutral')
@@ -109,6 +114,11 @@ describe('ClusterQueue related objects', () => {
     expect(html).toContain('references missing ResourceFlavor(s): gone.')
   })
 
+  it('marks a related object’s message from an earlier generation', () => {
+    const html = renderToStaticMarkup(<LocalQueueRenderer data={localQueue(active('False', 'ClusterQueueIsInactive', 1))} reads={{ clusterQueue: found(clusterQueue('parent', active('False', 'FlavorNotFound', 1, 'old cause'), {}, 3)) }} />)
+    expect(html).toContain('Reported for generation 1 (now 3): </span>old cause')
+  })
+
   it('says when the cohort member list may be incomplete or unread', () => {
     expect(renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{ cohortMembers: found([]), cohortMembersCompleteness: 'partial' }} />)).toContain('may be more')
     expect(renderToStaticMarkup(<ClusterQueueRenderer data={cq} reads={{ cohortMembers: found([]), cohortMembersCompleteness: 'unknown' }} />)).toContain('doesn’t say whether its ClusterQueue list is complete')
@@ -151,7 +161,8 @@ describe('Workload admission path', () => {
     expect(none).toContain('No reservation reported')
     const lost = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'nope' })} reads={{ localQueue: { state: 'not_found' } }} />)
     expect(lost).toContain('No LocalQueue nope exists in namespace team')
-    expect(lost).toContain('Unknown until the LocalQueue is read')
+    expect(lost).toContain('None: LocalQueue nope doesn&#x27;t exist.')
+    expect(lost).not.toContain('Unknown until the LocalQueue is read')
     const denied = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' })} reads={{ localQueue: { state: 'unavailable', code: 'user_forbidden' } }} />)
     expect(denied).toContain('Not read: you can’t read it')
     expect(denied).not.toContain('No LocalQueue')
@@ -168,6 +179,17 @@ describe('Workload admission path', () => {
     const html = renderToStaticMarkup(<KueueWorkloadRenderer data={workload({ queueName: 'lq' })} reads={{ localQueue: found(lq), clusterQueues: { cq: stopped } }} />)
     expect(html).toContain('ClusterQueueIsInactive')
     expect(html).not.toContain('status-alert')
+  })
+
+  it('shows the Workload’s own pending message when eligibility can’t be evaluated', () => {
+    const data = workload({ queueName: 'lq' }, { conditions: [{ type: 'QuotaReserved', status: 'False', reason: 'Pending', message: "Workload namespace doesn't match ClusterQueue selector", observedGeneration: 1 }] })
+    const html = renderToStaticMarkup(<KueueWorkloadRenderer data={data} reads={{
+      localQueue: found(localQueue(active('True', 'Ready', 1), 1, 'cq')),
+      clusterQueues: { cq: found(clusterQueue('cq', active('True', 'Ready', 1), { namespaceSelector: { matchLabels: { team: 'a' } } })) },
+      namespace: { state: 'unavailable', code: 'user_forbidden' },
+    }} />)
+    expect(html).toContain('namespace labels not read (you can’t read it)')
+    expect(html).toContain('Controller-reported on QuotaReserved: </span>Workload namespace doesn&#x27;t match ClusterQueue selector')
   })
 
   it('takes the owner from the ownership answer and keeps its unanswered states', () => {
@@ -202,6 +224,7 @@ describe('reasons reported per flavor', () => {
   it('falls back to the verbatim message, and skips stale or unrelated messages', () => {
     const odd = "couldn't assign flavors to pod set main: topology \"rack\" doesn't allow to fit any of 3 pod(s)"
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending(odd)} />)).toContain('topology &quot;rack&quot; doesn&#x27;t allow to fit any of 3 pod(s)')
+    expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending('failed to assign flavors to pod set main: boom')} />)).toContain('Reasons Reported per Flavor')
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={{ ...pending(live), metadata: { name: 'w', namespace: 'team', generation: 2 } }} />)).not.toContain('Reasons Reported per Flavor')
     expect(renderToStaticMarkup(<KueueWorkloadRenderer data={pending("LocalQueue no-such-localqueue doesn't exist")} />)).not.toContain('Reasons Reported per Flavor')
   })

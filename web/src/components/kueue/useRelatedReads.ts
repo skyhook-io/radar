@@ -67,7 +67,8 @@ export interface RelatedObjects {
  */
 export function useRelatedObjects(kind: string, group: string | undefined, namespace: string | undefined, names: string[], enabled = true): RelatedObjects {
   const { data, coverage, error } = useResources<any>(kind, namespace, group, { enabled, cacheScope: getApiBase(), refetchInterval: RELATED_LIST_RECHECK_MS })
-  const listDenied = error instanceof ApiError && readActionFor(error.data?.error_code) === 'user_access'
+  // An older Radar answers a list denial with an uncoded 403; a GET still says what the viewer may open.
+  const listDenied = error instanceof ApiError && (readActionFor(error.data?.error_code) === 'user_access' || (error.status === 403 && !error.data?.error_code))
   const gets = useRelatedReads(names.map(name => ({ kind, group, namespace, name })), enabled && listDenied)
   const all: RelatedRead<any[]> = error ? relatedReadFrom({ error }) : data ? { state: 'found', object: data } : { state: 'loading' }
   const byName = Object.fromEntries(names.map((name, index) => [name, listDenied ? gets[index] : relatedReadInList({ data, coverage, error }, name)]))
@@ -75,11 +76,15 @@ export function useRelatedObjects(kind: string, group: string | undefined, names
   return { byName, all, completeness }
 }
 
-/** Reads single objects through the resource GET with useResource's retry and polling rules. */
+/**
+ * Reads single objects through the resource GET with useResource's retry
+ * rules, re-reading on RELATED_LIST_RECHECK_MS: a viewer who may get but not
+ * list a kind receives no watch events for it.
+ */
 export function useRelatedReads(refs: RelatedRef[], enabled = true): RelatedRead[] {
   const cacheScope = getApiBase()
   const results = useQueries({
-    queries: refs.map(ref => resourceQueryOptions<unknown>(ref.kind, ref.namespace ?? '', ref.name, ref.group, { enabled, cacheScope })),
+    queries: refs.map(ref => resourceQueryOptions<unknown>(ref.kind, ref.namespace ?? '', ref.name, ref.group, { enabled, cacheScope, refetchInterval: RELATED_LIST_RECHECK_MS })),
   })
   return results.map(relatedReadFrom)
 }
