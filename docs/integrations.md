@@ -1802,7 +1802,11 @@ The wording rules were checked against Kueue v0.18 through v0.20; an older
 release's wording that differs reads `unrecognized`. Radar reads a Workload as
 v1beta1 only from a Kueue that serves no v1beta2 (v0.14 or older); the fields
 are the same, but classification there is best-effort because older releases'
-behaviour was not checked.
+behaviour was not checked beyond v0.9's wording (`InactiveWorkload…` eviction
+reasons and "insufficient unused quota in cohort"). With scheduling
+equivalence hashing, Kueue may copy an equivalent Workload's reason with the
+message "Bypassed scheduling evaluation because an equivalent workload recently
+failed"; the code then follows that reason alone.
 
 | Axis | Codes | Evidence |
 |------|-------|----------|
@@ -1842,8 +1846,13 @@ decision whose attention is `unknown`. Consumers pick their population from the 
 Workloads awaiting admission are those whose `phase` is not `admitted` or
 `finished`, that have no `inactive` fact, that name a queue (`spec.queueName`;
 Kueue manages no other) and that are not a concurrent-admission variant;
-`KueueClassification.AwaitingAdmission()` encodes this, so consumers don't
-restate it.
+`KueueClassification.AwaitingAdmission()` encodes this (and leaves out
+Workloads being deleted), so consumers don't restate it. With concurrent
+admission Kueue schedules a parent's variants, not the parent, so a pending
+parent reads `no_decision` with attention `unknown`; its variants say why.
+Each fact's `since` is its condition's or check's `lastTransitionTime`, for
+"how long" questions; it is when the status last changed, not when Kueue last
+tried.
 
 `stale` marks a `state` decided by evidence written for an earlier
 `metadata.generation` (for a blocker read because quota is reserved, that

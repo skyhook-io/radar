@@ -158,6 +158,7 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
         {stale && (admission
           ? <p className={`text-xs ${reason ? 'text-warning-text' : 'text-theme-text-tertiary'}`}>Reported before the Workload's spec last changed; it may not reflect the current spec.</p>
           : <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>)}
+        {admission && !stale && isKueueConditionStale(condition, observation.subjectGeneration) && <p className="text-xs text-theme-text-tertiary">The condition below was reported before the Workload's spec last changed.</p>}
         {hint && <p className="max-w-3xl text-xs text-theme-text-secondary">{hint}</p>}
         {factEvidence && <p className="max-w-3xl whitespace-pre-wrap break-words text-xs text-theme-text-secondary">{factEvidence.name}{factEvidence.reason && ` · ${factEvidence.reason}`}{factEvidence.message && `: ${factEvidence.message}`}</p>}
         {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}

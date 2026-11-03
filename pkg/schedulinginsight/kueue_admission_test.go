@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	rc "github.com/skyhook-io/radar/pkg/resourcecontext"
@@ -500,6 +501,48 @@ func TestClassifyKueueWorkloadStates(t *testing.T) {
 			blocker: rc.KueueAdmissionChecksPending,
 		},
 		{
+			name: "a clause Radar doesn't understand fails the PodSet even when it names no flavor",
+			spec: workloadSpec{conditions: []condition{pending("Pending",
+				"couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor default, 1 more needed, resourceUsage cannot store the admitted total for cpu")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionUnrecognized,
+			blocker: rc.KueueAdmissionUnrecognized,
+		},
+		{
+			name:    "v0.9 quota wording (in cohort)",
+			spec:    workloadSpec{version: "v1beta1", conditions: []condition{pending("Pending", "couldn't assign flavors to pod set main: insufficient unused quota in cohort for cpu in flavor default, 1 more needed")}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionInsufficientQuota,
+			blocker: rc.KueueAdmissionInsufficientQuota,
+		},
+		{
+			name: "v0.9 Kueue deactivation (InactiveWorkload with its cause)",
+			spec: workloadSpec{version: "v1beta1", active: boolPtr(false), conditions: []condition{
+				{kind: "Evicted", status: "True", reason: "InactiveWorkloadRequeuingLimitExceeded", message: "The workload is deactivated due to exceeding the maximum number of re-queuing retries"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionDeactivatedByKueue,
+			inactive:   rc.KueueAdmissionDeactivatedByKueue,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name: "v0.9 deactivation by a person",
+			spec: workloadSpec{version: "v1beta1", active: boolPtr(false), conditions: []condition{
+				{kind: "Evicted", status: "True", reason: "InactiveWorkload", message: "The workload is deactivated"},
+			}},
+			phase:      rc.KueuePhasePending,
+			state:      rc.KueueAdmissionDeactivated,
+			inactive:   rc.KueueAdmissionDeactivated,
+			disruption: rc.KueueAdmissionEvicted,
+		},
+		{
+			name:    "a flavor that only serves topology-aware scheduling",
+			spec:    workloadSpec{conditions: []condition{pending("Pending", `couldn't assign flavors to pod set main: Flavor "tas" supports only TopologyAwareScheduling`)}},
+			phase:   rc.KueuePhasePending,
+			state:   rc.KueueAdmissionNoMatchingFlavor,
+			blocker: rc.KueueAdmissionNoMatchingFlavor,
+		},
+		{
 			name:    "untolerated taint in every flavor",
 			spec:    workloadSpec{conditions: []condition{pending("Pending", legacyTaintMismatch)}},
 			phase:   rc.KueuePhasePending,
@@ -932,7 +975,7 @@ func TestClassifyKueueWorkloadKeepsNativeEvidence(t *testing.T) {
 	got := classify(t, workloadSpec{conditions: []condition{pending("SomethingNew", "a future Kueue reason")}}).Admission
 	want := &rc.KueueAdmissionFact{
 		Code: rc.KueueAdmissionUnrecognized, Source: rc.KueueFactSourceCondition, Name: "QuotaReserved",
-		Reason: "SomethingNew", Message: "a future Kueue reason",
+		Reason: "SomethingNew", Message: "a future Kueue reason", Since: "2026-11-01T10:00:00Z",
 	}
 	if !reflect.DeepEqual(got.Blocker, want) {
 		t.Fatalf("blocker = %+v, want %+v", got.Blocker, want)
@@ -1080,6 +1123,12 @@ func TestAwaitingAdmissionEncodesTheDocumentedPopulation(t *testing.T) {
 		{"admitted", buildWorkload(workloadSpec{conditions: []condition{reserved, admitted}}), false},
 		{"deactivated", buildWorkload(workloadSpec{active: boolPtr(false)}), false},
 		{"concurrent-admission variant", loadFixture(t, "concurrent-variant.yaml"), false},
+		{"being deleted", func() *unstructured.Unstructured {
+			u := buildWorkload(workloadSpec{conditions: []condition{pending("Pending", legacyUnusedQuota)}})
+			now := metav1.Now()
+			u.SetDeletionTimestamp(&now)
+			return u
+		}(), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, _ := ClassifyKueueWorkload(test.u)
@@ -1310,5 +1359,14 @@ func TestTruncatedFlavorMessageProvesOnlyItsCompleteSegments(t *testing.T) {
 	proven = proven[:32*1024-len(" ...")] + " ..."
 	if got := classify(t, workloadSpec{conditions: []condition{pending("Pending", proven)}}).Admission; got.State != rc.KueueAdmissionExceedsQuota {
 		t.Fatalf("complete segment before the cut read as %s", got.State)
+	}
+}
+
+func TestConcurrentAdmissionParentDefersToItsVariants(t *testing.T) {
+	u := buildWorkload(workloadSpec{conditions: []condition{pending("PendingEvaluation", "Workload is pending evaluation in the scheduling queue")}})
+	u.SetLabels(map[string]string{concurrentAdmissionParentLabel: "true"})
+	got, _ := ClassifyKueueWorkload(u)
+	if !got.Parent || got.Admission.State != rc.KueueAdmissionNoDecision || got.Admission.Attention != rc.KueueAttentionUnknown || !got.AwaitingAdmission() {
+		t.Fatalf("parent = %+v", got)
 	}
 }

@@ -14,23 +14,28 @@ import (
 // KueueClassification is one Workload's lifecycle phase, terminal outcome and
 // admission state. Outcome is empty until Phase is finished, and also for a
 // finish reason Kueue does not name as success or failure. QueueName is the
-// submission LocalQueue (empty when the Workload names none), and Variant
-// marks a concurrent-admission variant, whose parent Workload stands for the
-// same job.
+// submission LocalQueue (empty when the Workload names none). With concurrent
+// admission, Kueue schedules a parent's variants rather than the parent, so a
+// pending parent reports no decision of its own and its variants carry the
+// answer: Variant and Parent mark the two. Deleting marks a Workload with a
+// deletion timestamp.
 type KueueClassification struct {
 	Phase     rc.KueuePhase
 	Outcome   rc.KueueOutcome
 	Admission rc.KueueAdmissionState
 	QueueName string
 	Variant   bool
+	Parent    bool
+	Deleting  bool
 }
 
 // AwaitingAdmission reports whether the Workload counts as waiting for
-// admission: it names a queue, is not a concurrent-admission variant, is not
-// admitted or finished, and is not withdrawn. Consumers that count waiting
-// Workloads use this rather than restating the rule.
+// admission: it names a queue, is not a concurrent-admission variant or being
+// deleted, is not admitted or finished, and is not withdrawn. A parent counts
+// once for its job. Consumers that count waiting Workloads use this rather
+// than restating the rule.
 func (c KueueClassification) AwaitingAdmission() bool {
-	return c.QueueName != "" && !c.Variant && c.Admission.Inactive == nil &&
+	return c.QueueName != "" && !c.Variant && !c.Deleting && c.Admission.Inactive == nil &&
 		c.Phase != rc.KueuePhaseAdmitted && c.Phase != rc.KueuePhaseFinished
 }
 
@@ -52,12 +57,20 @@ func ClassifyKueueWorkload(obj runtime.Object) (classification KueueClassificati
 func classifyWorkload(u *unstructured.Unstructured, conditions map[string]workloadCondition) KueueClassification {
 	phase := workloadPhase(conditions)
 	queueName, _, _ := unstructured.NestedString(u.Object, "spec", "queueName")
+	admission := admissionState(u, conditions, phase)
+	parent := u.GetLabels()[concurrentAdmissionParentLabel] == "true"
+	if parent && admission.State == rc.KueueAdmissionNoDecision {
+		// Kueue never schedules the parent itself; its variants say why.
+		admission.Attention = rc.KueueAttentionUnknown
+	}
 	return KueueClassification{
 		Phase:     phase,
 		Outcome:   workloadOutcome(conditions),
-		Admission: admissionState(u, conditions, phase),
+		Admission: admission,
 		QueueName: queueName,
 		Variant:   concurrentAdmission(u) != nil,
+		Parent:    parent,
+		Deleting:  u.GetDeletionTimestamp() != nil,
 	}
 }
 
@@ -108,7 +121,10 @@ func admissionState(u *unstructured.Unstructured, conditions map[string]workload
 	return state
 }
 
-const externalAdmissionGateMessage = "Admission is gated by"
+const (
+	externalAdmissionGateMessage   = "Admission is gated by"
+	concurrentAdmissionParentLabel = "kueue.x-k8s.io/concurrent-admission-parent"
+)
 
 // preemptionGateIsCurrent reports whether BlockedOnPreemptionGates explains
 // the current attempt. Kueue writes it together with QuotaReserved (v0.18
@@ -184,6 +200,7 @@ func (c classifier) conditionFact(code rc.KueueAdmissionCode, condition workload
 		Name:    condition.Type,
 		Reason:  condition.Reason,
 		Message: truncateMessage(condition.Message, maxPrimaryMessageBytes),
+		Since:   condition.LastTransitionTime,
 		Stale:   c.isStale(condition),
 	}
 }
@@ -206,9 +223,9 @@ func (c classifier) inactive() *rc.KueueAdmissionFact {
 		}
 		evicted, evictedNow := trueCondition(c.conditions, "Evicted")
 		switch {
-		case evictedNow && strings.HasPrefix(evicted.Reason, "DeactivatedDueTo") && !c.reactivatedSince(evicted):
+		case evictedNow && kueueDeactivationCause(evicted.Reason) && !c.reactivatedSince(evicted):
 			return c.conditionFact(rc.KueueAdmissionDeactivatedByKueue, evicted)
-		case evictedNow && evicted.Reason != "Deactivated":
+		case evictedNow && evicted.Reason != "Deactivated" && evicted.Reason != "InactiveWorkload":
 			// Includes a Kueue cause from before a later reactivation: this
 			// deactivation came after it, with no cause recorded.
 			return c.conditionFact(rc.KueueAdmissionDeactivated, evicted)
@@ -222,6 +239,14 @@ func (c classifier) inactive() *rc.KueueAdmissionFact {
 		return c.conditionFact(rc.KueueAdmissionOnHold, quota)
 	}
 	return nil
+}
+
+// kueueDeactivationCause reports an Evicted reason in which Kueue recorded its
+// own deactivation cause: DeactivatedDueTo<Cause>, or InactiveWorkload<Cause>
+// before Kueue v0.10 renamed it.
+func kueueDeactivationCause(reason string) bool {
+	return strings.HasPrefix(reason, "DeactivatedDueTo") ||
+		(strings.HasPrefix(reason, "InactiveWorkload") && reason != "InactiveWorkload")
 }
 
 // reactivatedSince reports whether the Workload was reactivated after this
@@ -412,13 +437,15 @@ func messageBlockerCode(message string) rc.KueueAdmissionCode {
 }
 
 var (
-	unusedQuotaClause = regexp.MustCompile(`insufficient unused quota for \S+ in flavor (\S+?),`)
+	unusedQuotaClause = regexp.MustCompile(`insufficient unused quota (?:in cohort )?for \S+ in flavor (\S+?),`)
 	maxQuotaClause    = regexp.MustCompile(`insufficient quota for \S+ in flavor (\S+?),`)
 	mismatchClauses   = []*regexp.Regexp{
 		regexp.MustCompile(`untolerated taint \{[^}]*\} in flavor ([^,\s]+)`),
 		regexp.MustCompile(`flavor (\S+) doesn't match node affinity`),
 		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not support TopologyAwareScheduling`),
 		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not contain the requested level`),
+		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? supports only TopologyAwareScheduling`),
+		regexp.MustCompile(`[Ff]lavor "?([^"\s]+)"? does not contain a topology level required by topology spreading`),
 		regexp.MustCompile(`could not assign (\S+) flavor since the original workload is assigned`),
 	}
 )
@@ -470,7 +497,7 @@ func flavorAssignmentCode(message string) rc.KueueAdmissionCode {
 		// Every flavor the segment names must be accounted for: a flavor whose
 		// only failure Radar does not understand might still fit, so it keeps
 		// the PodSet from being called waiting or never-fitting.
-		couldFit, unexplained := false, false
+		couldFit, unexplained := false, hasUnknownClause(segment)
 		lower := strings.ToLower(segment)
 		for _, flavor := range mentionedFlavors(segment) {
 			switch {
@@ -516,6 +543,28 @@ const (
 	kueueMaxConditionMessage = 32 * 1024
 	kueueTruncationSuffix    = " ..."
 )
+
+// knownClauses match whole clauses of a flavor-assignment segment. What is
+// left after removing them is a clause Radar does not understand, even when it
+// names no flavor.
+var knownClauses = []*regexp.Regexp{
+	regexp.MustCompile(`^(?:couldn't assign flavors to pod set )?[^:]+: `),
+	regexp.MustCompile(`insufficient unused quota (?:in cohort )?for \S+ in flavor \S+?, \S+ more needed`),
+	regexp.MustCompile(`insufficient quota for \S+ in flavor \S+?, previously considered podsets requests \([^)]*\) \+ current podset request \([^)]*\) > maximum capacity \([^)]*\)`),
+	regexp.MustCompile(`untolerated taint \{[^}]*\} in flavor [^,\s]+`),
+	regexp.MustCompile(`flavor \S+ doesn't match node affinity`),
+	regexp.MustCompile(`[Ff]lavor "?[^"\s]+"? (?:does not support TopologyAwareScheduling|does not contain the requested level|supports only TopologyAwareScheduling|does not contain a topology level required by topology spreading)`),
+	regexp.MustCompile(`could not assign \S+ flavor since the original workload is assigned: [^,\s]+`),
+	regexp.MustCompile(`skipping flavor \S+ (?:due to WorkloadAllowedResourceFlavorAnnotation annotation|as it is not found in the nomination mapping for resource \S+)`),
+	regexp.MustCompile(`resource \S+ unavailable in ClusterQueue`),
+}
+
+func hasUnknownClause(segment string) bool {
+	for _, clause := range knownClauses {
+		segment = clause.ReplaceAllString(segment, "")
+	}
+	return strings.Trim(segment, " ,") != ""
+}
 
 var skippedFlavorClause = regexp.MustCompile(`skipping flavor (\S+) (?:due to|as it is not found)`)
 
@@ -580,7 +629,7 @@ func queueMessageCode(message string, missing, inactive rc.KueueAdmissionCode) r
 }
 
 type checkState struct {
-	name, state, message string
+	name, state, message, since string
 }
 
 func (s checkState) fact(code rc.KueueAdmissionCode) *rc.KueueAdmissionFact {
@@ -590,6 +639,7 @@ func (s checkState) fact(code rc.KueueAdmissionCode) *rc.KueueAdmissionFact {
 		Name:    s.name,
 		Reason:  s.state,
 		Message: truncateMessage(s.message, maxPrimaryMessageBytes),
+		Since:   s.since,
 	}
 }
 
@@ -607,7 +657,8 @@ func (c classifier) admissionChecks() []checkState {
 		}
 		state, _ := entry["state"].(string)
 		message, _ := entry["message"].(string)
-		checks = append(checks, checkState{name: name, state: state, message: message})
+		since, _ := entry["lastTransitionTime"].(string)
+		checks = append(checks, checkState{name: name, state: state, message: message, since: since})
 	}
 	sort.SliceStable(checks, func(i, j int) bool {
 		if left, right := admissionCheckRank(checks[i].state), admissionCheckRank(checks[j].state); left != right {

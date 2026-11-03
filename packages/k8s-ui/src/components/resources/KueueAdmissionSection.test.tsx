@@ -175,6 +175,12 @@ describe('Kueue admission investigation', () => {
     expect(render(response({ kueue: { phase: 'pending', admission: { state: 'insufficient_quota', attention: 'waiting' } } }))).not.toContain('ask an admin')
   })
 
+  it('quietly marks a stale primary condition under a current classification', () => {
+    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'old', observedGeneration: 1 }, kueue: { phase: 'pending', admission: { state: 'requeue_backoff', attention: 'waiting', blocker: { code: 'requeue_backoff', source: 'condition', name: 'Requeued', reason: 'PodsReadyTimeout' } } } }))
+    expect(html).toContain('The condition below was reported before')
+    expect(html).not.toContain('Stale evidence')
+  })
+
   it('keeps the generic qualifier when an older Radar sends no admission state', () => {
     expect(render(response({ decision: 'unknown', kueue: { phase: 'pending' } }))).toContain('Admission unknown')
   })

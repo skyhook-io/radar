@@ -88,7 +88,10 @@ func (s KueueAdmissionState) Clone() KueueAdmissionState {
 // read from. Name is the condition type, the AdmissionCheck name or the spec
 // field's name (active), by Source; Reason is the condition's reason or the check's state.
 // Message is display text: trimmed, and cut to 256 bytes with an ellipsis;
-// the Workload's own status holds the complete message. Stale is set only
+// the Workload's own status holds the complete message. Since is the
+// evidence's lastTransitionTime: how long the condition or check has held its
+// status, not when Kueue last tried; a no_decision fact without a Source has
+// none, so its age is the Workload's. Stale is set only
 // for condition evidence whose observedGeneration is behind the Workload's
 // generation; its absence means not known to be stale. Spec evidence is
 // current by definition; Kueue records no generation for an AdmissionCheck
@@ -100,6 +103,7 @@ type KueueAdmissionFact struct {
 	Name    string             `json:"name,omitempty"`
 	Reason  string             `json:"reason,omitempty"`
 	Message string             `json:"message,omitempty"`
+	Since   string             `json:"since,omitempty"`
 	Stale   bool               `json:"stale,omitempty"`
 }
 

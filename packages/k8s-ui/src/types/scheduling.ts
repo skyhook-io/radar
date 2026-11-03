@@ -59,6 +59,7 @@ export interface KueueAdmissionFact {
   name?: string
   reason?: string
   message?: string
+  since?: string
   stale?: boolean
 }
 
