@@ -152,7 +152,6 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
 			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
 			"Absent is not empty; coverage is not health. " +
-			"Kueue admission: use state/attention for the headline, phase for lifecycle (not execution); absent stale is not confirmed freshness; since is status-transition time, not last attempt; flavor fit is attempt-local. " +
 			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
 			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
 			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +

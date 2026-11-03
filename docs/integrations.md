@@ -1724,123 +1724,36 @@ quota reservations and assigned flavors, admission-check states and messages,
 and conditions. Reservation is distinguished from admission; resource totals are
 requests, not measured usage.
 
-Its **admission path** follows the Workload's owner (the owner-reference answer
-from [ownership](ownership.md), so a missing, replaced or hidden owner says so),
-its LocalQueue, the ClusterQueue that LocalQueue names, the ClusterQueue holding
-its reservation and the assigned flavor per PodSet and resource. The path names
-the states a stuck Workload usually has: no queue name, a LocalQueue that
-doesn't exist, no reservation, and a reservation in a ClusterQueue other than
-the one the LocalQueue now names. `status.clusterName` is shown as reported and
-never followed to another cluster. While quota isn't reserved, the reasons Kueue
-gave per flavor are parsed out of the QuotaReserved message, or shown verbatim
-when any part isn't recognised; Kueue sorts them alphabetically, so they are
-not an attempt order, and they describe one controller report, not history.
+Its **admission path** connects the owner, submission LocalQueue, its current
+ClusterQueue, reservation ClusterQueue and assigned ResourceFlavors. Missing,
+replaced and unreadable objects are distinguished. Per-flavor rejection reasons
+are one controller report, not attempt order or history; unrecognized text stays
+verbatim. Remote cluster names are reported without following them.
 
-LocalQueue and ClusterQueue detail put the Active condition as reported (reason,
-verbatim message, observed generation, with a stale marker when it describes an
-earlier generation) next to the configured stop policy, and show
-pending/reserving/admitted counts, which are not additive. Policy values carry a
-plain meaning from a dictionary per API version (v1beta1, v1beta2); a value the
-dictionary doesn't know is shown raw. Per-flavor resource rows join quota
-reservations and admitted usage; ClusterQueues also show nominal quota,
-borrowing/lending limits, namespace selector and admission policies. These are
-controller-reported quota facts, not measured utilization or available physical
-capacity. Both v1beta1 and v1beta2 queue shapes are supported.
-
-Related objects are read as the viewer, one list read per kind (re-read when the
-detail opens, when the object on screen changes and every 30 seconds, since
-watch events don't announce most additions), falling back to a
-GET per object, re-read every minute, when the viewer may get but not list the
-kind. Each one says whether it was found, doesn't exist, or couldn't be read
-(and why); a denial is never shown as missing, and an object is called missing
-only from a list Radar read in full (an older Radar that reports no coverage
-can't confirm absence). A ClusterQueue lists its ResourceFlavors per resource
-group in configured preference order and its AdmissionChecks with their own
-Active state, plus the other ClusterQueues naming its cohort (Cohort objects
-aren't read). A LocalQueue shows its ClusterQueue as read from that object and
-whether its namespace matches the ClusterQueue's `namespaceSelector` (null
-matches no namespace, `{}` every namespace; other selectors need the Namespace's
-labels). A LocalQueue that reports `ClusterQueueIsInactive` loses its alert tone
-in its detail only when its ClusterQueue, read now, reports it was stopped and
-nothing else (Kueue names only the first of a ClusterQueue's inactive causes as
-the reason, so a stopped queue that is also missing a flavor still says Stopped;
-its message lists every cause, and such a queue keeps the alert tone too) and
-both reports describe their current generation; its header badge follows the
-same rule, while the resource table and the Investigate hint keep the
-LocalQueue's own report. A
-consumer of the k8s-ui renderers that doesn't inject these reads shows the names
-without read state.
+LocalQueue and ClusterQueue detail separate Active state and freshness from
+configured stop policy. Pending/reserving/admitted counts are not additive;
+quota is requested capacity, not utilization or available hardware. Per-flavor
+rows compare reservations, admitted usage, nominal quota and borrowing/lending
+limits. Both v1beta1 and v1beta2 queue shapes are supported. Related flavors, AdmissionChecks and
+cohort peers are read as the viewer; Cohort objects are not read. A LocalQueue
+also shows namespace eligibility. Denied or incomplete reads never prove an
+object missing. An intentionally stopped parent softens a LocalQueue's alert
+only when fresh evidence establishes that the stop is its sole cause; table
+status retains the LocalQueue's own report.
 
 #### Workloads in a queue
 
-ClusterQueue and LocalQueue detail list the Workloads that belong to the
-queue, from `GET /api/kueue/clusterqueues/{name}/workloads` and
-`GET /api/kueue/localqueues/{namespace}/{name}/workloads`
-(`internal/server/kueue_queue_workloads.go`, membership rules in
-`internal/kueuequeues`). A Workload belongs to a ClusterQueue in two
-independent ways, and each row says which:
+Queue detail lists and filters member Workloads by admission state. A
+ClusterQueue row distinguishes submission through a LocalQueue's **current**
+target from the Workload's recorded reservation; these can name different queues.
+Finished and deleting Workloads remain listed while retained, so Radar's member
+counts can differ from Kueue's live counts. List order is not admission order.
 
-- **Submission:** its `spec.queueName` names a LocalQueue in its namespace
-  whose `spec.clusterQueue` is the ClusterQueue *now*. This is a join by name
-  through the LocalQueue as Radar reads it today, not a record of which
-  LocalQueue, or which target, the Workload was submitted through.
-- **Reservation:** its `status.admission.clusterQueue` names the ClusterQueue,
-  as the Workload reports it.
-
-A LocalQueue's Workloads are those in its namespace whose `spec.queueName`
-names it. The cases the two ways disagree on are listed as reported: a
-Workload still reserved in a ClusterQueue its LocalQueue no longer points at
-(`spec.clusterQueue` is immutable, so this follows deleting and re-creating
-the LocalQueue) belongs to the old ClusterQueue by reservation and the new one
-by submission, and its row names both; a finished Workload that still reports
-its admission stays a reservation member, though Kueue released its quota and
-leaves it out of its own counts; a Workload being deleted keeps its membership
-until it is gone; a Workload that belongs both ways is one row.
-
-Lookups go through an index on the cached Workloads and LocalQueues
-(`pkg/k8score/kueue_queue_index.go`), so a queue's cost follows its own size.
-Workloads and LocalQueues are each read only where the caller may `list`
-that kind in the namespace (a SubjectAccessReview per namespace, not
-inferred from Pod access), and the response carries `pkg/resourceapi`
-coverage for each read: a namespace the caller can't list is a
-`user_forbidden` gap, one Radar hasn't loaded `kind_sync_pending`. Where
-Workloads were read but LocalQueues weren't, only the admission record can
-place a Workload: `submissionUnresolved` names those namespaces, each such row
-says `localQueueUnread`, and the member counts are lower bounds. An empty list
-is a queue confirmed empty only when the coverage is complete, nothing
-narrowed it, and `submissionUnresolved` is absent. A caller who sees every
-namespace but may list Workloads only in some is checked namespace by
-namespace (within a budget of permission checks per request, split between
-Workloads and LocalQueues). This rule is stricter than the resource
-browser's, which shows Workloads wherever the caller can see the namespace.
-A denied Workload read does not fail the response: the ClusterQueue answer still lists the LocalQueues
-pointing at it with the counts their controller reports, which is the only
-evidence Radar shows of Workloads the caller can't list. Radar never
-subtracts its own count from a controller count: cache lag, finished
-Workloads and inadmissible Workloads make them differ too.
-
-Before Radar connects, both routes answer the usual 503 `{error}`;
-afterwards a failed request is `{error, error_code, coverage?}`, and a cursor
-issued for another list (another queue, a re-created queue, other filters or
-another cluster context, or a read that no longer matches the first page's)
-is refused with 400 `kueue_cursor_invalid`, after which a client reads from
-the first page again. Every page checks access afresh within its budget, and a page whose read
-differs from the first page's is refused by the cursor.
-
-Rows are paged by key: unfinished Workloads first, finished ones after
-(by default Kueue keeps them until their owner goes), each by namespace and name so that
-no order is mistaken for admission order. A cursor belongs to its queue (by UID), filter
-and cluster context. A member that keeps its key is never returned twice while a list is paged;
-a member that joins behind the cursor appears when the list is read again
-from the start. A member's key changes once, when it finishes, so one
-returned among the unfinished members that finishes before the traversal
-reaches the finished ones is returned again there: readers merge pages by
-UID. Counts and coverage describe every member Radar read for the caller as
-of each page's read, not just the page; the UI takes them, and the
-LocalQueues (sent with the first page only), from the first page. Each row
-carries the shared admission classification (`phase`, `admission`), and
-`counts.states` counts the members by `admission.state`, so a list can be
-filtered to one state with `state=`.
+Workloads and LocalQueues require exact per-kind list access in each namespace.
+Unread namespaces and unresolved submission membership are disclosed, with
+counts shown as lower bounds. A denied Workload read can still leave readable
+LocalQueues and their controller counts. Empty means confirmed empty only with
+complete, unnarrowed coverage and no unresolved submission membership.
 
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
@@ -1854,377 +1767,66 @@ eviction; an empty list is not evidence that no request was made. The Workload's
 check message remains the primary explanation, and requests are not assigned to
 individual checks by parsing their names.
 
-For a `kueue.x-k8s.io/v1beta2` or `v1beta1` Workload, the REST AI resource endpoint
-and MCP `get_resource` also project a bounded admission summary into
-`resourceContext.scheduling.observations`. The first adapter emits one Kueue
-`admission` observation: a controller-neutral `satisfied`, `unsatisfied`,
-`held`, or `unknown` decision; the most useful native condition; LocalQueue and
-ClusterQueue facts with submission/entitlement roles; AdmissionCheck and
-preemption-gate evidence; and affirmative disruption conditions from the
-current snapshot. Resource names remain useful facts when RBAC withholds an
-optional navigation reference.
-
-`held` requires evidence of an explicit pause: `spec.active=false`, an `OnHold`
-condition, or `AdmissionGated` together with the current non-empty
-`kueue.x-k8s.io/admission-gated-by` annotation. The overloaded
-preemption-gated `AdmissionGated` reason remains `unsatisfied`, as does
-`Suspended` by itself: Kueue uses that reason for an inactive ClusterQueue,
-which may reflect broken dependencies rather than an intentional stop policy.
-
-Typed Kueue detail retains the controller's `pending` / `quota_reserved` /
-`admitted` / `finished` phase, PodsReady and replacement-Pod evidence,
-per-PodSet resource-to-ResourceFlavor assignments and usage, requeue state,
-and an exact concurrent-admission Parent reference for a Variant. Each
-observation carries the Workload's `subjectGeneration`, and projected
-conditions retain `observedGeneration`, so consumers can detect stale
-controller evidence. The compact projection keeps the first eight PodSets in
-name order and up to seven resource assignments per PodSet, prioritizing
-extended resources before core resources; explicit truncation flags point
-consumers back to the returned raw Workload for the complete status. Waiting
-for admission is scheduling context, not an Issue; only blockers that need
-someone to act are Issues (see [Kueue in Issues](#kueue-in-issues)).
-Radar does not infer feature-gate state, queue position, fairness math, Pod
-placement, or physical capacity. This is a bounded projection of the returned
-Workload's current status, not condition history or queue-wide observation
-coverage. Both served Workload versions share every projected field;
-v1beta2-only fields such as preemption gates are simply absent on v1beta1.
-
 #### Admission state classification
 
-`kueue.admission` sorts what the Workload's own status reports into separate
-axes, so every surface describes a Workload's admission state the same way.
-`schedulinginsight.ClassifyKueueWorkload` is the only place the codes and their
-attention class are decided; Go consumers that list Workloads call it per
-object and ship `KueueAdmissionState` in their own rows (a table column needs a
-server-computed field behind a `FeatureCapabilities` flag, never a browser-side
-reading of conditions), and the UI only maps codes to labels
-(`kueueAdmissionStatePresentation` and `kueueAdmissionStateLabel` in k8s-ui,
-with a short suggestion from `kueueAdmissionStateHint` for states that usually
-need someone), rendering a code it does not know verbatim. Today the admission
-card on Job, JobSet and RayJob detail shows it, leading with the state instead of
-"Pending admission" for a withdrawn Workload. When a different condition decides
-the state (such as requeue backoff), its evidence and transition time lead the
-card, with the earlier primary condition retained in Technical details. MCP
-`get_resource` describes how to interpret state, attention and freshness;
-the Workload's own detail and its
-table Status column still show its most notable native condition, which can
-differ (an Evicted Workload now blocked by a missing LocalQueue). The
-classification is not a causal diagnosis: queues, namespaces and
-AdmissionChecks appear as the Workload names them and are never read, so
-"LocalQueue missing" is the Workload's report, not a NotFound Radar observed.
-The wording rules were checked against Kueue v0.18 through v0.20; an older
-release's wording that differs reads `unrecognized`. Radar reads a Workload as
-v1beta1 only from a Kueue that serves no v1beta2 (v0.14 or older); the fields
-are the same, but classification there is best-effort because older releases'
-behaviour was not checked beyond v0.9's wording (`InactiveWorkload…` eviction
-reasons and "insufficient unused quota in cohort"). With scheduling
-equivalence hashing, Kueue may copy an equivalent Workload's reason with the
-message "Bypassed scheduling evaluation because an equivalent workload recently
-failed"; the code then follows that reason alone.
+Job, JobSet and RayJob admission cards distinguish lifecycle, waiting blockers,
+withdrawal and disruption using the Workload's own status. The Workload table
+and detail retain native condition headlines, which can differ from the card.
+REST AI detail and MCP `get_resource` include the same bounded admission context
+for v1beta2 and v1beta1 Workloads, with explicit truncation markers.
 
-| Axis | Codes | Evidence |
-|------|-------|----------|
-| lifecycle | `kueue.phase`: `pending`, `quota_reserved`, `admitted`, `finished` (result in `kueue.outcome`) | conditions |
-| `inactive`: withdrawn from admission, not waiting | `deactivated` (`spec.active=false`, no cause recorded by Kueue), `deactivated_by_kueue` (cause in the fact's reason: a rejected AdmissionCheck, the requeuing limit, the maximum execution time), `deactivation_pending` (`DeactivationTarget=True`, `spec.active` not yet false), `on_hold` (Kueue v0.20+) | spec or condition |
-| `blocker`: why a Workload still competing is not admitted | `no_decision`, `insufficient_quota`, `exceeds_quota`, `no_matching_flavor`, `resource_unavailable`, `topology_placement_failed`, `waiting_for_preemption`, `preemption_gated`, `admission_gated`, `namespace_not_eligible`, `local_queue_missing`, `local_queue_inactive`, `cluster_queue_missing`, `cluster_queue_inactive`, `admission_check_rejected`, `admission_checks_pending`, `topology_assignment_pending`, `waiting_for_pods_ready`, `requeue_backoff`, `dra_resources_unresolved`, `invalid_workload`, `unrecognized` | condition or AdmissionCheck |
-| `disruption`: an eviction not yet followed by a new quota reservation | `preempted`, `pods_ready_timeout`, `evicted` | `Evicted` / `Preempted` condition |
-
-`state` is the one code to group or count by: `finished`, else the inactive
-code, else the blocker code, else the disruption code, else `admitted` or
-`quota_reserved`. A preempted Workload waiting for quota reads
-`insufficient_quota`, with `preempted` kept as its disruption. A disruption
-does outrank a `no_decision` blocker, an `unrecognized` one whose message
-only repeats the eviction message (what Kueue writes right after an eviction),
-and any blocker while quota is still reserved, since the eviction is releasing
-it. Which facts are reported: a finished Workload has no inactive or
-blocker fact, an inactive one has no blocker, an admitted one has no blocker,
-and a current eviction is always reported. A missing fact is not evidence on
-its own.
-
-`attention` is Radar's guidance for `state`: `none` (reserved, admitted,
-finished), `waiting` (Kueue or another controller is expected to move it on),
-`paused` (withdrawn on purpose, no failure recorded), `action_needed` (as
-reported, it will not be admitted without a change to the Workload, its queue
-or quota, or a controller that should have acted), or `unknown` (the Workload
-alone cannot tell, such as an inactive queue that may be stopped on purpose,
-a request too large for, or not matching, the flavors or topology Kueue last
-tried (another attempt may fit),
-unresolved DRA resources, an unrecognized reason, or a deactivation whose cause
-Kueue did not record).
-It is not a severity or a guarantee: how long waiting may last before it is a
-problem is the consumer's call. Counting, grouping, Issues and headlines read
-`state` and `attention`, not the observation's `decision`, which stays the
-controller-neutral scheduling view: an external admission gate is a `held`
-decision but a waiting blocker, and an inactive queue is an `unsatisfied`
-decision whose attention is `unknown`. Consumers pick their population from the axes:
-Workloads awaiting admission are those whose `phase` is not `admitted` or
-`finished`, that have no `inactive` fact, that name a queue (`spec.queueName`;
-Kueue manages no other) and that are not a concurrent-admission variant;
-`KueueClassification.AwaitingAdmission()` encodes this (and leaves out
-Workloads being deleted), so consumers don't restate it. With concurrent
-admission Kueue schedules a parent's variants, not the parent, so a pending
-parent reads `no_decision` with attention `unknown`; its variants say why.
-Each fact's `since` is its condition's or check's `lastTransitionTime`, for
-"how long" questions; it is when the status last changed, not when Kueue last
-tried.
-
-`stale` marks a `state` decided by evidence written for an earlier
-`metadata.generation` (for a blocker read because quota is reserved, that
-includes the reservation): the last reported state, not a confirmed current one.
-Kueue does not rewrite conditions on every spec change (a WorkloadPriorityClass
-update rewrites `spec.priority` and leaves `Admitted` alone), so a stale
-`admitted` is usually still admitted, but Radar does not claim it. Each
-condition fact also carries its own `stale` flag. An absent `stale` means not
-known to be stale: Kueue may omit `observedGeneration`, and records none for an
-AdmissionCheck state. `spec.active=false` is current by definition, so
-`deactivated` is never stale.
-
-Each fact keeps its native evidence (`source`, `name`, `reason`, `message`,
-where `message` is display text cut to 256 bytes; the Workload holds the full
-text). `unrecognized` is a reason Radar has no code for; the native reason and
-message are what to show. Rules that keep the axes honest:
-
-- A rejected AdmissionCheck is the blocker `admission_check_rejected`, usually
-  briefly: Kueue then sets `DeactivationTarget` (`deactivation_pending`) and
-  `spec.active=false` (`deactivated_by_kueue`, with the cause from the
-  `Evicted` reason `DeactivatedDueTo…`). Kueue keeps an earlier eviction's
-  reason when it records no deactivation target, and v0.18 also for its own
-  causes, so `spec.active=false` with some other `Evicted` reason reads
-  `deactivated` with attention `unknown`, and the admission card says Kueue
-  recorded no cause. Counts of `deactivated` should therefore split by
-  `attention`. The cause in a `deactivated_by_kueue` fact is Kueue's own word:
-  the `DeactivationTarget` reason (`AdmissionCheck`) or, after the eviction, the
-  `Evicted` reason (`DeactivatedDueToAdmissionCheck`). A `DeactivatedDueTo…`
-  eviction older than a later reactivation (`Requeued=True Reactivated`)
-  belongs to the earlier deactivation, so it reads `deactivated` with
-  attention `unknown`.
-- An inactive or stopped ClusterQueue or LocalQueue is a blocker, not an
-  inactive Workload. Kueue words a stopped queue as either "is stopped" or
-  "is inactive" depending on which of its writers ran last, so both read
-  `cluster_queue_inactive` / `local_queue_inactive`; telling a stop policy from
-  broken configuration needs a read of the queue. A Workload drained by a
-  stopped queue reads the same through its `Requeued=False` condition.
-- While pending, a rejected check and an eviction backoff (`Requeued=False`)
-  come first; otherwise the `QuotaReserved` condition decides the blocker.
-  Kueue resets check states to `Pending` on eviction, and `Admitted=False
-  NoReservation…` only restates the missing reservation, so neither decides.
-  Kueue's coarse reasons (`Pending`, `Inadmissible`, `Misconfigured`,
-  `Suspended`, and `PendingEvaluation` for failed checks) carry the cause in
-  their message, which is matched against Kueue's own wording. A
-  flavor-assignment message reads `insufficient_quota` only when every PodSet
-  has a flavor whose only problem is unused quota; a request over the maximum,
-  or a taint, affinity, topology or earlier-slice mismatch rules a flavor out,
-  a flavor named by a clause Radar does not understand (and a PodSet whose
-  failure Radar does not recognize) leaves the blocker `unrecognized` unless
-  another PodSet can never fit, a resource the ClusterQueue does not offer at
-  all reads `resource_unavailable`, a
-  PodSet that fits no flavor outranks one that exceeds quota, and Kueue's notes
-  on in-flight or retried preemptions read `waiting_for_preemption`.
-  A message Kueue cut at its 32 KiB limit proves only its complete PodSet
-  segments; otherwise it reads `unrecognized`. `exceeds_quota` and `no_matching_flavor`
-  describe Kueue's last attempt: with flavor fungibility an
-  attempt can resume past flavors tried before, so another flavor may still fit
-  later.
-- `BlockedOnPreemptionGates=True` is the blocker only while it explains the
-  current `QuotaReserved` (same message, reason `PreemptionGated`, or
-  `AdmissionGated` without the external gate's "Admission is gated by"
-  message): later attempts, including an external admission gate, rewrite
-  `QuotaReserved` but leave the gate condition set. The projection's primary
-  condition and decision follow the same rule.
-- `Evicted` and `Preempted` reset to `False` ("Previously: …") at the next quota
-  reservation, so an old failure after recovery is not a disruption.
+This is a controller report, not a causal diagnosis: named queues and checks
+are not independently verified by the classification. Flavor fit describes only
+Kueue's last attempt. Stale evidence is marked; an absent stale marker does not
+confirm freshness, and transition times do not date scheduling attempts.
+Older Kueue wording is best-effort; unrecognized reasons remain visible.
+Radar does not infer fairness, Pod placement, physical capacity or runtime health.
 
 #### Kueue in Issues
 
-Issues reports a Kueue run only when someone has to act. Waiting (for quota,
-preemption, a pending AdmissionCheck, a provisioning retry or an eviction
-backoff), a deliberate pause (a stop policy, an admission or preemption gate,
-`OnHold`, a user's `spec.active=false`) and states Radar can't judge
-(`unrecognized`, `topology_placement_failed`, and a request over the queue's
-maximum or a flavor mismatch, which Kueue's message reports only for the
-flavors it tried last, and stale evidence) are not Issues;
-they stay in the Workload's admission context. Pending, suspended or Pod-less
-alone is never an Issue. The Workload's own `attention` from the
-classification above decides: `action_needed` is an Issue, the rest is not,
-except for an inactive queue, which Radar settles by reading the queue.
+Issues surfaces actionable admission blockers, Kueue-stopped runs and broken
+queue configuration. Waiting for quota, preemption, checks or backoff, deliberate
+pauses, stale reports and uncertain flavor fit remain admission context.
+Pending or having no Pods alone is never an Issue. New configuration gets a
+short grace period; recovered queues suppress outdated blocked reports.
 
-| Row | Subject | When | Category |
-|-----|---------|------|----------|
-| `KueueResourceUnavailable` (the ClusterQueue offers no quota for a requested resource), `KueueNamespaceNotEligible`, `KueueLocalQueueMissing`, `KueueInvalidWorkload` | the run | the Workload reports it (classified `action_needed`) and is at least a minute old | `queue_admission_blocked` |
-| `KueueClusterQueueMissing` | the LocalQueue, or the run when no LocalQueue row explains it | Kueue reports the LocalQueue's ClusterQueue doesn't exist | `queue_admission_blocked` |
-| `KueueAdmissionCheckRejected` | the run | an AdmissionCheck rejected it, through Kueue's deactivation that follows (one row, one ID) | `queue_admission_blocked` |
-| `KueueRequeuingLimitExceeded`, `KueueMaximumExecutionTimeExceeded`, `KueueDeactivatedByKueue` | the run | Kueue deactivated it, or decided to, and recorded why | `batch_run_stopped` (the first two), `queue_admission_blocked` |
-| `KueueClusterQueueInactive` | the LocalQueue whose ClusterQueue is broken, and that ClusterQueue | the ClusterQueue's current `Active=False` reason is a configuration error (FlavorNotFound, AdmissionCheckNotFound, AdmissionCheckInactive, TopologyNotFound, CohortCycleDetected or a MultiKueue misconfiguration) and its `stopPolicy` is `None` | `queue_admission_blocked` |
+Findings follow the run's controller chain; queue incidents group affected runs.
+Links follow the viewer's access. Broken-queue checks require
+ClusterQueue list permission; missing access or collection appears as unchecked
+coverage on affected resource pages and counts, rather than a healthy answer.
+ClusterQueue findings appear only in views not narrowed to namespaces.
 
-All are warnings. The run is the top of the Workload's controller chain (a
-Job, JobSet or RayJob, or the CronJob above a Job), read through the ownership
-view from the same Workload incarnation that was classified; with no
-followable controller, the Workload is the subject. Ownership is never inferred
-from a queue or a name. Concurrent-admission variants and their parent are
-skipped: a losing variant is expected, and the parent's own status reports the
-race, not one blocked run.
-
-A broken ClusterQueue is one incident, not one row per run: each LocalQueue
-pointing to it gets a row listing the runs submitted there that Kueue reports
-blocked (its namespace, so the run's own page finds it), and the cluster-wide
-view adds one row for the ClusterQueue, which the LocalQueue rows name as
-their cause. A stopped (`Hold`, `HoldAndDrain`), terminating or recovered
-ClusterQueue raises nothing; neither does a LocalQueue with its own stop policy.
-
-On a run row, the issue message is Kueue's own message for the deciding fact;
-a `kueue_admission` fact summarizes every classified axis (code, source, native
-reason) and links the Workload, whose status holds the full messages. Queue rows
-carry the queue's native message or a Radar-composed explanation labelled as
-such, with queue and affected-run references when available.
-A rejected-check row adds a bounded sample: the AdmissionCheck that rejected
-the run, or the first by name among those the Workload lists (with its `Active` condition; Kueue
-records no generation for a Workload's check state, so its freshness is not
-established), and the newest retained ProvisioningRequest whose controller owner
-is that Workload incarnation, with its native outcome. A ProvisioningRequest is
-not matched to a particular check, and a missing link proves nothing: a row
-holds at most four facts, links follow the caller's access, and Kueue deletes a
-failed attempt's request when it retries. Kueue retries a failed provisioning
-attempt (the check reads `Retry`, which is waiting) and rejects only once
-retries are exhausted or capacity is revoked; with a large retry limit, a run
-can retry for a long time without becoming an Issue.
-
-Access: rows follow the caller's namespace access; a run row whose root the
-caller can't read falls back to the Workload. A LocalQueue or ClusterQueue
-row about a broken ClusterQueue needs permission to list ClusterQueues; for a
-caller without it, Radar reads no ClusterQueue and raises neither row (a stop
-and a fault would otherwise look different). It says so instead: in the Issues
-list's `unchecked_sources` (`kueue`, `caller_access_denied`), and for the
-LocalQueue, each run's Workload and the controllers above it, in
-`/api/issues/resource`'s `unchecked_sources` and `get_resource`'s
-`issueSummary.unchecked`, so their empty answer reads "can't confirm", not
-"none". List/search summaries qualify affected `issueCount` values with an
-`omitted` entry, retaining any findings that were readable. Findings also keeps
-these read gaps and a batch diagnosis's explicit runtime-collection limit visible.
-Links to runs, AdmissionChecks and ProvisioningRequests are kept only
-when the caller can open them, without counts. ClusterQueue rows appear only in
-answers not narrowed to namespaces. A queue row waits a minute after the queue
-(or its ClusterQueue) was created or its `Active` condition last changed, and
-the runs on it wait with it. When Radar can't read Workloads or LocalQueues at
-all, it can't tell which runs that hides, so the gap appears on every Job,
-CronJob, JobSet, RayJob, Workload and LocalQueue page.
-
-Recovery wins: a run whose own condition still reports a missing or inactive
-queue raises nothing once that LocalQueue exists and reports itself active.
-
-Every page of a run finds its row: the Workload's, the run's root, and any
-controller between them (a CronJob's Job), and a queue row lists both the run
-and its Workload. ProvisioningRequests and AdmissionChecks only add evidence:
-when Radar can't read them, the row says so and no source is marked unchecked.
-
-Not covered: a Workload Kueue never decides about (`no_decision` for as long
-as Kueue is down), a reason a newer Kueue adds (`unrecognized`), MultiKueue
-handoff, and queue position. `diagnose` accepts Job, JobSet, RayJob and Kueue Workload for cached resource
-evidence, canonical `relatedIssues` and resource events, sharing the
-`get_resource` read and authorization path. It explicitly collects no Pods,
-runtime logs or metrics. It also skips the full relationship graph, marking
-graph-derived networking/scaling fields unavailable instead of probing unrelated
-CRDs on a cold or restricted collector. An empty Issues list does not establish runtime health.
-Follow the Workload reference for its `scheduling` admission context and Pod
-references for runtime diagnosis. The same rows are available through `issues`
-and `get_resource(include=issues)`.
+`diagnose` on Job, JobSet, RayJob or Kueue Workload returns cached context,
+related Issues and resource events. It collects no Pods, runtime logs, metrics
+or relationship graph. Follow Workload references for admission and Pods for
+runtime diagnosis. An empty Issues list does not establish runtime health;
+undecided Workloads, unrecognized reasons and MultiKueue handoff are not covered.
 
 #### Pending position (Kueue's visibility API)
 
-Where Kueue's own visibility API (`visibility.kueue.x-k8s.io`, served by
-Kueue's visibility server) is installed, Workload detail and the Kueue
-admission card on Jobs, JobSets and RayJobs show **where Kueue places a pending
-Workload**: its place in its LocalQueue and in that LocalQueue's ClusterQueue,
-with when Radar read it. MCP `get_resource` and the REST AI resource context
-carry the same answer at
-`resourceContext.scheduling.observations[].kueue.pendingPosition` on the
-Workload (a Job's position is on its child Workload). `GET
-/api/kueue/position/{namespace}/{name}` serves the UI.
+When Kueue's visibility API is installed, pending Workload detail and admission
+cards show its reported LocalQueue and ClusterQueue positions with the read time.
+REST/MCP context carries the result on the Workload, not its parent Job.
+This is snapshot ordering, not promised admission order or a start time.
 
-- **Source.** Radar asks only the LocalQueue subresource
-  (`localqueues/pendingworkloads`) and never derives a position from list order
-  or timestamps. It asks only for Workloads whose snapshot permits a pending-position lookup — no
-  Finished, Admitted or QuotaReserved condition is True and `spec.active` is
-  not false — at any `kueue.x-k8s.io` Workload version; the agent context
-  carries it on `v1beta2` Workloads, which have a scheduling projection. Kueue
-  versions serving the visibility API at `v1beta2` or `v1beta1` are read; other
-  versions answer `unsupported`.
-- **What it means.** `aheadInLocalQueue` / `aheadInClusterQueue` count the
-  Workloads Kueue orders before this one (Kueue's 0-based positions); the UI
-  shows them as `#n`. The order is Kueue's snapshot when Radar read it,
-  including Workloads Kueue already tried and couldn't admit: not a promise of
-  admission order or a start time. The ClusterQueue count includes other
-  namespaces' Workloads without naming them, and Kueue's answer doesn't say
-  which ClusterQueue it used, so none is named.
-- **What absence means.** `not_listed`: Kueue's answer for the LocalQueue
-  didn't include the Workload — it may have been admitted or deactivated since,
-  Kueue may not have seen it yet, or Kueue may not know the LocalQueue's
-  ClusterQueue. It never means "not pending". `limit_reached`: Kueue returned
-  the 1,000 rows Radar asks for without it; the position is unknown.
-  `queue_unknown` means Kueue did not know the LocalQueue; `no_local_queue`,
-  `not_served` and `unsupported` explain why Radar did not ask; `unavailable` carries a `pkg/readreason` code.
-- **Access.** The read runs as the viewer (impersonated, or with their own
-  token), so Kubernetes enforces Kueue's RBAC exactly: `get` on
-  `localqueues/pendingworkloads` in `visibility.kueue.x-k8s.io` in the
-  Workload's namespace. Kueue's `kueue-pending-workloads-lq-viewer-role`
-  grants it and aggregates to `view`, `edit` and `admin`. A refusal is the
-  answer (`user_forbidden`), not an error. Without authentication Radar reads
-  as its own identity (`radar_forbidden` when it may not); the Helm chart
-  grants that read with the `kueue` CRD group. The endpoint itself first
-  requires seeing the namespace and `get` on the Workload.
-- **Load.** One identity's successful answer for one LocalQueue is reused for 10 seconds
-  except in user-token mode, which reads with each request's credentials
-  (each read makes Kueue sort the whole ClusterQueue); the UI refreshes every
-  30 seconds while the answer can change by itself. Failed reads are not memoized,
-  so Retry makes a new attempt.
+The read runs as the viewer and requires `get localqueues/pendingworkloads` in
+`visibility.kueue.x-k8s.io` in that namespace; without authentication it uses
+Radar's identity. Access failures and unavailable APIs are shown explicitly.
+An unlisted Workload is not proven absent from the queue; a capped result leaves
+position unknown. Other namespaces contribute only to the ahead count, never
+names. Radar never derives position from timestamps or resource list order.
 
-The ClusterQueue subresource of Kueue v0.18.0–v0.18.10 and v0.19.0–v0.19.1
-miscounts `positionInLocalQueue` when two namespaces use the same LocalQueue
-name, one more reason Radar reads the LocalQueue subresource.
+**Admission history.** A queued root's Timeline includes controller-owned
+Workloads and their ProvisioningRequests by owner UID. It records observed
+admission, check, reservation, requeue and configuration changes, suppressing
+counter-only and quantity-only retry noise. It cannot reconstruct unwatched
+transitions or deleted provisioning attempts. Initial rows marked "from metadata"
+date only the last status transition, not its current reason or message.
 
-**Admission history.** A Job, JobSet, RayJob or other root Kueue queues has its
-Workload as a controller-owned child, and the Workload owns its
-ProvisioningRequests, so the root's Timeline
-(`/api/workloads/{kind}/{ns}/{name}/history`) includes both by owner UID. While
-Radar runs, each Workload update it observes is recorded as one row naming what
-changed: condition transitions (type, status, reason, and the message when it
-changed), the admission assignment (ClusterQueue; per PodSet its flavors, count
-and usage; other assignment fields by path), admission-check states with their retry count and message, the
-scheduled requeue, `spec.active` and `spec.queueName`, Kueue's annotations, and
-any other status field by path. Two kinds of update record nothing: cumulative
-counters (`schedulingStats`, `accumulatedPastExecutionTimeSeconds`), and a condition message whose only change is a
-quantity Kueue rewrites between scheduling attempts (a parenthesized amount,
-"N more needed"); a message that names a different flavor, resource or blocker
-records. ProvisioningRequest updates record their conditions the same way.
-These are the transitions Radar saw: updates that happen while Radar isn't
-watching, or between two watch events, are not reconstructed, and each request
-is its own resource; nothing numbers attempts from names or list order.
-
-When Radar first sees a Workload or ProvisioningRequest, it adds rows from its
-status (source `historical`, shown as "from metadata"): its creation and, for
-each condition and admission check, the time of its last state change with the
-state alone (`QuotaReserved=True`, `Check prov=Pending`). A
-`lastTransitionTime` dates the status change, not the current reason or message,
-so those are not attached. A persistent store adds these rows only for
-resources it hasn't seen before.
-
-The history response says what it can't cover. `historyCoverage` (the shared
-`issuesapi.HistoryCoverage`) is present when Radar may not hold every change
-since the workload was created: it started observing later, began watching the
-Workload or ProvisioningRequest kind later, or deleted rows to stay within its
-limits; an earlier incarnation under the same name makes the start unknown.
-`complete_since` is sent only to callers who can read every namespace. For a
-root Kueue queues (the `kueue.x-k8s.io/queue-name` label, or a cached Workload
-it controls), `gaps` (the shared `resourceapi.Gap` with `pkg/readreason` codes)
-name Workloads or ProvisioningRequests the caller may not list in the namespace
-(`user_forbidden`) or Radar doesn't collect there. Gaps follow from access and
-collection, not from which rows were dropped, so every page carries the same
-gaps. When the root is deleted or has earlier incarnations, or the caller cannot
-check Workload affiliation, these dependencies are conservatively qualified
-without consulting hidden inventory; a gap does not assert that a related
-resource exists. If ownership records have expired, retained descendants can
-also be unreachable; the Timeline marks its scope incomplete rather than
-claiming the related history is complete. Queue-scoped history (a ClusterQueue's or LocalQueue's Workloads over
-time) is not provided.
+Coverage says when observation started late, retention removed rows, ownership
+records expired, or access/collection withheld related kinds. A gap never asserts
+that a hidden resource exists; an empty Timeline is not proof nothing happened.
+History belongs to the root workload; queue-scoped history is not provided.
 
 ### KubeRay
 
@@ -2243,33 +1845,16 @@ Pod navigation. Controller-reported counts use Ray labels and may differ from
 that owned-Pod list. Missing access, cache warming and recreated roots are explicit;
 no RayCluster-wide log stream or lifecycle actions are added.
 
-Logs are read per Pod, as container output; Ray session logs under `/tmp/ray` are
-not read. Kubernetes cannot serve a deleted Pod's logs; a viewer may still hold
-lines it already loaded.
+The RayCluster **Logs** tab uses current owner-UID-matched Pods, with per-Pod
+Runtime Pods buttons. It opens the least healthy Pod, selecting an unfinished
+regular init container for a Pending or Failed Pod when identifiable, otherwise
+an application container. Native sidecars are not selected first.
 
-- **Logs tab.** A `ray.io/v1` RayCluster's tab lists the Pods its current
-  incarnation owns, through the same owner-UID request as Runtime Pods, and opens
-  the least healthy one. Past 200 Pods it keeps the least healthy; to reach the
-  others, narrow Runtime Pods to the head or one worker group (each view is capped
-  at 200) and use a Pod's Logs button. The tab doesn't need Radar to
-  have recorded any Pods.
-- **Fallback.** When the owned list can't be read (it needs `get rayclusters` and
-  `list pods`), the Radar is older than v1.15, or the RayCluster itself can't be
-  read, the tab lists the Pods Radar has recorded and says why. On an older Radar
-  the tab and Runtime Pods both show an upgrade note. A refresh that fails for a
-  passing reason keeps the last list and says it wasn't refreshed.
-- **Row buttons.** Each Runtime Pods row has a Logs button (unless the namespace
-  is known to deny `pods/log`) that opens the Pod in the log dock. A Pod with no container
-  status shows why instead: not scheduled, no status yet, or ended before starting.
-- **Container.** The viewer opens on one container and stays there until you
-  switch. While a Pod is Pending, or after it failed, the button and the tab open
-  on the first regular init container that isn't done (a worker waiting on the
-  head sits in KubeRay's `wait-gcs-ready`). Otherwise they open the first
-  application container. Native sidecars are never chosen first; a Radar that doesn't
-  advertise `podSidecarMarks` doesn't mark sidecars, so there the first
-  application container opens.
-- A RayCluster served only as a version older than `ray.io/v1` keeps the generic
-  Logs tab, because Radar reads RayCluster Pods through `ray.io/v1`.
+Each Pod list is capped at 200; narrow to the head or a worker group to reach
+others. Unreadable owned lists fall back to recorded Pods with an explanation;
+older Radars show an upgrade note. Logs are container output, not Ray session
+files under `/tmp/ray`, and deleted Pods have no retrievable logs. Already loaded
+lines may remain visible. RayClusters served before `ray.io/v1` use generic logs.
 
 RayJob detail separates the controller lifecycle from the last reported application
 state, with links to the runtime RayCluster and a UID-verified submitter Job for
@@ -2329,43 +1914,22 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 | TrainedModel | `serving.kserve.io/v1alpha1` | Ready condition |
 | LLMInferenceService | `serving.kserve.io` (v1alpha2, v1alpha1) | Ready / aggregate conditions |
 
-For an exact `serving.kserve.io/v1beta1` InferenceService, REST AI detail and MCP
-`get_resource` include `resourceContext.serving.kserveInferenceService`: reported
-mode and runtime names, the main predictor's `transitionStatus`, `targetModelState`
-and last failure reason/exit code, Knative component revision names and configured
-traffic (eight targets per component), and Standard-mode canary readiness and
-spec traffic percentages (eight canaries). Source order is retained; truncation
-flags disclose omitted entries. Absent facts are unreported, not zero or healthy.
-Conditions stay in `statusSummary`; Standard-mode `Ready=True` can coexist with
-`TransformerReady=False`.
+For `serving.kserve.io/v1beta1` InferenceServices, REST AI detail and MCP
+`get_resource` include a bounded serving summary: reported mode/runtime names,
+predictor model transitions and failure evidence, Knative revisions and configured
+traffic, and Standard-mode canaries. Absent facts remain unreported, not healthy
+or zero. A Ready root can still report a non-ready transformer.
 
-The block includes `fieldNotes` (`field`, `note`) for present raw fields whose
-names overstate their evidence. `referenceWriterRelease: "KServe v0.20.0"` identifies the
-reference writer, **not a detected installed release**. Notes are fixed writer
-documentation, never a verdict computed from values. `field` is a dotted path in
-the Kubernetes object; `[]` means any entry. Detail output retains the fields;
-summary/compact minification may omit them. No note is not an assurance of safety.
-The notes explain sticky active-model and failure history (stopping clears them),
-the child-derived `observedGeneration` (not comparable with the root's generation),
-mode-specific model transitions, unfilled failed-copy/canary-model fields, and
-canary readiness/declared traffic. Knative `totalCopies` covers only ready Pods of
-the latest-created predictor revision, excludes older serving revisions and omits
-zero. It cannot establish service-wide capacity. A last failure may be historical; it is not
-necessarily historical. Standard-mode `UpToDate`/`Loaded` can precede a new rollout
-Pod starting. Confirming what serves requires Pod/route/request evidence.
+Per-field notes explain writer-specific limits beside the relevant raw fields.
+Their reference release is not a detected controller version. Model state and
+failure history can outlive a rollout; configured traffic and ready-copy counts
+do not prove what serves. Confirm with Pod, route and request evidence.
 
-This root-only projection follows the [KServe v0.20.0 status writers](https://github.com/kserve/kserve/blob/v0.20.0/pkg/apis/serving/v1beta1/inference_service_status.go).
-It fetches no child, runtime or route; runtime names are reported selections, not
-verified references. ModelMesh gets mode/runtime names only, without notes.
-LLMInferenceService is excluded. Selected fields omit active model state, copies,
-observed generation, URLs, storage URIs and failure messages; the raw resource
-remains available. `context=none` and list/search summaries carry no serving block.
-The addition shares existing root read authorization in local, authenticated
-shared, Hub and unauthenticated shared modes; no route, RBAC or feature flag changes.
-Standard-mode status writers were exercised live on v0.20.0. Knative revision
-traffic and a serving-old/failing-new two-Pod state have writer-derived fixtures;
-those cases have no live proof here. Notes add bounded fixed text to each detail
-read, with at most eight entries independent of array lengths.
+This reads only the root: runtime names are unverified selections. ModelMesh
+gets only mode/runtime names; LLMInferenceService and list/search summaries are
+excluded. Raw spec/status remains available. Standard-mode status has live
+v0.20.0 proof; Knative traffic and serving-old/failing-new cases use writer-derived
+fixtures, not live proof.
 
 ### Gateway API Inference Extension
 
@@ -2379,7 +1943,7 @@ read, with at most eight entries independent of array lengths.
 | Resource | Group | Status source | Topology |
 |----------|-------|---------------|----------|
 | LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions | No |
-| JobSet | `jobset.x-k8s.io/v1alpha2` | terminalState, then Failed / Completed / Suspended / StartupPolicyInProgress / RestartingJobSet conditions, then reported child counts | Yes: JobSet → member Job → Pod |
+| JobSet | `jobset.x-k8s.io/v1alpha2` | Root terminal state, conditions and reported child counts | Yes: JobSet → member Job → Pod |
 | Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group | No |
 | Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) | No |
 | PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition | No |
@@ -2422,27 +1986,16 @@ Extended-resource requests are declared demand, not GPU/TPU utilization. Logs ca
 scoped to one Job (live) or a role/all current members (bounded snapshots with source
 attribution and read failures). Historical goodput and archived logs are not collected.
 
-**Topology:** the resources view draws every `jobset.x-k8s.io` JobSet as a root, including
-one with no Jobs yet. Only `v1alpha2` is interpreted: a cluster serving JobSets at another
-version shows them with unknown status, without links to their member Jobs, and with a
-topology warning. Its status comes from the same lifecycle as the status badge and
-execution context: only a failed JobSet is unhealthy; starting and recreating are degraded;
-pending, active, suspended and completed are neutral; a JobSet whose controller hasn't
-reported yet is unknown. The node's subtitle shows that state as text (a failed JobSet shows
-its Failed condition's reason) and the number of Jobs its spec declares, which can exceed the
-Jobs created so far. Edges go to the member Jobs the member list shows:
-Jobs whose controller owner reference names this JobSet by API version, name and UID.
-Labels, other owner references and earlier same-named JobSets never link. With Jobs hidden,
-member Pods attach to the JobSet directly. Pods are matched to their Job by UID, for every
-Job: while a recreated Job's predecessor Pods are still terminating, they are grouped apart
-and attached to nothing, so they don't count toward the current Job. Objects a JobSet owns
-that Radar watches, such as its Kueue Workload, attach through the generic owner pass when
-their owner reference names this JobSet's UID. A
-JobSet's Topology tab shows up to 24 member Jobs, failed and active ones first, and says how
-many it left out; clicking a member Job there opens that member in the Overview. The traffic
-view does not draw Jobs, and no scheduling or dependency edges are drawn. A TrainJob that
-creates a JobSet isn't drawn, so its JobSet appears as a root.
+**Topology:** the resources view draws JobSets, including roots with no Jobs,
+and their exact controller-owned member Jobs and Pods. Status uses the same
+root lifecycle as detail; child failures alone do not make the root failed.
+Declared Job counts can exceed created members. Only v1alpha2 is interpreted;
+other served versions show unknown status and a warning without member links.
 
+With Jobs hidden, current member Pods attach to the JobSet. Pods from earlier
+same-named Jobs stay separate. The JobSet Topology tab shows at most 24 members,
+favoring failed and active Jobs, and clicking a member opens its Overview.
+Traffic, scheduling and dependency edges are not provided.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 
