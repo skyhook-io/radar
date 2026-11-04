@@ -170,7 +170,8 @@ function SummaryLine({ obj, level, palette, line }: { obj: Record<string, unknow
   const caller = obj.caller ?? obj.source
   // Lines with none of the summary fields (e.g. `step=4280 loss=1.73 …` after a
   // plain-text prefix) would otherwise collapse to just a field count.
-  const hasSummary = typeof msg === 'string' || typeof err === 'string' || typeof caller === 'string'
+  const nonBlank = (v: unknown) => typeof v === 'string' && v.trim() !== ''
+  const hasSummary = nonBlank(msg) || nonBlank(err) || nonBlank(caller)
 
   return (
     <>

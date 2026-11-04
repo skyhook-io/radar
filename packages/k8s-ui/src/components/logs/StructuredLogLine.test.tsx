@@ -83,6 +83,13 @@ describe('StructuredLogLine without summary fields', () => {
     expect(html).toContain('northstar.train')
   })
 
+  it('treats a blank message as no summary', () => {
+    const html = render(JSON.stringify({ level: 'info', msg: '', step: 4280 }))
+    expect(html).toContain('4280')
+    const logfmt = renderToStaticMarkup(<StructuredLogLine content={'level=info msg="" step=4280 loss=1.73'} level="info" wordWrap={false} isLogfmt />)
+    expect(logfmt).toContain('step=4280 loss=1.73')
+  })
+
   it('keeps msg-only summaries free of the raw line', () => {
     const html = render(JSON.stringify({ level: 'info', msg: 'ready', extra: 'hidden-detail' }))
     expect(html).toContain('ready')
