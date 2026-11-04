@@ -1124,9 +1124,6 @@ func jobSetMemberRunInfo(jobSet *unstructured.Unstructured, job *batchv1.Job) Wo
 		RestartAttempt:        annotations[jobSetRestartAttemptAnnotation],
 		JobRestartAttempt:     annotations[jobSetJobRestartAttemptAnnotation],
 	}
-	if job.DeletionTimestamp != nil {
-		run.Deleting = true
-	}
 	return run
 }
 
@@ -1286,6 +1283,7 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 		Namespace:    job.Namespace,
 		Name:         job.Name,
 		Phase:        phase,
+		Deleting:     job.DeletionTimestamp != nil,
 		Active:       phase == "Running" || phase == "Pending",
 		StartedAt:    formatMetaTime(job.Status.StartTime),
 		ScheduledAt:  scheduledAt,
