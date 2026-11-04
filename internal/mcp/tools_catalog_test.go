@@ -273,6 +273,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Includes batch diagnosis routing and log-argument boundaries.
+		// Every tool description and schema is sent to each MCP client and spends
+		// its context, so the cap makes any growth a deliberate choice.
 		maxCatalogBytes = 68750
 
 		maxToolDescriptionBytes = 3200
