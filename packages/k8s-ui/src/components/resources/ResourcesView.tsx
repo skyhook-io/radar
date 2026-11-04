@@ -9274,7 +9274,10 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
     case 'pods': {
       const m = metrics.nodes.get(resource.metadata?.name)
       const allocatable = resource.status?.allocatable?.pods
-      const podCount = m?.podCount ?? 0
+      // No metrics entry means the count wasn't loaded (e.g. node metrics are
+      // off while a namespace is selected), not that the node runs no Pods.
+      if (!m) return <span className="text-sm text-theme-text-tertiary font-mono">-</span>
+      const podCount = m.podCount ?? 0
       if (!allocatable) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
       // Allocatable pods is a Quantity, so a 1000-pod node reports "1k" —
       // a raw-integer read would see 1 and peg the bar at 21600%.
