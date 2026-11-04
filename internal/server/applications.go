@@ -1833,12 +1833,12 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			memberRoots[input.wl.jobSetParent] = true
 		}
 	}
-	deferredRoots := map[string]appWorkload{}
+	deferredRoots := map[string]appWorkloadInput{}
 	evidence := make([]appWorkloadInput, 0, len(inputs))
 	for _, input := range inputs {
 		key := resourceid.ResourceKey(input.wl.Group, input.wl.Kind, input.wl.Namespace, input.wl.Name)
 		if input.wl.Kind == jobset.Kind && input.wl.Group == jobset.Group && memberRoots[key] {
-			deferredRoots[key] = input.wl
+			deferredRoots[key] = input
 		} else {
 			evidence = append(evidence, input)
 		}
@@ -1848,6 +1848,14 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 	argoAppNamespaces := argoApplicationNamespaces(inputs)
 	for _, in := range inputs {
 		atoms := inputAtoms(in, argoAppNamespaces)
+		for i := 1; i < len(atoms); i++ {
+			d.union(atoms[0], atoms[i])
+		}
+	}
+	// The JobSet controller does not copy the JobSet's labels onto its Jobs, so
+	// a deferred root's own app declaration is still evidence for its members.
+	for _, root := range deferredRoots {
+		atoms := inputAtoms(root, argoAppNamespaces)
 		for i := 1; i < len(atoms); i++ {
 			d.union(atoms[0], atoms[i])
 		}
@@ -1875,13 +1883,15 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		ins := members[comp]
 		r := &appRow{}
 		rootAdded := map[string]bool{}
+		identityInputs := ins
 		for _, input := range ins {
 			if root, ok := deferredRoots[input.wl.jobSetParent]; ok && !rootAdded[input.wl.jobSetParent] {
-				r.jobSetRoots = append(r.jobSetRoots, root)
+				r.jobSetRoots = append(r.jobSetRoots, root.wl)
 				rootAdded[input.wl.jobSetParent] = true
+				identityInputs = append(identityInputs[:len(identityInputs):len(identityInputs)], root)
 			}
 		}
-		identifyApp(r, ins, rootGroups)
+		identifyApp(r, identityInputs, rootGroups)
 		servingHealth := packages.Health("")
 		appVers := map[string]struct{}{}
 		labeled := 0
