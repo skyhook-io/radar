@@ -799,6 +799,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Workload restart, scale, rollback
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.handleRestartWorkload)
+			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.handlePauseDeployment)
+			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.handleResumeDeployment)
 			r.Post("/workloads/{kind}/{namespace}/{name}/scale", s.handleScaleWorkload)
 			r.Get("/workloads/{kind}/{namespace}/{name}/images", s.handleGetWorkloadImages)
 			r.Post("/workloads/{kind}/{namespace}/{name}/images", s.handleSetWorkloadImages)
@@ -4666,6 +4668,56 @@ func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, map[string]string{"message": "Workload restart initiated"})
+}
+
+// handlePauseDeployment holds a Deployment's pod template changes without rolling them out.
+func (s *Server) handlePauseDeployment(w http.ResponseWriter, r *http.Request) {
+	s.setDeploymentPaused(w, r, true)
+}
+
+// handleResumeDeployment lets a paused Deployment roll out its pod template again.
+func (s *Server) handleResumeDeployment(w http.ResponseWriter, r *http.Request) {
+	s.setDeploymentPaused(w, r, false)
+}
+
+// setDeploymentPaused is gated like Restart: the patch runs as the caller, so
+// Kubernetes RBAC decides, and it returns 403 when the caller can't patch the
+// Deployment. Without authentication it acts with Radar's own identity, and
+// requireSameOrigin keeps a page on another site from reaching it.
+func (s *Server) setDeploymentPaused(w http.ResponseWriter, r *http.Request, paused bool) {
+	kind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	if k8score.NormalizeWorkloadKind(strings.ToLower(kind)) != "deployments" {
+		s.writeError(w, http.StatusBadRequest, "only Deployments can be paused or resumed")
+		return
+	}
+
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	if err := k8s.SetDeploymentPausedWithClient(r.Context(), namespace, name, paused, client); err != nil {
+		switch {
+		case apierrors.IsNotFound(err):
+			s.writeError(w, http.StatusNotFound, err.Error())
+		case apierrors.IsForbidden(err):
+			s.writeError(w, http.StatusForbidden, err.Error())
+		default:
+			log.Printf("[workload] Failed to set paused=%t on Deployment %s/%s: %v", paused, namespace, name, err)
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	message := "Deployment resumed"
+	if paused {
+		message = "Deployment paused"
+	}
+	s.writeJSON(w, map[string]string{"message": message})
 }
 
 // handleScaleWorkload scales a Deployment or StatefulSet to a new replica count
