@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/finalizers"
@@ -274,6 +275,8 @@ func argoAPIHealthFailure(err error, tokenSet bool) string {
 		return "the connection is still being set up"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "the request timed out"
+	case errors.Is(err, portforward.ErrAutoDisabled):
+		return "it isn't reachable directly from this machine, and automatic port-forwarding is turned off. Set its URL in Settings → Argo CD"
 	case errors.Is(err, argocd.ErrUnreachable):
 		// Before ErrNotFound: a URL that 404s on /api/version is not an Argo
 		// CD server, which is not the same as Argo not knowing the app.
