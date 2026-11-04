@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -63,6 +64,7 @@ type AppConfig struct {
 	FakeInCluster               bool
 	DisableHelmWrite            bool
 	DisableExec                 bool
+	DisableAutoPortForward      bool
 	DisableLocalTerminal        bool
 	PodShellDefault             string
 	DebugImage                  string
@@ -117,6 +119,10 @@ func SetGlobals(cfg AppConfig) {
 	k8s.ForceInCluster = cfg.FakeInCluster
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
+	portforward.SetAutoDisabled(cfg.DisableAutoPortForward)
+	if cfg.DisableAutoPortForward {
+		log.Printf("[portforward] Automatic port-forwarding is turned off: metrics, traffic, cost and Argo CD discovery will not open port-forwards")
+	}
 	k8s.ForceDisableLocalTerminal = cfg.DisableLocalTerminal
 	k8s.ListPageSize = cfg.ListPageSize
 	k8s.ForceNamespaceScope = cfg.NamespaceScope
@@ -368,6 +374,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			if err != nil {
 				prometheuspkg.Retire()
 				return err
+			}
+			if cfg.LocalConnections.HasLaunchOverride(config.IntegrationMetrics) && selection.View.State != "launch" {
+				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
 			}
 			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 			url, headers := prometheuspkg.CurrentConfig()

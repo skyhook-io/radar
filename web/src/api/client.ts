@@ -1122,6 +1122,8 @@ export type CostUnavailableReason =
   | "access_denied"
   | "not_found"
   | "source_unavailable"
+  | "metrics_port_forward_disabled"
+  | "kubecost_port_forward_disabled"
   | "authentication_error"
   | "configuration_mismatch"
   | "deployment_configuration_error"

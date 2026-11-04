@@ -8,21 +8,23 @@ const DefaultCurrentWindow = "1h"
 // Unavailability reasons — returned in the "reason" field when available=false
 // so the frontend can show contextual guidance to the user.
 const (
-	DefaultCurrency           = "USD"
-	ReasonNoPrometheus        = "no_prometheus"  // Prometheus/VictoriaMetrics not found in cluster
-	ReasonNoCostSource        = "no_cost_source" // neither OpenCost metrics nor Kubecost is available
-	ReasonNoMetrics           = "no_metrics"     // Prometheus found but OpenCost metrics not present
-	ReasonQueryError          = "query_error"    // The selected source connection or cost queries failed
-	ReasonAccessDenied        = "access_denied"  // user cannot access the requested resource
-	ReasonNotFound            = "not_found"      // requested resource no longer exists
-	ReasonSourceUnavailable   = "source_unavailable"
-	ReasonAuthentication      = "authentication_error"
-	ReasonConfigMismatch      = "configuration_mismatch"
-	ReasonDeploymentConfig    = "deployment_configuration_error"
-	ReasonMetricsSettings     = "metrics_settings_error" // this context's saved metrics settings need review
-	ReasonCostSettings        = "cost_settings_error"    // this context's saved cost settings need review
-	ReasonHistoryUnsupported  = "history_unsupported"
-	ReasonInsufficientHistory = "insufficient_history"
+	DefaultCurrency                   = "USD"
+	ReasonNoPrometheus                = "no_prometheus"  // Prometheus/VictoriaMetrics not found in cluster
+	ReasonNoCostSource                = "no_cost_source" // neither OpenCost metrics nor Kubecost is available
+	ReasonNoMetrics                   = "no_metrics"     // Prometheus found but OpenCost metrics not present
+	ReasonQueryError                  = "query_error"    // The selected source connection or cost queries failed
+	ReasonAccessDenied                = "access_denied"  // user cannot access the requested resource
+	ReasonNotFound                    = "not_found"      // requested resource no longer exists
+	ReasonSourceUnavailable           = "source_unavailable"
+	ReasonMetricsPortForwardDisabled  = "metrics_port_forward_disabled"  // Prometheus needs a port-forward from here, and automatic port-forwarding is turned off
+	ReasonKubecostPortForwardDisabled = "kubecost_port_forward_disabled" // the discovered Kubecost Aggregator needs a port-forward from here, and automatic port-forwarding is turned off
+	ReasonAuthentication              = "authentication_error"
+	ReasonConfigMismatch              = "configuration_mismatch"
+	ReasonDeploymentConfig            = "deployment_configuration_error"
+	ReasonMetricsSettings             = "metrics_settings_error" // this context's saved metrics settings need review
+	ReasonCostSettings                = "cost_settings_error"    // this context's saved cost settings need review
+	ReasonHistoryUnsupported          = "history_unsupported"
+	ReasonInsufficientHistory         = "insufficient_history"
 )
 
 // HourlyCost bases. On the Prometheus path the cluster total is raised to the

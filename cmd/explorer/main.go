@@ -105,6 +105,7 @@ func main() {
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
 	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells and pod file browsing")
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable the host local terminal")
+	disableAutoPortForward := flag.Bool("disable-auto-port-forward", fileCfg.DisableAutoPortForward, "Never open port-forwards on Radar's own initiative (metrics, traffic, cost and Argo CD discovery); port-forwards you start still work")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
 	reachabilityImage := flag.String("reachability-image", fileCfg.ReachabilityImage, "Image for the in-cluster reachability probe Job (empty = RADAR_IMAGE env, then the version-matched published Radar image; point at a mirror for air-gapped clusters)")
@@ -431,6 +432,7 @@ func main() {
 		FakeInCluster:               *fakeInCluster,
 		DisableHelmWrite:            *disableHelmWrite,
 		DisableExec:                 *disableExec,
+		DisableAutoPortForward:      *disableAutoPortForward,
 		DisableLocalTerminal:        *disableLocalTerminal,
 		PodShellDefault:             *podShellDefault,
 		DebugImage:                  *debugImage,

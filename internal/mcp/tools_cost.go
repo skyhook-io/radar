@@ -1065,6 +1065,10 @@ func costRemediation(reason string) string {
 		return "The cost source has not retained enough history for this range. Try a shorter range, or wait for it to accumulate."
 	case pkgopencost.ReasonNotFound:
 		return "The requested resource no longer exists."
+	case pkgopencost.ReasonMetricsPortForwardDisabled:
+		return "Automatic port-forwarding is turned off, and Radar can't reach Prometheus directly, so OpenCost metrics are unavailable. Set a metrics URL for this cluster in Radar's Settings → Metrics."
+	case pkgopencost.ReasonKubecostPortForwardDisabled:
+		return "Automatic port-forwarding is turned off, so Radar can't reach the Kubecost Aggregator it found in this cluster. Set the Kubecost URL for this cluster in Radar's Settings → Cost."
 	case pkgopencost.ReasonQueryError, pkgopencost.ReasonSourceUnavailable:
 		return "The selected cost source's connection or query failed. For OpenCost metrics, check Radar's Metrics connection status; for Kubecost, check its URL, network path and backend health."
 	default:
