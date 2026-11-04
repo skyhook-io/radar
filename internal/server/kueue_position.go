@@ -1,10 +1,12 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/kueuevisibility"
@@ -64,8 +66,7 @@ func (s *Server) handleKueuePosition(w http.ResponseWriter, r *http.Request) {
 		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kueue discovery is not ready; retry shortly")
 		return
 	}
-	workloadGVR, found := discovery.GetGVRWithGroup("Workload", kueueGroup)
-	if !found {
+	if _, found := discovery.GetGVRWithGroup("Workload", kueueGroup); !found {
 		if discovery.GroupHadPartialDiscovery(kueueGroup) {
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.ReadError), "Kueue discovery is incomplete; retry shortly")
 		} else {
@@ -73,14 +74,14 @@ func (s *Server) handleKueuePosition(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	workload, err := cache.GetDynamicWithGroup(r.Context(), "Workload", namespace, name, kueueGroup)
+	workload, err := readDynamicResourceGet(r.Context(), cache, "Workload", kueueGroup, namespace, name)
 	if err != nil {
-		if workloadParentGetError("Workload", namespace, name, err).statusCode == http.StatusNotFound && dynamic.IsNamespaceSynced(workloadGVR, namespace) {
+		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), "Kueue Workload not found")
-		} else {
-			log.Printf("[kueue] Failed to read Workload %s/%s: %v", namespace, name, err)
-			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.ReadError), "Radar could not observe the Workload; retry when its cache is available")
+			return
 		}
+		log.Printf("[kueue] Failed to read Workload %s/%s: %v", namespace, name, err)
+		s.writeCollectionFailure(w, "workloads", err)
 		return
 	}
 	response := KueuePositionResponse{UID: string(workload.GetUID()), Eligible: schedulinginsight.KueueWorkloadEligibleForPendingPosition(workload)}

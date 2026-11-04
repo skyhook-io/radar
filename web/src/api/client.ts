@@ -7834,13 +7834,12 @@ export function useKueueAdmission(namespace: string, name: string, uid: string |
 // answer can change by itself: a refusal, an absent API or an unsupported
 // version gives the same answer until someone changes access or the cluster.
 const kueuePositionPolledStatuses = new Set(['listed', 'not_listed', 'limit_reached', 'queue_unknown'])
-const kueuePositionRetriedCodes = new Set(['read_error', 'user_permission_check_failed'])
 
 export function kueuePositionRefetchInterval({ data, error }: { data?: KueuePositionResponse; error?: unknown }): number | false {
   if (error && !shouldRetryRadarQuery(0, error)) return false
   if (!data?.eligible || !data.position) return 30000
   const { status, code } = data.position
-  return kueuePositionPolledStatuses.has(status) || (status === 'unavailable' && kueuePositionRetriedCodes.has(code ?? '')) ? 30000 : false
+  return kueuePositionPolledStatuses.has(status) || (status === 'unavailable' && readActionFor(code) === 'retry') ? 30000 : false
 }
 
 /** UID and queueName invalidate the cache; the endpoint reads by namespace/name.
