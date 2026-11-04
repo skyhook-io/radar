@@ -66,7 +66,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
           className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} level={level} palette={palette} />
+          <SummaryLine obj={parsed} level={level} palette={palette} line={content} />
           <span className={`${palette.textTertiary} ml-1 inline-block whitespace-nowrap`}>{`{${fieldCount} fields}`}</span>
         </span>
       ) : (
@@ -77,7 +77,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
           className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} level={level} palette={palette} />
+          <SummaryLine obj={parsed} level={level} palette={palette} line={content} />
           <span className={`${palette.textTertiary} ml-1 inline-block whitespace-nowrap`}>{`{${fieldCount} fields}`}</span>
         </span>
         <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}>
@@ -159,7 +159,7 @@ function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilter
   return <>{nodes}</>
 }
 
-function SummaryLine({ obj, level, palette }: { obj: Record<string, unknown>; level: LogLevel; palette: LogPalette }) {
+function SummaryLine({ obj, level, palette, line }: { obj: Record<string, unknown>; level: LogLevel; palette: LogPalette; line: string }) {
   const lvl = selectLevelField(obj)?.raw
   const pgRecord = selectPostgresRecord(obj)
   const msg = pgRecord?.record.message ?? obj.msg ?? obj.message
@@ -168,6 +168,9 @@ function SummaryLine({ obj, level, palette }: { obj: Record<string, unknown>; le
     ? rawErr
     : nestedField(obj, 'error', 'message') ?? nestedField(obj, 'err', 'message')
   const caller = obj.caller ?? obj.source
+  // Lines with none of the summary fields (e.g. `step=4280 loss=1.73 …` after a
+  // plain-text prefix) would otherwise collapse to just a field count.
+  const hasSummary = typeof msg === 'string' || typeof err === 'string' || typeof caller === 'string'
 
   return (
     <>
@@ -185,6 +188,7 @@ function SummaryLine({ obj, level, palette }: { obj: Record<string, unknown>; le
       {typeof caller === 'string' && (
         <span className={`${palette.textDisabled} ml-2`}>{caller}</span>
       )}
+      {!hasSummary && <span className={palette.textPrimary}>{line.trim()}</span>}
     </>
   )
 }
