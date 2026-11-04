@@ -3,6 +3,7 @@ import type { KueuePendingPosition } from '../../types/scheduling'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { RadarUpgradeNote } from '../ui/RadarUpgradeNote'
 import { formatRelativeAgeTime } from '../../utils/format'
+import { readActionFor } from '../../utils/read-actions'
 
 export interface KueuePendingPositionValueProps {
   position?: KueuePendingPosition
@@ -17,9 +18,6 @@ export interface KueuePendingPositionValueProps {
   /** The Workload's status.requeueState.requeueAt: Kueue keeps a ranked Workload back until then. */
   requeueAt?: string
 }
-
-// Codes a retry can resolve; the others need someone's access or Radar's setup changed.
-const retryableCodes = new Set(['read_error', 'user_permission_check_failed'])
 
 function ReadAge({ readAt }: { readAt?: string }) {
   const [, tick] = useState(0)
@@ -83,7 +81,7 @@ export function KueuePendingPositionValue({ position, loading, error, refreshFai
       case 'unavailable':
         return <span className="text-theme-text-secondary">
           {position.message || "Radar couldn't get Kueue's answer."}
-          {retryableCodes.has(position.code ?? '') && <Retry onRetry={onRetry} />}
+          {readActionFor(position.code) === 'retry' && <Retry onRetry={onRetry} />}
         </span>
       default:
         return <span className="text-theme-text-tertiary">Radar reported a position status this view doesn't know: {position.status}</span>

@@ -286,6 +286,30 @@ func TestKueuePositionWithoutAuthReadsAsRadar(t *testing.T) {
 	}
 }
 
+func TestKueuePositionMissingWorkloadIsNotFound(t *testing.T) {
+	fake := setupKueuePosition(t, true)
+	srv := New(Config{DevMode: true})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() { ts.Close(); srv.Stop() })
+	response, err := http.Get(ts.URL + "/api/kueue/position/default/gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var body struct {
+		Code string `json:"error_code"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNotFound || body.Code != string(readreason.ObjectNotFound) {
+		t.Fatalf("missing Workload: %d %q", response.StatusCode, body.Code)
+	}
+	if fake.count() != 0 {
+		t.Fatal("no visibility read for a Workload that does not exist")
+	}
+}
+
 func TestKueuePositionCapabilityAdvertised(t *testing.T) {
 	srv := New(Config{DevMode: true})
 	ts := httptest.NewServer(srv.Handler())
