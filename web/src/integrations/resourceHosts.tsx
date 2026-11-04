@@ -1,4 +1,3 @@
-import { CustomResourceDefinitionRenderer } from '../components/resources/renderers/CustomResourceDefinitionRenderer'
 import { useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { PaneLoader, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
@@ -7,6 +6,7 @@ import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
+import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
   type DetailSlots, type HostResource, type HostFeatures, type HostKind, type KindListProps,
@@ -41,7 +41,7 @@ import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroR
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 
 export const resourceHosts: readonly ResourceHost[] = [
-  { id: 'kubernetes', renderers: { CustomResourceDefinitionRenderer, PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
+  { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
@@ -61,6 +61,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   cnpgResourceHost,
+  crdResourceHost,
 ]
 
 export const resourceRendererOverrides = composeResourceHosts(resourceHosts)

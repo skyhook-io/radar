@@ -1736,7 +1736,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'kind', label: 'Kind', width: 'w-56' },
     { key: 'scope', label: 'Scope', width: 'w-32' },
-    { key: 'versions', label: 'Served Versions', width: 'w-56' },
+    { key: 'versions', label: 'Served Versions', width: 'w-64' },
     { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],

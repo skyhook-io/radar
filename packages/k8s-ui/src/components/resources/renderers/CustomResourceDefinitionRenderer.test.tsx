@@ -64,10 +64,10 @@ it('falls back to the preferred version when an update removes the one being rea
   expect(versionButton()?.getAttribute('aria-label')).toBe('Schema version: v1')
   expect(host.textContent).not.toContain("didn't receive a schema")
 })
-it('shows the rules on enclosing fields for a field found by search, and an empty schema plainly', () => {
+it('shows the rules on parent fields for a field found by search, and an empty schema plainly', () => {
   const withRules = { ...data, spec: { ...data.spec, versions: [{ name: 'v1', served: true, schema: { openAPIV3Schema: { properties: { spec: { 'x-kubernetes-validations': [{ rule: 'has(self.a) != has(self.b)', message: 'set a or b' }], properties: { a: { type: 'string' }, b: { type: 'string' } } } } } } }] } }
   start(); mount(withRules); filter('spec.a'); click('spec.astring')
-  expect(host.textContent).toContain('Rules on enclosing fields')
+  expect(host.textContent).toContain('Rules on parent fields')
   expect(host.textContent).toContain('has(self.a) != has(self.b)')
   mount({ ...data, metadata: { uid: 'c' }, spec: { ...data.spec, versions: [{ name: 'v1', served: true, schema: { openAPIV3Schema: { type: 'object' } } }] } })
   expect(host.textContent).toContain('This schema declares no fields.')
@@ -85,4 +85,22 @@ it('shows preserve-unknown and int-or-string notes without replacing the declare
   expect(host.textContent).toContain('extraobject')
   click('extra'); expect(host.textContent).toContain('Accepts fields not declared in this schema.')
   click('port'); expect(host.textContent).toContain('Accepts an integer or a string.')
+})
+
+it('suppresses boilerplate root summaries and keeps other summaries visible on expansion', () => {
+  start()
+  const short = 'Brief description'
+  const long = 'Long description. '.repeat(10)
+  mount({ ...data, spec: { ...data.spec, versions: [{ name: 'v1', served: true, schema: { openAPIV3Schema: { properties: {
+    apiVersion: { type: 'string', description: 'Version boilerplate' }, kind: { type: 'string', description: 'Kind boilerplate' }, metadata: { type: 'object', description: 'Metadata boilerplate' },
+    brief: { type: 'string', description: short }, verbose: { type: 'string', description: long },
+  } } } }] } })
+  expect(host.textContent).not.toContain('boilerplate')
+  click('brief')
+  expect(Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('brief'))?.textContent).toContain(short)
+  expect(host.textContent?.split(short)).toHaveLength(2)
+  click('verbose')
+  expect(Array.from(host.querySelectorAll('p')).some(p => p.textContent === long)).toBe(true)
+  click('apiVersion')
+  expect(Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('apiVersion'))?.getAttribute('aria-expanded')).toBe('true')
 })

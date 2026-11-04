@@ -199,3 +199,5 @@ export { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from './FlaggerR
 export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
 
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
+
+export { CRDSchemaBrowser, type CRDSchemaBrowserProps } from './CRDSchemaBrowser'
