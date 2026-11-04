@@ -4681,11 +4681,15 @@ func (s *Server) handleResumeDeployment(w http.ResponseWriter, r *http.Request) 
 	s.setDeploymentPaused(w, r, false)
 }
 
-// setDeploymentPaused is gated like Restart: the patch runs as the caller, so
-// Kubernetes RBAC decides, and it returns 403 when the caller can't patch the
-// Deployment. Without authentication it acts with Radar's own identity, and
-// requireSameOrigin keeps a page on another site from reaching it.
+// setDeploymentPaused patches as the caller, so Kubernetes RBAC decides, and it
+// returns 403 when the caller can't patch the Deployment. Without authentication
+// it acts with Radar's own identity, and requireSameOrigin keeps a page on another
+// site from reaching it.
 func (s *Server) setDeploymentPaused(w http.ResponseWriter, r *http.Request, paused bool) {
+	if !s.requireConnected(w) {
+		return
+	}
+
 	kind := chi.URLParam(r, "kind")
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")

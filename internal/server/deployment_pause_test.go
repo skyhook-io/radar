@@ -36,6 +36,10 @@ func pauseTestDeployment(paused bool) *unstructured.Unstructured {
 
 func setupPauseTest(t *testing.T, objs ...runtime.Object) (*dynamicfake.FakeDynamicClient, http.Handler) {
 	t.Helper()
+	previousStatus := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{pauseDeploymentsGVR: "DeploymentList"},
@@ -206,8 +210,42 @@ func TestPauseDeploymentNeverFallsBackToRadarsIdentity(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (body %s)", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), "cluster client not available") {
+		t.Errorf("body = %s, want the missing-client error", w.Body.String())
+	}
 	if n := pausePatchCount(dyn); n != 0 {
 		t.Errorf("issued %d patches through Radar's own client", n)
+	}
+}
+
+func TestPauseAndResumeRequireAConnection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		state    k8s.ConnectionState
+		wantBody string
+	}{
+		{"disconnected", k8s.StateDisconnected, "Not connected to cluster"},
+		{"still connecting", k8s.StateConnecting, "cluster_connecting"},
+	} {
+		for _, action := range []string{"pause", "resume"} {
+			t.Run(tc.name+"/"+action, func(t *testing.T) {
+				dyn, router := setupPauseTest(t, pauseTestDeployment(false))
+				k8s.SetConnectionStatus(k8s.ConnectionStatus{State: tc.state})
+
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/workloads/deployments/prod/web/"+action, nil))
+
+				if w.Code != http.StatusServiceUnavailable {
+					t.Fatalf("status = %d, want 503 (body %s)", w.Code, w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), tc.wantBody) {
+					t.Errorf("body = %s, want it to contain %q", w.Body.String(), tc.wantBody)
+				}
+				if n := pausePatchCount(dyn); n != 0 {
+					t.Errorf("issued %d patches while not connected", n)
+				}
+			})
+		}
 	}
 }
 
