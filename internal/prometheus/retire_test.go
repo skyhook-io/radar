@@ -1,26 +1,21 @@
 package prometheus
 
-import (
-	"maps"
-	"testing"
-)
+import "testing"
 
-func TestRetirePreservesManualConfigurationForReinitialize(t *testing.T) {
+// Retire runs when a local context switch leaves the current cluster. The next
+// context must not start from the previous cluster's manual endpoint or
+// headers; it gets only what its own settings configure.
+func TestRetireDropsManualConfigurationBeforeReinitialize(t *testing.T) {
 	Initialize(nil, nil, "before")
 	t.Cleanup(func() { Initialize(nil, nil, "") })
 
-	wantURL := "http://127.0.0.1:9"
-	wantHeaders := map[string]string{"Authorization": "Bearer test-token"}
-	Configure(wantURL, wantHeaders)
+	Configure("http://127.0.0.1:9", map[string]string{"Authorization": "Bearer test-token"})
 
 	Retire()
 	Reinitialize(nil, nil, "after")
 
 	gotURL, gotHeaders := CurrentConfig()
-	if gotURL != wantURL {
-		t.Fatalf("manual URL after Retire/Reinitialize = %q, want %q", gotURL, wantURL)
-	}
-	if !maps.Equal(gotHeaders, wantHeaders) {
-		t.Fatalf("headers after Retire/Reinitialize = %v, want %v", gotHeaders, wantHeaders)
+	if gotURL != "" || len(gotHeaders) != 0 {
+		t.Fatalf("after Retire/Reinitialize got url=%q headers=%v, want neither carried over", gotURL, gotHeaders)
 	}
 }
