@@ -1027,11 +1027,11 @@ describe('Kueue Workload detail dispatch', () => {
 describe('Kueue queue detail dispatch', () => {
   it.each(['localqueues', 'clusterqueues'])('curates supported %s and preserves foreign and future versions', (kind) => {
     for (const version of ['v1beta1', 'v1beta2']) {
-      expect(renderKind(kind, { apiVersion: `kueue.x-k8s.io/${version}`, spec: {} })).toContain('Queue Status')
+      expect(renderKind(kind, { apiVersion: `kueue.x-k8s.io/${version}`, spec: {} })).toContain('Reported by controller')
     }
     for (const apiVersion of ['example.com/v1', 'fake.kueue.x-k8s.io/v1', 'kueue.x-k8s.io/v99']) {
       const html = renderKind(kind, { apiVersion, spec: { foreignField: 'preserved-value' } })
-      expect(html).not.toContain('Queue Status')
+      expect(html).not.toContain('Reported by controller')
       expect(html).toContain('preserved-value')
     }
   })

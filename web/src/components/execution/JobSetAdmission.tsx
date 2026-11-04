@@ -1,11 +1,13 @@
 import { KueueAdmissionSection } from '@skyhook-io/k8s-ui/components/resources/KueueAdmissionSection'
 import { ApiError, useKueueAdmission } from '../../api/client'
+import type { ReactNode } from 'react'
 
-export function KueueAdmission({ resource, namespace, name, onNavigate, presentation }: {
+export function KueueAdmission({ resource, namespace, name, onNavigate, presentation, children }: {
   presentation?: 'card' | 'drawer'
   resource: any
   namespace: string
   name: string
+  children?: (admissionContent: ReactNode, hasKueueEvidence: boolean) => ReactNode
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }) {
   const isJob = resource.apiVersion === 'batch/v1' && resource.kind === 'Job'
@@ -18,9 +20,11 @@ export function KueueAdmission({ resource, namespace, name, onNavigate, presenta
   const query = useKueueAdmission(namespace, name, resource.metadata?.uid, { isJob, isRayJob, hinted, terminal })
   const data = query.data?.uid === resource.metadata?.uid ? query.data : undefined
   const error = query.error?.message ?? (query.data && !data ? 'Admission evidence belongs to a different workload instance; waiting for a fresh observation.' : undefined)
-  if ((isJob || isRayJob) && !hinted && !data?.workloads.length) return null
+  const hasKueueEvidence = Boolean(labels?.['kueue.x-k8s.io/queue-name'] || (!query.error && data?.workloads.length))
+  const visible = !((isJob || isRayJob) && !hinted && !data?.workloads.length)
   const hasOwner = (resource.metadata?.ownerReferences ?? []).some((owner: any) => owner.controller === true && !(owner.apiVersion === 'batch/v1' && owner.kind === 'CronJob'))
-  return <KueueAdmissionSection presentation={presentation} data={data} loading={query.isLoading} error={error} forbidden={query.error instanceof ApiError && query.error.status === 403} hinted={hinted} externalExecution={externalExecution} hasOwner={isJob && hasOwner} onRetry={() => { void query.refetch() }} onNavigate={onNavigate} />
+  const content = visible ? <KueueAdmissionSection presentation={presentation} data={data} loading={query.isLoading} error={error} forbidden={query.error instanceof ApiError && query.error.status === 403} hinted={hinted} externalExecution={externalExecution} hasOwner={isJob && hasOwner} onRetry={() => { void query.refetch() }} onNavigate={onNavigate} /> : null
+  return children ? children(content, hasKueueEvidence) : content
 }
 
 export { KueueAdmission as JobSetAdmission }

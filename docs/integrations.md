@@ -1725,17 +1725,25 @@ These integrations expose resource state and selected admission/execution relati
 
 Workload detail shows PodSet counts and controller-evaluated resource requests,
 quota reservations and assigned flavors, admission-check states and messages,
-and conditions. Links connect submission LocalQueues, reservation ClusterQueues,
-ResourceFlavors and AdmissionChecks. Reservation is distinguished from admission;
-resource totals are requests, not measured usage.
+and conditions. Reservation is distinguished from admission; resource totals are
+requests, not measured usage.
 
-LocalQueue and ClusterQueue detail distinguish reported state from configured stop
-policy, show pending/reserving/admitted counts, and link a LocalQueue to its
-ClusterQueue even before a Workload has a reservation. Per-flavor resource rows
-join quota reservations and admitted usage; ClusterQueues also show nominal quota,
-borrowing/lending limits, namespace eligibility and admission policies. These are
-controller-reported quota facts, not measured utilization or available physical
-capacity. Both v1beta1 and v1beta2 queue shapes are supported.
+Its **admission path** connects the owner, submission LocalQueue, its current
+ClusterQueue, reservation ClusterQueue and assigned ResourceFlavors. Missing,
+replaced and unreadable objects are distinguished. Per-flavor rejection reasons
+are one controller report, not attempt order or history; unrecognized text stays
+verbatim. Remote cluster names are reported without following them.
+
+LocalQueue and ClusterQueue detail separate Active state and freshness from
+configured stop policy. Pending/reserving/admitted counts are not additive;
+quota is requested capacity, not utilization or available hardware. Per-flavor
+rows compare reservations, admitted usage, nominal quota and borrowing/lending
+limits. Both v1beta1 and v1beta2 queue shapes are supported. Related flavors, AdmissionChecks and
+cohort peers are read as the viewer; Cohort objects are not read. A LocalQueue
+also shows namespace eligibility. Denied or incomplete reads never prove an
+object missing. An intentionally stopped parent softens a LocalQueue's alert
+only when fresh evidence establishes that the stop is its sole cause; table
+status retains the LocalQueue's own report.
 
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
