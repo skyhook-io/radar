@@ -214,6 +214,9 @@ func MetricsAPIUnavailable(err error) bool {
 	if errors.Is(err, ErrMetricsAPINotDiscovered) {
 		return true
 	}
+	if nf, ok := err.(namespacesFailedError); ok {
+		return nf.metricsUnavailable()
+	}
 	if apierrors.IsNotFound(err) {
 		return true
 	}
@@ -502,7 +505,45 @@ func (s *MetricsHistoryStore) listPodMetrics(ctx context.Context, gvr schema.Gro
 			items = append(items, result.Items...)
 		}
 	}
-	return items, listed, errors.Join(errs...)
+	err = errors.Join(errs...)
+	if !listed && err != nil {
+		// The collection error is shown with any pod's history, so it must
+		// not name namespaces the reader may not see. The detail goes to the
+		// Radar log; the cause is kept for classification.
+		log.Printf("[metrics] Pod metrics could not be listed in any namespace: %v", err)
+		return nil, false, namespacesFailedError{cause: firstError(errs)}
+	}
+	return items, listed, err
+}
+
+// namespacesFailedError reports that pod metrics failed in every listed
+// namespace without naming them.
+type namespacesFailedError struct{ cause error }
+
+func (e namespacesFailedError) Error() string {
+	// Callers classify the stored text, so a metrics API that is down keeps
+	// words they recognise as unavailable.
+	if e.metricsUnavailable() {
+		return "pod metrics API not available in any namespace; see the Radar log"
+	}
+	return "pod metrics could not be listed in any namespace; see the Radar log"
+}
+
+// metricsUnavailable classifies the cause as a pod metrics error, the way it
+// was classified when the joined per-namespace errors were the message.
+func (e namespacesFailedError) metricsUnavailable() bool {
+	return e.cause != nil && MetricsAPIUnavailable(fmt.Errorf("pod metrics: %w", e.cause))
+}
+
+func (e namespacesFailedError) Unwrap() error { return e.cause }
+
+func firstError(errs []error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.Time) {
