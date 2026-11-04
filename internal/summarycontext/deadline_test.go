@@ -19,7 +19,7 @@ func TestExpiredBudgetPreservesHealthAndPreparedIssues(t *testing.T) {
 	build := BuilderFromIndexes(ctx, func() IndexedTopology {
 		t.Fatal("expired enrichment loaded the graph")
 		return IndexedTopology{}
-	}, IssueIndex{issueIndexKey("", "Pod", "shop", "web"): 7}, nil, nil, nil)
+	}, &IssueIndex{counts: map[string]int{issueIndexKey("", "Pod", "shop", "web"): 7}}, nil, nil, nil)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Status: corev1.PodStatus{Phase: corev1.PodFailed}}
 	got := build(pod, nil, "", "Pod", "shop", "web")
 	if got == nil || got.Health == "" || got.IssueCount != 7 || got.ManagedBy != nil {
@@ -85,7 +85,7 @@ func TestSlowPreparationDoesNotDisableOtherCallers(t *testing.T) {
 	defer stopSlow()
 	slow(&corev1.Pod{}, nil, "", "Pod", "shop", "web")
 	fast, stopFast := WithBudget(context.Background(), func(ctx context.Context) Builder {
-		return BuilderFromIndexes(ctx, nil, IssueIndex{issueIndexKey("", "Pod", "shop", "web"): 7}, nil, nil, nil)
+		return BuilderFromIndexes(ctx, nil, &IssueIndex{counts: map[string]int{issueIndexKey("", "Pod", "shop", "web"): 7}}, nil, nil, nil)
 	})
 	defer stopFast()
 	got := fast(&corev1.Pod{}, nil, "", "Pod", "shop", "web")

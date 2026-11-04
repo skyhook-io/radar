@@ -1,4 +1,5 @@
 import { type Issue, type IssueRecentChange } from "@skyhook-io/k8s-ui";
+import { type UncheckedSource } from "../../../api/client";
 import { type TimeSeries } from "@skyhook-io/k8s-ui/components/charts";
 import {
   type DiagnosisChangeContext,
@@ -103,6 +104,7 @@ export interface InvestigationResourceContext extends DiagnosisResourceContext {
     highestSeverity?: string;
     topReason?: string;
     bySource?: Record<string, number>;
+    unchecked?: UncheckedSource[];
   };
   auditSummary?: {
     count: number;

@@ -1,4 +1,6 @@
 import { relatedFindingLimitations } from "../../../utils/related-findings";
+import { uncheckedSourceLines } from "../../issues/uncheckedSources";
+import { type UncheckedSource } from "../../../api/client";
 import {
   type HPADiagnosisState,
   type Issue,
@@ -526,6 +528,14 @@ export function addNarrowHint(
   source: InvestigationEvidenceSource,
   value: Record<string, unknown>,
 ): void {
+  if (value.relatedIssuesTruncated === true) {
+    builder.limit(
+      source,
+      "Related Issues",
+      "Radar returned part of the related Issues; more findings may exist.",
+      "truncated",
+    );
+  }
   if (nonEmptyString(value.narrowHint)) {
     const label = investigationResultLabel(source);
     builder.limit(
@@ -537,12 +547,26 @@ export function addNarrowHint(
     );
   }
 }
+export function addUncheckedIssueLimitations(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  gaps: UncheckedSource[] | undefined,
+): void {
+  for (const line of uncheckedSourceLines(gaps)) {
+    builder.limit(source, "Issue scan", line, "unknown");
+  }
+}
 function addResourceContextLimitations(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   context: InvestigationResourceContext | undefined,
 ): void {
   if (!context) return;
+  addUncheckedIssueLimitations(
+    builder,
+    source,
+    context.issueSummary?.unchecked,
+  );
   for (const value of Array.isArray(context.omitted) ? context.omitted : []) {
     const omitted = record(value);
     if (
