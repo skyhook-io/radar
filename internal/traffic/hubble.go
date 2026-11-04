@@ -644,7 +644,11 @@ var errDirectUnreachable = errors.New("tcp dial failed (unreachable or blocked)"
 // picture; an RBAC-denied port-forward additionally names the real fixes.
 func composeConnectError(directAddr string, directErr, pfErr error) string {
 	if errors.Is(pfErr, portforward.ErrAutoDisabled) {
-		return "Radar can't reach hubble-relay directly from this machine, and automatic port-forwarding is turned off. Live traffic needs a network route to the hubble-relay Service."
+		if errors.Is(directErr, errDirectUnreachable) {
+			return "Radar can't reach hubble-relay directly from this machine, and automatic port-forwarding is turned off. Live traffic needs a network route to the hubble-relay Service."
+		}
+		// The route works; the connection itself failed, so that is what to fix.
+		return fmt.Sprintf("Radar reached hubble-relay directly, but the connection failed: %v. Automatic port-forwarding is turned off, so there is no other way to connect.", directErr)
 	}
 	msg := fmt.Sprintf("direct connection to %s (%s) failed (%v); port-forward fallback failed: %v", hubbleRelayService, directAddr, directErr, pfErr)
 	if isForbiddenPortForward(pfErr) {
