@@ -118,3 +118,41 @@ func TestJobSetWorkloadFoldPreservesMemberEvidence(t *testing.T) {
 		t.Fatalf("fold dropped member evidence: %+v", rows)
 	}
 }
+
+func TestJobSetRootLabelsGroupUnlabelledMembers(t *testing.T) {
+	jobSetMember := func(root appWorkloadInput, name string) appWorkloadInput {
+		member := rawInput("Job", "ml", name, "", "healthy")
+		member.rootKey, member.rootKind, member.rootGroup, member.rootIdentity = root.rootKey, root.rootKind, root.rootGroup, root.rootIdentity
+		member.wl.jobSetParent = root.rootIdentity
+		return member
+	}
+
+	t.Run("joins the app its own label declares", func(t *testing.T) {
+		root := overlayInput("JobSet", "ml", "train", "", "neutral", subject.TierPartOf, "ml/app/northstar", subject.ConfidenceMedium)
+		sibling := overlayInput("Deployment", "ml", "feature-store", "", "healthy", subject.TierPartOf, "ml/app/northstar", subject.ConfidenceMedium)
+		rows := groupApplications([]appWorkloadInput{jobSetMember(root, "train-driver-0"), jobSetMember(root, "train-workers-0"), root, sibling})
+		foldJobSetApplicationWorkloads(rows)
+		if len(rows) != 1 || rows[0].Name != "northstar" || rows[0].Tier != int(subject.TierPartOf) || len(rows[0].Workloads) != 2 {
+			t.Fatalf("want one northstar app holding the JobSet and the Deployment, got %+v", rows)
+		}
+	})
+
+	t.Run("names a lone JobSet's app from its own label", func(t *testing.T) {
+		root := overlayInput("JobSet", "ml", "train", "", "neutral", subject.TierPartOf, "ml/app/northstar", subject.ConfidenceMedium)
+		rows := groupApplications([]appWorkloadInput{jobSetMember(root, "train-driver-0"), root})
+		foldJobSetApplicationWorkloads(rows)
+		if len(rows) != 1 || rows[0].Name != "northstar" || len(rows[0].Workloads) != 1 || rows[0].Workloads[0].Kind != "JobSet" {
+			t.Fatalf("want app northstar with the folded JobSet, got %+v", rows)
+		}
+	})
+
+	t.Run("unlabelled JobSet stays its own app", func(t *testing.T) {
+		root := rawInput("JobSet", "ml", "train", "", "neutral")
+		other := overlayInput("Deployment", "ml", "feature-store", "", "healthy", subject.TierPartOf, "ml/app/northstar", subject.ConfidenceMedium)
+		rows := groupApplications([]appWorkloadInput{jobSetMember(root, "train-driver-0"), root, other})
+		foldJobSetApplicationWorkloads(rows)
+		if len(rows) != 2 || rowByName(rows, "train") == nil || rowByName(rows, "northstar") == nil {
+			t.Fatalf("want separate train and northstar apps, got %+v", rows)
+		}
+	})
+}
