@@ -49,6 +49,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/kueuevisibility"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
@@ -577,6 +578,9 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueSubjectAccess(r), s.issueEvidenceAccess(r), canonicalGroup, canonicalKind, namespace, name)
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
+	scheduling := schedulinginsight.ForResource(obj, resourcecontext.TierBasic)
+	kueuevisibility.Attach(r.Context(), scheduling, obj)
+
 	opts := resourcecontext.Options{
 		RelatedFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }),
 		Reflections:     k8s.ReflectionLookup{Cache: cache},
@@ -584,7 +588,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		AccessChecker:   s.newRequestScopedChecker(r),
 		IssueSummary:    issueSum,
 		AuditSummary:    auditSum,
-		Scheduling:      schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
+		Scheduling:      scheduling,
 		Execution:       executioninsight.ForResource(obj, resourcecontext.TierBasic),
 		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(

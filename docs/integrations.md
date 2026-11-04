@@ -1772,6 +1772,20 @@ confirm freshness, and transition times do not date scheduling attempts.
 Older Kueue wording is best-effort; unrecognized reasons remain visible.
 Radar does not infer fairness, Pod placement, physical capacity or runtime health.
 
+#### Pending position (Kueue's visibility API)
+
+When Kueue's visibility API is installed, pending Workload detail and admission
+cards show its reported LocalQueue and ClusterQueue positions with the read time.
+REST/MCP context carries the result on the Workload, not its parent Job.
+This is snapshot ordering, not promised admission order or a start time.
+
+The read runs as the viewer and requires `get localqueues/pendingworkloads` in
+`visibility.kueue.x-k8s.io` in that namespace; without authentication it uses
+Radar's identity. Access failures and unavailable APIs are shown explicitly.
+An unlisted Workload is not proven absent from the queue; a capped result leaves
+position unknown. Other namespaces contribute only to the ahead count, never
+names. Radar never derives position from timestamps or resource list order.
+
 ### KubeRay
 
 | Resource | Group | Status source |
