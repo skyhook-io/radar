@@ -302,6 +302,16 @@ export function sortedResourceEntries(
 }
 
 /** "8 CPU · 32Gi" style compact one-liner for a quantity observation. */
+// CPU and memory read by their units; every other quantity is a bare number
+// without its resource name.
+function labeledQuantity(resource: string, value: string): string {
+  const quantity = formatQuantity(resource, value);
+  if (resource === "cpu" || resource === "memory") return quantity;
+  if (resource === "pods") return `${quantity} ${quantity === "1" ? "pod" : "pods"}`;
+  if (/gpu/i.test(resource)) return `gpu ${quantity}`;
+  return `${resource} ${quantity}`;
+}
+
 export function quantityText(
   observation: CapacityQuantityObservation | undefined,
   options?: { max?: number },
@@ -312,7 +322,7 @@ export function quantityText(
   const max = options?.max ?? 4;
   const shown = entries
     .slice(0, max)
-    .map(([resource, value]) => formatQuantity(resource, value));
+    .map(([resource, value]) => labeledQuantity(resource, value));
   if (entries.length > max) shown.push(`+${entries.length - max}`);
   return shown.join(" · ");
 }
