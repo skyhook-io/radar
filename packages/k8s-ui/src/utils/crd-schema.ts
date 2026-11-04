@@ -29,6 +29,7 @@ export interface SchemaNode {
   path: SchemaPath
   schema: CRDSchema
   required: boolean
+  parent?: SchemaNode
 }
 
 export function compareKubeAwareVersions(a: string, b: string): number {
@@ -54,15 +55,43 @@ export function schemaTypeLabel(schema: CRDSchema): string {
 // Array items and map values get no row of their own, as in `kubectl explain`:
 // a field's children are the fields of what it holds, reached through a `[]` or
 // `{}` path segment.
-export function schemaChildren(schema: CRDSchema, path: SchemaPath = []): SchemaNode[] {
+export function schemaChildren(schema: CRDSchema, path: SchemaPath = [], parent?: SchemaNode): SchemaNode[] {
   const children: SchemaNode[] = Object.entries(schema.properties || {}).map(([name, child]) => ({
-    path: [...path, { kind: 'property', name }], schema: child, required: !!schema.required?.includes(name),
+    path: [...path, { kind: 'property', name }], schema: child, required: !!schema.required?.includes(name), parent,
   }))
-  if (schema.items) children.push(...schemaChildren(schema.items, [...path, { kind: 'items', name: '[]' }]))
+  if (schema.items) children.push(...schemaChildren(schema.items, [...path, { kind: 'items', name: '[]' }], parent))
   if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
-    children.push(...schemaChildren(schema.additionalProperties, [...path, { kind: 'map', name: '{}' }]))
+    children.push(...schemaChildren(schema.additionalProperties, [...path, { kind: 'map', name: '{}' }], parent))
   }
   return children
+}
+
+export interface EnclosingRules {
+  /** Display path of the enclosing field; empty for the document root. */
+  path: string
+  validations: { rule: string; message?: string }[]
+  compositions: { label: string; value: string }[]
+}
+
+function rulesOf(schema: CRDSchema, path: string): EnclosingRules | null {
+  const element = schemaElement(schema)?.schema
+  const validations = [...(schema['x-kubernetes-validations'] ?? []), ...(element?.['x-kubernetes-validations'] ?? [])]
+  const compositions = [...schemaCompositions(schema), ...(element ? schemaCompositions(element) : [])]
+  return validations.length || compositions.length ? { path, validations, compositions } : null
+}
+
+/** Rules declared on the fields that contain `node`, nearest first. CEL rules
+ *  and oneOf/anyOf constraints on a parent often decide whether a field's value
+ *  is accepted, so a field found by search has to show them too. */
+export function enclosingRules(node: SchemaNode, root: CRDSchema): EnclosingRules[] {
+  const result: EnclosingRules[] = []
+  for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+    const rules = rulesOf(ancestor.schema, displaySchemaPath(ancestor.path))
+    if (rules) result.push(rules)
+  }
+  const rootRules = rulesOf(root, '')
+  if (rootRules) result.push(rootRules)
+  return result
 }
 
 /** The schema an array or map holds, whose constraints belong to the field. */
@@ -85,16 +114,35 @@ export function schemaParentPath(path: SchemaPath): string {
   return parent ? `${parent}.` : ''
 }
 
-export function displaySchemaPath(path: SchemaPath): string {
-  return path.map((segment, i) => segment.kind === 'property' ? `${i ? '.' : ''}${segment.name}` : segment.name).join('')
+// A property name that would read as path syntax is quoted, so a literal
+// `a.b` key and a nested `a` → `b` never display alike.
+function displayPropertyName(name: string): string {
+  return /^[A-Za-z0-9_$@-]+$/.test(name) ? name : `[${JSON.stringify(name)}]`
 }
 
+export function displaySchemaPath(path: SchemaPath): string {
+  return path.map((segment, i) => {
+    if (segment.kind !== 'property') return segment.name
+    const name = displayPropertyName(segment.name)
+    return name.startsWith('[') || i === 0 ? name : `.${name}`
+  }).join('')
+}
+
+const EXTENSION_FACTS: [key: string, label: string][] = [
+  ['x-kubernetes-list-type', 'list type'],
+  ['x-kubernetes-list-map-keys', 'list keys'],
+  ['x-kubernetes-map-type', 'map type'],
+]
+
 export function schemaConstraints(schema: CRDSchema): { label: string; value: string }[] {
-  return ['format', 'enum', 'default', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
+  const extensions = EXTENSION_FACTS
+    .filter(([key]) => schema[key] !== undefined)
+    .map(([key, label]) => ({ label, value: Array.isArray(schema[key]) ? (schema[key] as unknown[]).join(', ') : String(schema[key]) }))
+  return [...extensions, ...['format', 'enum', 'default', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
     'minLength', 'maxLength', 'pattern', 'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties', 'nullable']
     .filter(key => schema[key] !== undefined)
     .map(key => ({ label: key, value: key === 'enum' && Array.isArray(schema.enum) ? schema.enum.map(v => typeof v === 'string' ? v : JSON.stringify(v)).join(' · ')
-      : typeof schema[key] === 'string' ? schema[key] as string : JSON.stringify(schema[key]) }))
+      : typeof schema[key] === 'string' ? schema[key] as string : JSON.stringify(schema[key]) }))]
 }
 
 export function schemaCompositions(schema: CRDSchema): { label: string; value: string }[] {
@@ -115,17 +163,26 @@ export function indexCRDSchema(schema: CRDSchema | undefined): SchemaNode[] {
   while (stack.length) {
     const node = stack.pop()!
     result.push(node)
-    stack.push(...schemaChildren(node.schema, node.path).reverse())
+    stack.push(...schemaChildren(node.schema, node.path, node).reverse())
   }
   return result
 }
 
+// Paths in API server errors and kubectl output index into lists and maps
+// (`spec.ports[0].name`, `metadata.labels[app]`), and people often leave the
+// brackets out entirely. Matching ignores both so a pasted path still finds its field.
+function matchablePath(path: string): string {
+  return path.toLowerCase().replace(/\[[^\]]*\]|\{\}/g, '').replace(/\.{2,}/g, '.')
+}
+
 export function filterCRDSchema(index: SchemaNode[], query: string, limit = 200): { nodes: SchemaNode[]; total: number } {
-  const term = query.toLowerCase()
+  const term = query.trim().toLowerCase()
+  const looseTerm = matchablePath(term)
   const nodes: SchemaNode[] = []
   let total = 0
   for (const node of index) {
-    if (!displaySchemaPath(node.path).toLowerCase().includes(term)) continue
+    const display = displaySchemaPath(node.path).toLowerCase()
+    if (!display.includes(term) && !(looseTerm && matchablePath(display).includes(looseTerm))) continue
     total++
     if (nodes.length < limit) nodes.push(node)
   }

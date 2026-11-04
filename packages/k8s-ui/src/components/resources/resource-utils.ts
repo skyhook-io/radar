@@ -1,3 +1,4 @@
+import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
@@ -2471,6 +2472,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const crdValue = getCRDColumnValue(resource, column)
+  if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()
 
   switch (column) {

@@ -1,4 +1,5 @@
 import { CRDVersionsCell } from './renderers/crd-cells'
+import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
@@ -1733,10 +1734,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   customresourcedefinitions: [
     { key: 'name', label: 'Name' },
-    { key: 'group', label: 'Group' },
-    { key: 'kind', label: 'Kind' },
+    { key: 'kind', label: 'Kind', width: 'w-56' },
     { key: 'scope', label: 'Scope', width: 'w-32' },
-    { key: 'versions', label: 'Versions' },
+    { key: 'versions', label: 'Served Versions', width: 'w-56' },
     { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -9953,6 +9953,6 @@ function CRDCell({ resource, column }: { resource: any; column: string }) {
   if (column === 'status') return <GenericCell resource={resource} column={column} />
   const spec = resource.spec || {}
   if (column === 'versions') return <CRDVersionsCell versions={spec.versions || []} />
-  const value = column === 'group' ? spec.group : column === 'kind' ? spec.names?.kind : column === 'scope' ? spec.scope : undefined
+  const value = getCRDColumnValue(resource, column)
   return <span className="text-sm text-theme-text-secondary">{value || '-'}</span>
 }

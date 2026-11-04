@@ -1,4 +1,5 @@
 import type { GenericStatus } from './generic-status'
+import { isApiGroup } from './resource-utils-cnpg'
 
 export function getCRDStatus(data: any): GenericStatus {
   const conditions: any[] = data.status?.conditions || []
@@ -11,4 +12,15 @@ export function getCRDStatus(data: any): GenericStatus {
   return conditions.some(c => c.type === 'Established' && c.status === 'True')
     ? { text: 'Established', tone: 'healthy' }
     : { text: 'Unknown', tone: 'unknown' }
+}
+
+export function getCRDColumnValue(data: any, column: string): string | undefined {
+  if (data?.kind !== 'CustomResourceDefinition' || !isApiGroup(data.apiVersion, 'apiextensions.k8s.io')) return undefined
+  switch (column) {
+    case 'kind': return data.spec?.names?.kind ?? ''
+    case 'scope': return data.spec?.scope ?? ''
+    case 'versions': return (data.spec?.versions ?? []).filter((v: any) => v?.served).map((v: any) => v.name).join(', ')
+    case 'status': return getCRDStatus(data).text
+    default: return undefined
+  }
 }

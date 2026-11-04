@@ -9,7 +9,7 @@ import { AlertBanner, ConditionsSection, Property, PropertyList, ResourceLink, S
 import { getCRDStatus } from '../resource-utils-crd'
 import { CRDVersionLabel } from './crd-cells'
 import {
-  filterCRDSchema, indexCRDSchema, preferredCRDVersion,
+  enclosingRules, filterCRDSchema, indexCRDSchema, preferredCRDVersion,
   schemaChildren, schemaCompositions, schemaConstraints, schemaElement, schemaLeafName, schemaParentPath, schemaTypeLabel,
   type CRDSchema, type CRDVersion, type SchemaNode, type SchemaPath,
 } from '../../../utils/crd-schema'
@@ -30,12 +30,15 @@ function versionNotes(version: CRDVersion): string | undefined {
   return notes.length ? notes.join(' · ') : undefined
 }
 
-function SchemaFacts({ schema, elementOf }: { schema: CRDSchema; elementOf?: 'items' | 'values' }) {
+function SchemaFacts({ schema, elementOf, parentDescription }: { schema: CRDSchema; elementOf?: string; parentDescription?: string }) {
   const constraints = schemaConstraints(schema)
   const element = schemaElement(schema)
+  const prefix = elementOf ? `${elementOf} ` : ''
+  const describes = schema.description && schema.description !== parentDescription
   return <>
-    {!elementOf && schema.description && <p className="whitespace-pre-wrap">{schema.description}</p>}
-    {constraints.length > 0 && <div className="flex flex-wrap gap-1">{constraints.map(fact => <Badge key={fact.label} tone="structural" size="sm">{elementOf ? `${elementOf} ` : ''}{fact.label}: {fact.value}</Badge>)}</div>}
+    {describes && <p className="whitespace-pre-wrap">{elementOf ? `Each entry (${elementOf}): ${schema.description}` : schema.description}</p>}
+    {constraints.length > 0 && <div className="flex flex-wrap gap-1">{constraints.map(fact => <Badge key={fact.label} tone="structural" size="sm">{prefix}{fact.label}: {fact.value}</Badge>)}</div>}
+    {schema['x-kubernetes-embedded-resource'] && <p>{elementOf ? 'Each entry is' : 'Holds'} a Kubernetes object: apiVersion, kind and metadata are implied.</p>}
     {schema['x-kubernetes-preserve-unknown-fields'] && <p>{elementOf ? 'Each entry accepts' : 'Accepts'} fields not declared in this schema.</p>}
     {schema['x-kubernetes-int-or-string'] && <p>{elementOf ? 'Each entry is' : 'Accepts'} an integer or a string.</p>}
     {schema['x-kubernetes-validations']?.map((validation, i) => <div key={i} className="card-inner">
@@ -43,9 +46,9 @@ function SchemaFacts({ schema, elementOf }: { schema: CRDSchema; elementOf?: 'it
       {validation.message && <p>{validation.message}</p>}
     </div>)}
     {schemaCompositions(schema).map(composition => <div key={composition.label}>
-      <span>{composition.label}: </span><code className="break-words whitespace-pre-wrap">{composition.value}</code>
+      <span>{prefix}{composition.label}: </span><code className="break-words whitespace-pre-wrap">{composition.value}</code>
     </div>)}
-    {!elementOf && element && <SchemaFacts schema={element.schema} elementOf={element.label} />}
+    {element && <SchemaFacts schema={element.schema} elementOf={`${prefix}${element.label}`} parentDescription={schema.description ?? parentDescription} />}
   </>
 }
 
@@ -58,15 +61,35 @@ function ParentPath({ path }: { path: SchemaPath }) {
   </span>
 }
 
-function SchemaRows({ nodes, fullPath = false }: { nodes: SchemaNode[]; fullPath?: boolean }) {
+function EnclosingRulesList({ node, root }: { node: SchemaNode; root: CRDSchema }) {
+  const groups = enclosingRules(node, root)
+  if (groups.length === 0) return null
+  return <div className="space-y-2">
+    <p className="text-xs font-medium text-theme-text-tertiary">Rules on enclosing fields</p>
+    {groups.map(group => <div key={group.path} className="space-y-1">
+      <p className="font-mono text-xs text-theme-text-tertiary">{group.path || 'Document root'}</p>
+      {group.validations.map((validation, i) => <div key={i} className="card-inner">
+        <div className="font-mono break-words">{validation.rule}</div>
+        {validation.message && <p>{validation.message}</p>}
+      </div>)}
+      {group.compositions.map(composition => <div key={composition.label}>
+        <span>{composition.label}: </span><code className="break-words whitespace-pre-wrap">{composition.value}</code>
+      </div>)}
+    </div>)}
+  </div>
+}
+
+function SchemaRows({ nodes, root }: { nodes: SchemaNode[]; root?: CRDSchema }) {
+  const fullPath = !!root
   const [visible, setVisible] = useState(100)
   return <div className="space-y-0.5">
-    {nodes.slice(0, fullPath ? 200 : visible).map(node => <SchemaRow key={JSON.stringify(node.path)} node={node} fullPath={fullPath} />)}
+    {nodes.slice(0, fullPath ? 200 : visible).map(node => <SchemaRow key={JSON.stringify(node.path)} node={node} root={root} />)}
     {!fullPath && nodes.length > visible && <button type="button" className="text-sm text-accent" onClick={() => setVisible(n => n + 100)}>Show {Math.min(100, nodes.length - visible)} more</button>}
   </div>
 }
 
-function SchemaRow({ node, fullPath }: { node: SchemaNode; fullPath: boolean }) {
+function SchemaRow({ node, root }: { node: SchemaNode; root?: CRDSchema }) {
+  const fullPath = !!root
   const [open, setOpen] = useState(false)
   const disclosure = useDisclosure(open)
   const schema = node.schema
@@ -86,47 +109,51 @@ function SchemaRow({ node, fullPath }: { node: SchemaNode; fullPath: boolean }) 
     <Collapse open={open} id={disclosure.panelId} mountLazily>
       <div className="space-y-2 pb-2 pl-5 text-sm text-theme-text-secondary">
         <SchemaFacts schema={schema} />
-        {!fullPath && <SchemaChildren node={node} />}
+        {root ? <EnclosingRulesList node={node} root={root} /> : <SchemaChildren node={node} />}
       </div>
     </Collapse>
   </div>
 }
 
 function SchemaChildren({ node }: { node: SchemaNode }) {
-  const children = useMemo(() => schemaChildren(node.schema, node.path), [node])
+  const children = useMemo(() => schemaChildren(node.schema, node.path, node), [node])
   return children.length > 0 ? <SchemaRows nodes={children} /> : null
 }
 
 const FIELD_CLASS = 'h-8 w-full min-w-0 rounded-md border border-theme-border bg-theme-elevated px-2.5 text-xs text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none'
 
-function SchemaExplorer({ version, versionPicker }: { version?: CRDVersion; versionPicker?: ReactNode }) {
-  const [filter, setFilter] = useState('')
-  const index = useRef<SchemaNode[] | null>(null)
+function SchemaExplorer({ version, versionPicker, filter, onFilterChange }: {
+  version?: CRDVersion
+  versionPicker?: ReactNode
+  filter: string
+  onFilterChange: (filter: string) => void
+}) {
+  const index = useRef<{ schema: CRDSchema; nodes: SchemaNode[] } | null>(null)
   const schema = version?.schema?.openAPIV3Schema
   const nodes = useMemo(() => schema ? schemaChildren(schema) : [], [schema])
   let results: ReturnType<typeof filterCRDSchema> | undefined
-  if (schema && filter) {
-    index.current ??= indexCRDSchema(schema)
-    results = filterCRDSchema(index.current, filter)
+  if (schema && filter.trim()) {
+    if (index.current?.schema !== schema) index.current = { schema, nodes: indexCRDSchema(schema) }
+    results = filterCRDSchema(index.current.nodes, filter)
   }
   return <div className="space-y-3">
     <div className="flex items-center gap-2">
-      {schema && <Input aria-label="Filter fields" placeholder="Filter fields, e.g. spec.replicas" value={filter} onChange={e => setFilter(e.target.value)} className={FIELD_CLASS} />}
+      {schema && <Input aria-label="Filter fields" placeholder="Filter fields, e.g. spec.replicas" value={filter} onChange={e => onFilterChange(e.target.value)} className={FIELD_CLASS} />}
       {versionPicker && <div className={schema ? 'w-40 shrink-0' : 'w-40'}>{versionPicker}</div>}
     </div>
     {!schema ? <p className="text-sm text-theme-text-tertiary">Radar didn't receive a schema for this version. The YAML tab shows the object as returned.</p>
       : results ? <>
         <p className="text-sm text-theme-text-tertiary">{results.total === 1 ? '1 matching field' : `${results.total} matching fields`}{results.total > 200 ? ' — showing 200; narrow the filter' : ''}</p>
-        <SchemaRows key="filter" nodes={results.nodes} fullPath />
+        <SchemaRows key="filter" nodes={results.nodes} root={schema} />
       </> : <>
         <div className="space-y-2 text-sm text-theme-text-secondary"><SchemaFacts schema={{ ...schema, description: undefined }} /></div>
-        <SchemaRows key="tree" nodes={nodes} />
+        {nodes.length > 0 ? <SchemaRows key="tree" nodes={nodes} /> : <p className="text-sm text-theme-text-tertiary">This schema declares no fields.</p>}
       </>}
   </div>
 }
 
 export function CustomResourceDefinitionRenderer(props: CustomResourceDefinitionRendererProps) {
-  const identity = JSON.stringify([props.data.metadata?.uid, props.data.metadata?.name, props.data.metadata?.resourceVersion])
+  const identity = JSON.stringify([props.data.metadata?.uid, props.data.metadata?.name])
   return <CRDDefinition key={identity} {...props} identity={identity} />
 }
 
@@ -135,6 +162,7 @@ function CRDDefinition({ data, onNavigate, onViewInstances, identity }: CustomRe
   const names = spec.names || {}
   const versions: CRDVersion[] = spec.versions || []
   const [selected, setSelected] = useState(() => preferredCRDVersion(versions)?.name)
+  const [filter, setFilter] = useState('')
   const version = versions.find(v => v.name === selected)
   const status = getCRDStatus(data)
   const service = spec.conversion?.webhook?.clientConfig?.service
@@ -153,7 +181,7 @@ function CRDDefinition({ data, onNavigate, onViewInstances, identity }: CustomRe
     <Section title="Schema" icon={Braces}>
       <div className="space-y-3">
         {allMissing ? <p className="text-sm text-theme-text-tertiary">Radar didn't receive this definition's schema. The YAML tab shows the object as returned.</p>
-          : <SchemaExplorer key={`${identity}:${selected}`} version={version} versionPicker={versions.length > 1 && <SelectMenu ariaLabel="Schema version" value={selected || ''} onChange={setSelected}
+          : <SchemaExplorer key={`${identity}:${selected}`} version={version} filter={filter} onFilterChange={setFilter} versionPicker={versions.length > 1 && <SelectMenu ariaLabel="Schema version" value={selected || ''} onChange={setSelected}
             options={versions.map(v => ({ value: v.name, label: v.name, description: versionNotes(v) }))} />} />}
       </div>
     </Section>

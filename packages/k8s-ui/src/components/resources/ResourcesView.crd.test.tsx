@@ -21,7 +21,7 @@ it('shows definition columns and only served versions with storage/deprecation m
   await act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 48 }}><KeyboardShortcutProvider><ResourcesView namespaces={[]} apiResources={[kind]} resourceCounts={{ CustomResourceDefinition: 1 }} selectedKindQuery={{ isLoading: false, data: [data], resourceName: kind.name, group: kind.group }} locationPathname="/resources/customresourcedefinitions" locationSearch="?apiGroup=apiextensions.k8s.io" onNavigate={() => {}} /></KeyboardShortcutProvider></VirtuosoMockContext.Provider>))
   const table = host.querySelector('table')!
   expect(table).not.toBeNull()
-  for (const text of ['Name', 'Group', 'Kind', 'Scope', 'Versions', 'Status', 'Age', 'example.io', 'Widget', 'Namespaced', 'storage', 'deprecated', 'Established']) expect(table.textContent).toContain(text)
+  for (const text of ['Name', 'Kind', 'Scope', 'Served Versions', 'Status', 'Age', 'Widget', 'Namespaced', 'storage', 'deprecated', 'Established']) expect(table.textContent).toContain(text)
   expect(table.textContent).not.toContain('v1alpha1')
   expect(Array.from(table.querySelectorAll('th')).map(th => th.textContent).join(',')).not.toContain('Namespace')
 })

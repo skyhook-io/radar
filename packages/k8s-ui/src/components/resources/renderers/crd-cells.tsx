@@ -1,12 +1,19 @@
 import { Badge } from '../../ui/Badge'
+import { Tooltip } from '../../ui/Tooltip'
 import type { CRDVersion } from '../../../utils/crd-schema'
 
 export function CRDVersionLabel({ version, showStorage = true }: { version: CRDVersion; showStorage?: boolean }) {
-  return <span className="inline-flex items-center gap-1 whitespace-nowrap" title={version.deprecationWarning}>
+  return <span className="inline-flex items-center gap-1 whitespace-nowrap">
     <span className="font-mono">{version.name}</span>
-    {showStorage && version.storage && <Badge tone="note" size="sm">storage</Badge>}
-    {version.deprecated && <Badge severity="warning" size="sm">deprecated</Badge>}
-    {!version.served && <Badge severity="neutral" size="sm">not served</Badge>}
+    {showStorage && version.storage && <Tooltip content="Objects are saved in this version; the API server converts them to the others on read">
+      <Badge tone="note" size="sm">storage</Badge>
+    </Tooltip>}
+    {version.deprecated && <Tooltip content={version.deprecationWarning || 'Requests for this version return a deprecation warning'}>
+      <Badge severity="warning" size="sm">deprecated</Badge>
+    </Tooltip>}
+    {!version.served && <Tooltip content="The API server doesn't serve this version, so clients can't read or write it">
+      <Badge severity="neutral" size="sm">not served</Badge>
+    </Tooltip>}
   </span>
 }
 
