@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -204,6 +205,35 @@ func TestPauseDeploymentNeverFallsBackToRadarsIdentity(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (body %s)", w.Code, w.Body.String())
+	}
+	if n := pausePatchCount(dyn); n != 0 {
+		t.Errorf("issued %d patches through Radar's own client", n)
+	}
+}
+
+func TestPauseDeploymentPatchesAsTheCaller(t *testing.T) {
+	dyn, router := setupPauseTest(t, pauseTestDeployment(false))
+
+	var requests []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" as "+r.Header.Get("Impersonate-User"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"prod"}}`))
+	}))
+	t.Cleanup(api.Close)
+	previous := k8s.SetTestConfig(&rest.Config{Host: api.URL})
+	t.Cleanup(func() { k8s.SetTestConfig(previous) })
+
+	r := httptest.NewRequest(http.MethodPost, "/api/workloads/deployments/prod/web/pause", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice"}))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	if len(requests) != 1 || requests[0] != "PATCH as alice" {
+		t.Errorf("API requests = %v, want one PATCH as alice", requests)
 	}
 	if n := pausePatchCount(dyn); n != 0 {
 		t.Errorf("issued %d patches through Radar's own client", n)
