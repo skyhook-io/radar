@@ -12,7 +12,7 @@ import {
 import { clsx } from 'clsx'
 import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../ui/Collapse'
 import type { APIResource } from '../../types'
-import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, resourceSearchAliases } from '../../utils/api-resources'
 import { getResourceIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
 import { certaintyGlyph } from '../facts'
@@ -138,7 +138,8 @@ export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' 
   if (!normalized) return true
   return resource.kind.toLowerCase().includes(normalized) ||
     resource.name.toLowerCase().includes(normalized) ||
-    resource.group.toLowerCase().includes(normalized)
+    resource.group.toLowerCase().includes(normalized) ||
+    resourceSearchAliases(resource).some(alias => alias.includes(normalized))
 }
 
 export function rawCRDGroupTitle(resources: Pick<APIResource, 'group' | 'isCrd'>[]): string | undefined {

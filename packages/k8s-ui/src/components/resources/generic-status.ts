@@ -1,3 +1,4 @@
+import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus } from './resource-utils-strimzi'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
@@ -92,6 +93,7 @@ function fromCondition(cond: any, polarityKnown: boolean): GenericStatus | null 
  * callers render their own placeholder rather than inventing one.
  */
 export function getGenericResourceStatus(resource: any): GenericStatus | null {
+  if (resource?.kind === 'CustomResourceDefinition' && isApiGroup(resource.apiVersion, 'apiextensions.k8s.io')) return getCRDStatus(resource)
   if (resource?.kind === 'KafkaConnector' && isApiGroup(resource.apiVersion, 'kafka.strimzi.io')) {
     const native = getStrimziConnectorStatus(resource)
     return { text: native.text, tone: native.level }

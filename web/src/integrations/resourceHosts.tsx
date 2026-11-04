@@ -1,3 +1,4 @@
+import { CustomResourceDefinitionRenderer } from '../components/resources/renderers/CustomResourceDefinitionRenderer'
 import { useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { PaneLoader, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
@@ -40,7 +41,7 @@ import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroR
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 
 export const resourceHosts: readonly ResourceHost[] = [
-  { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
+  { id: 'kubernetes', renderers: { CustomResourceDefinitionRenderer, PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
