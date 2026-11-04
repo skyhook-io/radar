@@ -13,7 +13,6 @@ import { localQueueStatusWithParent } from '@skyhook-io/k8s-ui/components/kueue/
 import type { RelatedRead } from '@skyhook-io/k8s-ui/components/kueue/related-read'
 import { KUEUE_GROUP } from '@skyhook-io/k8s-ui/components/kueue/constants'
 import { relatedReadKey, useRelatedObjects, useRelatedReads } from '../../kueue/useRelatedReads'
-
 import { KueueQueueWorkloads } from '@skyhook-io/k8s-ui/components/resources/renderers/KueueQueueWorkloads'
 import type { KueueQueueMembership } from '@skyhook-io/k8s-ui/types/kueue-queues'
 import { useKueueQueueWorkloads } from '../../../api/client'
@@ -78,8 +77,6 @@ function QueueWorkloads({ kind, data, onNavigate }: Props & { kind: 'ClusterQueu
     />
   )
 }
-
-
 
 // Keyed by UID so moving the drawer to another queue starts its reads (and their mount time) afresh.
 export function LocalQueueRenderer({ data, onNavigate }: { data: any; onNavigate?: Navigate }) {
