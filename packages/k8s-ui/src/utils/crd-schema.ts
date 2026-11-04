@@ -73,11 +73,20 @@ export interface EnclosingRules {
   compositions: { label: string; value: string }[]
 }
 
-function rulesOf(schema: CRDSchema, path: string): EnclosingRules | null {
-  const element = schemaElement(schema)?.schema
-  const validations = [...(schema['x-kubernetes-validations'] ?? []), ...(element?.['x-kubernetes-validations'] ?? [])]
-  const compositions = [...schemaCompositions(schema), ...(element ? schemaCompositions(element) : [])]
-  return validations.length || compositions.length ? { path, validations, compositions } : null
+// A field's own rules, then those of each array item or map value it holds
+// (`spec.groups`, `spec.groups[]`, `spec.groups[]{}`), each under the path its
+// `self` refers to. Nearest the leaf first.
+function rulesOf(schema: CRDSchema, path: string): EnclosingRules[] {
+  const levels: EnclosingRules[] = []
+  for (let level: CRDSchema | undefined = schema, at = path; level;) {
+    const validations = level['x-kubernetes-validations'] ?? []
+    const compositions = schemaCompositions(level)
+    if (validations.length || compositions.length) levels.push({ path: at, validations, compositions })
+    const element = schemaElement(level)
+    at += element?.label === 'items' ? '[]' : '{}'
+    level = element?.schema
+  }
+  return levels.reverse()
 }
 
 /** Rules declared on the fields that contain `node`, nearest first. CEL rules
@@ -86,11 +95,9 @@ function rulesOf(schema: CRDSchema, path: string): EnclosingRules | null {
 export function enclosingRules(node: SchemaNode, root: CRDSchema): EnclosingRules[] {
   const result: EnclosingRules[] = []
   for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
-    const rules = rulesOf(ancestor.schema, displaySchemaPath(ancestor.path))
-    if (rules) result.push(rules)
+    result.push(...rulesOf(ancestor.schema, displaySchemaPath(ancestor.path)))
   }
-  const rootRules = rulesOf(root, '')
-  if (rootRules) result.push(rootRules)
+  result.push(...rulesOf(root, ''))
   return result
 }
 
@@ -172,19 +179,23 @@ export function indexCRDSchema(schema: CRDSchema | undefined): SchemaNode[] {
 // (`spec.ports[0].name`, `metadata.labels[app]`), and people often leave the
 // brackets out entirely. Matching ignores both so a pasted path still finds its field.
 function matchablePath(path: string): string {
-  return path.toLowerCase().replace(/\[[^\]]*\]|\{\}/g, '').replace(/\.{2,}/g, '.')
+  return path.toLowerCase().replace(/\[(?!")[^\]]*\]|\{\}/g, '').replace(/\.{2,}/g, '.')
 }
 
 export function filterCRDSchema(index: SchemaNode[], query: string, limit = 200): { nodes: SchemaNode[]; total: number } {
   const term = query.trim().toLowerCase()
   const looseTerm = matchablePath(term)
+  // The field the query names exactly leads, so the cap can never hide it.
+  const exact: SchemaNode[] = []
   const nodes: SchemaNode[] = []
   let total = 0
   for (const node of index) {
     const display = displaySchemaPath(node.path).toLowerCase()
-    if (!display.includes(term) && !(looseTerm && matchablePath(display).includes(looseTerm))) continue
+    const loose = matchablePath(display)
+    if (!display.includes(term) && !(looseTerm && loose.includes(looseTerm))) continue
     total++
-    if (nodes.length < limit) nodes.push(node)
+    if (display === term || loose === looseTerm) exact.push(node)
+    else if (nodes.length < limit) nodes.push(node)
   }
-  return { nodes, total }
+  return { nodes: [...exact, ...nodes].slice(0, limit), total }
 }

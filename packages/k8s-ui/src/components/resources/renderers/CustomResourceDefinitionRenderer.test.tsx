@@ -58,6 +58,12 @@ it('shows constraints nested inside arrays of maps on the field that holds them'
   expect(host.textContent).toContain('tiers[]map[string]string')
   click('tiers'); expect(host.textContent).toContain('items values enum: gold · silver')
 })
+it('falls back to the preferred version when an update removes the one being read', () => {
+  start(); version('v1beta1'); expect(host.textContent).toContain('old')
+  mount({ ...data, spec: { ...data.spec, versions: data.spec.versions.filter(v => v.name !== 'v1beta1') } })
+  expect(versionButton()?.getAttribute('aria-label')).toBe('Schema version: v1')
+  expect(host.textContent).not.toContain("didn't receive a schema")
+})
 it('shows the rules on enclosing fields for a field found by search, and an empty schema plainly', () => {
   const withRules = { ...data, spec: { ...data.spec, versions: [{ name: 'v1', served: true, schema: { openAPIV3Schema: { properties: { spec: { 'x-kubernetes-validations': [{ rule: 'has(self.a) != has(self.b)', message: 'set a or b' }], properties: { a: { type: 'string' }, b: { type: 'string' } } } } } } }] } }
   start(); mount(withRules); filter('spec.a'); click('spec.astring')

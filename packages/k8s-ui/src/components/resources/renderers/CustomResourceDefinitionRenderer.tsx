@@ -161,9 +161,12 @@ function CRDDefinition({ data, onNavigate, onViewInstances, identity }: CustomRe
   const spec = data.spec || {}
   const names = spec.names || {}
   const versions: CRDVersion[] = spec.versions || []
-  const [selected, setSelected] = useState(() => preferredCRDVersion(versions)?.name)
+  const [picked, setSelected] = useState(() => preferredCRDVersion(versions)?.name)
   const [filter, setFilter] = useState('')
-  const version = versions.find(v => v.name === selected)
+  // An update can remove the version being read; fall back rather than
+  // reporting its schema as missing.
+  const version = versions.find(v => v.name === picked) ?? preferredCRDVersion(versions)
+  const selected = version?.name
   const status = getCRDStatus(data)
   const service = spec.conversion?.webhook?.clientConfig?.service
   const allMissing = versions.every(v => !v.schema?.openAPIV3Schema)

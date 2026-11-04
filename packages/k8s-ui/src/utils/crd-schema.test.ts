@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareKubeAwareVersions, displaySchemaPath, filterCRDSchema, indexCRDSchema, preferredCRDVersion, schemaChildren, schemaCompositions, schemaConstraints, schemaTypeLabel, schemaLeafName, schemaParentPath, schemaElement, enclosingRules } from './crd-schema'
+import { compareKubeAwareVersions, displaySchemaPath, filterCRDSchema, indexCRDSchema, preferredCRDVersion, schemaChildren, schemaCompositions, schemaConstraints, schemaTypeLabel, schemaLeafName, schemaParentPath, schemaElement, enclosingRules, type CRDSchema } from './crd-schema'
 
 describe('CRD schemas', () => {
   it('labels arrays, maps, boolean additionalProperties and Kubernetes extensions', () => {
@@ -60,7 +60,7 @@ describe('CRD schemas', () => {
     }
     const x = indexCRDSchema(root).find(n => displaySchemaPath(n.path) === 'spec.list[].x')!
     expect(enclosingRules(x, root)).toEqual([
-      { path: 'spec.list', validations: [{ rule: 'self.x > 0' }], compositions: [] },
+      { path: 'spec.list[]', validations: [{ rule: 'self.x > 0' }], compositions: [] },
       { path: 'spec', validations: [{ rule: 'has(self.a) != has(self.b)', message: 'set a or b' }], compositions: [{ label: 'One of', value: 'a · b' }] },
       { path: '', validations: [{ rule: 'has(self.spec)' }], compositions: [] },
     ])
@@ -71,6 +71,26 @@ describe('CRD schemas', () => {
       { label: 'list type', value: 'map' }, { label: 'list keys', value: 'name, protocol' },
     ])
     expect(schemaConstraints({ type: 'object', 'x-kubernetes-map-type': 'atomic' })).toEqual([{ label: 'map type', value: 'atomic' }])
+  })
+  it('reports rules at every container level a search hit sits in, under the path self refers to', () => {
+    const root = { properties: { spec: { properties: { groups: { type: 'array',
+      'x-kubernetes-validations': [{ rule: 'size(self) < 5' }],
+      items: { type: 'object', additionalProperties: { type: 'object',
+        'x-kubernetes-validations': [{ rule: 'self.min <= self.max' }],
+        properties: { min: { type: 'integer' }, max: { type: 'integer' } } } } } } } } }
+    const min = filterCRDSchema(indexCRDSchema(root), 'spec.groups[0][a].min').nodes
+    expect(min.map(n => displaySchemaPath(n.path))).toEqual(['spec.groups[]{}.min'])
+    expect(enclosingRules(min[0], root).map(r => [r.path, r.validations.map(v => v.rule)])).toEqual([
+      ['spec.groups[]{}', ['self.min <= self.max']],
+      ['spec.groups', ['size(self) < 5']],
+    ])
+  })
+  it('keeps a quoted property exact and ahead of the result cap', () => {
+    const properties: Record<string, CRDSchema> = Object.fromEntries(Array.from({ length: 205 }, (_, i) => [`f${i}`, { type: 'string' }]))
+    properties['a.b'] = { type: 'string' }
+    const result = filterCRDSchema(indexCRDSchema({ properties: { spec: { properties } } }), 'spec["a.b"]')
+    expect(result.nodes.map(n => displaySchemaPath(n.path))).toEqual(['spec["a.b"]'])
+    expect(filterCRDSchema(indexCRDSchema({ properties: { spec: { properties } } }), 'spec.f20').nodes[0].path.at(-1)?.name).toBe('f20')
   })
   it('orders kube versions by stability then descending major/minor, with other names last', () => {
     expect(['v2alpha2', 'foo', 'v1beta2', 'v2', 'v1', 'v3beta1', 'v1beta10', 'bar', 'v2alpha10'].sort(compareKubeAwareVersions)).toEqual(['v2', 'v1', 'v3beta1', 'v1beta10', 'v1beta2', 'v2alpha10', 'v2alpha2', 'bar', 'foo'])
