@@ -31,5 +31,8 @@ describe("quantityText", () => {
     expect(quantityText({ certainty: "exact", resources: { pods: "3", "example.com/fpga": "1" } } as never)).toBe(
       "example.com/fpga 1 · 3 pods",
     );
+    expect(quantityText({ certainty: "exact", resources: { "gpu.intel.com/millicores": "500" } } as never)).toBe(
+      "gpu.intel.com/millicores 500",
+    );
   });
 });

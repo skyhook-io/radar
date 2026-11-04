@@ -51,6 +51,7 @@ import {
   type StatusTone,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
+import { isGpuCountKey } from "@skyhook-io/k8s-ui/utils/extended-resources";
 import {
   formatCPUString,
   formatMemoryString,
@@ -308,7 +309,7 @@ function labeledQuantity(resource: string, value: string): string {
   const quantity = formatQuantity(resource, value);
   if (resource === "cpu" || resource === "memory") return quantity;
   if (resource === "pods") return `${quantity} ${quantity === "1" ? "pod" : "pods"}`;
-  if (/gpu/i.test(resource)) return `gpu ${quantity}`;
+  if (isGpuCountKey(resource)) return `gpu ${quantity}`;
   return `${resource} ${quantity}`;
 }
 
