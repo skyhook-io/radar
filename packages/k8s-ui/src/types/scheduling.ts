@@ -45,7 +45,36 @@ export interface SchedulingObservation {
     waitingForReplacementPods?: SchedulingCondition
     requeueState?: { count?: number; requeueAt?: string }
     concurrentAdmission?: { parentName: string; parentRef?: SchedulingRef }
+    admission?: KueueAdmissionState
   }
+}
+
+// Mirrors resourcecontext.KueueAdmissionFact (see its Go doc for the
+// evidence contract: message is bounded display text, an absent stale means
+// not known to be stale).
+export interface KueueAdmissionFact {
+  code: string
+  // Open like code: a newer Radar may send a source this UI doesn't know.
+  source?: 'condition' | 'admission_check' | 'spec' | (string & {})
+  name?: string
+  reason?: string
+  message?: string
+  since?: string
+  stale?: boolean
+}
+
+// Mirrors resourcecontext.KueueAdmissionState. The server is the only place
+// codes and attention are decided; a code this UI does not know still renders
+// verbatim. A missing fact is not evidence on its own (see the Go doc for
+// which facts each state reports), and a missing admission block means an
+// older Radar, not a Workload with no blocker.
+export interface KueueAdmissionState {
+  state: string
+  attention: string
+  stale?: boolean
+  inactive?: KueueAdmissionFact
+  blocker?: KueueAdmissionFact
+  disruption?: KueueAdmissionFact
 }
 
 export interface KueueAdmissionWorkload {

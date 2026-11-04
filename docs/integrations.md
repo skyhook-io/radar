@@ -1749,38 +1749,20 @@ eviction; an empty list is not evidence that no request was made. The Workload's
 check message remains the primary explanation, and requests are not assigned to
 individual checks by parsing their names.
 
-For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
-and MCP `get_resource` also project a bounded admission summary into
-`resourceContext.scheduling.observations`. The first adapter emits one Kueue
-`admission` observation: a controller-neutral `satisfied`, `unsatisfied`,
-`held`, or `unknown` decision; the most useful native condition; LocalQueue and
-ClusterQueue facts with submission/entitlement roles; AdmissionCheck and
-preemption-gate evidence; and affirmative disruption conditions from the
-current snapshot. Resource names remain useful facts when RBAC withholds an
-optional navigation reference.
+#### Admission state classification
 
-`held` requires evidence of an explicit pause: `spec.active=false`, an `OnHold`
-condition, or `AdmissionGated` together with the current non-empty
-`kueue.x-k8s.io/admission-gated-by` annotation. The overloaded
-preemption-gated `AdmissionGated` reason remains `unsatisfied`, as does
-`Suspended` by itself: Kueue uses that reason for an inactive ClusterQueue,
-which may reflect broken dependencies rather than an intentional stop policy.
+Job, JobSet and RayJob admission cards distinguish lifecycle, waiting blockers,
+withdrawal and disruption using the Workload's own status. The Workload table
+and detail retain native condition headlines, which can differ from the card.
+REST AI detail and MCP `get_resource` include the same bounded admission context
+for v1beta2 and v1beta1 Workloads, with explicit truncation markers.
 
-Typed Kueue detail retains the controller's `pending` / `quota_reserved` /
-`admitted` / `finished` phase, PodsReady and replacement-Pod evidence,
-per-PodSet resource-to-ResourceFlavor assignments and usage, requeue state,
-and an exact concurrent-admission Parent reference for a Variant. Each
-observation carries the Workload's `subjectGeneration`, and projected
-conditions retain `observedGeneration`, so consumers can detect stale
-controller evidence. The compact projection keeps the first eight PodSets in
-name order and up to seven resource assignments per PodSet, prioritizing
-extended resources before core resources; explicit truncation flags point
-consumers back to the returned raw Workload for the complete status. Normal
-unsatisfied admission is scheduling context rather than an operational Issue.
-Radar does not infer feature-gate state, queue position, fairness math, Pod
-placement, or physical capacity. This is a bounded projection of the returned
-Workload's current status, not condition history, queue-wide observation
-coverage, or support for other Kueue API versions.
+This is a controller report, not a causal diagnosis: named queues and checks
+are not independently verified by the classification. Flavor fit describes only
+Kueue's last attempt. Stale evidence is marked; an absent stale marker does not
+confirm freshness, and transition times do not date scheduling attempts.
+Older Kueue wording is best-effort; unrecognized reasons remain visible.
+Radar does not infer fairness, Pod placement, physical capacity or runtime health.
 
 ### KubeRay
 
