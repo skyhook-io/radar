@@ -5378,6 +5378,63 @@ export function useRestartWorkload() {
   });
 }
 
+function useSetDeploymentPaused(
+  action: "pause" | "resume",
+  meta: { errorMessage: string; successMessage: string },
+) {
+  const queryClient = useQueryClient();
+  const { guard } = useRadarFeature("deploymentPause");
+
+  return useMutation({
+    mutationFn: ({
+      kind,
+      namespace,
+      name,
+    }: {
+      kind: string;
+      namespace: string;
+      name: string;
+    }) =>
+      guard(async () => {
+        const response = await apiFetch(
+          `${getApiBase()}/workloads/${kind}/${namespace}/${name}/${action}`,
+          {
+            method: "POST",
+          },
+        );
+        if (!response.ok) {
+          const error = await readErrorBody(response);
+          throw new Error(error.error || `HTTP ${response.status}`);
+        }
+        return response.json();
+      }),
+    meta,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["resources", variables.kind],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["resource", variables.kind, variables.namespace, variables.name],
+      });
+      queryClient.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
+export function usePauseDeployment() {
+  return useSetDeploymentPaused("pause", {
+    errorMessage: "Failed to pause rollout",
+    successMessage: "Rollout paused",
+  });
+}
+
+export function useResumeDeployment() {
+  return useSetDeploymentPaused("resume", {
+    errorMessage: "Failed to resume rollout",
+    successMessage: "Rollout resumed",
+  });
+}
+
 export function fetchWorkloadImages(
   kind: string,
   namespace: string,

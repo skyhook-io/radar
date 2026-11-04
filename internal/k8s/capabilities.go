@@ -171,6 +171,7 @@ type FeatureCapabilities struct {
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
+	DeploymentPause       bool `json:"deploymentPause"`
 	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
 	ResourceIssueCoverage bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
 	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment

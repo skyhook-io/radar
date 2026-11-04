@@ -174,6 +174,7 @@ export interface FeatureCapabilities {
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
+  deploymentPause?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   podEnvironment?: boolean

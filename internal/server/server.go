@@ -1502,6 +1502,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		YAMLReview:               true,
 		YAMLSchemas:              true,
 		WorkloadImages:           true,
+		DeploymentPause:          true,
 		ResourceIssues:           true,
 		ResourceIssueCoverage:    true,
 		PodEnvironment:           true,
