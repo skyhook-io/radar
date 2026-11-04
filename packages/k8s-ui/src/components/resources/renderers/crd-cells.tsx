@@ -17,12 +17,14 @@ export function CRDVersionLabel({ version, showStorage = true }: { version: CRDV
   </span>
 }
 
-// Rough rendered widths (px) of a version name character, the deprecated badge
-// and the gap between tokens, against the Served Versions column's content width.
+// Rendered widths (px) measured in the list: a version name character, the
+// deprecated badge with its gap, the gap between tokens, the "+N" count, and the
+// Served Versions column's content width (w-64 less its padding).
 const VERSION_CHAR_PX = 8.5
 const DEPRECATED_BADGE_PX = 80
 const TOKEN_GAP_PX = 8
-const VERSIONS_CELL_BUDGET_PX = 200
+const COUNT_PX = 24
+const VERSIONS_CELL_CONTENT_PX = 224
 
 function versionTokenWidth(version: CRDVersion): number {
   return version.name.length * VERSION_CHAR_PX + (version.deprecated ? DEPRECATED_BADGE_PX : 0)
@@ -37,7 +39,9 @@ export function CRDVersionsCell({ versions }: { versions: CRDVersion[] }) {
   let shown = 0
   for (const version of served.slice(0, 2)) {
     const width = versionTokenWidth(version) + (shown ? TOKEN_GAP_PX : 0)
-    if (shown && used + width > VERSIONS_CELL_BUDGET_PX) break
+    const hiddenAfter = served.length - shown - 1
+    const budget = VERSIONS_CELL_CONTENT_PX - (hiddenAfter > 0 ? COUNT_PX + TOKEN_GAP_PX : 0)
+    if (shown && used + width > budget) break
     used += width
     shown++
   }

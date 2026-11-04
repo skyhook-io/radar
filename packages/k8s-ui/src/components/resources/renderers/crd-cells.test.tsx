@@ -17,9 +17,14 @@ it('sorts served versions, shows two complete tokens and summarizes the rest', (
     expect(token.parentElement?.classList.contains('whitespace-nowrap')).toBe(true)
   }
   container.innerHTML = renderToStaticMarkup(<CRDVersionsCell versions={[
-    { name: 'v1beta2', served: true, deprecated: true }, { name: 'v1beta1', served: true, deprecated: true },
+    { name: 'v1beta2', served: true }, { name: 'v1beta1', served: true, deprecated: true },
   ]} />)
-  expect(container.textContent).toBe('v1beta2deprecated+1')
+  expect(container.textContent).toBe('v1beta2v1beta1deprecated')
+  container.innerHTML = renderToStaticMarkup(<CRDVersionsCell versions={[
+    { name: 'v1beta2', served: true, deprecated: true }, { name: 'v1beta1', served: true, deprecated: true },
+    { name: 'v1alpha1', served: true },
+  ]} />)
+  expect(container.textContent).toBe('v1beta2deprecated+2')
   container.innerHTML = renderToStaticMarkup(<CRDVersionsCell versions={[]} />)
   expect(container.textContent).toBe('None served')
 })

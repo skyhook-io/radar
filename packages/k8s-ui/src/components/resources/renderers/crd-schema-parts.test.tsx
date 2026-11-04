@@ -25,6 +25,11 @@ it('renders messages before their expressions, including parent and root rules, 
   expect(own.lastElementChild?.textContent).toBe('self > 0')
   expect(host.textContent).toContain('5 rules on spec')
   expect(host.textContent).toContain('1 rule on Document root')
+  const rootGroup = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('1 rule on Document root'))!
+  expect(rootGroup.getAttribute('aria-expanded')).toBe('false')
+  expect(host.textContent).not.toContain('Spec must exist')
+  act(() => rootGroup.click())
+  expect(host.textContent).toContain('Spec must exist')
   expect(host.textContent).not.toContain('Message 3')
   const button = Array.from(host.querySelectorAll('button')).find(b => b.textContent === 'Show 2 more')!
   expect(button.getAttribute('aria-expanded')).toBe('false')

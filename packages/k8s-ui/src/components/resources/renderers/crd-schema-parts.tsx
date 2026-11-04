@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Search, X } from 'lucide-react'
 import { Badge } from '../../ui/Badge'
-import { Collapse, useDisclosure } from '../../ui/Collapse'
+import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { Input } from '../../ui/Input'
 import {
   displaySchemaPath, enclosingRules, schemaCompositions, schemaConstraints, schemaElement, schemaParentPath,
@@ -83,28 +83,39 @@ export function SchemaFacts({ schema, elementOf, parentDescription, showDescript
   </>
 }
 
-function ParentRuleGroup({ group }: { group: EnclosingRules }) {
-  const [open, setOpen] = useState(false)
-  const disclosure = useDisclosure(open)
+function ParentRuleGroup({ group, defaultOpen }: { group: EnclosingRules; defaultOpen: boolean }) {
+  const [groupOpen, setGroupOpen] = useState(defaultOpen)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const groupDisclosure = useDisclosure(groupOpen)
+  const moreDisclosure = useDisclosure(moreOpen)
   const count = group.validations.length + group.compositions.length
   const rules = [
     ...group.validations.map((rule, i) => <SchemaRules key={`v${i}`} rules={[rule]} />),
     ...group.compositions.map(composition => <div key={composition.label}><span>{composition.label}: </span><code className="whitespace-pre-wrap break-words">{composition.value}</code></div>),
   ]
   return <div className="space-y-1">
-    <p className="break-words text-xs text-theme-text-tertiary">{count} {count === 1 ? 'rule' : 'rules'} on <span className="font-mono">{group.path || 'Document root'}</span></p>
-    {rules.slice(0, 3)}
-    {count > 3 && <>
-      <button type="button" {...disclosure.buttonProps} onClick={() => setOpen(v => !v)} className="text-xs text-accent">{open ? 'Show fewer' : `Show ${count - 3} more`}</button>
-      <Collapse open={open} id={disclosure.panelId} mountLazily><div className="space-y-1">{rules.slice(3)}</div></Collapse>
-    </>}
+    <button type="button" {...groupDisclosure.buttonProps} onClick={() => setGroupOpen(v => !v)} className="flex items-start gap-1 text-left text-xs text-theme-text-tertiary hover:text-theme-text-secondary">
+      <CollapseChevron open={groupOpen} className="mt-0.5 h-3 w-3 shrink-0" />
+      <span className="break-words">{count} {count === 1 ? 'rule' : 'rules'} on <span className="font-mono">{group.path || 'Document root'}</span></span>
+    </button>
+    <Collapse open={groupOpen} id={groupDisclosure.panelId} mountLazily>
+      <div className="space-y-1">
+        {rules.slice(0, 3)}
+        {count > 3 && <>
+          <button type="button" {...moreDisclosure.buttonProps} onClick={() => setMoreOpen(v => !v)} className="text-xs text-accent">{moreOpen ? 'Show fewer' : `Show ${count - 3} more`}</button>
+          <Collapse open={moreOpen} id={moreDisclosure.panelId} mountLazily><div className="space-y-1">{rules.slice(3)}</div></Collapse>
+        </>}
+      </div>
+    </Collapse>
   </div>
 }
 
+// The nearest parent's rules are the likeliest to concern the field; farther
+// groups start collapsed to their path and count.
 export function ParentRulesList({ node, root }: { node: SchemaNode; root: CRDSchema }) {
   const groups = enclosingRules(node, root)
   return groups.length ? <div className="space-y-2">
     <p className="text-xs font-medium text-theme-text-tertiary">Rules on parent fields</p>
-    {groups.map(group => <ParentRuleGroup key={group.path} group={group} />)}
+    {groups.map((group, i) => <ParentRuleGroup key={group.path} group={group} defaultOpen={i === 0} />)}
   </div> : null
 }
