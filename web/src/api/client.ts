@@ -5602,6 +5602,30 @@ export function useWorkloadRevisions(
   });
 }
 
+// A rollout can start long after its request returned, as when a resume releases
+// a held template, so nothing in the request says when its revision exists. The
+// controller records the Deployment's revision only after creating that ReplicaSet.
+// deploymentRevision is undefined until the resource loads, and empty on a loaded
+// Deployment with no revision yet, which is how one created paused starts out.
+export function useRefreshRevisionsOnNewRollout(
+  kind: string,
+  namespace: string,
+  name: string,
+  deploymentRevision: string | undefined,
+) {
+  const queryClient = useQueryClient();
+  const seen = useRef(deploymentRevision);
+
+  useEffect(() => {
+    const previous = seen.current;
+    seen.current = deploymentRevision;
+    if (previous === undefined || deploymentRevision === undefined || previous === deploymentRevision) return;
+    queryClient.invalidateQueries({
+      queryKey: ["workload-revisions", kind, namespace, name],
+    });
+  }, [queryClient, kind, namespace, name, deploymentRevision]);
+}
+
 export function useRollbackWorkload() {
   const queryClient = useQueryClient();
   return useMutation({

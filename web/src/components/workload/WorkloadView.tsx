@@ -71,6 +71,7 @@ import {
   fetchResourceWithRelationships,
   useSetWorkloadImages,
   useWorkloadRevisions,
+  useRefreshRevisionsOnNewRollout,
   useRollbackWorkload,
   useRolloutAction,
   useRolloutCapabilities,
@@ -592,6 +593,12 @@ export function WorkloadView({
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
+  useRefreshRevisionsOnNewRollout(
+    apiKind.toLowerCase(),
+    namespace,
+    name,
+    resource ? resource.metadata?.annotations?.['deployment.kubernetes.io/revision'] ?? '' : undefined,
+  )
   const resourceGroup = useMemo(
     () => (resource?.apiVersion ? apiVersionToGroup(resource.apiVersion) : undefined),
     [resource?.apiVersion],
