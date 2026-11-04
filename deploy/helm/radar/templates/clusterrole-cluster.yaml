@@ -4,6 +4,7 @@ namespaces, where cluster-scoped rules have no effect. This role keeps the
 cluster-scoped verbs Radar needs to run: access reviews, and impersonation of
 the people it acts for. Impersonation cannot be limited to the listed
 namespaces; each impersonated request is still bounded by that person's RBAC.
+In cloud mode it can also read the kube-system namespace, the cluster's identity.
 */}}
 {{- if and .Values.rbac.create .Values.rbac.namespaces -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -25,6 +26,12 @@ rules:
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]
     verbs: ["create"]
+  {{- end }}
+  {{- if .Values.cloud.enabled }}
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["kube-system"]
+    verbs: ["get"]
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

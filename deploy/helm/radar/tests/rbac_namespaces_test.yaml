@@ -62,6 +62,13 @@ tests:
             apiGroups: ["authorization.k8s.io"]
             resources: ["subjectaccessreviews"]
             verbs: ["create"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["namespaces"]
+            resourceNames: ["kube-system"]
+            verbs: ["get"]
 
   - it: keeps SubjectAccessReviews but not impersonation in user-token mode
     template: clusterrole-cluster.yaml
