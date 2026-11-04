@@ -16,3 +16,12 @@ it('navigates to instances within the router basename', () => {
   act(() => Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('View Widget resources'))!.click())
   expect(host.querySelector('output')?.textContent).toBe('/resources/widgets?apiGroup=example.io')
 })
+it('keeps the namespace selection when opening instances', () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(<MemoryRouter initialEntries={['/resources/customresourcedefinitions?namespaces=team-a,team-b']}><CustomResourceDefinitionRenderer data={{ spec: { group: 'example.io', names: { kind: 'Widget', plural: 'widgets' }, versions: [{ name: 'v1', served: true }] } }} /><Location /></MemoryRouter>))
+  act(() => Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('View Widget resources'))!.click())
+  const url = new URL(host.querySelector('output')!.textContent!, 'http://x')
+  expect(url.pathname).toBe('/resources/widgets')
+  expect(url.searchParams.get('apiGroup')).toBe('example.io')
+  expect(url.searchParams.get('namespaces')).toBe('team-a,team-b')
+})

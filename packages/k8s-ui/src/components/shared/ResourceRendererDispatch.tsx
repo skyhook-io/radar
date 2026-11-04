@@ -1153,7 +1153,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   const k = kind.toLowerCase()
   if (k === 'customresourcedefinitions' && isApiGroup(data.apiVersion, 'apiextensions.k8s.io')) {
     const status = getCRDStatus(data)
-    return { text: status.text, color: HEALTH_BADGE_COLORS[status.tone] }
+    const badge = { text: status.text, color: HEALTH_BADGE_COLORS[status.tone], level: status.tone }
+    return badge
   }
   if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
 

@@ -172,7 +172,7 @@ function CRDDefinition({ data, onNavigate, onViewInstances, identity }: CustomRe
   const allMissing = versions.every(v => !v.schema?.openAPIV3Schema)
   return <>
     {(status.tone === 'unhealthy' || status.tone === 'degraded') && <AlertBanner variant={status.tone === 'unhealthy' ? 'error' : 'warning'} title={status.text} message={status.reason} />}
-    <Section title="Definition" icon={FileCode}>
+    <Section title="Definition" icon={FileCode} defaultExpanded={true}>
       <PropertyList>
         <Property label="Kind" value={names.kind} />
         <Property label="Group" value={spec.group} />
@@ -181,7 +181,7 @@ function CRDDefinition({ data, onNavigate, onViewInstances, identity }: CustomRe
         {onViewInstances && versions.some(v => v.served) && <Property label="Instances" value={<button type="button" onClick={onViewInstances} className="text-accent hover:underline">View {names.kind} resources →</button>} />}
       </PropertyList>
     </Section>
-    <Section title="Schema" icon={Braces}>
+    <Section title="Schema" icon={Braces} defaultExpanded={true}>
       <div className="space-y-3">
         {allMissing ? <p className="text-sm text-theme-text-tertiary">Radar didn't receive this definition's schema. The YAML tab shows the object as returned.</p>
           : <SchemaExplorer key={`${identity}:${selected}`} version={version} filter={filter} onFilterChange={setFilter} versionPicker={versions.length > 1 && <SelectMenu ariaLabel="Schema version" value={selected || ''} onChange={setSelected}
