@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,6 +24,17 @@ func TestHubbleConnectWithAutoPortForwardDisabled(t *testing.T) {
 	}
 	if info.Connected || !strings.Contains(strings.ToLower(info.Error), "automatic port-forwarding is turned off") || strings.Contains(info.Error, "fallback failed") {
 		t.Fatalf("Connect = {connected:%v err:%q}, want the direct failure and the turned-off forward", info.Connected, info.Error)
+	}
+}
+
+func TestComposeConnectErrorWithAutoPortForwardDisabled(t *testing.T) {
+	route := composeConnectError("10.0.0.1:80", errDirectUnreachable, portforward.ErrAutoDisabled)
+	if !strings.Contains(route, "needs a network route") {
+		t.Errorf("unreachable relay = %q, want routing advice", route)
+	}
+	tlsFailed := composeConnectError("10.0.0.1:80", errors.New("TLS gRPC connection test failed"), portforward.ErrAutoDisabled)
+	if strings.Contains(tlsFailed, "network route") || !strings.Contains(tlsFailed, "TLS gRPC connection test failed") {
+		t.Errorf("reachable relay with a failed connection = %q, want the connection error, not routing advice", tlsFailed)
 	}
 }
 
