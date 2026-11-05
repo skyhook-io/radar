@@ -511,7 +511,9 @@ export function ApplicationDetail({
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
   const workloadContext = useMemo<AppWorkloadRenderContext>(() => {
-    if (!selectedWorkload || deploys === undefined || !workloadHasRevisions(selectedWorkload.kind)) return {};
+    // A source-backed app has a deploy history even when this workload has no
+    // revisions of its own, as a CronJob doesn't.
+    if (!selectedWorkload || !deploysAvailable) return {};
     return {
       defaultTab:
         singleWorkloadScope && initialView === "deploys" ? "deploys" : undefined,
