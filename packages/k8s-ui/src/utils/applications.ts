@@ -31,6 +31,9 @@ export interface AppWorkload {
   reason?: string;
   rollout?: WorkloadRolloutActivity;
   batch?: AppBatchSummary;
+  /** When the newest retained revision was created. A rollback reuses an old
+   *  revision, so it doesn't move this. */
+  latestRevisionAt?: string;
 }
 
 export interface AppRolloutSummary {
