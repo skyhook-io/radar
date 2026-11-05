@@ -319,6 +319,15 @@ describe('imageVersion', () => {
     expect(rows[0].via).toBe('release 42')
   })
 
+  it("doesn't mention a last list when nothing was ever read", () => {
+    const { partialReasons } = buildAppDeploys({
+      workloads: [{ ref: { kind: 'Deployment', namespace: 'ns', name: 'api' }, revisions: undefined }],
+      stale: true,
+    })
+    expect(partialReasons.join(' ')).not.toContain('last list')
+    expect(partialReasons).toContain("Revision history for Deployment api couldn't be read.")
+  })
+
   it('stops claiming Live and Newest when a refresh failed', () => {
     const { rows, partial, partialReasons } = buildAppDeploys({
       workloads: [{ ref: { kind: 'Deployment', namespace: 'shop', name: 'api' }, revisions: [{ number: 1, createdAt: '2026-11-05T01:00:00Z', image: 'api:1', isCurrent: true, replicas: 1, serving: true }] }],
