@@ -73,7 +73,8 @@ function RowBadges({ row }: { row: AppDeployRow }) {
 
 function readyLabel(row: AppDeployRow): string | undefined {
   if (row.ready === undefined) return undefined;
-  return row.desired === undefined ? String(row.ready) : `${row.ready}/${row.desired}`;
+  if (row.ready === 0 && row.desired === 0) return "Scaled down";
+  return `${row.desired === undefined ? row.ready : `${row.ready}/${row.desired}`} ready`;
 }
 
 function RollbackAction({
@@ -126,7 +127,6 @@ function DeployRowView({
   const hasDiff = Boolean(row.template && row.previousTemplate);
   const ready = readyLabel(row);
   const version = row.version ?? row.image;
-  const workloadLabel = `${row.workload.kind}/${row.workload.name}`;
   const columns = 4 + Number(showWorkload) + Number(showActions) + 1;
   return (
     <Fragment>
@@ -166,7 +166,9 @@ function DeployRowView({
         </td>
         {showWorkload && (
           <td className="min-w-0 py-1.5 pr-3">
-            <Truncated text={workloadLabel} className="text-xs text-theme-text-secondary" />
+            <Tooltip content={`${row.workload.kind}/${row.workload.name}`} delay={150} wrapperClassName="block min-w-0">
+              <span className="block truncate text-xs text-theme-text-secondary">{row.workload.name}</span>
+            </Tooltip>
           </td>
         )}
         <td className="min-w-0 py-1.5 pr-3">
@@ -186,7 +188,7 @@ function DeployRowView({
           )}
         </td>
         <td className="min-w-0 py-1.5 pr-3 text-xs text-theme-text-secondary">
-          {ready && <span className="whitespace-nowrap">{ready} ready</span>}
+          {ready && <span className="whitespace-nowrap">{ready}</span>}
           {ready && row.status && " · "}
           {row.status && (row.detail ? (
             <Tooltip content={row.detail} delay={150}>
@@ -255,7 +257,7 @@ export function ApplicationDeploys({
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
-      <div className="w-full max-w-[2400px] space-y-3 p-4 sm:p-6">
+      <div className="flex w-full max-w-[2400px] flex-col gap-3 p-4 sm:p-6">
       {deploys.rolloutInProgress && (
         <AlertBanner
           variant="info"
@@ -287,7 +289,7 @@ export function ApplicationDeploys({
         />
       ) : (
         <section className="overflow-x-auto rounded-lg border border-theme-border bg-theme-surface shadow-theme-sm">
-          <table className="w-full min-w-[720px] table-fixed text-left">
+          <table className={clsx("w-full table-fixed text-left", showWorkload ? "min-w-[900px]" : "min-w-[720px]")}>
             <colgroup>
               <col className="w-8" />
               <col className={showWorkload ? "w-[30%]" : "w-[38%]"} />
