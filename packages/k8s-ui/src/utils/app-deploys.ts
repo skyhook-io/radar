@@ -24,7 +24,7 @@ export interface AppDeployRow {
   version?: string
   image?: string
   source: AppDeploySource
-  /** How it got there: "Helm revision 12", "Argo CD sync by alice". */
+  /** Where it came from: "Helm revision 12", "Argo CD sync by alice". "Near …" means only that the times line up. */
   via?: string
   at?: string
   live: boolean | 'unknown'
@@ -65,6 +65,8 @@ export interface AppDeploys {
   partial: boolean
   /** One sentence per missing source, for display. */
   partialReasons: string[]
+  /** Revisions came back without the per-revision signals a current Radar agent always sends. */
+  agentOutdated?: boolean
 }
 
 // A Helm or GitOps deploy records its time when it finishes, so the ReplicaSet
@@ -92,6 +94,12 @@ export function imageVersion(image: string | undefined): string | undefined {
   return tagStart > image.lastIndexOf('/') ? image.slice(tagStart + 1) : undefined
 }
 
+// Only a Deployment proves it: a StatefulSet or DaemonSet mid-update reports
+// neither field on a current agent too.
+function predatesRevisionSignals({ ref, revisions = [] }: AppDeployWorkloadInput): boolean {
+  return ref.kind === 'Deployment' && revisions.length > 0 && revisions.every((r) => r.serving === undefined && r.readyReplicas === undefined)
+}
+
 function liveOf(kind: string, revision: WorkloadRevision, revisions: WorkloadRevision[]): boolean | 'unknown' {
   if (kind === 'Rollout') {
     return revisions.some((r) => r.isStable) ? Boolean(revision.isStable) : 'unknown'
@@ -105,18 +113,45 @@ function timeOf(value: string | undefined): number | undefined {
   return Number.isFinite(at) ? at : undefined
 }
 
-function closestAnchorFor(createdAt: string, anchors: AppHistoryAnchor[]): AppHistoryAnchor | undefined {
-  const created = timeOf(createdAt)
+/** The version a source recorded: a Helm chart, or a GitOps revision. */
+function anchorVersion(anchor: AppHistoryAnchor): string | undefined {
+  return anchor.type === 'helm' ? anchor.source : anchor.revision
+}
+
+const withoutV = (version: string) => version.replace(/^v/, '')
+
+// Evidence beyond timing: the source recorded the version this revision runs.
+// A Helm record lists its app version; a CI-built image often carries the commit.
+function anchorNamesVersion(anchor: AppHistoryAnchor, version: string | undefined): boolean {
+  if (!version || version === 'latest') return false
+  if (anchor.type === 'helm') {
+    return (anchor.source ?? '').split(' · ').some((part) => withoutV(part) === withoutV(version))
+  }
+  const revision = anchor.revision
+  if (!revision) return false
+  return revision === version || version.split(/[-_.+]/).some((part) => /^[0-9a-f]{7,40}$/.test(part) && revision.startsWith(part))
+}
+
+interface AnchorPairing {
+  anchor: AppHistoryAnchor
+  /** The source recorded this revision's version, rather than just being close in time. */
+  proven: boolean
+}
+
+function pairAnchor(revision: WorkloadRevision, anchors: AppHistoryAnchor[]): AnchorPairing | undefined {
+  const created = timeOf(revision.createdAt)
   if (created === undefined) return undefined
-  let closest: AppHistoryAnchor | undefined
+  const version = imageVersion(revision.image)
+  let closest: AnchorPairing | undefined
   let closestGap = Infinity
   for (const anchor of anchors) {
     const at = timeOf(anchor.timestamp)
     if (at === undefined) continue
     const gap = at - created
     if (gap > ANCHOR_AFTER_REVISION_MS || gap < -ANCHOR_BEFORE_REVISION_MS) continue
-    if (Math.abs(gap) < closestGap) {
-      closest = anchor
+    const proven = anchorNamesVersion(anchor, version)
+    if (!closest || (proven === closest.proven ? Math.abs(gap) < closestGap : proven)) {
+      closest = { anchor, proven }
       closestGap = Math.abs(gap)
     }
   }
@@ -125,6 +160,13 @@ function closestAnchorFor(createdAt: string, anchors: AppHistoryAnchor[]): AppHi
 
 function anchorVia(anchor: AppHistoryAnchor): string {
   return anchor.initiatedBy ? `${anchor.title} by ${anchor.initiatedBy}` : anchor.title
+}
+
+// A paired source loses its own row, so what it recorded has to survive here.
+function pairedVia({ anchor, proven }: AnchorPairing, version: string | undefined): string {
+  const recorded = anchorVersion(anchor)
+  const via = recorded && recorded !== version ? `${anchorVia(anchor)} · ${recorded}` : anchorVia(anchor)
+  return proven ? via : `Near ${via}`
 }
 
 function anchorRow(anchor: AppHistoryAnchor, index: number, sourceRef: AppSourceRef | undefined): AppDeployRow {
@@ -136,7 +178,7 @@ function anchorRow(anchor: AppHistoryAnchor, index: number, sourceRef: AppSource
       name: sourceRef?.name ?? '',
       group: sourceRef?.group,
     },
-    version: anchor.type === 'helm' ? anchor.source : anchor.revision,
+    version: anchorVersion(anchor),
     source: anchor.type === 'helm' ? 'helm' : 'gitops',
     via: anchorVia(anchor),
     at: anchor.timestamp,
@@ -162,8 +204,10 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
   let sortAt = -Infinity
   for (let i = newestFirst.length - 1; i >= 0; i--) {
     const revision = newestFirst[i]
-    const anchor = closestAnchorFor(revision.createdAt, anchors)
+    const pairing = pairAnchor(revision, anchors)
+    const anchor = pairing?.anchor
     if (anchor) matched.add(anchor)
+    const version = imageVersion(revision.image)
     sortAt = Math.max(sortAt, timeOf(revision.createdAt) ?? -Infinity)
     rows.push({
       sortAt,
@@ -171,10 +215,10 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
         id: `${ref.group ?? ''}/${ref.kind}/${ref.namespace}/${ref.name}#${revision.number}`,
         workload: ref,
         revision: revision.number,
-        version: imageVersion(revision.image),
+        version,
         image: revision.image,
         source: 'revision',
-        via: anchor ? anchorVia(anchor) : revision.changeCause,
+        via: pairing ? pairedVia(pairing, version) : revision.changeCause,
         at: revision.createdAt,
         live: liveOf(ref.kind, revision, revisions),
         newest: revision.isCurrent,
@@ -232,5 +276,6 @@ export function buildAppDeploys({ workloads, anchors, sourceRef, partialSources,
     rolloutInProgress: workloads.some((workload) => workload.rolloutActive),
     partial: partialReasons.length > 0,
     partialReasons,
+    agentOutdated: workloads.some(predatesRevisionSignals),
   }
 }

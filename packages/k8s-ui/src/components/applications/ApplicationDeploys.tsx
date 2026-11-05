@@ -22,8 +22,12 @@ const INITIAL_ROWS = 30;
 
 const WHEN_TIP =
   "When the revision was created, or when Helm or GitOps recorded the deploy. A rollback reuses an old revision, so its time doesn't change.";
+const SOURCE_TIP =
+  "The Helm or GitOps record for this deploy. \"Near\" means a record landed close to when the revision was created, which doesn't prove it created the revision.";
 const UNKNOWN_LIVE_TIP =
   "Kubernetes doesn't report which revision's pods are serving here. A StatefulSet or DaemonSet mid-update, or a Rollout with no stable revision yet, has no per-revision split.";
+const OUTDATED_AGENT_NOTE =
+  "The Radar agent on this cluster needs upgrading to report which revision's pods are serving.";
 
 export interface ApplicationDeploysProps {
   /** `null` while the host hasn't produced a result yet. */
@@ -52,7 +56,7 @@ function Truncated({ text, className }: { text: string; className?: string }) {
   );
 }
 
-function RowBadges({ row }: { row: AppDeployRow }) {
+function RowBadges({ row, liveUnknownTip }: { row: AppDeployRow; liveUnknownTip: string }) {
   if (row.source !== "revision") return null;
   return (
     <>
@@ -60,7 +64,7 @@ function RowBadges({ row }: { row: AppDeployRow }) {
         <span className={clsx(CHIP, CHIP_TONE.emerald)}>Live</span>
       )}
       {row.live === "unknown" && (
-        <Tooltip content={UNKNOWN_LIVE_TIP} delay={150}>
+        <Tooltip content={liveUnknownTip} delay={150}>
           <span className={clsx(CHIP, CHIP_TONE.muted)}>Live?</span>
         </Tooltip>
       )}
@@ -111,6 +115,7 @@ function DeployRowView({
   row,
   showWorkload,
   showActions,
+  liveUnknownTip,
   expanded,
   onToggle,
   onRollback,
@@ -119,6 +124,7 @@ function DeployRowView({
   row: AppDeployRow;
   showWorkload: boolean;
   showActions: boolean;
+  liveUnknownTip: string;
   expanded: boolean;
   onToggle: () => void;
   onRollback?: (row: AppDeployRow) => void;
@@ -160,7 +166,7 @@ function DeployRowView({
               <span className="flex-1 text-xs text-theme-text-tertiary">No version</span>
             )}
             <span className="flex shrink-0 items-center gap-1">
-              <RowBadges row={row} />
+              <RowBadges row={row} liveUnknownTip={liveUnknownTip} />
             </span>
           </div>
         </td>
@@ -253,6 +259,7 @@ export function ApplicationDeploys({
   const showWorkload = workloadCount > 1;
   const showActions = Boolean(onRollback || rollbackHref);
   const liveUnknown = rows.some((row) => row.source === "revision" && row.live === "unknown");
+  const liveUnknownTip = deploys.agentOutdated ? OUTDATED_AGENT_NOTE : UNKNOWN_LIVE_TIP;
   const visibleRows = showAll ? rows : rows.slice(0, INITIAL_ROWS);
 
   return (
@@ -305,7 +312,11 @@ export function ApplicationDeploys({
                 <th aria-label="Changes" />
                 <th className="py-2 pr-3 font-medium">Version</th>
                 {showWorkload && <th className="py-2 pr-3 font-medium">Workload</th>}
-                <th className="py-2 pr-3 font-medium">How it got there</th>
+                <th className="py-2 pr-3 font-medium">
+                  <Tooltip content={SOURCE_TIP} delay={150}>
+                    <span>Source</span>
+                  </Tooltip>
+                </th>
                 <th className="py-2 pr-3 font-medium">
                   <Tooltip content={WHEN_TIP} delay={150}>
                     <span>When</span>
@@ -322,6 +333,7 @@ export function ApplicationDeploys({
                   row={row}
                   showWorkload={showWorkload}
                   showActions={showActions}
+                  liveUnknownTip={liveUnknownTip}
                   expanded={expandedId === row.id}
                   onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
                   onRollback={onRollback}
@@ -343,7 +355,7 @@ export function ApplicationDeploys({
           )}
         </section>
       )}
-      {liveUnknown && <p className="text-xs text-theme-text-tertiary">{UNKNOWN_LIVE_TIP}</p>}
+      {liveUnknown && <p className="text-xs text-theme-text-tertiary">{liveUnknownTip}</p>}
       </div>
     </div>
   );
