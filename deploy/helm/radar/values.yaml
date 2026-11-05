@@ -589,6 +589,19 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+    # Owner-only writes for integration actions the built-in roles don't cover,
+    # rendered from files/integration-write-baseline.yaml. Per capability:
+    #   false - off (default; other roles still apply)
+    #   true  - on with any owner role
+    #   auto  - on only when ownerClusterRole is exactly admin or cluster-admin
+    # gitops: get/patch on Argo CD Applications in every namespace. That
+    # delegates the Argo CD controller's deployment authority; Argo CD's own
+    # RBAC isn't consulted. Read the chart README before relying on it.
+    # Requires cloud.enabled, rbac.create, defaultRbac.create and owner=true.
+    # Grants callers access; does not change Radar's collector ServiceAccount.
+    integrationWrite:
+      gitops:
+        owner: false
   # Create the default read grant for radar:system: Radar Cloud's alerts worker
   # and timeline puller. Includes view via a chart-owned aggregated role, the
   # cluster-read and integration-read add-ons, and cluster-wide Secret read

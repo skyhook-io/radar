@@ -316,6 +316,102 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Cloud owner integration writes
+
+Some Radar actions write integration resources that the built-in `admin` and
+`edit` roles don't cover on a stock install. The chart can grant those writes to
+the owner tier from a reviewed [write table](files/integration-write-baseline.yaml),
+with one switch per capability:
+
+```yaml
+cloud:
+  defaultRbac:
+    integrationWrite:
+      gitops:
+        owner: false  # false (default) | true | auto
+```
+
+Today the table grants one thing: `get` and `patch` on Argo CD Applications
+(`argoproj.io/applications`) in all namespaces, through a `*-integration-write`
+ClusterRole bound to `radar:owner` and `cloud:owner`. Members and viewers get
+nothing from it. The other rows record decisions that add no rule: Flux and
+Argo Rollouts writes are already granted to `admin` and `edit` by the vendors'
+stock aggregated roles, and Velero run messages (`downloadrequests`) are
+withheld pending review. CloudNativePG actions add no write grant; their
+existing caller permissions continue to decide access.
+
+The grant is off by default for every owner role: the default owner is `admin`
+bound cluster-wide, deliberately without cluster-scoped writes, while patching an
+Application lets the Argo CD controller create cluster-scoped resources (the
+built-in `default` AppProject allows them), widening that boundary. For a
+`cluster-admin` owner, the grant adds nothing.
+
+- `false` (default): off. This removes only this add-on. Kubernetes RBAC is additive:
+  vendor aggregation, other roles and your own bindings still apply.
+- `true`: on with any owner role, including a custom one.
+- `auto`: on only when `cloud.defaultRbac.ownerClusterRole` is exactly
+  `admin` or `cluster-admin`. This compares the name; a modified `admin` role is
+  not detected. With a custom owner role, `auto` grants nothing.
+
+The add-on also requires `cloud.enabled`, `rbac.create`,
+`cloud.defaultRbac.create`, `cloud.defaultRbac.owner`, and the `argo`
+collection (`rbac.crdGroups.argo` or `all`). These are caller permissions;
+`rbac.additionalRules` extends Radar's collector ServiceAccount, not callers,
+and can't grant these actions.
+
+**What `get` and `patch` on Applications allow.** Kubernetes RBAC can't limit
+a patch to the fields an action sets, and the grant works from any client, not
+only Radar. A holder can:
+
+- change an Application's sources, destination, sync policy, labels, status and
+  `spec.project`. An Application in Argo CD's namespace may use any existing
+  AppProject; elsewhere, the project's `sourceNamespaces` decide which
+  Application namespaces it permits. The original project is not a fixed boundary;
+- start operations, including a sync to another revision or with locally
+  supplied manifests. Through argocd-server, local manifests always need
+  `override`; another revision needs it only when `argocd-cm` enables
+  `application.sync.requireOverridePrivilegeForRevisionSync` (off by default);
+- so use the Argo CD controller's deployment authority, often cluster-admin and
+  possibly on remote clusters that Argo CD manages.
+
+It does not allow creating or deleting Applications, or administering
+AppProjects. Argo CD's own user and project RBAC, including its `get` permission,
+and argocd-server's request checks are not consulted for actions through Radar
+or `kubectl`. Kubernetes `get` exposes the whole Application.
+
+The project's source-repository allowlist is checked against the Application's
+spec only. A directly written sync operation can name its own source, which the
+controller renders without that check. Application patch access therefore lets
+a holder deploy from a repository the project doesn't allow, within the
+project's destination, kind and namespace limits. The controller also enforces
+sync windows (Argo CD 2.11 and later). Source integrity (GPG) covers Git sources
+only; on Argo CD 3.x, a sync with local manifests can bypass it.
+
+A namespace RoleBinding can't narrow this add-on or any other cluster-wide
+default binding. For narrower access, leave the add-on off (or set
+`cloud.defaultRbac.create=false`) and bind your own namespace- or
+resource-name-scoped roles.
+
+**Upgrades.** To turn it on, set
+`cloud.defaultRbac.integrationWrite.gitops.owner=true` and apply it with a chart
+upgrade (substitute your release name and namespace):
+
+```bash
+helm upgrade radar skyhook/radar -n radar --reuse-values \
+  --set cloud.defaultRbac.integrationWrite.gitops.owner=true
+```
+
+On `helm upgrade --reuse-values` from an older chart, a missing key follows the
+capability's declared default (`false` for gitops), so it stays off. An existing
+explicit `true` or `auto` setting is preserved. Updating only the Radar binary,
+including Radar Cloud one-click self-upgrade, installs no RBAC.
+
+GitOps action controls check the caller's permissions per object and disable
+denied actions with an explanation. Controls stay available while the first check
+loads or fails. After a confirmed denial, failed checks keep that result for up to
+two minutes, then allow another attempt. The checks are advisory: each action still
+runs as the caller, and Kubernetes makes the final authorization decision.
+
 ### Radar Cloud background services (`radar:system`)
 
 Radar Cloud's alerts worker and timeline puller read as `radar:system`.
