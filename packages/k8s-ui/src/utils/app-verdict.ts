@@ -109,7 +109,12 @@ function earliestProblem(app: AppRow): string | undefined {
 function rolloutOf(app: AppRow): string | undefined {
   const summary = rolloutSummaryForApps([app])
   if (!summary) return undefined
-  return summary.count === 1 ? summary.details[0] : summary.label
+  if (summary.count !== 1) return summary.label
+  // An app and its only workload usually share a name; saying it twice costs
+  // the part of the line that explains the problem.
+  const detail = summary.details[0]
+  const named = `${app.name}: `
+  return detail.startsWith(named) ? detail.slice(named.length) : detail
 }
 
 function instanceHealth(app: AppRow): AppHealth {
@@ -131,7 +136,10 @@ function singleSummary(app: AppRow, health: AppHealth): string {
   if (health === 'unknown' && unknown > 0) return `${label}: no reading for ${unknown} of ${workloads.length} workloads`
 
   const failing = workloads.filter(isFailing)
-  if (failing.length === 1) return `${label}: ${failing[0].name} ${failing[0].ready}/${failing[0].desired} ready`
+  if (failing.length === 1) {
+    const { name, ready, desired } = failing[0]
+    return `${label}: ${name === app.name ? '' : `${name} `}${ready}/${desired} ready`
+  }
   if (failing.length > 1) return `${label}: ${failing.length} of ${workloads.length} workloads`
 
   const { ready, desired } = servingReadiness(workloads)
@@ -182,8 +190,8 @@ export function appVerdictText(verdict: AppVerdict): string {
   const scoped = (text: string) => (verdict.activeEnv ? `${verdict.activeEnv}: ${text}` : text)
   const details = [
     verdict.since && `since ${formatRelativeAgeTime(verdict.since)}`,
-    verdict.rollout,
     verdict.cause && CAUSE_LABEL[verdict.cause],
+    verdict.rollout,
   ].filter((detail): detail is string => Boolean(detail))
   return [verdict.summary, ...(details.length > 0 ? [scoped(details.join(' · '))] : [])].join(' · ')
 }
