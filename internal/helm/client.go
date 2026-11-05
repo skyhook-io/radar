@@ -3865,7 +3865,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	switch mode {
 	case installFresh:
 		sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
-		if req.CreateNamespace {
+		if createsNamespace(req) {
 			sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
 		}
 	case installReplace:
