@@ -12,7 +12,7 @@ const TICK_MS = 5 * 60_000
 let root: Root
 let container: HTMLDivElement
 let visibility: DocumentVisibilityState
-const fetchMock = vi.fn((..._args: unknown[]) => Promise.resolve(new Response(null, { status: 204 })))
+const fetchMock = vi.fn<(...args: unknown[]) => Promise<Response>>(() => Promise.resolve(new Response(null, { status: 204 })))
 
 function Recorder({ view, status }: { view: string; status: UsageDataStatus | undefined }) {
   useUsageRecording(view, status)
