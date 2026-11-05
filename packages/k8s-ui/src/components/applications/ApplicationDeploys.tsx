@@ -258,7 +258,8 @@ export function ApplicationDeploys({
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       <div className="flex w-full max-w-[2400px] flex-col gap-3 p-4 sm:p-6">
-      {deploys.rolloutInProgress && (
+      {/* A stuck rollout is already the page's red banner and verdict. */}
+      {deploys.rolloutInProgress && rolloutSummary?.health !== "unhealthy" && (
         <AlertBanner
           variant="info"
           icon={RefreshCw}

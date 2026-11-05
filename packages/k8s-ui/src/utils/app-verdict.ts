@@ -186,12 +186,13 @@ const CAUSE_LABEL: Record<AppCause, string> = {
   platform: 'likely the platform',
 }
 
-export function appVerdictText(verdict: AppVerdict): string {
+/** `omitRollout` is for pages that already show the rollout on their own. */
+export function appVerdictText(verdict: AppVerdict, { omitRollout = false }: { omitRollout?: boolean } = {}): string {
   const scoped = (text: string) => (verdict.activeEnv ? `${verdict.activeEnv}: ${text}` : text)
   const details = [
     verdict.since && `since ${formatRelativeAgeTime(verdict.since)}`,
     verdict.cause && CAUSE_LABEL[verdict.cause],
-    verdict.rollout,
+    !omitRollout && verdict.rollout,
   ].filter((detail): detail is string => Boolean(detail))
   return [verdict.summary, ...(details.length > 0 ? [scoped(details.join(' · '))] : [])].join(' · ')
 }
