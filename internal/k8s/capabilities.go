@@ -133,6 +133,10 @@ type Capabilities struct {
 	Karpenter              IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
 	PolicyReports          *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
 	CloudConnect           *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+
+	// HelmWriteUnavailable records a failed or unavailable Helm-write lookup from CheckCapabilities.
+	// It is internal preflight state, not a wire capability.
+	HelmWriteUnavailable bool `json:"-"`
 }
 
 type IntegrationCapability struct {
@@ -334,14 +338,14 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	if GetClient() == nil {
 		// Return all false if client not initialized (fail closed)
 		log.Printf("Warning: K8s client not initialized, returning restricted capabilities")
-		return &Capabilities{Exec: false, Logs: false, PortForward: false, Secrets: false, SecretsUpdate: false, HelmWrite: false}, nil
+		return &Capabilities{HelmWriteUnavailable: true}, nil
 	}
 
 	// Don't start RBAC checks when disconnected — the exec credential plugin
 	// serializes all API calls per-process, so browser-polled capability checks
 	// would block retry/context-switch connectivity tests.
 	if GetConnectionStatus().State == StateDisconnected {
-		return &Capabilities{}, nil
+		return &Capabilities{HelmWriteUnavailable: true}, nil
 	}
 
 	// Use the operation context so RBAC checks are canceled on context switch.
@@ -403,6 +407,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 			}
 			if apiErr {
 				hadErrors.Store(true)
+				if c.result == &caps.HelmWrite {
+					caps.HelmWriteUnavailable = true
+				}
 			}
 		}(check)
 	}

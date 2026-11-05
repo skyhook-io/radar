@@ -36,6 +36,9 @@ func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
 		}
 		return 0, nil
 	}
+	if k8s.GetClient() == nil || k8s.GetConnectionStatus().State == k8s.StateDisconnected {
+		return http.StatusServiceUnavailable, fmt.Errorf("couldn't verify Radar's Kubernetes permissions for Helm; restore the cluster connection and try again")
+	}
 	if namespace != "" {
 		caps, err := k8s.CheckNamespaceCapabilities(ctx, namespace)
 		if err != nil {
@@ -53,8 +56,11 @@ func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("failed to check capabilities: %w", err)
 	}
+	if caps.HelmWriteUnavailable {
+		return http.StatusServiceUnavailable, fmt.Errorf("couldn't verify Radar's Kubernetes permissions for Helm repository/OCI management; try again")
+	}
 	if !caps.HelmWrite {
-		return http.StatusForbidden, fmt.Errorf("Helm management requires permission to create Secrets in the current namespace scope. Select an allowed namespace scope or grant that permission (chart installations: rbac.helm=true).")
+		return http.StatusForbidden, fmt.Errorf("Helm repository/OCI management requires Secrets/create cluster-wide or in the kubeconfig context namespace (otherwise Radar's configured namespace fallback, then the first --rbac-namespaces entry)")
 	}
 	return 0, nil
 }
