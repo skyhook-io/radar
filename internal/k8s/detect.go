@@ -1382,16 +1382,6 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 				NoReadyEndpointsFingerprint,
 			)}
 		}
-		if rolloutLookup == rolloutLookupRefUnresolved {
-			return []Detection{serviceBackendDetection(
-				svc,
-				ageDur,
-				"warning",
-				fmt.Sprintf("0/%d selected pods ready", len(selected)),
-				"no ready endpoints; a backing Argo Rollout delegates its pod template to a workload Radar couldn't resolve, so we can't confirm whether it's intentionally scaled to 0 - check the Rollout directly",
-				NoReadyEndpointsFingerprint,
-			)}
-		}
 		det := serviceBackendDetection(
 			svc,
 			ageDur,
@@ -1402,6 +1392,13 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 		)
 		if rolloutLookup == rolloutLookupForbidden {
 			det.Message = "no ready endpoints; couldn't check Argo Rollouts (no RBAC to list rollouts.argoproj.io) - if this workload is a Rollout intentionally scaled to zero, ignore this"
+		}
+		// An unresolvable Rollout workloadRef can't confirm an intentional
+		// scale-to-zero, but it must NOT soften a real zero-ready-pods outage: an
+		// unrelated broken reference in the namespace would otherwise downgrade this
+		// Service. Keep it critical and caveat it, as with a Rollout we can't list.
+		if rolloutLookup == rolloutLookupRefUnresolved {
+			det.Message = "no ready endpoints; couldn't check an Argo Rollout that delegates its pod template to a workload Radar couldn't resolve - if this workload is a Rollout intentionally scaled to zero, ignore this"
 		}
 		problems = append(problems, det)
 	}
@@ -2446,7 +2443,7 @@ func scaledToZeroBackingWorkload(cache *ResourceCache, svc *corev1.Service) (sca
 		rolloutListOutcome = rolloutLookupTransient
 	}
 
-	// Ordered evidence (see the issue): an active workload we actually observed
+	// Ordered evidence: an active workload we actually observed
 	// disproves dormancy outright (a positive read is trustworthy regardless of
 	// scope); otherwise an unresolvable matching Rollout keeps today's
 	// non-downgraded row; otherwise an empty typed List is only authoritative when

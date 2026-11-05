@@ -537,7 +537,7 @@ func TestNestedNumberInt64(t *testing.T) {
 	}
 }
 
-// --- RAD-929: scan every matching workload, including workloadRef Rollouts ---
+// --- Scan every matching workload, including workloadRef Rollouts ---
 
 func deploymentWithReplicas(name, ns string, replicas int32, lbls map[string]string) *appsv1.Deployment {
 	return &appsv1.Deployment{
@@ -701,7 +701,7 @@ func TestDormancy_AllParkedIsDormant(t *testing.T) {
 	}
 }
 
-// TestDormancy_WorkloadRefRolloutActiveVetoes is the core RAD-929 case: a Rollout
+// TestDormancy_WorkloadRefRolloutActiveVetoes is the core workloadRef case: a Rollout
 // borrows its pod template from a Deployment that Argo parks at 0, while the
 // Rollout itself wants pods. The parked referenced Deployment must NOT make the
 // Service benign - resolving the workloadRef reveals the Rollout is active. This
@@ -804,6 +804,56 @@ func TestDormancy_EmptyOrPartialRefIsUnknown(t *testing.T) {
 				t.Errorf("empty/partial ref outcome = %v, want ref-unresolved", outcome)
 			}
 		})
+	}
+}
+
+// TestNoReadyEndpoints_UnresolvableRefStaysCritical: a genuine zero-ready-pods
+// outage must stay critical (with a caveat) when the only uncertainty is an
+// unresolvable Rollout workloadRef. An unrelated broken reference in the namespace
+// must not downgrade the Service's outage to a warning.
+func TestNoReadyEndpoints_UnresolvableRefStaysCritical(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	old := metav1.NewTime(time.Now().Add(-30 * time.Minute))
+	initDormancyEnv(t,
+		[]runtime.Object{
+			&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "api-0", Namespace: "prod", Labels: lbl(), CreationTimestamp: old},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod", CreationTimestamp: old},
+				Spec:       corev1.ServiceSpec{Selector: lbl(), Ports: []corev1.ServicePort{{Port: 80}}},
+			},
+		},
+		// An unrelated Rollout with an unsupported (unresolvable) workloadRef.
+		argoRolloutWithRef("unrelated-rollout", "prod", 0, "CloneSet", "whatever"),
+	)
+	var got *Detection
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(GetResourceCache(), "prod")
+		for i := range problems {
+			p := &problems[i]
+			if p.Kind == "Service" && p.Name == "api" && p.Fingerprint == NoReadyEndpointsFingerprint {
+				got = p
+				break
+			}
+		}
+		if got != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got == nil {
+		t.Fatalf("missing Service/api no-ready-endpoints row; got: %+v", problems)
+	}
+	if got.Severity != "critical" {
+		t.Errorf("an unresolvable Rollout ref must NOT downgrade a real outage; severity = %q, want critical", got.Severity)
+	}
+	if !strings.Contains(got.Message, "couldn't resolve") {
+		t.Errorf("expected a caveat about the unresolvable Rollout, got message %q", got.Message)
 	}
 }
 
