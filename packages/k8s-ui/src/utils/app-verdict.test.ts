@@ -33,7 +33,7 @@ describe('classifyAppCause', () => {
     expect(classifyAppCause(app({ workloads: [workload({ health: 'unhealthy', reason: 'CreateContainerConfigError' })] }))).toBe('app')
   })
 
-  it('reads scheduling failures as the platform', () => {
+  it('reads node failures as the platform', () => {
     expect(classifyAppCause(app({ workloads: [workload({ health: 'unhealthy', ready: 0 })], events: [event('NodeNotReady')] }))).toBe('platform')
   })
 
@@ -43,7 +43,11 @@ describe('classifyAppCause', () => {
   })
 
   it('stays open when the two sides disagree', () => {
-    expect(classifyAppCause(app({ workloads: [failing], events: [event('FailedScheduling')] }))).toBeNull()
+    expect(classifyAppCause(app({ workloads: [failing], events: [event('NodeNotReady')] }))).toBeNull()
+  })
+
+  it('stays open on a scheduling failure, which can be the app\'s own selector or a short cluster', () => {
+    expect(classifyAppCause(app({ workloads: [workload({ health: 'unhealthy', ready: 0 })], events: [event('FailedScheduling')] }))).toBeNull()
   })
 
   it('stays open on an image pull, which can be a bad tag or a registry outage', () => {
