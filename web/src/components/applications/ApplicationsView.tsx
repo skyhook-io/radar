@@ -320,6 +320,7 @@ function AppDetailRoute({
         anchors: historyQuery.data?.anchors ?? (historyQuery.data ? [] : undefined),
         sourceRef: app.sourceRef,
         partialSources: historyQuery.data?.partialSources,
+        stale: revisionQueries.some((query) => query.isError),
       });
   const [rollbackRow, setRollbackRow] = useState<AppDeployRow | null>(null);
   const [retainedHistoryRange, setRetainedHistoryRange] =

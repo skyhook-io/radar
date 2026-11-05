@@ -318,4 +318,15 @@ describe('imageVersion', () => {
     })
     expect(rows[0].via).toBe('release 42')
   })
+
+  it('stops claiming Live and Newest when a refresh failed', () => {
+    const { rows, partial, partialReasons } = buildAppDeploys({
+      workloads: [{ ref: { kind: 'Deployment', namespace: 'shop', name: 'api' }, revisions: [{ number: 1, createdAt: '2026-11-05T01:00:00Z', image: 'api:1', isCurrent: true, replicas: 1, serving: true }] }],
+      anchors: [],
+      stale: true,
+    })
+    expect(rows[0]).toMatchObject({ live: 'unknown', newest: false })
+    expect(partial).toBe(true)
+    expect(partialReasons[0]).toContain("Couldn't refresh")
+  })
 })
