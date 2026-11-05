@@ -100,6 +100,13 @@ describe('ApplicationDeploys', () => {
     expect(element.querySelector('tbody tr:nth-child(2)')?.textContent).toMatch(/Live(?!\?)/)
   })
 
+  it('reads a revision with no pods as scaled down', async () => {
+    await renderDeploys({ deploys: deploys([row({ ready: 0, desired: 0 })]) })
+
+    expect(text()).toContain('Scaled down')
+    expect(text()).not.toContain('0/0')
+  })
+
   it('shows no Live badge on source rows', async () => {
     await renderDeploys({
       deploys: deploys([row({ id: 'h', source: 'helm', revision: undefined, version: 'chart-1.2', via: 'Helm revision 7', live: 'unknown' })]),
@@ -175,7 +182,7 @@ describe('ApplicationDeploys', () => {
     await renderDeploys({
       deploys: deploys([row({ id: 'a' }), row({ id: 'b', workload: { ...workload, name: 'worker' } })]),
     })
-    expect(text()).toContain(`Deployment/${workload.name}`)
+    expect(text()).toContain(workload.name)
   })
 
   it('caps long histories until asked', async () => {

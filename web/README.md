@@ -33,7 +33,7 @@ export function ClusterPage({ clusterId }: { clusterId: string }) {
 }
 ```
 
-See `RadarAppProps` + `NavCustomization` in the type declarations for the full surface.
+See `RadarAppProps` + `NavCustomization` in the type declarations for the full surface. `defaultTopologyGrouping` sets the topology grouping when the URL names none; it is read once at mount.
 
 ## Embedding notes
 
