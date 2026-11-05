@@ -30,6 +30,9 @@ type timelineEndRecord = timelineapi.EndRecord
 //
 //	?from=<ms>&to=<ms>[&limit=N]  window load: newest-N events in the event-time
 //	                              range, `truncated` set when the range held more
+//	  &kinds=A,B                  only these kinds, before the limit
+//	  &changes_only=true          only creations, deletions and updates that
+//	                              touched more than status, before the limit
 //	?since=<cursor>               delta: every event that ARRIVED after the
 //	                              cursor, ascending arrival order
 //
@@ -178,6 +181,14 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 	if raw := q.Get("kinds"); raw != "" {
 		opts.Kinds = strings.Split(raw, ",")
 	}
+	changesOnly := q.Get("changes_only") == "true"
+	if changesOnly {
+		// Status churn is told apart by its diff, which no store can filter on,
+		// so a bounded scan runs first and the caller's limit applies after it.
+		opts.IncludeK8sEvents = false
+		opts.EventTypes = []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeUpdate, timeline.EventTypeDelete}
+		opts.Limit = timelineEventsPageLimit
+	}
 
 	events, err := store.Query(r.Context(), opts)
 	if err != nil {
@@ -189,6 +200,17 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 		if e.Seq > maxSeq {
 			maxSeq = e.Seq
 		}
+	}
+	if changesOnly {
+		// The scan hitting its ceiling means the oldest part of the range went
+		// unread, however few changes it found.
+		truncated := len(events) == timelineEventsPageLimit
+		events = s.filterEventsByRBAC(r, changeEvents(events))
+		if len(events) > limit {
+			events, truncated = events[:limit], true
+		}
+		writeTimelineStream(w, events, timelineEndRecord{Type: "end", Cursor: timelineCursor(epoch, maxSeq), Truncated: truncated})
+		return
 	}
 	// The default query order is newest-first, so hitting the limit means the
 	// oldest part of the requested range was cut — exactly what the client's
@@ -202,6 +224,34 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 		Cursor:    timelineCursor(epoch, maxSeq),
 		Truncated: truncated,
 	})
+}
+
+// statusRevisionPaths are the status fields that do record a change: a GitOps
+// controller's new revision lives nowhere else.
+var statusRevisionPaths = map[string]bool{"status.sync.revision": true, "status.lastAppliedRevision": true, "status.artifact.revision": true}
+
+// changeEvents keeps creations, deletions and updates that touched more than
+// status. It keeps slice order, newest first.
+func changeEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	out := make([]timeline.TimelineEvent, 0, len(events))
+	for _, e := range events {
+		if e.EventType != timeline.EventTypeUpdate || isChangeUpdate(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func isChangeUpdate(e timeline.TimelineEvent) bool {
+	if e.Diff == nil {
+		return false
+	}
+	for _, f := range e.Diff.Fields {
+		if !strings.HasPrefix(f.Path, "status") || statusRevisionPaths[f.Path] {
+			return true
+		}
+	}
+	return false
 }
 
 // writeTimelineStream emits the NDJSON body: one event per line, then the
