@@ -726,8 +726,15 @@ export function PreparingCard({ step, context }: { step?: CloudInstallStage; con
   const current = Math.max(0, PREPARE_STEPS.findIndex((s) => s.stage === step))
   return (
     <div className="px-8 pt-6 pb-5">
-      <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3.5 break-words" title={context}>
-        Checking {context ? parseContextName(context).clusterName : 'this cluster'}
+      <h4 className="text-[15px] font-semibold text-theme-text-primary mb-3.5 break-words">
+        Checking{' '}
+        {context ? (
+          <Tooltip content={context} position="bottom">
+            <span>{parseContextName(context).clusterName}</span>
+          </Tooltip>
+        ) : (
+          'this cluster'
+        )}
       </h4>
       <StepList
         steps={PREPARE_STEPS.map((s, i) => ({

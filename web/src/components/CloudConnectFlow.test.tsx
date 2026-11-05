@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CloudInstallStage } from '../api/client'
 import { CloudConnectFlow } from './CloudConnectFlow'
 
@@ -66,6 +66,21 @@ describe('Cloud connect preparation steps', () => {
     await renderPreparing('inspect', 'gke_my-project_us-east1_prod-eu')
     const title = document.querySelector('h4')!
     expect(title.textContent).toBe('Checking prod-eu')
-    expect(title.getAttribute('title')).toBe('gke_my-project_us-east1_prod-eu')
+
+    // The full context is reachable through the themed Tooltip, not a native
+    // title attribute (which the no-native-title lint check forbids).
+    expect(title.querySelector('[title]')).toBeNull()
+    const trigger = title.querySelector('span')!
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+        vi.advanceTimersByTime(400)
+      })
+      const tip = document.querySelector('[role="tooltip"]')
+      expect(tip?.textContent).toBe('gke_my-project_us-east1_prod-eu')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
