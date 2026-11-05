@@ -30,3 +30,13 @@ func TestCheckWritePermissionOperatorDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckWritePermissionNoClientFailsClosed(t *testing.T) {
+	previous := k8s.SetTestClient(nil)
+	k8s.InvalidateCapabilitiesCache()
+	t.Cleanup(func() { k8s.SetTestClient(previous); k8s.InvalidateCapabilitiesCache() })
+	status, err := CheckWritePermission(t.Context(), "team-a")
+	if status != http.StatusServiceUnavailable || err == nil {
+		t.Fatalf("want unavailable preflight, got %d %v", status, err)
+	}
+}

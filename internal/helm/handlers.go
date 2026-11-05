@@ -1389,10 +1389,12 @@ type installResult struct {
 // its namespace, so secrets/create there is the check. It runs before any chart
 // is fetched, so a caller who could never install can't make Radar reach out to
 // an arbitrary repository URL either. An empty namespace is a pod-local change
-// (the chart cache, OCI sources) and needs no cluster permission.
+// (the chart cache, repository/OCI sources): signed-in callers skip this gate,
+// while existing configuration ownership/mode checks still apply where required.
 //
-// Without auth Helm runs as the service account, which needs rbac.helm=true;
-// secrets/create is the sentinel for that grant.
+// Without auth Helm runs with Radar's Kubernetes credentials. Release operations
+// check secrets/create in their target namespace; global source/cache operations
+// retain the current-scope capability check. The disable flag refuses both.
 func requireHelmWrite(w http.ResponseWriter, r *http.Request, namespace string) bool {
 	status, err := CheckWritePermission(r.Context(), namespace)
 	if err != nil {

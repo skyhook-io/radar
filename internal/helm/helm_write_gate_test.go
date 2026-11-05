@@ -134,6 +134,10 @@ func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
 			t.Fatalf("decode self subject access review: %v", err)
 		}
 		a := review.Spec.ResourceAttributes
+		if a != nil && a.Namespace == "outage" && a.Resource == "secrets" {
+			writeK8sStatus(t, w, http.StatusInternalServerError, "InternalError", "permission service unavailable")
+			return
+		}
 		allowed := a != nil && a.Namespace == "app" && a.Resource == "secrets" && a.Verb == "create"
 		w.Header().Set("Content-Type", "application/json")
 		writeTestJSON(t, w, authv1.SelfSubjectAccessReview{
@@ -161,7 +165,10 @@ func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
 	}{
 		{"release in a listed namespace", []string{"app"}, "app", http.StatusOK},
 		{"repository change", []string{"app"}, "", http.StatusOK},
-		{"no list, no grant", nil, "app", http.StatusForbidden},
+		{"target allowed without a probe list", nil, "app", http.StatusOK},
+		{"target allowed despite another probe", []string{"other"}, "app", http.StatusOK},
+		{"probe allowed but target denied", []string{"app"}, "other", http.StatusForbidden},
+		{"target permission lookup failed", []string{"app"}, "outage", http.StatusServiceUnavailable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1349,13 +1349,15 @@ tokens are not Secret references.
 
 ### Write Tools
 
-`--disable-helm-write` disables native Helm release-management writes in the UI/API
-and removes `manage_helm` from MCP. For a chart installation, add
-`--disable-helm-write` to `extraArgs` (for example, `extraArgs: ["--disable-helm-write"]`).
-It does not disable the separate Radar Cloud cluster-installation flow.
-Authenticated repository/source management (including adding repositories or OCI
-sources, removing OCI sources, and refreshing indexes) retains its existing
-ownership and configuration-mode checks; this flag does not disable it.
+`--disable-helm-write` disables Helm release writes, per-release source updates,
+values previews and the `manage_helm` MCP tool. With no authentication, it also
+refuses global repository/OCI changes and index refresh. Signed-in repository/OCI
+management **without a target release** continues, subject to existing ownership
+and configuration-mode checks where required. Adding a repository while binding it
+to a release (`namespace`/`releaseName`) is a per-release operation and is refused.
+The separate Cloud installation/adoption flow, including upgrades, is unaffected.
+For a chart installation, add `--disable-helm-write` to `extraArgs` (for example,
+`extraArgs: ["--disable-helm-write"]`).
 `/api/capabilities.mcpHelmTools` reports registration, independently of the caller's
 permission in a target namespace; each call still checks that permission.
 

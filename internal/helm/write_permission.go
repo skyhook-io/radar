@@ -36,12 +36,25 @@ func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
 		}
 		return 0, nil
 	}
+	if namespace != "" {
+		caps, err := k8s.CheckNamespaceCapabilities(ctx, namespace)
+		if err != nil {
+			return http.StatusInternalServerError, fmt.Errorf("failed to check permissions: %w", err)
+		}
+		if caps == nil || caps.Errors.HelmWrite {
+			return http.StatusServiceUnavailable, fmt.Errorf("couldn't verify Radar's Kubernetes permissions for Helm in namespace %q; try again", namespace)
+		}
+		if !caps.HelmWrite {
+			return http.StatusForbidden, fmt.Errorf("Radar's Kubernetes credentials don't have permission to create Secrets in namespace %q, which Helm requires to manage releases", namespace)
+		}
+		return 0, nil
+	}
 	caps, err := k8s.CheckCapabilities(ctx)
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("failed to check capabilities: %w", err)
 	}
 	if !caps.HelmWrite {
-		return http.StatusForbidden, fmt.Errorf("Helm write operations require additional RBAC permissions. Set rbac.helm=true in the Radar Helm chart values.")
+		return http.StatusForbidden, fmt.Errorf("Helm management requires permission to create Secrets in the current namespace scope. Select an allowed namespace scope or grant that permission (chart installations: rbac.helm=true).")
 	}
 	return 0, nil
 }

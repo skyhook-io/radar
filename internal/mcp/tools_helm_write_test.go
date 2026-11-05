@@ -142,6 +142,20 @@ func TestManageHelmDeniesBeforeFetchingChart(t *testing.T) {
 	repo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; http.Error(w, "must not fetch", 500) }))
 	defer repo.Close()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
+			var review authv1.SelfSubjectAccessReview
+			if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+				t.Error(err)
+			}
+			a := review.Spec.ResourceAttributes
+			if a == nil || a.Namespace != "team-a" {
+				t.Errorf("no-auth preflight ignored target namespace: %+v", a)
+			}
+			allowed := a != nil && a.Namespace == "team-probe" && a.Resource == "secrets" && a.Verb == "create"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(authv1.SelfSubjectAccessReview{TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SelfSubjectAccessReview"}, Status: authv1.SubjectAccessReviewStatus{Allowed: allowed}})
+			return
+		}
 		if r.URL.Path != "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
 			t.Errorf("unexpected request %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -163,14 +177,23 @@ func TestManageHelmDeniesBeforeFetchingChart(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := k8s.SetTestClient(client)
-	defer k8s.SetTestClient(old)
+	oldNamespaces := k8s.RBACNamespaces()
+	k8s.SetRBACNamespaces([]string{"team-probe"})
+	k8s.InvalidateCapabilitiesCache()
+	defer func() {
+		k8s.SetTestClient(old)
+		k8s.SetRBACNamespaces(oldNamespaces)
+		k8s.InvalidateCapabilitiesCache()
+	}()
 	status := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	defer k8s.SetConnectionStatus(status)
-	ctx := auth.ContextWithUser(context.Background(), &auth.User{Username: "helm-mcp-denied"})
-	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "install", Namespace: "team-a", Name: "cache", Chart: "redis", Repository: repo.URL, Version: "1.2.3"})
-	if err == nil || !strings.Contains(err.Error(), "permission") {
-		t.Fatalf("want denied, got %v", err)
+	for _, user := range []*auth.User{nil, {Username: "helm-mcp-denied"}} {
+		ctx := auth.ContextWithUser(context.Background(), user)
+		_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "install", Namespace: "team-a", Name: "cache", Chart: "redis", Repository: repo.URL, Version: "1.2.3"})
+		if err == nil || !strings.Contains(err.Error(), "permission") {
+			t.Fatalf("user=%v: want denied, got %v", user, err)
+		}
 	}
 	if hits != 0 {
 		t.Fatalf("denied caller fetched repository %d times", hits)
