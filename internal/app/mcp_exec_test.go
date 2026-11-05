@@ -175,3 +175,42 @@ func TestMCPHTTPFlagGating(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPHelmRegistrationCapability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	previous := k8s.ForceDisableHelmWrite
+	t.Cleanup(func() { SetGlobals(AppConfig{DisableHelmWrite: previous}) })
+	for _, tc := range []struct {
+		name                              string
+		enabled, disabled, readOnly, want bool
+	}{
+		{name: "registered", enabled: true, want: true},
+		{name: "operator-disabled", enabled: true, disabled: true},
+		{name: "read-only", enabled: true, readOnly: true},
+		{name: "MCP-disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := AppConfig{MCPEnabled: tc.enabled, DisableHelmWrite: tc.disabled, MCPReadOnly: tc.readOnly}
+			SetGlobals(cfg)
+			srv := CreateServer(cfg)
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/capabilities", nil))
+			var caps k8s.Capabilities
+			if err := json.Unmarshal(rec.Body.Bytes(), &caps); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusOK || caps.MCPHelmTools != tc.want {
+				t.Fatalf("capability: %d %s; want registered=%v", rec.Code, rec.Body.String(), tc.want)
+			}
+			req := httptest.NewRequest(http.MethodPost, "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			req.Header.Set("MCP-Protocol-Version", "2025-06-18")
+			catalog := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(catalog, req)
+			if got := strings.Contains(catalog.Body.String(), `"name":"manage_helm"`); got != tc.want {
+				t.Fatalf("catalog registered=%v want=%v: %s", got, tc.want, catalog.Body.String())
+			}
+		})
+	}
+}

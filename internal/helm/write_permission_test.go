@@ -18,6 +18,12 @@ func TestCheckWritePermissionOperatorDisabled(t *testing.T) {
 		for _, namespace := range []string{"", "team-a"} {
 			ctx := pkgauth.ContextWithUser(context.Background(), user)
 			status, err := CheckWritePermission(ctx, namespace)
+			if user != nil && namespace == "" {
+				if status != 0 || err != nil {
+					t.Fatalf("authenticated cache refresh refused: %d %v", status, err)
+				}
+				continue
+			}
 			if status != http.StatusForbidden || err == nil || !strings.Contains(err.Error(), "--disable-helm-write") {
 				t.Fatalf("user=%v namespace=%q: want operator-disabled refusal, got %d %v", user, namespace, status, err)
 			}

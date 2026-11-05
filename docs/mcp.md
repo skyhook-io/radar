@@ -1349,6 +1349,11 @@ tokens are not Secret references.
 
 ### Write Tools
 
+`--disable-helm-write` disables release mutations and removes this tool from MCP.
+`/api/capabilities.mcpHelmTools` reports registration, independently of the caller's
+permission in a target namespace; each call still checks that permission. Authenticated
+repository-cache refresh remains available because it does not mutate a release.
+
 `manage_helm` exposes native Helm install, upgrade, rollback and uninstall. Supply
 `namespace` and `name`, plus `chart`, `repository` and an exact `version` for install;
 `version` (and optional `values`) for upgrade; or a positive `revision` for rollback.

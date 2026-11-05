@@ -120,6 +120,7 @@ type Capabilities struct {
 	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
+	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
 	MCPHTTPTools           bool                     `json:"mcpHttpTools"`
 	MCPApplicationEvidence bool                     `json:"mcpApplicationEvidence"`
 	MCPEnabled             bool                     `json:"mcpEnabled"`              // MCP server is running
@@ -298,7 +299,7 @@ var (
 	nsCapCache map[string]*nsCapEntry
 	nsCapMu    sync.RWMutex
 
-	// ForceDisableHelmWrite overrides the helmWrite capability to false (for dev testing)
+	// ForceDisableHelmWrite disables release mutations and native Helm MCP registration.
 	ForceDisableHelmWrite bool
 	// ForceDisableExec turns off exec (--disable-exec): the capability reports false
 	// and the exec, debug and pod-file routes refuse requests.

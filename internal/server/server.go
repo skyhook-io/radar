@@ -1494,6 +1494,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.MCPExecTools = s.mcpHandler != nil && s.mcpExecTools
 	caps.MCPHTTPTools = s.mcpHandler != nil && s.mcpHTTPTools
+	caps.MCPHelmTools = s.mcpHandler != nil && !k8s.ForceDisableHelmWrite
 	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()

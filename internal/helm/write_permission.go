@@ -15,13 +15,15 @@ import (
 // An empty namespace skips the signed-in user preflight for existing REST callers;
 // targeted operations must validate their namespace before calling.
 func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
+	user := pkgauth.UserFromContext(ctx)
+	// Authenticated repository-cache refresh has no target release to mutate.
+	if user != nil && namespace == "" {
+		return 0, nil
+	}
 	if k8s.ForceDisableHelmWrite {
 		return http.StatusForbidden, fmt.Errorf("Helm write operations are disabled by --disable-helm-write")
 	}
-	if user := pkgauth.UserFromContext(ctx); user != nil {
-		if namespace == "" {
-			return 0, nil
-		}
+	if user != nil {
 		caps, err := k8s.CheckNamespaceCapabilitiesForUser(ctx, user.Username, user.Groups, namespace)
 		if err != nil {
 			return http.StatusInternalServerError, fmt.Errorf("failed to check permissions: %w", err)
