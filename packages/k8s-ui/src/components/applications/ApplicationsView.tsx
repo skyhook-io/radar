@@ -606,7 +606,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           </Tooltip>
                         </span>
                       </td>
-                      <td className="px-2 py-2.5">
+                      <td className={clsx('px-2 py-2.5', clusterColumn)}>
                         <span className="text-xs text-theme-text-tertiary">{pluralize(r.members.length, 'instance')}</span>
                       </td>
                       <td className="px-2 py-2.5">
