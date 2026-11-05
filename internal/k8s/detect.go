@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
@@ -1326,6 +1327,8 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 				message += "; couldn't verify the backing workload yet (cache still syncing) - re-check shortly"
 			case rolloutLookupScopeUnverifiable:
 				message += "; the backing workload is outside this session's cache scope, so a scale-to-zero couldn't be confirmed - check the workload directly"
+			case rolloutLookupRefUnresolved:
+				message += "; a backing Argo Rollout delegates its pod template to a workload Radar couldn't resolve, so a scale-to-zero couldn't be confirmed - check the Rollout directly"
 			}
 		}
 		return []Detection{serviceBackendDetection(svc, ageDur, "warning", reason, message, fingerprint)}
@@ -1376,6 +1379,16 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 				"warning",
 				fmt.Sprintf("0/%d selected pods ready", len(selected)),
 				"no ready endpoints; the backing workload's namespace isn't covered by this session's cache scope, so we can't confirm whether it's intentionally scaled to 0 - check the workload directly",
+				NoReadyEndpointsFingerprint,
+			)}
+		}
+		if rolloutLookup == rolloutLookupRefUnresolved {
+			return []Detection{serviceBackendDetection(
+				svc,
+				ageDur,
+				"warning",
+				fmt.Sprintf("0/%d selected pods ready", len(selected)),
+				"no ready endpoints; a backing Argo Rollout delegates its pod template to a workload Radar couldn't resolve, so we can't confirm whether it's intentionally scaled to 0 - check the Rollout directly",
 				NoReadyEndpointsFingerprint,
 			)}
 		}
@@ -2282,9 +2295,11 @@ func selectorMatchesSucceededPod(svc *corev1.Service, pods []*corev1.Pod) bool {
 type rolloutLookupOutcome int
 
 const (
-	// rolloutLookupConclusive: the check ran to completion — CRD absent, or
-	// present and readable with no matching scaled-to-zero Rollout — and the
-	// typed workload informers authoritatively cover the namespace.
+	// rolloutLookupConclusive: the answer is certain. Either a matching workload
+	// is active (replicas>0), which disproves intentional dormancy outright; or
+	// the full scan ran to completion — every matching workload parked at 0, or
+	// no matching workload at all (CRD absent, or present and readable) — with the
+	// typed workload informers authoritatively covering the namespace.
 	rolloutLookupConclusive rolloutLookupOutcome = iota
 	// rolloutLookupTransient: the Rollout cache hasn't synced yet, or the
 	// list failed for a non-RBAC reason. Self-heals by the next poll.
@@ -2299,6 +2314,13 @@ const (
 	// start watching the namespace on a later poll — so a confident outage
 	// critical here would be a scope artifact, not a verified break.
 	rolloutLookupScopeUnverifiable
+	// rolloutLookupRefUnresolved: a matching (or possibly-matching) Argo Rollout
+	// delegates its pod template to a spec.workloadRef target Radar can't resolve
+	// (an unsupported ref kind, a malformed ref, or a referenced workload it can't
+	// read), so whether that Rollout is intentionally scaled to 0 is unknown.
+	// Treated like scope-unverifiable: keep the non-downgraded row rather than
+	// claim a confident outage.
+	rolloutLookupRefUnresolved
 )
 
 // scaledToZeroBackingWorkload reports whether the Service's selector matches a
@@ -2348,90 +2370,235 @@ func scaledToZeroBackingWorkload(cache *ResourceCache, svc *corev1.Service) (sca
 	if cache == nil || len(svc.Spec.Selector) == 0 {
 		return false, rolloutLookupConclusive
 	}
-	// The typed Deployment/StatefulSet Lists below only RULE OUT a scaled-to-zero
-	// backing workload when the informers authoritatively cover this namespace.
-	// Under namespace-scoped RBAC an empty List is indistinguishable from "not
-	// watched", so a negative there must not harden into a confident outage — a
-	// positive (a match we actually found) is always trustworthy. nonMatch
-	// downgrades every "found nothing" verdict to scope-unverifiable when either
-	// typed workload informer can't observe the namespace.
+	// Scan EVERY matching workload, not just the first one parked at 0: a paused
+	// workload must not mask an active sibling failing behind the same Service.
+	// A workload we positively observe is trustworthy; an EMPTY typed List is only
+	// authoritative when the informers cover this namespace (under namespace-scoped
+	// RBAC it is indistinguishable from "not watched"), which gates the dormant and
+	// no-match conclusions below.
 	typedCovered := cache.KindCoversNamespace("deployments", svc.Namespace) &&
 		cache.KindCoversNamespace("statefulsets", svc.Namespace)
-	nonMatch := func(outcome rolloutLookupOutcome) rolloutLookupOutcome {
-		if !typedCovered {
-			return rolloutLookupScopeUnverifiable
-		}
-		return outcome
-	}
 	sel := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
+
+	// Typed dormancy is tracked apart from Rollout dormancy: a found-dormant typed
+	// workload is trusted as benign even when Rollouts can't be listed/synced
+	// (preserving today's default-install reading), whereas a dormant verdict that
+	// rests ONLY on the Rollout cache needs that cache to have finished syncing -
+	// an incomplete Rollout scan could still be hiding an active sibling.
+	var sawActive, sawDormantTyped, sawDormantRollout, sawUnknownMatching bool
+
 	if dl := cache.Deployments(); dl != nil {
 		deps, _ := dl.Deployments(svc.Namespace).List(labels.Everything())
 		for _, d := range deps {
-			if d.Spec.Replicas != nil && *d.Spec.Replicas == 0 && sel.Matches(labels.Set(d.Spec.Template.Labels)) {
-				return true, rolloutLookupConclusive
+			if !sel.Matches(labels.Set(d.Spec.Template.Labels)) {
+				continue
+			}
+			if typedReplicasZero(d.Spec.Replicas) {
+				sawDormantTyped = true
+			} else {
+				sawActive = true
 			}
 		}
 	}
 	if sl := cache.StatefulSets(); sl != nil {
 		stss, _ := sl.StatefulSets(svc.Namespace).List(labels.Everything())
 		for _, s := range stss {
-			if s.Spec.Replicas != nil && *s.Spec.Replicas == 0 && sel.Matches(labels.Set(s.Spec.Template.Labels)) {
-				return true, rolloutLookupConclusive
+			if !sel.Matches(labels.Set(s.Spec.Template.Labels)) {
+				continue
+			}
+			if typedReplicasZero(s.Spec.Replicas) {
+				sawDormantTyped = true
+			} else {
+				sawActive = true
 			}
 		}
 	}
-	// Argo Rollouts are a Deployment-shaped CRD with their own spec.replicas.
-	// Best-effort via the dynamic cache: an absent CRD comes back as
-	// ErrUnknownDynamicKind and is correctly read as no-match. Other errors
-	// are NOT a definitive "not scaled to zero" - classify them so the caller
-	// can pick the honest framing. The dynamic List is a cache read, so a
-	// background context is sufficient.
-	rollouts, err := cache.ListDynamicWithGroup(context.Background(), "Rollout", svc.Namespace, "argoproj.io")
-	if err != nil {
+
+	// Argo Rollouts are a Deployment-shaped CRD with their own spec.replicas, read
+	// best-effort via the dynamic cache. A matching Rollout can be active (vetoes
+	// dormancy), dormant, or unresolvable (a spec.workloadRef we can't follow -
+	// unknown). The dynamic List is a cache read, so a background context suffices.
+	rolloutListOutcome := rolloutLookupConclusive
+	rolloutList, err := cache.ListDynamicWithGroup(context.Background(), "Rollout", svc.Namespace, "argoproj.io")
+	switch {
+	case err == nil:
+		for _, r := range rolloutList {
+			switch rolloutWorkloadMatch(cache, sel, r) {
+			case rolloutMatchActive:
+				sawActive = true
+			case rolloutMatchDormant:
+				sawDormantRollout = true
+			case rolloutMatchUnknown:
+				sawUnknownMatching = true
+			}
+		}
+	case errors.Is(err, ErrUnknownDynamicKind) || errors.Is(err, ErrDynamicNotReady):
 		// Absent CRD or dynamic support not wired = a clean no-match (Rollouts
 		// genuinely aren't in play).
-		if errors.Is(err, ErrUnknownDynamicKind) || errors.Is(err, ErrDynamicNotReady) {
-			return false, nonMatch(rolloutLookupConclusive)
-		}
-		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
 		// RBAC denial is persistent - the SA lacks `list rollouts.argoproj.io`
 		// (helm gates CRD groups behind rbac.crdGroups), so every future poll
-		// fails identically. Everything else is transient.
-		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-			return false, nonMatch(rolloutLookupForbidden)
-		}
-		return false, nonMatch(rolloutLookupTransient)
+		// fails identically.
+		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+		rolloutListOutcome = rolloutLookupForbidden
+	default:
+		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+		rolloutListOutcome = rolloutLookupTransient
 	}
-	for _, r := range rollouts {
-		// spec.replicas can arrive as int64 (k8s typed decode) OR float64 (plain
-		// JSON decode) depending on how the object entered the cache, so read it
-		// tolerantly - unstructured.NestedInt64 alone would miss the float64 shape
-		// and never recognize a scaled-to-zero Rollout, condemning dormancy as an
-		// outage.
-		replicas, found := nestedNumberInt64(r.Object, "spec", "replicas")
-		if !found || replicas != 0 {
-			continue
-		}
-		tmpl, _, _ := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "labels")
-		if len(tmpl) > 0 && sel.Matches(labels.Set(tmpl)) {
+
+	// Ordered evidence (see the issue): an active workload we actually observed
+	// disproves dormancy outright (a positive read is trustworthy regardless of
+	// scope); otherwise an unresolvable matching Rollout keeps today's
+	// non-downgraded row; otherwise an empty typed List is only authoritative when
+	// the informers cover this namespace. A found-dormant typed workload is then
+	// benign even if Rollouts are unreadable, but a Rollout-only dormant verdict
+	// is trusted only from a complete (synced) Rollout scan.
+	switch {
+	case sawActive:
+		return false, rolloutLookupConclusive
+	case sawUnknownMatching:
+		return false, rolloutLookupRefUnresolved
+	case !typedCovered:
+		return false, rolloutLookupScopeUnverifiable
+	case sawDormantTyped:
+		return true, rolloutLookupConclusive
+	case sawDormantRollout:
+		if rolloutListOutcome == rolloutLookupConclusive && rolloutNamespaceSynced(svc.Namespace) {
 			return true, rolloutLookupConclusive
 		}
-	}
-	// An empty Rollout list with no error is ambiguous: DynamicResourceCache.List
-	// doesn't gate on HasSynced, so the first read of a not-yet-watched Rollout GVR
-	// returns ([], nil) even when a scaled-to-zero Rollout exists. Verify the cache
-	// actually synced before concluding no-match - otherwise stay transient so the
-	// caller keeps the warning framing until the next poll.
-	if len(rollouts) == 0 {
-		if disc := GetResourceDiscovery(); disc != nil {
-			if gvr, ok := disc.GetGVRWithGroup("Rollout", "argoproj.io"); ok {
-				if dc := GetDynamicResourceCache(); dc != nil && !dc.IsSynced(gvr) {
-					return false, nonMatch(rolloutLookupTransient)
-				}
-			}
+		// An incomplete Rollout scan could be hiding an active sibling, so don't
+		// harden into benign; stay transient (self-heals next poll).
+		return false, rolloutLookupTransient
+	default:
+		// No matching workload anywhere. A Rollout read we couldn't trust keeps its
+		// outcome; an untrustworthy (not-yet-synced) empty read stays transient so
+		// the caller keeps the warning framing until the next poll.
+		if rolloutListOutcome != rolloutLookupConclusive {
+			return false, rolloutListOutcome
 		}
+		if !rolloutNamespaceSynced(svc.Namespace) {
+			return false, rolloutLookupTransient
+		}
+		return false, rolloutLookupConclusive
 	}
-	return false, nonMatch(rolloutLookupConclusive)
+}
+
+// typedReplicasZero reports whether a typed workload is parked at 0. A nil
+// Replicas pointer is Kubernetes' "unset", which defaults to 1 - an active
+// workload, not a dormant one.
+func typedReplicasZero(replicas *int32) bool {
+	return replicas != nil && *replicas == 0
+}
+
+type rolloutMatch int
+
+const (
+	rolloutMatchNone rolloutMatch = iota
+	rolloutMatchDormant
+	rolloutMatchActive
+	rolloutMatchUnknown
+)
+
+// rolloutWorkloadMatch classifies one Rollout against the Service selector. A
+// spec.workloadRef Rollout carries no inline pod template, so its selector labels
+// come from the referenced Deployment (resolved through the same resolver
+// /api/workloads uses). A Rollout whose template or desired scale can't be read -
+// an unsupported/malformed ref, or a referenced workload we can't observe -
+// classifies as unknown, never as a confident dormant/active.
+func rolloutWorkloadMatch(cache *ResourceCache, sel labels.Selector, r *unstructured.Unstructured) rolloutMatch {
+	tmplLabels, ok := rolloutTemplateLabels(cache, r)
+	if !ok {
+		return rolloutMatchUnknown
+	}
+	if len(tmplLabels) == 0 || !sel.Matches(labels.Set(tmplLabels)) {
+		return rolloutMatchNone
+	}
+	// Only now that the Rollout matches does its scale matter: a non-matching
+	// workload with unreadable replicas is irrelevant, not uncertain.
+	replicas, ok := rolloutDesiredReplicas(r)
+	if !ok {
+		return rolloutMatchUnknown
+	}
+	if replicas == 0 {
+		return rolloutMatchDormant
+	}
+	return rolloutMatchActive
+}
+
+// rolloutTemplateLabels returns the pod-template labels that a Rollout's pods
+// carry - inline, or from the Deployment named by spec.workloadRef. The second
+// bool is false when the reference can't be resolved (unsupported/malformed ref,
+// a non-Deployment target, or a referenced Deployment the cache can't read),
+// which the caller treats as unknown. The referenced Deployment is read from the
+// already-loaded typed cache, so this adds no API call or RBAC surface.
+func rolloutTemplateLabels(cache *ResourceCache, r *unstructured.Unstructured) (map[string]string, bool) {
+	// A present spec.workloadRef - even empty or partially populated - means the
+	// Rollout delegates its pod template. It must resolve fully, or the Rollout is
+	// unknown; never fall back to the (absent) inline template, which would make an
+	// unresolved reference look like a non-match.
+	if ref, hasRefField, _ := unstructured.NestedFieldNoCopy(r.Object, "spec", "workloadRef"); hasRefField && ref != nil {
+		if _, _, ok := rollouts.WorkloadRef(r); !ok {
+			return nil, false
+		}
+		target, err := rollouts.ResolveTemplateTarget(r)
+		if err != nil {
+			return nil, false
+		}
+		// Resolve only Deployment refs, cheaply, from the typed cache.
+		if target.GVR.Group != "apps" || target.GVR.Resource != "deployments" {
+			return nil, false
+		}
+		dl := cache.Deployments()
+		if dl == nil {
+			return nil, false
+		}
+		dep, err := dl.Deployments(r.GetNamespace()).Get(target.Name)
+		if err != nil {
+			return nil, false
+		}
+		return dep.Spec.Template.Labels, true
+	}
+	tmpl, _, _ := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "labels")
+	return tmpl, true
+}
+
+// rolloutDesiredReplicas reads a Rollout's desired replica count. An absent
+// spec.replicas defaults to 1 (Argo's default), so a matching Rollout with no
+// replicas field is active, not dormant. A present-but-unreadable value (a
+// fractional or non-numeric shape) reports not-ok, which the caller treats as
+// unknown.
+func rolloutDesiredReplicas(r *unstructured.Unstructured) (int64, bool) {
+	_, found, err := unstructured.NestedFieldNoCopy(r.Object, "spec", "replicas")
+	if err != nil {
+		return 0, false
+	}
+	if !found {
+		return 1, true
+	}
+	// spec.replicas can arrive as int64 (k8s typed decode) OR float64 (plain JSON
+	// decode) depending on how the object entered the cache, so read it tolerantly.
+	return nestedNumberInt64(r.Object, "spec", "replicas")
+}
+
+// rolloutNamespaceSynced reports whether an empty/negative Rollout read for the
+// namespace can be trusted. Only a cache we can positively see is NOT yet synced
+// forces the caller to stay transient; when sync state is indeterminate (no
+// discovery or dynamic cache wired) we trust the read rather than flap every
+// no-match into "re-check shortly".
+func rolloutNamespaceSynced(namespace string) bool {
+	disc := GetResourceDiscovery()
+	if disc == nil {
+		return true
+	}
+	gvr, ok := disc.GetGVRWithGroup("Rollout", "argoproj.io")
+	if !ok {
+		return true
+	}
+	dc := GetDynamicResourceCache()
+	if dc == nil {
+		return true
+	}
+	return dc.IsNamespaceSynced(gvr, namespace)
 }
 
 func isPodReadyForProblem(pod *corev1.Pod) bool {
