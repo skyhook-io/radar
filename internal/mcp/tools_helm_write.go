@@ -22,10 +22,10 @@ type manageHelmInput struct {
 	Namespace     string         `json:"namespace" jsonschema:"release storage namespace (target namespace for install)"`
 	Name          string         `json:"name" jsonschema:"Helm release name"`
 	Chart         string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
-	Repository    string         `json:"repository,omitempty" jsonschema:"install: configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
+	Repository    string         `json:"repository,omitempty" jsonschema:"install: required configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
 	Version       string         `json:"version,omitempty" jsonschema:"exact chart version; required for install and upgrade"`
 	Values        map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; upgrade merges into stored overrides unless replace_values=true; never reuse redacted output or literal credentials"`
-	ReplaceValues bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false preserves omitted map keys; lists replace; hidden-credential container replacement is refused"`
+	ReplaceValues bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false merges maps and refuses hidden-credential container replacement; true drops omitted overrides, including hidden credentials"`
 	Revision      int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
 	Confirm       string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`
 }
@@ -158,9 +158,7 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 	case "install":
 		_, err = client.InstallFreshAsUser(&helm.InstallRequest{ReleaseName: in.Name, Namespace: in.Namespace, ChartName: in.Chart, Repository: in.Repository, Version: in.Version, Values: in.Values}, user)
 	case "upgrade":
-		if in.Values == nil {
-			err = client.UpgradeAsUser(in.Namespace, in.Name, in.Version, in.Repository, user)
-		} else if !in.ReplaceValues {
+		if !in.ReplaceValues {
 			err = client.UpgradeWithOverridesAsUser(in.Namespace, in.Name, in.Version, in.Repository, in.Values, user)
 		} else {
 			err = client.UpgradeWithValuesProgressAsUser(in.Namespace, in.Name, in.Version, in.Repository, in.Values, user, nil)

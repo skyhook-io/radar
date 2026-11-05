@@ -453,7 +453,7 @@ trend charts remain unavailable for Kubecost.
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
 | `disableExec` | Turn off pod exec through Radar for everyone on this cluster. See [Turning exec off](#turning-exec-off) | `false` |
-| `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires exec access. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
+| `mcp.execTools` | Opt in to `exec_pod` and `curl_service` (`--mcp-exec-tools`); requires pods/exec or get services/proxy respectively. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
 | `usageReporting.enabled` | Anonymous daily usage stats: views, actions and MCP tools used, plus this cluster's version, platform, node-count range and known integrations. Off unless `true`; Radar never asks in a cluster ([what is sent](https://radarhq.io/docs/configuration/usage-stats)) | unset |
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
@@ -596,8 +596,7 @@ Disabled by default for security:
 
 ### MCP container commands
 
-`mcp.execTools` registers `exec_pod`; `rbac.podExec` grants Radar's ServiceAccount
-exec permission. These are separate controls:
+`mcp.execTools` registers both `exec_pod` and `curl_service`. Existing installations with this option enabled gain Service GETs when upgrading. `rbac.podExec` grants Radar's ServiceAccount exec permission; it does not grant `get services/proxy`. Service GETs require that separate permission on the target Service, as the signed-in caller or Radar's ServiceAccount without auth. The chart does not add it to the ServiceAccount. The table below describes only exec access:
 
 | `mcp.execTools` | `rbac.podExec` | Result |
 |---|---|---|

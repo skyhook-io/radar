@@ -2579,6 +2579,9 @@ func (c *Client) upgradeWithValuesMode(actionConfig *action.Configuration, name,
 	}
 
 	if !replace {
+		if newValues == nil {
+			newValues = map[string]any{}
+		}
 		releaseCtx, err := releaseContext(actionConfig, name)
 		if err != nil {
 			return err

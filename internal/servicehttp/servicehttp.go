@@ -51,7 +51,7 @@ type Response struct {
 	Headers          map[string]string `json:"headers"`
 	Body             string            `json:"body"`
 	Truncated        bool              `json:"truncated"`
-	BodyBytes        int               `json:"bodyBytes"`
+	BodyBytes        int               `json:"bodyBytes"` // captured bytes before MCP clipping; not the full response size
 	HeadersTruncated bool              `json:"headersTruncated,omitempty"`
 	BodyEncodingLoss bool              `json:"bodyEncodingLoss,omitempty"`
 	// Error is set when the response was received but reading its body failed
@@ -86,7 +86,7 @@ func friendlyDialError(err error) string {
 	msg := err.Error()
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "Client.Timeout"):
-		return fmt.Sprintf("No response within %s — the Service may be down or not listening on this port.", curlTimeout)
+		return fmt.Sprintf("No response within %s — check Service endpoints, the port, and network policies or routing from Radar's namespace.", curlTimeout)
 	case strings.Contains(msg, "no such host"):
 		return "Could not resolve the Service — check the name/namespace, or it may not exist."
 	case strings.Contains(msg, "connection refused"):
@@ -161,7 +161,7 @@ func authorizeCurl(ctx context.Context, namespace, name string, requireServiceAc
 	return result.Status.Allowed, nil
 }
 
-// Error retains the REST status when the same operation is called from MCP.
+// Error carries the REST status; MCP renders Message as a tool error.
 type Error struct {
 	Status  int
 	Message string

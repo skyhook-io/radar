@@ -11,6 +11,9 @@ import (
 
 // CheckWritePermission is shared by REST and MCP. Check before fetching charts:
 // a caller who cannot manage a release must not initiate repository requests.
+// Success returns status zero and nil error; failures return an HTTP status.
+// An empty namespace skips the signed-in user preflight for existing REST callers;
+// targeted operations must validate their namespace before calling.
 func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
 	if user := pkgauth.UserFromContext(ctx); user != nil {
 		if namespace == "" {

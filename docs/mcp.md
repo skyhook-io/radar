@@ -113,13 +113,12 @@ operator access. Only selector-backed Services with a ClusterIP are allowed; Ext
 and manually routed Services are refused, including in the browser UI. Radar dials
 the validated IP rather than resolving DNS, preserving the Service Host header and TLS name. Namespace RBAC
 is not network isolation: granting `services/proxy` delegates Radar-to-Service network
-access, and users who can edit EndpointSlices can alter where a Service routes. It sends no Kubernetes credentials, accepts no authentication
+access, and anyone able to create EndpointSlices, directly or through a GitOps controller, can alter where a Service routes. AppProject and network policy constraints must account for controller-mediated changes too. It sends no Kubernetes credentials, accepts no authentication
 headers or body, and does not follow redirects. Supply `namespace`, `name`, numeric
 Service `port`, and optionally `scheme` and `path` (including a query).
 
 The result includes the actual HTTP status and body, including non-2xx responses,
-plus duration, truncation and incomplete-body errors. A 200 status does not make an
-incomplete body successful. The request is limited to 10 seconds and reads at most 512 KiB; MCP retains at most
+plus duration, truncation and incomplete-body errors. An `error` field means the body is incomplete, even with HTTP status 200. The request is limited to 10 seconds and reads at most 512 KiB; MCP retains at most
 64 KiB of body head/tail and 16 KiB of header names/values. `truncated` marks the
 body preview; `headersTruncated` separately marks dropped headers. The header map
 retains the first value for each name, matching the UI (not a full wire capture).
@@ -1352,18 +1351,14 @@ tokens are not Secret references.
 `manage_helm` exposes native Helm install, upgrade, rollback and uninstall. Supply
 `namespace` and `name`, plus `chart`, `repository` and an exact `version` for install;
 `version` (and optional `values`) for upgrade; or a positive `revision` for rollback.
-Upgrade values merge into the stored overrides on the server, preserving omitted map keys. Lists are replaced as whole units; nulls and type changes
+Upgrade values merge into Helm's stored baseline on the server, preserving omitted map keys. Omitted values and `values: {}` both add no overrides; after a failed revision, Helm uses the last deployed baseline when available. Lists are replaced as whole units; nulls and type changes
 can remove existing values. Partial overrides that replace containers with hidden
 credentials are refused. `replace_values: true` explicitly replaces all stored
 overrides; `values: {}` with replacement resets them. Redacted placeholders are refused.
 Install and upgrade require a source configured by Radar's configuration owner.
-In local mode, use Helm settings. In operator-managed in-cluster mode, use the
-existing startup Helm configuration (`helm.ociSources` for OCI, or an operator-mounted
-Helm repository config for classic repositories); UI repository writes are disabled.
+For local CLI installations, configure a named source with `helm repo add NAME URL` in the Helm configuration used by Radar. In operator-managed OSS mode, use startup Helm configuration (`helm.ociSources` for OCI, or an operator-mounted Helm repository config for classic repositories); UI repository writes are disabled.
 MCP installs refresh the configured index and use its credentials, so no warmed index cache is needed.
-Cloud source changes require the owner; pod-local repository settings are ephemeral
-and must be restored after a restart. The tool does not provision or persist sources;
-use GitOps for the shared hackathon cluster.
+Cloud source changes require the owner; pod-local repository settings are ephemeral and must be restored after Pod replacement. The chart rejects `helm.ociSources` with `cloud.enabled`; that OSS setting is not a durable Cloud source configuration path. The tool does not provision or persist sources. Keep GitOps-owned dependencies in git.
 For existing releases,
 upgrade also requires a confirmed saved chart source. Install refuses any existing
 release history, including failed or uninstalled releases, rather than recovering
@@ -1376,6 +1371,19 @@ complete cascade or data-loss analysis. Detected Flux-owned releases are refused
 best-effort when Flux visibility is restricted; update
 GitOps-owned dependencies in their source repo.
 
+A successful call returns `action`, `namespace`, `name`, `state` and `message`.
+`state: preview` additionally returns `revision`, `resources` and the expiring `confirm`
+token; `state: completed` means the Helm action returned, not that workloads are healthy.
+Read `get_helm_release` for the resulting revision and readiness. Failures are MCP tool
+errors; an operation may have changed resources, so inspect before retrying.
+
+Radar action audit records `helm_<action>` with `refused`, `preview`,
+`failed_or_unconfirmed`, or `completed`. Invalid actions are logged as supplied with
+that prefix; no values are logged. Service GET audit uses `curl_service`: `response`
+means headers/body were received (including non-2xx), `partial_response` means a body
+read error, and `failed` includes validation, permission, or transport failures.
+Audit omits HTTP path/query/body and Helm values to avoid recording credentials.
+
 Helm operations use the caller's Kubernetes identity and the same preflight permission
 check as the UI. Namespace creation and repository configuration are not exposed.
 They can execute hooks and take minutes. After a disconnected or timed-out call,
@@ -1386,6 +1394,8 @@ show Helm's full impact; external MCP clients can use it on the full write endpo
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
+| `manage_helm` | Native Helm install, upgrade, rollback or preview/confirm uninstall; configured source and exact version required for install/upgrade. | `action`, `namespace`, `name`; action-specific `chart`, `repository`, `version`, `values`, `replace_values`, `revision`, `confirm` (see lifecycle above) |
+| `curl_service` | Opt-in credential-free in-cluster Service GET with bounded response and partial-body errors. | `namespace`, `name`, numeric `port`; optional `scheme`, `path` (see Service HTTP above) |
 | `apply_resource` | Create or update a Kubernetes resource from YAML. Supports multi-document YAML, per-document partial-failure results, server-side dry-run preview, and SSA ownership-conflict reporting. | `yaml` (required), `mode` (optional: `apply` or `create`, default `apply`), `dry_run` (optional, default false), `namespace` (optional, override), `verify` (optional, default true: real mutations return post-mutation state, submitted-vs-live diff, workload rollout/pods, and related issues; dry runs return a preview diff), `force` (optional, default false: take SSA field ownership from other managers) |
 | `patch_resource` | Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. Use for precise field/list edits when you know the exact path and do not want to rewrite the full manifest or take broad server-side-apply ownership. Strategic patch is for built-in Kubernetes kinds and name-keyed list edits, such as changing one container. | `kind` (required), `name` (required), `namespace` (required for namespaced resources), `group` (optional), `patch_type` (optional: `json` default, `merge`, or `strategic`), `patch` (required JSON string), `dry_run` (optional), `verify` (optional, default true: real mutations return compact post-patch state and JSON Patch field checks; dry runs return a preview diff) |
 | `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
