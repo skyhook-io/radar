@@ -591,7 +591,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           </Tooltip>
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
                           {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
-                          <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
+                          <span className="max-w-[16rem] truncate font-semibold text-theme-text-primary" title={r.label}>{r.label}</span>
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip
                             content={<AppIdentityTooltip identityKey={r.label} source={r.members[0]?.row.identity?.source} portable={r.members[0]?.row.identity?.portable} fleet={variant === 'fleet'} members={r.members.map((m) => ({ name: m.row.name, env: m.row.identity!.env, confidence: m.row.identity!.confidence, evidence: m.row.identity!.evidence }))} />}
@@ -672,7 +672,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
                           {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
-                          <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
+                          <span className="max-w-[16rem] truncate font-medium text-theme-text-primary" title={e.row.name}>{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
