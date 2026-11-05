@@ -36,6 +36,7 @@ export interface AppDeployRow {
   desired?: number
   template?: string
   previousTemplate?: string
+  previousRevision?: number
 }
 
 export interface AppDeployWorkloadInput {
@@ -181,6 +182,7 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
         desired: hasPerRevisionReplicas(ref.kind) ? revision.replicas : revision.isCurrent ? desired : undefined,
         template: revision.template,
         previousTemplate: newestFirst[i + 1]?.template,
+        previousRevision: newestFirst[i + 1]?.number,
       },
     })
   }

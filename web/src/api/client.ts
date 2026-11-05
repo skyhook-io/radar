@@ -5735,18 +5735,31 @@ export interface WorkloadRevision {
   serving?: boolean;
 }
 
+export function workloadRevisionsQuery(
+  kind: string,
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
+  return {
+    queryKey: ["workload-revisions", kind, namespace, name],
+    queryFn: () =>
+      fetchJSON<WorkloadRevision[]>(
+        `/workloads/${kind}/${namespace}/${name}/revisions`,
+      ),
+    enabled: Boolean(kind && namespace && name && enabled),
+  };
+}
+
 export function useWorkloadRevisions(
   kind: string,
   namespace: string,
   name: string,
   enabled = true,
 ) {
-  return useQuery<WorkloadRevision[]>({
-    queryKey: ["workload-revisions", kind, namespace, name],
-    queryFn: () =>
-      fetchJSON(`/workloads/${kind}/${namespace}/${name}/revisions`),
-    enabled: Boolean(kind && namespace && name && enabled),
-  });
+  return useQuery<WorkloadRevision[]>(
+    workloadRevisionsQuery(kind, namespace, name, enabled),
+  );
 }
 
 // A rollout can start long after its request returned, as when a resume releases
