@@ -42,6 +42,18 @@ var knownMethods = map[string]bool{
 // Reads that are the action itself, not background polling.
 var actionReads = []string{"/exec", "/logs", "/logs/stream", "/debug"}
 
+// POST routes that only read, which the UI calls on its own from queries and
+// polls: cost panels, the drain estimate, the YAML editor's schemas and the
+// GitOps write check. A success is never someone's action; a failure still
+// counts as an error.
+var automaticReads = map[string]bool{
+	"POST /api/nodes/{name}/drain-plan":    true,
+	"POST /api/resources/schemas":          true,
+	"POST /api/gitops/write-evidence":      true,
+	"POST /api/opencost/application":       true,
+	"POST /api/opencost/application/trend": true,
+}
+
 // Named UI moments without an API call of their own.
 var allowedUIEvents = map[string]bool{
 	"command_palette":          true,
@@ -233,7 +245,7 @@ func RecordRequest(r APIRequest) {
 	ok := r.Status == 0 || (r.Status >= 100 && r.Status < 400)
 	switch {
 	case ok && (!read || isActionRead(r.Pattern)):
-		if r.Automatic {
+		if r.Automatic || automaticReads[key] {
 			return
 		}
 		kindKey := actionKindKey(key, r.Kind, r.Group)
@@ -340,4 +352,17 @@ func SortedUnique(names []string) []string {
 		}
 	}
 	return sortedKeys(seen)
+}
+
+// RouteKeys lists the "METHOD pattern" keys this package matches by name, so
+// a test can check each against the server's real routes.
+func RouteKeys() []string {
+	keys := make([]string, 0, len(automaticReads)+len(kindActions))
+	for k := range automaticReads {
+		keys = append(keys, k)
+	}
+	for k := range kindActions {
+		keys = append(keys, k)
+	}
+	return keys
 }

@@ -410,11 +410,9 @@ func (s *Server) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
 	case "session":
 		usagedata.RecordSession(r.UserAgent())
 	case "active":
-		// The view on screen, counted only if the period has no views yet.
-		if body.View != "" && !usagedata.IsAllowedView(body.View) {
-			s.writeError(w, http.StatusBadRequest, "unknown view")
-			return
-		}
+		// The view on screen, counted only if the period has no views yet. A
+		// view outside the list (a custom resource's page) still counts the
+		// minutes; RecordActiveView leaves its name out.
 		usagedata.RecordActiveView(body.Minutes, body.View)
 	default:
 		s.writeError(w, http.StatusBadRequest, "unknown event type")

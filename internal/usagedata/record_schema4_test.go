@@ -253,3 +253,44 @@ func TestSchema4Report(t *testing.T) {
 		}
 	}
 }
+
+// Time on a custom resource's page is real use: the minutes count, the page
+// name (a custom kind) never leaves.
+func TestActiveTickOnACustomResourcePageCountsMinutesOnly(t *testing.T) {
+	releaseBuild(t)
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true); err != nil {
+		t.Fatal(err)
+	}
+	RecordActiveView(5, "resources:certificates")
+	RecordActiveView(5, "resources:certificates")
+	st := h.c.Status()
+	if st.Preview.Engagement.ActiveMinutes != "10-19" {
+		t.Errorf("activeMinutes = %q, want 10-19", st.Preview.Engagement.ActiveMinutes)
+	}
+	if len(st.Preview.Views) != 0 {
+		t.Errorf("views = %v, want none: a custom kind is never named", st.Preview.Views)
+	}
+}
+
+func TestAutomaticReadRoutesAreNotActions(t *testing.T) {
+	releaseBuild(t)
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true); err != nil {
+		t.Fatal(err)
+	}
+	for pattern := range automaticReads {
+		method, path, _ := strings.Cut(pattern, " ")
+		RecordRequest(APIRequest{Method: method, Pattern: path, Status: 200})
+	}
+	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/nodes/{name}/drain-plan", Status: 500})
+	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/nodes/{name}/drain", Status: 200})
+
+	st := h.c.Status()
+	if len(st.Preview.Actions) != 1 || st.Preview.Actions["POST /api/nodes/{name}/drain"] != 1 {
+		t.Errorf("actions = %v, want only the drain itself", st.Preview.Actions)
+	}
+	if st.Preview.Errors["POST /api/nodes/{name}/drain-plan 500"] != 1 {
+		t.Errorf("errors = %v, want the failed drain estimate counted", st.Preview.Errors)
+	}
+}
