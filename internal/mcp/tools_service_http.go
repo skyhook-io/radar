@@ -14,7 +14,7 @@ import (
 type curlServiceInput struct {
 	Namespace string `json:"namespace" jsonschema:"Service namespace"`
 	Name      string `json:"name" jsonschema:"Service name"`
-	Port      string `json:"port" jsonschema:"numeric Service port, not targetPort"`
+	Port      string `json:"port" jsonschema:"numeric Service port as a string, e.g. 8080; not targetPort"`
 	Scheme    string `json:"scheme,omitempty" jsonschema:"http (default) or https; internal TLS certificates are not verified"`
 	Path      string `json:"path,omitempty" jsonschema:"HTTP request path and query; defaults to /; no credentials"`
 }

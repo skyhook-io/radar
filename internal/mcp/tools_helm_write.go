@@ -24,7 +24,7 @@ type manageHelmInput struct {
 	Chart         string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
 	Repository    string         `json:"repository,omitempty" jsonschema:"install: required configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
 	Version       string         `json:"version,omitempty" jsonschema:"exact chart version; required for install and upgrade"`
-	Values        map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; upgrade merges into stored overrides unless replace_values=true; never reuse redacted output or literal credentials"`
+	Values        map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; merge uses the deployed baseline, not necessarily the latest values read; replace_values=true resets overrides; no redacted output or literal credentials"`
 	ReplaceValues bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false merges maps and refuses hidden-credential container replacement; true drops omitted overrides, including hidden credentials"`
 	Revision      int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
 	Confirm       string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`

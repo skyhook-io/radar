@@ -79,6 +79,9 @@ func TestCurlServiceThroughMCPChecksPermissionAndReturnsApplicationResponse(t *t
 			if !result.IsError || hits.Load() != 0 {
 				t.Fatalf("denied call reached Service: %+v hits=%d", result, hits.Load())
 			}
+			if !strings.Contains(result.Content[0].(*mcp.TextContent).Text, "Radar's ServiceAccount") {
+				t.Fatalf("no-auth refusal names the wrong principal: %+v", result)
+			}
 			continue
 		}
 		var body servicehttp.Response

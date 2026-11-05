@@ -231,6 +231,9 @@ func do(ctx context.Context, req Request, send func(context.Context, string, str
 		log.Printf("[servicehttp] Failed to authorize curl %s/%s: %v", req.Namespace, req.Name, err)
 		return Response{}, &Error{Status: http.StatusInternalServerError, Message: "authorization check failed"}
 	} else if !allowed {
+		if requireServiceAccountPermission && auth.UserFromContext(ctx) == nil {
+			return Response{}, &Error{Status: http.StatusForbidden, Message: "Radar's ServiceAccount lacks get services/proxy on this Service; ask the operator to configure that permission."}
+		}
 		return Response{}, &Error{Status: http.StatusForbidden, Message: "You don't have permission to reach this Service (requires get services/proxy)."}
 	}
 
