@@ -712,6 +712,7 @@ function AppDetailRoute({
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
+        showVerdict
         deploys={deploys}
         deploysLoading={deploysPending}
         onDeploysVisibleChange={setDeploysVisible}
