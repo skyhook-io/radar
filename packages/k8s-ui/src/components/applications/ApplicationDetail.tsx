@@ -185,8 +185,6 @@ function canonicalApplicationView(
  *  has no application tab row, so app-level views reach it as tabs of its own. */
 export interface AppWorkloadRenderContext {
   extraTabs?: WorkloadExtraTab[];
-  /** The tab to open on when the URL or host doesn't pick one. */
-  defaultTab?: string;
 }
 
 type ViewProps =
@@ -266,8 +264,6 @@ export type ApplicationDetailProps = {
   renderOverviewChecks?: () => ReactNode;
   /** Show the one-line verdict under the app title (see `buildAppVerdict`). */
   showVerdict?: boolean;
-  /** Opening view for an uncontrolled host (no `selectedView`). */
-  initialView?: ApplicationView;
   /** Deploy history. Undefined hides the view; `null` shows it loading, so a
    *  host can hold its revision fetches until `onDeploysVisibleChange`. */
   deploys?: AppDeploys | null;
@@ -382,7 +378,6 @@ export function ApplicationDetail({
   headerActions,
   renderOverviewChecks,
   showVerdict,
-  initialView,
   deploys,
   deploysLoading,
   onDeploysVisibleChange,
@@ -459,9 +454,8 @@ export function ApplicationDetail({
   const inferred = app.identity
     ? identityEnvInferred(app.identity)
     : resolvedEnv.inferred;
-  const openingView = initialView ?? DEFAULT_APPLICATION_VIEW;
   const [internalView, setInternalView] =
-    useState<CanonicalApplicationView>(openingView);
+    useState<CanonicalApplicationView>(DEFAULT_APPLICATION_VIEW);
   const [internalCostSelected, setInternalCostSelected] = useState(false);
   const deploysAvailable =
     deploys !== undefined &&
@@ -487,9 +481,9 @@ export function ApplicationDetail({
     else setInternalCostSelected(true);
   }, [onSelectCostView, renderCostView]);
   useEffect(() => {
-    if (selectedView === undefined) setInternalView(openingView);
+    if (selectedView === undefined) setInternalView(DEFAULT_APPLICATION_VIEW);
     setInternalCostSelected(false);
-  }, [app.key, selectedView, openingView]);
+  }, [app.key, selectedView]);
 
   const [internalSelected, setInternalSelected] = useState<string | null>(null);
   const hostSelected =
@@ -515,8 +509,6 @@ export function ApplicationDetail({
     // revisions of its own, as a CronJob doesn't.
     if (!selectedWorkload || !deploysAvailable) return {};
     return {
-      defaultTab:
-        singleWorkloadScope && initialView === "deploys" ? "deploys" : undefined,
       extraTabs: [
         {
           id: "deploys",
@@ -542,7 +534,6 @@ export function ApplicationDetail({
   }, [
     selectedWorkload,
     singleWorkloadScope,
-    initialView,
     deploys,
     deploysLoading,
     rolloutSummary,

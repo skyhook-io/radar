@@ -818,25 +818,14 @@ describe("ApplicationDetail shell", () => {
     });
 
     it("falls back to Overview when a host names Deploys but has none", () => {
-      const html = renderDetail({ initialView: "deploys" });
+      const html = renderDetail({ selectedView: "deploys", onSelectView: () => {} });
 
       expect(html).toContain("Workloads");
       expect(html).not.toContain("Loading deploys");
     });
 
-    it("opens on initialView for an uncontrolled host", () => {
-      expect(renderDetail({ initialView: "deploys", deploys })).toContain("No deploys to show.");
-    });
-
-    it("lets a controlled host win over initialView", () => {
-      const html = renderDetail({
-        initialView: "deploys",
-        deploys,
-        selectedView: "overview",
-        onSelectView: () => {},
-      });
-
-      expect(html).not.toContain("No deploys to show.");
+    it("opens on Overview even when the host has deploys", () => {
+      expect(renderDetail({ deploys })).not.toContain("No deploys to show.");
     });
 
     it("gives a workload scope nothing extra unless the host provides deploys", () => {
@@ -873,7 +862,6 @@ describe("ApplicationDetail shell", () => {
       renderDetail({
         app: { ...app, workloads: [app.workloads[0]] },
         deploys: null,
-        initialView: "deploys",
         renderWorkload: (_, context) => {
           contexts.push(context);
           return null;
@@ -881,7 +869,6 @@ describe("ApplicationDetail shell", () => {
       });
 
       expect(contexts[0].extraTabs?.map((tab) => tab.id)).toEqual(["deploys"]);
-      expect(contexts[0].defaultTab).toBe("deploys");
     });
   });
 
@@ -925,7 +912,6 @@ describe("ApplicationDetail shell", () => {
         renderOverviewChecks: undefined,
         showVerdict: false,
         deploys: undefined,
-        initialView: undefined,
         onRollback: undefined,
         rollbackHref: undefined,
       });
