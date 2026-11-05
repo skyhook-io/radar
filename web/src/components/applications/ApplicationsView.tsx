@@ -275,7 +275,7 @@ function AppDetailRoute({
   const selectedView: ApplicationView =
     selectedRouteView === "cost" ? "overview" : selectedRouteView;
   const selectedWorkloadParam = searchParams.get("workload");
-  const appWorkloads = app.workloads ?? [];
+  const appWorkloads = useMemo(() => app.workloads ?? [], [app.workloads]);
   const singleWorkloadKey =
     appWorkloads.length === 1 ? workloadKey(appWorkloads[0]) : null;
   const selectedWorkloadKey = singleWorkloadKey ?? selectedWorkloadParam;

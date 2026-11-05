@@ -335,3 +335,35 @@ func TestWriteTimelineQueryError_TimeoutChecksTheDatabase(t *testing.T) {
 func fromMs2(at time.Time) string {
 	return strconv.FormatInt(at.Add(-time.Second).UnixMilli(), 10)
 }
+
+func TestHandleTimelineAuthorize(t *testing.T) {
+	s := &Server{}
+	post := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/timeline/authorize", strings.NewReader(body))
+		rr := httptest.NewRecorder()
+		s.handleTimelineAuthorize(rr, req)
+		return rr
+	}
+	// With auth off there's nothing to filter, so answers line up with the request.
+	rr := post(`{"resources":[{"kind":"Deployment","namespace":"a"},{"kind":"Secret","namespace":"b"}]}`)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"allowed":[true,true]`) {
+		t.Fatalf("authorize: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := post(`not json`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("bad body: %d", rr.Code)
+	}
+	var many strings.Builder
+	many.WriteString(`{"resources":[`)
+	for i := 0; i <= timelineAuthorizeLimit; i++ {
+		if i > 0 {
+			many.WriteString(",")
+		}
+		many.WriteString(`{"kind":"Pod"}`)
+	}
+	many.WriteString(`]}`)
+	if rr := post(many.String()); rr.Code != http.StatusBadRequest {
+		t.Fatalf("over limit: %d", rr.Code)
+	}
+}
+

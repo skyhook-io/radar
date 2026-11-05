@@ -18,6 +18,10 @@ import (
 // above the cap clamps rather than erroring — it is a maximum, not a demand.
 const timelineEventsPageLimit = 10000
 
+// timelineAuthorizeLimit caps one authorize request. Callers send distinct
+// (kind, namespace) pairs, so this is far more than a page of rows needs.
+const timelineAuthorizeLimit = 2000
+
 // timelineEndRecord is the NDJSON terminal record closing an events stream.
 // Its shape is the wire contract the web client's retained source parses —
 // the same record the hub emits. It aliases the shared timelineapi.EndRecord
@@ -224,6 +228,41 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 		Cursor:    timelineCursor(epoch, maxSeq),
 		Truncated: truncated,
 	})
+}
+
+// handleTimelineAuthorize answers which resources the caller may read, by the
+// same per-kind check live timeline reads use. A retained copy of the timeline
+// knows only namespaces, so a hub asks here before serving its own rows.
+//
+//	POST /api/timeline/authorize  {"resources":[{"kind","apiVersion","namespace"}]}
+//	                              → {"allowed":[true,false,...]} in request order
+func (s *Server) handleTimelineAuthorize(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Resources []struct {
+			Kind       string `json:"kind"`
+			APIVersion string `json:"apiVersion"`
+			Namespace  string `json:"namespace"`
+		} `json:"resources"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if len(body.Resources) > timelineAuthorizeLimit {
+		s.writeError(w, http.StatusBadRequest, "too many resources")
+		return
+	}
+	events := make([]timeline.TimelineEvent, len(body.Resources))
+	for i, res := range body.Resources {
+		events[i] = timeline.TimelineEvent{ID: strconv.Itoa(i), Kind: res.Kind, APIVersion: res.APIVersion, Namespace: res.Namespace}
+	}
+	allowed := make([]bool, len(events))
+	for _, e := range s.filterEventsByRBAC(r, events) {
+		if i, err := strconv.Atoi(e.ID); err == nil {
+			allowed[i] = true
+		}
+	}
+	s.writeJSON(w, map[string][]bool{"allowed": allowed})
 }
 
 // statusRevisionPaths are the status fields that do record a change: a GitOps

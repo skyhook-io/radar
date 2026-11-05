@@ -745,6 +745,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// the same shape the hub serves; backs the web client's single
 			// ring-and-delta timeline path.
 			r.Get("/timeline/events", s.handleTimelineEvents)
+			r.Post("/timeline/authorize", s.handleTimelineAuthorize)
 
 			// Pod logs (non-streaming)
 			r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
