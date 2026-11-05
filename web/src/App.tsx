@@ -79,7 +79,7 @@ import { SettingsDialog, type SettingsSectionId } from './components/settings/Se
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { createViewMemory } from './utils/viewMemory'
 import { createKindFilterStore } from './utils/kindFilterStore'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams, CROSS_VIEW_PARAMS, namespacesFromSearch } from './utils/navigation'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams, initialTopologyGrouping, CROSS_VIEW_PARAMS, namespacesFromSearch } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -346,9 +346,10 @@ interface AppProps {
   manageDocumentTitle?: boolean
   documentTitleSuffix?: string
   onClusterLoadStateChange?: (state: ClusterLoadState) => void
+  defaultTopologyGrouping?: GroupingMode
 }
 
-function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
+function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange, defaultTopologyGrouping }: AppProps) {
   useLayoutEffect(() => () => resetNavigationMap(), [])
   const navigate = useNavigate()
   const location = useLocation()
@@ -429,8 +430,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     return {
       namespaces,
       topologyMode: (searchParams.get('mode') as TopologyMode) || 'resources',
-      // Default to namespace grouping when viewing all namespaces
-      grouping: (searchParams.get('group') as GroupingMode) || (namespaces.length === 0 ? 'namespace' : 'none'),
+      grouping: initialTopologyGrouping(searchParams.get('group'), namespaces.length, defaultTopologyGrouping),
     }
   }
 
@@ -2657,7 +2657,7 @@ function DockSpacer() {
 }
 
 // Main App component wrapped with providers
-function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
+function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange, defaultTopologyGrouping }: AppProps) {
   return (
     <ConnectionProvider>
       <CapabilitiesProvider>
@@ -2669,6 +2669,7 @@ function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadSt
                   manageDocumentTitle={manageDocumentTitle}
                   documentTitleSuffix={documentTitleSuffix}
                   onClusterLoadStateChange={onClusterLoadStateChange}
+                  defaultTopologyGrouping={defaultTopologyGrouping}
                 />
               </KeyboardShortcutProvider>
             </DockProvider>

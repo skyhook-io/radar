@@ -20,13 +20,14 @@ import {
   type ResourceOwnershipContext,
   type ServingResourceDetail,
   type AuditFinding,
-  dedupeResourceRefs,
+  collectServingRefs,
   gitOpsRouteForOwner,
   gitOpsOwnerFromRelationships,
   isDiagnoseKind,
   isRolloutKind,
   canSetWorkloadImages,
   isCoreBatchJob,
+  workloadHasRevisions,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
   setImageWrites,
@@ -42,6 +43,7 @@ import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSch
 import { useHistoryPaging } from './historyPaging'
 import { findInheritedGitOpsLookupRef, useResolvedGitOpsOwner } from '../../hooks/useResolvedGitOpsOwner'
 import { useGitOpsWriteGuard } from '../../hooks/useGitOpsWriteGuard'
+import { useRollbackWriteGuard } from '../../hooks/useRollbackWriteGuard'
 import {
   kindToPlural,
   kindToPluralWithGroup,
@@ -267,6 +269,8 @@ interface WorkloadViewProps {
   pushTabHistory?: boolean
   breadcrumb?: ReactNode
   extraTabs?: WorkloadExtraTab[]
+  /** The tab to open on when the URL names none. */
+  defaultTab?: string
   tabOrder?: string[]
   subheader?: ReactNode
   specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
@@ -531,19 +535,19 @@ export function WorkloadView({
         ? 'timeline'
         : rawTab === 'diagnose'
           ? 'reachability' // the network tab was renamed Reachability
-          : (rawTab as TabType) || 'overview'
+          : (rawTab as TabType) || (rest.defaultTab as TabType) || 'overview'
 
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {
       const params = new URLSearchParams(searchParams)
-      if (tab === 'overview') {
+      if (tab === 'overview' && !rest.defaultTab) {
         params.delete('tab')
       } else {
         params.set('tab', tab)
       }
       setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory, state: location.state })
     },
-    [pushTabHistory, searchParams, setSearchParams, location.state],
+    [pushTabHistory, rest.defaultTab, searchParams, setSearchParams, location.state],
   )
 
   const selectedRunKey = searchParams.get('run') ?? ''
@@ -1057,6 +1061,23 @@ export function WorkloadView({
     imageOwnerVerified,
     imageSelection,
   ])
+  const [rollbackGuardRequested, setRollbackGuardRequested] = useState(false)
+  const { warning: rollbackGuardWarning, satisfied: rollbackGuardSatisfied } = useRollbackWriteGuard({
+    target: { kind: resource?.kind ?? pluralToKind(apiKind), group: effectiveGroup ?? '', namespace, name },
+    ownership: workloadOwnership,
+    relationshipsUnavailable: Boolean(resource) && !relationships,
+    enabled: rollbackGuardRequested,
+    onOpenOwner: handleOpenGitOpsResource,
+    onOpenHelmRelease: handleOpenHelmRelease,
+  })
+  const rollbackGuard = useMemo(
+    () => ({
+      onRequest: () => setRollbackGuardRequested(true),
+      warning: rollbackGuardWarning,
+      satisfied: rollbackGuardSatisfied,
+    }),
+    [rollbackGuardWarning, rollbackGuardSatisfied],
+  )
   const actionsBarProps = useMemo(
     () => ({
       ...baseActionsBarProps,
@@ -1066,11 +1087,13 @@ export function WorkloadView({
       onCompareTo,
       onCompareAcrossClusters,
       imageOwnership,
+      rollbackGuard,
     }),
     [
       baseActionsBarProps,
       loadImagesWithTargetOwnership,
       imageOwnership,
+      rollbackGuard,
       onCompareTo,
       onCompareAcrossClusters,
     ],
@@ -1382,17 +1405,6 @@ export function WorkloadView({
   )
 }
 
-export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
-  if (!relationships) return []
-  return dedupeResourceRefs([
-    ...(relationships.services ?? []),
-    ...(relationships.ingresses ?? []),
-    ...(relationships.gateways ?? []),
-    ...(relationships.routes ?? []),
-    ...(relationships.routedFrom ?? []),
-  ])
-}
-
 const POD_OWNERSHIP_WORKLOAD_KINDS = new Set([
   'deployments',
   'statefulsets',
@@ -1517,6 +1529,9 @@ function LogsTabContent({
   onSelectRun: (runKey: string) => void
   viewNamespaces: string[]
 }) {
+  const { data: revisions } = useWorkloadRevisions(apiKind.toLowerCase(), namespace, name, workloadHasRevisions(kind))
+  const lastDeployAt = revisions?.find((revision) => revision.isCurrent)?.createdAt
+
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
       <div className="h-full">
@@ -1544,6 +1559,7 @@ function LogsTabContent({
           namespace={namespace}
           name={name}
           autoStream={shouldAutoStreamWorkloadLogs(kind, resource)}
+          shortcuts={{ lastDeployAt }}
         />
       </div>
     )

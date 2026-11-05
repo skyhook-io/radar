@@ -16,6 +16,7 @@ import {
   Coins,
   ExternalLink,
   GitCommit,
+  History,
   Layers,
   Radio,
   RefreshCw,
@@ -62,6 +63,7 @@ import {
   type AppWorkload,
   type AppBatchActivity,
   type AppHealth,
+  type AppRolloutSummary,
   CHIP,
   CHIP_TONE,
   HEALTH_META,
@@ -90,6 +92,10 @@ import {
 } from "../../utils/applications";
 import { PaneLoader } from "../ui/PaneLoader";
 import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
+import { workloadHasRevisions, type AppDeployRow, type AppDeploys } from "../../utils/app-deploys";
+import { appVerdictText, buildAppVerdict } from "../../utils/app-verdict";
+import { ApplicationDeploys } from "./ApplicationDeploys";
+import type { WorkloadExtraTab } from "../workload/WorkloadView";
 import { VersionTooltip, AppIdentityTooltip, RolloutSummaryTooltip } from "./AppTooltips";
 import {
   ProvenanceBadge,
@@ -151,7 +157,7 @@ export interface AppWorkloadSelectionOptions {
   tab?: string;
 }
 
-type CanonicalApplicationView = "overview" | "topology" | "history";
+type CanonicalApplicationView = "overview" | "deploys" | "topology" | "history";
 
 export type ApplicationView = CanonicalApplicationView;
 
@@ -162,14 +168,23 @@ const APPLICATION_VIEWS: Array<{
   label: string;
 }> = [
   { id: "overview", label: "Overview" },
+  { id: "deploys", label: "Deploys" },
   { id: "topology", label: "Topology" },
   { id: "history", label: "History" },
 ];
 
 function canonicalApplicationView(
-  view?: ApplicationView,
+  view: ApplicationView | undefined,
+  deploysAvailable: boolean,
 ): CanonicalApplicationView {
+  if (view === "deploys" && !deploysAvailable) return DEFAULT_APPLICATION_VIEW;
   return view ?? DEFAULT_APPLICATION_VIEW;
+}
+
+/** What a workload scope can add to the host's WorkloadView. A workload scope
+ *  has no application tab row, so app-level views reach it as tabs of its own. */
+export interface AppWorkloadRenderContext {
+  extraTabs?: WorkloadExtraTab[];
 }
 
 type ViewProps =
@@ -182,8 +197,14 @@ type ViewProps =
 export type ApplicationDetailProps = {
   app: AppRow;
   onBack: () => void;
-  /** Render the host's WorkloadView for the chosen workload. */
-  renderWorkload: (workload: SelectedAppWorkload) => ReactNode;
+  /** Where the back link goes, for hosts with more than one way in. */
+  backLabel?: string;
+  /** Render the host's WorkloadView for the chosen workload. Spread `context`
+   *  onto it; it is empty unless the host enabled a view that needs it. */
+  renderWorkload: (
+    workload: SelectedAppWorkload,
+    context: AppWorkloadRenderContext,
+  ) => ReactNode;
   /** Optional host-rendered app-scope Cost view. When absent, no Cost tab is shown. */
   renderCostView?: (props: {
     app: AppRow;
@@ -237,6 +258,21 @@ export type ApplicationDetailProps = {
    *  must stay the logical app key for provenance) passes the active instance's
    *  key here so the switcher marks it. */
   activeInstanceKey?: string;
+  /** Rendered first in the header's right cluster (a star, a compare link). */
+  headerActions?: ReactNode;
+  /** Rendered in the Overview, above the latest change. */
+  renderOverviewChecks?: () => ReactNode;
+  /** Show the one-line verdict under the app title (see `buildAppVerdict`). */
+  showVerdict?: boolean;
+  /** Deploy history. Undefined hides the view; `null` shows it loading, so a
+   *  host can hold its revision fetches until `onDeploysVisibleChange`. */
+  deploys?: AppDeploys | null;
+  deploysLoading?: boolean;
+  onDeploysVisibleChange?: (visible: boolean) => void;
+  /** Show an inline rollback on older revisions. */
+  onRollback?: (row: AppDeployRow) => void;
+  /** Link to where a rollback can be done, for hosts that can't do it here. */
+  rollbackHref?: (row: AppDeployRow) => string | undefined;
   history?: AppHistory;
   historyLoading?: boolean;
   historyItems?: ApplicationHistoryItem[];
@@ -323,6 +359,7 @@ function compareDefinedVersions(
 export function ApplicationDetail({
   app,
   onBack,
+  backLabel = "Applications",
   renderWorkload,
   renderCostView,
   costViewSelected,
@@ -338,6 +375,14 @@ export function ApplicationDetail({
   onSwitchInstance,
   discoveredEnvs,
   activeInstanceKey,
+  headerActions,
+  renderOverviewChecks,
+  showVerdict,
+  deploys,
+  deploysLoading,
+  onDeploysVisibleChange,
+  onRollback,
+  rollbackHref,
   history,
   historyLoading,
   historyItems,
@@ -378,11 +423,20 @@ export function ApplicationDetail({
     [app, workloads],
   );
   const overall = applicationDisplayHealth(app);
+  const activeEnv = identityInstances?.find((i) => i.appKey === (activeInstanceKey ?? app.key))?.env;
+  const verdictLine = useMemo(() => {
+    if (!showVerdict) return null;
+    const verdict = buildAppVerdict({ app, instances: identityInstances, activeEnv });
+    return { text: appVerdictText(verdict, { omitRollout: true }), health: verdict.health };
+  }, [showVerdict, app, identityInstances, activeEnv]);
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
     workloadClass === "job" && overall === batchRuntime.health
       ? batchRuntime.label
       : HEALTH_META[overall].label;
+  // The verdict speaks for every environment and this pill for the one on
+  // screen, so with several of them the pill has to say which.
+  const pillScope = showVerdict && activeEnv && (identityInstances?.length ?? 0) > 1 ? ` in ${activeEnv}` : "";
   const versions = useMemo(
     () => Array.from(new Set((app.versions || []).filter(Boolean))),
     [app.versions],
@@ -400,11 +454,16 @@ export function ApplicationDetail({
   const inferred = app.identity
     ? identityEnvInferred(app.identity)
     : resolvedEnv.inferred;
-  const [internalView, setInternalView] = useState<CanonicalApplicationView>(
-    DEFAULT_APPLICATION_VIEW,
-  );
+  const [internalView, setInternalView] =
+    useState<CanonicalApplicationView>(DEFAULT_APPLICATION_VIEW);
   const [internalCostSelected, setInternalCostSelected] = useState(false);
-  const activeView = canonicalApplicationView(selectedView ?? internalView);
+  const deploysAvailable =
+    deploys !== undefined &&
+    (Boolean(app.sourceRef) || workloads.some((w) => workloadHasRevisions(w.kind)));
+  const activeView = canonicalApplicationView(
+    selectedView ?? internalView,
+    deploysAvailable,
+  );
   const costSelected = Boolean(
     renderCostView && (costViewSelected ?? internalCostSelected),
   );
@@ -445,6 +504,43 @@ export function ApplicationDetail({
     ? workloads.find((w) => workloadKey(w) === rawSelected)
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
+  const workloadContext = useMemo<AppWorkloadRenderContext>(() => {
+    // A source-backed app has a deploy history even when this workload has no
+    // revisions of its own, as a CronJob doesn't.
+    if (!selectedWorkload || !deploysAvailable) return {};
+    return {
+      extraTabs: [
+        {
+          id: "deploys",
+          label: "Deploys",
+          icon: <History className="h-4 w-4" />,
+          after: "overview",
+          render: () => (
+            <div className="flex h-full min-h-0 flex-col">
+              <ApplicationDeploys
+                deploys={deploys}
+                loading={deploysLoading}
+                workload={selectedWorkload}
+                rolloutSummary={rolloutSummary}
+                onRollback={onRollback}
+                rollbackHref={rollbackHref}
+                onVisibleChange={onDeploysVisibleChange}
+              />
+            </div>
+          ),
+        },
+      ],
+    };
+  }, [
+    selectedWorkload,
+    singleWorkloadScope,
+    deploys,
+    deploysLoading,
+    rolloutSummary,
+    onRollback,
+    rollbackHref,
+    onDeploysVisibleChange,
+  ]);
   useEffect(() => {
     if (selectedWorkloadKey !== undefined && hostKeyIsStale) {
       onSelectWorkload?.(null);
@@ -601,7 +697,7 @@ export function ApplicationDetail({
           onClick={onBack}
           className="flex shrink-0 items-center gap-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
         >
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Applications
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> {backLabel}
         </button>
         <span
           className="hidden h-6 w-px bg-theme-border sm:block"
@@ -629,11 +725,12 @@ export function ApplicationDetail({
           )}
         </div>
         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {headerActions}
           <span
             className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}
           >
             <StatusDot tone={mapHealthToTone(overall)} />
-            <span className="text-sm font-semibold">{verdictLabel}</span>
+            <span className="text-sm font-semibold">{verdictLabel}{pillScope}</span>
           </span>
           {restartSignal && (
             <Tooltip
@@ -664,6 +761,21 @@ export function ApplicationDetail({
           )}
         </div>
       </div>
+
+      {verdictLine && (
+        <div className="flex min-w-0 items-center gap-2 border-b border-theme-border px-4 py-1.5 sm:px-6">
+          <StatusDot tone={mapHealthToTone(verdictLine.health)} />
+          <Tooltip
+            content={verdictLine.text}
+            delay={150}
+            wrapperClassName="block min-w-0"
+          >
+            <p className="truncate text-sm text-theme-text-secondary">
+              {verdictLine.text}
+            </p>
+          </Tooltip>
+        </div>
+      )}
 
       {/* Context strip */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-theme-border px-4 py-2 sm:px-6">
@@ -749,7 +861,7 @@ export function ApplicationDetail({
 
       <div className="min-h-0 flex-1 overflow-hidden bg-theme-base">
         {selectedWorkload ? (
-          renderRuntime(selectedWorkload, renderWorkload)
+          renderRuntime(selectedWorkload, renderWorkload, workloadContext)
         ) : (
           <ApplicationWorkspace
             app={app}
@@ -777,6 +889,12 @@ export function ApplicationDetail({
               setSelected(workloadKey(workload), options)
             }
             onNavigateToResource={onNavigateToResource}
+            deploys={deploysAvailable ? deploys : undefined}
+            deploysLoading={deploysLoading}
+            onDeploysVisibleChange={onDeploysVisibleChange}
+            onRollback={onRollback}
+            rollbackHref={rollbackHref}
+            rolloutSummary={rolloutSummary}
             history={history}
             historyLoading={historyLoading}
             historyItems={historyItems}
@@ -795,6 +913,7 @@ export function ApplicationDetail({
             onToggleReplicaSets={toggleReplicaSets}
             renderOverviewIssues={renderOverviewIssues}
             hasOverviewIssues={hasOverviewIssues}
+            renderOverviewChecks={renderOverviewChecks}
           />
         )}
       </div>
@@ -826,6 +945,12 @@ function ApplicationWorkspace({
   onFocusWorkload,
   onSelectWorkload,
   onNavigateToResource,
+  deploys,
+  deploysLoading,
+  onDeploysVisibleChange,
+  onRollback,
+  rollbackHref,
+  rolloutSummary,
   history,
   historyLoading,
   historyItems,
@@ -844,6 +969,7 @@ function ApplicationWorkspace({
   onToggleReplicaSets,
   renderOverviewIssues,
   hasOverviewIssues,
+  renderOverviewChecks,
 }: {
   app: AppRow;
   activeView: CanonicalApplicationView;
@@ -876,6 +1002,12 @@ function ApplicationWorkspace({
     name: string;
     group?: string;
   }) => void;
+  deploys?: AppDeploys | null;
+  deploysLoading?: boolean;
+  onDeploysVisibleChange?: (visible: boolean) => void;
+  onRollback?: (row: AppDeployRow) => void;
+  rollbackHref?: (row: AppDeployRow) => string | undefined;
+  rolloutSummary: AppRolloutSummary | null;
   history?: AppHistory;
   historyLoading?: boolean;
   historyItems?: ApplicationHistoryItem[];
@@ -899,6 +1031,7 @@ function ApplicationWorkspace({
   onToggleReplicaSets: (ownerID: string) => void;
   renderOverviewIssues?: () => ReactNode;
   hasOverviewIssues?: boolean;
+  renderOverviewChecks?: () => ReactNode;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -906,6 +1039,7 @@ function ApplicationWorkspace({
         activeView={activeView}
         costSelected={costSelected}
         costAvailable={Boolean(renderCostView)}
+        deploysAvailable={deploys !== undefined}
         onChange={onViewChange}
         onCostChange={onCostViewChange}
       />
@@ -928,6 +1062,17 @@ function ApplicationWorkspace({
           onOpenSource={onOpenSource}
           renderOverviewIssues={renderOverviewIssues}
           hasOverviewIssues={hasOverviewIssues}
+          renderOverviewChecks={renderOverviewChecks}
+        />
+      )}
+      {!costSelected && activeView === "deploys" && deploys !== undefined && (
+        <ApplicationDeploys
+          deploys={deploys}
+          loading={deploysLoading}
+          rolloutSummary={rolloutSummary}
+          onRollback={onRollback}
+          rollbackHref={rollbackHref}
+          onVisibleChange={onDeploysVisibleChange}
         />
       )}
       {!costSelected && activeView === "topology" && (
@@ -979,12 +1124,14 @@ function ApplicationViewTabs({
   activeView,
   costSelected,
   costAvailable,
+  deploysAvailable,
   onChange,
   onCostChange,
 }: {
   activeView: CanonicalApplicationView;
   costSelected: boolean;
   costAvailable: boolean;
+  deploysAvailable: boolean;
   onChange: (view: CanonicalApplicationView) => void;
   onCostChange: () => void;
 }) {
@@ -995,7 +1142,9 @@ function ApplicationViewTabs({
       aria-label="Application views"
     >
       <div className="flex min-w-0 gap-1 overflow-x-auto">
-        {APPLICATION_VIEWS.map((view) => {
+        {APPLICATION_VIEWS.filter(
+          (view) => view.id !== "deploys" || deploysAvailable,
+        ).map((view) => {
           const active = !costSelected && view.id === activeView;
           return (
             <button
@@ -1060,6 +1209,7 @@ function ApplicationOverview({
   onOpenSource,
   renderOverviewIssues,
   hasOverviewIssues,
+  renderOverviewChecks,
 }: {
   app: AppRow;
   workloads: AppWorkload[];
@@ -1078,6 +1228,7 @@ function ApplicationOverview({
   onOpenSource?: (source: AppSourceRef) => void;
   renderOverviewIssues?: () => ReactNode;
   hasOverviewIssues?: boolean;
+  renderOverviewChecks?: () => ReactNode;
 }) {
   const rel = app.relationships;
   const hasEntrypoints = Boolean(
@@ -1147,6 +1298,7 @@ function ApplicationOverview({
               onSelectWorkload={onSelectWorkload}
             />
           )}
+          {renderOverviewChecks?.()}
           <ApplicationLatestHistory
             history={history}
             sourceRef={app.sourceRef}
@@ -3349,7 +3501,8 @@ function useDismissablePopover<T extends HTMLElement>(
 
 function renderRuntime(
   workload: SelectedAppWorkload | undefined,
-  renderWorkload: (workload: SelectedAppWorkload) => ReactNode,
+  renderWorkload: ApplicationDetailProps["renderWorkload"],
+  context: AppWorkloadRenderContext,
 ): ReactNode {
   if (!workload) {
     return (
@@ -3361,7 +3514,7 @@ function renderRuntime(
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div key={workloadKey(workload)} className="min-h-0 flex-1">
-        {renderWorkload(workload)}
+        {renderWorkload(workload, context)}
       </div>
     </div>
   );

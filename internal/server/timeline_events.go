@@ -18,6 +18,10 @@ import (
 // above the cap clamps rather than erroring — it is a maximum, not a demand.
 const timelineEventsPageLimit = 10000
 
+// timelineAuthorizeLimit caps one authorize request. Callers send distinct
+// (kind, namespace) pairs, so this is far more than a page of rows needs.
+const timelineAuthorizeLimit = 2000
+
 // timelineEndRecord is the NDJSON terminal record closing an events stream.
 // Its shape is the wire contract the web client's retained source parses —
 // the same record the hub emits. It aliases the shared timelineapi.EndRecord
@@ -30,6 +34,9 @@ type timelineEndRecord = timelineapi.EndRecord
 //
 //	?from=<ms>&to=<ms>[&limit=N]  window load: newest-N events in the event-time
 //	                              range, `truncated` set when the range held more
+//	  &kinds=A,B                  only these kinds, before the limit
+//	  &changes_only=true          only creations, deletions and updates that
+//	                              touched more than status, before the limit
 //	?since=<cursor>               delta: every event that ARRIVED after the
 //	                              cursor, ascending arrival order
 //
@@ -173,6 +180,19 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 	opts.Since = time.UnixMilli(fromMs)
 	opts.Until = time.UnixMilli(toMs)
 	opts.Limit = limit
+	// Spent before the limit, so a caller after a few kinds isn't crowded out
+	// by Pods and Events.
+	if raw := q.Get("kinds"); raw != "" {
+		opts.Kinds = strings.Split(raw, ",")
+	}
+	changesOnly := q.Get("changes_only") == "true"
+	if changesOnly {
+		// Status churn is told apart by its diff, which no store can filter on,
+		// so a bounded scan runs first and the caller's limit applies after it.
+		opts.IncludeK8sEvents = false
+		opts.EventTypes = []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeUpdate, timeline.EventTypeDelete}
+		opts.Limit = timelineEventsPageLimit
+	}
 
 	events, err := store.Query(r.Context(), opts)
 	if err != nil {
@@ -184,6 +204,17 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 		if e.Seq > maxSeq {
 			maxSeq = e.Seq
 		}
+	}
+	if changesOnly {
+		// The scan hitting its ceiling means the oldest part of the range went
+		// unread, however few changes it found.
+		truncated := len(events) == timelineEventsPageLimit
+		events = s.filterEventsByRBAC(r, changeEvents(events))
+		if len(events) > limit {
+			events, truncated = events[:limit], true
+		}
+		writeTimelineStream(w, events, timelineEndRecord{Type: "end", Cursor: timelineCursor(epoch, maxSeq), Truncated: truncated})
+		return
 	}
 	// The default query order is newest-first, so hitting the limit means the
 	// oldest part of the requested range was cut — exactly what the client's
@@ -197,6 +228,69 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 		Cursor:    timelineCursor(epoch, maxSeq),
 		Truncated: truncated,
 	})
+}
+
+// handleTimelineAuthorize answers which resources the caller may read, by the
+// same per-kind check live timeline reads use. A retained copy of the timeline
+// knows only namespaces, so a hub asks here before serving its own rows.
+//
+//	POST /api/timeline/authorize  {"resources":[{"kind","apiVersion","namespace"}]}
+//	                              → {"allowed":[true,false,...]} in request order
+func (s *Server) handleTimelineAuthorize(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Resources []struct {
+			Kind       string `json:"kind"`
+			APIVersion string `json:"apiVersion"`
+			Namespace  string `json:"namespace"`
+		} `json:"resources"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if len(body.Resources) > timelineAuthorizeLimit {
+		s.writeError(w, http.StatusBadRequest, "too many resources")
+		return
+	}
+	events := make([]timeline.TimelineEvent, len(body.Resources))
+	for i, res := range body.Resources {
+		events[i] = timeline.TimelineEvent{ID: strconv.Itoa(i), Kind: res.Kind, APIVersion: res.APIVersion, Namespace: res.Namespace}
+	}
+	allowed := make([]bool, len(events))
+	for _, e := range s.filterEventsByRBAC(r, events) {
+		if i, err := strconv.Atoi(e.ID); err == nil {
+			allowed[i] = true
+		}
+	}
+	s.writeJSON(w, map[string][]bool{"allowed": allowed})
+}
+
+// statusRevisionPaths are the status fields that do record a change: a GitOps
+// controller's new revision lives nowhere else.
+var statusRevisionPaths = map[string]bool{"status.sync.revision": true, "status.lastAppliedRevision": true, "status.artifact.revision": true}
+
+// changeEvents keeps creations, deletions and updates that touched more than
+// status. It keeps slice order, newest first.
+func changeEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	out := make([]timeline.TimelineEvent, 0, len(events))
+	for _, e := range events {
+		if e.EventType != timeline.EventTypeUpdate || isChangeUpdate(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func isChangeUpdate(e timeline.TimelineEvent) bool {
+	if e.Diff == nil {
+		return false
+	}
+	for _, f := range e.Diff.Fields {
+		if !strings.HasPrefix(f.Path, "status") || statusRevisionPaths[f.Path] {
+			return true
+		}
+	}
+	return false
 }
 
 // writeTimelineStream emits the NDJSON body: one event per line, then the

@@ -808,4 +808,116 @@ describe("ApplicationDetail shell", () => {
     expect(html).toMatch(/<span class="text-sm font-semibold">Degraded<\/span>/);
     expect(html).toContain("Succeeded");
   });
+
+  describe("Deploys", () => {
+    const deploys = { rows: [], rolloutInProgress: false, partial: false, partialReasons: [] };
+
+    it("has no Deploys tab unless the host provides deploys", () => {
+      expect(renderDetail()).not.toContain(">Deploys<");
+      expect(renderDetail({ deploys: null })).toContain(">Deploys<");
+    });
+
+    it("falls back to Overview when a host names Deploys but has none", () => {
+      const html = renderDetail({ selectedView: "deploys", onSelectView: () => {} });
+
+      expect(html).toContain("Workloads");
+      expect(html).not.toContain("Loading deploys");
+    });
+
+    it("opens on Overview even when the host has deploys", () => {
+      expect(renderDetail({ deploys })).not.toContain("No deploys to show.");
+    });
+
+    it("gives a workload scope nothing extra unless the host provides deploys", () => {
+      const contexts: unknown[] = [];
+      renderDetail({
+        app: { ...app, workloads: [app.workloads[0]] },
+        renderWorkload: (_, context) => {
+          contexts.push(context);
+          return null;
+        },
+      });
+
+      expect(contexts).toEqual([{}]);
+    });
+
+    it("offers no Deploys for an app with nothing that can have them", () => {
+      const cron = { ...app.workloads[0], kind: "CronJob" };
+      const contexts: unknown[] = [];
+
+      expect(renderDetail({ app: { ...app, workloads: [cron, { ...cron, name: "b" }] }, deploys })).not.toContain(">Deploys<");
+      renderDetail({
+        app: { ...app, workloads: [cron] },
+        deploys,
+        renderWorkload: (_, context) => {
+          contexts.push(context);
+          return null;
+        },
+      });
+      expect(contexts).toEqual([{}]);
+    });
+
+    it("reaches a single-workload app as a tab of the workload", () => {
+      const contexts: Array<{ extraTabs?: Array<{ id: string }>; defaultTab?: string }> = [];
+      renderDetail({
+        app: { ...app, workloads: [app.workloads[0]] },
+        deploys: null,
+        renderWorkload: (_, context) => {
+          contexts.push(context);
+          return null;
+        },
+      });
+
+      expect(contexts[0].extraTabs?.map((tab) => tab.id)).toEqual(["deploys"]);
+    });
+  });
+
+  describe("verdict", () => {
+    it("adds nothing unless the host asks for it", () => {
+      expect(renderDetail()).not.toContain("Healthy, 4/4 ready");
+    });
+
+    it("sums up the app under the title", () => {
+      expect(renderDetail({ showVerdict: true })).toContain("Healthy, 4/4 ready");
+    });
+
+    it("covers every instance when the app runs in several", () => {
+      const html = renderDetail({
+        showVerdict: true,
+        identityInstances: [
+          { appKey: app.key, name: "checkout", env: "dev", health: "healthy", confidence: "high", evidence: "" },
+          { appKey: "other", name: "checkout", env: "prod", health: "degraded", confidence: "high", evidence: "" },
+        ],
+      });
+
+      expect(html).toContain("Degraded in prod · healthy in dev");
+    });
+  });
+
+  describe("host slots", () => {
+    it("renders headerActions and overview checks where given", () => {
+      const html = renderDetail({
+        headerActions: <button>Follow</button>,
+        renderOverviewChecks: () => <div>Audit checks</div>,
+      });
+
+      expect(html).toContain("Follow");
+      expect(html).toContain("Audit checks");
+    });
+
+    it("renders the same page with every new prop absent", () => {
+      const plain = renderDetail();
+      const withNoOps = renderDetail({
+        headerActions: undefined,
+        renderOverviewChecks: undefined,
+        showVerdict: false,
+        deploys: undefined,
+        onRollback: undefined,
+        rollbackHref: undefined,
+      });
+
+      expect(withNoOps).toBe(plain);
+      expect(plain).not.toContain(">Deploys<");
+    });
+  });
 });

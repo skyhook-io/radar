@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { gitOpsOwnerFromRelationships } from '@skyhook-io/k8s-ui'
 import type { Relationships } from '../../types'
-import { collectServingRefs, supportsBatchExecution } from './WorkloadView'
+import { collectServingRefs } from '@skyhook-io/k8s-ui'
+import { supportsBatchExecution } from './WorkloadView'
 import { findInheritedGitOpsLookupRef } from '../../hooks/useResolvedGitOpsOwner'
 
 describe('findInheritedGitOpsLookupRef', () => {

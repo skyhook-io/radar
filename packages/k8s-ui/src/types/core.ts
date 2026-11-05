@@ -1812,6 +1812,15 @@ export interface WorkloadRevision {
   // Rollouts only: mid-canary isCurrent (rolling out) and isStable (serving traffic) differ.
   isStable?: boolean
   podHash?: string
+  // This revision's own ready pods. Absent when the kind has no per-revision
+  // count, or the workload's Radar predates it.
+  readyReplicas?: number
+  // Whether this revision's pods are running and ready. Absent means unknown:
+  // a StatefulSet or DaemonSet mid-update has no per-revision split. Rollouts
+  // leave it unset; isStable is their signal.
+  serving?: boolean
+  // The kubernetes.io/change-cause note, when the rollout set one.
+  changeCause?: string
 }
 
 // Workload log stream event data

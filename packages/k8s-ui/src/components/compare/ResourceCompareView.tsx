@@ -32,6 +32,8 @@ export interface ResourceCompareViewProps {
   errors?: CompareSideError[]
   /** Caller-supplied theme passthrough for the Monaco editor. */
   editorTheme?: 'vs-dark' | 'vs'
+  /** Open on spec only, for hosts comparing two copies of the same app. */
+  initialSpecOnly?: boolean
   onSwap: () => void
   onClose: () => void
   /** Optional — when provided, the resource pill shows a pencil button to re-pick. */
@@ -59,12 +61,15 @@ function ResourcePill({
   error,
   onChange,
   subtitle,
+  subtitleOnly,
 }: {
   resource: CompareResourceRef
   side: CompareSide
   error?: string
   onChange?: () => void
   subtitle?: string
+  /** Both sides are the same resource, so where it runs is all that tells them apart. */
+  subtitleOnly?: boolean
 }) {
   const tones = SIDE_TONES[side]
   const errTone = 'border-red-400/50 bg-red-500/10'
@@ -83,12 +88,18 @@ function ResourcePill({
       </span>
       {error && <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" aria-hidden />}
       <span className={clsx('truncate min-w-0', error ? 'text-red-300' : 'text-theme-text-primary')}>
-        {resource.namespace && <span className="opacity-60">{resource.namespace}/</span>}
-        {resource.name}
-        {subtitle && (
-          <span className="opacity-60 ml-1" aria-label={`Source: ${subtitle}`}>
-            · {subtitle}
-          </span>
+        {subtitleOnly && subtitle ? (
+          subtitle
+        ) : (
+          <>
+            {resource.namespace && <span className="opacity-60">{resource.namespace}/</span>}
+            {resource.name}
+            {subtitle && (
+              <span className="opacity-60 ml-1" aria-label={`Source: ${subtitle}`}>
+                · {subtitle}
+              </span>
+            )}
+          </>
         )}
       </span>
       {onChange && (
@@ -112,6 +123,7 @@ export function ResourceCompareView({
   bData,
   errors,
   editorTheme = 'vs-dark',
+  initialSpecOnly = false,
   onSwap,
   onClose,
   onChangeA,
@@ -120,7 +132,7 @@ export function ResourceCompareView({
   bSubtitle,
   bleed = false,
 }: ResourceCompareViewProps) {
-  const [specOnly, setSpecOnly] = useState(false)
+  const [specOnly, setSpecOnly] = useState(initialSpecOnly)
   const [unifiedPicked, setUnified] = useState(false)
   // Two side-by-side panes don't fit a phone, so phones always get one column.
   const isPhone = usePhoneLayout()
@@ -144,6 +156,7 @@ export function ResourceCompareView({
   // blank the editor. When the A/B identity changes (navigating to a
   // new pair on the same route), the latch resets so the loader shows
   // again until the new fetches settle.
+  const sameResource = a.kind === b.kind && a.namespace === b.namespace && a.name === b.name && Boolean(aSubtitle && bSubtitle)
   const settleKey = `${a.kind}|${a.namespace}|${a.name}|${a.group ?? ''}|${aSubtitle ?? ''}` +
     `|${b.kind}|${b.namespace}|${b.name}|${b.group ?? ''}|${bSubtitle ?? ''}`
   const settleKeyRef = useRef(settleKey)
@@ -168,7 +181,7 @@ export function ResourceCompareView({
         </h2>
 
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} />
+          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} subtitleOnly={sameResource} />
           <Tooltip content="Swap A and B">
             <button
               onClick={onSwap}
@@ -177,7 +190,7 @@ export function ResourceCompareView({
               <ArrowLeftRight className="w-3.5 h-3.5" />
             </button>
           </Tooltip>
-          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} subtitle={bSubtitle} />
+          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} subtitle={bSubtitle} subtitleOnly={sameResource} />
         </div>
 
         <div className="flex items-center gap-1 shrink-0">

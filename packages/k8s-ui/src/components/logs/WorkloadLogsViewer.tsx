@@ -74,9 +74,37 @@ export interface WorkloadLogsViewerProps {
   allowAllContainers?: boolean
   /** Rendered only when the loaded source list is empty. */
   emptySourceState?: ReactNode
+  /** Adds "Failing pods only" and, given `lastDeployAt`, "Since last deploy".
+   *  Each shows only when it would change what's on screen. */
+  shortcuts?: { lastDeployAt?: string; onShowEvents?: () => void }
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer, allowAllContainers = true, emptySourceState, disableSourceControlsWithoutSource = false }: WorkloadLogsViewerProps) {
+const DEFAULT_LOG_RANGE = '100'
+
+function NoFailingPodLogs({ onShowEvents }: { onShowEvents?: () => void }) {
+  return (
+    <>
+      These pods wrote no logs. If they never started, the reason is in the workload's events.
+      {onShowEvents && (
+        <button type="button" onClick={onShowEvents} className="ml-1.5 underline hover:text-theme-text-primary">
+          Show events
+        </button>
+      )}
+    </>
+  )
+}
+
+function isFailingPod(pod: WorkloadPodInfo): boolean {
+  return pod.healthLevel === 'unhealthy' || pod.healthLevel === 'degraded'
+}
+
+function secondsSince(timestamp: string | undefined): number | null {
+  if (!timestamp) return null
+  const seconds = Math.ceil((Date.now() - Date.parse(timestamp)) / 1000)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null
+}
+
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer, allowAllContainers = true, emptySourceState, disableSourceControlsWithoutSource = false, shortcuts }: WorkloadLogsViewerProps) {
   const initialSelection = (names: string[]) => {
     const wanted = names.filter((n) => initialPods?.includes(n))
     return new Set(wanted.length > 0 ? wanted : names)
@@ -93,7 +121,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
   const [emptyCommand, setEmptyCommand] = useState<string | null>(null)
   const [showPodFilter, setShowPodFilter] = useState(false)
-  const [logRange, setLogRange] = useState('100')
+  const [logRange, setLogRange] = useState(DEFAULT_LOG_RANGE)
+  const [sinceDeployRange, setSinceDeployRange] = useState<string | null>(null)
   const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
@@ -275,6 +304,32 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     stopStreaming()
   }, [stopStreaming])
 
+  // A stream reads its range when it opens, so changing it means reopening.
+  // The auto-stream effect above does that itself.
+  const restartStreamRef = useRef(false)
+  useEffect(() => {
+    if (!restartStreamRef.current) return
+    restartStreamRef.current = false
+    handleStartStreaming()
+  }, [handleStartStreaming])
+
+  const lastDeployAt = shortcuts?.lastDeployAt
+  const sinceDeployActive = sinceDeployRange !== null && logRange === sinceDeployRange
+  const toggleSinceDeploy = useCallback(() => {
+    const seconds = secondsSince(lastDeployAt)
+    const next = sinceDeployActive || seconds === null ? DEFAULT_LOG_RANGE : `since:${seconds}`
+    setSinceDeployRange(next === DEFAULT_LOG_RANGE ? null : next)
+    restartStreamRef.current = isStreaming && !willAutoStream
+    setLogRange(next)
+  }, [isStreaming, lastDeployAt, sinceDeployActive, willAutoStream])
+
+  const failingPods = useMemo(() => pods.filter(isFailingPod), [pods])
+  const failingOnly = failingPods.length > 0 &&
+    pods.every(pod => selectedPods.has(pod.name) === isFailingPod(pod))
+  const toggleFailingPods = useCallback(() => {
+    setSelectedPods(new Set((failingOnly ? pods : failingPods).map(pod => pod.name)))
+  }, [failingOnly, failingPods, pods])
+
   useEffect(() => {
     if (!willAutoStream) return
     if (userStoppedRef.current) return
@@ -324,7 +379,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     }
   }, [name, overrideDownload, showError, showSuccess])
 
-  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
+  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => {
+    const shortcutClass = (active: boolean) =>
+      `px-2 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${
+        active ? palette.toolbarActive : `${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg}`
+      }`
+    return (
     <>
       {/* Pod filter */}
       <fieldset disabled={sourceUnavailable} className="flex items-center gap-2 disabled:opacity-50 phone:flex-wrap">
@@ -399,10 +459,22 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         isDark={isDark}
         disabled={isStreaming || sourceUnavailable}
         disabledReason={sourceUnavailable ? 'No log source is available yet' : undefined}
+        extraTimeOptions={sinceDeployRange ? [{ value: sinceDeployRange, label: 'Since last deploy' }] : undefined}
       />
+      {shortcuts && secondsSince(lastDeployAt) !== null && (
+        <button type="button" aria-pressed={sinceDeployActive} onClick={toggleSinceDeploy} className={shortcutClass(sinceDeployActive)}>
+          Since last deploy
+        </button>
+      )}
+      {shortcuts && failingPods.length > 0 && failingPods.length < pods.length && (
+        <button type="button" aria-pressed={failingOnly} onClick={toggleFailingPods} className={shortcutClass(failingOnly)}>
+          Failing pods only
+        </button>
+      )}
       </fieldset>
     </>
-  )
+    )
+  }
 
   // While the auto-stream is opening (before it first settles), show the
   // loading state rather than the empty-logs placeholder.
@@ -447,7 +519,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       showPodName
-      emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
+      emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : failingOnly ? <NoFailingPodLogs onShowEvents={shortcuts?.onShowEvents} /> : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
       forceDark={forceDark}

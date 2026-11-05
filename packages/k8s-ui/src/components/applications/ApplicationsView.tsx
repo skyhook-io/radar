@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import { Fragment, useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
 import { CollapseChevron } from '../ui/Collapse'
@@ -40,9 +40,11 @@ import {
   foldAppGroups,
   batchSignalForApp,
   batchRuntimeForApp,
+  latestRevisionAtOf,
   rolloutSummaryForApps,
   type FoldedRow,
 } from '../../utils/applications'
+import { formatRelativeAgeTime } from '../../utils/format'
 import { ReadyBar } from './ReadyBar'
 import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo, BatchSignalChip } from './AppChips'
 import { AppIdentityTooltip, EnvHint, RolloutSummaryTooltip } from './AppTooltips'
@@ -104,7 +106,7 @@ const HEALTH_TONE: Record<AppHealth, FacetTone> = {
 
 // Sortable columns. `health` is the implicit default (worst-first then name);
 // clicking a sortable header cycles asc → desc → off (back to default).
-type SortKey = 'name' | 'ready' | 'version'
+type SortKey = 'name' | 'ready' | 'version' | 'lastDeployed'
 type SortDir = 'asc' | 'desc'
 
 function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
@@ -120,7 +122,64 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
       if (byCount !== 0) return byCount
       return (a.versions[0] ?? '').localeCompare(b.versions[0] ?? '')
     }
+    case 'lastDeployed':
+      return lastDeployedSortValue(a) - lastDeployedSortValue(b)
   }
+}
+
+function lastDeployedSortValue(entry: AppEntry): number {
+  const at = latestRevisionAtOf(entry.row)
+  return at ? Date.parse(at) : 0
+}
+
+const LAST_DEPLOYED_TIP =
+  "When the newest revision was created. A rollback reuses an old revision, so it doesn't move this."
+
+function LastDeployedCell({ rows }: { rows: AppRow[] }) {
+  const at = latestRevisionAtOf({ workloads: rows.flatMap((row) => row.workloads ?? []) })
+  if (!at) return <span className="text-theme-text-tertiary">—</span>
+  return (
+    <Tooltip content={new Date(at).toLocaleString()} delay={150}>
+      <span className="whitespace-nowrap text-xs text-theme-text-secondary">{formatRelativeAgeTime(at)}</span>
+    </Tooltip>
+  )
+}
+
+// Stops at the row's own click, so a star doesn't also open the app.
+// Sized by the column, not its text: a long verdict truncates instead of
+// pushing the table's other columns aside.
+function RowVerdict({ verdict }: { verdict?: string }) {
+  if (!verdict) return null
+  return (
+    <div className="w-0 min-w-full pl-3 pt-0.5">
+      <Tooltip content={verdict} delay={300}>
+        <span className="block min-w-0 truncate text-xs font-normal text-theme-text-secondary">{verdict}</span>
+      </Tooltip>
+    </div>
+  )
+}
+
+function RowLeading({ children }: { children: ReactNode }) {
+  if (children == null || children === false) return null
+  return (
+    <span className="inline-flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
+      {children}
+    </span>
+  )
+}
+
+function EnvVersion({ version }: { version: string }) {
+  return <span className="max-w-[7rem] truncate font-mono text-theme-text-tertiary">{version}</span>
+}
+
+function SectionHeader({ title, columns }: { title: string; columns: number }) {
+  return (
+    <tr>
+      <td colSpan={columns} className="border-b-subtle bg-theme-surface/60 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+        {title}
+      </td>
+    </tr>
+  )
 }
 
 function runtimeSortValue(entry: AppEntry): number {
@@ -148,6 +207,18 @@ export interface ApplicationsViewProps {
   /** First fetch in flight — render the shape-stable skeleton (pulsing tiles,
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
+  /** Rendered before the app name. On a folded group `entry` is its first member
+   *  and `group` holds them all. */
+  renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
+  /** Lifts matching rows into a titled section above the rest. A group lifts
+   *  when any member matches. Nothing changes when nothing matches. */
+  pinnedSection?: { title: string; predicate: (entry: AppEntry) => boolean }
+  /** Rendered in the toolbar beside the search box. */
+  extraFilters?: ReactNode
+  /** Adds a Last deployed column, from each workload's `latestRevisionAt`. */
+  showLastDeployed?: boolean
+  /** Adds each env's version to the env cells that have one. */
+  showEnvVersions?: boolean
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -160,7 +231,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading, pinnedSection, extraFilters, showLastDeployed, showEnvVersions }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -228,7 +299,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // Fleet rows must scope non-portable identities to the cluster set that
   // produced them — only a portable (declared / cross-cluster-unified) key may
   // fold across clusters. Single-cluster has no such concern, so no localScope.
-  const visibleRows = useMemo<FoldedRow<AppEntry>[]>(
+  const foldedRows = useMemo<FoldedRow<AppEntry>[]>(
     () => foldAppGroups(entries, expandedGroups, FAMILY_AUTO_EXPAND_ON_SEARCH && textFilter.trim() !== '',
       variant === 'fleet'
         ? {
@@ -244,7 +315,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             envsOf: (e) =>
               e.variant === 'fleet'
                 ? e.envs.length
-                  ? e.envs.map((s) => ({ env: s.env, health: s.health }))
+                  ? e.envs.map((s) => ({ env: s.env, health: s.health, version: s.version }))
                   : [{ env: e.row.identity?.env ?? '', health: e.health }]
                 : [],
           }
@@ -252,6 +323,28 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     ),
     [entries, expandedGroups, textFilter, variant],
   )
+
+  // Pinned rows move as a block, an expanded group with its children, and the
+  // keyboard walks this order, so a section can't desync the highlight.
+  const { visibleRows, pinnedCount } = useMemo(() => {
+    if (!pinnedSection) return { visibleRows: foldedRows, pinnedCount: 0 }
+    const pinned: FoldedRow<AppEntry>[] = []
+    const rest: FoldedRow<AppEntry>[] = []
+    let target = rest
+    for (const row of foldedRows) {
+      if (row.kind === 'group') target = row.members.some(pinnedSection.predicate) ? pinned : rest
+      else if (!row.child) target = pinnedSection.predicate(row.entry) ? pinned : rest
+      target.push(row)
+    }
+    return { visibleRows: [...pinned, ...rest], pinnedCount: pinned.length }
+  }, [foldedRows, pinnedSection])
+  const columnCount = 8 + Number(Boolean(showLastDeployed))
+  // Last deployed takes this column's room: the page's rails leave too little
+  // width for both, and Class already says most of what the kinds would.
+  const workloadsColumn = showLastDeployed ? 'hidden min-[1800px]:table-cell' : undefined
+  // With versions on the environment chips, the cluster is the column a narrow
+  // page can spare: Version keeps skew and lag, which the chips don't show.
+  const clusterColumn = showEnvVersions ? 'hidden min-[1800px]:table-cell' : undefined
 
   // Row keyboard navigation — same contract as the Resources table: j/k or
   // arrows move a highlight, g g / G jump, Enter opens, Escape clears the
@@ -437,6 +530,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                 if (visibleRows.length > 0) setHighlightedIndex(0)
               }}
             />
+            {extraFilters}
             {/* Sorting is via the clickable column headers (Resources-table
                 pattern) — no separate sort control. */}
           </div>
@@ -469,21 +563,33 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       </>
                     ) : (
                       <>
-                        <th className={TH_CLASS}>Cluster</th>
+                        <th className={clsx(TH_CLASS, clusterColumn)}>Cluster</th>
                         <th className={TH_CLASS}>Envs</th>
                       </>
                     )}
                     <th className={TH_CLASS}>Class</th>
                     <SortableTh label="Runtime" sortKey="ready" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
                     <SortableTh label="Version" sortKey="version" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
-                    <th className={TH_CLASS}>Workloads</th>
+                    {showLastDeployed && (
+                      <SortableTh
+                        label={<Tooltip content={LAST_DEPLOYED_TIP} delay={150}><span className="whitespace-nowrap">Last deployed</span></Tooltip>}
+                        sortKey="lastDeployed"
+                        activeKey={sort?.key ?? null}
+                        direction={sort?.dir ?? 'asc'}
+                        onSort={onSort}
+                      />
+                    )}
+                    <th className={clsx(TH_CLASS, workloadsColumn)}>Workloads</th>
                     <th className={clsx(TH_CLASS, 'w-8')} />
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRows.map((r, idx) => r.kind === 'group' ? (
+                  {visibleRows.map((r, idx) => (
+                    <Fragment key={r.kind === 'group' ? `group:${r.key}` : r.entry.row.key}>
+                  {pinnedSection && pinnedCount > 0 && idx === 0 && <SectionHeader title={pinnedSection.title} columns={columnCount} />}
+                  {pinnedSection && pinnedCount > 0 && idx === pinnedCount && <SectionHeader title="All applications" columns={columnCount} />}
+                  {r.kind === 'group' ? (
                     <tr
-                      key={`group:${r.key}`}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       aria-expanded={r.expanded}
                       className={clsx(
@@ -500,7 +606,8 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[r.health].bar)} />
                           </Tooltip>
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
-                          <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
+                          {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
+                          <Tooltip content={r.label} delay={300} wrapperClassName="min-w-0 max-w-[16rem]"><span className="block truncate font-semibold text-theme-text-primary">{r.label}</span></Tooltip>
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip
                             content={<AppIdentityTooltip identityKey={r.label} source={r.members[0]?.row.identity?.source} portable={r.members[0]?.row.identity?.portable} fleet={variant === 'fleet'} members={r.members.map((m) => ({ name: m.row.name, env: m.row.identity!.env, confidence: m.row.identity!.confidence, evidence: m.row.identity!.evidence }))} />}
@@ -511,8 +618,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             </span>
                           </Tooltip>
                         </span>
+                        <RowVerdict verdict={(r.members.find((m) => m.verdict && m.health === r.health) ?? r.members.find((m) => m.verdict))?.verdict} />
                       </td>
-                      <td className="px-2 py-2.5">
+                      <td className={clsx('px-2 py-2.5', clusterColumn)}>
                         <span className="text-xs text-theme-text-tertiary">{pluralize(r.members.length, 'instance')}</span>
                       </td>
                       <td className="px-2 py-2.5">
@@ -532,6 +640,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                                 className={`${CHIP} ${CHIP_TONE.neutral} gap-1 hover:bg-theme-hover`}
                               >
                                 <StatusDot tone={mapHealthToTone(c.health)} />{c.env}
+                                {showEnvVersions && c.version && <EnvVersion version={c.version} />}
                               </button>
                             </Tooltip>
                           ))}
@@ -559,14 +668,14 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <span className="text-theme-text-tertiary">—</span>
                         )}
                       </td>
-                      <td className="px-2 py-2.5">
+                      {showLastDeployed && <td className="px-2 py-2.5"><LastDeployedCell rows={r.members.map((member) => member.row)} /></td>}
+                      <td className={clsx('px-2 py-2.5', workloadsColumn)}>
                         <span className="text-xs text-theme-text-secondary">{Object.entries(r.kinds).map(([k, n]) => pluralize(n, k)).join(' · ')}</span>
                       </td>
                       <td className="pr-2 text-right" />
                     </tr>
                   ) : ((e) => (
                     <tr
-                      key={e.row.key}
                       ref={idx === highlightedIndex ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                       className={clsx(
                         'group/row cursor-pointer border-b-subtle',
@@ -579,11 +688,13 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <Tooltip content={applicationRuntimeLabel([e.row], e.workloadClass, e.health)} delay={150}>
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
-                          <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
+                          {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
+                          <Tooltip content={e.row.name} delay={300} wrapperClassName="min-w-0 max-w-[16rem]"><span className="block truncate font-medium text-theme-text-primary">{e.row.name}</span></Tooltip>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
+                        <RowVerdict verdict={e.verdict} />
                       </td>
                       {e.variant === 'single' ? (
                         <>
@@ -616,7 +727,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                         </>
                       ) : (
                         <>
-                          <td className="px-2 py-2.5">
+                          <td className={clsx('px-2 py-2.5', clusterColumn)}>
                             {e.clusters.length === 1 ? (
                               <span className="truncate text-xs text-theme-text-secondary">{e.clusters[0].name}</span>
                             ) : e.clusters.length > 1 ? (
@@ -636,7 +747,12 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                                       <span className={`${CHIP} italic ${CHIP_TONE.muted} gap-1`}><StatusDot tone={mapHealthToTone(s.health)} />~{s.env}</span>
                                     </Tooltip>
                                   ) : (
-                                    <span key={s.env || 'none'} className={`${CHIP} ${CHIP_TONE.neutral} gap-1`}><StatusDot tone={mapHealthToTone(s.health)} />{s.env || 'unlabeled'}</span>
+                                    <Tooltip key={s.env || 'none'} content={`${s.env || 'unlabeled'} · ${s.version}`} delay={150} disabled={!showEnvVersions || !s.version}>
+                                      <span className={`${CHIP} ${CHIP_TONE.neutral} gap-1`}>
+                                        <StatusDot tone={mapHealthToTone(s.health)} />{s.env || 'unlabeled'}
+                                        {showEnvVersions && s.version && <EnvVersion version={s.version} />}
+                                      </span>
+                                    </Tooltip>
                                   ),
                                 )}
                               </span>
@@ -667,7 +783,8 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <VersionInfo app={e.row} variant="cell" />
                         )}
                       </td>
-                      <td className="px-2 py-2.5">
+                      {showLastDeployed && <td className="px-2 py-2.5"><LastDeployedCell rows={[e.row]} /></td>}
+                      <td className={clsx('px-2 py-2.5', workloadsColumn)}>
                         {Object.keys(e.kinds).length === 0 ? (
                           <span className="text-xs text-theme-text-tertiary">—</span>
                         ) : (
@@ -676,7 +793,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       </td>
                       <td className="pr-2 text-right"><ChevronRight className="inline h-4 w-4 text-theme-text-tertiary" /></td>
                     </tr>
-                  ))(r.entry))}
+                  ))(r.entry)}
+                    </Fragment>
+                  ))}
                 </tbody>
               </table>
           )}
