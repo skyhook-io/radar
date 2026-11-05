@@ -46,3 +46,30 @@ func TestOutageStartNotSetWhileFirstConnecting(t *testing.T) {
 		t.Fatalf("startup connecting set an outage start: %q", got)
 	}
 }
+
+// Losing credentials while connected is the most common long outage, and it
+// publishes through its own path; it must start the outage clock too, and the
+// recovery loop's later reports must keep that start.
+func TestRuntimeAuthLossStartsTheOutage(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "prod"})
+
+	before := time.Now().UTC().Add(-time.Second)
+	if !transitionConnectedToRuntimeAuthFailure("auth-rejected") {
+		t.Fatal("expected the connected session to be demoted")
+	}
+	status := GetConnectionStatus()
+	started, err := time.Parse(time.RFC3339, status.DisconnectedAt)
+	if err != nil {
+		t.Fatalf("disconnectedAt = %q, want an RFC 3339 time: %v", status.DisconnectedAt, err)
+	}
+	if started.Before(before.Truncate(time.Second)) || started.After(time.Now().UTC()) {
+		t.Fatalf("disconnectedAt = %s, want about now", started)
+	}
+
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "prod", ErrorType: "auth-rejected", Error: "still rejected"})
+	if got := GetConnectionStatus().DisconnectedAt; got != status.DisconnectedAt {
+		t.Fatalf("recovery report moved the outage start from %q to %q", status.DisconnectedAt, got)
+	}
+}

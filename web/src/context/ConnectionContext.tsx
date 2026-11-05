@@ -58,6 +58,10 @@ const AUTO_RETRY_MAX_DELAY_MS = 60000
 const AUTO_RETRY_ATTEMPTS_BEFORE_SLOWDOWN = 5
 const AUTO_RETRY_UNATTENDED_DELAY_MS = 5 * 60_000
 const WAKE_RETRY_DEDUPE_MS = 2000
+// Returning to the window retries at once, but no sooner than this after the
+// previous attempt started: someone alt-tabbing while they fix a VPN would
+// otherwise run a full reconnect on every return.
+const WAKE_RETRY_MIN_GAP_MS = AUTO_RETRY_INITIAL_DELAY_MS
 const CONNECTION_STATUS_FALLBACK_POLL_MS = 30000
 
 export function refreshQueriesAfterReconnect(queryClient: QueryClient, previousContext: string, nextContext: string) {
@@ -139,6 +143,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const autoRetryAttemptsRef = useRef(0)
   const autoRetryContextRef = useRef('')
   const lastWakeRetryAtRef = useRef(0)
+  const lastAutoRetryAtRef = useRef(0)
   const manualRetryPendingRef = useRef(false)
   // Fed by the status poll only (SSE frames don't carry the field, and must
   // not clear it): while the server's recovery loop owns the episode, browser
@@ -379,6 +384,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
       autoRetryInFlightRef.current = true
       autoRetryAttemptsRef.current += 1
+      lastAutoRetryAtRef.current = Date.now()
       setIsAutoRetrying(true)
       let recovered = false
       retryConnection()
@@ -435,6 +441,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       if (event.type !== 'online' && document.visibilityState === 'hidden') return
       const now = Date.now()
       if (now - lastWakeRetryAtRef.current < WAKE_RETRY_DEDUPE_MS) return
+      // The network coming back is worth an attempt right away; a focus or
+      // visibility change only once the previous attempt is old enough.
+      if (event.type !== 'online' && now - lastAutoRetryAtRef.current < WAKE_RETRY_MIN_GAP_MS) return
       lastWakeRetryAtRef.current = now
       if (manualRetryPendingRef.current || autoRetryInFlightRef.current || serverOwnsRecoveryRef.current) return
       if (retryTimeout !== undefined) {

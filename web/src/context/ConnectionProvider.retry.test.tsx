@@ -104,6 +104,7 @@ describe('ConnectionProvider auto-retry', () => {
     expect(retries).toBe(5)
     await advance(240_000)
     expect(retries).toBe(6)
+    await advance(30_000)
 
     focused = true
     await act(async () => {
@@ -113,6 +114,25 @@ describe('ConnectionProvider auto-retry', () => {
     await advance(10)
     // focus and visibilitychange together are one return, so one retry.
     expect(retries).toBe(7)
+  })
+
+  it('alt-tabbing back and forth retries no more than every ten seconds', async () => {
+    focused = true
+    await advance(15_000)
+    expect(retries).toBe(1) // the scheduled attempt at 10s
+    // Back to the window every 3s for 30s, as when switching to a terminal
+    // to fix the VPN and back.
+    for (let i = 0; i < 10; i++) {
+      await act(async () => {
+        window.dispatchEvent(new Event('blur'))
+        window.dispatchEvent(new Event('focus'))
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      await advance(3_000)
+    }
+    // 30s of returns: at most one attempt per ten seconds, scheduled ones included.
+    expect(retries).toBeLessThanOrEqual(4)
+    expect(retries).toBeGreaterThanOrEqual(3)
   })
 
   it('retries at once when the network comes back', async () => {
