@@ -2568,6 +2568,10 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 // the supplied user values (WYSIWYG — ResetValues, no merge with prior overrides).
 // The plain upgradeWith path keeps ResetThenReuseValues for the blind carry-over case.
 func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, sendProgress func(phase, message, detail string)) error {
+	return c.upgradeWithValuesMode(actionConfig, name, targetVersion, repositoryName, newValues, true, sendProgress)
+}
+
+func (c *Client) upgradeWithValuesMode(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, replace bool, sendProgress func(phase, message, detail string)) error {
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
 	if err != nil {
@@ -2591,7 +2595,8 @@ func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, tar
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.Labels = boundChartSourceLabels(rel.Labels, source, targetChart)
-	upgradeAction.ResetValues = true // WYSIWYG: apply only the edited values
+	upgradeAction.ResetValues = replace
+	upgradeAction.ResetThenReuseValues = !replace // Helm overlays supplied values on stored overrides, then new chart defaults.
 
 	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", rel.Chart.Metadata.Name, targetVersion), "")
 
@@ -3461,6 +3466,25 @@ func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRe
 }
 
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
+	return c.installWithPolicy(actionConfig, req, false)
+}
+
+func (c *Client) installWithPolicy(actionConfig *action.Configuration, req *InstallRequest, freshOnly bool) (*HelmRelease, error) {
+	if freshOnly {
+		if err := freshInstallCheck(actionConfig, req.ReleaseName, req.Namespace); err != nil {
+			return nil, err
+		}
+		source, err := c.installChartSource(req)
+		if err != nil {
+			return nil, err
+		}
+		if source == nil {
+			return nil, fmt.Errorf("install requires a configured, credential-free chart source")
+		}
+		if _, err := c.exactConfiguredSource(*source, req.ChartName); err != nil {
+			return nil, fmt.Errorf("configure this chart repository in Radar's Helm settings before installing: %w", err)
+		}
+	}
 
 	var chartURL string
 	var indexDigest string
@@ -3603,7 +3627,13 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		}
 	}
 
-	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	mode := installFresh
+	var err error
+	if freshOnly {
+		err = freshInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	} else {
+		mode, err = preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -611,7 +611,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name:        "manage_helm",
-		Description: "Install, upgrade, roll back or uninstall a native Helm release as the caller. Install and upgrade require an exact chart version. Upgrade requires a confirmed source and configured repository in Radar's Helm settings; URL installs do not register repositories. Change GitOps-managed dependencies in git instead. Uninstall without confirm previews resources; a reviewed confirm token removes them. Operations may run Helm hooks and take minutes; after a timeout inspect get_helm_release before retrying. Use wait_for for workload readiness. Never pass literal credentials in values.",
+		Description: "Install, upgrade, roll back or uninstall a native Helm release as the caller. Install and upgrade require an exact chart version and a repository configured in Radar's Helm settings. Install refuses existing release history. Upgrade uses the confirmed source and merges values into stored overrides; replace_values=true explicitly replaces them. Change GitOps-managed dependencies in git instead. Uninstall without confirm previews resources; a reviewed confirm token removes them. Operations may run Helm hooks and take minutes; after a timeout inspect get_helm_release before retrying. Use wait_for for workload readiness. Never pass literal credentials in values.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
 	}, logToolCall("manage_helm", handleManageHelm))
 

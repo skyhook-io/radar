@@ -174,10 +174,11 @@ Existing local Helm flows still accept repositories that omit checksums. Prepare
 External MCP clients can use `manage_helm` to install a dependency, upgrade a release
 from its confirmed saved source, roll back to an explicit revision, or preview and
 confirm an uninstall. It uses the same Helm permission preflight and caller identity
-as the UI. On upgrade, omitted `values` preserves existing overrides; supplied `values`
-is the complete replacement set, not a patch. Never feed redacted values from a read
-back into a write. See [MCP](mcp.md#write-tools) for the input and confirmation contract.
+as the UI. On upgrade, supplied `values` merge into stored overrides on the server;
+omitted keys, including credentials, are preserved. `replace_values: true` explicitly
+replaces all overrides. Never feed redacted values from a read back into a write.
+See [MCP](mcp.md#write-tools) for the input and confirmation contract.
 
-Direct-URL MCP installs do not register a repository in Radar settings. Before a
-later upgrade, configure that repository in the Helm UI; upgrades also require a
-confirmed source on the release. This preserves the existing source policy.
+MCP installs require a configured repository and refuse any existing release history.
+Register the source in Radar's Helm settings first. Upgrades also require a confirmed
+source on the release. This avoids implicit recovery or source changes through install.

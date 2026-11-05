@@ -272,8 +272,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Includes batch diagnosis routing, log-argument boundaries and native Helm writes.
-		maxCatalogBytes = 70436
+		// Includes batch diagnosis routing, log boundaries and native Helm source/merge/confirmation contracts.
+		// Opt-in Service curl and exec remain a separate allowance below.
+		maxCatalogBytes = 71138
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -285,7 +286,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 			budget := maxCatalogBytes
 			// Optional exec_pod and curl_service use 3,595 description/schema bytes.
 			if enabled {
-				budget += 3595
+				budget += 3800
 			}
 			total := 0
 			for _, tool := range listRegisteredTools(t) {

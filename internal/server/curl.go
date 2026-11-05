@@ -15,6 +15,8 @@ func (s *Server) handleCurlService(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
+	audit := auth.AuditActionDetails{Action: "curl_service", Kind: "Service", Namespace: input.Namespace, Name: input.Name, Source: "ui", Outcome: "failed"}
+	defer func() { auth.AuditLogAction(r, audit) }()
 	result, err := servicehttp.Do(r.Context(), input)
 	if err != nil {
 		var failure *servicehttp.Error
@@ -25,6 +27,9 @@ func (s *Server) handleCurlService(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	auth.AuditLog(r, input.Namespace, input.Name)
+	audit.Outcome = "response"
+	if result.Error != "" {
+		audit.Outcome = "partial_response"
+	}
 	s.writeJSON(w, result)
 }

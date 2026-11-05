@@ -13,6 +13,7 @@ import (
 	"time"
 
 	authv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -92,19 +93,27 @@ func friendlyDialError(err error) string {
 
 // authorizeCurl checks the caller may reach the Service. Direct-dial bypasses the
 // apiserver, so we re-create the authorization it would have enforced for
-// services/proxy via a SubjectAccessReview as the calling user. No auth (local
-// self-host) means a single trusted operator — allow.
+// services/proxy as the calling user, or as Radar's ServiceAccount on an
+// unauthenticated in-cluster listener. Network access never bypasses RBAC.
 func authorizeCurl(ctx context.Context, namespace, name string) (bool, error) {
 	user := auth.UserFromContext(ctx)
-	if user == nil {
-		return true, nil
-	}
 	attrs := &authv1.ResourceAttributes{
 		Namespace:   namespace,
 		Verb:        "get",
 		Resource:    "services",
 		Subresource: "proxy",
 		Name:        name,
+	}
+	if user == nil {
+		client := k8s.GetClient()
+		if client == nil {
+			return false, fmt.Errorf("k8s client not initialized")
+		}
+		result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: attrs}}, metav1.CreateOptions{})
+		if err != nil {
+			return false, err
+		}
+		return result.Status.Allowed, nil
 	}
 	if pkgauth.UserTokenMode() && !user.System {
 		// No impersonation to fall back on: a person reaches a Service only
@@ -159,6 +168,10 @@ func (e *Error) Error() string { return e.Message }
 // leak Radar's token to anything you curl. Authorization is re-created with an
 // explicit SubjectAccessReview.
 func Do(ctx context.Context, req Request) (Response, error) {
+	return do(ctx, req, request)
+}
+
+func do(ctx context.Context, req Request, send func(context.Context, string) (Response, error)) (Response, error) {
 	// Direct dial only works from inside the cluster network (Cloud / in-cluster).
 	// Locally you'd port-forward instead.
 	if !k8s.IsInCluster() {
@@ -216,6 +229,11 @@ func Do(ctx context.Context, req Request) (Response, error) {
 	if err != nil {
 		return Response{}, &Error{Status: http.StatusNotFound, Message: "Service not found"}
 	}
+	// An alias or manually routed Service can use Radar's network position to
+	// reach another tenant. Only selector-backed Services are diagnostic targets.
+	if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
+		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service curl requires a selector-backed Service; ExternalName and manually routed Services are not supported"}
+	}
 	matchedPort := int32(-1)
 	for _, p := range svc.Spec.Ports {
 		if fmt.Sprintf("%d", p.Port) == req.Port {
@@ -231,7 +249,7 @@ func Do(ctx context.Context, req Request) (Response, error) {
 	// to the workload. Host and port come from the cache object, not the request.
 	target := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d%s", scheme, svc.Name, svc.Namespace, matchedPort, path)
 
-	return request(ctx, target)
+	return send(ctx, target)
 }
 
 func request(ctx context.Context, target string) (Response, error) {

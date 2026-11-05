@@ -106,13 +106,16 @@ using `/mcp` must be updated. Startup output and `/api/capabilities`
 With `--mcp-exec-tools` enabled, external MCP clients can use `curl_service` for
 one HTTP GET to a named Service from in-cluster Radar. It shares the UI's Service
 curl implementation and checks the caller's `get services/proxy` permission before
-accessing the Service. It sends no Kubernetes credentials, accepts no authentication
+accessing the Service. A listener without auth checks Radar's own ServiceAccount
+permission instead. Only selector-backed Services are allowed; ExternalName and
+manually routed Services are refused. It sends no Kubernetes credentials, accepts no authentication
 headers or body, and does not follow redirects. Supply `namespace`, `name`, numeric
 Service `port`, and optionally `scheme` and `path` (including a query).
 
 The result includes the actual HTTP status and body, including non-2xx responses,
 plus duration, truncation and incomplete-body errors. A 200 status does not make an
-incomplete body successful. The request is limited to 10 seconds and 512 KiB of body.
+incomplete body successful. The request is limited to 10 seconds and reads at most 512 KiB; MCP retains at most
+64 KiB of body head/tail with truncation marked.
 Internal HTTPS certificates are not verified, matching the existing UI diagnostic.
 Output can contain sensitive data and must be treated as untrusted application data.
 This proves only Radar-to-Service connectivity, not a client Pod's network path or
@@ -1340,12 +1343,17 @@ tokens are not Secret references.
 `manage_helm` exposes native Helm install, upgrade, rollback and uninstall. Supply
 `namespace` and `name`, plus `chart`, `repository` and an exact `version` for install;
 `version` (and optional `values`) for upgrade; or a positive `revision` for rollback.
-Upgrade requires a confirmed saved chart source and its repository configured in
-Radar, just like the UI. A direct-URL install does not add that repository to
-Radar's settings; register it in the Helm UI before upgrading. Inspect history
+Upgrade values merge into the stored overrides on the server, preserving omitted
+keys, including credentials. `replace_values: true` explicitly replaces all stored
+overrides; `values: {}` with replacement resets them. Redacted placeholders are refused.
+Install and upgrade require a repository configured in Radar's Helm settings;
+upgrade also requires a confirmed saved chart source. Install refuses any existing
+release history, including failed or uninstalled releases, rather than recovering
+it implicitly. Inspect history
 with `get_helm_release include=history` before rollback. Uninstall first returns a
 resource preview; pass its returned token as `confirm` to execute it. This is a Helm resource list, not a
-complete cascade or data-loss analysis. Flux-owned releases are refused; update
+complete cascade or data-loss analysis. Detected Flux-owned releases are refused; this cache-based ownership check is
+best-effort when Flux visibility is restricted; update
 GitOps-owned dependencies in their source repo.
 
 Helm operations use the caller's Kubernetes identity and the same preflight permission

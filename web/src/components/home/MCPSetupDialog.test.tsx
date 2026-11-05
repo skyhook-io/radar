@@ -27,6 +27,7 @@ describe('MCP setup in read-only mode', () => {
       expect(html).toContain('list_namespaces')
       expect(html).not.toContain('apply_resource')
       expect(html).not.toContain('exec_pod')
+    expect(html).not.toContain('curl_service')
       expect(html).not.toContain('collect_application_evidence')
       expect(html).not.toContain('in_cluster')
       expect(html).toContain('Read-only mode blocks write tools')
@@ -42,18 +43,20 @@ describe('MCP setup in read-only mode', () => {
     expect(html).toContain('exec_pod')
     expect(html).toContain('is disabled')
     expect(html).toContain('--mcp-exec-tools')
-    expect(html).toContain(`${MCP_TOOL_CATALOG.length - 2} tools`)
+    expect(html).toContain(`${MCP_TOOL_CATALOG.length - 3} tools`)
   })
 
   it('does not suggest an unsupported flag when the capability is absent', () => {
     const html = renderToStaticMarkup(<MCPSetupDialog open mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).not.toContain('exec_pod')
+    expect(html).not.toContain('curl_service')
     expect(html).not.toContain('--mcp-exec-tools')
   })
 
   it('shows exec and counts it only when enabled', () => {
     const html = renderToStaticMarkup(<MCPSetupDialog open execTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('exec_pod')
+    expect(html).toContain('curl_service')
     expect(html).toContain(`${MCP_TOOL_CATALOG.length - 1} tools`)
     expect(html.indexOf('exec_pod')).toBeGreaterThan(html.indexOf('get_workload_logs'))
   })
@@ -61,6 +64,7 @@ describe('MCP setup in read-only mode', () => {
   it('hides exec in read-only mode even if exec is requested', () => {
     const html = renderToStaticMarkup(<MCPSetupDialog open readOnly execTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
     expect(html).not.toContain('exec_pod')
+    expect(html).not.toContain('curl_service')
     expect(html).toContain(`${MCP_TOOL_CATALOG.filter((tool) => !tool.write && !tool.localOnly).length} tools`)
   })
 

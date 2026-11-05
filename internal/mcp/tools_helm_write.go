@@ -18,15 +18,16 @@ import (
 )
 
 type manageHelmInput struct {
-	Action     string         `json:"action" jsonschema:"install, upgrade, rollback, or uninstall"`
-	Namespace  string         `json:"namespace" jsonschema:"release storage namespace (target namespace for install)"`
-	Name       string         `json:"name" jsonschema:"Helm release name"`
-	Chart      string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
-	Repository string         `json:"repository,omitempty" jsonschema:"install: repository name, https URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
-	Version    string         `json:"version,omitempty" jsonschema:"exact chart version; required for install and upgrade"`
-	Values     map[string]any `json:"values,omitempty" jsonschema:"complete user values for install or upgrade; supplied values REPLACE prior overrides; omit on upgrade to preserve them; never reuse redacted values or literal credentials"`
-	Revision   int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
-	Confirm    string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`
+	Action        string         `json:"action" jsonschema:"install, upgrade, rollback, or uninstall"`
+	Namespace     string         `json:"namespace" jsonschema:"release storage namespace (target namespace for install)"`
+	Name          string         `json:"name" jsonschema:"Helm release name"`
+	Chart         string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
+	Repository    string         `json:"repository,omitempty" jsonschema:"install: configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
+	Version       string         `json:"version,omitempty" jsonschema:"exact chart version; required for install and upgrade"`
+	Values        map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; upgrade merges into stored overrides unless replace_values=true; never reuse redacted output or literal credentials"`
+	ReplaceValues bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false preserves omitted keys"`
+	Revision      int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
+	Confirm       string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`
 }
 
 func (in manageHelmInput) validate() error {
@@ -70,6 +71,9 @@ func (in manageHelmInput) validate() error {
 			return fmt.Errorf("version must be an exact chart version, not a range or latest")
 		}
 	}
+	if in.ReplaceValues && (in.Action != "upgrade" || in.Values == nil) {
+		return fmt.Errorf("replace_values requires action=upgrade and an explicit values object")
+	}
 	if in.Values != nil {
 		encoded, err := json.Marshal(in.Values)
 		if err != nil {
@@ -89,12 +93,16 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 	if err := requireConnected(); err != nil {
 		return nil, nil, err
 	}
+	operation := k8s.OperationContext()
 	config, clusterContext := k8s.GetConfigSnapshot()
 	ctx = context.WithValue(ctx, confirmationContextKey{}, clusterContext)
+	r := (&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
+	audit := auth.AuditActionDetails{Action: "helm_" + in.Action, Kind: "HelmRelease", Namespace: in.Namespace, Name: in.Name, Source: "mcp", Outcome: "refused"}
+	defer func() { auth.AuditLogAction(r, audit) }()
 	if _, err := helm.CheckWritePermission(ctx, in.Namespace); err != nil {
 		return nil, nil, err
 	}
-	if config == nil || k8s.ActiveClusterContext() != clusterContext {
+	if config == nil || operation.Err() != nil || k8s.ActiveClusterContext() != clusterContext {
 		return nil, nil, fmt.Errorf("cluster connection changed or is unavailable; retry after reconnecting")
 	}
 	// Pin every read and write in this call to the same cluster, even if the
@@ -105,6 +113,9 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 		detail, err := client.GetReleaseAsUser(in.Namespace, in.Name, user)
 		if err != nil {
 			return nil, nil, fmt.Errorf("read release before %s: %w", in.Action, err)
+		}
+		if operation.Err() != nil {
+			return nil, nil, fmt.Errorf("cluster connection changed during release lookup; retry on the intended cluster")
 		}
 		if detail.ManagedByFluxHelmRelease != "" {
 			return nil, nil, fmt.Errorf("release is managed by Flux HelmRelease %s; change its source configuration instead", detail.ManagedByFluxHelmRelease)
@@ -133,19 +144,24 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 					return nil, nil, err
 				}
 
+				audit.Outcome = "preview"
 				return toJSONResult(map[string]any{"action": "uninstall", "state": "preview", "namespace": in.Namespace, "name": in.Name, "revision": detail.Revision, "confirm": token, "resources": detail.Resources, "message": "Review the resources and any retained data before calling again with the returned confirm token. Helm hooks and resource policies can affect deletion; this is not a complete cascade preview."})
 			}
 		}
 	}
-	r := (&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
-	auth.AuditLog(r, in.Namespace, in.Name)
+	if operation.Err() != nil {
+		return nil, nil, fmt.Errorf("cluster connection changed; retry on the intended cluster")
+	}
+	audit.Outcome = "failed_or_unconfirmed"
 	var err error
 	switch in.Action {
 	case "install":
-		_, err = client.InstallAsUser(&helm.InstallRequest{ReleaseName: in.Name, Namespace: in.Namespace, ChartName: in.Chart, Repository: in.Repository, Version: in.Version, Values: in.Values}, user)
+		_, err = client.InstallFreshAsUser(&helm.InstallRequest{ReleaseName: in.Name, Namespace: in.Namespace, ChartName: in.Chart, Repository: in.Repository, Version: in.Version, Values: in.Values}, user)
 	case "upgrade":
 		if in.Values == nil {
 			err = client.UpgradeAsUser(in.Namespace, in.Name, in.Version, in.Repository, user)
+		} else if !in.ReplaceValues {
+			err = client.UpgradeWithOverridesAsUser(in.Namespace, in.Name, in.Version, in.Repository, in.Values, user)
 		} else {
 			err = client.UpgradeWithValuesProgressAsUser(in.Namespace, in.Name, in.Version, in.Repository, in.Values, user, nil)
 		}
@@ -157,5 +173,6 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 	if err != nil {
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors configure the repository and confirm its source in Radar; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
 	}
+	audit.Outcome = "completed"
 	return toJSONResult(map[string]any{"action": in.Action, "state": "completed", "namespace": in.Namespace, "name": in.Name, "message": "Helm operation completed. Use get_helm_release and wait_for to verify workload readiness; completion does not prove application behavior."})
 }

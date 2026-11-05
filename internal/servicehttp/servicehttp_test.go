@@ -6,8 +6,10 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	authv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"slices"
 
@@ -167,9 +169,95 @@ func TestServiceAuthorizationUsesCallerAndTarget(t *testing.T) {
 	}
 }
 
-func TestServiceAuthorizationLocalOperator(t *testing.T) {
-	allowed, err := authorizeCurl(t.Context(), "team-a", "app")
-	if err != nil || !allowed {
-		t.Fatalf("local operator: %v %v", allowed, err)
+func TestServiceAuthorizationNoAuthListener(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+			seen := false
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen = true
+				var review authv1.SelfSubjectAccessReview
+				if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+					t.Error(err)
+				}
+				a := review.Spec.ResourceAttributes
+				if a == nil || a.Namespace != "team-a" || a.Name != "app" || a.Resource != "services" || a.Subresource != "proxy" || a.Verb != "get" {
+					t.Errorf("wrong self review: %+v", a)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(authv1.SelfSubjectAccessReview{TypeMeta: metav1.TypeMeta{Kind: "SelfSubjectAccessReview", APIVersion: "authorization.k8s.io/v1"}, Status: authv1.SubjectAccessReviewStatus{Allowed: allowed}})
+			}))
+			defer api.Close()
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prev := k8s.SetTestClient(client)
+			defer k8s.SetTestClient(prev)
+			got, err := authorizeCurl(t.Context(), "team-a", "app")
+			if err != nil || got != allowed || !seen {
+				t.Fatalf("serviceaccount check: %v %v %v", got, err, seen)
+			}
+		})
+	}
+}
+
+func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
+	priorMode := k8s.ForceInCluster
+	k8s.ForceInCluster = true
+	defer func() { k8s.ForceInCluster = priorMode }()
+	for _, tc := range []struct {
+		name        string
+		allowed     bool
+		serviceType corev1.ServiceType
+		selector    map[string]string
+		wantStatus  int
+	}{
+		{"selector", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 0},
+		{"denied", false, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 403},
+		{"alias", true, corev1.ServiceTypeExternalName, nil, 400},
+		{"manual endpoints", true, corev1.ServiceTypeClusterIP, nil, 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(authv1.SubjectAccessReview{TypeMeta: metav1.TypeMeta{Kind: "SubjectAccessReview", APIVersion: "authorization.k8s.io/v1"}, Status: authv1.SubjectAccessReviewStatus{Allowed: tc.allowed}})
+			}))
+			defer api.Close()
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prev := k8s.SetTestClient(client)
+			defer k8s.SetTestClient(prev)
+			cacheClient := fake.NewClientset(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}, Spec: corev1.ServiceSpec{Type: tc.serviceType, Selector: tc.selector, ExternalName: "api.team-b.svc.cluster.local", Ports: []corev1.ServicePort{{Port: 8080}}}})
+			if err := k8s.InitTestResourceCache(cacheClient); err != nil {
+				t.Fatal(err)
+			}
+			defer k8s.ResetResourceCache()
+			app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "" || r.Header.Get("Impersonate-User") != "" {
+					t.Error("credentials reached app")
+				}
+				w.WriteHeader(503)
+				fmt.Fprint(w, "application says unavailable")
+			}))
+			defer app.Close()
+			calls := 0
+			got, err := do(auth.ContextWithUser(t.Context(), &auth.User{Username: "alice"}), Request{Namespace: "team-a", Name: "app", Port: "8080", Path: "/health?full=true"}, func(ctx context.Context, target string) (Response, error) {
+				calls++
+				if target != "http://app.team-a.svc.cluster.local:8080/health?full=true" {
+					t.Errorf("wrong target %s", target)
+				}
+				return request(ctx, app.URL+"/health?full=true")
+			})
+			if tc.wantStatus != 0 {
+				failure, ok := err.(*Error)
+				if !ok || failure.Status != tc.wantStatus || calls != 0 {
+					t.Fatalf("refusal: %v calls=%d", err, calls)
+				}
+			} else if err != nil || got.Status != 503 || got.Body != "application says unavailable" || calls != 1 {
+				t.Fatalf("response=%+v err=%v calls=%d", got, err, calls)
+			}
+		})
 	}
 }

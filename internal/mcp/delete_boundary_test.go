@@ -39,7 +39,7 @@ func TestApplyServerDoesNotExposeDelete(t *testing.T) {
 	}
 	patch := false
 	for _, tool := range listed.Tools {
-		if tool.Name == "delete_resource" || tool.Name == "exec_pod" {
+		if tool.Name == "delete_resource" || tool.Name == "exec_pod" || tool.Name == "manage_helm" || tool.Name == "curl_service" {
 			t.Fatalf("Apply exposes restricted tool %s", tool.Name)
 		}
 		patch = patch || tool.Name == "patch_resource"

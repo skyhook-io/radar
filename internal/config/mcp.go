@@ -26,7 +26,7 @@ type MCPFlags struct {
 func RegisterMCPFlags(fs *flag.FlagSet, file Config) MCPFlags {
 	return MCPFlags{
 		fs: fs, file: file,
-		execTools: fs.Bool("mcp-exec-tools", file.MCPExecTools != nil && *file.MCPExecTools, "Enable exec_pod and curl_service: run container commands and in-cluster Service GETs as the caller (off by default; ignored with --disable-exec or --mcp-read-only)"),
+		execTools: fs.Bool("mcp-exec-tools", file.MCPExecTools != nil && *file.MCPExecTools, "Enable exec_pod and curl_service: run container commands and in-cluster Service GETs with Kubernetes permission checks (off by default; ignored with --disable-exec or --mcp-read-only)"),
 		noMCP:     fs.Bool("no-mcp", !file.MCPEnabledOr(true), "Disable all MCP endpoints"),
 		readOnly: fs.Bool("mcp-read-only", file.MCPReadOnly != nil && *file.MCPReadOnly,
 			"Expose only read-only MCP tools (env: RADAR_MCP_READ_ONLY)"),
