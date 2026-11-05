@@ -173,6 +173,11 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 	opts.Since = time.UnixMilli(fromMs)
 	opts.Until = time.UnixMilli(toMs)
 	opts.Limit = limit
+	// Spent before the limit, so a caller after a few kinds isn't crowded out
+	// by Pods and Events.
+	if raw := q.Get("kinds"); raw != "" {
+		opts.Kinds = strings.Split(raw, ",")
+	}
 
 	events, err := store.Query(r.Context(), opts)
 	if err != nil {

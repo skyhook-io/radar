@@ -138,6 +138,12 @@ func TestHandleTimelineEvents_Contract(t *testing.T) {
 		}
 	}
 
+	// A kinds filter applies before the limit, so other kinds can't spend it.
+	rr = get("/api/timeline/events?from=" + fromMs + "&to=" + toMs + "&kinds=NoSuchKind&namespaces=default")
+	if events, _ = parseStream(t, rr.Body.String()); len(events) != 0 {
+		t.Fatalf("kinds filter ignored: %d events", len(events))
+	}
+
 	// The `to` bound is honored: a window ending before event c excludes it.
 	beforeC := strconv.FormatInt(base.Add(1500*time.Millisecond).UnixMilli(), 10)
 	rr = get("/api/timeline/events?from=" + fromMs + "&to=" + beforeC + "&namespaces=default")
