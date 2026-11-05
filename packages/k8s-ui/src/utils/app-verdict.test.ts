@@ -34,7 +34,7 @@ describe('classifyAppCause', () => {
   })
 
   it('reads scheduling failures as the platform', () => {
-    expect(classifyAppCause(app({ workloads: [workload({ health: 'unhealthy', ready: 0 })], events: [event('FailedScheduling')] }))).toBe('platform')
+    expect(classifyAppCause(app({ workloads: [workload({ health: 'unhealthy', ready: 0 })], events: [event('NodeNotReady')] }))).toBe('platform')
   })
 
   it('reads evictions as the platform, in any case', () => {
