@@ -5,6 +5,7 @@
 // same source is consumed by Radar's binary via main.tsx.
 export { RadarApp, type RadarAppProps } from './RadarApp';
 export type { PrometheusRightsizing, RightsizingScanResponse, RightsizingScanWorkload } from './api/client';
+export type { GroupingMode } from '@skyhook-io/k8s-ui/types/core';
 export type { ClusterLoadState } from './types/clusterLoadState';
 export {
   setApiBase,
