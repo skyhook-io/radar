@@ -1196,7 +1196,9 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 		}
 	}
 
-	// Job problems: stuck active (running > 1h with no completions)
+	// Job problems: a terminal failure condition, or a Job being deleted. Age
+	// alone is not failure — a long-running active Job (training, migration, big
+	// batch) with no failure evidence is in progress, not failed.
 	if cache.Jobs() != nil {
 		for _, job := range jobs {
 			if det, ok := terminatingProblem("Job", "batch", job, now); ok {
@@ -1231,25 +1233,6 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				setDetectionOnset(&detection, now, cond.LastTransitionTime.Time)
 				problems = append(problems, detection)
 				continue
-			}
-			if stuckActiveJob(job, now) {
-				onsetAt := job.CreationTimestamp.Time
-				if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-					onsetAt = job.Status.StartTime.Time
-				}
-				detection := Detection{
-					Kind:              "Job",
-					Namespace:         job.Namespace,
-					Name:              job.Name,
-					Group:             "batch",
-					Severity:          "high",
-					Reason:            fmt.Sprintf("Running for %s with no completions", timeutil.FormatAgeShort(ageDur)),
-					Age:               timeutil.FormatAgeShort(ageDur),
-					AgeSeconds:        int64(ageDur.Seconds()),
-					ResourceCreatedAt: job.CreationTimestamp.Time,
-				}
-				setDetectionOnset(&detection, now, onsetAt)
-				problems = append(problems, detection)
 			}
 		}
 	}

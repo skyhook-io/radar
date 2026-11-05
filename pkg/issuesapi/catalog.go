@@ -105,7 +105,7 @@ var categoryDescription = map[Category]string{
 	CategoryWorkloadDegraded:  "A workload has fewer ready replicas than desired — some pods are unavailable.",
 	CategoryHighRestart:       "A container has restarted many times — unstable even if it's currently running.",
 	CategoryPodEvicted:        "The kubelet evicted a pod because its node ran low on memory, disk, or PIDs, or because the pod exceeded its own ephemeral-storage limit.",
-	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline — or has been running too long with no completions.",
+	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline (activeDeadlineSeconds).",
 	CategoryCronJobFailed:     "A CronJob's recent runs are failing, or its schedule isn't producing successful jobs.",
 	// Configuration
 	CategoryMissingConfigRef:     "A pod references a ConfigMap, Secret, or volume that doesn't exist, so it can't start.",
