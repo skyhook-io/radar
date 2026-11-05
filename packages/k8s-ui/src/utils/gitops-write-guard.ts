@@ -36,6 +36,11 @@ export interface GitOpsWriteTarget {
 
 export type GitOpsWriteLevel = 'none' | 'info' | 'may-revert' | 'will-revert'
 
+/** A rollback replaces the workload's whole pod template. */
+export const ROLLBACK_WRITES: GitOpsWrite[] = [
+  { scope: 'spec', paths: ['spec.template'], description: 'Pod template' },
+]
+
 export interface GitOpsSyncPolicy {
   tool: GitOpsOwnerTool
   auto: boolean | null

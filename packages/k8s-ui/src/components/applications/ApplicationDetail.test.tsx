@@ -808,4 +808,64 @@ describe("ApplicationDetail shell", () => {
     expect(html).toMatch(/<span class="text-sm font-semibold">Degraded<\/span>/);
     expect(html).toContain("Succeeded");
   });
+
+  describe("Deploys", () => {
+    const deploys = { rows: [], rolloutInProgress: false, partial: false, partialReasons: [] };
+
+    it("has no Deploys tab unless the host provides deploys", () => {
+      expect(renderDetail()).not.toContain(">Deploys<");
+      expect(renderDetail({ deploys: null })).toContain(">Deploys<");
+    });
+
+    it("falls back to Overview when a host names Deploys but has none", () => {
+      const html = renderDetail({ initialView: "deploys" });
+
+      expect(html).toContain("Workloads");
+      expect(html).not.toContain("Loading deploys");
+    });
+
+    it("opens on initialView for an uncontrolled host", () => {
+      expect(renderDetail({ initialView: "deploys", deploys })).toContain("No deploys to show.");
+    });
+
+    it("lets a controlled host win over initialView", () => {
+      const html = renderDetail({
+        initialView: "deploys",
+        deploys,
+        selectedView: "overview",
+        onSelectView: () => {},
+      });
+
+      expect(html).not.toContain("No deploys to show.");
+    });
+
+    it("gives a workload scope nothing extra unless the host provides deploys", () => {
+      const contexts: unknown[] = [];
+      renderDetail({
+        app: { ...app, workloads: [app.workloads[0]] },
+        renderWorkload: (_, context) => {
+          contexts.push(context);
+          return null;
+        },
+      });
+
+      expect(contexts).toEqual([{}]);
+    });
+
+    it("reaches a single-workload app as a tab of the workload", () => {
+      const contexts: Array<{ extraTabs?: Array<{ id: string }>; defaultTab?: string }> = [];
+      renderDetail({
+        app: { ...app, workloads: [app.workloads[0]] },
+        deploys: null,
+        initialView: "deploys",
+        renderWorkload: (_, context) => {
+          contexts.push(context);
+          return null;
+        },
+      });
+
+      expect(contexts[0].extraTabs?.map((tab) => tab.id)).toEqual(["deploys"]);
+      expect(contexts[0].defaultTab).toBe("deploys");
+    });
+  });
 });
