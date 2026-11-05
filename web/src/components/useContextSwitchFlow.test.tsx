@@ -29,10 +29,11 @@ const { useContextSwitchFlow } = await import('./useContextSwitchFlow')
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
-let flow: ReturnType<typeof useContextSwitchFlow>
+const seen = vi.fn<(flow: ReturnType<typeof useContextSwitchFlow>) => void>()
+const flow = () => seen.mock.lastCall![0]
 
 function Probe() {
-  flow = useContextSwitchFlow()
+  seen(useContextSwitchFlow())
   return null
 }
 
@@ -47,14 +48,14 @@ const ctx = (name: string, isCurrent: boolean) => ({ name, cluster: name, user: 
 
 describe('useContextSwitchFlow', () => {
   it('picking the cluster you are still on dismisses a refused switch without switching', async () => {
-    await act(() => flow.requestSwitch(ctx('current', true)))
+    await act(() => flow().requestSwitch(ctx('current', true)))
     expect(mocks.setFailedSwitch).toHaveBeenCalledWith(null)
     expect(mocks.startSwitch).not.toHaveBeenCalled()
     expect(mocks.mutateAsync).not.toHaveBeenCalled()
   })
 
   it('picking another cluster still switches', async () => {
-    await act(() => flow.requestSwitch(ctx('staging', false)))
+    await act(() => flow().requestSwitch(ctx('staging', false)))
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ name: 'staging' })
   })
 })
