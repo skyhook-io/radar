@@ -406,6 +406,22 @@ describe('imageVersion', () => {
     expect(rows[0].via).toBe('release 42')
   })
 
+  it('shows a change-cause only on the revision where it changed', () => {
+    const { rows } = buildAppDeploys({
+      workloads: [{
+        ref: { kind: 'Deployment', namespace: 'shop', name: 'api' },
+        revisions: [
+          revision(1, { changeCause: 'release 42' }),
+          revision(2, { changeCause: 'release 42' }),
+          revision(3, { changeCause: 'release 43' }),
+        ],
+      }],
+      anchors: [],
+    })
+    const via = Object.fromEntries(rows.map((row) => [row.revision, row.via]))
+    expect(via).toEqual({ 1: 'release 42', 2: undefined, 3: 'release 43' })
+  })
+
   it("doesn't mention a last list when nothing was ever read", () => {
     const { partialReasons } = buildAppDeploys({
       workloads: [{ ref: { kind: 'Deployment', namespace: 'ns', name: 'api' }, revisions: undefined }],
@@ -421,8 +437,19 @@ describe('imageVersion', () => {
       anchors: [],
       stale: true,
     })
-    expect(rows[0]).toMatchObject({ live: 'unknown', newest: false })
+    expect(rows[0]).toMatchObject({ live: 'unknown', newest: false, stale: true })
     expect(partial).toBe(true)
     expect(partialReasons[0]).toContain("Couldn't refresh")
+  })
+
+  it('leaves rows it can still vouch for unmarked', () => {
+    const { rows } = buildAppDeploys({
+      workloads: [{ ref: { kind: 'Deployment', namespace: 'shop', name: 'api' }, revisions: [revision(1)] }],
+      anchors: [{ type: 'helm', title: 'Helm revision 9', timestamp: '2020-01-01T00:00:00Z' }],
+      sourceRef: { type: 'helm', kind: 'HelmRelease', namespace: 'shop', name: 'api' },
+      stale: true,
+    })
+    expect(rows.find((row) => row.source === 'helm')?.stale).toBeUndefined()
+    expect(rows.find((row) => row.source === 'revision')?.stale).toBe(true)
   })
 })

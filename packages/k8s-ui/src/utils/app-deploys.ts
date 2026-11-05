@@ -29,6 +29,8 @@ export interface AppDeployRow {
   at?: string
   live: boolean | 'unknown'
   newest: boolean
+  /** From the last list read, after a refresh failed: which revision is current isn't known. */
+  stale?: boolean
   status?: string
   /** The source's own message for this deploy. */
   detail?: string
@@ -208,6 +210,7 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
     const anchor = pairing?.anchor
     if (anchor) matched.add(anchor)
     const version = imageVersion(revision.image)
+    const previous = newestFirst[i + 1]
     sortAt = Math.max(sortAt, timeOf(revision.createdAt) ?? -Infinity)
     rows.push({
       sortAt,
@@ -218,7 +221,9 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
         version,
         image: revision.image,
         source: 'revision',
-        via: pairing ? pairedVia(pairing, version) : revision.changeCause,
+        // Kubernetes copies the workload's change-cause onto each new revision,
+        // so a repeat says nothing about this one.
+        via: pairing ? pairedVia(pairing, version) : revision.changeCause !== previous?.changeCause ? revision.changeCause : undefined,
         at: revision.createdAt,
         live: liveOf(ref.kind, revision, revisions),
         newest: revision.isCurrent,
@@ -227,8 +232,8 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
         ready: revision.readyReplicas,
         desired: hasPerRevisionReplicas(ref.kind) ? revision.replicas : revision.isCurrent ? desired : undefined,
         template: revision.template,
-        previousTemplate: newestFirst[i + 1]?.template,
-        previousRevision: newestFirst[i + 1]?.number,
+        previousTemplate: previous?.template,
+        previousRevision: previous?.number,
       },
     })
   }
@@ -272,7 +277,7 @@ export function buildAppDeploys({ workloads, anchors, sourceRef, partialSources,
   }
 
   return {
-    rows: sortable.map(({ row }) => (stale && row.source === 'revision' ? { ...row, live: 'unknown' as const, newest: false } : row)),
+    rows: sortable.map(({ row }) => (stale && row.source === 'revision' ? { ...row, live: 'unknown' as const, newest: false, stale: true } : row)),
     rolloutInProgress: workloads.some((workload) => workload.rolloutActive),
     partial: partialReasons.length > 0,
     partialReasons,

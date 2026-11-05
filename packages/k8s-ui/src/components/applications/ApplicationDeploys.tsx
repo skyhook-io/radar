@@ -90,7 +90,7 @@ function RollbackAction({
   onRollback?: (row: AppDeployRow) => void;
   rollbackHref?: (row: AppDeployRow) => string | undefined;
 }) {
-  if (row.source !== "revision" || row.newest || row.revision === undefined) return null;
+  if (row.source !== "revision" || row.newest || row.stale || row.revision === undefined) return null;
   if (onRollback) {
     return (
       <button

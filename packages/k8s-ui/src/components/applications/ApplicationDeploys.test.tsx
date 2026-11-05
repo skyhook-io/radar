@@ -160,6 +160,17 @@ describe('ApplicationDeploys', () => {
     expect(link?.getAttribute('href')).toBe('/c/one/apps?revision=2')
   })
 
+  it('offers no rollback from a list it could not refresh', async () => {
+    await renderDeploys({
+      deploys: deploys([row({ id: 'a', stale: true }), row({ id: 'b', revision: 1, stale: true })]),
+      onRollback: vi.fn(),
+    })
+    expect(buttons('Roll back')).toHaveLength(0)
+
+    await renderDeploys({ deploys: deploys([row({ stale: true })]), rollbackHref: () => '/c/one/apps' })
+    expect(element.querySelector('a')).toBeNull()
+  })
+
   it('narrows to one workload but keeps source rows', async () => {
     await renderDeploys({
       workload,
