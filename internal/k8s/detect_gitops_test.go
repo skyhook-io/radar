@@ -1405,3 +1405,76 @@ func TestDetectArgoAppProblems_RollbackKeepsSyncHazard(t *testing.T) {
 		t.Errorf("message lost the rollback context: %q", d.Message)
 	}
 }
+
+// TestApplyArgoOperationDiagnosis_CreateNamespaceAlreadySet pins the cluster-wide
+// issues engine's call site: a missing-namespace failure must not re-suggest
+// CreateNamespace=true when the Application already sets it.
+func TestApplyArgoOperationDiagnosis_CreateNamespaceAlreadySet(t *testing.T) {
+	const msg = `one or more objects failed to apply, reason: namespaces "observability" not found (retried 5 times).`
+	const addOptionAdvice = "add the CreateNamespace=true sync option"
+	const optionInSyncOptionsAdvice = "CreateNamespace=true in the Application's syncOptions"
+
+	app := func(createNamespaceSet, remote bool) *unstructured.Unstructured {
+		server := "https://kubernetes.default.svc"
+		if remote {
+			server = "https://remote.example.com"
+		}
+		spec := map[string]any{"destination": map[string]any{"server": server}}
+		if createNamespaceSet {
+			spec["syncPolicy"] = map[string]any{"syncOptions": []any{"CreateNamespace=true"}}
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Application",
+			"metadata":   map[string]any{"name": "secrets", "namespace": "argocd"},
+			"spec":       spec,
+		}}
+	}
+
+	t.Run("set local drops the suggestion, keeps the fix", func(t *testing.T) {
+		d := Detection{}
+		applyArgoOperationDiagnosis(&d, app(true, false), msg)
+		if strings.Contains(d.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("set Cause must not re-suggest the option: %q", d.Cause)
+		}
+		if !strings.Contains(d.Cause, "already sets CreateNamespace=true") {
+			t.Errorf("set Cause should say the option is already set: %q", d.Cause)
+		}
+		if d.RemediationKind != diagnose.RemediationCreateNamespace {
+			t.Errorf("set local should keep the one-click remediation, got %q", d.RemediationKind)
+		}
+	})
+
+	t.Run("set remote drops the suggestion and the fix", func(t *testing.T) {
+		d := Detection{}
+		applyArgoOperationDiagnosis(&d, app(true, true), msg)
+		if strings.Contains(d.Action, addOptionAdvice) {
+			t.Errorf("set remote Action must not re-suggest the option: %q", d.Action)
+		}
+		if !strings.Contains(d.Action, "already sets CreateNamespace=true") {
+			t.Errorf("set remote Action should say the option is already set: %q", d.Action)
+		}
+		if d.RemediationKind != "" {
+			t.Errorf("remote remediation should be stripped, got %q", d.RemediationKind)
+		}
+	})
+
+	t.Run("unset local keeps the suggestion (regression guard)", func(t *testing.T) {
+		d := Detection{}
+		applyArgoOperationDiagnosis(&d, app(false, false), msg)
+		if !strings.Contains(d.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("unset Cause should still advise enabling the option: %q", d.Cause)
+		}
+		if d.RemediationKind != diagnose.RemediationCreateNamespace {
+			t.Errorf("unset local should keep the one-click remediation, got %q", d.RemediationKind)
+		}
+	})
+
+	t.Run("unset remote keeps the add-the-option action", func(t *testing.T) {
+		d := Detection{}
+		applyArgoOperationDiagnosis(&d, app(false, true), msg)
+		if !strings.Contains(d.Action, addOptionAdvice) {
+			t.Errorf("unset remote Action should offer the option: %q", d.Action)
+		}
+	})
+}
