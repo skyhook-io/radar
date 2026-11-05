@@ -943,7 +943,7 @@ export interface FoldAppGroupsOptions<T extends AppGroupFoldEntry> {
    *  authoritative) rather than the single `identity.env` — which the hub can
    *  stale when it joins the same overlay key across clusters. Defaults to the
    *  member's single identity env. */
-  envsOf?: (entry: T) => Array<{ env: string; health: AppHealth }>;
+  envsOf?: (entry: T) => Array<{ env: string; health: AppHealth; version?: string }>;
 }
 
 export function foldAppGroups<T extends AppGroupFoldEntry>(
@@ -1002,16 +1002,16 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
       // A fleet member spans several per-cluster envs; the host supplies them so
       // the ladder reflects every env, not just the member's (possibly stale)
       // single identity env. Default: the one identity env.
-      const slices = options.envsOf?.(m) ?? [
-        { env: m.row.identity!.env, health: m.health },
-      ];
+      const slices: Array<{ env: string; health: AppHealth; version?: string }> =
+        options.envsOf?.(m) ?? [{ env: m.row.identity!.env, health: m.health }];
       for (const slice of slices) {
         const cur = cellMap.get(slice.env);
+        const version = slice.version ?? v;
         if (!cur) {
           cellMap.set(slice.env, {
             env: slice.env,
             health: slice.health,
-            version: v,
+            version,
             count: 1,
             firstKey: m.row.key,
           });
@@ -1019,8 +1019,8 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
           cur.count++;
           if ((HEALTH_RANK[slice.health] ?? 0) > (HEALTH_RANK[cur.health] ?? 0))
             cur.health = slice.health;
-          if (v && (!cur.version || compareVersions(v, cur.version) === 1))
-            cur.version = v;
+          if (version && (!cur.version || compareVersions(version, cur.version) === 1))
+            cur.version = version;
         }
       }
       if ((HEALTH_RANK[m.health] ?? 0) > (HEALTH_RANK[health] ?? 0))
@@ -1696,6 +1696,8 @@ export interface EnvSlice {
   env: string;
   health: AppHealth;
   inferred: boolean;
+  /** The version running in this env, when the host knows it per env. */
+  version?: string;
 }
 
 /** A cluster this fleet row's app runs in. */
@@ -1714,6 +1716,16 @@ export interface FleetAppEntry extends AppEntryBase {
 }
 
 export type AppEntry = SingleAppEntry | FleetAppEntry;
+
+/** When the app's newest retained revision was created. */
+export function latestRevisionAtOf(app: Pick<AppRow, "workloads">): string | undefined {
+  let latest: string | undefined;
+  for (const workload of app.workloads ?? []) {
+    const at = workload.latestRevisionAt;
+    if (at && (!latest || Date.parse(at) > Date.parse(latest))) latest = at;
+  }
+  return latest;
+}
 
 /** Build a single-cluster list entry from a wire row. The env is resolved via
  *  the server's identity classification (authoritative) with a namespace

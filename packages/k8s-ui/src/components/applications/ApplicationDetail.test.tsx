@@ -890,4 +890,32 @@ describe("ApplicationDetail shell", () => {
       expect(html).toContain("Degraded in prod · healthy in dev");
     });
   });
+
+  describe("host slots", () => {
+    it("renders headerActions and overview checks where given", () => {
+      const html = renderDetail({
+        headerActions: <button>Follow</button>,
+        renderOverviewChecks: () => <div>Audit checks</div>,
+      });
+
+      expect(html).toContain("Follow");
+      expect(html).toContain("Audit checks");
+    });
+
+    it("renders the same page with every new prop absent", () => {
+      const plain = renderDetail();
+      const withNoOps = renderDetail({
+        headerActions: undefined,
+        renderOverviewChecks: undefined,
+        showVerdict: false,
+        deploys: undefined,
+        initialView: undefined,
+        onRollback: undefined,
+        rollbackHref: undefined,
+      });
+
+      expect(withNoOps).toBe(plain);
+      expect(plain).not.toContain(">Deploys<");
+    });
+  });
 });
