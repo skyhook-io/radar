@@ -16,7 +16,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 // Opens the "drawer" twice on one query client and counts RBAC requests.
 async function requestsOverTwoOpens(status: number, error: string) {
-  const fetchMock = vi.fn(async (_input: RequestInfo | URL) =>
+  const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () =>
     new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } }))
   vi.stubGlobal('fetch', fetchMock)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })

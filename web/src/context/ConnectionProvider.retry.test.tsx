@@ -10,12 +10,13 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
 let container: HTMLDivElement
 let retries: number
-let latest: ReturnType<typeof useConnection> | null
+const seen = vi.fn<(value: ReturnType<typeof useConnection>) => void>()
+const latest = () => seen.mock.lastCall?.[0]
 let focused: boolean
 let pollContext: string
 
 function Probe() {
-  latest = useConnection()
+  seen(useConnection())
   return null
 }
 
@@ -32,7 +33,7 @@ async function advance(ms: number) {
 beforeEach(async () => {
   vi.useFakeTimers()
   retries = 0
-  latest = null
+  seen.mockClear()
   focused = false
   pollContext = 'prod'
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused)
@@ -84,8 +85,8 @@ const FIVE_ATTEMPTS_MS = 190_000
 
 describe('ConnectionProvider auto-retry', () => {
   it('carries the outage start from the server', () => {
-    expect(latest?.connection.state).toBe('disconnected')
-    expect(latest?.connection.disconnectedAt).toBe('2026-10-30T14:02:00Z')
+    expect(latest()?.connection.state).toBe('disconnected')
+    expect(latest()?.connection.disconnectedAt).toBe('2026-10-30T14:02:00Z')
   })
 
   it('keeps retrying every minute while someone is looking', async () => {
@@ -166,7 +167,7 @@ describe('ConnectionProvider auto-retry across contexts and background windows',
     pollContext = 'staging'
     await advance(30_000)
     await advance(100)
-    expect(latest?.connection.context).toBe('staging')
+    expect(latest()?.connection.context).toBe('staging')
     const before = retries
     // A fresh outage retries after the initial 10s, not the unattended 5 minutes.
     await advance(10_500)
