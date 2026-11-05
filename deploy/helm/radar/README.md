@@ -556,7 +556,7 @@ Limits:
 - If Radar's ServiceAccount cannot read a listed namespace when Radar starts (its RoleBinding is missing, say), or cannot read a kind there that it reads in the other listed namespaces, Radar reports its view as incomplete and Radar Cloud stops evaluating alerts for the cluster. As with any grant change, Radar notices a removed grant only when it restarts.
 - Radar's ServiceAccount must not be able to list namespaces cluster-wide. If a binding added outside the chart lets it, Radar logs a warning and is not limited.
 
-The chart refuses Radar's own namespace in the list when auth or Radar Cloud is on, since people with access there could use Radar's ServiceAccount, which can impersonate anyone. It also refuses `cloud.defaultRbac.nodeOps`, and `--namespace-scope` or `--rbac-namespaces` in `extraArgs`. Leave `rbac.namespaces` unset for cluster-wide access. The chart refuses an empty list, which would name no namespace. To return an existing release to cluster-wide access, remove the setting with `--set rbac.namespaces=null`.
+The chart refuses Radar's own namespace in the list when auth or Radar Cloud is on, since people with access there could use Radar's ServiceAccount, which can impersonate anyone. It also refuses `cloud.defaultRbac.nodeOps`, and `--namespace-scope` or `--rbac-namespaces` in `extraArgs`. It also refuses an empty list; leave `rbac.namespaces` unset for cluster-wide access.
 
 ### Default Permissions (Core K8s Resources)
 
