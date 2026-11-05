@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -363,10 +364,27 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 	groups := map[string]*routeGroup{}
 	var order []string
 
+	// A controller can leave a status.parents entry behind after its parent was
+	// removed from spec.parentRefs; that stale entry must not raise a warning
+	// while the route's current parent is healthy. Keep only status entries that
+	// still match a current spec.parentRef. Exception: a route attaching to
+	// default Gateways (spec.useDefaultGateways) has parents in status that are
+	// intentionally absent from spec.parentRefs, so filtering there would hide
+	// real failures — leave those routes unfiltered.
+	routeNS := u.GetNamespace()
+	specParents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+	filterToSpec := !routeUsesDefaultGateways(u)
+
 	for _, parent := range parents {
 		pm, ok := parent.(map[string]any)
 		if !ok {
 			continue
+		}
+		if filterToSpec {
+			ref, _ := pm["parentRef"].(map[string]any)
+			if !configrefs.GatewayParentRefInSpec(ref, specParents, routeNS) {
+				continue
+			}
 		}
 		gwLabel, gwKey, section := gatewayParentRef(pm)
 		conds, _ := pm["conditions"].([]any)
@@ -435,6 +453,15 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 		out = append(out, issue)
 	}
 	return out
+}
+
+// routeUsesDefaultGateways reports whether the route opts into attaching to
+// default Gateways (Gateway API spec.useDefaultGateways). Such routes record
+// parents in status that are not listed in spec.parentRefs, so the stale-parent
+// filter is bypassed for them to avoid suppressing real failures.
+func routeUsesDefaultGateways(u *unstructured.Unstructured) bool {
+	v, found, _ := unstructured.NestedString(u.Object, "spec", "useDefaultGateways")
+	return found && v != "" && v != "None"
 }
 
 // gatewayRouteMessage renders a collapsed gateway group's message. When every

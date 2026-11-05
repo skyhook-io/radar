@@ -429,6 +429,11 @@ func TestDetectGenericCRDIssues_GatewayRouteParentConditions(t *testing.T) {
 			routeGVR: {{
 				Object: map[string]any{
 					"metadata": map[string]any{"name": "web", "namespace": "prod"},
+					"spec": map[string]any{
+						"parentRefs": []any{
+							map[string]any{"name": "edge", "namespace": "infra", "sectionName": "https"},
+						},
+					},
 					"status": map[string]any{
 						"parents": []any{
 							map[string]any{
@@ -465,10 +470,13 @@ func TestDetectGenericCRDIssues_GatewayRouteParentConditions(t *testing.T) {
 }
 
 // routeWithParents builds an HTTPRoute whose status.parents each carry one
-// Accepted=False condition with the given (sectionName, reason, message).
+// Accepted=False condition with the given (sectionName, reason, message). The
+// route's spec.parentRefs mirrors each status parent exactly, so every entry is
+// a current parent and the stale-parent filter keeps it.
 func routeWithParents(gw string, listeners []struct{ section, reason, message string }) *unstructured.Unstructured {
 	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
 	parents := make([]any, len(listeners))
+	specParents := make([]any, len(listeners))
 	for i, l := range listeners {
 		parents[i] = map[string]any{
 			"parentRef": map[string]any{"name": gw, "namespace": "infra", "sectionName": l.section},
@@ -476,9 +484,11 @@ func routeWithParents(gw string, listeners []struct{ section, reason, message st
 				map[string]any{"type": "Accepted", "status": "False", "reason": l.reason, "message": l.message, "lastTransitionTime": now},
 			},
 		}
+		specParents[i] = map[string]any{"name": gw, "namespace": "infra", "sectionName": l.section}
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{"name": "web", "namespace": "prod"},
+		"spec":     map[string]any{"parentRefs": specParents},
 		"status":   map[string]any{"parents": parents},
 	}}
 }
@@ -618,6 +628,145 @@ func TestDetectGatewayRouteParentIssues_StableIdentityAcrossListenerCount(t *tes
 	})
 	if one.ID == "" || one.ID != two.ID {
 		t.Fatalf("issue ID must be stable as listeners join the same fault: one=%q two=%q", one.ID, two.ID)
+	}
+}
+
+// httpRouteObject builds an HTTPRoute from explicit spec.parentRefs and
+// status.parents (each given as raw maps), plus optional metadata.generation.
+// spec is written independently of status so membership assertions are not
+// tautological.
+func httpRouteObject(generation int64, specParentRefs, statusParents []any) *unstructured.Unstructured {
+	meta := map[string]any{"name": "web", "namespace": "prod"}
+	if generation > 0 {
+		meta["generation"] = generation
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": meta,
+		"spec":     map[string]any{"parentRefs": specParentRefs},
+		"status":   map[string]any{"parents": statusParents},
+	}}
+}
+
+func httpRouteProvider(route *unstructured.Unstructured) *fakeProvider {
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	return &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{routeGVR: {route}},
+		kinds:      map[schema.GroupVersionResource]string{routeGVR: "HTTPRoute"},
+		namespaced: map[schema.GroupVersionResource]bool{routeGVR: true},
+	}
+}
+
+func failedParent(gw, section string) map[string]any {
+	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	ref := map[string]any{"name": gw, "namespace": "infra"}
+	if section != "" {
+		ref["sectionName"] = section
+	}
+	return map[string]any{
+		"parentRef": ref,
+		"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "False", "reason": "NoMatchingParent", "message": "No listeners match this parent ref", "lastTransitionTime": now},
+		},
+	}
+}
+
+func acceptedParent(gw, section string) map[string]any {
+	ref := map[string]any{"name": gw, "namespace": "infra"}
+	if section != "" {
+		ref["sectionName"] = section
+	}
+	return map[string]any{
+		"parentRef":  ref,
+		"conditions": []any{map[string]any{"type": "Accepted", "status": "True", "reason": "Accepted"}},
+	}
+}
+
+// A status entry for a parentRef no longer in spec is stale and must not raise a
+// warning while the current parent is accepted (the skh-nonprod radar-hub case).
+func TestDetectGatewayRouteParentIssues_StaleParentDropped(t *testing.T) {
+	route := httpRouteObject(0,
+		[]any{map[string]any{"name": "gw", "namespace": "infra", "sectionName": "current"}},
+		[]any{failedParent("gw", "stale"), acceptedParent("gw", "current")},
+	)
+	got := Compose(httpRouteProvider(route), Filters{})
+	if len(got) != 0 {
+		t.Fatalf("stale parent entry must produce no issue, got %d: %+v", len(got), got)
+	}
+}
+
+// When spec widens a scoped parentRef to an unscoped one, the status entry for
+// the old scope is stale. Exact (non-wildcard) matching must drop it rather than
+// let the unscoped spec ref re-admit it.
+func TestDetectGatewayRouteParentIssues_ScopedReplacedByUnscopedDropsOldScope(t *testing.T) {
+	route := httpRouteObject(0,
+		[]any{map[string]any{"name": "gw", "namespace": "infra"}},
+		[]any{failedParent("gw", "old"), acceptedParent("gw", "")},
+	)
+	got := Compose(httpRouteProvider(route), Filters{})
+	if len(got) != 0 {
+		t.Fatalf("old-scope entry must be dropped under exact matching, got %d: %+v", len(got), got)
+	}
+}
+
+// A False condition on a CURRENT parent still raises a warning even when its
+// observedGeneration lags the route generation — membership is spec-only, never
+// an observedGeneration filter.
+func TestDetectGatewayRouteParentIssues_CurrentParentOlderGenerationStillEmits(t *testing.T) {
+	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	staleGenParent := map[string]any{
+		"parentRef": map[string]any{"name": "gw", "namespace": "infra", "sectionName": "current"},
+		"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "False", "reason": "NoMatchingParent", "message": "No listeners match this parent ref", "observedGeneration": int64(3), "lastTransitionTime": now},
+		},
+	}
+	route := httpRouteObject(5,
+		[]any{map[string]any{"name": "gw", "namespace": "infra", "sectionName": "current"}},
+		[]any{staleGenParent},
+	)
+	got := Compose(httpRouteProvider(route), Filters{})
+	if len(got) != 1 {
+		t.Fatalf("current parent with older observedGeneration must still emit, got %d: %+v", len(got), got)
+	}
+	if got[0].Reason != "Accepted: NoMatchingParent" {
+		t.Fatalf("reason = %q, want Accepted: NoMatchingParent", got[0].Reason)
+	}
+}
+
+// A route attaching to default Gateways records parents in status that are not
+// listed in spec.parentRefs; the stale-parent filter is bypassed so their real
+// failures are not suppressed.
+func TestDetectGatewayRouteParentIssues_UseDefaultGatewaysBypassesFilter(t *testing.T) {
+	route := httpRouteObject(0, nil, []any{failedParent("default-gw", "https")})
+	route.Object["spec"].(map[string]any)["useDefaultGateways"] = "All"
+	got := Compose(httpRouteProvider(route), Filters{})
+	if len(got) != 1 {
+		t.Fatalf("useDefaultGateways route must keep its failure, got %d: %+v", len(got), got)
+	}
+}
+
+// A stale failed entry and a current failed entry on the same gateway: only the
+// current one survives the filter and shapes the issue.
+func TestDetectGatewayRouteParentIssues_StaleAndCurrentBothFailing(t *testing.T) {
+	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	currentFailed := map[string]any{
+		"parentRef": map[string]any{"name": "gw", "namespace": "infra", "sectionName": "current"},
+		"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "False", "reason": "NoMatchingListenerHostname", "message": "no hostname intersections", "lastTransitionTime": now},
+		},
+	}
+	route := httpRouteObject(0,
+		[]any{map[string]any{"name": "gw", "namespace": "infra", "sectionName": "current"}},
+		[]any{failedParent("gw", "stale"), currentFailed},
+	)
+	got := Compose(httpRouteProvider(route), Filters{})
+	if len(got) != 1 {
+		t.Fatalf("only the current listener's failure should surface, got %d: %+v", len(got), got)
+	}
+	if got[0].Reason != "Accepted: NoMatchingListenerHostname" {
+		t.Fatalf("reason = %q, want the current listener's Accepted: NoMatchingListenerHostname", got[0].Reason)
+	}
+	if strings.Contains(got[0].Message, "No listeners match this parent ref") {
+		t.Fatalf("stale listener detail must not leak into the message: %q", got[0].Message)
 	}
 }
 
