@@ -11,6 +11,7 @@ import (
 
 func TestApplyMountExcludesExecTools(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	for _, base := range []string{"", "/radar"} {
 		t.Run(base, func(t *testing.T) {
 			srv := server.New(server.Config{BasePath: base, MCPHandler: NewHandler(), MCPApplyHandler: NewApplyHandler()})

@@ -82,13 +82,13 @@ it('keeps selector Services free of slice lookups on an older Radar', () => {
   expect(html).not.toContain('EndpointSlices')
 })
 
-it('only offers in-cluster curl for selector-backed Services', () => {
+it('preserves in-cluster UI curl for all Service types', () => {
   mock.local = false
   const ports = [{ port: 80, name: 'http', protocol: 'TCP' }]
   expect(render({ ...service, spec: { ...service.spec, ports } })).toContain('Service curl')
-  expect(render({ ...service, spec: { ports } })).not.toContain('Service curl')
-  expect(render({ ...service, spec: { type: 'ExternalName', externalName: 'example.org', ports } })).not.toContain('Service curl')
-  expect(render({ ...service, spec: { ...service.spec, clusterIP: 'None', ports } })).not.toContain('Service curl')
+  expect(render({ ...service, spec: { ports } })).toContain('Service curl')
+  expect(render({ ...service, spec: { type: 'ExternalName', externalName: 'example.org', ports } })).toContain('Service curl')
+  expect(render({ ...service, spec: { ...service.spec, clusterIP: 'None', ports } })).toContain('Service curl')
   mock.local = true
   expect(render({ ...service, spec: { ...service.spec, ports } })).not.toContain('Service curl')
 })

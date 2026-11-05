@@ -13,6 +13,7 @@ import (
 
 func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	httpServer := httptest.NewServer(NewApplyHandler())
 	defer httpServer.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

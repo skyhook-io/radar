@@ -37,7 +37,7 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   }, [])
   const spec = data.spec || {}
   const hasNoSelector = !spec.selector || Object.keys(spec.selector).length === 0
-  const showCurl = !isLocal && spec.type !== 'ExternalName' && spec.clusterIP !== 'None' && !hasNoSelector
+  const showCurl = !isLocal
   const canListEndpointSlices = Boolean(namespace && serviceName && spec.type !== 'ExternalName')
   const serviceSlices = useServiceEndpointSlices(namespace, serviceName, canListEndpointSlices)
   // A Radar without the per-Service endpoint keeps its earlier behavior: only
@@ -66,11 +66,10 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
       endpointSlicesError={(legacy ? namespaceSlicesError : serviceSlices.error)?.message}
       endpointSlicesTruncated={!legacy && serviceSlices.data?.truncated}
       onNavigate={onNavigate}
-      renderPortAction={({ port, name, appProtocol, protocol, ...serviceFacts }) => (
+      renderPortAction={({ port, name, appProtocol, protocol }) => (
         <>
           {showCurl && isHttpishPort(port, name, appProtocol, protocol) && (
             <CurlButton
-              service={serviceFacts}
               active={curl?.port === port && !curl.closing}
               onClick={() => {
                 if (curl?.port === port && !curl.closing) closeCurl()

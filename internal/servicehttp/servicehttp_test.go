@@ -274,6 +274,20 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 			} else if err != nil || got.Status != 503 || got.Body != "application says unavailable" || calls != 1 {
 				t.Fatalf("response=%+v err=%v calls=%d", got, err, calls)
 			}
+
+			if tc.allowed && tc.protocols == nil {
+				uiCalls := 0
+				_, uiErr := do(auth.ContextWithUser(t.Context(), &auth.User{Username: "alice"}), Request{Namespace: "team-a", Name: "app", Port: "8080", Path: "/health"}, func(_ context.Context, target, host string) (Response, error) {
+					uiCalls++
+					if target != "http://app.team-a.svc.cluster.local:8080/health" || host != "app.team-a.svc.cluster.local" {
+						t.Errorf("UI target: %s host=%s", target, host)
+					}
+					return Response{Status: 200}, nil
+				}, false)
+				if uiErr != nil || uiCalls != 1 {
+					t.Fatalf("UI Service reachability changed: %v calls=%d", uiErr, uiCalls)
+				}
+			}
 		})
 	}
 }

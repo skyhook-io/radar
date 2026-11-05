@@ -103,14 +103,15 @@ using `/mcp` must be updated. Startup output and `/api/capabilities`
 
 ## curl_service
 
-With `--mcp-exec-tools` enabled, external MCP clients can use `curl_service` for
+With `--mcp-http-tools` enabled (Helm `mcp.httpTools: true`), external MCP clients can use `curl_service` for
 one HTTP GET to a named Service from in-cluster Radar. It shares the UI's Service
 curl implementation and checks the caller's `get services/proxy` permission before
 accessing the Service. A listener without auth checks Radar's own ServiceAccount
 permission instead; operators must grant `get services/proxy` to Radar explicitly
 (the default chart does not grant it). The no-auth browser UI retains its existing
 operator access. Only selector-backed Services with a ClusterIP are allowed; ExternalName, headless
-and manually routed Services are refused, including in the browser UI. Radar dials
+and manually routed Services are refused by MCP. The browser UI preserves its
+existing DNS-based access to those Service types. MCP dials
 the validated IP rather than resolving DNS, preserving the Service Host header and TLS name. Namespace RBAC
 is not network isolation: granting `services/proxy` delegates Radar-to-Service network
 access, and anyone able to create EndpointSlices, directly or through a GitOps controller, can alter where a Service routes. AppProject and network policy constraints must account for controller-mediated changes too. It sends no Kubernetes credentials, accepts no authentication

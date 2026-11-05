@@ -471,6 +471,7 @@ func main() {
 		MCPEnabled:                  mcpEnabled,
 		MCPReadOnly:                 mcpMode.ReadOnly,
 		MCPExecTools:                mcpFlags.ExecToolsEnabled(),
+		MCPHTTPTools:                mcpFlags.HTTPToolsEnabled(),
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,
@@ -505,6 +506,10 @@ func main() {
 			OIDCBackchannelLogout:     *authOIDCBackchannelLogout,
 			OIDCEnablePKCE:            *authOIDCEnablePKCE,
 		},
+	}
+
+	if (*mcpCatalogOnly || *mcpCatalogStdio) && !cfg.FakeInCluster {
+		cfg.MCPHTTPTools = false
 	}
 
 	// Set global flags

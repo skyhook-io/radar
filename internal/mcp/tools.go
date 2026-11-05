@@ -722,6 +722,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 
+	if includeExec && httpToolsEnabled.Load() && k8s.IsInCluster() {
+		registerHTTPTools(server, paramRegistry, &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)})
+	}
 	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
 	if includeExec && execToolsEnabled.Load() {
 		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{

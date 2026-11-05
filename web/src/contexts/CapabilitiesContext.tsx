@@ -44,6 +44,7 @@ const restrictedCapabilities: Capabilities = {
   },
   mcpEnabled: false,
   mcpExecTools: false,
+  mcpHttpTools: false,
   deployment: { mode: 'local' },
 }
 

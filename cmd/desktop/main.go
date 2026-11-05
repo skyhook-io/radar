@@ -228,6 +228,7 @@ func main() {
 		MCPEnabled:                mcpMode.Enabled,
 		MCPReadOnly:               mcpMode.ReadOnly,
 		MCPExecTools:              mcpFlags.ExecToolsEnabled(),
+		MCPHTTPTools:              mcpFlags.HTTPToolsEnabled(),
 		AIHistory:                 fileCfg.AIHistoryOr(true),
 		AIHistoryDBPath:           fileCfg.AIHistoryDBPath,
 	}

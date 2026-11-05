@@ -14,6 +14,7 @@ import (
 
 func TestApplyServerDoesNotExposeDelete(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	ctx := context.Background()
 	server := newApplyServer()
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "test"}, nil)

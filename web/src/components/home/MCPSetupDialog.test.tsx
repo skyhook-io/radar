@@ -53,11 +53,11 @@ describe('MCP setup in read-only mode', () => {
     expect(html).not.toContain('--mcp-exec-tools')
   })
 
-  it('shows exec and counts it only when enabled', () => {
+  it('shows exec without enabling HTTP', () => {
     const html = renderToStaticMarkup(<MCPSetupDialog open execTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('exec_pod')
-    expect(html).toContain('curl_service')
-    expect(html).toContain(`${MCP_TOOL_CATALOG.length - 1} tools`)
+    expect(html).not.toContain('curl_service')
+    expect(html).toContain(`${MCP_TOOL_CATALOG.length - 2} tools`)
     expect(html.indexOf('exec_pod')).toBeGreaterThan(html.indexOf('get_workload_logs'))
   })
 
@@ -146,4 +146,13 @@ describe('MCP setup prompt tip', () => {
       host.remove()
     }
   })
+})
+
+it('shows HTTP independently of exec', () => {
+ const html = renderToStaticMarkup(<MCPSetupDialog open httpTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+ expect(html).toContain('curl_service')
+ expect(html).not.toContain('exec_pod')
+ expect(html).toContain(`${MCP_TOOL_CATALOG.length - 2} tools`)
+ const readOnly = renderToStaticMarkup(<MCPSetupDialog open readOnly httpTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
+ expect(readOnly).not.toContain('curl_service')
 })

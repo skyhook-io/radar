@@ -36,6 +36,7 @@ var toolNameInCatalog = regexp.MustCompile(`(?m)^\s*name:\s*'([a-z][a-z0-9_]*)'`
 // through that dialog.
 func TestSetupDialogCoversAllTools(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	registered := map[string]bool{}
 	for _, tool := range listRegisteredTools(t) {
 		registered[tool.Name] = true
@@ -282,6 +283,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			previous := execToolsEnabled.Load()
 			SetExecToolsEnabled(enabled)
+			if enabled {
+				enableHTTPToolsForTest(t)
+			}
 			t.Cleanup(func() { SetExecToolsEnabled(previous) })
 			budget := maxCatalogBytes
 			// Optional exec_pod and curl_service use 3,595 description/schema bytes.
@@ -438,6 +442,7 @@ func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
 
 func TestRegisteredToolAnnotations(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	tools := listRegisteredTools(t)
 	writeTools := map[string]bool{
 		"manage_workload": true,
@@ -509,6 +514,7 @@ var writeToolNames = []string{
 // mutating tool. If a tool is reclassified, this fails until the lists agree.
 func TestReadOnlyServerExcludesWriteTools(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	ro := map[string]bool{}
 	for _, tool := range listRegisteredToolsWith(t, false) {
 		ro[tool.Name] = true

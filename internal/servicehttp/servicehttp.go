@@ -170,7 +170,8 @@ type Error struct {
 func (e *Error) Error() string { return e.Message }
 
 // Do issues a single server-side GET to an in-cluster Service by
-// dialing its validated ClusterIP while preserving its Service hostname. This is the Cloud-safe stand-in for
+// dialing its Service hostname. This preserves UI support for headless, alias and
+// manually routed Services. This is the Cloud-safe stand-in for
 // port-forward when the question is "what does this endpoint return": the request
 // originates in-cluster and the response flows back to the browser. Critically it
 // dials the Service directly rather than via the apiserver services/proxy — the
@@ -181,13 +182,14 @@ func Do(ctx context.Context, req Request) (Response, error) {
 	return do(ctx, req, requestService, false)
 }
 
-// DoForMCP adds ServiceAccount authorization on a no-auth agent listener.
+// DoForMCP requires a selector-backed ClusterIP Service and adds ServiceAccount
+// authorization on a no-auth agent listener. Service routing is not tenant isolation.
 // Signed-in users have the same caller authorization on both transports.
 func DoForMCP(ctx context.Context, req Request) (Response, error) {
 	return do(ctx, req, requestService, true)
 }
 
-func do(ctx context.Context, req Request, send func(context.Context, string, string) (Response, error), requireServiceAccountPermission bool) (Response, error) {
+func do(ctx context.Context, req Request, send func(context.Context, string, string) (Response, error), mcpRequest bool) (Response, error) {
 	// Direct dial only works from inside the cluster network (Cloud / in-cluster).
 	// Locally you'd port-forward instead.
 	if !k8s.IsInCluster() {
@@ -227,11 +229,11 @@ func do(ctx context.Context, req Request, send func(context.Context, string, str
 		return Response{}, &Error{Status: http.StatusBadRequest, Message: "invalid path"}
 	}
 
-	if allowed, err := authorizeCurl(ctx, req.Namespace, req.Name, requireServiceAccountPermission); err != nil {
+	if allowed, err := authorizeCurl(ctx, req.Namespace, req.Name, mcpRequest); err != nil {
 		log.Printf("[servicehttp] Failed to authorize curl %s/%s: %v", req.Namespace, req.Name, err)
 		return Response{}, &Error{Status: http.StatusInternalServerError, Message: "authorization check failed"}
 	} else if !allowed {
-		if requireServiceAccountPermission && auth.UserFromContext(ctx) == nil {
+		if mcpRequest && auth.UserFromContext(ctx) == nil {
 			return Response{}, &Error{Status: http.StatusForbidden, Message: "Radar's ServiceAccount lacks get services/proxy on this Service; ask the operator to configure that permission."}
 		}
 		return Response{}, &Error{Status: http.StatusForbidden, Message: "You don't have permission to reach this Service (requires get services/proxy)."}
@@ -251,7 +253,7 @@ func do(ctx context.Context, req Request, send func(context.Context, string, str
 	}
 	// Reject aliases and manual routing; selectors are not a network-isolation
 	// boundary. EndpointSlice writers still control where a Service routes.
-	if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
+	if mcpRequest && (svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0) {
 		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service curl requires a selector-backed Service; ExternalName and manually routed Services are not supported"}
 	}
 	matchedPort := int32(-1)
@@ -265,14 +267,17 @@ func do(ctx context.Context, req Request, send func(context.Context, string, str
 		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service has no TCP port with that number; HTTP requires TCP"}
 	}
 
-	// Bind the dial to the validated Service IP, not a separately cached DNS
-	// record that might still alias an earlier ExternalName target.
-	ip := net.ParseIP(svc.Spec.ClusterIP)
-	if ip == nil {
-		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service curl requires a ClusterIP; use exec_pod or port-forward for headless Services"}
-	}
 	host := fmt.Sprintf("%s.%s.svc.cluster.local", svc.Name, svc.Namespace)
-	target := scheme + "://" + net.JoinHostPort(ip.String(), strconv.Itoa(int(matchedPort))) + path
+	dialHost := host
+	if mcpRequest {
+		// MCP pins the Service IP rather than following aliases through DNS.
+		ip := net.ParseIP(svc.Spec.ClusterIP)
+		if ip == nil {
+			return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service curl requires a ClusterIP; use the Radar UI or port-forward for headless Services"}
+		}
+		dialHost = ip.String()
+	}
+	target := scheme + "://" + net.JoinHostPort(dialHost, strconv.Itoa(int(matchedPort))) + path
 	return send(ctx, target, host)
 }
 

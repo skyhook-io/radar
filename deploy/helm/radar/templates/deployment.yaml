@@ -209,6 +209,9 @@ spec:
             {{- if .Values.disableExec }}
             - --disable-exec
             {{- end }}
+            {{- if .Values.mcp.httpTools }}
+            - --mcp-http-tools
+            {{- end }}
             {{- if .Values.mcp.execTools }}
             - --mcp-exec-tools
             {{- end }}

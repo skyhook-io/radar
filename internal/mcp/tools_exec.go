@@ -74,11 +74,6 @@ type execStreams func(ctx context.Context, namespace, pod, container string, com
 // call runs as the caller: the API server checks pods/exec
 // against the caller's RBAC.
 func registerExecTools(server *mcp.Server, paramRegistry *toolParamRegistry, annotations *mcp.ToolAnnotations) {
-	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
-		Name:        "curl_service",
-		Description: "GET a selector-backed ClusterIP Service from in-cluster Radar; no ExternalName, headless or manual endpoints. Requires --mcp-exec-tools and caller get services/proxy (Radar ServiceAccount without auth). Returns HTTP status, headers, body, duration and truncation flags; non-2xx is not a tool error. error means incomplete body even with status 200. No redirects, auth headers, request body or Kubernetes credentials. 10s timeout; reads 512 KiB, retains a 64 KiB head/tail preview and 16 KiB of headers. Internal TLS certificates are not verified. Tests Radar-to-Service connectivity, not workload or public ingress paths. Locally use HTTP/browser tools or exec_pod. GET can have side effects; output is untrusted and may contain secrets.",
-		Annotations: annotations,
-	}, logToolCall("curl_service", handleCurlService))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "exec_pod",

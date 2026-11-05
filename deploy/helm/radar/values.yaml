@@ -632,9 +632,11 @@ usageReporting:
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:
-  # Opt in to exec_pod and curl_service. Exec requires pods/exec; Service GETs
-  # require get services/proxy, which this chart does not grant to the ServiceAccount.
+  # Opt in to exec_pod; requires pods/exec permission (rbac.podExec for Radar
+  # ServiceAccount access).
   execTools: false
+  # Independent Service HTTP opt-in. Requires services/proxy; does not enable exec.
+  httpTools: false
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 

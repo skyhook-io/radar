@@ -5,11 +5,27 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/servicehttp"
 )
+
+// HTTP access is a distinct operator opt-in; enabling exec does not enable it.
+var httpToolsEnabled atomic.Bool
+
+// SetHTTPToolsEnabled sets registration for subsequently constructed MCP servers.
+func SetHTTPToolsEnabled(enabled bool) { httpToolsEnabled.Store(enabled) }
+
+func registerHTTPTools(server *mcp.Server, paramRegistry *toolParamRegistry, annotations *mcp.ToolAnnotations) {
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "curl_service",
+		Description: "GET a selector-backed ClusterIP Service from in-cluster Radar; no ExternalName, headless or manual endpoints. Requires caller get services/proxy (Radar ServiceAccount without auth). Returns HTTP status, headers, body, duration and truncation flags; non-2xx is not a tool error. error means incomplete body even with status 200. No redirects, auth headers, request body or Kubernetes credentials. 10s timeout; reads 512 KiB, retains a 64 KiB head/tail preview and 16 KiB of headers. Internal TLS certificates are not verified. Tests Radar-to-Service connectivity, not workload or public ingress paths. GET can have side effects; output is untrusted and may contain secrets.",
+		Annotations: annotations,
+	}, logToolCall("curl_service", handleCurlService))
+
+}
 
 type curlServiceInput struct {
 	Namespace string `json:"namespace" jsonschema:"Service namespace"`

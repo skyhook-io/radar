@@ -131,6 +131,7 @@ export interface Capabilities {
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
+  mcpHttpTools?: boolean // Effective in-cluster HTTP registration; services/proxy permission is still required
   mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
   mcpApplicationEvidence?: boolean

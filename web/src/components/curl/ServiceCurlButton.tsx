@@ -9,7 +9,6 @@ import { readErrorBody } from '../../api/httpErrors'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '@skyhook-io/k8s-ui'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
-import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 
 // A port is "curl-able" only if it plausibly speaks HTTP — probing a raw TCP
 // port (Postgres, Redis) with a GET returns noise, so we don't offer it there
@@ -37,8 +36,8 @@ export function defaultPathForPort(port: number, name?: string, appProtocol?: st
 }
 
 export function isHttpishPort(port: number, name?: string, appProtocol?: string, protocol?: string): boolean {
-  // HTTP rides TCP — a UDP port is never a GET target (e.g. statsd "metrics-udp").
-  if ((protocol || '').toUpperCase() === 'UDP') return false
+  // HTTP rides TCP — UDP and SCTP ports are never GET targets (e.g. statsd "metrics-udp").
+  if (protocol && protocol.toUpperCase() !== 'TCP') return false
   const proto = (appProtocol || '').toLowerCase()
   if (proto === 'http' || proto === 'https' || proto === 'http2') return true
   if (proto && proto !== 'tcp') {
@@ -125,14 +124,10 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 // Small toggle button rendered in a port row's action slot. The panel itself
 // renders inline within the port card (see CurlPanel), not as an overlay.
-// Renders nothing for ExternalName, selectorless, headless or unallocated Services.
-export function CurlButton({ active, onClick, service }: {
+export function CurlButton({ active, onClick }: {
   active: boolean
   onClick: () => void
-  /** Service facts supplied by the shared port-card renderer, on every surface. */
-  service: Pick<ServicePortRenderProps, 'serviceType' | 'clusterIP' | 'hasSelector'>
 }) {
-  if (!service.hasSelector || !service.clusterIP || service.clusterIP === 'None' || service.serviceType === 'ExternalName') return null
   return (
     <Tooltip content="Curl this endpoint — GET from inside the cluster">
       <button

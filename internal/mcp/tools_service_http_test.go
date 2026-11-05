@@ -23,7 +23,7 @@ import (
 )
 
 func TestCurlServiceThroughMCPChecksPermissionAndReturnsApplicationResponse(t *testing.T) {
-	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	priorMode := k8s.ForceInCluster
 	k8s.ForceInCluster = true
 	t.Cleanup(func() { k8s.ForceInCluster = priorMode })
@@ -131,4 +131,12 @@ func TestCurlServiceHeaderTruncationDoesNotMarkCompleteBody(t *testing.T) {
 	if !got.HeadersTruncated || got.Truncated || got.Body != "complete" {
 		t.Fatalf("ambiguous truncation: %+v", got)
 	}
+}
+
+func enableHTTPToolsForTest(t *testing.T) {
+	t.Helper()
+	previous, priorMode := httpToolsEnabled.Load(), k8s.ForceInCluster
+	SetHTTPToolsEnabled(true)
+	k8s.ForceInCluster = true
+	t.Cleanup(func() { SetHTTPToolsEnabled(previous); k8s.ForceInCluster = priorMode })
 }

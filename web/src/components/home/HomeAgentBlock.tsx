@@ -14,11 +14,13 @@ export function HomeAgentBlock({
   mcpUrl,
   readOnly,
   execTools,
+  httpTools,
   applicationEvidenceAvailable,
 }: {
   mcpUrl: string
   readOnly?: boolean
   execTools?: boolean
+  httpTools?: boolean
   applicationEvidenceAvailable?: boolean
 }) {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
@@ -54,6 +56,7 @@ export function HomeAgentBlock({
         mcpUrl={mcpUrl}
         readOnly={readOnly}
         execTools={execTools}
+        httpTools={httpTools}
         onInvestigate={showInvestigate && d.available ? () => openComposer(d) : undefined}
         applicationEvidenceAvailable={applicationEvidenceAvailable}
       />
