@@ -19,6 +19,7 @@ func TestCodeWireValues(t *testing.T) {
 		RadarNamespaceNotCollected: "radar_namespace_not_collected",
 		KindSyncPending:            "kind_sync_pending",
 		KindSyncTimedOut:           "kind_sync_timed_out",
+		KindStale:                  "kind_stale",
 		RadarKindNotCollected:      "radar_kind_not_collected",
 		KindUnknown:                "kind_unknown",
 		KindNotWatchable:           "kind_not_watchable",

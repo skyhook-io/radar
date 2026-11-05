@@ -16,6 +16,7 @@ const gapPhrases: [string, (where: string) => string][] = [
   ['radar_credentials_rejected', where => `Kubernetes rejected Radar's credentials for some ${where}`],
   ['radar_forbidden', where => `Radar's collector could not read some ${where}`],
   ['kind_sync_timed_out', where => `some ${where} haven't finished loading`],
+  ['kind_stale', where => `Radar's copy of some ${where} stopped updating`],
   ['radar_namespace_not_collected', where => `Radar doesn't collect this kind in some ${where}`],
 ]
 
@@ -48,6 +49,7 @@ export function resourceCoverageNotice(coverage: ResourceCoverage | undefined, k
     radar_credentials_rejected: `Kubernetes rejected Radar's credentials for ${namedScope}`,
     radar_forbidden: `Radar's collector could not read ${namedScope}`,
     kind_sync_timed_out: `${namedScope} haven't finished loading`,
+    kind_stale: `Radar's copy of ${namedScope} stopped updating`,
     radar_namespace_not_collected: `Radar doesn't collect ${namedScope}`,
   }
   const gap = (canName && phrase && namedPhrases[phrase[0]]) || phrase?.[1](where) || `other ${where} were not read`

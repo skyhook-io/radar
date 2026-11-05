@@ -279,6 +279,8 @@ func typedReason(rc *k8score.ResourceCache, resource, namespace string) readreas
 		return readreason.RadarKindNotCollected
 	case len(a.Uncovered) > 0:
 		return readreason.RadarNamespaceNotCollected
+	case len(a.Stale) > 0:
+		return readreason.KindStale
 	case len(a.Failed) > 0:
 		return readreason.KindSyncTimedOut
 	default:

@@ -49,6 +49,11 @@ const (
 	// does not restart it; if it persists, Radar's connection or
 	// list/watch permissions need attention.
 	KindSyncTimedOut Code = "kind_sync_timed_out"
+	// KindStale: the kind had loaded, but Radar's lists of it have kept
+	// failing for minutes, so its copy stopped updating and Radar can't say
+	// what exists now. Radar keeps trying; if it persists, Radar's access to
+	// the kind or its connection to the API server needs attention.
+	KindStale Code = "kind_stale"
 	// RadarKindNotCollected: Radar's setup leaves the kind out, so it can't say
 	// which exist. Whoever runs Radar can include it, if Radar's identity may
 	// list and watch it.
@@ -137,6 +142,7 @@ var actions = map[Code]Action{
 	RadarNamespaceNotCollected: ActionRadarConfig,
 	KindSyncPending:            ActionRetry,
 	KindSyncTimedOut:           ActionWait,
+	KindStale:                  ActionWait,
 	RadarKindNotCollected:      ActionRadarConfig,
 	KindUnknown:                ActionChangeRequest,
 	KindNotWatchable:           ActionChangeRequest,
@@ -192,7 +198,8 @@ func AffectsWholeCluster(c Code) bool {
 // connection, without which nothing is read; wait for what resolves by
 // itself, since a retry then returns at least part of the answer; act on
 // their own access and namespace targeting; then Radar's identity and setup,
-// a load that is overdue, and what Radar doesn't collect. Search filter
+// a load that is overdue or a copy that stopped updating, and what Radar
+// doesn't collect. Search filter
 // failures, incomplete findings scans and the unclassified read_error come
 // last among failures, so an error names a specific cause when it has one.
 // object_not_found is an
@@ -204,7 +211,7 @@ var precedence = []Code{
 	UserForbidden, UserNoNamespaceAccess, UserNamespaceNotVisible, NamespaceNotFound,
 	OutsideNamespacePin,
 	RadarCredentialsRejected, RadarForbidden, RadarKindNotCollected,
-	KindSyncTimedOut, RadarNamespaceNotCollected, FilterEvalFailed, FindingsScanIncomplete, ReadError,
+	KindSyncTimedOut, KindStale, RadarNamespaceNotCollected, FilterEvalFailed, FindingsScanIncomplete, ReadError,
 	ObjectNotFound,
 }
 

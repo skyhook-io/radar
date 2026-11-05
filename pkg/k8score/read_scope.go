@@ -2,22 +2,46 @@ package k8score
 
 import (
 	"slices"
+	"time"
 
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 )
 
-// kindStore is one informer's store for a kind and that informer's own sync.
+// kindStore is one informer's store for a kind, that informer's own sync,
+// and its lists' progress.
 type kindStore struct {
-	indexer cache.Indexer
-	synced  func() bool
+	indexer  cache.Indexer
+	synced   func() bool
+	progress *listProgress
 }
 
-func (rc *ResourceCache) addKindStore(key, namespace string, inf cache.SharedIndexInformer) {
+func (rc *ResourceCache) addKindStore(key, namespace string, inf cache.SharedIndexInformer, progress *listProgress) {
 	if rc.kindStores[key] == nil {
 		rc.kindStores[key] = map[string]kindStore{}
 	}
-	rc.kindStores[key][namespace] = kindStore{indexer: inf.GetIndexer(), synced: inf.HasSynced}
+	rc.kindStores[key][namespace] = kindStore{indexer: inf.GetIndexer(), synced: inf.HasSynced, progress: progress}
+}
+
+// stale reports a store that had loaded but whose lists have kept failing
+// for ListStaleAfter: it holds a copy that stopped updating.
+func (st kindStore) stale(now time.Time) bool {
+	return st.synced() && st.progress.stale(now)
+}
+
+func (st kindStore) current(now time.Time) bool {
+	return st.synced() && !st.progress.stale(now)
+}
+
+// StoreStale reports whether the store holding namespace's resource ("" for
+// a cluster-scoped kind) had loaded but its lists have kept failing for
+// ListStaleAfter, so a miss there proves nothing.
+func (rc *ResourceCache) StoreStale(resource, namespace string) bool {
+	if rc == nil {
+		return false
+	}
+	st, ok := rc.storeFor(resource, namespace)
+	return ok && st.stale(time.Now())
 }
 
 // storeFor returns the store holding namespace's objects: that namespace's own
@@ -44,7 +68,10 @@ func (rc *ResourceCache) pastDeadline(key string) bool {
 	return tracked
 }
 
-func (rc *ResourceCache) storeReadiness(key string, st kindStore) KindReadiness {
+func (rc *ResourceCache) storeReadiness(key string, st kindStore, stale bool) KindReadiness {
+	if stale {
+		return KindFailed
+	}
 	if st.synced() {
 		return KindReady
 	}
@@ -68,7 +95,8 @@ type KindReadAssessment struct {
 	// Read, Loading, Failed and Uncovered partition the target: Requested, or
 	// for an all-namespaces request on a namespace-scoped collector, the
 	// namespaces it collects. A namespace is Read when the store holding it is
-	// complete now; Failed when its load missed the sync deadline. Uncovered
+	// complete now; Failed when its load missed the sync deadline, or its
+	// store is stale (see Stale). Uncovered
 	// is known from configuration before any sync. An all-namespaces request
 	// on an all-namespaces informer has no partition: Readiness is its state
 	// and Read is nil. So is a kind Radar doesn't watch (Readiness
@@ -76,6 +104,12 @@ type KindReadAssessment struct {
 	// even when empty, because readers take a nil namespace list to mean
 	// every namespace.
 	Read, Loading, Failed, Uncovered []string
+	// Stale names the Failed namespaces whose store had loaded but whose
+	// lists have kept failing for ListStaleAfter: Radar holds a copy of them
+	// that stopped updating. Without a partition, KindStale says the same of
+	// the kind: Readiness is then Failed although every informer has synced.
+	Stale     []string
+	KindStale bool
 	// Complete: every requested namespace is readable now; an empty target is
 	// complete. An all-namespaces request (Requested nil) is complete only on
 	// one informer over every namespace that has loaded: a namespace-scoped
@@ -90,6 +124,17 @@ func (rc *ResourceCache) AssessKindRead(resource string, requested []string) Kin
 	if a.Readiness == KindUnavailable {
 		return a
 	}
+	now := time.Now()
+	if a.Readiness == KindReady {
+		// A stale store of any namespace keeps the whole kind from being
+		// Ready, so readers take it namespace by namespace.
+		for _, st := range rc.kindStores[resource] {
+			if st.stale(now) {
+				a.Readiness, a.KindStale = KindFailed, true
+				break
+			}
+		}
+	}
 	covered := rc.KindNamespaces(resource)
 	if covered == nil {
 		a.AllNamespaces = true
@@ -99,6 +144,9 @@ func (rc *ResourceCache) AssessKindRead(resource string, requested []string) Kin
 		}
 		a.Read = []string{}
 		a.assign(a.Readiness, slices.Clone(requested)...)
+		if a.KindStale {
+			a.Stale = slices.Clone(requested)
+		}
 		a.Complete = len(a.Loading) == 0 && len(a.Failed) == 0
 		return a
 	}
@@ -115,7 +163,11 @@ func (rc *ResourceCache) AssessKindRead(resource string, requested []string) Kin
 		}
 		state := a.Readiness
 		if st, ok := rc.storeFor(resource, namespace); ok {
-			state = rc.storeReadiness(resource, st)
+			stale := st.stale(now)
+			state = rc.storeReadiness(resource, st, stale)
+			if stale {
+				a.Stale = append(a.Stale, namespace)
+			}
 		}
 		a.assign(state, namespace)
 	}
@@ -172,10 +224,11 @@ func (rc *ResourceCache) readableIndexers(resource string, namespaces []string) 
 		return nil, false
 	}
 	stores := rc.kindStores[resource]
+	now := time.Now()
 	var reads []func() []any
 	if namespaces == nil {
 		for _, st := range stores {
-			if !st.synced() {
+			if !st.current(now) {
 				return nil, false
 			}
 			reads = append(reads, st.indexer.List)
@@ -189,7 +242,7 @@ func (rc *ResourceCache) readableIndexers(resource string, namespaces []string) 
 			return nil, false
 		}
 		st, ok := rc.storeFor(resource, namespace)
-		if !ok || !st.synced() {
+		if !ok || !st.current(now) {
 			return nil, false
 		}
 		reads = append(reads, func() []any {
@@ -275,7 +328,7 @@ func (rc *ResourceCache) ReadableObject(resource, namespace, name string) (obj a
 		return nil, false, false
 	}
 	st, exists := rc.storeFor(resource, namespace)
-	if !exists || !st.synced() {
+	if !exists || !st.current(time.Now()) {
 		return nil, false, false
 	}
 	key := name

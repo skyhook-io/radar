@@ -194,7 +194,11 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 		switch a.Readiness {
 		case k8score.KindReady:
 		case k8score.KindFailed:
-			q.gapEverywhere(gk, b.Namespaced, readreason.KindSyncTimedOut)
+			code := readreason.KindSyncTimedOut
+			if a.KindStale {
+				code = readreason.KindStale
+			}
+			q.gapEverywhere(gk, b.Namespaced, code)
 			return
 		default:
 			q.gapEverywhere(gk, b.Namespaced, readreason.KindSyncPending)
@@ -204,8 +208,16 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 		for _, ns := range a.Loading {
 			q.gap(gk, ns, readreason.KindSyncPending)
 		}
+		stale := make(map[string]bool, len(a.Stale))
+		for _, ns := range a.Stale {
+			stale[ns] = true
+		}
 		for _, ns := range a.Failed {
-			q.gap(gk, ns, readreason.KindSyncTimedOut)
+			code := readreason.KindSyncTimedOut
+			if stale[ns] {
+				code = readreason.KindStale
+			}
+			q.gap(gk, ns, code)
 		}
 		for _, ns := range a.Uncovered {
 			q.gap(gk, ns, readreason.RadarNamespaceNotCollected)

@@ -208,6 +208,8 @@ func typedReadCoverageFrom(cache *k8s.ResourceCache, permissions *k8s.Permission
 		message = fmt.Sprintf("%s are still loading, please retry shortly", resource)
 	case readreason.KindSyncTimedOut:
 		message = fmt.Sprintf("%s did not finish loading within the sync deadline; Radar keeps trying, so retry later", resource)
+	case readreason.KindStale:
+		message = fmt.Sprintf("Radar's copy of %s stopped updating because its lists keep failing, so it can't say what exists now. Radar keeps trying; if this persists, check Radar's access to %s and its connection to the API server", resource, resource)
 	}
 	if cache.KindReadinessFor(resource) == k8s.KindUnavailable {
 		plan.gaps = nil

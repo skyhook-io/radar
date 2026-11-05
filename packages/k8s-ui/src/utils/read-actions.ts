@@ -17,6 +17,7 @@ export const READ_ACTIONS: Record<string, ReadAction> = {
   findings_scan_incomplete: 'change_request',
   kind_not_watchable: 'change_request',
   kind_not_searchable: 'change_request',
+  kind_stale: 'wait',
   kind_sync_pending: 'retry',
   kind_sync_timed_out: 'wait',
   kind_unknown: 'change_request',
@@ -65,6 +66,8 @@ export function gapReasonText(reason: string): string {
       return 'still loading'
     case 'kind_sync_timed_out':
       return 'loading is overdue'
+    case 'kind_stale':
+      return "Radar's copy stopped updating"
     case 'radar_forbidden':
     case 'radar_credentials_rejected':
       return 'Radar may not list it'

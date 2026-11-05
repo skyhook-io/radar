@@ -544,6 +544,8 @@ func planResourceInventory(ctx context.Context, kind, group string, namespaces [
 			err = errKindNotCollected(qualifiedResource(gvr.Group, gvr.Resource))
 		case readreason.KindSyncTimedOut:
 			err = errKindLoadFailed(gvr.Resource)
+		case readreason.KindStale:
+			err = errKindStale(gvr.Resource)
 		default:
 			err = errKindLoading(gvr.Resource)
 		}
@@ -597,6 +599,10 @@ func errKindLoading(resource string) error {
 
 func errKindLoadFailed(resource string) error {
 	return readErrorf(readreason.KindSyncTimedOut, "Radar's load of %s didn't finish in time, so it can't answer yet. It keeps trying; if this persists, whoever runs Radar should check its cluster connection and list/watch permissions.", resource)
+}
+
+func errKindStale(resource string) error {
+	return readErrorf(readreason.KindStale, "Radar's copy of %s stopped updating: its lists have kept failing for minutes, so it can't say what exists now. It keeps trying; if this persists, whoever runs Radar should check its access to %s and its connection to the API server.", resource, resource)
 }
 
 func errKindNotCollected(resource string) error {

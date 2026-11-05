@@ -109,7 +109,7 @@ var coverageTemplates = []coverageTemplate{
 		label, _ := kindsLabel(e)
 		return fmt.Sprintf("Radar couldn't check your access to %s; retry.", label)
 	}},
-	{[]readreason.Code{readreason.KindSyncTimedOut, readreason.ReadError, readreason.RadarCredentialsRejected}, func(e, all []hintEntry) string {
+	{[]readreason.Code{readreason.KindSyncTimedOut, readreason.KindStale, readreason.ReadError, readreason.RadarCredentialsRejected}, func(e, all []hintEntry) string {
 		if slices.ContainsFunc(all, func(u hintEntry) bool { return u.Reason == readreason.KindUnknown }) {
 			// The unknown-kind sentence already explains undiscovered groups.
 			e = slices.DeleteFunc(slices.Clone(e), func(u hintEntry) bool { return u.Kind == "*" && u.Count == 0 })
