@@ -4,7 +4,7 @@ import {
   initNavigationMap,
   resetNavigationMap,
 } from '@skyhook-io/k8s-ui/utils/navigation'
-import { getNetworkPolicyResourceTarget, relatedResourcePath, resourcePath, withCrossViewParams, writeViewParams } from './navigation'
+import { getNetworkPolicyResourceTarget, initialTopologyGrouping, relatedResourcePath, resourcePath, withCrossViewParams, writeViewParams } from './navigation'
 
 afterEach(resetNavigationMap)
 
@@ -86,5 +86,22 @@ describe('writeViewParams', () => {
     const issues = new URLSearchParams('mode=traffic&group=app&kind=Widget&apiGroup=example.com&resource=ns%2Fw')
     writeViewParams(issues, ['ns'], null)
     expect(issues.toString()).toBe('kind=Widget&apiGroup=example.com&resource=ns%2Fw&namespaces=ns')
+  })
+})
+
+describe('initialTopologyGrouping', () => {
+  it('keeps the existing defaults with no host preference', () => {
+    expect(initialTopologyGrouping(null, 0)).toBe('namespace')
+    expect(initialTopologyGrouping(null, 2)).toBe('none')
+  })
+
+  it('uses the host preference when the URL names none', () => {
+    expect(initialTopologyGrouping(null, 0, 'app')).toBe('app')
+    expect(initialTopologyGrouping(null, 2, 'app')).toBe('app')
+  })
+
+  it('lets the URL win over the host preference', () => {
+    expect(initialTopologyGrouping('namespace', 0, 'app')).toBe('namespace')
+    expect(initialTopologyGrouping('none', 2, 'app')).toBe('none')
   })
 })

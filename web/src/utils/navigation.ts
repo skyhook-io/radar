@@ -161,6 +161,16 @@ export const RESOURCE_LIST_PATH = /^\/resources\/[^/]+$/
  * `group` are dropped on every other view, so no other view can use those
  * names for params of its own.
  */
+/** The topology grouping to open with: the URL, then what the host prefers,
+ *  then namespace grouping across all namespaces. */
+export function initialTopologyGrouping(
+  urlGrouping: string | null,
+  namespaceCount: number,
+  hostDefault?: GroupingMode,
+): GroupingMode {
+  return (urlGrouping as GroupingMode) || hostDefault || (namespaceCount === 0 ? 'namespace' : 'none')
+}
+
 export function writeViewParams(
   params: URLSearchParams,
   namespaces: string[],
