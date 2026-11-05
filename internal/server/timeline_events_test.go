@@ -366,4 +366,3 @@ func TestHandleTimelineAuthorize(t *testing.T) {
 		t.Fatalf("over limit: %d", rr.Code)
 	}
 }
-
