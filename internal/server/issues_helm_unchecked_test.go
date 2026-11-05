@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -243,6 +244,18 @@ func TestIssuesNameTheNamespacesWhereHelmCouldNotBeChecked(t *testing.T) {
 	}
 }
 
+// With user tokens the person's own token was denied, and the card must be
+// told so it names no Cloud role.
+func TestDashboardHelmSummaryReportsUserTokenDenial(t *testing.T) {
+	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
+	t.Cleanup(func() { pkgauth.SetCredentialMode(pkgauth.CredentialsImpersonate) })
+	useHelmStorageAnswering(t, http.StatusForbidden, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"secrets is forbidden: User \"dev\" cannot list resource \"secrets\" in API group \"\" in the namespace \"shop\"","reason":"Forbidden","code":403}`)
+	got := testServerSrv.getDashboardHelmSummary(httptest.NewRequest(http.MethodGet, "/api/dashboard/helm", nil), []string{"shop"})
+	if !got.Restricted || got.ErrorCode != ErrCodeRBACDenied || got.KubernetesCredentials != "user-token" {
+		t.Fatalf("summary = %+v", got)
+	}
+}
+
 // Home's Helm card must not call a failed read "Access Restricted": that is
 // reserved for the caller's own permissions.
 func TestDashboardHelmSummarySeparatesDeniedFromFailed(t *testing.T) {
@@ -251,6 +264,8 @@ func TestDashboardHelmSummarySeparatesDeniedFromFailed(t *testing.T) {
 		status         int
 		body           string
 		wantRestricted bool
+		wantError      string
+		wantCode       string
 	}{
 		{
 			name:           "caller may not list release Secrets",
@@ -259,14 +274,17 @@ func TestDashboardHelmSummarySeparatesDeniedFromFailed(t *testing.T) {
 			wantRestricted: true,
 		},
 		{
-			name:   "API server rejects Radar's credentials",
-			status: http.StatusUnauthorized,
-			body:   `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"Unauthorized","reason":"Unauthorized","code":401}`,
+			name:      "API server rejects Radar's credentials",
+			status:    http.StatusUnauthorized,
+			body:      `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"Unauthorized","reason":"Unauthorized","code":401}`,
+			wantError: helm.UnauthorizedListMessage(),
+			wantCode:  ErrCodeAuthRequired,
 		},
 		{
-			name:   "Radar may not impersonate the caller",
-			status: http.StatusForbidden,
-			body:   `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"users \"dev\" is forbidden: User \"system:serviceaccount:radar:radar\" cannot impersonate resource \"users\" in API group \"\" at the cluster scope","reason":"Forbidden","code":403}`,
+			name:      "Radar may not impersonate the caller",
+			status:    http.StatusForbidden,
+			body:      `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"users \"dev\" is forbidden: User \"system:serviceaccount:radar:radar\" cannot impersonate resource \"users\" in API group \"\" at the cluster scope","reason":"Forbidden","code":403}`,
+			wantError: helm.ImpersonationDeniedListMessage,
 		},
 	}
 	for _, tc := range cases {
@@ -276,8 +294,17 @@ func TestDashboardHelmSummarySeparatesDeniedFromFailed(t *testing.T) {
 			if got.Restricted != tc.wantRestricted {
 				t.Fatalf("restricted = %v, want %v (summary: %+v)", got.Restricted, tc.wantRestricted, got)
 			}
+			if tc.wantRestricted && got.ErrorCode != ErrCodeRBACDenied {
+				t.Fatalf("a Secrets denial must say so with %q, got %+v", ErrCodeRBACDenied, got)
+			}
+			if tc.wantRestricted && got.KubernetesCredentials != "impersonate" {
+				t.Fatalf("kubernetesCredentials = %q, want impersonate", got.KubernetesCredentials)
+			}
 			if !tc.wantRestricted && got.Error == "" {
 				t.Fatalf("a failed read must carry its error, got %+v", got)
+			}
+			if tc.wantError != "" && (got.Error != tc.wantError || got.ErrorCode != tc.wantCode) {
+				t.Fatalf("error = %q (code %q), want %q (code %q)", got.Error, got.ErrorCode, tc.wantError, tc.wantCode)
 			}
 		})
 	}

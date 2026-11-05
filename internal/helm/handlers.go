@@ -30,6 +30,58 @@ func IsForbiddenError(err error) bool {
 	return strings.Contains(errLower, "forbidden") || strings.Contains(errLower, "unauthorized")
 }
 
+// IsUnauthorizedError reports whether the cluster rejected the credentials
+// themselves (HTTP 401), e.g. an expired kubeconfig token. IsForbiddenError
+// also matches these, so check this first wherever the two need different
+// advice: granting more RBAC can't fix a credential the cluster won't accept.
+func IsUnauthorizedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsUnauthorized(err) {
+		return true
+	}
+	// A typed status is authoritative: a 403 can mention "unauthorized" in a
+	// namespace name or an authorizer's reason. Fall back to the text only
+	// when no status survived the wrapping.
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "unauthorized")
+}
+
+// ReleaseListDeniedCode marks a release-list 403 caused by the caller's
+// own RBAC on Secrets. ReleaseListDeniedMessage is unchanged from older
+// releases, which send it without the code.
+const (
+	ReleaseListDeniedCode    = "release_list_denied"
+	ReleaseListDeniedMessage = "insufficient permissions to list Helm releases"
+)
+
+// UnauthorizedListMessage is shown when the release list fails with
+// IsUnauthorizedError. In user-token mode the rejected credential is the
+// person's own sign-in token, not Radar's.
+func UnauthorizedListMessage() string {
+	switch {
+	case pkgauth.UserTokenMode():
+		// A token the API server never trusted is refused earlier, by the
+		// auth middleware; one that gets this far has usually expired.
+		return "The cluster rejected your sign-in token, so Radar couldn't list Helm releases. It has probably expired: sign in to Radar again, then retry."
+	case k8s.IsInCluster():
+		// The kubelet refreshes a mounted token, so a rejection usually means
+		// the token belongs to a ServiceAccount that was deleted and recreated.
+		// The reader may be a signed-in user who can't restart anything.
+		return "The cluster rejected Radar's ServiceAccount token, so Radar couldn't list Helm releases. This usually means the ServiceAccount was deleted and recreated. Whoever runs Radar can restart its pod to pick up a new token."
+	default:
+		return "The cluster rejected the kubeconfig credentials Radar runs with, so it couldn't list Helm releases. They may have expired: sign in to the cluster again with that kubeconfig, then retry."
+	}
+}
+
+// ImpersonationDeniedListMessage is shown when the release list fails with
+// IsImpersonationDenied.
+const ImpersonationDeniedListMessage = "Radar isn't allowed to act as your user, so it couldn't list Helm releases. Whoever installed Radar needs to let Radar's own identity impersonate users and groups; the Radar chart does this when it manages RBAC."
+
 // writeReleaseReadError reports a failed read of release content made as the
 // caller. Helm stores releases as Secrets, so a denial is the caller's
 // Kubernetes RBAC, not a server fault.
@@ -248,8 +300,25 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			return // the caller left; this is not a Helm failure
 		}
+		// Not 401: the UI treats a 401 from Radar's own API as an expired
+		// Radar session and reloads or redirects to sign-in.
+		if IsUnauthorizedError(err) {
+			writeError(w, http.StatusBadGateway, UnauthorizedListMessage())
+			return
+		}
+		if IsImpersonationDenied(err) {
+			writeError(w, http.StatusInternalServerError, ImpersonationDeniedListMessage)
+			return
+		}
 		if ReleaseReadDeniedForCaller(err) {
-			writeError(w, http.StatusForbidden, "insufficient permissions to list Helm releases")
+			// The code tells the UI this 403 is the caller's Secret access;
+			// auth middleware 403s (rejected sign-in tokens) carry none. The
+			// credential mode tells it whether a Cloud role could matter.
+			writeErrorPayload(w, http.StatusForbidden, map[string]string{
+				"error":                  ReleaseListDeniedMessage,
+				"error_code":             ReleaseListDeniedCode,
+				"kubernetes_credentials": string(pkgauth.CurrentCredentialMode()),
+			})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())

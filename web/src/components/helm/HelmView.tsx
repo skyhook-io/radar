@@ -1,16 +1,18 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
+import { Package, Search, ArrowUpCircle, LayoutGrid, List, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
 import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
-import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
+import { useHelmReleases, useHelmBatchUpgradeInfo } from '../../api/client'
 import type { HelmOperation, HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
 import { getStatusColor, formatAge, isHelmReleaseActionable } from './helm-utils'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
 import { InstallWizard } from './InstallWizard'
+import { identityForDenial, releaseListDenial, useHelmReadIdentity } from './helmReadIdentity'
+import { HelmRestrictedState } from './HelmRestrictedState'
 
 type ViewTab = 'releases' | 'charts'
 
@@ -26,7 +28,8 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
   const [selectedChart, setSelectedChart] = useState<{ repo: string; chart: string; version: string; source: ChartSource } | null>(null)
 
   const { data: releases, isLoading, error: releasesError, dataUpdatedAt: releasesUpdatedAt, isFetching: releasesFetching, refetch: refetchReleases } = useHelmReleases(namespaces)
-  const isForbidden = isForbiddenError(releasesError)
+  const denial = releaseListDenial(releasesError)
+  const helmReadIdentity = useHelmReadIdentity()
   const releasesErrorMessage = releasesError instanceof Error ? releasesError.message : 'Failed to load Helm releases'
 
   // Lazy load upgrade info after releases are loaded
@@ -262,20 +265,16 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                   Upgrade checks failed: {upgradeErrorMessage}
                 </div>
               )}
-              {isLoading ? (
+              {isLoading || (denial && identityForDenial(denial, helmReadIdentity) === 'pending') ? (
                 <PaneLoader className="h-full" />
-              ) : isForbidden ? (
-                <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-                  <Shield className="w-8 h-8 text-amber-400 mb-2" />
-                  <p className="text-theme-text-secondary font-medium">Access Restricted</p>
-                  <p className="text-sm mt-1">Insufficient permissions to list Helm releases</p>
-                </div>
+              ) : denial ? (
+                <HelmRestrictedState denial={denial} />
               ) : releasesError ? (
                 <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-3 px-6 text-center">
                   <Package className="w-10 h-10 text-amber-400" />
                   <div>
                     <p className="text-theme-text-secondary font-medium">Failed to load Helm releases</p>
-                    <p className="text-sm mt-1 break-all">{releasesErrorMessage}</p>
+                    <p className="text-sm mt-1 max-w-xl break-words">{releasesErrorMessage}</p>
                   </div>
                   <button
                     onClick={() => refetchReleases()}
