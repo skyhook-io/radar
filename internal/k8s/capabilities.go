@@ -299,7 +299,8 @@ var (
 	nsCapCache map[string]*nsCapEntry
 	nsCapMu    sync.RWMutex
 
-	// ForceDisableHelmWrite disables release mutations and native Helm MCP registration.
+	// ForceDisableHelmWrite disables native release-management writes and MCP registration.
+	// Cloud provisioning and authenticated repository/source management are unaffected.
 	ForceDisableHelmWrite bool
 	// ForceDisableExec turns off exec (--disable-exec): the capability reports false
 	// and the exec, debug and pod-file routes refuse requests.

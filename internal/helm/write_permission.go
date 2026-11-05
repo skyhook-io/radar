@@ -16,7 +16,7 @@ import (
 // targeted operations must validate their namespace before calling.
 func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
 	user := pkgauth.UserFromContext(ctx)
-	// Authenticated repository-cache refresh has no target release to mutate.
+	// Authenticated repository/source management and cache refresh have no target release.
 	if user != nil && namespace == "" {
 		return 0, nil
 	}

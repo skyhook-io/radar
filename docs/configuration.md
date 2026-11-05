@@ -27,7 +27,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
 | `--disable-exec` | `false` | Disable pod terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP `exec_pod` |
-| `--disable-helm-write` | `false` | Disable Helm write operations and hide `manage_helm` from MCP |
+| `--disable-helm-write` | `false` | Disable native release-management writes and hide `manage_helm`; excludes Cloud cluster installation and authenticated repository/source management |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
 | `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
