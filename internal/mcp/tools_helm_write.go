@@ -174,5 +174,9 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
 	}
 	audit.Outcome = "completed"
-	return toJSONResult(map[string]any{"action": in.Action, "state": "completed", "namespace": in.Namespace, "name": in.Name, "message": "Helm operation completed. Use get_helm_release and wait_for to verify workload readiness; completion does not prove application behavior."})
+	message := "Helm operation completed. Use get_helm_release and wait_for to verify workload readiness; completion does not prove application behavior."
+	if in.Action == "uninstall" {
+		message = "Helm uninstall completed. Inspect retained resources and hooks; use wait_for condition=deleted for workloads expected to disappear. A missing Helm release alone does not prove all resources or data were deleted."
+	}
+	return toJSONResult(map[string]any{"action": in.Action, "state": "completed", "namespace": in.Namespace, "name": in.Name, "message": message})
 }

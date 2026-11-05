@@ -311,7 +311,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'curl_service',
     write: true,
-    desc: 'HTTP GET to a Service from in-cluster Radar, with status/body and no Kubernetes credentials. Requires the exec-tools opt-in and get services/proxy permission. No redirects or authenticated requests; internal TLS certificates are not verified.',
+    desc: 'HTTP GET to a selector-backed Service with a ClusterIP from in-cluster Radar, with status/body and no Kubernetes credentials. Requires the exec-tools opt-in and get services/proxy permission. No redirects or authenticated requests; internal TLS certificates are not verified.',
     params: [
       { arg: 'namespace', required: true, desc: 'Service namespace' },
       { arg: 'name', required: true, desc: 'Service name' },

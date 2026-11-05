@@ -47,7 +47,7 @@ func curlServiceResult(result servicehttp.Response) (*mcp.CallToolResult, any, e
 	for _, key := range keys {
 		value := result.Headers[key]
 		if len(key)+len(value) > remaining {
-			result.Truncated = true
+			result.HeadersTruncated = true
 			continue
 		}
 		headers[key] = value

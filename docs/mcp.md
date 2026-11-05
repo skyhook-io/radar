@@ -109,8 +109,9 @@ curl implementation and checks the caller's `get services/proxy` permission befo
 accessing the Service. A listener without auth checks Radar's own ServiceAccount
 permission instead; operators must grant `get services/proxy` to Radar explicitly
 (the default chart does not grant it). The no-auth browser UI retains its existing
-operator access. Only selector-backed Services are allowed; ExternalName and
-manually routed Services are refused, including in the browser UI. Namespace RBAC
+operator access. Only selector-backed Services with a ClusterIP are allowed; ExternalName, headless
+and manually routed Services are refused, including in the browser UI. Radar dials
+the validated IP rather than resolving DNS, preserving the Service Host header and TLS name. Namespace RBAC
 is not network isolation: granting `services/proxy` delegates Radar-to-Service network
 access, and users who can edit EndpointSlices can alter where a Service routes. It sends no Kubernetes credentials, accepts no authentication
 headers or body, and does not follow redirects. Supply `namespace`, `name`, numeric
@@ -119,7 +120,9 @@ Service `port`, and optionally `scheme` and `path` (including a query).
 The result includes the actual HTTP status and body, including non-2xx responses,
 plus duration, truncation and incomplete-body errors. A 200 status does not make an
 incomplete body successful. The request is limited to 10 seconds and reads at most 512 KiB; MCP retains at most
-64 KiB of body head/tail and 16 KiB of header names/values with truncation marked.
+64 KiB of body head/tail and 16 KiB of header names/values. `truncated` marks the
+body preview; `headersTruncated` separately marks dropped headers. The header map
+retains the first value for each name, matching the UI (not a full wire capture).
 Transport headers over 64 KiB are refused. `bodyBytes` is the captured byte count
 before the MCP preview, and `bodyEncodingLoss` marks invalid UTF-8 replacement.
 Internal HTTPS certificates are not verified, matching the existing UI diagnostic.
@@ -1357,6 +1360,7 @@ Install and upgrade require a source configured by Radar's configuration owner.
 In local mode, use Helm settings. In operator-managed in-cluster mode, use the
 existing startup Helm configuration (`helm.ociSources` for OCI, or an operator-mounted
 Helm repository config for classic repositories); UI repository writes are disabled.
+MCP installs refresh the configured index and use its credentials, so no warmed index cache is needed.
 Cloud source changes require the owner; pod-local repository settings are ephemeral
 and must be restored after a restart. The tool does not provision or persist sources;
 use GitOps for the shared hackathon cluster.

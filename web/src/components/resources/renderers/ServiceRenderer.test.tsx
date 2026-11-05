@@ -88,6 +88,7 @@ it('only offers in-cluster curl for selector-backed Services', () => {
   expect(render({ ...service, spec: { ...service.spec, ports } })).toContain('Service curl')
   expect(render({ ...service, spec: { ports } })).not.toContain('Service curl')
   expect(render({ ...service, spec: { type: 'ExternalName', externalName: 'example.org', ports } })).not.toContain('Service curl')
+  expect(render({ ...service, spec: { ...service.spec, clusterIP: 'None', ports } })).not.toContain('Service curl')
   mock.local = true
   expect(render({ ...service, spec: { ...service.spec, ports } })).not.toContain('Service curl')
 })

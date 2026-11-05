@@ -103,7 +103,7 @@ func TestServiceResponsePreservesFailureAndTruncation(t *testing.T) {
 				io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			result, err := request(t.Context(), srv.URL)
+			result, err := requestService(t.Context(), srv.URL, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -127,7 +127,7 @@ func TestServiceResponseCancellationAfterHeaders(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	result, err := request(ctx, srv.URL)
+	result, err := requestService(ctx, srv.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +216,7 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 		{"denied", false, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 403},
 		{"alias", true, corev1.ServiceTypeExternalName, nil, 400},
 		{"manual endpoints", true, corev1.ServiceTypeClusterIP, nil, 400},
+		{"headless", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 400},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +230,11 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 			}
 			prev := k8s.SetTestClient(client)
 			defer k8s.SetTestClient(prev)
-			cacheClient := fake.NewClientset(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}, Spec: corev1.ServiceSpec{Type: tc.serviceType, Selector: tc.selector, ExternalName: "api.team-b.svc.cluster.local", Ports: []corev1.ServicePort{{Port: 8080}}}})
+			clusterIP := "10.0.0.8"
+			if tc.name == "headless" {
+				clusterIP = "None"
+			}
+			cacheClient := fake.NewClientset(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}, Spec: corev1.ServiceSpec{Type: tc.serviceType, Selector: tc.selector, ClusterIP: clusterIP, ExternalName: "api.team-b.svc.cluster.local", Ports: []corev1.ServicePort{{Port: 8080}}}})
 			if err := k8s.InitTestResourceCache(cacheClient); err != nil {
 				t.Fatal(err)
 			}
@@ -243,12 +248,12 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 			}))
 			defer app.Close()
 			calls := 0
-			got, err := do(auth.ContextWithUser(t.Context(), &auth.User{Username: "alice"}), Request{Namespace: "team-a", Name: "app", Port: "8080", Path: "/health?full=true"}, func(ctx context.Context, target string) (Response, error) {
+			got, err := do(auth.ContextWithUser(t.Context(), &auth.User{Username: "alice"}), Request{Namespace: "team-a", Name: "app", Port: "8080", Path: "/health?full=true"}, func(ctx context.Context, target, host string) (Response, error) {
 				calls++
-				if target != "http://app.team-a.svc.cluster.local:8080/health?full=true" {
+				if target != "http://10.0.0.8:8080/health?full=true" || host != "app.team-a.svc.cluster.local" {
 					t.Errorf("wrong target %s", target)
 				}
-				return request(ctx, app.URL+"/health?full=true")
+				return requestService(ctx, app.URL+"/health?full=true", "")
 			}, true)
 			if tc.wantStatus != 0 {
 				failure, ok := err.(*Error)
@@ -272,5 +277,20 @@ func TestNoAuthUIRetainsOperatorAccess(t *testing.T) {
 	allowed, err = authorizeCurl(t.Context(), "team-a", "app", true)
 	if err == nil || allowed {
 		t.Fatal("MCP must require explicit SA permission")
+	}
+}
+
+func TestServiceRequestPinsIPAndPreservesHostAndTLSName(t *testing.T) {
+	const host = "app.team-a.svc.cluster.local"
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Host, host+":") || r.TLS.ServerName != host {
+			t.Errorf("lost host/SNI: %s %s", r.Host, r.TLS.ServerName)
+		}
+		fmt.Fprint(w, "pinned")
+	}))
+	defer srv.Close()
+	result, err := requestService(t.Context(), srv.URL, host)
+	if err != nil || result.Body != "pinned" {
+		t.Fatalf("IP dial failed: %+v %v", result, err)
 	}
 }

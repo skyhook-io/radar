@@ -2579,7 +2579,11 @@ func (c *Client) upgradeWithValuesMode(actionConfig *action.Configuration, name,
 	}
 
 	if !replace {
-		if err := validateOverrideReplacement(rel.Config, newValues); err != nil {
+		releaseCtx, err := releaseContext(actionConfig, name)
+		if err != nil {
+			return err
+		}
+		if err := validateOverrideReplacement(releaseCtx.Baseline.Config, newValues); err != nil {
 			return err
 		}
 	}
@@ -3472,26 +3476,6 @@ func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRe
 }
 
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
-	return c.installWithPolicy(actionConfig, req, false)
-}
-
-func (c *Client) installWithPolicy(actionConfig *action.Configuration, req *InstallRequest, freshOnly bool) (*HelmRelease, error) {
-	if freshOnly {
-		if err := freshInstallCheck(actionConfig, req.ReleaseName, req.Namespace); err != nil {
-			return nil, err
-		}
-		source, err := c.installChartSource(req)
-		if err != nil {
-			return nil, err
-		}
-		if source == nil {
-			return nil, fmt.Errorf("install requires a configured, credential-free chart source")
-		}
-		if _, err := c.exactConfiguredSource(*source, req.ChartName); err != nil {
-			return nil, fmt.Errorf("chart source is not configured: ask the Radar configuration owner to configure it (operator-managed installations use startup Helm configuration, not UI repository writes): %w", err)
-		}
-	}
-
 	var chartURL string
 	var indexDigest string
 	var downloadEntry *repo.Entry
@@ -3633,13 +3617,7 @@ func (c *Client) installWithPolicy(actionConfig *action.Configuration, req *Inst
 		}
 	}
 
-	mode := installFresh
-	var err error
-	if freshOnly {
-		err = freshInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
-	} else {
-		mode, err = preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
-	}
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -3673,10 +3651,6 @@ func (c *Client) installWithPolicy(actionConfig *action.Configuration, req *Inst
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
-	}
-
-	if freshOnly && (loadedChart.Metadata == nil || loadedChart.Metadata.Name != req.ChartName || loadedChart.Metadata.Version != req.Version) {
-		return nil, fmt.Errorf("downloaded chart does not match the requested name and exact version")
 	}
 
 	if mode != installFresh {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -51,6 +52,7 @@ type Response struct {
 	Body             string            `json:"body"`
 	Truncated        bool              `json:"truncated"`
 	BodyBytes        int               `json:"bodyBytes"`
+	HeadersTruncated bool              `json:"headersTruncated,omitempty"`
 	BodyEncodingLoss bool              `json:"bodyEncodingLoss,omitempty"`
 	// Error is set when the response was received but reading its body failed
 	// (e.g. the target stalled until the timeout). Status/body still reflect
@@ -168,7 +170,7 @@ type Error struct {
 func (e *Error) Error() string { return e.Message }
 
 // Do issues a single server-side GET to an in-cluster Service by
-// dialing it directly over cluster DNS. This is the Cloud-safe stand-in for
+// dialing its validated ClusterIP while preserving its Service hostname. This is the Cloud-safe stand-in for
 // port-forward when the question is "what does this endpoint return": the request
 // originates in-cluster and the response flows back to the browser. Critically it
 // dials the Service directly rather than via the apiserver services/proxy — the
@@ -176,16 +178,16 @@ func (e *Error) Error() string { return e.Message }
 // leak Radar's token to anything you curl. Authorization is re-created with an
 // explicit SubjectAccessReview.
 func Do(ctx context.Context, req Request) (Response, error) {
-	return do(ctx, req, request, false)
+	return do(ctx, req, requestService, false)
 }
 
 // DoForMCP adds ServiceAccount authorization on a no-auth agent listener.
 // Signed-in users have the same caller authorization on both transports.
 func DoForMCP(ctx context.Context, req Request) (Response, error) {
-	return do(ctx, req, request, true)
+	return do(ctx, req, requestService, true)
 }
 
-func do(ctx context.Context, req Request, send func(context.Context, string) (Response, error), requireServiceAccountPermission bool) (Response, error) {
+func do(ctx context.Context, req Request, send func(context.Context, string, string) (Response, error), requireServiceAccountPermission bool) (Response, error) {
 	// Direct dial only works from inside the cluster network (Cloud / in-cluster).
 	// Locally you'd port-forward instead.
 	if !k8s.IsInCluster() {
@@ -244,8 +246,8 @@ func do(ctx context.Context, req Request, send func(context.Context, string) (Re
 	if err != nil {
 		return Response{}, &Error{Status: http.StatusNotFound, Message: "Service not found"}
 	}
-	// An alias or manually routed Service can use Radar's network position to
-	// reach another tenant. Only selector-backed Services are diagnostic targets.
+	// Reject aliases and manual routing; selectors are not a network-isolation
+	// boundary. EndpointSlice writers still control where a Service routes.
 	if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
 		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service curl requires a selector-backed Service; ExternalName and manually routed Services are not supported"}
 	}
@@ -260,14 +262,18 @@ func do(ctx context.Context, req Request, send func(context.Context, string) (Re
 		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service has no such port"}
 	}
 
-	// Dial the Service directly over cluster DNS — sends NO Kubernetes credentials
-	// to the workload. Host and port come from the cache object, not the request.
-	target := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d%s", scheme, svc.Name, svc.Namespace, matchedPort, path)
-
-	return send(ctx, target)
+	// Bind the dial to the validated Service IP, not a separately cached DNS
+	// record that might still alias an earlier ExternalName target.
+	ip := net.ParseIP(svc.Spec.ClusterIP)
+	if ip == nil {
+		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service curl requires a ClusterIP; use exec_pod or port-forward for headless Services"}
+	}
+	host := fmt.Sprintf("%s.%s.svc.cluster.local", svc.Name, svc.Namespace)
+	target := scheme + "://" + net.JoinHostPort(ip.String(), strconv.Itoa(int(matchedPort))) + path
+	return send(ctx, target, host)
 }
 
-func request(ctx context.Context, target string) (Response, error) {
+func requestService(ctx context.Context, target, serviceHost string) (Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, curlTimeout)
 	defer cancel()
 
@@ -277,7 +283,12 @@ func request(ctx context.Context, target string) (Response, error) {
 	}
 
 	start := time.Now()
-	resp, err := curlDialClient().Do(preq)
+	client := curlDialClient()
+	if serviceHost != "" {
+		preq.Host = net.JoinHostPort(serviceHost, preq.URL.Port())
+		client.Transport.(*http.Transport).TLSClientConfig.ServerName = serviceHost
+	}
+	resp, err := client.Do(preq)
 	if err != nil {
 		return Response{}, &Error{Status: http.StatusBadGateway, Message: friendlyDialError(err)}
 	}

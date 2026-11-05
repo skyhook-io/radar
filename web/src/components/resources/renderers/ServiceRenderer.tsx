@@ -37,7 +37,7 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   }, [])
   const spec = data.spec || {}
   const hasNoSelector = !spec.selector || Object.keys(spec.selector).length === 0
-  const showCurl = !isLocal && spec.type !== 'ExternalName' && !hasNoSelector
+  const showCurl = !isLocal && spec.type !== 'ExternalName' && spec.clusterIP !== 'None' && !hasNoSelector
   const canListEndpointSlices = Boolean(namespace && serviceName && spec.type !== 'ExternalName')
   const serviceSlices = useServiceEndpointSlices(namespace, serviceName, canListEndpointSlices)
   // A Radar without the per-Service endpoint keeps its earlier behavior: only

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"helm.sh/helm/v3/pkg/action"
 )
 
 // InstallFreshAsUser refuses all existing release history and requires a locally
@@ -16,7 +17,7 @@ func (c *Client) InstallFreshAsUser(req *InstallRequest, user *pkgauth.User) (*H
 	if err != nil {
 		return nil, err
 	}
-	return c.installWithPolicy(cfg, req, true)
+	return c.installFreshWith(cfg, req)
 }
 
 // UpgradeWithOverridesAsUser overlays values onto the stored user overrides on
@@ -67,4 +68,36 @@ func validateOverrideReplacement(stored, overrides map[string]any) error {
 		return nil
 	}
 	return check(redacted, overrides)
+}
+
+func (c *Client) installFreshWith(cfg *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
+	if err := freshInstallCheck(cfg, req.ReleaseName, req.Namespace); err != nil {
+		return nil, err
+	}
+	source, err := c.installChartSource(req)
+	if err != nil {
+		return nil, err
+	}
+	if source == nil {
+		return nil, fmt.Errorf("install requires a configured, credential-free chart source")
+	}
+	selected, err := c.exactConfiguredSource(*source, req.ChartName)
+	if err != nil {
+		return nil, fmt.Errorf("chart source is not configured: ask the Radar configuration owner to configure it (operator-managed installations use startup Helm configuration): %w", err)
+	}
+	// Reuse fresh authenticated index loading and exact metadata/dependency checks.
+	// A mounted repository config needs no warmed local index cache.
+	loaded, _, err := c.loadSourceChart(cfg, selected, req.ChartName, req.Version)
+	if err != nil {
+		return nil, err
+	}
+	if err := freshInstallCheck(cfg, req.ReleaseName, req.Namespace); err != nil {
+		return nil, err
+	}
+	req.resolvedSource = &selected
+	rel, err := runInstallOrUpgrade(cfg, req, loaded, installFresh)
+	if err != nil {
+		return nil, fmt.Errorf("install failed: %w", err)
+	}
+	return installedHelmRelease(rel), nil
 }

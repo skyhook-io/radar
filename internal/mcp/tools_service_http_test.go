@@ -18,7 +18,7 @@ func TestCurlServiceResultBoundsHeadersAndBody(t *testing.T) {
 	if err := json.Unmarshal(encoded, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != 503 || !got.Truncated || got.Headers["X-Large"] != "" || got.Headers["Content-Type"] != "text/plain" || len(got.Body) > execOutputCap || got.BodyBytes != 512<<10 {
+	if got.Status != 503 || !got.Truncated || !got.HeadersTruncated || got.Headers["X-Large"] != "" || got.Headers["Content-Type"] != "text/plain" || len(got.Body) > execOutputCap || got.BodyBytes != 512<<10 {
 		t.Fatalf("bad bounded response: %d bytes, truncated=%v", len(encoded), got.Truncated)
 	}
 }
@@ -32,5 +32,17 @@ func TestCurlServiceResultMarksInvalidUTF8(t *testing.T) {
 	json.Unmarshal(encoded, &got)
 	if !got.BodyEncodingLoss || got.BodyBytes != 2 {
 		t.Fatalf("lost binary metadata: %s", encoded)
+	}
+}
+
+func TestCurlServiceHeaderTruncationDoesNotMarkCompleteBody(t *testing.T) {
+	result, _, err := curlServiceResult(servicehttp.Response{Body: "complete", Headers: map[string]string{"X-Large": strings.Repeat("x", 32<<10)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got servicehttp.Response
+	json.Unmarshal([]byte(result.Content[0].(*mcp.TextContent).Text), &got)
+	if !got.HeadersTruncated || got.Truncated || got.Body != "complete" {
+		t.Fatalf("ambiguous truncation: %+v", got)
 	}
 }
