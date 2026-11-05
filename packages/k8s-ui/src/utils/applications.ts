@@ -1680,6 +1680,8 @@ export interface AppEntryBase {
   /** ready/desired as a fraction for sorting; -1 when nothing is desired. */
   readyRatio: number;
   source: AppSource;
+  /** One line on what's wrong, from the host. Absent on a row with nothing to say. */
+  verdict?: string;
 }
 
 export interface SingleAppEntry extends AppEntryBase {

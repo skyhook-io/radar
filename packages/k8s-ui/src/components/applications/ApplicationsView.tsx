@@ -146,6 +146,19 @@ function LastDeployedCell({ rows }: { rows: AppRow[] }) {
 }
 
 // Stops at the row's own click, so a star doesn't also open the app.
+// Sized by the column, not its text: a long verdict truncates instead of
+// pushing the table's other columns aside.
+function RowVerdict({ verdict }: { verdict?: string }) {
+  if (!verdict) return null
+  return (
+    <div className="w-0 min-w-full pl-3 pt-0.5">
+      <Tooltip content={verdict} delay={300}>
+        <span className="block min-w-0 truncate text-xs font-normal text-theme-text-secondary">{verdict}</span>
+      </Tooltip>
+    </div>
+  )
+}
+
 function RowLeading({ children }: { children: ReactNode }) {
   if (children == null || children === false) return null
   return (
@@ -605,6 +618,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             </span>
                           </Tooltip>
                         </span>
+                        <RowVerdict verdict={(r.members.find((m) => m.verdict && m.health === r.health) ?? r.members.find((m) => m.verdict))?.verdict} />
                       </td>
                       <td className={clsx('px-2 py-2.5', clusterColumn)}>
                         <span className="text-xs text-theme-text-tertiary">{pluralize(r.members.length, 'instance')}</span>
@@ -680,6 +694,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
                           <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
+                        <RowVerdict verdict={e.verdict} />
                       </td>
                       {e.variant === 'single' ? (
                         <>

@@ -60,6 +60,13 @@ describe('ApplicationsView', () => {
     expect(markup).toContain('ago')
   })
 
+  it('shows a verdict only on the rows the host gave one', () => {
+    const markup = html({ entries: [{ ...entries[0], verdict: 'Unhealthy · since 3m ago' }, entries[1]] })
+
+    expect(markup.match(/Unhealthy · since 3m ago/g)).toHaveLength(1)
+    expect(html({ entries: entries.map((entry) => ({ ...entry })) })).toBe(html())
+  })
+
   it('renders host content before the name and in the toolbar', () => {
     const markup = html({
       renderRowLeading: (entry) => <i>star:{entry.row.key}</i>,
@@ -161,6 +168,19 @@ describe('ApplicationsView', () => {
     it('adds versions only when asked', () => {
       expect(html({ entries: ladder })).not.toContain('v2')
       expect(html({ entries: ladder, showEnvVersions: true })).toContain('v2')
+    })
+
+    it('says what the worst member says on a folded row', () => {
+      const [dev, prod] = ladder
+      const markup = html({
+        entries: [
+          { ...dev, health: 'degraded', verdict: 'dev is degraded' },
+          { ...prod, health: 'unhealthy', verdict: 'prod is down' },
+        ],
+      })
+
+      expect(markup).toContain('prod is down')
+      expect(markup).not.toContain('dev is degraded')
     })
   })
 })
