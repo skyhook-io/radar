@@ -10,6 +10,12 @@ export interface ServicePortRenderProps {
   protocol: string
   name?: string
   appProtocol?: string
+  /** Kubernetes Service type; absent if omitted by the source (Kubernetes defaults to ClusterIP). */
+  serviceType?: string
+  /** Allocated Service IP; "None" means headless, absent means not allocated. */
+  clusterIP?: string
+  /** Whether the Service spec contains a nonempty pod selector. */
+  hasSelector: boolean
 }
 
 interface ServiceRendererProps {
@@ -187,6 +193,9 @@ export function ServicePortCards({
           protocol: port.protocol || 'TCP',
           name: port.name,
           appProtocol: port.appProtocol,
+          serviceType: service.spec.type,
+          clusterIP: service.spec.clusterIP,
+          hasSelector: Object.keys(service.spec.selector || {}).length > 0,
         }
         return (
           <div key={`${serviceName}-${port.name || i}-${port.port}-${port.protocol || 'TCP'}`} className="card-inner text-sm">

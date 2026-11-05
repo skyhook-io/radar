@@ -1363,9 +1363,9 @@ For existing releases,
 upgrade also requires a confirmed saved chart source. Install refuses any existing
 release history, including failed or uninstalled releases, rather than recovering
 it implicitly. Inspect history
-with `get_helm_release include=history` before rollback. Uninstall first returns a
+with `get_helm_release include=history` before rollback. MCP refuses upgrade, rollback and uninstall while the latest release is pending or uninstalling. Wait for the operation to finish; an operator must recover a stranded release through the existing UI or Helm CLI. This preflight is not a lock against other release writers. Uninstall first returns a
 resource preview; pass its returned token as `confirm` to execute it. The token rejects
-changes observed before dispatch; Helm does not provide an atomic revision-conditioned
+revision, timestamp or status changes observed before dispatch; Helm does not provide an atomic revision-conditioned
 uninstall, so coordinate with other release writers during deletion. This is a Helm resource list, not a
 complete cascade or data-loss analysis. Detected Flux-owned releases are refused; this cache-based ownership check is
 best-effort when Flux visibility is restricted; update

@@ -66,10 +66,11 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
       endpointSlicesError={(legacy ? namespaceSlicesError : serviceSlices.error)?.message}
       endpointSlicesTruncated={!legacy && serviceSlices.data?.truncated}
       onNavigate={onNavigate}
-      renderPortAction={({ port, name, appProtocol, protocol }) => (
+      renderPortAction={({ port, name, appProtocol, protocol, ...serviceFacts }) => (
         <>
           {showCurl && isHttpishPort(port, name, appProtocol, protocol) && (
             <CurlButton
+              service={serviceFacts}
               active={curl?.port === port && !curl.closing}
               onClick={() => {
                 if (curl?.port === port && !curl.closing) closeCurl()

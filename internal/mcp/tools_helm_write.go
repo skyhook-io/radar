@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"helm.sh/helm/v3/pkg/release"
 )
 
 type manageHelmInput struct {
@@ -117,6 +118,10 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 		if operation.Err() != nil {
 			return nil, nil, fmt.Errorf("cluster connection changed during release lookup; retry on the intended cluster")
 		}
+		status := release.Status(detail.Status)
+		if status.IsPending() || status == release.StatusUninstalling {
+			return nil, nil, fmt.Errorf("release is %s; wait for the active Helm operation, or ask an operator to recover a stranded release before retrying", detail.Status)
+		}
 		if detail.ManagedByFluxHelmRelease != "" {
 			return nil, nil, fmt.Errorf("release is managed by Flux HelmRelease %s; change its source configuration instead", detail.ManagedByFluxHelmRelease)
 		}
@@ -125,7 +130,8 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 				Namespace, Name string
 				Revision        int
 				Updated         any
-			}{in.Namespace, in.Name, detail.Revision, detail.Updated})
+				Status          string
+			}{in.Namespace, in.Name, detail.Revision, detail.Updated, detail.Status})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -145,7 +151,7 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 				}
 
 				audit.Outcome = "preview"
-				return toJSONResult(map[string]any{"action": "uninstall", "state": "preview", "namespace": in.Namespace, "name": in.Name, "revision": detail.Revision, "confirm": token, "resources": detail.Resources, "message": "Review the resources and any retained data before calling again with the returned confirm token. Helm hooks and resource policies can affect deletion; this is not a complete cascade preview."})
+				return toJSONResult(map[string]any{"action": "uninstall", "state": "preview", "namespace": in.Namespace, "name": in.Name, "revision": detail.Revision, "confirm": token, "resources": detail.Resources, "message": fmt.Sprintf("Release status: %s. Review the resources and retained data before calling again with confirm. Helm hooks and resource policies can affect deletion; this is not a complete cascade preview.", detail.Status)})
 			}
 		}
 	}

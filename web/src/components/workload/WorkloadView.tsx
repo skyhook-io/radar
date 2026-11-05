@@ -778,6 +778,7 @@ export function WorkloadView({
           {showServingCurl &&
             isHttpishPort(props.port, props.name, props.appProtocol, props.protocol) && (
               <CurlButton
+                service={props}
                 active={active}
                 onClick={() => {
                   if (active) closeServingCurl()

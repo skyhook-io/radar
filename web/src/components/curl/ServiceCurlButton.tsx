@@ -9,6 +9,7 @@ import { readErrorBody } from '../../api/httpErrors'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '@skyhook-io/k8s-ui'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
+import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 
 // A port is "curl-able" only if it plausibly speaks HTTP — probing a raw TCP
 // port (Postgres, Redis) with a GET returns noise, so we don't offer it there
@@ -124,7 +125,13 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 // Small toggle button rendered in a port row's action slot. The panel itself
 // renders inline within the port card (see CurlPanel), not as an overlay.
-export function CurlButton({ active, onClick }: { active: boolean; onClick: () => void }) {
+export function CurlButton({ active, onClick, service }: {
+  active: boolean
+  onClick: () => void
+  /** Service facts supplied by the shared port-card renderer, on every surface. */
+  service: Pick<ServicePortRenderProps, 'serviceType' | 'clusterIP' | 'hasSelector'>
+}) {
+  if (!service.hasSelector || !service.clusterIP || service.clusterIP === 'None' || service.serviceType === 'ExternalName') return null
   return (
     <Tooltip content="Curl this endpoint — GET from inside the cluster">
       <button
