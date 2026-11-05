@@ -214,7 +214,10 @@ export function buildAppDeploys({ workloads, anchors, sourceRef, partialSources,
   sortable.sort((a, b) => b.sortAt - a.sortAt || (b.row.revision ?? 0) - (a.row.revision ?? 0) || a.row.id.localeCompare(b.row.id))
 
   const partialReasons = [...(partialSources ?? [])]
-  if (stale) partialReasons.push("Couldn't refresh revisions. This is the last list read, so Live and Newest aren't shown.")
+  // Nothing read yet means there's no last list; the per-workload line below says so.
+  if (stale && revisioned.some((workload) => workload.revisions !== undefined)) {
+    partialReasons.push("Couldn't refresh revisions. This is the last list read, so Live and Newest aren't shown.")
+  }
   for (const workload of revisioned) {
     if (workload.revisions === undefined) {
       partialReasons.push(`Revision history for ${workload.ref.kind} ${workload.ref.name} couldn't be read.`)
