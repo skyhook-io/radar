@@ -92,7 +92,7 @@ import {
 } from "../../utils/applications";
 import { PaneLoader } from "../ui/PaneLoader";
 import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
-import type { AppDeployRow, AppDeploys } from "../../utils/app-deploys";
+import { workloadHasRevisions, type AppDeployRow, type AppDeploys } from "../../utils/app-deploys";
 import { appVerdictText, buildAppVerdict } from "../../utils/app-verdict";
 import { ApplicationDeploys } from "./ApplicationDeploys";
 import type { WorkloadExtraTab } from "../workload/WorkloadView";
@@ -461,7 +461,9 @@ export function ApplicationDetail({
   const [internalView, setInternalView] =
     useState<CanonicalApplicationView>(openingView);
   const [internalCostSelected, setInternalCostSelected] = useState(false);
-  const deploysAvailable = deploys !== undefined;
+  const deploysAvailable =
+    deploys !== undefined &&
+    (Boolean(app.sourceRef) || workloads.some((w) => workloadHasRevisions(w.kind)));
   const activeView = canonicalApplicationView(
     selectedView ?? internalView,
     deploysAvailable,
@@ -507,7 +509,7 @@ export function ApplicationDetail({
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
   const workloadContext = useMemo<AppWorkloadRenderContext>(() => {
-    if (!selectedWorkload || deploys === undefined) return {};
+    if (!selectedWorkload || deploys === undefined || !workloadHasRevisions(selectedWorkload.kind)) return {};
     return {
       defaultTab:
         singleWorkloadScope && initialView === "deploys" ? "deploys" : undefined,
@@ -892,7 +894,7 @@ export function ApplicationDetail({
               setSelected(workloadKey(workload), options)
             }
             onNavigateToResource={onNavigateToResource}
-            deploys={deploys}
+            deploys={deploysAvailable ? deploys : undefined}
             deploysLoading={deploysLoading}
             onDeploysVisibleChange={onDeploysVisibleChange}
             onRollback={onRollback}

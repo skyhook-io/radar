@@ -852,6 +852,22 @@ describe("ApplicationDetail shell", () => {
       expect(contexts).toEqual([{}]);
     });
 
+    it("offers no Deploys for an app with nothing that can have them", () => {
+      const cron = { ...app.workloads[0], kind: "CronJob" };
+      const contexts: unknown[] = [];
+
+      expect(renderDetail({ app: { ...app, workloads: [cron, { ...cron, name: "b" }] }, deploys })).not.toContain(">Deploys<");
+      renderDetail({
+        app: { ...app, workloads: [cron] },
+        deploys,
+        renderWorkload: (_, context) => {
+          contexts.push(context);
+          return null;
+        },
+      });
+      expect(contexts).toEqual([{}]);
+    });
+
     it("reaches a single-workload app as a tab of the workload", () => {
       const contexts: Array<{ extraTabs?: Array<{ id: string }>; defaultTab?: string }> = [];
       renderDetail({
