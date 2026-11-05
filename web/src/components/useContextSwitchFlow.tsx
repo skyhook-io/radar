@@ -64,7 +64,12 @@ export function useContextSwitchFlow() {
   }
 
   const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource) => {
-    if (context.isCurrent || switchContext.isPending) return
+    if (switchContext.isPending) return
+    // Picking the cluster you're still on dismisses a refused switch's screen.
+    if (context.isCurrent) {
+      setFailedSwitch(null)
+      return
+    }
     // Active sessions (port forwards from API + terminal tabs from dock) get
     // a confirmation prompt — switching contexts kills both.
     try {

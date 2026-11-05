@@ -5241,7 +5241,7 @@ func (s *Server) writeSwitchPreflightError(w http.ResponseWriter, prefix string,
 	w.WriteHeader(http.StatusBadRequest)
 	if encodeErr := json.NewEncoder(w).Encode(map[string]string{
 		"error":     prefix + probeErr.Error(),
-		"errorType": k8s.ClassifyError(probeErr.Err),
+		"errorType": probeErr.Classification(),
 	}); encodeErr != nil {
 		log.Printf("Failed to encode error response: %v", encodeErr)
 	}

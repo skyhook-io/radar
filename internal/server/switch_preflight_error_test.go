@@ -45,3 +45,18 @@ func TestWriteSwitchPreflightErrorKeepsPlainErrorForConfigRefusals(t *testing.T)
 		t.Fatalf("config refusal should not carry errorType: %v", body)
 	}
 }
+
+func TestWriteSwitchPreflightErrorNamesAStuckCredentialPlugin(t *testing.T) {
+	s := &Server{}
+	probe := &k8s.ContextProbeError{Context: "aks-prod", Err: fmt.Errorf("auth plugin timeout: %w", errors.New("context deadline exceeded")), PluginStuck: true}
+	rec := httptest.NewRecorder()
+	s.writeSwitchPreflightError(rec, "", fmt.Errorf("%w: %w", k8s.ErrContextSwitchPreflight, probe))
+
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["errorType"] != "auth-plugin-stuck" {
+		t.Fatalf("errorType = %q, want auth-plugin-stuck (body %v)", body["errorType"], body)
+	}
+}

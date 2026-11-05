@@ -6,6 +6,7 @@ import {
 import { useContexts, useClusterInfo, useCapabilities } from '../api/client'
 import type { ContextInfo } from '../types'
 import { useContextSwitchFlow } from './useContextSwitchFlow'
+import { useContextSwitch } from '../context/ContextSwitchContext'
 import { parseContextForSwitcher, visibleContextQualifier, type ParsedContextName } from '../utils/context-name'
 
 interface ContextSwitcherProps {
@@ -29,6 +30,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
   const { data: clusterInfo } = useClusterInfo()
   const { data: capabilities } = useCapabilities()
   const switchFlow = useContextSwitchFlow()
+  const { failedSwitch } = useContextSwitch()
 
   // Parse contexts and decide whether to render group headers (multi-account only).
   // hasMultipleSources gates the kubeconfig-source chip — only useful when 2+
@@ -134,6 +136,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         loading={switchFlow.isPending}
         disabled={contextsLoading || !capabilities || capabilities.configManagement === 'operator'}
         searchable={items.length > 1}
+        currentSelectable={!!failedSwitch}
         showGroupHeaders={hasMultipleAccounts}
         errorSlot={
           switchFlow.errorText ? (

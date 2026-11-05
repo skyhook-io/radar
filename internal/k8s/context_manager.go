@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -415,6 +416,10 @@ func PerformContextSwitch(newContext string) error {
 type ContextProbeError struct {
 	Context string
 	Err     error
+	// PluginStuck: the exec credential plugin never returned while the API
+	// endpoint itself answered, so the fix is the credential command, not
+	// the network.
+	PluginStuck bool
 }
 
 func (e *ContextProbeError) Error() string {
@@ -422,6 +427,27 @@ func (e *ContextProbeError) Error() string {
 }
 
 func (e *ContextProbeError) Unwrap() error { return e.Err }
+
+// Classification is the connection errorType for this failure.
+func (e *ContextProbeError) Classification() string {
+	if e.PluginStuck {
+		return "auth-plugin-stuck"
+	}
+	return ClassifyError(e.Err)
+}
+
+// credentialPluginStuck applies the runtime check's rule for a hung plugin to
+// a switch target: the probe ran out of time inside the exec plugin, and an
+// anonymous request shows the endpoint is reachable. An offline machine fails
+// that request too and keeps its network classification.
+func credentialPluginStuck(ctx context.Context, prepared *preparedContext, probeErr error) bool {
+	if !prepared.usesExec || ctx.Err() != nil || !strings.Contains(probeErr.Error(), "auth plugin timeout") {
+		return false
+	}
+	endpointCtx, cancel := context.WithTimeout(ctx, runtimeAuthEndpointProbeTimeout)
+	defer cancel()
+	return getRuntimeAuthEndpointProbe()(endpointCtx, prepared.config) == nil
+}
 
 // checkedSwitch carries a context that was prepared and found reachable
 // before the switch took contextOpMu.
@@ -454,7 +480,11 @@ func PerformCheckedContextSwitch(ctx context.Context, newContext string) error {
 		log.Printf("[ops] Context switch to %q refused before teardown: %v", newContext, probeErr)
 		errorlog.Record("context-switch", "warning",
 			"target=%q unreachable, switch refused before teardown: %v", newContext, probeErr)
-		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, &ContextProbeError{Context: newContext, Err: probeErr})
+		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, &ContextProbeError{
+			Context:     newContext,
+			Err:         probeErr,
+			PluginStuck: credentialPluginStuck(ctx, prepared, probeErr),
+		})
 	}
 	return performContextSwitch(newContext, observedOperationGen, true, &checkedSwitch{ctx: ctx, prepared: prepared})
 }

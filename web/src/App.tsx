@@ -1063,11 +1063,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   useEffect(() => {
     if (connection.state === 'connected' && connection.context) setLastConnectedContext(connection.context)
   }, [connection.state, connection.context])
-  // A refused switch is about the cluster that was still connected; if that
-  // connection drops, its own error screen takes over.
+  // A refused switch is about the cluster that was still connected. Once that
+  // connection changes in any way (dropped, reconnecting, or switched from
+  // another tab), the screen is stale.
+  const failedSwitchFrom = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (failedSwitch && connection.state === 'disconnected') setFailedSwitch(null)
-  }, [failedSwitch, connection.state, setFailedSwitch])
+    if (!failedSwitch) {
+      failedSwitchFrom.current = undefined
+      return
+    }
+    failedSwitchFrom.current ??= connection.context
+    if (connection.state !== 'connected' || connection.context !== failedSwitchFrom.current) setFailedSwitch(null)
+  }, [failedSwitch, connection.state, connection.context, setFailedSwitch])
 
   // Progressive shell during the initial informer sync: once the server
   // publishes per-kind sync progress, render the app instead of the splash.

@@ -3,11 +3,16 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"k8s.io/client-go/rest"
 
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -236,5 +241,92 @@ func TestContextSourceFingerprintIgnoresRefreshedCredentials(t *testing.T) {
 	cfg.AuthInfos["u"].AuthProvider.Name = "other"
 	if after := contextSourceFingerprint("/k", "ctx", *cfg, cfg.Contexts["ctx"]); after == before {
 		t.Fatal("a different auth provider did not change the fingerprint")
+	}
+}
+
+// versionOnlyServer answers /version like an API server and refuses
+// everything else, so subsystem init finds nothing it may read.
+func versionOnlyServer(t *testing.T, versionHits *atomic.Int32) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/version" {
+			versionHits.Add(1)
+			_, _ = w.Write([]byte(`{"major":"1","minor":"30","gitVersion":"v1.30.0"}`))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`))
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+func TestCheckedSwitchToReachableTargetCompletes(t *testing.T) {
+	var versionHits atomic.Int32
+	_, tornDown := setupCheckedSwitch(t, versionOnlyServer(t, &versionHits), true)
+
+	done := make(chan error, 1)
+	go func() { done <- PerformCheckedContextSwitch(context.Background(), "target") }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("checked switch to a reachable target did not finish")
+	}
+	if errors.Is(err, ErrContextSwitchPreflight) {
+		t.Fatalf("reachable target was refused: %v", err)
+	}
+	if !*tornDown {
+		t.Fatal("the previous cluster's sessions were not stopped")
+	}
+	if got := GetContextName(); got != "target" {
+		t.Fatalf("active context = %q, want target", got)
+	}
+	if err != nil {
+		t.Fatalf("switch failed after the check passed: %v", err)
+	}
+	status := GetConnectionStatus()
+	if status.State != StateConnected || status.Context != "target" {
+		t.Fatalf("connection = %s/%s, want connected/target", status.State, status.Context)
+	}
+	// The pre-teardown check already proved the target answers; the switch
+	// must not probe it a second time.
+	if got := versionHits.Load(); got != 1 {
+		t.Fatalf("target /version probed %d times, want 1", got)
+	}
+}
+
+func TestCheckedSwitchNamesAStuckCredentialPlugin(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	prepared := &preparedContext{usesExec: true, config: &rest.Config{Host: "https://target.invalid"}}
+	stuck := fmt.Errorf("auth plugin timeout: %w", context.DeadlineExceeded)
+
+	setRuntimeAuthEndpointProbe(func(context.Context, *rest.Config) error { return nil })
+	if !credentialPluginStuck(context.Background(), prepared, stuck) {
+		t.Fatal("plugin timeout with a reachable endpoint should read as a stuck plugin")
+	}
+	probeErr := &ContextProbeError{Context: "target", Err: stuck, PluginStuck: true}
+	if got := probeErr.Classification(); got != "auth-plugin-stuck" {
+		t.Fatalf("classification = %q, want auth-plugin-stuck", got)
+	}
+
+	setRuntimeAuthEndpointProbe(func(context.Context, *rest.Config) error { return errors.New("dial tcp: i/o timeout") })
+	if credentialPluginStuck(context.Background(), prepared, stuck) {
+		t.Fatal("an unreachable endpoint is a network problem, not a stuck plugin")
+	}
+
+	setRuntimeAuthEndpointProbe(func(context.Context, *rest.Config) error { return nil })
+	if credentialPluginStuck(context.Background(), &preparedContext{usesExec: false, config: prepared.config}, stuck) {
+		t.Fatal("a context without an exec plugin can't have a stuck plugin")
+	}
+	if credentialPluginStuck(context.Background(), prepared, errors.New("cluster unreachable: connection refused")) {
+		t.Fatal("only a timeout inside the plugin counts")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if credentialPluginStuck(cancelled, prepared, stuck) {
+		t.Fatal("a request the person abandoned says nothing about the plugin")
 	}
 }

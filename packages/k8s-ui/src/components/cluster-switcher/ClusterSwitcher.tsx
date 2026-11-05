@@ -74,6 +74,9 @@ export interface ClusterSwitcherProps {
   variant?: 'chip' | 'segment'
   /** Muted label shown before the value in the 'segment' variant (e.g. "Cluster"). */
   label?: string
+  /** Lets the current row be picked, for hosts that show a screen about
+   *  another cluster on top of the current one (picking it dismisses that). */
+  currentSelectable?: boolean
 }
 
 // Trigger width cap. With middle-truncation kicking in, this is a
@@ -102,6 +105,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
   align = 'left',
   variant = 'chip',
   label,
+  currentSelectable = false,
 }, ref) => {
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -183,7 +187,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
   }, [isOpen])
 
   const select = (item: ClusterSwitcherItem) => {
-    if (item.disabled || item.id === currentId) return
+    if (item.disabled || (item.id === currentId && !currentSelectable)) return
     setIsOpen(false)
     if (item.href) {
       window.location.href = item.href
@@ -341,12 +345,12 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                         data-highlighted={idx === highlightedIndex}
                         onClick={() => select(item)}
                         onMouseEnter={() => setHighlightedIndex(idx)}
-                        disabled={isCurrent || item.disabled}
+                        disabled={(isCurrent && !currentSelectable) || item.disabled}
                         title={item.title}
                         className={`
                           w-full flex items-center gap-2 px-3 py-2 text-left transition-colors
                           ${isCurrent
-                            ? 'selection'
+                            ? `selection${currentSelectable ? ' cursor-pointer' : ''}`
                             : idx === highlightedIndex
                               ? 'bg-theme-hover cursor-pointer'
                               : 'hover:bg-theme-hover cursor-pointer'}
