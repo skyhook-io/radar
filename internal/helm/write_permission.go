@@ -15,6 +15,9 @@ import (
 // An empty namespace skips the signed-in user preflight for existing REST callers;
 // targeted operations must validate their namespace before calling.
 func CheckWritePermission(ctx context.Context, namespace string) (int, error) {
+	if k8s.ForceDisableHelmWrite {
+		return http.StatusForbidden, fmt.Errorf("Helm write operations are disabled by --disable-helm-write")
+	}
 	if user := pkgauth.UserFromContext(ctx); user != nil {
 		if namespace == "" {
 			return 0, nil

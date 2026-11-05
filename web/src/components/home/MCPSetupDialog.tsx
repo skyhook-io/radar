@@ -14,6 +14,8 @@ interface MCPSetupDialogProps {
   readOnly?: boolean
   execTools?: boolean
   httpTools?: boolean
+  /** Whether this caller can manage native Helm releases; defaults to writable. */
+  helmWrite?: boolean
   applicationEvidenceAvailable?: boolean
   mcpUrl: string
   /** Opens Radar's own investigation composer. Omit where investigations can't run. */
@@ -57,7 +59,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, httpTools, onInvestigate, applicationEvidenceAvailable = false }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, httpTools, helmWrite = true, onInvestigate, applicationEvidenceAvailable = false }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -131,7 +133,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
   const currentPort = Number(window.location.port) || 80
 
   const tools = MCP_TOOL_CATALOG
-    .filter((tool) => (!readOnly || !tool.write) && (tool.name !== 'exec_pod' || execTools) && (tool.name !== 'curl_service' || httpTools) && (!tool.localOnly || (!readOnly && applicationEvidenceAvailable)))
+    .filter((tool) => (!readOnly || !tool.write) && (tool.name !== 'exec_pod' || execTools) && (tool.name !== 'curl_service' || httpTools) && (tool.name !== 'manage_helm' || helmWrite) && (!tool.localOnly || (!readOnly && applicationEvidenceAvailable)))
     .map((tool) => readOnly && tool.name === 'diagnose'
       ? { ...tool, params: tool.params.filter((param) => param.arg !== 'in_cluster') }
       : tool)

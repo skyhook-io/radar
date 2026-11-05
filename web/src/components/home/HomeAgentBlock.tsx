@@ -15,12 +15,15 @@ export function HomeAgentBlock({
   readOnly,
   execTools,
   httpTools,
+  helmWrite,
   applicationEvidenceAvailable,
 }: {
   mcpUrl: string
   readOnly?: boolean
   execTools?: boolean
   httpTools?: boolean
+  /** Whether this caller can manage native Helm releases. */
+  helmWrite?: boolean
   applicationEvidenceAvailable?: boolean
 }) {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
@@ -57,6 +60,7 @@ export function HomeAgentBlock({
         readOnly={readOnly}
         execTools={execTools}
         httpTools={httpTools}
+        helmWrite={helmWrite}
         onInvestigate={showInvestigate && d.available ? () => openComposer(d) : undefined}
         applicationEvidenceAvailable={applicationEvidenceAvailable}
       />

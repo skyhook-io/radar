@@ -187,3 +187,24 @@ func TestManageHelmAuditsInvalidInput(t *testing.T) {
 		t.Fatalf("missing refusal audit: %v %s", err, output.String())
 	}
 }
+
+func TestManageHelmDisabledCatalogAndDispatch(t *testing.T) {
+	previous := k8s.ForceDisableHelmWrite
+	k8s.ForceDisableHelmWrite = true
+	t.Cleanup(func() { k8s.ForceDisableHelmWrite = previous })
+	names := make(map[string]bool)
+	for _, tool := range listRegisteredTools(t) {
+		names[tool.Name] = true
+	}
+	if names["manage_helm"] || !names["get_helm_release"] || !names["apply_resource"] {
+		t.Fatalf("disabled Helm writes changed the wrong tools: %v", names)
+	}
+	// A stale or direct dispatch must also refuse before any API or chart request.
+	status := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(status) })
+	_, _, err := handleManageHelm(t.Context(), nil, manageHelmInput{Action: "install", Namespace: "team-a", Name: "cache", Chart: "redis", Repository: "https://charts.example", Version: "1.2.3"})
+	if err == nil || !strings.Contains(err.Error(), "--disable-helm-write") {
+		t.Fatalf("want operator-disabled refusal, got %v", err)
+	}
+}

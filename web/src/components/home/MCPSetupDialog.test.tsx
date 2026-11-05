@@ -156,3 +156,11 @@ it('shows HTTP independently of exec', () => {
  const readOnly = renderToStaticMarkup(<MCPSetupDialog open readOnly httpTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
  expect(readOnly).not.toContain('curl_service')
 })
+
+
+it('hides disabled Helm writes while retaining release reads and other writes', () => {
+  const html = renderToStaticMarkup(<MCPSetupDialog open helmWrite={false} mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+  expect(html).not.toContain('manage_helm')
+  expect(html).toContain('get_helm_release')
+  expect(html).toContain('apply_resource')
+})
