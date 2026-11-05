@@ -1,0 +1,56 @@
+suite: Turning pod exec off
+templates:
+  - deployment.yaml
+  - clusterrole.yaml
+tests:
+  - it: leaves exec on by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --disable-exec
+  - it: passes the flag when turned off
+    template: deployment.yaml
+    set:
+      disableExec: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --disable-exec
+  - it: rejects a string value at install time
+    template: deployment.yaml
+    set:
+      disableExec: "false"
+    asserts:
+      - failedTemplate: {}
+  - it: keeps the ServiceAccount exec rule when only rbac.podExec is set
+    template: clusterrole.yaml
+    set:
+      rbac.podExec: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods/exec]
+            verbs: [create]
+  - it: removes the ServiceAccount exec rule even with rbac.podExec set
+    template: clusterrole.yaml
+    set:
+      disableExec: true
+      rbac.podExec: true
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods/exec]
+            verbs: [create]
+  - it: survives a values file carried over from an older chart
+    template: deployment.yaml
+    set:
+      disableExec: null
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --disable-exec
