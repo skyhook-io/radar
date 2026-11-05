@@ -329,6 +329,8 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // Last deployed takes this column's room: the page's rails leave too little
   // width for both, and Class already says most of what the kinds would.
   const workloadsColumn = showLastDeployed ? 'hidden min-[1800px]:table-cell' : undefined
+  // Per-environment chips already carry each version.
+  const versionColumn = showEnvVersions ? 'hidden min-[1800px]:table-cell' : undefined
 
   // Row keyboard navigation — same contract as the Resources table: j/k or
   // arrows move a highlight, g g / G jump, Enter opens, Escape clears the
@@ -553,7 +555,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                     )}
                     <th className={TH_CLASS}>Class</th>
                     <SortableTh label="Runtime" sortKey="ready" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
-                    <SortableTh label="Version" sortKey="version" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
+                    <SortableTh label="Version" sortKey="version" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className={versionColumn} />
                     {showLastDeployed && (
                       <SortableTh
                         label={<Tooltip content={LAST_DEPLOYED_TIP} delay={150}><span className="whitespace-nowrap">Last deployed</span></Tooltip>}
@@ -642,7 +644,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       </td>
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={r.workloadClass} composition={r.classComposition} /></td>
                       <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={r.members.map((member) => member.row)} workloadClass={r.workloadClass} ready={r.ready} desired={r.desired} /></td>
-                      <td className="px-2 py-2.5">
+                      <td className={clsx('px-2 py-2.5', versionColumn)}>
                         {r.lag ? (
                           <Tooltip content={`Promotion lag: ${r.lag} (${r.cells.filter((c) => c.version).map((c) => `${c.env}=${c.version}`).join(', ')})`} delay={150}>
                             <span className={`${CHIP} ${CHIP_TONE.amber}`}>{r.lag}</span>
@@ -746,7 +748,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                       )}
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={e.workloadClass} composition={e.classComposition} /></td>
                       <td className="px-2 py-2.5"><ApplicationRuntimeCell apps={[e.row]} workloadClass={e.workloadClass} ready={e.ready} desired={e.desired} /></td>
-                      <td className="px-2 py-2.5">
+                      <td className={clsx('px-2 py-2.5', versionColumn)}>
                         {e.variant === 'fleet' ? (
                           e.versionSkew ? (
                             <Tooltip content={`Version skew across clusters: ${e.versions.join(', ')}`} delay={150}>

@@ -28,7 +28,6 @@ const APP_REASONS = new Set([
 ])
 
 const PLATFORM_REASONS = new Set([
-  'failedscheduling',
   'failedattachvolume',
   'failedcreatepodsandbox',
   'networknotready',
@@ -38,7 +37,9 @@ const PLATFORM_REASONS = new Set([
 ])
 
 // Follows from a failure either side can cause, so it says nothing about which.
-const NEUTRAL_REASONS = new Set(['backoff', 'unhealthy', 'killing'])
+// FailedScheduling is here because an app's own selector or requests cause it
+// as often as a short cluster does.
+const NEUTRAL_REASONS = new Set(['backoff', 'unhealthy', 'killing', 'failedscheduling'])
 
 function isFailing(workload: AppWorkload): boolean {
   const health = healthOf(workload.health)
