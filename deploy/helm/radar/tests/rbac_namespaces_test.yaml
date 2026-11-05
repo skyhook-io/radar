@@ -219,7 +219,17 @@ tests:
     template: deployment.yaml
     set:
       rbac.namespaces: [app]
-      image.tag: 1.18.3
+      image.tag: 1.19.0
     asserts:
       - failedTemplate:
-          errorPattern: requires Radar 1.19.0 or later
+          errorPattern: requires Radar 1.19.1 or later
+
+  - it: accepts the first image with the flag
+    template: deployment.yaml
+    set:
+      rbac.namespaces: [app]
+      image.tag: 1.19.1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --rbac-namespaces=app
