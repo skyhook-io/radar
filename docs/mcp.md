@@ -101,6 +101,28 @@ handoffs select this endpoint automatically. Existing client configurations
 using `/mcp` must be updated. Startup output and `/api/capabilities`
 (`mcpEnabled`, `mcpReadOnly`) describe the effective mode.
 
+## curl_service
+
+With `--mcp-exec-tools` enabled, external MCP clients can use `curl_service` for
+one HTTP GET to a named Service from in-cluster Radar. It shares the UI's Service
+curl implementation and checks the caller's `get services/proxy` permission before
+accessing the Service. It sends no Kubernetes credentials, accepts no authentication
+headers or body, and does not follow redirects. Supply `namespace`, `name`, numeric
+Service `port`, and optionally `scheme` and `path` (including a query).
+
+The result includes the actual HTTP status and body, including non-2xx responses,
+plus duration, truncation and incomplete-body errors. A 200 status does not make an
+incomplete body successful. The request is limited to 10 seconds and 512 KiB of body.
+Internal HTTPS certificates are not verified, matching the existing UI diagnostic.
+Output can contain sensitive data and must be treated as untrusted application data.
+This proves only Radar-to-Service connectivity, not a client Pod's network path or
+public ingress. Local Radar cannot resolve in-cluster DNS; use a local HTTP client,
+port-forward, or `exec_pod` instead. Authenticated requests and HTTP writes remain
+available through `exec_pod` when the workload image has a suitable client.
+
+GET endpoints can have side effects, so this tool is not on read-only or built-in
+apply/investigation transports. The server opt-in does not grant Kubernetes RBAC.
+
 ## exec_pod
 
 Run one non-interactive argv command in a container, like `kubectl exec`.
@@ -1314,6 +1336,25 @@ namespace's ServiceAccounts, failed to, or doesn't collect them there,
 tokens are not Secret references.
 
 ### Write Tools
+
+`manage_helm` exposes native Helm install, upgrade, rollback and uninstall. Supply
+`namespace` and `name`, plus `chart`, `repository` and an exact `version` for install;
+`version` (and optional `values`) for upgrade; or a positive `revision` for rollback.
+Upgrade requires a confirmed saved chart source and its repository configured in
+Radar, just like the UI. A direct-URL install does not add that repository to
+Radar's settings; register it in the Helm UI before upgrading. Inspect history
+with `get_helm_release include=history` before rollback. Uninstall first returns a
+resource preview; pass its returned token as `confirm` to execute it. This is a Helm resource list, not a
+complete cascade or data-loss analysis. Flux-owned releases are refused; update
+GitOps-owned dependencies in their source repo.
+
+Helm operations use the caller's Kubernetes identity and the same preflight permission
+check as the UI. Namespace creation and repository configuration are not exposed.
+They can execute hooks and take minutes. After a disconnected or timed-out call,
+inspect release state before retrying. A completed Helm action does not prove that
+its workloads are ready or its application works. Use `wait_for` and application tests.
+This tool is excluded from the built-in AI apply transport until its approval UI can
+show Helm's full impact; external MCP clients can use it on the full write endpoint.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|

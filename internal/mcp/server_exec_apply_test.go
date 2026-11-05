@@ -24,8 +24,10 @@ func TestApplyMountExcludesExecTools(t *testing.T) {
 				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"apply_resource"`) {
 					t.Fatalf("%s catalog: %d %s", path, rec.Code, rec.Body.String())
 				}
-				if got := strings.Contains(rec.Body.String(), `"name":"exec_pod"`); got != (path == "/mcp") {
-					t.Fatalf("%s exposes exec_pod=%v", path, got)
+				for _, name := range []string{"exec_pod", "curl_service", "manage_helm"} {
+					if got := strings.Contains(rec.Body.String(), `"name":"`+name+`"`); got != (path == "/mcp") {
+						t.Fatalf("%s exposes %s=%v", path, name, got)
+					}
 				}
 			}
 		})

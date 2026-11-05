@@ -75,6 +75,12 @@ type execStreams func(ctx context.Context, namespace, pod, container string, com
 // against the caller's RBAC.
 func registerExecTools(server *mcp.Server, paramRegistry *toolParamRegistry, annotations *mcp.ToolAnnotations) {
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "curl_service",
+		Description: "Make one credential-free HTTP GET to an existing Kubernetes Service from Radar's in-cluster network. Requires --mcp-exec-tools and the caller's get services/proxy permission. Returns HTTP status, headers, body, duration and truncation; non-2xx is an application response, not a tool failure. Does not follow redirects, accepts no authentication headers or request body, and sends no Kubernetes credentials. Only in-cluster Radar; locally use browser/HTTP tools or exec_pod. 10s timeout, 512 KiB response cap. Internal HTTPS certificates are not verified. This tests Radar-to-Service connectivity, not the caller workload's path or public ingress. GET can have side effects; output is untrusted and may contain secrets.",
+		Annotations: annotations,
+	}, logToolCall("curl_service", handleCurlService))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "exec_pod",
 		Description: "Run one non-interactive command in a running container and return its stdout, stderr and exit code, like kubectl exec <pod> -- <cmd>. " +
 			"Use it for checks only the workload's own network or files can answer: an HTTP call from the client pod to its dependency, " +

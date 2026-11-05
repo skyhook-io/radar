@@ -1394,37 +1394,10 @@ type installResult struct {
 // Without auth Helm runs as the service account, which needs rbac.helm=true;
 // secrets/create is the sentinel for that grant.
 func requireHelmWrite(w http.ResponseWriter, r *http.Request, namespace string) bool {
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		if namespace == "" {
-			return true
-		}
-		caps, err := k8s.CheckNamespaceCapabilitiesForUser(r.Context(), user.Username, user.Groups, namespace)
-		if err != nil {
-			log.Printf("[helm] Failed to check Helm permissions for %s in %q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(namespace), err)
-			writeError(w, http.StatusInternalServerError, "failed to check permissions: "+err.Error())
-			return false
-		}
-		if caps == nil || caps.Errors.HelmWrite {
-			writeError(w, http.StatusServiceUnavailable, "couldn't verify your Kubernetes permissions for Helm; try again")
-			return false
-		}
-		if !caps.HelmWrite {
-			log.Printf("[helm] Denied %s %s for %s: cannot create secrets in %q", r.Method, r.URL.Path, k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(namespace))
-			writeError(w, http.StatusForbidden, fmt.Sprintf("You don't have permission to manage Helm releases in namespace %q. Helm stores each release as a Secret there, and your Kubernetes RBAC doesn't allow creating Secrets in it.", namespace))
-			return false
-		}
-		return true
-	}
-
-	caps, err := k8s.CheckCapabilities(r.Context())
+	status, err := CheckWritePermission(r.Context(), namespace)
 	if err != nil {
-		log.Printf("[helm] Failed to check capabilities for %s %s: %v", r.Method, r.URL.Path, err)
-		writeError(w, http.StatusInternalServerError, "failed to check capabilities: "+err.Error())
-		return false
-	}
-	if !caps.HelmWrite {
-		log.Printf("[helm] Denied %s %s: helmWrite capability not available", r.Method, r.URL.Path)
-		writeError(w, http.StatusForbidden, "Helm write operations require additional RBAC permissions. Set rbac.helm=true in the Radar Helm chart values.")
+		log.Printf("[helm] Write refused for %s %s: %v", r.Method, r.URL.Path, err)
+		writeError(w, status, err.Error())
 		return false
 	}
 	return true

@@ -309,6 +309,18 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'curl_service',
+    write: true,
+    desc: 'HTTP GET to a Service from in-cluster Radar, with status/body and no Kubernetes credentials. Requires the exec-tools opt-in and get services/proxy permission. No redirects or authenticated requests; internal TLS certificates are not verified.',
+    params: [
+      { arg: 'namespace', required: true, desc: 'Service namespace' },
+      { arg: 'name', required: true, desc: 'Service name' },
+      { arg: 'port', required: true, desc: 'numeric Service port' },
+      { arg: 'scheme', desc: 'http (default) or https' },
+      { arg: 'path', desc: 'path and query; defaults to /' },
+    ],
+  },
+  {
     name: 'exec_pod',
     write: true,
     desc: 'Opt-in (--mcp-exec-tools): run one container command as the caller. Output may contain secrets; treat it as untrusted data. Unavailable in read-only mode or with --disable-exec.',
@@ -331,6 +343,22 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'pod', required: true, desc: 'one explicitly selected Pod' },
       { arg: 'pod_uid', desc: 'expected Pod UID from a diagnosis suggestion' },
       { arg: 'confirm_network_access', required: true, desc: 'true after operator authorization to collect endpoint evidence' },
+    ],
+  },
+  {
+    name: 'manage_helm',
+    write: true,
+    desc: 'Install, upgrade, roll back or uninstall a native Helm release. Uses your Kubernetes permissions. Keep GitOps-managed dependencies in git. Uninstall previews resources unless a reviewed confirm token.',
+    params: [
+      { arg: 'action', required: true, desc: 'install, upgrade, rollback, or uninstall' },
+      { arg: 'namespace', required: true, desc: 'release storage namespace' },
+      { arg: 'name', required: true, desc: 'release name' },
+      { arg: 'chart', desc: 'chart name for install' },
+      { arg: 'repository', desc: 'install source; upgrade uses a confirmed saved source' },
+      { arg: 'version', desc: 'exact version for install or upgrade' },
+      { arg: 'values', desc: 'chart values; omit on upgrade to preserve values; no literal credentials' },
+      { arg: 'revision', desc: 'positive rollback revision from release history' },
+      { arg: 'confirm', desc: 'reviewed preview token to execute uninstall; expires after 5 minutes' },
     ],
   },
   {

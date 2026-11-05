@@ -610,6 +610,12 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "manage_helm",
+		Description: "Install, upgrade, roll back or uninstall a native Helm release as the caller. Install and upgrade require an exact chart version. Upgrade requires a confirmed source and configured repository in Radar's Helm settings; URL installs do not register repositories. Change GitOps-managed dependencies in git instead. Uninstall without confirm previews resources; a reviewed confirm token removes them. Operations may run Helm hooks and take minutes; after a timeout inspect get_helm_release before retrying. Use wait_for for workload readiness. Never pass literal credentials in values.",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
+	}, logToolCall("manage_helm", handleManageHelm))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +

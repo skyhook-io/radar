@@ -272,9 +272,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Includes batch diagnosis routing and log-argument boundaries.
-		maxCatalogBytes = 68661
-
+		// Includes batch diagnosis routing, log-argument boundaries and native Helm writes.
+		maxCatalogBytes = 70436
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -284,9 +283,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 			SetExecToolsEnabled(enabled)
 			t.Cleanup(func() { SetExecToolsEnabled(previous) })
 			budget := maxCatalogBytes
-			// exec_pod adds 2,370 measured description/schema bytes; the default cap stays fixed.
+			// Optional exec_pod and curl_service use 3,595 description/schema bytes.
 			if enabled {
-				budget += 2370
+				budget += 3595
 			}
 			total := 0
 			for _, tool := range listRegisteredTools(t) {
@@ -441,6 +440,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 	tools := listRegisteredTools(t)
 	writeTools := map[string]bool{
 		"manage_workload": true,
+		"manage_helm":     true,
 		"manage_rollout":  true,
 		"manage_cronjob":  true,
 		"manage_gitops":   true,
@@ -449,6 +449,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"delete_resource": true,
 		"manage_node":     true,
 		"exec_pod":        true,
+		"curl_service":    true,
 	}
 
 	seenWriteTools := map[string]bool{}
@@ -456,8 +457,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		if tool.Annotations == nil {
 			t.Fatalf("tool %q missing annotations", tool.Name)
 		}
-		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod") {
-			t.Errorf("tool %q openWorldHint should be true only for exec_pod", tool.Name)
+		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod" || tool.Name == "manage_helm" || tool.Name == "curl_service") {
+			t.Errorf("tool %q openWorldHint should be true only for exec_pod or manage_helm", tool.Name)
 		}
 		if writeTools[tool.Name] {
 			seenWriteTools[tool.Name] = true
@@ -498,8 +499,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 
 // writeToolNames is the mutating tool set the read-only mount must exclude.
 var writeToolNames = []string{
-	"manage_workload", "manage_rollout", "manage_cronjob", "manage_gitops",
-	"apply_resource", "patch_resource", "delete_resource", "manage_node", "exec_pod",
+	"manage_workload", "manage_helm", "manage_rollout", "manage_cronjob", "manage_gitops",
+	"apply_resource", "patch_resource", "delete_resource", "manage_node", "exec_pod", "curl_service",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the
