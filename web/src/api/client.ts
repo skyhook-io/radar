@@ -5,6 +5,7 @@ import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
+import { useClusterConnected } from '../context/clusterConnected'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
@@ -705,9 +706,12 @@ export function useDashboard(
 export function useAudit(namespaces: string[] = []) {
   const params =
     namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
+  // Mounted app-wide, so without this it keeps polling a cluster that is down.
+  const connected = useClusterConnected();
   return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
     queryFn: () => fetchJSON(`/audit${params}`),
+    enabled: connected,
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
     placeholderData: (prev) => prev,
@@ -1122,6 +1126,8 @@ export type CostUnavailableReason =
   | "access_denied"
   | "not_found"
   | "source_unavailable"
+  | "metrics_port_forward_disabled"
+  | "kubecost_port_forward_disabled"
   | "authentication_error"
   | "configuration_mismatch"
   | "deployment_configuration_error"
@@ -2130,11 +2136,14 @@ export function useRuntimeStats(enabled: boolean = true) {
 
 // Capabilities (RBAC-based feature flags)
 export function useCapabilities() {
+  const connected = useClusterConnected();
   return useQuery<Capabilities>({
     queryKey: ["capabilities"],
     queryFn: () => fetchJSON("/capabilities"),
     staleTime: 60000, // 1 minute - cached on backend too
-    refetchInterval: 60000, // Re-check periodically so transient failures self-correct
+    // Re-check periodically so transient failures self-correct, but not while
+    // the cluster is down: reconnecting refreshes every query anyway.
+    refetchInterval: connected ? 60000 : false,
   });
 }
 
@@ -2187,7 +2196,7 @@ export interface CloudInstallAttempted {
   mode: 'fresh' | 'adopt' | 'gitops'
   namespace: string
   release: string
-  stage: 'inspect' | 'prepare' | 'preflight'
+  stage: CloudInstallStage
   // Discovery saw only the default namespace; a fresh plan is not proof that
   // no Radar exists elsewhere.
   partialScan?: boolean
@@ -2197,6 +2206,8 @@ export interface CloudInstallAttempted {
   // GitOps only: the Hub install-page tab of the verified owning controller.
   method?: 'argocd' | 'flux' | ''
 }
+
+export type CloudInstallStage = 'inspect' | 'prepare' | 'preflight'
 
 export interface CloudInstallBlocked {
   reason: 'gitops' | 'preflight' | 'unsupported'
@@ -2227,6 +2238,8 @@ export type CloudInstallState =
 export interface CloudInstallStatus {
   flowId?: string
   state: CloudInstallState
+  // Preparing only: the check the server is running now.
+  prepareStep?: CloudInstallStage
   plan?: CloudInstallPlanSummary
   clusterName?: string
   connectUrl?: string
@@ -2292,7 +2305,10 @@ export function useCloudConnectInfo(
   });
 }
 
-export function useCloudInstallStatus(enabled: boolean) {
+// preparing: the prepare request is in flight. It answers only once every
+// check has run, and the cached status from before it says idle, so without
+// this nothing would poll and the steps could not advance.
+export function useCloudInstallStatus(enabled: boolean, preparing = false) {
   const queryClient = useQueryClient()
   const query = useQuery<CloudInstallStatus>({
     queryKey: ['cloud-install-status'],
@@ -2300,7 +2316,10 @@ export function useCloudInstallStatus(enabled: boolean) {
     enabled,
     gcTime: 0,
     staleTime: 0,
-    refetchInterval: (q) => (cloudInstallActive(q.state.data?.state) ? 1500 : false),
+    refetchInterval: (q) => {
+      if (preparing || q.state.data?.state === 'preparing') return 1000
+      return cloudInstallActive(q.state.data?.state) ? 1500 : false
+    },
   })
   return {
     ...query,
@@ -7356,6 +7375,19 @@ export async function fetchSessionCounts(): Promise<SessionCounts> {
 const CONTEXT_SWITCH_TIMEOUT = 45000; // 45 seconds
 
 // Switch to a different context
+// A refused context switch. errorType is set when the server checked the new
+// cluster before leaving the current one and it didn't answer; older Radar
+// servers never send it.
+export class SwitchContextError extends Error {
+  constructor(
+    message: string,
+    readonly errorType?: string,
+  ) {
+    super(message);
+    this.name = "SwitchContextError";
+  }
+}
+
 export function useSwitchContext() {
   const queryClient = useQueryClient();
 
@@ -7379,7 +7411,10 @@ export function useSwitchContext() {
 
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+          throw new SwitchContextError(
+            error.error || `HTTP ${response.status}`,
+            typeof error.errorType === "string" ? error.errorType : undefined,
+          );
         }
         return response.json();
       } catch (error) {
