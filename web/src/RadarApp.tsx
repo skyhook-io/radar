@@ -18,6 +18,7 @@
 // sees the host's values.
 import React from "react";
 import { BrowserRouter, MemoryRouter } from "react-router-dom";
+import type { GroupingMode } from "@skyhook-io/k8s-ui/types/core";
 import {
   QueryClient,
   QueryClientProvider,
@@ -110,6 +111,12 @@ export interface RadarAppProps {
   queryClient?: QueryClient;
   /** Embedded layout and host navigation hooks for Radar Hub. */
   navSlots?: NavCustomization;
+  /**
+   * Topology grouping to open with when the URL has no `?group=`. Read once at
+   * mount, so pass it from the first render. Omitted → namespace grouping across
+   * all namespaces, none within selected ones.
+   */
+  defaultTopologyGrouping?: GroupingMode;
   /**
    * Whether Radar may set the browser tab title (`document.title`) per view.
    * Defaults to OFF: embedders keep title ownership without opting out. The
@@ -244,6 +251,7 @@ export function RadarApp({
   onInvestigationFocus,
   timelineSource,
   timelineRetentionNote,
+  defaultTopologyGrouping,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
   // before children construct URLs. getApiBase() / getAuthHeaders() /
@@ -290,6 +298,7 @@ export function RadarApp({
                           manageDocumentTitle={manageDocumentTitle}
                           documentTitleSuffix={documentTitleSuffix}
                           onClusterLoadStateChange={onClusterLoadStateChange}
+                          defaultTopologyGrouping={defaultTopologyGrouping}
                         />
                       </DiagnoseProvider>
                     </DiagnoseCustomizationProvider>
