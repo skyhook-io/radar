@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { BellOff, Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
+import { BellOff, Bot, Boxes, Braces, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -48,6 +48,68 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.20.0',
+    highlights: [
+      {
+        id: 'crd-schema-explorer',
+        icon: Braces,
+        title: "Explore any CRD's schema",
+        description: 'Browse a custom resource definition as a searchable tree of fields, types and descriptions, from a new Schema tab or the resource drawer.',
+        leadDescription: "Radar now reads a CustomResourceDefinition's own schema and shows it as a searchable explorer: every field path, its type, whether it is required, and the description the CRD ships. Open it from the new Schema tab on a CRD, or from the resource drawer, and search to jump straight to the field you need instead of reading raw OpenAPI by hand.",
+        importance: 8,
+      },
+      {
+        id: 'argo-rollback-autosync',
+        icon: Undo2,
+        title: 'Roll back Argo CD apps, and manage auto-sync',
+        description: 'Roll back an Argo CD Application and see the outcome, read its auto-sync and self-heal state, and keep your sync options and compared revision.',
+        importance: 7,
+        path: '/gitops',
+        cta: 'Open GitOps',
+      },
+      {
+        id: 'kueue-admission',
+        icon: Layers,
+        title: 'See why a Kueue job waits',
+        description: 'Workload detail explains Kueue admission: the queue, the resource flavors tried, and the quota or dependencies holding a job back.',
+        importance: 6,
+      },
+      {
+        id: 'issues-new-checks-v120',
+        icon: ShieldAlert,
+        title: 'New issue checks',
+        description: 'Issues flag cert-manager renewals that failed while still Ready, pods blocked by slow admission webhooks, and evicted pods linked to their node.',
+        importance: 6,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'continue-investigation-in-agent',
+        icon: Bot,
+        title: 'Continue an investigation in your agent',
+        description: "Hand an investigation to Claude Code to continue it, see which hypotheses were ruled out and why, and open a resource's last investigation.",
+        importance: 6,
+      },
+      {
+        id: 'operator-evidence',
+        icon: Boxes,
+        title: 'Deeper evidence for more operators',
+        description: 'Detail views and investigations show NATS delivery and acks, RabbitMQ alarms with measurements, Vault HA state, and Strimzi connector tasks.',
+        importance: 5,
+      },
+    ],
+    improvements: [
+      // The grid fills row by row: pair lines of similar length.
+      'Home shows Topology and Live Traffic as live previews',
+      'Search finds an IP or host:port from a log as one address',
+      'Change history records Node label, annotation and taint edits',
+      'Workload rollback restores the previous revision exactly',
+      'ServiceAccounts link to their Secrets, webhooks to their Service',
+      'Live Traffic detects Calico and Flannel outside kube-system',
+      'Prometheus keeps its settings when you switch cluster context',
+    ],
+  },
   {
     version: 'v1.19.0',
     highlights: [
