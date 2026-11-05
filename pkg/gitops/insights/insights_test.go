@@ -2937,8 +2937,8 @@ func TestBuildIssuesCreateNamespaceAlreadySet(t *testing.T) {
 		}
 	})
 
-	// A pruning hazard already clears the one-click fix; our change must not
-	// resurrect it when the option is set.
+	// A pruning hazard clears the one-click fix; that must hold even when
+	// CreateNamespace=true is set, so a retrying sync can't prune everything.
 	t.Run("sync hazard still wins over the one-click fix", func(t *testing.T) {
 		root := missingNamespaceApp(true, false)
 		_ = unstructured.SetNestedField(root.Object, "OutOfSync", "status", "sync", "status")
