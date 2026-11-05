@@ -682,7 +682,7 @@ func acceptedParent(gw, section string) map[string]any {
 }
 
 // A status entry for a parentRef no longer in spec is stale and must not raise a
-// warning while the current parent is accepted (the skh-nonprod radar-hub case).
+// warning while the current parent is accepted.
 func TestDetectGatewayRouteParentIssues_StaleParentDropped(t *testing.T) {
 	route := httpRouteObject(0,
 		[]any{map[string]any{"name": "gw", "namespace": "infra", "sectionName": "current"}},
@@ -732,15 +732,39 @@ func TestDetectGatewayRouteParentIssues_CurrentParentOlderGenerationStillEmits(t
 	}
 }
 
-// A route attaching to default Gateways records parents in status that are not
-// listed in spec.parentRefs; the stale-parent filter is bypassed so their real
-// failures are not suppressed.
-func TestDetectGatewayRouteParentIssues_UseDefaultGatewaysBypassesFilter(t *testing.T) {
+// A route attaching to default Gateways records Gateway parents in status that
+// are not listed in spec.parentRefs; their real failures must still surface.
+func TestDetectGatewayRouteParentIssues_UseDefaultGatewaysKeepsGatewayFailure(t *testing.T) {
 	route := httpRouteObject(0, nil, []any{failedParent("default-gw", "https")})
 	route.Object["spec"].(map[string]any)["useDefaultGateways"] = "All"
 	got := Compose(httpRouteProvider(route), Filters{})
 	if len(got) != 1 {
-		t.Fatalf("useDefaultGateways route must keep its failure, got %d: %+v", len(got), got)
+		t.Fatalf("useDefaultGateways route must keep its Gateway failure, got %d: %+v", len(got), got)
+	}
+}
+
+// On a default-Gateways route, an unmatched non-Gateway status entry (a mesh
+// Service parent the spec dropped) cannot be a default attachment and is stale,
+// so it is ignored while a failing default Gateway still surfaces.
+func TestDetectGatewayRouteParentIssues_UseDefaultGatewaysDropsRemovedMeshService(t *testing.T) {
+	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	meshService := map[string]any{
+		"parentRef": map[string]any{"group": "", "kind": "Service", "name": "legacy-mesh", "namespace": "prod"},
+		"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "False", "reason": "NoMatchingParent", "message": "mesh parent gone", "lastTransitionTime": now},
+		},
+	}
+	route := httpRouteObject(0, nil, []any{meshService, failedParent("default-gw", "https")})
+	route.Object["spec"].(map[string]any)["useDefaultGateways"] = "All"
+	got := Compose(httpRouteProvider(route), Filters{})
+	if len(got) != 1 {
+		t.Fatalf("dropped mesh Service must not add a row; only the Gateway failure should surface, got %d: %+v", len(got), got)
+	}
+	if got[0].Reason != "Accepted: NoMatchingParent" || !strings.Contains(got[0].Message, "default-gw") {
+		t.Fatalf("surviving issue should be the default Gateway's, got reason=%q message=%q", got[0].Reason, got[0].Message)
+	}
+	if strings.Contains(got[0].Message, "mesh parent gone") {
+		t.Fatalf("dropped mesh Service detail must not leak: %q", got[0].Message)
 	}
 }
 
