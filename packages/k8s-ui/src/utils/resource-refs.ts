@@ -1,4 +1,4 @@
-import type { ResourceRef } from '../types/core'
+import type { Relationships, ResourceRef } from '../types/core'
 
 /**
  * resourceKey mirrors Go `audit.ResourceKey(group, kind, namespace, name)`:
@@ -28,3 +28,16 @@ export function omitResourceRefs(refs: ResourceRef[], excluded: ResourceRef[]): 
   const excludedKeys = new Set(excluded.map(resourceRefKey))
   return refs.filter(ref => !excludedKeys.has(resourceRefKey(ref)))
 }
+
+/** What serves a workload's traffic: its Services, ingresses, gateways and routes. */
+export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
+  if (!relationships) return []
+  return dedupeResourceRefs([
+    ...(relationships.services ?? []),
+    ...(relationships.ingresses ?? []),
+    ...(relationships.gateways ?? []),
+    ...(relationships.routes ?? []),
+    ...(relationships.routedFrom ?? []),
+  ])
+}
+

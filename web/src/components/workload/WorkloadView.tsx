@@ -20,7 +20,7 @@ import {
   type ResourceOwnershipContext,
   type ServingResourceDetail,
   type AuditFinding,
-  dedupeResourceRefs,
+  collectServingRefs,
   gitOpsRouteForOwner,
   gitOpsOwnerFromRelationships,
   isDiagnoseKind,
@@ -1403,17 +1403,6 @@ export function WorkloadView({
       {comparePicker}
     </>
   )
-}
-
-export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
-  if (!relationships) return []
-  return dedupeResourceRefs([
-    ...(relationships.services ?? []),
-    ...(relationships.ingresses ?? []),
-    ...(relationships.gateways ?? []),
-    ...(relationships.routes ?? []),
-    ...(relationships.routedFrom ?? []),
-  ])
 }
 
 const POD_OWNERSHIP_WORKLOAD_KINDS = new Set([
