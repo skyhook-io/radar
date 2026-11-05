@@ -27,6 +27,7 @@ import {
   canSetWorkloadImages,
   canPauseDeployment,
   isCoreBatchJob,
+  workloadHasRevisions,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
   setImageWrites,
@@ -1648,6 +1649,9 @@ function LogsTabContent({
   resourceLoading: boolean
   resourceError: Error | null
 }) {
+  const { data: revisions } = useWorkloadRevisions(apiKind.toLowerCase(), namespace, name, workloadHasRevisions(kind))
+  const lastDeployAt = revisions?.find((revision) => revision.isCurrent)?.createdAt
+
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
       <div className="h-full">
@@ -1691,6 +1695,7 @@ function LogsTabContent({
           namespace={namespace}
           name={name}
           autoStream={shouldAutoStreamWorkloadLogs(kind, resource)}
+          shortcuts={{ lastDeployAt }}
         />
       </div>
     )

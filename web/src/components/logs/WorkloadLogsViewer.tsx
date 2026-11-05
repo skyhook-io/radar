@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { fetchJSON, createWorkloadLogStream } from '../../api/client'
 import { WorkloadLogsViewer as SharedWorkloadLogsViewer } from '@skyhook-io/k8s-ui'
-import type { WorkloadLogsFetchParams, WorkloadLogsResult } from '@skyhook-io/k8s-ui'
+import type { WorkloadLogsFetchParams, WorkloadLogsResult, WorkloadLogsViewerProps as SharedWorkloadLogsViewerProps } from '@skyhook-io/k8s-ui'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useTheme } from '../../context/ThemeContext'
 
@@ -13,9 +13,10 @@ interface WorkloadLogsViewerProps {
   snapshotOnly?: boolean
   role?: string
   autoStream?: boolean
+  shortcuts?: SharedWorkloadLogsViewerProps['shortcuts']
 }
 
-export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, snapshotOnly = false, role }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, snapshotOnly = false, role, shortcuts }: WorkloadLogsViewerProps) {
   const desktopDownload = useDesktopDownload()
   const { theme } = useTheme()
 
@@ -47,6 +48,7 @@ export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, s
       forceDark={theme === 'dark' ? true : undefined}
       defaultDark={false}
       autoStream={autoStream}
+      shortcuts={shortcuts}
     />
   )
 }
