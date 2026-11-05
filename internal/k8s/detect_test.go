@@ -1045,9 +1045,9 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
 }
 
-// TestJobDetection_AgeAloneIsNotFailure pins RAD-931: a long-running active Job
-// with no failure evidence must not be reported as a failure, while a Job that
-// has truly failed — or whose pods are failing — still surfaces.
+// TestJobDetection_AgeAloneIsNotFailure guards that a long-running active Job
+// with no failure evidence is not reported as a failure, while a Job that has
+// truly failed — or whose pods are failing — still surfaces.
 func TestJobDetection_AgeAloneIsNotFailure(t *testing.T) {
 	defer ResetTestState()
 
