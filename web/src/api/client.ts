@@ -5728,6 +5728,8 @@ export interface WorkloadRevision {
   // (serving traffic, what an abort reverts to) are different revisions.
   isStable?: boolean;
   podHash?: string;
+  readyReplicas?: number;
+  serving?: boolean;
 }
 
 export function useWorkloadRevisions(
