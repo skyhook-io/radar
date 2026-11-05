@@ -55,6 +55,8 @@ export interface BuildAppDeploysInput {
   /** The app's Helm/GitOps source, when it has one. */
   sourceRef?: AppSourceRef
   partialSources?: string[]
+  /** The last revisions read, after a refresh failed: still worth showing, but not a claim about now. */
+  stale?: boolean
 }
 
 export interface AppDeploys {
@@ -199,7 +201,7 @@ export function appDeployWorkloadInput(workload: AppWorkload, revisions?: Worklo
   }
 }
 
-export function buildAppDeploys({ workloads, anchors, sourceRef, partialSources }: BuildAppDeploysInput): AppDeploys {
+export function buildAppDeploys({ workloads, anchors, sourceRef, partialSources, stale }: BuildAppDeploysInput): AppDeploys {
   const revisioned = workloads.filter((workload) => workloadHasRevisions(workload.ref.kind))
   const matched = new Set<AppHistoryAnchor>()
   const sortable = revisioned.flatMap((workload) => revisionRows(workload, anchors ?? [], matched))
@@ -212,6 +214,7 @@ export function buildAppDeploys({ workloads, anchors, sourceRef, partialSources 
   sortable.sort((a, b) => b.sortAt - a.sortAt || (b.row.revision ?? 0) - (a.row.revision ?? 0) || a.row.id.localeCompare(b.row.id))
 
   const partialReasons = [...(partialSources ?? [])]
+  if (stale) partialReasons.push("Couldn't refresh revisions. This is the last list read, so Live and Newest aren't shown.")
   for (const workload of revisioned) {
     if (workload.revisions === undefined) {
       partialReasons.push(`Revision history for ${workload.ref.kind} ${workload.ref.name} couldn't be read.`)
@@ -222,7 +225,7 @@ export function buildAppDeploys({ workloads, anchors, sourceRef, partialSources 
   }
 
   return {
-    rows: sortable.map(({ row }) => row),
+    rows: sortable.map(({ row }) => (stale && row.source === 'revision' ? { ...row, live: 'unknown' as const, newest: false } : row)),
     rolloutInProgress: workloads.some((workload) => workload.rolloutActive),
     partial: partialReasons.length > 0,
     partialReasons,
