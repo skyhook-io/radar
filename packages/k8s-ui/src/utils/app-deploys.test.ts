@@ -151,6 +151,36 @@ describe('buildAppDeploys', () => {
     expect(rows[0].ready).toBeUndefined()
   })
 
+  it('blames an outdated agent when a Deployment reports no per-revision signals at all', () => {
+    const bare = { readyReplicas: undefined, serving: undefined }
+    const { agentOutdated } = buildAppDeploys({
+      workloads: [{ ref: deployment, revisions: [revision(2, { ...bare, isCurrent: true }), revision(1, bare)] }],
+    })
+
+    expect(agentOutdated).toBe(true)
+  })
+
+  it('does not blame the agent for a Deployment with the signals, or for no revisions', () => {
+    const current = buildAppDeploys({ workloads: [{ ref: deployment, revisions: [revision(1, { isCurrent: true, serving: true })] }] })
+    const empty = buildAppDeploys({ workloads: [{ ref: deployment, revisions: [] }] })
+    const unread = buildAppDeploys({ workloads: [{ ref: deployment }] })
+
+    expect(current.agentOutdated).toBe(false)
+    expect(empty.agentOutdated).toBe(false)
+    expect(unread.agentOutdated).toBe(false)
+  })
+
+  it('does not blame the agent for a StatefulSet mid-update, which reports neither on a current agent', () => {
+    const { agentOutdated } = buildAppDeploys({
+      workloads: [{
+        ref: { kind: 'StatefulSet', namespace: 'prod', name: 'postgres-primary-cluster-prod-us-east1' },
+        revisions: [revision(1, { isCurrent: true, readyReplicas: undefined, serving: undefined })],
+      }],
+    })
+
+    expect(agentOutdated).toBe(false)
+  })
+
   it('interleaves workloads newest-first and keeps diffs within each workload', () => {
     const { rows } = buildAppDeploys({
       workloads: [
@@ -184,6 +214,7 @@ describe('buildAppDeploys', () => {
       rolloutInProgress: false,
       partial: false,
       partialReasons: [],
+      agentOutdated: false,
     })
   })
 
@@ -218,7 +249,7 @@ describe('buildAppDeploys', () => {
       timestamp: '2026-11-02T10:01:30Z',
     }
 
-    it('folds a source deploy into the revision it produced', () => {
+    it('folds a nearby source deploy into the revision without claiming it produced it', () => {
       const { rows } = buildAppDeploys({
         sourceRef: helmSource,
         anchors: [helmAnchor],
@@ -226,7 +257,63 @@ describe('buildAppDeploys', () => {
       })
 
       expect(rows).toHaveLength(1)
-      expect(rows[0]).toMatchObject({ source: 'revision', via: 'Helm revision 7', status: 'deployed', detail: 'Upgrade complete' })
+      expect(rows[0]).toMatchObject({ source: 'revision', via: 'Near Helm revision 7 · checkout-1.4.2', status: 'deployed', detail: 'Upgrade complete' })
+    })
+
+    it('keeps the git revision of a nearby sync that loses its own row', () => {
+      const { rows } = buildAppDeploys({
+        sourceRef: gitopsSource,
+        anchors: [{ type: 'gitops', title: 'Argo CD sync', revision: 'f00dfeed12', initiatedBy: 'alice', timestamp: '2026-11-02T10:01:00Z' }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true })] }],
+      })
+
+      expect(rows).toHaveLength(1)
+      expect(rows[0].via).toBe('Near Argo CD sync by alice · f00dfeed12')
+    })
+
+    it('states it plainly when a Helm record names the running version', () => {
+      const { rows } = buildAppDeploys({
+        sourceRef: helmSource,
+        anchors: [{ ...helmAnchor, source: 'checkout-1.4.2 · 2.0.1' }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image: 'shop/checkout:v2.0.1' })] }],
+      })
+
+      expect(rows[0].via).toBe('Helm revision 7 · checkout-1.4.2 · 2.0.1')
+    })
+
+    it('states it plainly when the image carries the synced commit', () => {
+      const synced = (image: string) => buildAppDeploys({
+        sourceRef: gitopsSource,
+        anchors: [{ type: 'gitops', title: 'Argo CD sync', revision: 'a1b2c3d4e5f60718', timestamp: '2026-11-02T10:01:00Z' }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image })] }],
+      }).rows[0].via
+
+      expect(synced('shop/checkout:a1b2c3d')).toBe('Argo CD sync · a1b2c3d4e5f60718')
+      expect(synced('shop/checkout:main-a1b2c3d4')).toBe('Argo CD sync · a1b2c3d4e5f60718')
+      expect(synced('shop/checkout:a1b2c3d4e5f60718')).toBe('Argo CD sync')
+      expect(synced('shop/checkout:ffffffffff')).toBe('Near Argo CD sync · a1b2c3d4e5f60718')
+    })
+
+    it("doesn't count a moving tag as evidence", () => {
+      const { rows } = buildAppDeploys({
+        sourceRef: helmSource,
+        anchors: [{ ...helmAnchor, source: 'checkout-1.4.2 · latest' }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image: 'shop/checkout:latest' })] }],
+      })
+
+      expect(rows[0].via).toMatch(/^Near /)
+    })
+
+    it('pairs with the record that names the version over a closer one that does not', () => {
+      const closer = { ...helmAnchor, title: 'Helm revision 8', revision: '8', source: 'checkout-1.4.3 · 9.9.9', timestamp: '2026-11-02T10:00:10Z' }
+      const { rows } = buildAppDeploys({
+        sourceRef: helmSource,
+        anchors: [closer, { ...helmAnchor, source: 'checkout-1.4.2 · 2.0.1' }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image: 'shop/checkout:2.0.1' })] }],
+      })
+
+      expect(rows.map((row) => row.via)).toContain('Helm revision 7 · checkout-1.4.2 · 2.0.1')
+      expect(rows.find((row) => row.source === 'helm')?.via).toBe('Helm revision 8')
     })
 
     it('keeps a source deploy with no matching revision as its own row', () => {
