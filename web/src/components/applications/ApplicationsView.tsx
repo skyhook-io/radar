@@ -293,14 +293,16 @@ function AppDetailRoute({
     [appWorkloads],
   );
   const revisionQueries = useQueries({
-    queries: deployWorkloads.map((workload) =>
-      workloadRevisionsQuery(
+    queries: deployWorkloads.map((workload) => ({
+      ...workloadRevisionsQuery(
         workloadRevisionKind(workload),
         workload.namespace,
         workload.name,
         deploysVisible,
       ),
-    ),
+      // Live and Newest are claims about right now.
+      refetchInterval: deploysVisible ? 20_000 : false,
+    })),
   });
   const deploysPending =
     !deploysVisible ||
