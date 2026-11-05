@@ -51,6 +51,8 @@ interface LogRangeSelectProps {
   /** When true, the control is greyed out and non-interactive. */
   disabled?: boolean
   disabledReason?: string
+  /** Host-specific ranges, listed after the standard time ranges. */
+  extraTimeOptions?: Array<{ value: string; label: string }>
 }
 
 export function LogRangeSelect({
@@ -61,6 +63,7 @@ export function LogRangeSelect({
   isDark = true,
   disabled = false,
   disabledReason = 'Stop streaming to change the log range',
+  extraTimeOptions = [],
 }: LogRangeSelectProps) {
   const palette = getLogPalette(isDark)
   return (
@@ -84,6 +87,9 @@ export function LogRangeSelect({
           <option value="since:900">Last 15 min</option>
           <option value="since:1800">Last 30 min</option>
           <option value="since:3600">Last 1 hour</option>
+          {extraTimeOptions.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
         </optgroup>
       </select>
     </Tooltip>
