@@ -1373,7 +1373,9 @@ GitOps-owned dependencies in their source repo.
 
 A successful call returns `action`, `namespace`, `name`, `state` and `message`.
 `state: preview` additionally returns `revision`, `resources` and the expiring `confirm`
-token; `state: completed` means the Helm action returned, not that workloads are healthy.
+token. The preview's `message` includes the observed release status. The token is not
+single-use: it remains valid for five minutes while its bound caller, cluster and
+release state match. `state: completed` means the Helm action returned, not that workloads are healthy.
 Read `get_helm_release` for the resulting revision and readiness. Failures are MCP tool
 errors; an operation may have changed resources, so inspect before retrying.
 

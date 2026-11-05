@@ -125,6 +125,7 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 // Small toggle button rendered in a port row's action slot. The panel itself
 // renders inline within the port card (see CurlPanel), not as an overlay.
+// Renders nothing for ExternalName, selectorless, headless or unallocated Services.
 export function CurlButton({ active, onClick, service }: {
   active: boolean
   onClick: () => void

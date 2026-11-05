@@ -211,12 +211,16 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 		serviceType corev1.ServiceType
 		selector    map[string]string
 		wantStatus  int
+		protocols   []corev1.Protocol
 	}{
-		{"selector", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 0},
-		{"denied", false, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 403},
-		{"alias", true, corev1.ServiceTypeExternalName, nil, 400},
-		{"manual endpoints", true, corev1.ServiceTypeClusterIP, nil, 400},
-		{"headless", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 400},
+		{"selector", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 0, nil},
+		{"denied", false, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 403, nil},
+		{"alias", true, corev1.ServiceTypeExternalName, nil, 400, nil},
+		{"manual endpoints", true, corev1.ServiceTypeClusterIP, nil, 400, nil},
+		{"headless", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 400, nil},
+		{"udp only", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 400, []corev1.Protocol{corev1.ProtocolUDP}},
+		{"sctp only", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 400, []corev1.Protocol{corev1.ProtocolSCTP}},
+		{"udp then tcp", true, corev1.ServiceTypeClusterIP, map[string]string{"app": "fixture"}, 0, []corev1.Protocol{corev1.ProtocolUDP, corev1.ProtocolTCP}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +238,14 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 			if tc.name == "headless" {
 				clusterIP = "None"
 			}
-			cacheClient := fake.NewClientset(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}, Spec: corev1.ServiceSpec{Type: tc.serviceType, Selector: tc.selector, ClusterIP: clusterIP, ExternalName: "api.team-b.svc.cluster.local", Ports: []corev1.ServicePort{{Port: 8080}}}})
+			ports := []corev1.ServicePort{{Port: 8080}}
+			if tc.protocols != nil {
+				ports = nil
+				for _, protocol := range tc.protocols {
+					ports = append(ports, corev1.ServicePort{Port: 8080, Protocol: protocol})
+				}
+			}
+			cacheClient := fake.NewClientset(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}, Spec: corev1.ServiceSpec{Type: tc.serviceType, Selector: tc.selector, ClusterIP: clusterIP, ExternalName: "api.team-b.svc.cluster.local", Ports: ports}})
 			if err := k8s.InitTestResourceCache(cacheClient); err != nil {
 				t.Fatal(err)
 			}

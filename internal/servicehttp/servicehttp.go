@@ -256,13 +256,13 @@ func do(ctx context.Context, req Request, send func(context.Context, string, str
 	}
 	matchedPort := int32(-1)
 	for _, p := range svc.Spec.Ports {
-		if fmt.Sprintf("%d", p.Port) == req.Port {
+		if fmt.Sprintf("%d", p.Port) == req.Port && (p.Protocol == "" || p.Protocol == corev1.ProtocolTCP) {
 			matchedPort = p.Port
 			break
 		}
 	}
 	if matchedPort < 0 {
-		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service has no such port"}
+		return Response{}, &Error{Status: http.StatusBadRequest, Message: "Service has no TCP port with that number; HTTP requires TCP"}
 	}
 
 	// Bind the dial to the validated Service IP, not a separately cached DNS
