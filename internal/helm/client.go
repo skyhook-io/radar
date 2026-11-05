@@ -2578,6 +2578,12 @@ func (c *Client) upgradeWithValuesMode(actionConfig *action.Configuration, name,
 		return fmt.Errorf("failed to get current release: %w", err)
 	}
 
+	if !replace {
+		if err := validateOverrideReplacement(rel.Config, newValues); err != nil {
+			return err
+		}
+	}
+
 	source, sourceErr := c.normalUpgradeSource(actionConfig, rel, repositoryName)
 	if sourceErr != nil {
 		return sourceErr
@@ -3482,7 +3488,7 @@ func (c *Client) installWithPolicy(actionConfig *action.Configuration, req *Inst
 			return nil, fmt.Errorf("install requires a configured, credential-free chart source")
 		}
 		if _, err := c.exactConfiguredSource(*source, req.ChartName); err != nil {
-			return nil, fmt.Errorf("configure this chart repository in Radar's Helm settings before installing: %w", err)
+			return nil, fmt.Errorf("chart source is not configured: ask the Radar configuration owner to configure it (operator-managed installations use startup Helm configuration, not UI repository writes): %w", err)
 		}
 	}
 
@@ -3667,6 +3673,10 @@ func (c *Client) installWithPolicy(actionConfig *action.Configuration, req *Inst
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
+	}
+
+	if freshOnly && (loadedChart.Metadata == nil || loadedChart.Metadata.Name != req.ChartName || loadedChart.Metadata.Version != req.Version) {
+		return nil, fmt.Errorf("downloaded chart does not match the requested name and exact version")
 	}
 
 	if mode != installFresh {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -43,13 +44,14 @@ type Request struct {
 }
 
 type Response struct {
-	Status     int               `json:"status"`
-	StatusText string            `json:"statusText"` // canonical reason phrase, e.g. "OK", "Service Unavailable"
-	DurationMs int64             `json:"durationMs"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
-	Truncated  bool              `json:"truncated"`
-	BodyBytes  int               `json:"bodyBytes"`
+	Status           int               `json:"status"`
+	StatusText       string            `json:"statusText"` // canonical reason phrase, e.g. "OK", "Service Unavailable"
+	DurationMs       int64             `json:"durationMs"`
+	Headers          map[string]string `json:"headers"`
+	Body             string            `json:"body"`
+	Truncated        bool              `json:"truncated"`
+	BodyBytes        int               `json:"bodyBytes"`
+	BodyEncodingLoss bool              `json:"bodyEncodingLoss,omitempty"`
 	// Error is set when the response was received but reading its body failed
 	// (e.g. the target stalled until the timeout). Status/body still reflect
 	// whatever arrived so a partial response isn't silently shown as success.
@@ -70,8 +72,9 @@ func curlDialClient() *http.Client {
 			return http.ErrUseLastResponse
 		},
 		Transport: &http.Transport{
-			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // diagnostic curl; no creds sent
-			DisableKeepAlives: true,
+			TLSClientConfig:        &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // diagnostic curl; no creds sent
+			DisableKeepAlives:      true,
+			MaxResponseHeaderBytes: 64 * 1024,
 		},
 	}
 }
@@ -94,8 +97,8 @@ func friendlyDialError(err error) string {
 // authorizeCurl checks the caller may reach the Service. Direct-dial bypasses the
 // apiserver, so we re-create the authorization it would have enforced for
 // services/proxy as the calling user, or as Radar's ServiceAccount on an
-// unauthenticated in-cluster listener. Network access never bypasses RBAC.
-func authorizeCurl(ctx context.Context, namespace, name string) (bool, error) {
+// unauthenticated MCP listener. The no-auth UI retains operator access.
+func authorizeCurl(ctx context.Context, namespace, name string, requireServiceAccountPermission bool) (bool, error) {
 	user := auth.UserFromContext(ctx)
 	attrs := &authv1.ResourceAttributes{
 		Namespace:   namespace,
@@ -105,6 +108,11 @@ func authorizeCurl(ctx context.Context, namespace, name string) (bool, error) {
 		Name:        name,
 	}
 	if user == nil {
+		// The existing no-auth UI uses the operator's network access. External
+		// agents additionally need an explicit services/proxy grant to Radar.
+		if !requireServiceAccountPermission {
+			return true, nil
+		}
 		client := k8s.GetClient()
 		if client == nil {
 			return false, fmt.Errorf("k8s client not initialized")
@@ -168,10 +176,16 @@ func (e *Error) Error() string { return e.Message }
 // leak Radar's token to anything you curl. Authorization is re-created with an
 // explicit SubjectAccessReview.
 func Do(ctx context.Context, req Request) (Response, error) {
-	return do(ctx, req, request)
+	return do(ctx, req, request, false)
 }
 
-func do(ctx context.Context, req Request, send func(context.Context, string) (Response, error)) (Response, error) {
+// DoForMCP adds ServiceAccount authorization on a no-auth agent listener.
+// Signed-in users have the same caller authorization on both transports.
+func DoForMCP(ctx context.Context, req Request) (Response, error) {
+	return do(ctx, req, request, true)
+}
+
+func do(ctx context.Context, req Request, send func(context.Context, string) (Response, error), requireServiceAccountPermission bool) (Response, error) {
 	// Direct dial only works from inside the cluster network (Cloud / in-cluster).
 	// Locally you'd port-forward instead.
 	if !k8s.IsInCluster() {
@@ -211,7 +225,8 @@ func do(ctx context.Context, req Request, send func(context.Context, string) (Re
 		return Response{}, &Error{Status: http.StatusBadRequest, Message: "invalid path"}
 	}
 
-	if allowed, err := authorizeCurl(ctx, req.Namespace, req.Name); err != nil {
+	if allowed, err := authorizeCurl(ctx, req.Namespace, req.Name, requireServiceAccountPermission); err != nil {
+		log.Printf("[servicehttp] Failed to authorize curl %s/%s: %v", req.Namespace, req.Name, err)
 		return Response{}, &Error{Status: http.StatusInternalServerError, Message: "authorization check failed"}
 	} else if !allowed {
 		return Response{}, &Error{Status: http.StatusForbidden, Message: "You don't have permission to reach this Service (requires get services/proxy)."}

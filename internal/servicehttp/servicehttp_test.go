@@ -161,7 +161,7 @@ func TestServiceAuthorizationUsesCallerAndTarget(t *testing.T) {
 			prev := k8s.SetTestClient(client)
 			defer k8s.SetTestClient(prev)
 			ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "alice", Groups: []string{"team-a"}})
-			got, err := authorizeCurl(ctx, "team-a", "app")
+			got, err := authorizeCurl(ctx, "team-a", "app", true)
 			if err != nil || got != allowed || !seen {
 				t.Fatalf("allowed=%v err=%v seen=%v", got, err, seen)
 			}
@@ -193,7 +193,7 @@ func TestServiceAuthorizationNoAuthListener(t *testing.T) {
 			}
 			prev := k8s.SetTestClient(client)
 			defer k8s.SetTestClient(prev)
-			got, err := authorizeCurl(t.Context(), "team-a", "app")
+			got, err := authorizeCurl(t.Context(), "team-a", "app", true)
 			if err != nil || got != allowed || !seen {
 				t.Fatalf("serviceaccount check: %v %v %v", got, err, seen)
 			}
@@ -249,7 +249,7 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 					t.Errorf("wrong target %s", target)
 				}
 				return request(ctx, app.URL+"/health?full=true")
-			})
+			}, true)
 			if tc.wantStatus != 0 {
 				failure, ok := err.(*Error)
 				if !ok || failure.Status != tc.wantStatus || calls != 0 {
@@ -259,5 +259,18 @@ func TestServiceFlowAuthorizationTargetAndResponse(t *testing.T) {
 				t.Fatalf("response=%+v err=%v calls=%d", got, err, calls)
 			}
 		})
+	}
+}
+
+func TestNoAuthUIRetainsOperatorAccess(t *testing.T) {
+	prev := k8s.SetTestClient(nil)
+	defer k8s.SetTestClient(prev)
+	allowed, err := authorizeCurl(t.Context(), "team-a", "app", false)
+	if err != nil || !allowed {
+		t.Fatalf("no-auth UI unexpectedly needs SA proxy grant: %v %v", allowed, err)
+	}
+	allowed, err = authorizeCurl(t.Context(), "team-a", "app", true)
+	if err == nil || allowed {
+		t.Fatal("MCP must require explicit SA permission")
 	}
 }

@@ -1396,7 +1396,7 @@ type installResult struct {
 func requireHelmWrite(w http.ResponseWriter, r *http.Request, namespace string) bool {
 	status, err := CheckWritePermission(r.Context(), namespace)
 	if err != nil {
-		log.Printf("[helm] Write refused for %s %s: %v", r.Method, r.URL.Path, err)
+		log.Printf("[helm] Failed to authorize write %q/%q: %v", namespace, r.PathValue("name"), err)
 		writeError(w, status, err.Error())
 		return false
 	}

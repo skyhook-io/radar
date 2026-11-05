@@ -37,3 +37,29 @@ func TestMCPInstallRefusesUnconfiguredSourceBeforeFetch(t *testing.T) {
 		t.Fatalf("unconfigured source fetched: %v hits=%d", err, hits)
 	}
 }
+
+func TestMCPOverridesRefuseHiddenContainerReplacement(t *testing.T) {
+	stored := map[string]any{"auth": map[string]any{"password": "secret", "user": "before"}, "credentials": []any{map[string]any{"password": "secret"}}, "ports": []any{80}}
+	for _, tc := range []struct {
+		name    string
+		values  map[string]any
+		refused bool
+	}{
+		{"nested map preserves password", map[string]any{"auth": map[string]any{"user": "after"}}, false},
+		{"empty preserves", map[string]any{}, false},
+		{"null hidden object", map[string]any{"auth": nil}, true},
+		{"scalar hidden object", map[string]any{"auth": false}, true},
+		{"replace hidden list", map[string]any{"credentials": []any{map[string]any{"user": "new"}}}, true},
+		{"replace public list", map[string]any{"ports": []any{443}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateOverrideReplacement(stored, tc.values)
+			if (err != nil) != tc.refused {
+				t.Fatalf("refused=%v err=%v", tc.refused, err)
+			}
+			if stored["auth"].(map[string]any)["password"] != "secret" {
+				t.Fatal("validation mutated original values")
+			}
+		})
+	}
+}

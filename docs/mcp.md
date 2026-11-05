@@ -107,15 +107,21 @@ With `--mcp-exec-tools` enabled, external MCP clients can use `curl_service` for
 one HTTP GET to a named Service from in-cluster Radar. It shares the UI's Service
 curl implementation and checks the caller's `get services/proxy` permission before
 accessing the Service. A listener without auth checks Radar's own ServiceAccount
-permission instead. Only selector-backed Services are allowed; ExternalName and
-manually routed Services are refused. It sends no Kubernetes credentials, accepts no authentication
+permission instead; operators must grant `get services/proxy` to Radar explicitly
+(the default chart does not grant it). The no-auth browser UI retains its existing
+operator access. Only selector-backed Services are allowed; ExternalName and
+manually routed Services are refused, including in the browser UI. Namespace RBAC
+is not network isolation: granting `services/proxy` delegates Radar-to-Service network
+access, and users who can edit EndpointSlices can alter where a Service routes. It sends no Kubernetes credentials, accepts no authentication
 headers or body, and does not follow redirects. Supply `namespace`, `name`, numeric
 Service `port`, and optionally `scheme` and `path` (including a query).
 
 The result includes the actual HTTP status and body, including non-2xx responses,
 plus duration, truncation and incomplete-body errors. A 200 status does not make an
 incomplete body successful. The request is limited to 10 seconds and reads at most 512 KiB; MCP retains at most
-64 KiB of body head/tail with truncation marked.
+64 KiB of body head/tail and 16 KiB of header names/values with truncation marked.
+Transport headers over 64 KiB are refused. `bodyBytes` is the captured byte count
+before the MCP preview, and `bodyEncodingLoss` marks invalid UTF-8 replacement.
 Internal HTTPS certificates are not verified, matching the existing UI diagnostic.
 Output can contain sensitive data and must be treated as untrusted application data.
 This proves only Radar-to-Service connectivity, not a client Pod's network path or
@@ -1343,15 +1349,25 @@ tokens are not Secret references.
 `manage_helm` exposes native Helm install, upgrade, rollback and uninstall. Supply
 `namespace` and `name`, plus `chart`, `repository` and an exact `version` for install;
 `version` (and optional `values`) for upgrade; or a positive `revision` for rollback.
-Upgrade values merge into the stored overrides on the server, preserving omitted
-keys, including credentials. `replace_values: true` explicitly replaces all stored
+Upgrade values merge into the stored overrides on the server, preserving omitted map keys. Lists are replaced as whole units; nulls and type changes
+can remove existing values. Partial overrides that replace containers with hidden
+credentials are refused. `replace_values: true` explicitly replaces all stored
 overrides; `values: {}` with replacement resets them. Redacted placeholders are refused.
-Install and upgrade require a repository configured in Radar's Helm settings;
+Install and upgrade require a source configured by Radar's configuration owner.
+In local mode, use Helm settings. In operator-managed in-cluster mode, use the
+existing startup Helm configuration (`helm.ociSources` for OCI, or an operator-mounted
+Helm repository config for classic repositories); UI repository writes are disabled.
+Cloud source changes require the owner; pod-local repository settings are ephemeral
+and must be restored after a restart. The tool does not provision or persist sources;
+use GitOps for the shared hackathon cluster.
+For existing releases,
 upgrade also requires a confirmed saved chart source. Install refuses any existing
 release history, including failed or uninstalled releases, rather than recovering
 it implicitly. Inspect history
 with `get_helm_release include=history` before rollback. Uninstall first returns a
-resource preview; pass its returned token as `confirm` to execute it. This is a Helm resource list, not a
+resource preview; pass its returned token as `confirm` to execute it. The token rejects
+changes observed before dispatch; Helm does not provide an atomic revision-conditioned
+uninstall, so coordinate with other release writers during deletion. This is a Helm resource list, not a
 complete cascade or data-loss analysis. Detected Flux-owned releases are refused; this cache-based ownership check is
 best-effort when Flux visibility is restricted; update
 GitOps-owned dependencies in their source repo.

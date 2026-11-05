@@ -175,7 +175,8 @@ External MCP clients can use `manage_helm` to install a dependency, upgrade a re
 from its confirmed saved source, roll back to an explicit revision, or preview and
 confirm an uninstall. It uses the same Helm permission preflight and caller identity
 as the UI. On upgrade, supplied `values` merge into stored overrides on the server;
-omitted keys, including credentials, are preserved. `replace_values: true` explicitly
+omitted map keys are preserved. Lists replace as whole units; null and type changes
+can remove values. Partial overrides cannot replace a container with hidden credentials. `replace_values: true` explicitly
 replaces all overrides. Never feed redacted values from a read back into a write.
 See [MCP](mcp.md#write-tools) for the input and confirmation contract.
 

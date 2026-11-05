@@ -1,8 +1,10 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +26,8 @@ func TestManageHelmRejectsAmbiguousAndRedactedInput(t *testing.T) {
 	for _, mutate := range []func(*manageHelmInput){
 		func(x *manageHelmInput) { x.Namespace = "../other" },
 		func(x *manageHelmInput) { x.Version = "" },
+		func(x *manageHelmInput) { x.Version = "1" },
+		func(x *manageHelmInput) { x.Version = "1.2" },
 		func(x *manageHelmInput) { x.Version = ">=1.2.3" },
 		func(x *manageHelmInput) { x.Action = "remove" },
 		func(x *manageHelmInput) { x.Confirm = "true" },
@@ -75,5 +79,16 @@ func TestManageHelmDeniesBeforeFetchingChart(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Fatalf("denied caller fetched repository %d times", hits)
+	}
+}
+
+func TestManageHelmAuditsInvalidInput(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	_, _, err := handleManageHelm(t.Context(), nil, manageHelmInput{Action: "install", Namespace: "team-a", Name: "demo"})
+	if err == nil || !strings.Contains(output.String(), `action="helm_install"`) || !strings.Contains(output.String(), `outcome="refused"`) {
+		t.Fatalf("missing refusal audit: %v %s", err, output.String())
 	}
 }

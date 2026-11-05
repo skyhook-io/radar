@@ -25,7 +25,7 @@ type manageHelmInput struct {
 	Repository    string         `json:"repository,omitempty" jsonschema:"install: configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
 	Version       string         `json:"version,omitempty" jsonschema:"exact chart version; required for install and upgrade"`
 	Values        map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; upgrade merges into stored overrides unless replace_values=true; never reuse redacted output or literal credentials"`
-	ReplaceValues bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false preserves omitted keys"`
+	ReplaceValues bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false preserves omitted map keys; lists replace; hidden-credential container replacement is refused"`
 	Revision      int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
 	Confirm       string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`
 }
@@ -67,7 +67,7 @@ func (in manageHelmInput) validate() error {
 		return fmt.Errorf("confirm is only valid for uninstall")
 	}
 	if in.Version != "" {
-		if _, err := semver.NewVersion(in.Version); err != nil {
+		if _, err := semver.StrictNewVersion(strings.TrimPrefix(in.Version, "v")); err != nil {
 			return fmt.Errorf("version must be an exact chart version, not a range or latest")
 		}
 	}
@@ -87,6 +87,9 @@ func (in manageHelmInput) validate() error {
 }
 
 func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput) (*mcp.CallToolResult, any, error) {
+	r := (&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
+	audit := auth.AuditActionDetails{Action: "helm_" + in.Action, Kind: "HelmRelease", Namespace: in.Namespace, Name: in.Name, Source: "mcp", Outcome: "refused"}
+	defer func() { auth.AuditLogAction(r, audit) }()
 	if err := in.validate(); err != nil {
 		return nil, nil, err
 	}
@@ -96,9 +99,6 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 	operation := k8s.OperationContext()
 	config, clusterContext := k8s.GetConfigSnapshot()
 	ctx = context.WithValue(ctx, confirmationContextKey{}, clusterContext)
-	r := (&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
-	audit := auth.AuditActionDetails{Action: "helm_" + in.Action, Kind: "HelmRelease", Namespace: in.Namespace, Name: in.Name, Source: "mcp", Outcome: "refused"}
-	defer func() { auth.AuditLogAction(r, audit) }()
 	if _, err := helm.CheckWritePermission(ctx, in.Namespace); err != nil {
 		return nil, nil, err
 	}
@@ -171,7 +171,7 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 		err = client.UninstallAsUser(in.Namespace, in.Name, user)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors configure the repository and confirm its source in Radar; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
+		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
 	}
 	audit.Outcome = "completed"
 	return toJSONResult(map[string]any{"action": in.Action, "state": "completed", "namespace": in.Namespace, "name": in.Name, "message": "Helm operation completed. Use get_helm_release and wait_for to verify workload readiness; completion does not prove application behavior."})
