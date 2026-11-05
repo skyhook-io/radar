@@ -54,7 +54,9 @@ type Setup struct {
 	Prometheus string   `json:"prometheus"`
 	CostSource string   `json:"costSource"`
 	Browsers   []string `json:"browsers"`
-	// AIConfigured is whether an AI agent can run investigations.
+	// AIConfigured is whether Radar's AI investigations are set up: a drivable
+	// agent is installed and its disclosure was accepted. An installed agent CLI
+	// alone is false.
 	AIConfigured bool `json:"aiConfigured"`
 	// TrafficSource is the traffic source in use (hubble, caretta, istio,
 	// beyla) or "none".

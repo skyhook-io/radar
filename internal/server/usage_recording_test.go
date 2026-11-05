@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/usagedata"
 )
@@ -229,5 +230,30 @@ func TestUsageMiddlewareTreatsDisconnected503AsNotConnected(t *testing.T) {
 				t.Fatalf("recorded %+v, want NotConnected=%v", *got, tc.want)
 			}
 		})
+	}
+}
+
+// An installed agent CLI alone isn't "AI configured": the person must have
+// accepted Radar's disclosure for it, which investigations require.
+func TestAnyAgentSetUpNeedsAcceptedDisclosure(t *testing.T) {
+	claude := ai.AgentInfo{Name: "claude", Present: true, Supported: true, ConsentSurfaces: map[ai.ExecutionProfile]string{"read-only": "claude-readonly"}}
+	accepted := func(surface string) bool { return surface == "claude-readonly" }
+	none := func(string) bool { return false }
+
+	if anyAgentSetUp([]ai.AgentInfo{claude}, none) {
+		t.Error("installed agent without an accepted disclosure counted as set up")
+	}
+	if !anyAgentSetUp([]ai.AgentInfo{claude}, accepted) {
+		t.Error("installed agent with an accepted disclosure not counted as set up")
+	}
+	unsupported := claude
+	unsupported.Supported = false
+	if anyAgentSetUp([]ai.AgentInfo{unsupported}, accepted) {
+		t.Error("an agent Radar can't drive counted as set up")
+	}
+	missing := claude
+	missing.Present = false
+	if anyAgentSetUp([]ai.AgentInfo{missing}, accepted) {
+		t.Error("an uninstalled agent counted as set up")
 	}
 }

@@ -27,8 +27,10 @@ Once a day, and only if Radar was used:
 - Radar's setup: auth mode, timeline storage, whether MCP is on, whether
   Prometheus was found in the cluster or set by hand, cost source, and browser
   family.
-- Yes or no: whether an AI agent can run investigations, and whether Radar can
-  read Argo CD or Flux. Which traffic source is in use, from a fixed list.
+- Yes or no: whether you set up Radar's AI investigations (an agent Radar can
+  use is installed and you accepted Radar's AI disclosure for it), and whether
+  Radar can read Argo CD or Flux. Having Claude Code or Codex installed doesn't
+  count on its own. Which traffic source is in use, from a fixed list.
 - How often each view, action and MCP tool was used, how often the command
   palette and search were opened, which buttons on an issue were used (such as
   Investigate), which requests failed, and which screens crashed. Actions are

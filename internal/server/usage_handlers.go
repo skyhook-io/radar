@@ -17,7 +17,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -225,11 +227,32 @@ func (s *Server) usageSetup() usagedata.Setup {
 	}
 }
 
-// aiConfigured reports whether investigations can run now: the same test the
-// AI agent picker's "enabled" uses, without probing for newly installed CLIs.
+// aiConfigured reports whether someone set up Radar's AI investigations: an
+// agent Radar can drive is installed and its disclosure was accepted, in the
+// consent card or the CLI. Investigations can't run without that acceptance.
+// An installed Claude Code or Codex alone doesn't count; people install them
+// for other work.
 func (s *Server) aiConfigured() bool {
 	diagnoser, runs := s.aiEngine()
-	return diagnoser != nil && runs != nil && len(diagnoser.AgentInfos(context.Background(), false)) > 0
+	if diagnoser == nil || runs == nil {
+		return false
+	}
+	return anyAgentSetUp(diagnoser.AgentInfos(context.Background(), false), config.AIConsentGiven)
+}
+
+// anyAgentSetUp reports whether any drivable agent has an accepted disclosure.
+func anyAgentSetUp(agents []ai.AgentInfo, consentGiven func(surface string) bool) bool {
+	for _, agent := range agents {
+		if !agent.Present || !agent.Supported {
+			continue
+		}
+		for _, surface := range agent.ConsentSurfaces {
+			if consentGiven(surface) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // lastUsageTrafficSource is the traffic source last read, reported while
