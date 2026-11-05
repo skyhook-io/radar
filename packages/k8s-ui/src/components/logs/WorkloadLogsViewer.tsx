@@ -506,7 +506,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       showPodName
-      emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
+      emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : failingOnly ? "These pods wrote no logs. If they never started, the reason is in the workload's events." : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
       forceDark={forceDark}
