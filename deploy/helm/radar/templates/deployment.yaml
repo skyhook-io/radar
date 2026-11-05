@@ -4,6 +4,9 @@
 {{- if and (eq .Values.timeline.storage "postgres") (not .Values.timeline.postgres.existingSecret) }}
 {{- fail "timeline.postgres.existingSecret is required when timeline.storage=postgres" }}
 {{- end }}
+{{- if and (hasKey .Values.rbac "namespaces") (empty .Values.rbac.namespaces) }}
+{{- fail "rbac.namespaces is empty, so it names no namespace for Radar. List at least one namespace, or remove rbac.namespaces to give Radar cluster-wide access." }}
+{{- end }}
 {{- with .Values.rbac.namespaces }}
 {{- if and (has $.Release.Namespace .) (or $.Values.cloud.enabled (ne $.Values.auth.mode "none")) }}
 {{- fail (printf "rbac.namespaces must not include Radar's own namespace %s when auth or Radar Cloud is on: people with access there could use Radar's ServiceAccount, which can impersonate anyone. Install Radar in a namespace of its own." $.Release.Namespace) }}

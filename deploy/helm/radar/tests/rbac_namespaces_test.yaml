@@ -30,6 +30,14 @@ tests:
       - isKind:
           of: ClusterRoleBinding
 
+  - it: refuses an empty list instead of reading it as cluster-wide
+    template: deployment.yaml
+    set:
+      rbac.namespaces: []
+    asserts:
+      - failedTemplate:
+          errorPattern: "rbac.namespaces is empty"
+
   - it: keeps only access reviews cluster-wide without auth
     template: clusterrole-cluster.yaml
     set:
