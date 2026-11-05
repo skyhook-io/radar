@@ -258,6 +258,8 @@ export type ApplicationDetailProps = {
    *  must stay the logical app key for provenance) passes the active instance's
    *  key here so the switcher marks it. */
   activeInstanceKey?: string;
+  /** Rendered in the Overview, above the latest change. */
+  renderOverviewChecks?: () => ReactNode;
   /** Show the one-line verdict under the app title (see `buildAppVerdict`). */
   showVerdict?: boolean;
   /** Opening view for an uncontrolled host (no `selectedView`). */
@@ -374,6 +376,7 @@ export function ApplicationDetail({
   onSwitchInstance,
   discoveredEnvs,
   activeInstanceKey,
+  renderOverviewChecks,
   showVerdict,
   initialView,
   deploys,
@@ -913,6 +916,7 @@ export function ApplicationDetail({
             onToggleReplicaSets={toggleReplicaSets}
             renderOverviewIssues={renderOverviewIssues}
             hasOverviewIssues={hasOverviewIssues}
+            renderOverviewChecks={renderOverviewChecks}
           />
         )}
       </div>
@@ -968,6 +972,7 @@ function ApplicationWorkspace({
   onToggleReplicaSets,
   renderOverviewIssues,
   hasOverviewIssues,
+  renderOverviewChecks,
 }: {
   app: AppRow;
   activeView: CanonicalApplicationView;
@@ -1029,6 +1034,7 @@ function ApplicationWorkspace({
   onToggleReplicaSets: (ownerID: string) => void;
   renderOverviewIssues?: () => ReactNode;
   hasOverviewIssues?: boolean;
+  renderOverviewChecks?: () => ReactNode;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1059,6 +1065,7 @@ function ApplicationWorkspace({
           onOpenSource={onOpenSource}
           renderOverviewIssues={renderOverviewIssues}
           hasOverviewIssues={hasOverviewIssues}
+          renderOverviewChecks={renderOverviewChecks}
         />
       )}
       {!costSelected && activeView === "deploys" && deploys !== undefined && (
@@ -1205,6 +1212,7 @@ function ApplicationOverview({
   onOpenSource,
   renderOverviewIssues,
   hasOverviewIssues,
+  renderOverviewChecks,
 }: {
   app: AppRow;
   workloads: AppWorkload[];
@@ -1223,6 +1231,7 @@ function ApplicationOverview({
   onOpenSource?: (source: AppSourceRef) => void;
   renderOverviewIssues?: () => ReactNode;
   hasOverviewIssues?: boolean;
+  renderOverviewChecks?: () => ReactNode;
 }) {
   const rel = app.relationships;
   const hasEntrypoints = Boolean(
@@ -1292,6 +1301,7 @@ function ApplicationOverview({
               onSelectWorkload={onSelectWorkload}
             />
           )}
+          {renderOverviewChecks?.()}
           <ApplicationLatestHistory
             history={history}
             sourceRef={app.sourceRef}
