@@ -76,10 +76,23 @@ export interface WorkloadLogsViewerProps {
   emptySourceState?: ReactNode
   /** Adds "Failing pods only" and, given `lastDeployAt`, "Since last deploy".
    *  Each shows only when it would change what's on screen. */
-  shortcuts?: { lastDeployAt?: string }
+  shortcuts?: { lastDeployAt?: string; onShowEvents?: () => void }
 }
 
 const DEFAULT_LOG_RANGE = '100'
+
+function NoFailingPodLogs({ onShowEvents }: { onShowEvents?: () => void }) {
+  return (
+    <>
+      These pods wrote no logs. If they never started, the reason is in the workload's events.
+      {onShowEvents && (
+        <button type="button" onClick={onShowEvents} className="ml-1.5 underline hover:text-theme-text-primary">
+          Show events
+        </button>
+      )}
+    </>
+  )
+}
 
 function isFailingPod(pod: WorkloadPodInfo): boolean {
   return pod.healthLevel === 'unhealthy' || pod.healthLevel === 'degraded'
@@ -506,7 +519,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       showPodName
-      emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : failingOnly ? "These pods wrote no logs. If they never started, the reason is in the workload's events." : 'No logs available')}
+      emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : failingOnly ? <NoFailingPodLogs onShowEvents={shortcuts?.onShowEvents} /> : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
       forceDark={forceDark}

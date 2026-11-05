@@ -432,7 +432,7 @@ export function ApplicationDetail({
   const verdictLine = useMemo(() => {
     if (!showVerdict) return null;
     const verdict = buildAppVerdict({ app, instances: identityInstances, activeEnv });
-    return { text: appVerdictText(verdict), health: verdict.health };
+    return { text: appVerdictText(verdict, { omitRollout: true }), health: verdict.health };
   }, [showVerdict, app, identityInstances, activeEnv]);
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =

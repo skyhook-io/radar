@@ -322,6 +322,7 @@ interface WorkloadViewProps {
     resource: any
     pods: ResourceRef[]
     selectedPod: string | null
+    onShowEvents?: () => void
     onSelectPod: (name: string | null) => void
     initialContainer: string | null
     onConsumeInitialContainer: () => void
@@ -1454,6 +1455,7 @@ export function WorkloadView({
             pods: allPods,
             selectedPod,
             onSelectPod: setSelectedPod,
+            onShowEvents: () => handleSetTab('timeline'),
             initialContainer,
             onConsumeInitialContainer: () => setInitialContainer(null),
           })

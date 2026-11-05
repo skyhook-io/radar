@@ -208,6 +208,10 @@ describe('appVerdictText', () => {
     )
   })
 
+  it('leaves the rollout out for pages that show it themselves', () => {
+    expect(appVerdictText({ health: 'degraded', summary: 'Degraded', rollout: 'Rolling out' }, { omitRollout: true })).toBe('Degraded')
+  })
+
   it('names a workload only when it differs from the app', () => {
     const rollout = { phase: 'stalled', active: true, manual: false, label: 'Rollout stalled', desired: 2, updated: 0, ready: 0, available: 0 }
     const verdict = buildAppVerdict({ app: app({ name: 'checkout', workloads: [workload({ name: 'checkout', health: 'unhealthy', ready: 0, desired: 2, rollout } as never)] }) })
