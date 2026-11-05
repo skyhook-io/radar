@@ -868,4 +868,26 @@ describe("ApplicationDetail shell", () => {
       expect(contexts[0].defaultTab).toBe("deploys");
     });
   });
+
+  describe("verdict", () => {
+    it("adds nothing unless the host asks for it", () => {
+      expect(renderDetail()).not.toContain("Healthy, 4/4 ready");
+    });
+
+    it("sums up the app under the title", () => {
+      expect(renderDetail({ showVerdict: true })).toContain("Healthy, 4/4 ready");
+    });
+
+    it("covers every instance when the app runs in several", () => {
+      const html = renderDetail({
+        showVerdict: true,
+        identityInstances: [
+          { appKey: app.key, name: "checkout", env: "dev", health: "healthy", confidence: "high", evidence: "" },
+          { appKey: "other", name: "checkout", env: "prod", health: "degraded", confidence: "high", evidence: "" },
+        ],
+      });
+
+      expect(html).toContain("Degraded in prod · healthy in dev");
+    });
+  });
 });

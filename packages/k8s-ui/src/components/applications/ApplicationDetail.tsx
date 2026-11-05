@@ -93,6 +93,7 @@ import {
 import { PaneLoader } from "../ui/PaneLoader";
 import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
 import type { AppDeployRow, AppDeploys } from "../../utils/app-deploys";
+import { appVerdictText, buildAppVerdict } from "../../utils/app-verdict";
 import { ApplicationDeploys } from "./ApplicationDeploys";
 import type { WorkloadExtraTab } from "../workload/WorkloadView";
 import { VersionTooltip, AppIdentityTooltip, RolloutSummaryTooltip } from "./AppTooltips";
@@ -257,6 +258,8 @@ export type ApplicationDetailProps = {
    *  must stay the logical app key for provenance) passes the active instance's
    *  key here so the switcher marks it. */
   activeInstanceKey?: string;
+  /** Show the one-line verdict under the app title (see `buildAppVerdict`). */
+  showVerdict?: boolean;
   /** Opening view for an uncontrolled host (no `selectedView`). */
   initialView?: ApplicationView;
   /** Deploy history. Undefined hides the view; `null` shows it loading, so a
@@ -369,6 +372,7 @@ export function ApplicationDetail({
   onSwitchInstance,
   discoveredEnvs,
   activeInstanceKey,
+  showVerdict,
   initialView,
   deploys,
   deploysLoading,
@@ -415,6 +419,16 @@ export function ApplicationDetail({
     [app, workloads],
   );
   const overall = applicationDisplayHealth(app);
+  const verdictLine = useMemo(() => {
+    if (!showVerdict) return null;
+    const activeKey = activeInstanceKey ?? app.key;
+    const verdict = buildAppVerdict({
+      app,
+      instances: identityInstances,
+      activeEnv: identityInstances?.find((i) => i.appKey === activeKey)?.env,
+    });
+    return { text: appVerdictText(verdict), health: verdict.health };
+  }, [showVerdict, app, identityInstances, activeInstanceKey]);
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
     workloadClass === "job" && overall === batchRuntime.health
@@ -743,6 +757,21 @@ export function ApplicationDetail({
           )}
         </div>
       </div>
+
+      {verdictLine && (
+        <div className="flex min-w-0 items-center gap-2 border-b border-theme-border px-4 py-1.5 sm:px-6">
+          <StatusDot tone={mapHealthToTone(verdictLine.health)} />
+          <Tooltip
+            content={verdictLine.text}
+            delay={150}
+            wrapperClassName="block min-w-0"
+          >
+            <p className="truncate text-sm text-theme-text-secondary">
+              {verdictLine.text}
+            </p>
+          </Tooltip>
+        </div>
+      )}
 
       {/* Context strip */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-theme-border px-4 py-2 sm:px-6">
