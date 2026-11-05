@@ -172,7 +172,7 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
         version: imageVersion(revision.image),
         image: revision.image,
         source: 'revision',
-        via: anchor && anchorVia(anchor),
+        via: anchor ? anchorVia(anchor) : revision.changeCause,
         at: revision.createdAt,
         live: liveOf(ref.kind, revision, revisions),
         newest: revision.isCurrent,

@@ -1998,6 +1998,8 @@ export interface WorkloadRevision {
   // a StatefulSet or DaemonSet mid-update has no per-revision split. Rollouts
   // leave it unset; isStable is their signal.
   serving?: boolean
+  // The kubernetes.io/change-cause note, when the rollout set one.
+  changeCause?: string
 }
 
 // Workload log stream event data
