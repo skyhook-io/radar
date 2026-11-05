@@ -326,6 +326,9 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
     return { visibleRows: [...pinned, ...rest], pinnedCount: pinned.length }
   }, [foldedRows, pinnedSection])
   const columnCount = 8 + Number(Boolean(showLastDeployed))
+  // Last deployed takes this column's room: the page's rails leave too little
+  // width for both, and Class already says most of what the kinds would.
+  const workloadsColumn = showLastDeployed ? 'hidden min-[1800px]:table-cell' : undefined
 
   // Row keyboard navigation — same contract as the Resources table: j/k or
   // arrows move a highlight, g g / G jump, Enter opens, Escape clears the
@@ -553,14 +556,14 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                     <SortableTh label="Version" sortKey="version" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
                     {showLastDeployed && (
                       <SortableTh
-                        label={<Tooltip content={LAST_DEPLOYED_TIP} delay={150}><span>Last deployed</span></Tooltip>}
+                        label={<Tooltip content={LAST_DEPLOYED_TIP} delay={150}><span className="whitespace-nowrap">Last deployed</span></Tooltip>}
                         sortKey="lastDeployed"
                         activeKey={sort?.key ?? null}
                         direction={sort?.dir ?? 'asc'}
                         onSort={onSort}
                       />
                     )}
-                    <th className={TH_CLASS}>Workloads</th>
+                    <th className={clsx(TH_CLASS, workloadsColumn)}>Workloads</th>
                     <th className={clsx(TH_CLASS, 'w-8')} />
                   </tr>
                 </thead>
@@ -649,7 +652,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                         )}
                       </td>
                       {showLastDeployed && <td className="px-2 py-2.5"><LastDeployedCell rows={r.members.map((member) => member.row)} /></td>}
-                      <td className="px-2 py-2.5">
+                      <td className={clsx('px-2 py-2.5', workloadsColumn)}>
                         <span className="text-xs text-theme-text-secondary">{Object.entries(r.kinds).map(([k, n]) => pluralize(n, k)).join(' · ')}</span>
                       </td>
                       <td className="pr-2 text-right" />
@@ -763,7 +766,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                         )}
                       </td>
                       {showLastDeployed && <td className="px-2 py-2.5"><LastDeployedCell rows={[e.row]} /></td>}
-                      <td className="px-2 py-2.5">
+                      <td className={clsx('px-2 py-2.5', workloadsColumn)}>
                         {Object.keys(e.kinds).length === 0 ? (
                           <span className="text-xs text-theme-text-tertiary">—</span>
                         ) : (
