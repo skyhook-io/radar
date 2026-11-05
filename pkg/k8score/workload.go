@@ -41,6 +41,13 @@ type WorkloadRevision struct {
 	// traffic, what an abort reverts to) are different revisions.
 	IsStable bool   `json:"isStable,omitempty"`
 	PodHash  string `json:"podHash,omitempty"`
+	// ReadyReplicas is this revision's own ready pods. Nil when the kind has no
+	// per-revision count and the workload's pods may span revisions.
+	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
+	// Serving says whether this revision's pods are running and ready. Nil means
+	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
+	// per revision. Rollouts leave it nil; IsStable is their signal.
+	Serving *bool `json:"serving,omitempty"`
 }
 
 // UpdateResourceOptions contains options for updating a resource.
@@ -923,7 +930,12 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 	case "deployments":
 		return m.listDeploymentRevisions(ctx, namespace, name, workloadUID)
 	case "statefulsets", "daemonsets":
-		return m.listControllerRevisions(ctx, namespace, name, workloadUID)
+		revisions, err := m.listControllerRevisions(ctx, namespace, name, workloadUID)
+		if err != nil {
+			return nil, err
+		}
+		applyControllerRevisionServing(revisions, workload, normalizedKind)
+		return revisions, nil
 	default:
 		return nil, fmt.Errorf("revision history not supported for %s", kind)
 	}
@@ -936,15 +948,17 @@ func (m *WorkloadManager) listRolloutRevisions(ctx context.Context, namespace, n
 	}
 	out := make([]WorkloadRevision, 0, len(revisions))
 	for _, r := range revisions {
+		readyReplicas := r.ReadyReplicas
 		out = append(out, WorkloadRevision{
-			Number:    r.Number,
-			CreatedAt: r.CreatedAt,
-			Image:     r.Image,
-			IsCurrent: r.IsCurrent,
-			IsStable:  r.IsStable,
-			PodHash:   r.PodHash,
-			Replicas:  r.Replicas,
-			Template:  r.Template,
+			Number:        r.Number,
+			CreatedAt:     r.CreatedAt,
+			Image:         r.Image,
+			IsCurrent:     r.IsCurrent,
+			IsStable:      r.IsStable,
+			PodHash:       r.PodHash,
+			Replicas:      r.Replicas,
+			Template:      r.Template,
+			ReadyReplicas: &readyReplicas,
 		})
 	}
 	return out, nil
@@ -995,6 +1009,8 @@ func BuildDeploymentRevisions(rsList []unstructured.Unstructured, workloadUID st
 
 		image := extractContainerImage(rs.Object)
 		replicas, _, _ := unstructured.NestedInt64(rs.Object, "spec", "replicas")
+		readyReplicas, _, _ := unstructured.NestedInt64(rs.Object, "status", "readyReplicas")
+		serving := readyReplicas > 0
 
 		var templateStr string
 		if template, found, _ := unstructured.NestedMap(rs.Object, "spec", "template"); found && template != nil {
@@ -1008,12 +1024,14 @@ func BuildDeploymentRevisions(rsList []unstructured.Unstructured, workloadUID st
 		}
 
 		revisions = append(revisions, WorkloadRevision{
-			Number:    revNum,
-			CreatedAt: rs.GetCreationTimestamp().Time,
-			Image:     image,
-			Replicas:  replicas,
-			Template:  templateStr,
-			PodHash:   rs.GetLabels()["pod-template-hash"],
+			Number:        revNum,
+			CreatedAt:     rs.GetCreationTimestamp().Time,
+			Image:         image,
+			Replicas:      replicas,
+			Template:      templateStr,
+			PodHash:       rs.GetLabels()["pod-template-hash"],
+			ReadyReplicas: &readyReplicas,
+			Serving:       &serving,
 		})
 	}
 
@@ -1171,6 +1189,59 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 	sort.Slice(revisions, func(i, j int) bool { return revisions[i].Number > revisions[j].Number })
 
 	return revisions
+}
+
+// applyControllerRevisionServing fills the serving signal when the workload's
+// status proves every pod is on one revision. Mid-update there is no per-revision
+// pod count to read, so the fields stay nil rather than guessing.
+func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unstructured.Unstructured, normalizedKind string) {
+	generation := workload.GetGeneration()
+	observed, _, _ := unstructured.NestedInt64(workload.Object, "status", "observedGeneration")
+	if observed < generation {
+		return
+	}
+
+	settled := -1
+	var ready int64
+	switch normalizedKind {
+	case "statefulsets":
+		updateRevision, _, _ := unstructured.NestedString(workload.Object, "status", "updateRevision")
+		currentRevision, _, _ := unstructured.NestedString(workload.Object, "status", "currentRevision")
+		if updateRevision == "" || updateRevision != currentRevision {
+			return
+		}
+		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "readyReplicas")
+		for i := range revisions {
+			if revisions[i].PodHash == updateRevision {
+				settled = i
+			}
+		}
+	case "daemonsets":
+		desired, _, _ := unstructured.NestedInt64(workload.Object, "status", "desiredNumberScheduled")
+		updated, _, _ := unstructured.NestedInt64(workload.Object, "status", "updatedNumberScheduled")
+		if updated != desired {
+			return
+		}
+		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "numberReady")
+		for i := range revisions {
+			if revisions[i].IsCurrent {
+				settled = i
+			}
+		}
+	}
+	if settled < 0 {
+		return
+	}
+
+	for i := range revisions {
+		serving := i == settled && ready > 0
+		revisions[i].Serving = &serving
+		var count int64
+		if i == settled {
+			count = ready
+		}
+		revisions[i].ReadyReplicas = &count
+	}
 }
 
 // RollbackWorkload rolls back a Deployment, StatefulSet, DaemonSet, or Rollout to a specific revision.
