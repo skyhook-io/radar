@@ -199,6 +199,8 @@ type ViewProps =
 export type ApplicationDetailProps = {
   app: AppRow;
   onBack: () => void;
+  /** Where the back link goes, for hosts with more than one way in. */
+  backLabel?: string;
   /** Render the host's WorkloadView for the chosen workload. Spread `context`
    *  onto it; it is empty unless the host enabled a view that needs it. */
   renderWorkload: (
@@ -361,6 +363,7 @@ function compareDefinedVersions(
 export function ApplicationDetail({
   app,
   onBack,
+  backLabel = "Applications",
   renderWorkload,
   renderCostView,
   costViewSelected,
@@ -425,21 +428,20 @@ export function ApplicationDetail({
     [app, workloads],
   );
   const overall = applicationDisplayHealth(app);
+  const activeEnv = identityInstances?.find((i) => i.appKey === (activeInstanceKey ?? app.key))?.env;
   const verdictLine = useMemo(() => {
     if (!showVerdict) return null;
-    const activeKey = activeInstanceKey ?? app.key;
-    const verdict = buildAppVerdict({
-      app,
-      instances: identityInstances,
-      activeEnv: identityInstances?.find((i) => i.appKey === activeKey)?.env,
-    });
+    const verdict = buildAppVerdict({ app, instances: identityInstances, activeEnv });
     return { text: appVerdictText(verdict), health: verdict.health };
-  }, [showVerdict, app, identityInstances, activeInstanceKey]);
+  }, [showVerdict, app, identityInstances, activeEnv]);
   const verdictTone = HEALTH_META[overall].pill;
   const verdictLabel =
     workloadClass === "job" && overall === batchRuntime.health
       ? batchRuntime.label
       : HEALTH_META[overall].label;
+  // The verdict speaks for every environment and this pill for the one on
+  // screen, so with several of them the pill has to say which.
+  const pillScope = showVerdict && activeEnv && (identityInstances?.length ?? 0) > 1 ? ` in ${activeEnv}` : "";
   const versions = useMemo(
     () => Array.from(new Set((app.versions || []).filter(Boolean))),
     [app.versions],
@@ -702,7 +704,7 @@ export function ApplicationDetail({
           onClick={onBack}
           className="flex shrink-0 items-center gap-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
         >
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Applications
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> {backLabel}
         </button>
         <span
           className="hidden h-6 w-px bg-theme-border sm:block"
@@ -735,7 +737,7 @@ export function ApplicationDetail({
             className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}
           >
             <StatusDot tone={mapHealthToTone(overall)} />
-            <span className="text-sm font-semibold">{verdictLabel}</span>
+            <span className="text-sm font-semibold">{verdictLabel}{pillScope}</span>
           </span>
           {restartSignal && (
             <Tooltip

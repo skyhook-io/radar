@@ -48,6 +48,9 @@ type WorkloadRevision struct {
 	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
 	// per revision. Rollouts leave it nil; IsStable is their signal.
 	Serving *bool `json:"serving,omitempty"`
+	// ChangeCause is the kubernetes.io/change-cause note on this revision, the
+	// one record of why it exists when no Helm or GitOps source does.
+	ChangeCause string `json:"changeCause,omitempty"`
 }
 
 // UpdateResourceOptions contains options for updating a resource.
@@ -1032,6 +1035,7 @@ func BuildDeploymentRevisions(rsList []unstructured.Unstructured, workloadUID st
 			PodHash:       rs.GetLabels()["pod-template-hash"],
 			ReadyReplicas: &readyReplicas,
 			Serving:       &serving,
+			ChangeCause:   rs.GetAnnotations()["kubernetes.io/change-cause"],
 		})
 	}
 

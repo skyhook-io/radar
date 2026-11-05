@@ -310,4 +310,12 @@ describe('imageVersion', () => {
   ])('reads %s', (image, version) => {
     expect(imageVersion(image)).toBe(version)
   })
+
+  it('falls back to the change-cause note when no source record matches', () => {
+    const { rows } = buildAppDeploys({
+      workloads: [{ ref: { kind: 'Deployment', namespace: 'shop', name: 'api' }, revisions: [{ number: 1, createdAt: '2026-11-05T01:00:00Z', image: 'api:1', isCurrent: true, replicas: 1, changeCause: 'release 42' }] }],
+      anchors: [],
+    })
+    expect(rows[0].via).toBe('release 42')
+  })
 })

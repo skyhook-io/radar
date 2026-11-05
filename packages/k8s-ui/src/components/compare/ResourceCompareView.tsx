@@ -32,6 +32,8 @@ export interface ResourceCompareViewProps {
   errors?: CompareSideError[]
   /** Caller-supplied theme passthrough for the Monaco editor. */
   editorTheme?: 'vs-dark' | 'vs'
+  /** Open on spec only, for hosts comparing two copies of the same app. */
+  initialSpecOnly?: boolean
   onSwap: () => void
   onClose: () => void
   /** Optional — when provided, the resource pill shows a pencil button to re-pick. */
@@ -112,6 +114,7 @@ export function ResourceCompareView({
   bData,
   errors,
   editorTheme = 'vs-dark',
+  initialSpecOnly = false,
   onSwap,
   onClose,
   onChangeA,
@@ -120,7 +123,7 @@ export function ResourceCompareView({
   bSubtitle,
   bleed = false,
 }: ResourceCompareViewProps) {
-  const [specOnly, setSpecOnly] = useState(false)
+  const [specOnly, setSpecOnly] = useState(initialSpecOnly)
   const [unifiedPicked, setUnified] = useState(false)
   // Two side-by-side panes don't fit a phone, so phones always get one column.
   const isPhone = usePhoneLayout()
