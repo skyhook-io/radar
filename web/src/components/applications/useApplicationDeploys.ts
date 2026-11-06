@@ -1,4 +1,5 @@
 import { useQueries } from "@tanstack/react-query";
+import { isRolloutActivityVisible } from "@skyhook-io/k8s-ui/utils/workload-rollout";
 import {
   workloadHasRevisions,
   type AppHistory,
@@ -11,6 +12,14 @@ import { kindToPluralWithGroup } from "../../utils/navigation";
 
 // Live and Newest are claims about right now.
 const REVISIONS_REFRESH_INTERVAL_MS = 20_000;
+
+// Each read lists every ReplicaSet or ControllerRevision in the workload's
+// namespace, so a large app can't afford one per workload on every refresh.
+export const MAX_WORKLOADS_READ = 12;
+
+function rollingOut(workload: AppWorkload): boolean {
+  return workload.rollout ? isRolloutActivityVisible(workload.rollout) : false;
+}
 
 interface UseApplicationDeploysOptions {
   workloads: AppWorkload[];
@@ -25,12 +34,13 @@ export function useApplicationDeploys({
   sourceRef,
   history,
   visible,
-}: UseApplicationDeploysOptions) {
-  const revisioned = workloads.filter((workload) =>
-    workloadHasRevisions(workload.kind),
-  );
+}: UseApplicationDeploysOptions): BuildAppDeploysInput | null {
+  const read = workloads
+    .filter((workload) => workloadHasRevisions(workload.kind))
+    .sort((a, b) => Number(rollingOut(b)) - Number(rollingOut(a)))
+    .slice(0, MAX_WORKLOADS_READ);
   const revisionQueries = useQueries({
-    queries: revisioned.map((workload) => ({
+    queries: read.map((workload) => ({
       ...workloadRevisionsQuery(
         kindToPluralWithGroup(workload.kind, workload.group ?? "").toLowerCase(),
         workload.namespace,
@@ -38,30 +48,31 @@ export function useApplicationDeploys({
         visible,
       ),
       refetchInterval: visible ? REVISIONS_REFRESH_INTERVAL_MS : false,
+      refetchIntervalInBackground: false,
     })),
   });
-  const deploysPending =
-    !visible ||
-    revisionQueries.some((query) => query.isPending) ||
-    history.isPending;
-  const deploys: BuildAppDeploysInput | null = deploysPending
-    ? null
-    : {
-        workloads: workloads.map((workload) => ({
-          ref: {
-            kind: workload.kind,
-            namespace: workload.namespace,
-            name: workload.name,
-            group: workload.group,
-          },
-          revisions: revisionQueries[revisioned.indexOf(workload)]?.data,
-          desired: workload.desired,
-          stale: revisionQueries[revisioned.indexOf(workload)]?.isError,
-        })),
-        anchors: history.data?.anchors ?? (history.data ? [] : undefined),
-        sourceRef,
-        partialSources: history.data?.partialSources,
-        sourceStale: history.isError,
+  if (!visible) return null;
+  return {
+    workloads: workloads.map((workload) => {
+      const query = revisionQueries[read.indexOf(workload)];
+      return {
+        ref: {
+          kind: workload.kind,
+          namespace: workload.namespace,
+          name: workload.name,
+          group: workload.group,
+        },
+        revisions: query?.data,
+        desired: workload.desired,
+        stale: query?.isError,
+        loading: query?.isPending,
+        notRead: !query,
       };
-  return { deploys, deploysPending };
+    }),
+    anchors: history.data?.anchors ?? (history.data ? [] : undefined),
+    sourceRef,
+    partialSources: history.data?.partialSources,
+    sourceStale: history.isError,
+    sourceLoading: history.isPending,
+  };
 }

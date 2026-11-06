@@ -1,5 +1,7 @@
 import type { WorkloadRevision } from '../types/core'
+import { coalesceHistoryAnchors } from './application-history'
 import type { AppHistoryAnchor, AppSourceRef } from './applications'
+import { pluralize } from './pluralize'
 
 // One deploy history for an app across its workloads and its Helm/GitOps source.
 // "Live" and "Newest" answer different questions: which revision's pods are
@@ -23,7 +25,7 @@ export interface AppDeployRow {
   version?: string
   image?: string
   source: AppDeploySource
-  /** Where it came from: "Helm revision 12", "Argo CD sync by alice". "Near …" means only that the times line up. */
+  /** Where it came from: "Helm revision 12", "Argo CD sync by alice". On a revision, "Near …": a record that lines up with it, which no record ties to this resource. */
   via?: string
   /** A change-cause note the previous revision had too. Kubernetes copies the
    *  workload's note onto each new revision, so it may not be about this one. */
@@ -51,6 +53,10 @@ export interface AppDeployWorkloadInput {
   desired?: number
   /** `revisions` is the last list read, after a refresh failed: still worth showing, but not a claim about now. */
   stale?: boolean
+  /** The first read is still under way. */
+  loading?: boolean
+  /** Left out to bound the reads a large app makes. */
+  notRead?: boolean
 }
 
 export interface BuildAppDeploysInput {
@@ -62,6 +68,8 @@ export interface BuildAppDeploysInput {
   partialSources?: string[]
   /** The last source history read, after a refresh failed. */
   sourceStale?: boolean
+  /** The first read of the source history is still under way. */
+  sourceLoading?: boolean
 }
 
 export interface AppDeploys {
@@ -69,6 +77,8 @@ export interface AppDeploys {
   partial: boolean
   /** One sentence per missing source, for display. */
   partialReasons: string[]
+  /** One sentence per kind of read still under way, for display. */
+  stillLoading: string[]
   /** Revisions came back without the per-revision signals a current Radar agent always sends. */
   agentOutdated?: boolean
 }
@@ -139,39 +149,42 @@ function anchorNamesVersion(anchor: AppHistoryAnchor, version: string | undefine
   return revision === version || version.split(/[-_.+]/).some((part) => /^[0-9a-f]{7,40}$/.test(part) && revision.startsWith(part))
 }
 
-// A failed attempt may have changed nothing, so it keeps its own row and outcome.
 function anchorFailed(anchor: AppHistoryAnchor): boolean {
   return /fail|error/i.test(anchor.status ?? '')
 }
 
 interface AnchorPairing {
   anchor: AppHistoryAnchor
-  /** The source recorded this revision's version, rather than just being close in time. */
-  proven: boolean
+  /** Both describe one deploy, so the record needs no row of its own. Anything
+   *  less leaves it an event of its own: a failed attempt, or a record beside a
+   *  restart that kept the version. */
+  sameDeploy: boolean
 }
 
-// One record explains one revision of a workload, though it can explain a
-// revision in each workload it touched. Evidence goes first, then closeness.
-function pairAnchors(revisions: WorkloadRevision[], anchors: AppHistoryAnchor[]): Map<WorkloadRevision, AnchorPairing> {
-  const candidates: Array<AnchorPairing & { revision: WorkloadRevision; gap: number }> = []
-  for (const revision of revisions) {
+// One record lines up with one revision of a workload, though it can line up
+// with a revision in each workload it touched. Evidence goes first, then closeness.
+function pairAnchors(revisions: Array<{ revision: WorkloadRevision; previous?: WorkloadRevision }>, anchors: AppHistoryAnchor[]): Map<WorkloadRevision, AnchorPairing> {
+  const candidates: Array<AnchorPairing & { revision: WorkloadRevision; named: boolean; gap: number }> = []
+  for (const { revision, previous } of revisions) {
     const created = timeOf(revision.createdAt)
     if (created === undefined) continue
     const version = imageVersion(revision.image)
+    const versionChanged = version !== imageVersion(previous?.image)
     for (const anchor of anchors) {
       const at = timeOf(anchor.timestamp)
-      if (at === undefined || anchorFailed(anchor)) continue
+      if (at === undefined) continue
       const gap = at - created
       if (gap > ANCHOR_AFTER_REVISION_MS || gap < -ANCHOR_BEFORE_REVISION_MS) continue
-      candidates.push({ revision, anchor, proven: anchorNamesVersion(anchor, version), gap: Math.abs(gap) })
+      const named = anchorNamesVersion(anchor, version)
+      candidates.push({ revision, anchor, named, sameDeploy: named && versionChanged && !anchorFailed(anchor), gap: Math.abs(gap) })
     }
   }
-  candidates.sort((a, b) => Number(b.proven) - Number(a.proven) || a.gap - b.gap)
+  candidates.sort((a, b) => Number(b.named) - Number(a.named) || a.gap - b.gap)
   const pairings = new Map<WorkloadRevision, AnchorPairing>()
   const taken = new Set<AppHistoryAnchor>()
-  for (const { revision, anchor, proven } of candidates) {
+  for (const { revision, anchor, sameDeploy } of candidates) {
     if (pairings.has(revision) || taken.has(anchor)) continue
-    pairings.set(revision, { anchor, proven })
+    pairings.set(revision, { anchor, sameDeploy })
     taken.add(anchor)
   }
   return pairings
@@ -181,11 +194,12 @@ function anchorVia(anchor: AppHistoryAnchor): string {
   return anchor.initiatedBy ? `${anchor.title} by ${anchor.initiatedBy}` : anchor.title
 }
 
-// A paired source loses its own row, so what it recorded has to survive here.
-function pairedVia({ anchor, proven }: AnchorPairing, version: string | undefined): string {
+// A paired source can lose its own row, so what it recorded has to survive here.
+// Always "Near": a record lists no resources, so a match in time or version is
+// a correlation, never a cause.
+function pairedVia({ anchor }: AnchorPairing, version: string | undefined): string {
   const recorded = anchorVersion(anchor)
-  const via = recorded && recorded !== version ? `${anchorVia(anchor)} · ${recorded}` : anchorVia(anchor)
-  return proven ? via : `Near ${via}`
+  return `Near ${recorded && recorded !== version ? `${anchorVia(anchor)} · ${recorded}` : anchorVia(anchor)}`
 }
 
 function anchorRow(anchor: AppHistoryAnchor, index: number, sourceRef: AppSourceRef | undefined): AppDeployRow {
@@ -224,7 +238,10 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
   const { ref, revisions = [], desired, stale } = input
   const newestFirst = [...revisions].sort((a, b) => b.number - a.number)
   // The revision's own note is firmer than any record paired by time or version.
-  const pairings = pairAnchors(newestFirst.filter((revision, i) => !ownCauseOf(revision, newestFirst[i + 1])), anchors)
+  const pairings = pairAnchors(
+    newestFirst.map((revision, i) => ({ revision, previous: newestFirst[i + 1] })).filter(({ revision, previous }) => !ownCauseOf(revision, previous)),
+    anchors,
+  )
   const rows: SortableRow[] = []
   let sortAt = -Infinity
   for (let i = newestFirst.length - 1; i >= 0; i--) {
@@ -233,8 +250,8 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
     const cause = revision.changeCause
     const ownCause = ownCauseOf(revision, previous)
     const pairing = pairings.get(revision)
-    const anchor = pairing?.anchor
-    if (anchor) matched.add(anchor)
+    const folded = pairing?.sameDeploy ? pairing.anchor : undefined
+    if (folded) matched.add(folded)
     const version = imageVersion(revision.image)
     sortAt = Math.max(sortAt, timeOf(revision.createdAt) ?? -Infinity)
     const row: AppDeployRow = {
@@ -249,8 +266,8 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
       at: revision.createdAt,
       live: liveOf(ref.kind, revision, revisions),
       newest: revision.isCurrent,
-      status: anchor?.status,
-      detail: anchor?.message,
+      status: folded?.status,
+      detail: folded?.message,
       ready: revision.readyReplicas,
       desired: hasPerRevisionReplicas(ref.kind) ? revision.replicas : revision.isCurrent ? desired : undefined,
       template: revision.template,
@@ -267,16 +284,17 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
 
 /** Pass `scope` to answer for one workload; Helm and GitOps records cover the whole app and stay. */
 export function buildAppDeploys(
-  { workloads, anchors, sourceRef, partialSources, sourceStale }: BuildAppDeploysInput,
+  { workloads, anchors, sourceRef, partialSources, sourceStale, sourceLoading }: BuildAppDeploysInput,
   scope?: AppDeployRowWorkload,
 ): AppDeploys {
   const revisioned = workloads.filter(
     ({ ref }) => workloadHasRevisions(ref.kind) && (!scope || (ref.kind === scope.kind && ref.namespace === scope.namespace && ref.name === scope.name)),
   )
+  const records = coalesceHistoryAnchors(anchors ?? [])
   const matched = new Set<AppHistoryAnchor>()
-  const sortable = revisioned.flatMap((workload) => revisionRows(workload, anchors ?? [], matched))
+  const sortable = revisioned.flatMap((workload) => revisionRows(workload, records, matched))
 
-  ;(anchors ?? []).forEach((anchor, index) => {
+  records.forEach((anchor, index) => {
     if (matched.has(anchor)) return
     sortable.push({ row: anchorRow(anchor, index, sourceRef), sortAt: timeOf(anchor.timestamp) ?? -Infinity })
   })
@@ -284,24 +302,33 @@ export function buildAppDeploys(
   sortable.sort((a, b) => b.sortAt - a.sortAt || (b.row.revision ?? 0) - (a.row.revision ?? 0) || a.row.id.localeCompare(b.row.id))
 
   const partialReasons = [...(partialSources ?? [])]
+  const notRead = revisioned.filter((workload) => workload.notRead).length
+  if (notRead > 0) {
+    partialReasons.push(`Showing revisions for ${revisioned.length - notRead} of ${pluralize(revisioned.length, 'workload')}. Open a workload to see its own.`)
+  }
+  const reading = revisioned.filter((workload) => workload.loading).length
   for (const workload of revisioned) {
     const label = `${workload.ref.kind} ${workload.ref.name}`
+    if (workload.notRead || workload.loading) continue
     if (workload.revisions === undefined) {
       partialReasons.push(`Revision history for ${label} couldn't be read.`)
     } else if (workload.stale) {
       partialReasons.push(`Couldn't refresh revisions for ${label}. This is the last list read, so its Live, Newest and ready counts aren't shown.`)
     }
   }
-  if (sourceRef && anchors === undefined) {
-    partialReasons.push(`${sourceRef.type === 'helm' ? 'Helm' : 'GitOps'} history for ${sourceRef.name} isn't available here.`)
-  } else if (sourceRef && sourceStale) {
-    partialReasons.push(`Couldn't refresh ${sourceRef.type === 'helm' ? 'Helm' : 'GitOps'} history for ${sourceRef.name}. This is the last list read.`)
+  const stillLoading = reading > 0 ? [`Still loading revisions for ${pluralize(reading, 'workload')}.`] : []
+  if (sourceRef) {
+    const sourceHistory = `${sourceRef.type === 'helm' ? 'Helm' : 'GitOps'} history for ${sourceRef.name}`
+    if (sourceLoading) stillLoading.push(`Still loading ${sourceHistory}.`)
+    else if (anchors === undefined) partialReasons.push(`${sourceHistory} isn't available here.`)
+    else if (sourceStale) partialReasons.push(`Couldn't refresh ${sourceHistory}. This is the last list read.`)
   }
 
   return {
     rows: sortable.map(({ row }) => row),
     partial: partialReasons.length > 0,
     partialReasons,
+    stillLoading,
     agentOutdated: revisioned.some(predatesRevisionSignals),
   }
 }
