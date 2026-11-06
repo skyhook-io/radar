@@ -277,7 +277,7 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
   if (isCloud) return null
 
   return (
-    <DialogPortal open={open} onClose={close} ariaLabelledBy={titleId} className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[min(840px,calc(100vh-4rem))] flex flex-col overflow-hidden rounded-xl">
+    <DialogPortal open={open} onClose={close} ariaLabelledBy={titleId} className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[min(980px,calc(100vh-4rem))] flex flex-col overflow-hidden rounded-xl">
       {view && (
         <WhatsNewContent
           titleId={titleId}
