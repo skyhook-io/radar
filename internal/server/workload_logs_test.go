@@ -305,6 +305,17 @@ func TestJobRunInfoTreatsPendingAsActive(t *testing.T) {
 	}
 }
 
+func TestJobRunInfoMarksDeletingJobs(t *testing.T) {
+	now := metav1.Now()
+	deleting := jobRunInfo(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "old-run", Namespace: "ci", DeletionTimestamp: &now}})
+	if !deleting.Deleting {
+		t.Fatalf("a Job with a deletion timestamp is not marked deleting: %#v", deleting)
+	}
+	if live := jobRunInfo(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "run", Namespace: "ci"}}); live.Deleting {
+		t.Fatalf("a live Job is marked deleting: %#v", live)
+	}
+}
+
 func TestJobRunInfoSuspendedAndLauncher(t *testing.T) {
 	suspended := true
 	controller := true

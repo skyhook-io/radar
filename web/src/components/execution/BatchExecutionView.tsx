@@ -30,6 +30,7 @@ import { useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
 import { executionDefinitionDiffers, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 import { batchRunHasContainerOutcome, batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 import { JobSetAdmission } from './JobSetAdmission'
+import { runStateLabel } from './runState'
 
 const EMPTY_RUNS: WorkloadRun[] = []
 const SCHEDULED_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob', 'JobSet'])
@@ -417,7 +418,7 @@ function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, re
                         {selectedResourceQuery.isFetching && <span>refreshing</span>}
                       </div>
                     </div>
-                    <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? 'Held by Kueue until admitted' : selectedRun.phase}{selectedRun.deleting ? ' · deleting' : ''}</span>
+                    <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? `Held by Kueue until admitted${selectedRun.deleting ? ' · deleting' : ''}` : runStateLabel(selectedRun)}</span>
                   </div>
                   {memberCollection && <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2 text-xs">
                     {!runs.some(run => workloadRunKey(run) === selectedRunKey) && <span className="text-theme-text-secondary">Selected Job is outside the current filter or shown window.</span>}
@@ -1285,7 +1286,7 @@ function RunRailButton({ run, selected, showNamespace, onClick }: { run: Workloa
           {formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}
         </span>
       </span>
-      <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{shortPhase(run.phase)}{run.deleting ? ' · deleting' : ''}</span>
+      <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{runStateLabel(run, shortPhase)}</span>
     </button>
   )
 }
