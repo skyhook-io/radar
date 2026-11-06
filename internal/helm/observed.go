@@ -207,25 +207,9 @@ func parseFluxEvidence(hr *unstructured.Unstructured) (fluxEvidence, bool) {
 	if !gitops.FluxTargetsLocalCluster(hr) {
 		return fluxEvidence{}, false
 	}
-	spec, _, _ := unstructured.NestedMap(hr.Object, "spec")
-	targetNS, _ := spec["targetNamespace"].(string)
-	name, _ := spec["releaseName"].(string)
-	if name == "" {
-		name = hr.GetName()
-		if targetNS != "" {
-			name = targetNS + "-" + hr.GetName()
-		}
-	}
-	namespace := targetNS
-	if namespace == "" {
-		namespace = hr.GetNamespace()
-	}
-	storage, _, _ := unstructured.NestedString(hr.Object, "status", "storageNamespace")
-	if storage == "" {
-		storage, _ = spec["storageNamespace"].(string)
-	}
-	if storage == "" {
-		storage = hr.GetNamespace()
+	name, namespace, storage := gitops.FluxHelmTarget(hr)
+	if recorded, _, _ := unstructured.NestedString(hr.Object, "status", "storageNamespace"); recorded != "" {
+		storage = recorded
 	}
 	evidence := fluxEvidence{
 		ref:              hr.GetNamespace() + "/" + hr.GetName(),

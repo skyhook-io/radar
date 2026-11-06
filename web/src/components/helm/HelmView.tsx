@@ -619,7 +619,7 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
         {release.appVersion ? (
           <span className="text-sm text-theme-text-secondary">{release.appVersion}</span>
         ) : (
-          <Tooltip content="This chart doesn’t set app.kubernetes.io/version on its objects.">
+          <Tooltip content="No single app version could be read from its objects.">
             <span className="text-sm text-theme-text-disabled cursor-help">—</span>
           </Tooltip>
         )}

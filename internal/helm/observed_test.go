@@ -213,6 +213,12 @@ func TestParseFluxEvidence(t *testing.T) {
 		t.Fatalf("implied = %+v, want Flux's default release name", implied)
 	}
 
+	long := "a-namespace-with-quite-a-long-name-for-this"
+	shortened, ok := parseFluxEvidence(fluxHelmRelease(map[string]any{}, map[string]any{"targetNamespace": long + "-and-then-some"}))
+	if !ok || len(shortened.releaseName) > 53 {
+		t.Fatalf("shortened = %+v, want Flux's limit on default names", shortened)
+	}
+
 	if _, ok := parseFluxEvidence(fluxHelmRelease(map[string]any{}, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "remote"}}})); ok {
 		t.Fatal("a HelmRelease that installs into another cluster says nothing about this one")
 	}

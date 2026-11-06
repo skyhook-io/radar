@@ -143,16 +143,16 @@ function OverviewTab({ release }: { release: ObservedHelmReleaseDetail }) {
   const chartWhenMissing = release.otherCharts?.length
     ? `Its objects name several charts, and none matches the release name: ${release.otherCharts.join(', ')}.`
     : 'Its objects have no helm.sh/chart label.'
-  const chartFact: Fact = release.managedByFluxHelmRelease && release.fluxHistory?.length
-    ? { text: release.chart ?? 'Unknown', tone: release.chart ? 'neutral' : 'unknown', source: 'Recorded by Flux' }
-    : stampedFact(release.chart, 'helm.sh/chart', chartWhenMissing)
+  // When Flux recorded the release, these three values are Flux's, not labels.
+  const fact = (value: string | undefined, label: string, whenMissing: string): Fact =>
+    lastRecord?.chartName ? (value ? { text: value, tone: 'neutral', source: 'Recorded by Flux' } : unknownFact('Flux didn’t record this.')) : stampedFact(value, label, whenMissing)
   return (
     <div className="p-4 space-y-4">
       <div className="bg-theme-elevated/30 rounded-lg p-4">
         <FactGrid>
-          <FactRow label="Chart"><FactValue fact={chartFact} /></FactRow>
-          <FactRow label="Chart version"><FactValue fact={stampedFact(release.chartVersion, 'helm.sh/chart', 'No version could be read from its objects.')} /></FactRow>
-          <FactRow label="App version"><FactValue fact={stampedFact(release.appVersion, 'app.kubernetes.io/version', 'This chart doesn’t set app.kubernetes.io/version on its objects.')} /></FactRow>
+          <FactRow label="Chart"><FactValue fact={fact(release.chart, 'helm.sh/chart', chartWhenMissing)} /></FactRow>
+          <FactRow label="Chart version"><FactValue fact={fact(release.chartVersion, 'helm.sh/chart', 'No single version could be read from its objects.')} /></FactRow>
+          <FactRow label="App version"><FactValue fact={fact(release.appVersion, 'app.kubernetes.io/version', 'No single app version could be read from its objects.')} /></FactRow>
           {release.otherCharts && release.otherCharts.length > 0 && (
             <FactRow label={release.chart ? 'Subcharts' : 'Charts found'}>
               <span className="text-theme-text-secondary">{release.otherCharts.join(', ')}</span>

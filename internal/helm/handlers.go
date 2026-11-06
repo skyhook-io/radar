@@ -334,6 +334,7 @@ func writeInventoryError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrConnectionChanged):
 		writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
 	default:
+		log.Printf("[helm] Failed to read Helm inventory %s: %v", r.URL.Path, err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}
 }
