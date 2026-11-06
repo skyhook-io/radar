@@ -22,7 +22,7 @@ const INITIAL_ROWS = 30;
 const WHEN_TIP =
   "When the revision was created, or when Helm or GitOps recorded the deploy. A rollback reuses an old revision, so its time doesn't change.";
 const CAUSE_TIP =
-  "The Helm or GitOps record for this deploy, or the revision's change-cause note. \"Near\" means a record landed close to when the revision was created, which doesn't prove it created the revision.";
+  "The revision's change-cause note, or a Helm or GitOps record. \"Near\" means a record lines up with the revision in time or version, which doesn't prove it created the revision.";
 const REPEATED_CAUSE_TIP =
   "The revision before this one has the same note. Kubernetes copies it to each new revision, so it may not describe this one.";
 const UNKNOWN_LIVE_TIP =
@@ -33,7 +33,6 @@ const OUTDATED_AGENT_NOTE =
 export interface ApplicationDeploysProps {
   /** `null` while the host hasn't produced a result yet. */
   deploys: AppDeploys | null;
-  loading?: boolean;
   /** A rollout under way in the app. WorkloadView reports its own, so a workload scope omits this. */
   rolloutSummary?: AppRolloutSummary | null;
   /** Lets a host hold its revision fetches until this view is on screen. */
@@ -184,7 +183,6 @@ function DeployRowView({
 
 export function ApplicationDeploys({
   deploys,
-  loading,
   rolloutSummary,
   onVisibleChange,
 }: ApplicationDeploysProps) {
@@ -227,7 +225,10 @@ export function ApplicationDeploys({
           items={deploys.partialReasons}
         />
       )}
-      {loading && rows.length === 0 ? (
+      {deploys.stillLoading.length > 0 && rows.length > 0 && (
+        <p className="text-xs text-theme-text-tertiary">{deploys.stillLoading.join(" ")}</p>
+      )}
+      {deploys.stillLoading.length > 0 && rows.length === 0 ? (
         <PaneLoader label="Loading deploys…" className="h-32" />
       ) : rows.length === 0 ? (
         <EmptyState

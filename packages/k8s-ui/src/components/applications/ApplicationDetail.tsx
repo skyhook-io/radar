@@ -258,7 +258,6 @@ export type ApplicationDetailProps = {
   /** What the Deploys view reads. Undefined hides the view; `null` shows it
    *  loading, so a host can hold its fetches until `onDeploysVisibleChange`. */
   deploys?: BuildAppDeploysInput | null;
-  deploysLoading?: boolean;
   onDeploysVisibleChange?: (visible: boolean) => void;
   history?: AppHistory;
   historyLoading?: boolean;
@@ -362,7 +361,6 @@ export function ApplicationDetail({
   discoveredEnvs,
   activeInstanceKey,
   deploys,
-  deploysLoading,
   onDeploysVisibleChange,
   history,
   historyLoading,
@@ -497,7 +495,6 @@ export function ApplicationDetail({
             <div className="flex h-full min-h-0 flex-col">
               <ApplicationDeploys
                 deploys={shownDeploys}
-                loading={deploysLoading}
                 onVisibleChange={onDeploysVisibleChange}
               />
             </div>
@@ -509,7 +506,6 @@ export function ApplicationDetail({
     app.sourceRef,
     selectedWorkload,
     shownDeploys,
-    deploysLoading,
     onDeploysVisibleChange,
   ]);
   useEffect(() => {
@@ -845,7 +841,6 @@ export function ApplicationDetail({
             }
             onNavigateToResource={onNavigateToResource}
             deploys={shownDeploys}
-            deploysLoading={deploysLoading}
             onDeploysVisibleChange={onDeploysVisibleChange}
             rolloutSummary={rolloutSummary}
             history={history}
@@ -898,7 +893,6 @@ function ApplicationWorkspace({
   onSelectWorkload,
   onNavigateToResource,
   deploys,
-  deploysLoading,
   onDeploysVisibleChange,
   rolloutSummary,
   history,
@@ -952,7 +946,6 @@ function ApplicationWorkspace({
     group?: string;
   }) => void;
   deploys?: AppDeploys | null;
-  deploysLoading?: boolean;
   onDeploysVisibleChange?: (visible: boolean) => void;
   rolloutSummary: AppRolloutSummary | null;
   history?: AppHistory;
@@ -1013,7 +1006,6 @@ function ApplicationWorkspace({
       {!costSelected && activeView === "deploys" && deploys !== undefined && (
         <ApplicationDeploys
           deploys={deploys}
-          loading={deploysLoading}
           rolloutSummary={rolloutSummary}
           onVisibleChange={onDeploysVisibleChange}
         />
