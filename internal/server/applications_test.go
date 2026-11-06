@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1611,6 +1612,7 @@ func TestApplicationsViewRestricted(t *testing.T) {
 		requested     []string
 		effective     []string
 		processScoped bool
+		notCollected  string
 		want          bool
 	}{
 		{name: "all namespaces, all visible", want: false},
@@ -1620,9 +1622,11 @@ func TestApplicationsViewRestricted(t *testing.T) {
 		{name: "explicit filter fully granted", requested: []string{"a", "b"}, effective: []string{"a", "b"}, want: false},
 		{name: "explicit filter partly granted", requested: []string{"a", "b"}, effective: []string{"a"}, want: true},
 		{name: "explicit filter is not an access limit on a scoped Radar", requested: []string{"a"}, effective: []string{"a"}, processScoped: true, want: false},
+		{name: "explicit filter outside what a scoped Radar collects", requested: []string{"b"}, effective: []string{"b"}, processScoped: true, notCollected: "b", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := applicationsViewRestricted(tc.requested, tc.effective, tc.processScoped); got != tc.want {
+			readable := func(namespaces []string) bool { return !slices.Contains(namespaces, tc.notCollected) }
+			if got := applicationsViewRestricted(tc.requested, tc.effective, tc.processScoped, readable); got != tc.want {
 				t.Fatalf("applicationsViewRestricted() = %v, want %v", got, tc.want)
 			}
 		})

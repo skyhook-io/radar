@@ -1214,6 +1214,13 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 		if updateRevision == "" || updateRevision != currentRevision {
 			return
 		}
+		// OnDelete can leave pods on a reverted revision while both names agree,
+		// and those pods are the only ones this count leaves out.
+		replicas, _, _ := unstructured.NestedInt64(workload.Object, "status", "replicas")
+		onRevision, _, _ := unstructured.NestedInt64(workload.Object, "status", "currentReplicas")
+		if onRevision != replicas {
+			return
+		}
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "readyReplicas")
 		for i := range revisions {
 			if revisions[i].PodHash == updateRevision {

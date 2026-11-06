@@ -143,9 +143,19 @@ func TestApplyControllerRevisionServing(t *testing.T) {
 	t.Run("settled StatefulSet", func(t *testing.T) {
 		got := revisions()
 		applyControllerRevisionServing(got, workload(4, map[string]any{
-			"currentRevision": "db-new", "updateRevision": "db-new", "readyReplicas": int64(3),
+			"currentRevision": "db-new", "updateRevision": "db-new", "readyReplicas": int64(3), "replicas": int64(3), "currentReplicas": int64(3),
 		}), "statefulsets")
 		if !*got[0].Serving || *got[0].ReadyReplicas != 3 || *got[1].Serving || *got[1].ReadyReplicas != 0 {
+			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
+		}
+	})
+
+	t.Run("OnDelete StatefulSet with pods left on a reverted revision stays unknown", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(4, map[string]any{
+			"currentRevision": "db-new", "updateRevision": "db-new", "readyReplicas": int64(3), "replicas": int64(3), "currentReplicas": int64(1),
+		}), "statefulsets")
+		if got[0].Serving != nil || got[1].Serving != nil || got[0].ReadyReplicas != nil {
 			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
 		}
 	})

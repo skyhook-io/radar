@@ -320,20 +320,20 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 	out := *s.filterApplicationAuthenticationRefs(r, resp)
 	if !accessUnknown {
 		perms := k8s.GetCachedPermissionResult()
-		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms != nil && perms.NamespaceScoped)}
+		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms != nil && perms.NamespaceScoped, perms.ReadableInEvery)}
 	}
 	s.writeJSON(w, &out)
 }
 
 // applicationsViewRestricted reports whether access, not the caller's own
 // filter, left namespaces out. requested is what the URL asked for (nil = all),
-// effective what the listing ran with, and processScoped whether Radar's own
-// identity can't read cluster-wide.
-func applicationsViewRestricted(requested, effective []string, processScoped bool) bool {
+// effective what the listing ran with, processScoped whether Radar's own identity
+// can't read cluster-wide, and readable whether it reads those namespaces in full.
+func applicationsViewRestricted(requested, effective []string, processScoped bool, readable func(namespaces []string) bool) bool {
 	if requested == nil {
 		return effective != nil || processScoped
 	}
-	return len(effective) < len(requested)
+	return len(effective) < len(requested) || (processScoped && !readable(effective))
 }
 
 // handleApplicationHistory serves a focused app-level change narrative.
