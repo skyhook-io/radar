@@ -282,11 +282,15 @@ func (h *Handlers) handleInventory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
 	}
+	// The scope comes first: its namespace check caches the caller's answer, so
+	// the resolver can't get a different one and pass off a failed check as no
+	// access.
+	scope := h.objectScope(r)
 	namespaces, ok := h.listNamespaces(r)
 	if !ok {
 		namespaces = []string{}
 	}
-	inventory, err := client.ReadInventory(r.Context(), InventoryRequest{StorageNamespaces: namespaces, User: userCreds(r), Scope: h.objectScope(r)})
+	inventory, err := client.ReadInventory(r.Context(), InventoryRequest{StorageNamespaces: namespaces, User: userCreds(r), Scope: scope})
 	if err != nil {
 		writeInventoryError(w, r, err)
 		return

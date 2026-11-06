@@ -92,6 +92,11 @@ func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*Rele
 	}
 	inventory.ObjectCoverage = &scan.coverage
 	inventory.Observed = observedOutsideStorage(scan, read, req.Scope.Requested)
+	// Health reads the current cache, so this has to come after it. It also
+	// keeps a storage read from one cluster from pairing with objects of another.
+	if !req.Scope.Provider.Current() {
+		return nil, ErrConnectionChanged
+	}
 	return inventory, nil
 }
 

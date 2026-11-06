@@ -40,6 +40,7 @@ What this can miss, by design:
 - A release doesn't appear if the caller can read none of its objects, or if it deploys only CRDs from a chart's `crds/` directory, which Helm doesn't stamp. Scanning CRDs wouldn't help: `karpenter-crd`'s CRDs, for example, carry no stamps at all.
 - A failed release with objects looks like any other: its objects don't record the failure.
 - Objects kept after an uninstall, for example with `helm.sh/resource-policy: keep`, can show up as a release.
+- Someone who can read Secrets in a release's namespace gets Helm's answer for that namespace, even if Helm stores the release elsewhere. A Flux release stored in `flux-system` and deployed into `apps` isn't listed for someone with Secrets in `apps` who can't read its `HelmRelease`: Radar can't tell it from objects left behind, so it keeps to what Helm says there.
 
 Measured on a real cluster against `helm list`, over 20 kinds: 22 of 23 releases found with no false ones, and no wrong chart or version where one was shown.
 

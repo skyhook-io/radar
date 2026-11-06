@@ -52,10 +52,13 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 		return nil, nil, fmt.Errorf("helm is not available (no releases found or helm not installed)")
 	}
 
+	// The scope comes first, as in the REST handler: its namespace check caches
+	// the answer the resolver then reads.
+	scope := mcpHelmObjectScope(ctx, input.Namespace)
 	inventory, err := helmClient.ReadInventory(ctx, helm.InventoryRequest{
 		StorageNamespaces: resolveHelmListNamespaces(ctx, input.Namespace),
 		User:              userFromContext(ctx),
-		Scope:             mcpHelmObjectScope(ctx, input.Namespace),
+		Scope:             scope,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list helm releases: %w", err)

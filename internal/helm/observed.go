@@ -190,9 +190,6 @@ func scanObservedReleases(ctx context.Context, scope *ObjectScope) (*stampScan, 
 	if err != nil {
 		return nil, err
 	}
-	if !scope.Provider.Current() {
-		return nil, ErrConnectionChanged
-	}
 	scan.coverage = coverage
 	return scan, nil
 }
@@ -453,6 +450,9 @@ func GetObservedRelease(ctx context.Context, scope *ObjectScope, namespace, name
 	key := releaseKey{namespace, name}
 	objects := groupStamped(scan.stamped)[key]
 	if len(objects) == 0 {
+		if !scope.Provider.Current() {
+			return nil, ErrConnectionChanged
+		}
 		return nil, nil
 	}
 	sort.Slice(objects, func(i, j int) bool {
@@ -466,6 +466,10 @@ func GetObservedRelease(ctx context.Context, scope *ObjectScope, namespace, name
 	})
 	detail := &ObservedReleaseDetail{ObservedRelease: observedRow(key, objects, scan.flux), ObjectCoverage: scan.coverage}
 	detail.Resources = addObservedHealth(&detail.ObservedRelease, objects, scan.coverage.Status != resourceapi.CoverageComplete)
+	// Health reads the current cache, so this has to come after it.
+	if !scope.Provider.Current() {
+		return nil, ErrConnectionChanged
+	}
 	for _, f := range scan.flux {
 		if f.releaseNamespace == namespace && f.releaseName == name {
 			detail.FluxHistory = f.history
