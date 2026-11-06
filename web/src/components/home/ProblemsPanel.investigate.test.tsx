@@ -7,6 +7,12 @@ import { ProblemsPanel } from './HomeView'
 import { IssueDiagnoseButton } from '../diagnose/LocalDiagnoseAction'
 import { HOVER_REVEAL_ACTION, HOVER_REVEAL_HIT, HOVER_REVEAL_REST } from '../../utils/animation'
 
+const usage = vi.hoisted(() => ({ recordUsageEvent: vi.fn() }))
+vi.mock('../../api/usage-data', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  recordUsageEvent: usage.recordUsageEvent,
+}))
+
 const diagnose = vi.hoisted(() => ({
   setupState: 'ready' as string,
   available: true,
@@ -140,6 +146,17 @@ describe('Home Active Issues Investigate action', () => {
     expect(ageSlot().textContent).toMatch(/\d/)
     expect(ageSlot().classList).not.toContain('group-hover:opacity-0')
     expect(container.querySelector('.group > div')).toBeNull()
+  })
+})
+
+describe('opening an issue from Home', () => {
+  it('opens its resource and counts it once', () => {
+    render()
+    usage.recordUsageEvent.mockClear()
+    const row = buttons().find((b) => b.textContent?.includes('checkout'))!
+    act(() => row.click())
+    expect(onResourceClick).toHaveBeenCalledTimes(1)
+    expect(usage.recordUsageEvent.mock.calls).toEqual([[{ type: 'ui', name: 'issue_action:open' }]])
   })
 })
 

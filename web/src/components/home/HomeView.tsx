@@ -36,6 +36,7 @@ import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
 import { IssueDiagnoseButton, useIssueDiagnoseShown } from '../diagnose/LocalDiagnoseAction'
+import { recordUsageEvent } from '../../api/usage-data'
 import { HOVER_REVEAL_ACTION, HOVER_REVEAL_HIT, HOVER_REVEAL_REST } from '../../utils/animation'
 
 interface HomeViewProps {
@@ -465,12 +466,15 @@ export function ProblemsPanel({
                       <button
                         type="button"
                         className="w-full flex items-center gap-2 px-3 py-1.5 group-hover:bg-theme-hover group-has-[:focus-visible]:bg-theme-hover transition-colors text-left"
-                        onClick={() => onResourceClick({
-                          kind: ref.kind,
-                          namespace: ref.namespace ?? '',
-                          name: ref.name,
-                          group: ref.group ?? '',
-                        })}
+                        onClick={() => {
+                          recordUsageEvent({ type: 'ui', name: 'issue_action:open' })
+                          onResourceClick({
+                            kind: ref.kind,
+                            namespace: ref.namespace ?? '',
+                            name: ref.name,
+                            group: ref.group ?? '',
+                          })
+                        }}
                       >
                         <StatusDot tone={issue.severity === 'critical' ? 'unhealthy' : 'degraded'} className="shrink-0" />
                         <div className="min-w-0 flex-1">

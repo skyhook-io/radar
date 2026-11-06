@@ -14,6 +14,12 @@ const api = vi.hoisted(() => ({
   runs: [] as RunSummary[],
   hosted: false,
   listRuns: vi.fn(),
+  recordUsageEvent: vi.fn(),
+}));
+
+vi.mock("../../api/usage-data", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  recordUsageEvent: api.recordUsageEvent,
 }));
 
 vi.mock("../../api/diagnose", async (importOriginal) => ({
@@ -337,6 +343,26 @@ describe("an issue row's Investigate action", () => {
       expect(rowToggle).not.toHaveBeenCalled();
     },
   );
+
+  const investigateEvent = { type: "ui", name: "issue_action:investigate" };
+
+  it("counts starting an investigation", async () => {
+    api.runs = [];
+    await renderIssueRow();
+    api.recordUsageEvent.mockClear();
+    await act(async () => issueButton().click());
+    expect(api.recordUsageEvent.mock.calls).toEqual([[investigateEvent]]);
+  });
+
+  it("counts investigating again, not opening the last investigation", async () => {
+    api.runs = [investigated()];
+    await renderIssueRow();
+    api.recordUsageEvent.mockClear();
+    await act(async () => issueButton().click());
+    expect(api.recordUsageEvent).not.toHaveBeenCalled();
+    await act(async () => buttonNamed("Investigate again").click());
+    expect(api.recordUsageEvent.mock.calls).toEqual([[investigateEvent]]);
+  });
 
   it("re-investigates from the panel", async () => {
     api.runs = [investigated()];
