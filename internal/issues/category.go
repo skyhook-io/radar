@@ -339,11 +339,11 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryUnknown
 
 	case "Job":
-		// DetectProblems only emits Job problems for genuine failures: a
-		// JobFailed condition (reason e.g. BackoffLimitExceeded /
-		// DeadlineExceeded, or the "Failed" fallback) or a stuck-active job
-		// ("Running for … with no completions"). All map to the batch
-		// workload-failure category rather than being discarded.
+		// DetectProblems only emits Job problems for a genuine terminal
+		// failure: a JobFailed condition (reason e.g. BackoffLimitExceeded /
+		// DeadlineExceeded, or the "Failed" fallback). It maps to the batch
+		// workload-failure category. (A deleting Job is classified as
+		// terminating earlier, before this switch.)
 		return issuesapi.CategoryJobFailed
 
 	case "CronJob":
