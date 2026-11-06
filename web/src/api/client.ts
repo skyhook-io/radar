@@ -5529,6 +5529,26 @@ export interface WorkloadRevision {
   // (serving traffic, what an abort reverts to) are different revisions.
   isStable?: boolean;
   podHash?: string;
+  readyReplicas?: number;
+  serving?: boolean;
+  changeCause?: string;
+}
+
+export function workloadRevisionsQuery(
+  kind: string,
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
+  return {
+    queryKey: ["workload-revisions", kind, namespace, name],
+    // The endpoint answers null for a workload with no revisions.
+    queryFn: async () =>
+      (await fetchJSON<WorkloadRevision[] | null>(
+        `/workloads/${kind}/${namespace}/${name}/revisions`,
+      )) ?? [],
+    enabled: Boolean(kind && namespace && name && enabled),
+  };
 }
 
 export function useWorkloadRevisions(
@@ -5537,12 +5557,9 @@ export function useWorkloadRevisions(
   name: string,
   enabled = true,
 ) {
-  return useQuery<WorkloadRevision[]>({
-    queryKey: ["workload-revisions", kind, namespace, name],
-    queryFn: () =>
-      fetchJSON(`/workloads/${kind}/${namespace}/${name}/revisions`),
-    enabled: Boolean(kind && namespace && name && enabled),
-  });
+  return useQuery<WorkloadRevision[]>(
+    workloadRevisionsQuery(kind, namespace, name, enabled),
+  );
 }
 
 export function useRollbackWorkload() {
