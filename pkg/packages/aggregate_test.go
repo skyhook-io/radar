@@ -17,11 +17,15 @@ func TestSplitChart(t *testing.T) {
 		{"foo", "foo", ""},
 		{"", "", ""},
 		{"-1.0.0", "", "1.0.0"},
+		{"foo-1.2.3-1", "foo", "1.2.3-1"},
+		{"foo-2-bar-1.2.3", "foo-2-bar", "1.2.3"},
+		{"foo-1", "foo", "1"},
+		{"tool-1.2.3_build.4", "tool", "1.2.3_build.4"},
 	}
 	for _, c := range cases {
-		gotName, gotV := splitChart(c.in)
+		gotName, gotV := SplitChart(c.in)
 		if gotName != c.wantName || gotV != c.wantV {
-			t.Errorf("splitChart(%q) = (%q, %q), want (%q, %q)", c.in, gotName, gotV, c.wantName, c.wantV)
+			t.Errorf("SplitChart(%q) = (%q, %q), want (%q, %q)", c.in, gotName, gotV, c.wantName, c.wantV)
 		}
 	}
 }

@@ -44,8 +44,10 @@ import type {
   TimelineEvent,
   TimeRange,
   ResourceWithRelationships,
+  HelmInventory,
   HelmRelease,
   HelmReleaseDetail,
+  ObservedHelmReleaseDetail,
   HelmValues,
   ManifestDiff,
   NotesDiff,
@@ -6119,13 +6121,41 @@ function helmNamespaceParams(namespaces: string[] = []) {
   return namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
 }
 
-// List all Helm releases
-export function useHelmReleases(namespaces: string[] = []) {
+// The Helm list as far as the caller's access reaches. An older Radar has no
+// inventory route: its list is the whole answer, and a denial stays a 403.
+export function useHelmInventory(namespaces: string[] = []) {
   const params = helmNamespaceParams(namespaces);
-  return useQuery<HelmRelease[]>({
-    queryKey: ["helm-releases", namespaces],
-    queryFn: () => fetchJSON(`/helm/releases${params}`),
+  const { isPending: capabilitiesPending } = useCapabilities();
+  const { support } = useRadarFeature("helmInventory");
+  const hasInventory = support === "supported";
+  return useQuery<HelmInventory>({
+    queryKey: ["helm-releases", namespaces, hasInventory],
+    queryFn: async () =>
+      hasInventory
+        ? fetchJSON<HelmInventory>(`/helm/inventory${params}`)
+        : { releases: await fetchJSON<HelmRelease[]>(`/helm/releases${params}`), observed: [] },
+    enabled: !capabilitiesPending,
     staleTime: 30000, // 30 seconds
+    // Objects still loading clear on their own, so the list shouldn't wait for
+    // a manual refresh to fill in.
+    refetchInterval: (query) => (query.state.data?.objectCoverage?.gaps.some((gap) => gap.action === "retry") ? 5000 : false),
+  });
+}
+
+// Kubernetes refused the caller's own read of Helm's storage. Other 403s on the
+// same route mean something else, and a Radar without inventory sends no code.
+export function isHelmReleaseReadDenied(error: unknown): boolean {
+  return isForbiddenError(error) && (error as ApiError).data?.error_code === "release_read_denied";
+}
+
+// One release built from the stamps on its objects, for a caller who can't read
+// Helm's storage.
+export function useObservedHelmRelease(namespace: string, name: string) {
+  return useQuery<ObservedHelmReleaseDetail>({
+    queryKey: ["helm-observed-release", namespace, name],
+    queryFn: () => fetchJSON(`/helm/inventory/${namespace}/${name}`),
+    staleTime: 5000,
+    refetchInterval: (query) => (isStableClientError(query.state.error) ? false : 15000),
   });
 }
 
@@ -6140,7 +6170,9 @@ export function useHelmRelease(
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}`),
     enabled: Boolean(namespace && name) && (options?.enabled ?? true),
     staleTime: 5000,
-    refetchInterval: 10000, // Poll for live resource status updates (post-upgrade/rollback)
+    // Poll for live resource status updates (post-upgrade/rollback); a refusal
+    // would only repeat.
+    refetchInterval: (query) => (isForbiddenError(query.state.error) ? false : 10000),
   });
 }
 

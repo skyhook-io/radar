@@ -1,6 +1,6 @@
 import type { Issue, IssueResourceRef } from '../components/issues/types'
 import type { CapacityIntegrationState } from './capacity'
-import type { ReadGap, ReadKindRef } from './read-coverage'
+import type { ReadGap, ReadGapSet, ReadKindRef, SearchCoverage } from './read-coverage'
 
 // Topology types matching the Go backend
 
@@ -168,6 +168,7 @@ export interface CloudConnectCapability {
 
 export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
+  helmInventory?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
@@ -1221,11 +1222,63 @@ export interface ResourceDiff {
   parseErrorCount?: number
 }
 
+// A release as its deployed objects describe it, built without Helm's release
+// Secrets. It has no status, revision or update time because only those Secrets
+// record them. An absent chart, chartVersion or appVersion is unknown.
+export interface ObservedHelmRelease {
+  name: string
+  namespace: string
+  storageNamespace?: string
+  chart?: string
+  chartVersion?: string
+  appVersion?: string
+  // Other helm.sh/chart labels on its objects. With no chart, these are the
+  // candidates Radar wouldn't choose between.
+  otherCharts?: string[]
+  // Objects the caller can read, which can be fewer than the release has.
+  resourceCount: number
+  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
+  healthIssue?: string
+  healthSummary?: string
+  managedByFluxHelmRelease?: string
+}
+
+// One entry of a Flux HelmRelease's status.history.
+export interface FluxHelmRevision {
+  revision: number
+  status?: string
+  chartName?: string
+  chartVersion?: string
+  appVersion?: string
+  digest?: string
+  configDigest?: string
+  firstDeployed?: string
+  lastDeployed?: string
+}
+
+export interface ObservedHelmReleaseDetail extends ObservedHelmRelease {
+  resources?: HelmOwnedResource[]
+  fluxHistory?: FluxHelmRevision[]
+  objectCoverage: SearchCoverage
+}
+
+// The Helm list as far as the caller's access reaches. storageDenied is absent
+// when nothing was denied; objectCoverage is present when objects were read.
+export interface HelmInventory {
+  releases: HelmRelease[]
+  observed: ObservedHelmRelease[]
+  storageDenied?: ReadGapSet<string>
+  objectCoverage?: SearchCoverage
+}
+
 // Selected Helm release (for drawer state)
 export interface SelectedHelmRelease {
   namespace: string
   name: string
   storageNamespace?: string
+  // Opened from a row built without Helm's release Secrets, so the full release
+  // read would only be refused. A shared link has no such hint.
+  observed?: boolean
 }
 
 // Upgrade availability info

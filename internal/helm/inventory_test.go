@@ -1,0 +1,183 @@
+package helm
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+
+	"helm.sh/helm/v3/pkg/release"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
+
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/internal/search"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
+)
+
+func denySecrets(namespaces ...string) ktesting.ReactionFunc {
+	return func(action ktesting.Action) (bool, runtime.Object, error) {
+		for _, ns := range namespaces {
+			if action.GetNamespace() == ns {
+				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New(`User "dev" cannot list resource "secrets"`))
+			}
+		}
+		return false, nil, nil
+	}
+}
+
+func TestListReleasesRecordingAccess(t *testing.T) {
+	client := fake.NewSimpleClientset(helmReleaseSecret(t, "apps", helmTestRelease("api", "apps", 1, release.StatusDeployed, "Install complete"), false))
+	client.PrependReactor("list", "secrets", denySecrets("team-b"))
+
+	rows, read, denied, err := listReleasesRecordingAccess(context.Background(), client, "", []string{"apps", "team-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !reflect.DeepEqual(read, []string{"apps"}) || !reflect.DeepEqual(denied, []string{"team-b"}) {
+		t.Fatalf("rows %+v read %v denied %v", rows, read, denied)
+	}
+}
+
+func TestListReleasesRecordingAccessTreatsACompleteDenialAsAResult(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "secrets", denySecrets(""))
+
+	rows, read, denied, err := listReleasesRecordingAccess(context.Background(), client, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 || rows == nil || len(read) != 0 || !reflect.DeepEqual(denied, []string{""}) {
+		t.Fatalf("rows %+v read %v denied %v", rows, read, denied)
+	}
+}
+
+func TestListReleasesRecordingAccessKeepsOtherFailures(t *testing.T) {
+	for name, failure := range map[string]error{
+		"rejected credentials": apierrors.NewUnauthorized("Unauthorized"),
+		"impersonation":        apierrors.NewForbidden(schema.GroupResource{Resource: "users"}, "dev", errors.New(`User "radar" cannot impersonate resource "users"`)),
+		"server error":         errors.New("etcd is down"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			client.PrependReactor("list", "secrets", func(ktesting.Action) (bool, runtime.Object, error) { return true, nil, failure })
+			if _, _, _, err := listReleasesRecordingAccess(context.Background(), client, "", nil); err == nil {
+				t.Fatal("a failure that isn't the caller's denial must not read as one")
+			}
+		})
+	}
+}
+
+func scopeSeeing(namespaces []string, requested []string) *ObjectScope {
+	return &ObjectScope{Access: search.ScanAccess{Selection: readscope.Selection{Namespaces: namespaces}}, Requested: requested}
+}
+
+func TestUnreadStorage(t *testing.T) {
+	user := &pkgauth.User{Username: "dev"}
+	listed := func(names ...string) *resourceapi.NameSet { return resourceapi.Names(names, resourceapi.RESTSetLimit) }
+	for _, tc := range []struct {
+		name         string
+		req          InventoryRequest
+		read, denied []string
+		want         *resourceapi.NameSet
+	}{
+		{
+			name:   "cluster-wide denial",
+			req:    InventoryRequest{User: user, Scope: scopeSeeing(nil, nil)},
+			denied: []string{""},
+			want:   resourceapi.AllNames(),
+		},
+		{
+			name: "no namespace access at all",
+			req:  InventoryRequest{StorageNamespaces: []string{}, User: user, Scope: scopeSeeing([]string{}, nil)},
+			want: resourceapi.AllNames(),
+		},
+		{
+			name:   "every namespace denied",
+			req:    InventoryRequest{StorageNamespaces: []string{"a", "b"}, User: user, Scope: scopeSeeing([]string{"a", "b"}, nil)},
+			denied: []string{"a", "b"},
+			want:   listed("a", "b"),
+		},
+		{
+			name:   "a namespace named and denied",
+			req:    InventoryRequest{StorageNamespaces: []string{"a", "b"}, User: user, Scope: scopeSeeing([]string{"a", "b"}, []string{"a", "b"})},
+			read:   []string{"a"},
+			denied: []string{"b"},
+			want:   listed("b"),
+		},
+		{
+			// The resolver narrowed storage to where Secrets can be listed, so
+			// the storage read never met b. It still can't be answered from Helm.
+			name: "a namespace the storage scope left out",
+			req:  InventoryRequest{StorageNamespaces: []string{"a"}, User: user, Scope: scopeSeeing([]string{"a", "b"}, nil)},
+			read: []string{"a"},
+			want: listed("b"),
+		},
+		{
+			name: "everything asked about was read",
+			req:  InventoryRequest{StorageNamespaces: []string{"a"}, User: user, Scope: scopeSeeing([]string{"a", "b"}, []string{"a"})},
+			read: []string{"a"},
+		},
+		{
+			// With no user the resolver's list is the identity's whole reach,
+			// so a namespace outside it isn't a denial.
+			name: "no user and nothing denied",
+			req:  InventoryRequest{StorageNamespaces: []string{"a"}, Scope: scopeSeeing(nil, nil)},
+			read: []string{"a"},
+		},
+		{
+			name:   "no user and a denial",
+			req:    InventoryRequest{StorageNamespaces: []string{"a", "b"}, Scope: scopeSeeing(nil, nil)},
+			read:   []string{"a"},
+			denied: []string{"b"},
+			want:   listed("b"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := unreadStorage(tc.req, tc.read, tc.denied); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("unreadStorage = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestObservedOutsideStorage(t *testing.T) {
+	stamped := func(release, namespace string) stampedObject {
+		return stampedObject{kind: "ConfigMap", namespace: namespace, name: release, release: release, releaseNS: namespace}
+	}
+	scan := &stampScan{
+		stamped: []stampedObject{stamped("kept-after-uninstall", "readable"), stamped("api", "denied"), stamped("web", "flux-target"), stamped("cache", "elsewhere")},
+		flux:    []fluxEvidence{{ref: "denied/web", releaseName: "web", releaseNamespace: "flux-target", storageNamespace: "denied"}},
+	}
+	names := func(rows []ObservedRelease) []string {
+		out := []string{}
+		for _, row := range rows {
+			out = append(out, row.Namespace+"/"+row.Name)
+		}
+		return out
+	}
+
+	got := names(observedOutsideStorage(scan, []string{"readable", "flux-target"}, nil))
+	// Helm's own answer stands where its storage was read, so an object kept
+	// after an uninstall doesn't resurrect the release there. A Flux release is
+	// judged by where Flux records it's stored, not by its target namespace.
+	want := []string{"denied/api", "elsewhere/cache", "flux-target/web"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+
+	got = names(observedOutsideStorage(scan, nil, []string{"elsewhere"}))
+	if !reflect.DeepEqual(got, []string{"elsewhere/cache"}) {
+		t.Fatalf("a namespace filter selects by the release's namespace: %v", got)
+	}
+
+	scan.stamped = append(scan.stamped, stampedObject{kind: "ClusterRole", name: "cache-reader", release: "cache", releaseNS: "elsewhere"})
+	rows := observedOutsideStorage(scan, nil, []string{"elsewhere"})
+	if len(rows) != 1 || rows[0].ResourceCount != 2 {
+		t.Fatalf("a namespace filter must keep a release's cluster-scoped objects: %+v", rows)
+	}
+}

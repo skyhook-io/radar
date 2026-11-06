@@ -15,6 +15,42 @@ The Helm list shows:
 
 When `storageNamespace` is present, use it for Helm detail/API/MCP calls. Helm stores release history there even when the chart deploys resources into another namespace. Rollback, upgrade, values preview/apply, and uninstall use the release’s recorded target namespace for objects without an explicit `metadata.namespace`, while history stays in the storage namespace. Objects with an explicit namespace retain it.
 
+## Without Access To Secrets
+
+Helm stores each release as a Secret, and Kubernetes has no metadata-only permission, so someone who can't read Secrets can't read Helm's records. The Helm list then shows what it can from the objects each release deployed, and says so in a callout above the list. It reads no Secret to do this, as the caller or as Radar.
+
+Helm stamps what it deploys with the `meta.helm.sh/release-name` and `meta.helm.sh/release-namespace` annotations. Charts conventionally add the `helm.sh/chart` and `app.kubernetes.io/version` labels. Radar groups objects by those two annotations. An object with no annotations isn't counted, even with Helm labels: charts rendered by Argo CD carry the labels with no Helm release behind them. An object with a controller owner isn't counted either, because operators copy their parent's annotations onto what they create.
+
+| Field | Without Secret access |
+|---|---|
+| Name, namespace | From the annotations |
+| Chart, chart version | From `helm.sh/chart`. Unknown if no object has the label, and the version is unknown if the label is at Kubernetes' 63-character limit, since it may be cut off |
+| App version | The most common `app.kubernetes.io/version` among objects of the chosen chart. Unknown if none has it, or on a tie |
+| Resources, object health | Live objects the caller can read, which can be fewer than the release has. Secrets are never read, and only kinds Radar is already watching are included |
+| Flux ownership, history | From a Flux `HelmRelease` the caller can read: its `status.history` supplies the chart, the versions and the history shown in the drawer. Flux's recorded status is shown as Flux's, in the drawer, and never as the release's status |
+| Status, revision, last updated | Unknown. Observed rows have no such fields, so nothing can default to "deployed" |
+| Helm history, compare, values, manifest, notes, hooks | Not available: these routes stay denied, and the drawer explains why |
+| Install, upgrade, rollback, uninstall | Not available |
+
+Subcharts label their own objects and can outnumber the parent's, so a count can't identify the chart: one real release has 21 objects from its `clickhouse` subchart and 8 from its own `signoz` chart. With several chart names, Radar chooses the one named exactly like the release. Otherwise it shows "Several charts" and lists them rather than guessing.
+
+What this can miss, by design:
+
+- A release that failed before creating any object doesn't appear.
+- A release doesn't appear if the caller can read none of its objects, or if it deploys only CRDs from a chart's `crds/` directory, which Helm doesn't stamp. Scanning CRDs wouldn't help: `karpenter-crd`'s CRDs, for example, carry no stamps at all.
+- A failed release with objects looks like any other: its objects don't record the failure.
+- Objects kept after an uninstall, for example with `helm.sh/resource-policy: keep`, can show up as a release.
+
+Measured on a real cluster against `helm list`, over 20 kinds: 22 of 23 releases found with no false ones, and no wrong chart or version where one was shown.
+
+The list comes from `GET /api/helm/inventory`, which returns `{releases, observed, storageDenied?, objectCoverage?}`. `releases` are ordinary rows from Helm's storage. `observed` rows exist only for releases whose storage the caller didn't read, so anyone who can read Secrets gets exactly what `GET /api/helm/releases` returns, without any object read. Access is judged per namespace: someone with Secrets in `team-a` and `view` on `team-b` gets full rows for `team-a` and observed rows for `team-b`, and a release in `team-a` that Helm no longer has stays gone even if objects from it remain. `storageDenied` names what wasn't read, and `objectCoverage` is what the object read reached, in the [search coverage](mcp.md#search-coverage-and-cel-object-filters) shape.
+
+`GET /api/helm/inventory/{namespace}/{name}` returns one observed release with its resources and Flux history. The namespace is the release's, and a 404 means no object the caller can read carries the release's stamps, not that the release doesn't exist. `GET /api/helm/releases/{namespace}/{name}` returns 403 with `error_code: release_read_denied` when the caller's own read of Helm's storage was refused, which is what sends a shared link to the observed drawer. Any other 403, such as Radar's ServiceAccount being refused impersonation, isn't one and shows as an error.
+
+Objects are read through the same walk and per-user gates as search (`internal/search.Scan`): the namespaces the caller can see, exact-kind checks for Roles and RoleBindings, and per-kind checks for cluster-scoped kinds. The namespace picker filters rows by the release's namespace after that read, so a release keeps its cluster-scoped objects and those in other namespaces. Nothing is cached across callers. Without authentication the caller is Radar's own identity, so a default chart install with `rbac.secrets=false` gets this view too, and it shows nothing `/api/resources` doesn't.
+
+A Radar too old to serve the inventory doesn't advertise `helmInventory`, so the UI reads `/api/helm/releases` and keeps its "Access Restricted" state.
+
 ## Release Detail
 
 The drawer includes:
@@ -106,7 +142,7 @@ Evidence reads use the requester's Kubernetes identity in auth-enabled deploymen
 
 ## MCP
 
-Use `list_helm_releases` first for broad Helm deployment triage. It returns release status, health, storage namespace, Flux ownership, and operation signals.
+Use `list_helm_releases` first for broad Helm deployment triage. It returns release status, health, storage namespace, Flux ownership, and operation signals. When the caller can't read all of Helm's storage it returns an object instead of an array: `{summary, releases, observed, storageDenied, objectCoverage}`, with the same meanings as [the inventory](#without-access-to-secrets). The `summary` says in words what's unknown. `get_helm_release` stays denied for those releases.
 
 Use `get_helm_release` for detail:
 
