@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { ResourceCompareView, type ResourceCompareViewProps } from './ResourceCompareView'
@@ -11,7 +12,9 @@ function header(props: Partial<ResourceCompareViewProps>) {
     <ResourceCompareView a={checkout} b={checkout} aData={{}} bData={{}} onSwap={() => {}} onClose={() => {}} {...props} />,
   )
   // Tags split the name from its namespace, so compare the text a reader sees.
-  return html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'")
+  const host = document.createElement('div')
+  host.innerHTML = html
+  return host.textContent ?? ''
 }
 
 describe('ResourceCompareView sides', () => {
