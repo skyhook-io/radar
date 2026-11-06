@@ -597,7 +597,7 @@ Disabled by default for security:
 
 ### MCP container commands
 
-`mcp.execTools` registers `exec_pod`. `mcp.httpTools` independently registers `curl_service`; both default off. `rbac.podExec` grants Radar's ServiceAccount exec permission; it does not grant `get services/proxy`. Service GETs require that separate permission on the target Service, as the signed-in caller or Radar's ServiceAccount without auth. The chart does not add it to the ServiceAccount. The table below describes only exec access:
+`mcp.execTools` registers `exec_pod`. `mcp.httpTools` independently registers `curl_service`; both default off. `rbac.podExec` grants Radar's ServiceAccount exec permission; it does not grant `get services/proxy`. Service GETs require that separate permission on the target Service, as the signed-in caller or Radar's ServiceAccount without auth. The chart does not add it to the ServiceAccount; see [the scoped Service HTTP grant](#granting-service-http-access-without-authentication). The table below describes only exec access:
 
 | `mcp.execTools` | `rbac.podExec` | Result |
 |---|---|---|
@@ -613,6 +613,48 @@ no SA exec rule and execution uses the forwarded caller token. The chart's SA
 rule grants `create pods/exec` (SPDY); WebSocket also needs `get pods/exec`.
 `disableExec` (`--disable-exec`), read-only mode and disabled MCP suppress registration regardless
 of either value. See [the exec contract](../../../docs/mcp.md#exec_pod).
+
+### Granting Service HTTP access without authentication
+
+For a no-auth Radar listener, enable `mcp.httpTools` and explicitly grant Radar's
+ServiceAccount `get services/proxy` on the intended target. For example, this
+namespace Role permits only the Service named `app` in `team-a`. Replace the
+ServiceAccount name and namespace with those used by your Radar installation.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: radar-service-http
+  namespace: team-a
+rules:
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: ["app"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: radar-service-http
+  namespace: team-a
+subjects:
+  - kind: ServiceAccount
+    name: radar
+    namespace: radar
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: radar-service-http
+```
+
+Every reachable unauthenticated MCP client shares this access. With authentication,
+the signed-in caller needs the grant instead. Prefer a namespace Role to adding
+`services/proxy` through `rbac.additionalRules`: those rules extend a ClusterRole,
+so a resource-name restriction there applies to that name across namespaces.
+This grant delegates Radar-to-Service network access; it does not isolate where a
+Service routes. Constrain EndpointSlice/GitOps-controller changes and network
+policy for a shared cluster. The chart does not apply this grant automatically.
 
 ### Turning exec off
 
@@ -759,45 +801,3 @@ Radar uses its ServiceAccount permissions to access the Kubernetes API. The UI a
 helm uninstall radar -n radar
 kubectl delete namespace radar
 ```
-
-### Granting Service HTTP access without authentication
-
-For a no-auth Radar listener, enable `mcp.httpTools` and explicitly grant Radar's
-ServiceAccount `get services/proxy` on the intended target. For example, this
-namespace Role permits only the Service named `app` in `team-a`. Replace the
-ServiceAccount name and namespace with those used by your Radar installation.
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: radar-service-http
-  namespace: team-a
-rules:
-  - apiGroups: [""]
-    resources: ["services/proxy"]
-    resourceNames: ["app"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: radar-service-http
-  namespace: team-a
-subjects:
-  - kind: ServiceAccount
-    name: radar
-    namespace: radar
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: radar-service-http
-```
-
-Every reachable unauthenticated MCP client shares this access. With authentication,
-the signed-in caller needs the grant instead. Prefer a namespace Role to adding
-`services/proxy` through `rbac.additionalRules`: those rules extend a ClusterRole,
-so a resource-name restriction there applies to that name across namespaces.
-This grant delegates Radar-to-Service network access; it does not isolate where a
-Service routes. Constrain EndpointSlice/GitOps-controller changes and network
-policy for a shared cluster. The chart does not apply this grant automatically.
