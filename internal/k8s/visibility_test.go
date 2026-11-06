@@ -117,3 +117,43 @@ func TestBuildVisibilitySummaryMultiNamespace(t *testing.T) {
 		t.Fatalf("pods in ungranted namespace = %q, want unavailable", s.Core["pods"])
 	}
 }
+
+func TestReadsApplicationsInEvery(t *testing.T) {
+	enabled := func(namespace string) k8score.ResourceScope {
+		return k8score.ResourceScope{Enabled: true, Namespace: namespace}
+	}
+	allKinds := func(namespace string) map[string]k8score.ResourceScope {
+		scopes := make(map[string]k8score.ResourceScope)
+		for _, key := range []string{k8score.Pods, k8score.Deployments, k8score.Services, k8score.StatefulSets, k8score.DaemonSets} {
+			scopes[key] = enabled(namespace)
+		}
+		return scopes
+	}
+	without := func(scopes map[string]k8score.ResourceScope, key string) map[string]k8score.ResourceScope {
+		delete(scopes, key)
+		return scopes
+	}
+
+	for _, tc := range []struct {
+		name       string
+		scopes     map[string]k8score.ResourceScope
+		namespaces []string
+		want       bool
+	}{
+		{name: "cluster-wide, all namespaces", scopes: allKinds(""), namespaces: []string{""}, want: true},
+		{name: "cluster-wide, one namespace", scopes: allKinds(""), namespaces: []string{"a"}, want: true},
+		{name: "scoped Radar, its own namespace", scopes: allKinds("a"), namespaces: []string{"a"}, want: true},
+		{name: "scoped Radar, another namespace", scopes: allKinds("a"), namespaces: []string{"b"}, want: false},
+		{name: "scoped Radar, all namespaces", scopes: allKinds("a"), namespaces: []string{""}, want: false},
+		{name: "Deployments denied cluster-wide", scopes: without(allKinds(""), k8score.Deployments), namespaces: []string{""}, want: false},
+		{name: "StatefulSets denied cluster-wide", scopes: without(allKinds(""), k8score.StatefulSets), namespaces: []string{""}, want: false},
+		{name: "DaemonSets denied in a namespace", scopes: without(allKinds(""), k8score.DaemonSets), namespaces: []string{"a"}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			perms := &PermissionCheckResult{Scopes: tc.scopes}
+			if got := perms.ReadsApplicationsInEvery(tc.namespaces); got != tc.want {
+				t.Fatalf("ReadsApplicationsInEvery(%v) = %v, want %v", tc.namespaces, got, tc.want)
+			}
+		})
+	}
+}

@@ -1608,25 +1608,24 @@ func TestManagedSourceRefs_IgnoreRemoteArgoDestinations(t *testing.T) {
 
 func TestApplicationsViewRestricted(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		requested     []string
-		effective     []string
-		processScoped bool
-		notCollected  string
-		want          bool
+		name       string
+		requested  []string
+		effective  []string
+		unreadable string
+		want       bool
 	}{
-		{name: "all namespaces, all visible", want: false},
-		{name: "all namespaces, user narrowed", effective: []string{"a"}, want: true},
-		{name: "all namespaces, no access", effective: []string{}, want: true},
-		{name: "all namespaces, Radar itself namespace-scoped", processScoped: true, want: true},
-		{name: "explicit filter fully granted", requested: []string{"a", "b"}, effective: []string{"a", "b"}, want: false},
-		{name: "explicit filter partly granted", requested: []string{"a", "b"}, effective: []string{"a"}, want: true},
-		{name: "explicit filter is not an access limit on a scoped Radar", requested: []string{"a"}, effective: []string{"a"}, processScoped: true, want: false},
-		{name: "explicit filter outside what a scoped Radar collects", requested: []string{"b"}, effective: []string{"b"}, processScoped: true, notCollected: "b", want: true},
+		{name: "all namespaces, all visible", unreadable: "none", want: false},
+		{name: "all namespaces, user narrowed", effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "all namespaces, no access", effective: []string{}, unreadable: "none", want: true},
+		{name: "all namespaces, Radar can't read them all", unreadable: "", want: true},
+		{name: "explicit filter fully granted", requested: []string{"a", "b"}, effective: []string{"a", "b"}, unreadable: "none", want: false},
+		{name: "explicit filter partly granted", requested: []string{"a", "b"}, effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "explicit filter inside what Radar reads", requested: []string{"a"}, effective: []string{"a"}, unreadable: "b", want: false},
+		{name: "explicit filter outside what Radar reads", requested: []string{"b"}, effective: []string{"b"}, unreadable: "b", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			readable := func(namespaces []string) bool { return !slices.Contains(namespaces, tc.notCollected) }
-			if got := applicationsViewRestricted(tc.requested, tc.effective, tc.processScoped, readable); got != tc.want {
+			readable := func(namespaces []string) bool { return !slices.Contains(namespaces, tc.unreadable) }
+			if got := applicationsViewRestricted(tc.requested, tc.effective, readable); got != tc.want {
 				t.Fatalf("applicationsViewRestricted() = %v, want %v", got, tc.want)
 			}
 		})

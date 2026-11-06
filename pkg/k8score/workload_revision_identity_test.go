@@ -160,6 +160,16 @@ func TestApplyControllerRevisionServing(t *testing.T) {
 		}
 	})
 
+	t.Run("DaemonSet with a misscheduled pod stays unknown", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(4, map[string]any{
+			"desiredNumberScheduled": int64(3), "updatedNumberScheduled": int64(3), "numberReady": int64(3), "numberMisscheduled": int64(1),
+		}), "daemonsets")
+		if got[0].Serving != nil || got[1].Serving != nil || got[0].ReadyReplicas != nil {
+			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
+		}
+	})
+
 	t.Run("mid-update StatefulSet stays unknown", func(t *testing.T) {
 		got := revisions()
 		applyControllerRevisionServing(got, workload(4, map[string]any{

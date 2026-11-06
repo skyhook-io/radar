@@ -1230,7 +1230,10 @@ func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unst
 	case "daemonsets":
 		desired, _, _ := unstructured.NestedInt64(workload.Object, "status", "desiredNumberScheduled")
 		updated, _, _ := unstructured.NestedInt64(workload.Object, "status", "updatedNumberScheduled")
-		if updated != desired {
+		// Pods on nodes the DaemonSet no longer targets count in neither figure,
+		// and they can be on an older revision.
+		misscheduled, _, _ := unstructured.NestedInt64(workload.Object, "status", "numberMisscheduled")
+		if updated != desired || misscheduled != 0 {
 			return
 		}
 		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "numberReady")

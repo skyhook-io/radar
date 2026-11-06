@@ -318,22 +318,21 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out := *s.filterApplicationAuthenticationRefs(r, resp)
-	if !accessUnknown {
-		perms := k8s.GetCachedPermissionResult()
-		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms != nil && perms.NamespaceScoped, perms.ReadableInEvery)}
+	if perms := k8s.GetCachedPermissionResult(); !accessUnknown && perms != nil {
+		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms.ReadsApplicationsInEvery)}
 	}
 	s.writeJSON(w, &out)
 }
 
-// applicationsViewRestricted reports whether access, not the caller's own
-// filter, left namespaces out. requested is what the URL asked for (nil = all),
-// effective what the listing ran with, processScoped whether Radar's own identity
-// can't read cluster-wide, and readable whether it reads those namespaces in full.
-func applicationsViewRestricted(requested, effective []string, processScoped bool, readable func(namespaces []string) bool) bool {
+// applicationsViewRestricted reports whether access, not the caller's own filter,
+// left applications out. requested is what the URL asked for (nil = all), effective
+// what the listing ran with, and readable whether Radar's own identity reads those
+// namespaces in full, the empty namespace meaning all of them.
+func applicationsViewRestricted(requested, effective []string, readable func(namespaces []string) bool) bool {
 	if requested == nil {
-		return effective != nil || processScoped
+		return effective != nil || !readable([]string{""})
 	}
-	return len(effective) < len(requested) || (processScoped && !readable(effective))
+	return len(effective) < len(requested) || !readable(effective)
 }
 
 // handleApplicationHistory serves a focused app-level change narrative.
