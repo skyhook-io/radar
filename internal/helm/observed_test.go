@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/search"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
@@ -271,5 +272,26 @@ func TestInventorySummarySaysWhatIsUnknown(t *testing.T) {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary lacks %q: %s", want, summary)
 		}
+	}
+}
+
+func TestCoverageMaySettle(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gaps []resourceapi.Gap
+		want bool
+	}{
+		{"complete", nil, false},
+		{"still loading", []resourceapi.Gap{{Code: readreason.KindSyncPending}}, true},
+		{"read failed", []resourceapi.Gap{{Code: readreason.ReadError}}, true},
+		{"access check failed", []resourceapi.Gap{{Code: readreason.UserPermissionCheckFailed}}, true},
+		{"denied by RBAC", []resourceapi.Gap{{Code: readreason.UserForbidden}}, false},
+		{"mixed", []resourceapi.Gap{{Code: readreason.UserForbidden}, {Code: readreason.KindSyncPending}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := coverageMaySettle(tc.gaps); got != tc.want {
+				t.Fatalf("coverageMaySettle = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

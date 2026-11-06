@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -420,6 +421,19 @@ func objectAPIVersion(o stampedObject) string {
 	return o.group + "/" + builtin.Version
 }
 
+// coverageMaySettle reports a gap that can close by itself, so finding no object
+// doesn't yet mean the release is gone. Gaps that need someone to change access
+// or configuration are the caller's stable answer.
+func coverageMaySettle(gaps []resourceapi.Gap) bool {
+	for _, gap := range gaps {
+		switch action, _ := readreason.ActionFor(gap.Code); action {
+		case readreason.ActionRetry, readreason.ActionWait:
+			return true
+		}
+	}
+	return false
+}
+
 // GetObservedRelease reads one release from its stamps, with its resources and
 // any Flux history. It returns nil when no object the caller can read carries
 // the release's stamps.
@@ -433,6 +447,9 @@ func GetObservedRelease(ctx context.Context, scope *ObjectScope, namespace, name
 	if len(objects) == 0 {
 		if !scope.Provider.Current() {
 			return nil, ErrConnectionChanged
+		}
+		if coverageMaySettle(scan.coverage.Gaps) {
+			return nil, ErrObjectsUnavailable
 		}
 		return nil, nil
 	}
