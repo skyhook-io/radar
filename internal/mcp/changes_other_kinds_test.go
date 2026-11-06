@@ -84,12 +84,84 @@ func TestGetChangesSurvivesOtherKindsReadFailure(t *testing.T) {
 	}
 }
 
+// A call that sets a limit keeps its curated rows whatever the other kinds
+// hold; the hint names what it left out.
+func TestGetChangesExplicitLimitKeepsCuratedRows(t *testing.T) {
+	store := initCorrelationStore(t)
+	now := time.Now()
+	appendInformerEvent(t, store, timeline.TimelineEvent{
+		ID: "dr", Timestamp: now.Add(-time.Minute), APIVersion: "networking.istio.io/v1", Kind: "DestinationRule",
+		Namespace: "shop", Name: "reviews", EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.host", OldValue: "a", NewValue: "b"}}},
+	})
+	for i := range 30 {
+		appendInformerEvent(t, store, timeline.TimelineEvent{
+			ID: fmt.Sprintf("cm-%d", i), Timestamp: now.Add(-time.Duration(i+2) * time.Minute), APIVersion: "v1", Kind: "ConfigMap",
+			Namespace: "shop", Name: fmt.Sprintf("cfg-%d", i), EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.key", OldValue: "a", NewValue: "b"}}},
+		})
+	}
+
+	response, _ := getChangesForTest(t, context.Background(), getChangesInput{Limit: 20})
+	if len(response.Changes) != 20 {
+		t.Fatalf("got %d rows, want 20", len(response.Changes))
+	}
+	for _, c := range response.Changes {
+		if c.Kind != "ConfigMap" {
+			t.Fatalf("explicit limit listed %s/%s ahead of a curated row", c.Kind, c.Name)
+		}
+	}
+	if !strings.Contains(response.NarrowHint, "1 DestinationRule change") || !strings.Contains(response.NarrowHint, "kind=DestinationRule") {
+		t.Fatalf("narrowHint = %q", response.NarrowHint)
+	}
+
+	// With no limit the same window reserves the edit a slot, and says so.
+	response, _ = getChangesForTest(t, context.Background(), getChangesInput{})
+	if len(response.Changes) != 25 || !strings.Contains(response.NarrowHint, "the highest-ranked and some custom resources and Nodes") {
+		t.Fatalf("%d rows, narrowHint = %q", len(response.Changes), response.NarrowHint)
+	}
+}
+
+// A slow read of the other kinds runs out its own budget and costs only its
+// own rows.
+func TestGetChangesBoundsOtherKindsRead(t *testing.T) {
+	store := initCorrelationStore(t)
+	appendInformerEvent(t, store, timeline.TimelineEvent{
+		ID: "cm", Timestamp: time.Now().Add(-time.Minute), APIVersion: "v1", Kind: "ConfigMap",
+		Namespace: "shop", Name: "cfg", EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.key", OldValue: "a", NewValue: "b"}}},
+	})
+	timeline.SetStoreForTest(blockingOtherKindsStore{EventStore: store})
+	budget := otherKindsBudget
+	otherKindsBudget = 20 * time.Millisecond
+	t.Cleanup(func() { otherKindsBudget = budget })
+
+	response, _ := getChangesForTest(t, context.Background(), getChangesInput{})
+	if len(response.Changes) != 1 || response.Changes[0].Name != "cfg" {
+		t.Fatalf("changes = %+v, want the curated row", response.Changes)
+	}
+	if len(response.SourcesErrored) != 1 || !strings.Contains(response.SourcesErrored[0], "deadline") {
+		t.Fatalf("sourcesErrored = %v", response.SourcesErrored)
+	}
+}
+
 // failingOtherKindsStore fails only the desired-state reads the other kinds use.
 type failingOtherKindsStore struct{ timeline.EventStore }
 
 func (s failingOtherKindsStore) Query(ctx context.Context, opts timeline.QueryOptions) ([]timeline.TimelineEvent, error) {
 	if opts.DesiredStateUpdates {
 		return nil, errors.New("read failed")
+	}
+	return s.EventStore.Query(ctx, opts)
+}
+
+// blockingOtherKindsStore holds the other kinds' reads until their context ends.
+type blockingOtherKindsStore struct{ timeline.EventStore }
+
+func (s blockingOtherKindsStore) Query(ctx context.Context, opts timeline.QueryOptions) ([]timeline.TimelineEvent, error) {
+	if opts.DesiredStateUpdates {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	return s.EventStore.Query(ctx, opts)
 }

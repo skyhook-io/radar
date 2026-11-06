@@ -261,11 +261,6 @@ type Query struct {
 	// don't overlap Groups is skipped.
 	Groups []string
 
-	// OtherKinds also reads, for a query with no kind or name, the rows of
-	// kinds outside the curated ones, custom resources and Nodes, into
-	// RecentResult.Other.
-	OtherKinds bool
-
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
 	start time.Time
@@ -307,12 +302,6 @@ type RecentResult struct {
 	// History reports whether Radar's held history covers the window; see
 	// HistoryCoverageSince.
 	History issuesapi.HistoryCoverage
-	// Other holds the ranked rows Query.OtherKinds reads, with their own
-	// truncation signal. Their read failing leaves the rest of the result
-	// valid.
-	Other               []issuesapi.RecentChange
-	OtherFetchSaturated bool
-	OtherErr            error
 }
 
 // Recent returns ranked changes plus two distinct truncation signals:
@@ -361,16 +350,12 @@ func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	saturated = saturated || full
 
 	changes, capped := rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
-	result := RecentResult{
+	return RecentResult{
 		Changes:        changes,
 		OutputCapped:   capped,
 		FetchSaturated: saturated,
 		History:        historyCoverage(q.start, q.Namespaces),
-	}
-	if q.OtherKinds && len(q.Kinds) == 0 && q.Name == "" {
-		result.Other, result.OtherFetchSaturated, result.OtherErr = otherKindsChanges(ctx, store, q, bound)
-	}
-	return result, nil
+	}, nil
 }
 
 // historyCoverage is HistoryCoverageSince for an answer scoped to

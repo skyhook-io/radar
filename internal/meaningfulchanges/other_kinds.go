@@ -18,10 +18,10 @@ import (
 var otherKindsDisabled atomic.Bool
 
 // SetOtherKinds turns the default feed's other-kinds read (see
-// Query.OtherKinds) on or off; it is on unless the operator turns it off.
+// RecentOtherKinds) on or off; it is on unless the operator turns it off.
 func SetOtherKinds(enabled bool) { otherKindsDisabled.Store(!enabled) }
 
-// OtherKindsEnabled reports whether callers should set Query.OtherKinds.
+// OtherKindsEnabled reports whether callers should read RecentOtherKinds.
 func OtherKindsEnabled() bool { return !otherKindsDisabled.Load() }
 
 // churnKinds are custom kinds controllers create, delete or rewrite as
@@ -80,17 +80,31 @@ var controllerTaints = map[string]bool{
 	"DeletionCandidateOfClusterAutoscaler":           true,
 }
 
-// otherKindsChanges returns the ranked rows otherKindsCandidates reads, with
-// no limit: ComposeFeed picks from them. They are ranked apart from the curated
-// rows, so nothing here can change which curated rows a query returns.
-func otherKindsChanges(ctx context.Context, store timeline.EventStore, q Query, bound int) ([]issuesapi.RecentChange, bool, error) {
-	events, saturated, err := otherKindsCandidates(ctx, store, q, bound)
+// OtherKindsResult is RecentOtherKinds' answer.
+type OtherKindsResult struct {
+	Changes        []issuesapi.RecentChange
+	FetchSaturated bool
+}
+
+// RecentOtherKinds returns, ranked and with no limit, the rows of kinds outside
+// the curated ones: custom resources and Nodes. ComposeFeed picks from them.
+// They are read and ranked apart from Recent's, so they cannot change which
+// curated rows a query selects. Authorization fails closed without an error, so
+// a context that ends during ranking is returned as one, with the rows that
+// passed: dropped rows must not read as rows that never existed.
+func RecentOtherKinds(ctx context.Context, q Query) (OtherKindsResult, error) {
+	store := timeline.GetStore()
+	if store == nil {
+		return OtherKindsResult{}, timeline.StoreMissingError()
+	}
+	q = normalizeQuery(q)
+	events, saturated, err := otherKindsCandidates(ctx, store, q, FetchBound)
 	if err != nil {
-		return nil, false, err
+		return OtherKindsResult{}, err
 	}
 	q.Limit = 0
 	changes, _ := rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
-	return changes, saturated, nil
+	return OtherKindsResult{Changes: changes, FetchSaturated: saturated}, ctx.Err()
 }
 
 // otherKindsCandidates reads the default feed's rows outside the curated
@@ -210,14 +224,10 @@ func onlyControllerNodeChanges(e timeline.TimelineEvent) bool {
 	return controllerFields > 0
 }
 
-// The default feed keeps the rows of its curated kinds ahead of other kinds':
-// other kinds get a small reserve of the page and whatever slots are left.
 const (
-	// otherKindsReserve is the most page slots reserved for other kinds, and
-	// otherKindsReserveShare limits it to a share of the page, so a small
-	// limit stays with the curated kinds.
-	otherKindsReserve      = 5
-	otherKindsReserveShare = 5
+	// OtherKindsReserve is how many page slots a call that doesn't set a limit
+	// reserves for other kinds. Its default page is larger by the same number.
+	OtherKindsReserve = 5
 	// otherKindsReservedPerKind is the most reserved slots one kind can hold.
 	otherKindsReservedPerKind = 2
 )
@@ -234,30 +244,34 @@ type FeedSelection struct {
 	Changes []issuesapi.RecentChange
 	// CuratedShown is how many of Changes came from the curated rows.
 	CuratedShown int
+	// Reserved is how many of Changes took slots reserved from curated rows.
+	Reserved int
 	// LeftOut lists the other kinds with rows that didn't fit.
 	LeftOut []KindCount
 }
 
 // ComposeFeed builds the default feed's page. Curated rows are cut by rank
-// alone, so rows of other kinds can only take the lowest-ranked curated
-// places, and only as many as the reserve allows. Other kinds are taken one
-// row per kind in turn, not by rank: a controller rewriting one kind's objects
-// keeps a row, which may be the lead, without burying the other kinds.
-func ComposeFeed(curated, other []issuesapi.RecentChange, limit int) FeedSelection {
+// alone, and rows of other kinds take up to reserve of the page, then any
+// slots curated rows leave empty. Reserved slots go by rank, kind by kind,
+// because they cost a curated row. Empty slots cost nothing, so they go kind by
+// kind whatever the rank: a controller rewriting one kind keeps a row, which
+// may be the lead, without burying the other kinds.
+func ComposeFeed(curated, other []issuesapi.RecentChange, limit, reserve int) FeedSelection {
 	RankAndCap(&curated, 0)
-	order, reservable := byKindInTurn(other)
-	reserved := min(otherKindsReserve, limit/otherKindsReserveShare, reservable)
-	shown := min(len(curated), limit-reserved)
-	taken := min(len(order), limit-shown)
+	RankAndCap(&other, 0)
+	reserved, rest := reserveOtherRows(other, reserve)
+	shown := min(len(curated), limit-len(reserved))
+	spare := byKindInTurn(rest)
+	taken := min(len(spare), limit-shown-len(reserved))
 
-	page := append(slices.Clone(curated[:shown]), order[:taken]...)
+	page := slices.Concat(curated[:shown], reserved, spare[:taken])
 	RankAndCap(&page, 0)
 
 	left := map[resourceid.GroupKind]int{}
-	for _, c := range order[taken:] {
+	for _, c := range spare[taken:] {
 		left[changeGroupKind(c)]++
 	}
-	sel := FeedSelection{Changes: page, CuratedShown: shown}
+	sel := FeedSelection{Changes: page, CuratedShown: shown, Reserved: len(reserved)}
 	for key, n := range left {
 		sel.LeftOut = append(sel.LeftOut, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
 	}
@@ -265,10 +279,34 @@ func ComposeFeed(curated, other []issuesapi.RecentChange, limit int) FeedSelecti
 	return sel
 }
 
+// reserveOtherRows picks up to reserve of rows, which must be ranked: every
+// row of one score before the next, and within a score one row per kind in
+// turn, so an edit of a represented kind beats a create of a new one.
+func reserveOtherRows(rows []issuesapi.RecentChange, reserve int) (picked, rest []issuesapi.RecentChange) {
+	perKind := map[resourceid.GroupKind]int{}
+	for start := 0; start < len(rows); {
+		end := start
+		for end < len(rows) && score(rows[end]) == score(rows[start]) {
+			end++
+		}
+		for _, c := range byKindInTurn(rows[start:end]) {
+			key := changeGroupKind(c)
+			if len(picked) < reserve && perKind[key] < otherKindsReservedPerKind {
+				perKind[key]++
+				picked = append(picked, c)
+			} else {
+				rest = append(rest, c)
+			}
+		}
+		start = end
+	}
+	return picked, rest
+}
+
 // byKindInTurn orders rows one per kind in turn, each kind's best row first
-// and kinds by their best row. reservable counts the rows inside
-// otherKindsReservedPerKind turns.
-func byKindInTurn(rows []issuesapi.RecentChange) (order []issuesapi.RecentChange, reservable int) {
+// and kinds by their best row.
+func byKindInTurn(rows []issuesapi.RecentChange) []issuesapi.RecentChange {
+	rows = slices.Clone(rows)
 	RankAndCap(&rows, 0)
 	byKind := map[resourceid.GroupKind][]issuesapi.RecentChange{}
 	var kinds []resourceid.GroupKind
@@ -279,18 +317,15 @@ func byKindInTurn(rows []issuesapi.RecentChange) (order []issuesapi.RecentChange
 		}
 		byKind[key] = append(byKind[key], c)
 	}
-	order = make([]issuesapi.RecentChange, 0, len(rows))
+	order := make([]issuesapi.RecentChange, 0, len(rows))
 	for turn := 0; len(order) < len(rows); turn++ {
 		for _, key := range kinds {
 			if turn < len(byKind[key]) {
 				order = append(order, byKind[key][turn])
 			}
 		}
-		if turn < otherKindsReservedPerKind {
-			reservable = len(order)
-		}
 	}
-	return order, reservable
+	return order
 }
 
 func changeGroupKind(c issuesapi.RecentChange) resourceid.GroupKind {

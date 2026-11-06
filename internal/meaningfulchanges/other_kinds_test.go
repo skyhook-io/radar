@@ -2,6 +2,7 @@ package meaningfulchanges
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -22,7 +23,21 @@ func desiredDiff(paths ...string) *timeline.DiffInfo {
 }
 
 func otherKindsQuery(namespaces ...string) Query {
-	return Query{Namespaces: namespaces, OtherKinds: true}
+	return Query{Namespaces: namespaces}
+}
+
+// feedNames returns the rows the curated and other-kinds reads hold together.
+func feedNames(t *testing.T, q Query) []string {
+	t.Helper()
+	curated, err := Recent(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := RecentOtherKinds(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return changeNames(slices.Concat(curated.Changes, other.Changes))
 }
 
 func changeNames(changes []issuesapi.RecentChange) []string {
@@ -65,11 +80,7 @@ func TestRecentOtherKindsCoverage(t *testing.T) {
 		}
 	}
 
-	result, err := Recent(context.Background(), otherKindsQuery())
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := changeNames(slices.Concat(result.Changes, result.Other))
+	got := feedNames(t, otherKindsQuery())
 	for _, want := range []string{"DestinationRule/reviews", "BGPConfiguration/default", "Node/worker-1", "Node/worker-2", "Application/shop"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("missing %s in %v", want, got)
@@ -85,22 +96,9 @@ func TestRecentOtherKindsCoverage(t *testing.T) {
 	}
 
 	// Nodes are cluster-scoped: a namespace query has none.
-	result, err = Recent(context.Background(), otherKindsQuery("shop"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got = changeNames(slices.Concat(result.Changes, result.Other))
+	got = feedNames(t, otherKindsQuery("shop"))
 	if !slices.Contains(got, "DestinationRule/reviews") || slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "Node/") || strings.HasPrefix(s, "BGPConfiguration/") }) {
 		t.Errorf("namespace query = %v, want its custom resources and no cluster-scoped rows", got)
-	}
-
-	// The read is off without OtherKinds and for kind or name queries.
-	result, err = Recent(context.Background(), Query{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := changeNames(slices.Concat(result.Changes, result.Other)); slices.Contains(got, "DestinationRule/reviews") {
-		t.Errorf("curated feed lists %v", got)
 	}
 }
 
@@ -120,15 +118,15 @@ func TestRecentOtherKindsStatusBurstKeepsDesiredEdit(t *testing.T) {
 			EventType: timeline.EventTypeUpdate, Diff: desiredDiff("status.conditions[Active]"),
 		})
 	}
-	result, err := Recent(context.Background(), otherKindsQuery())
+	result, err := RecentOtherKinds(context.Background(), otherKindsQuery())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.OtherFetchSaturated {
+	if result.FetchSaturated {
 		t.Error("status rows must not count against the read's bound")
 	}
-	if got := changeNames(result.Other); !slices.Contains(got, "ScaledObject/worker") {
-		t.Fatalf("Other = %v, want the ScaledObject edit", got)
+	if got := changeNames(result.Changes); !slices.Contains(got, "ScaledObject/worker") {
+		t.Fatalf("rows = %v, want the ScaledObject edit", got)
 	}
 }
 
@@ -158,15 +156,37 @@ func TestRecentKeepsOtherKindsApart(t *testing.T) {
 		ID: "cm", Timestamp: now.Add(-2 * time.Minute), APIVersion: "v1", Kind: "ConfigMap", Name: "cfg",
 		EventType: timeline.EventTypeUpdate, Diff: desiredDiff("data.key"),
 	})
-	result, err := Recent(context.Background(), otherKindsQuery())
+	curated, err := Recent(context.Background(), Query{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := changeNames(result.Changes); !slices.Equal(got, []string{"ConfigMap/cfg"}) {
-		t.Fatalf("Changes = %v, want the curated row alone", got)
+	if got := changeNames(curated.Changes); !slices.Equal(got, []string{"ConfigMap/cfg"}) {
+		t.Fatalf("Recent = %v, want the curated row alone", got)
 	}
-	if got := changeNames(result.Other); !slices.Equal(got, []string{"DestinationRule/reviews"}) {
-		t.Fatalf("Other = %v", got)
+	other, err := RecentOtherKinds(context.Background(), Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changeNames(other.Changes); !slices.Equal(got, []string{"DestinationRule/reviews"}) {
+		t.Fatalf("RecentOtherKinds = %v", got)
+	}
+}
+
+// A context ending while rows are authorized reads as an error, not as rows
+// that never existed.
+func TestRecentOtherKindsReportsContextEnd(t *testing.T) {
+	store := initFetchBoundStore(t, 1000)
+	appendEvent(t, store, timeline.TimelineEvent{
+		ID: "dr", Timestamp: time.Now().Add(-time.Minute), APIVersion: "networking.istio.io/v1", Kind: "DestinationRule", Name: "reviews",
+		EventType: timeline.EventTypeUpdate, Diff: desiredDiff("spec.trafficPolicy"),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	q := Query{Allow: func(issuesapi.RecentChange) bool {
+		cancel()
+		return false
+	}}
+	if _, err := RecentOtherKinds(ctx, q); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
 
@@ -184,9 +204,9 @@ func TestComposeFeedKeepsTodaysCuratedPage(t *testing.T) {
 
 	// Helm rows join after the timeline's, out of order.
 	slices.Reverse(curated)
-	sel := ComposeFeed(curated, other, 25)
-	if len(sel.Changes) != 25 || sel.CuratedShown != 20 {
-		t.Fatalf("page %d rows, %d curated; want 25 and 20", len(sel.Changes), sel.CuratedShown)
+	sel := ComposeFeed(curated, other, 25, OtherKindsReserve)
+	if len(sel.Changes) != 25 || sel.CuratedShown != 20 || sel.Reserved != 5 {
+		t.Fatalf("page %d rows, %d curated, %d reserved; want 25, 20, 5", len(sel.Changes), sel.CuratedShown, sel.Reserved)
 	}
 	var kept []string
 	for _, name := range changeNames(sel.Changes) {
@@ -199,16 +219,20 @@ func TestComposeFeedKeepsTodaysCuratedPage(t *testing.T) {
 	}
 }
 
-func TestComposeFeedReserve(t *testing.T) {
-	var other []issuesapi.RecentChange
-	for i := range 10 {
-		other = append(other, change(fmt.Sprintf("Kind%d", i), "example.com/v1", "a", 59))
+// With no reserve, as for a call that sets a limit, curated rows keep every
+// slot they fill and other kinds get the rest.
+func TestComposeFeedNoReserve(t *testing.T) {
+	other := []issuesapi.RecentChange{change("Widget", "example.com/v1", "a", 59), change("Gadget", "example.com/v1", "b", 59)}
+	sel := ComposeFeed(curatedRows(60), other, 20, 0)
+	if sel.CuratedShown != 20 || sel.Reserved != 0 {
+		t.Fatalf("%d curated, %d reserved; want 20 and 0", sel.CuratedShown, sel.Reserved)
 	}
-	for _, tc := range []struct{ limit, wantOther int }{{1, 0}, {4, 0}, {5, 1}, {20, 4}, {25, 5}, {50, 5}} {
-		sel := ComposeFeed(curatedRows(60), other, tc.limit)
-		if got := len(sel.Changes) - sel.CuratedShown; len(sel.Changes) != tc.limit || got != tc.wantOther {
-			t.Errorf("limit %d: %d rows, %d other; want %d other", tc.limit, len(sel.Changes), got, tc.wantOther)
-		}
+	if hint := FeedSelectionGuidance(sel); !strings.Contains(hint, "1 Widget change") || !strings.Contains(hint, "1 Gadget change") {
+		t.Fatalf("hint = %q", hint)
+	}
+	sel = ComposeFeed(curatedRows(19), other, 20, 0)
+	if sel.CuratedShown != 19 || len(sel.Changes) != 20 {
+		t.Fatalf("%d curated of %d rows; want 19 of 20", sel.CuratedShown, len(sel.Changes))
 	}
 }
 
@@ -218,7 +242,7 @@ func TestComposeFeedReservedPerKind(t *testing.T) {
 	for i := range 50 {
 		loop = append(loop, change("Widget", "example.com/v1", "w", i))
 	}
-	sel := ComposeFeed(curatedRows(40), loop, 25)
+	sel := ComposeFeed(curatedRows(40), loop, 25, OtherKindsReserve)
 	if sel.CuratedShown != 23 {
 		t.Fatalf("curated rows = %d, want 23", sel.CuratedShown)
 	}
@@ -227,22 +251,47 @@ func TestComposeFeedReservedPerKind(t *testing.T) {
 	}
 }
 
-// Spare slots go kind by kind, so a controller loop's repeats come after
-// every other kind's rows, and it still shows.
+// A reserved slot costs a curated row, so edits come before creates even when
+// a create is the only row of its kind.
+func TestComposeFeedReservesEditsBeforeCreates(t *testing.T) {
+	var other []issuesapi.RecentChange
+	for i := range 3 {
+		other = append(other, change("DestinationRule", "networking.istio.io/v1", fmt.Sprintf("dr-%d", i), i))
+	}
+	for i := range 4 {
+		c := change(fmt.Sprintf("Kind%d", i), "example.com/v1", "a", 50)
+		c.ChangeCategory, c.ChangeType = issuesapi.ChangeCategoryLifecycle, "add"
+		other = append(other, c)
+	}
+	got := changeNames(ComposeFeed(curatedRows(30), other, 25, OtherKindsReserve).Changes)
+	for _, want := range []string{"DestinationRule/dr-2", "DestinationRule/dr-1", "Kind0/a", "Kind1/a", "Kind2/a"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("page = %v, want %s", got, want)
+		}
+	}
+	if slices.Contains(got, "DestinationRule/dr-0") {
+		t.Fatalf("page = %v, want at most 2 reserved per kind", got)
+	}
+}
+
+// Empty slots go kind by kind, so a controller loop's repeats come after every
+// other kind's rows, even rows that rank lower, and it still shows.
 func TestComposeFeedLoopDoesNotBuryOtherKinds(t *testing.T) {
 	var other []issuesapi.RecentChange
 	for i := range 50 {
 		other = append(other, change("Widget", "example.com/v1", "w", 30+i%30))
 	}
-	for i := range 5 {
-		other = append(other, change(fmt.Sprintf("Kind%d", i), "example.com/v1", "a", i))
+	for i := range 7 {
+		c := change(fmt.Sprintf("Kind%d", i), "example.com/v1", "a", i)
+		c.ChangeCategory, c.ChangeType = issuesapi.ChangeCategoryLifecycle, "add"
+		other = append(other, c)
 	}
-	sel := ComposeFeed(curatedRows(1), other, 25)
+	sel := ComposeFeed(curatedRows(1), other, 25, OtherKindsReserve)
 	if len(sel.Changes) != 25 {
 		t.Fatalf("page %d rows, want 25", len(sel.Changes))
 	}
 	got := changeNames(sel.Changes)
-	for _, want := range []string{"Deployment/web-00", "Widget/w", "Kind0/a", "Kind1/a", "Kind2/a", "Kind3/a", "Kind4/a"} {
+	for _, want := range []string{"Deployment/web-00", "Widget/w", "Kind0/a", "Kind3/a", "Kind6/a"} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("page = %v, want %s", got, want)
 		}
@@ -252,7 +301,7 @@ func TestComposeFeedLoopDoesNotBuryOtherKinds(t *testing.T) {
 // A page sorted by the normal ranking puts an other-kinds edit among curated
 // edits, not after them.
 func TestComposeFeedRanksThePage(t *testing.T) {
-	sel := ComposeFeed(curatedRows(3), []issuesapi.RecentChange{change("Widget", "example.com/v1", "w", 59)}, 25)
+	sel := ComposeFeed(curatedRows(3), []issuesapi.RecentChange{change("Widget", "example.com/v1", "w", 59)}, 25, OtherKindsReserve)
 	if got := changeNames(sel.Changes); got[0] != "Deployment/web-00" || got[1] != "Widget/w" {
 		t.Fatalf("page = %v", got)
 	}
@@ -261,7 +310,7 @@ func TestComposeFeedRanksThePage(t *testing.T) {
 // Same kind name in another group is another kind.
 func TestComposeFeedKindsByGroup(t *testing.T) {
 	other := []issuesapi.RecentChange{change("Widget", "a.example.com/v1", "a", 3), change("Widget", "a.example.com/v1", "b", 2), change("Widget", "b.example.com/v1", "c", 1)}
-	sel := ComposeFeed(nil, other, 2)
+	sel := ComposeFeed(nil, other, 2, 0)
 	if got := changeNames(sel.Changes); !slices.Contains(got, "Widget/c") {
 		t.Fatalf("page = %v", got)
 	}
