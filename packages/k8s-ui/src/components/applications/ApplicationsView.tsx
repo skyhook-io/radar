@@ -166,7 +166,8 @@ export interface ApplicationsViewProps {
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
   /** Rendered before the app name. On a folded group `entry` is its first member
-   *  and `group` holds them all. */
+   *  and `group` holds them all. For a small control such as a button: clicks and
+   *  Enter stay in the slot, and other keys still reach the table's shortcuts. */
   renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
 }
 
