@@ -120,13 +120,12 @@ func (r *PermissionCheckResult) ReadableInEvery(namespaces []string) bool {
 // ReadsApplicationsInEvery reports whether Radar reads every kind applications
 // are built from in each of namespaces, so a missing application is really absent.
 // The empty namespace means all of them. ReadableInEvery can't answer this alone:
-// it skips disabled kinds, and StatefulSets and DaemonSets aren't among the kinds
-// it requires.
+// it skips disabled kinds, and it requires only Deployments of the workload kinds.
 func (r *PermissionCheckResult) ReadsApplicationsInEvery(namespaces []string) bool {
 	if !r.ReadableInEvery(namespaces) {
 		return false
 	}
-	for _, key := range []string{k8score.StatefulSets, k8score.DaemonSets} {
+	for _, key := range []string{k8score.StatefulSets, k8score.DaemonSets, k8score.Jobs, k8score.CronJobs} {
 		for _, namespace := range namespaces {
 			if visibilityStatus(r, key, namespace) != "allowed" {
 				return false

@@ -124,7 +124,7 @@ func TestReadsApplicationsInEvery(t *testing.T) {
 	}
 	allKinds := func(namespace string) map[string]k8score.ResourceScope {
 		scopes := make(map[string]k8score.ResourceScope)
-		for _, key := range []string{k8score.Pods, k8score.Deployments, k8score.Services, k8score.StatefulSets, k8score.DaemonSets} {
+		for _, key := range []string{k8score.Pods, k8score.Deployments, k8score.Services, k8score.StatefulSets, k8score.DaemonSets, k8score.Jobs, k8score.CronJobs} {
 			scopes[key] = enabled(namespace)
 		}
 		return scopes
@@ -148,6 +148,8 @@ func TestReadsApplicationsInEvery(t *testing.T) {
 		{name: "Deployments denied cluster-wide", scopes: without(allKinds(""), k8score.Deployments), namespaces: []string{""}, want: false},
 		{name: "StatefulSets denied cluster-wide", scopes: without(allKinds(""), k8score.StatefulSets), namespaces: []string{""}, want: false},
 		{name: "DaemonSets denied in a namespace", scopes: without(allKinds(""), k8score.DaemonSets), namespaces: []string{"a"}, want: false},
+		{name: "Jobs denied cluster-wide", scopes: without(allKinds(""), k8score.Jobs), namespaces: []string{""}, want: false},
+		{name: "CronJobs denied cluster-wide", scopes: without(allKinds(""), k8score.CronJobs), namespaces: []string{""}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			perms := &PermissionCheckResult{Scopes: tc.scopes}
