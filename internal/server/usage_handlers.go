@@ -62,7 +62,7 @@ func (s *Server) startUsageData() {
 	}
 	usagedata.Start(ctx, opts)
 	connectionFailuresOnce.Do(func() {
-		t := &connectionFailureTracker{record: usagedata.RecordConnectionFailure}
+		t := &connectionFailureTracker{record: recordConnectionFailure}
 		k8s.OnConnectionChange(t.observe)
 		// The first connection attempt can fail before the server starts.
 		t.observe(k8s.GetConnectionStatus())
@@ -95,6 +95,16 @@ func (t *connectionFailureTracker) observe(st k8s.ConnectionStatus) {
 		return
 	}
 	t.settled, t.context = st.State, st.Context
+}
+
+// countRefusedSwitch counts a context switch refused because its target didn't
+// answer. The refusal leaves the connection status alone, so the tracker above
+// never sees it.
+func countRefusedSwitch(err error) {
+	var probeErr *k8s.ContextProbeError
+	if errors.As(err, &probeErr) {
+		recordConnectionFailure(probeErr.Classification())
+	}
 }
 
 // requestOriginHeader marks a request the UI made on its own; see
@@ -305,9 +315,10 @@ func gitopsReadable() bool {
 
 // Replaced in tests, which can't turn the process-wide collector on.
 var (
-	usageRecording     = usagedata.Recording
-	recordUsageRequest = usagedata.RecordRequest
-	clusterConnected   = k8s.IsConnected
+	usageRecording          = usagedata.Recording
+	recordUsageRequest      = usagedata.RecordRequest
+	recordConnectionFailure = usagedata.RecordConnectionFailure
+	clusterConnected        = k8s.IsConnected
 )
 
 // usageMiddleware counts API requests by their route pattern once the

@@ -284,6 +284,7 @@ func TestAutomaticReadRoutesAreNotActions(t *testing.T) {
 		RecordRequest(APIRequest{Method: method, Pattern: path, Status: 200})
 	}
 	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/nodes/{name}/drain-plan", Status: 500})
+	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/version-check/browser", Status: 200})
 	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/nodes/{name}/drain", Status: 200})
 
 	st := h.c.Status()

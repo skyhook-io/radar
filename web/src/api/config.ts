@@ -137,9 +137,10 @@ export function getCredentialsMode(): RequestCredentials {
 let markAutomaticRequests = false;
 
 /**
- * Internal: turns the automatic-request mark on while usage data is recorded.
- * Off, requests carry nothing extra, which also keeps an embedding host
- * (recording is always off there) free of a header its proxy might refuse.
+ * Internal: Radar's own entry point turns the automatic-request mark on at
+ * startup, and the usage status then keeps it on only while usage data is
+ * recorded. Off, requests carry nothing extra, which also keeps an embedding
+ * host free of a header its proxy might refuse.
  */
 export function setAutomaticRequestMarking(on: boolean): void {
   markAutomaticRequests = on;

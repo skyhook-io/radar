@@ -124,7 +124,6 @@ let recording = false
 
 function setUsageRecording(on: boolean) {
   recording = on
-  setAutomaticRequestMarking(on)
 }
 
 type UsageEvent =
@@ -149,8 +148,10 @@ export function recordUsageEvent(event: UsageEvent): void {
 
 const ACTIVE_TICK_MINUTES = 5
 
-// Real use: a window left open on a second screen sees none of these.
-const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'scroll'] as const
+// Real use: a window left open on a second screen sees none of these. Scroll
+// isn't one: following logs scrolls by itself, and a person scrolling already
+// shows up as wheel, touch, pointer or key input.
+const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'] as const
 
 // Counts views, one session per page load, and time in use in five-minute
 // ticks: a tick counts only if the page is visible and someone used it during
@@ -168,6 +169,12 @@ export function useUsageRecording(view: string, status: UsageDataStatus | undefi
     setUsageRecording(on)
   }, [on])
 
+  // No status yet leaves the mark as the entry point set it.
+  const decided = status !== undefined
+  useEffect(() => {
+    if (decided) setAutomaticRequestMarking(on)
+  }, [decided, on])
+
   useEffect(() => {
     if (on) recordUsageEvent({ type: 'view', name: view })
   }, [view, on])
@@ -179,7 +186,7 @@ export function useUsageRecording(view: string, status: UsageDataStatus | undefi
     const markUsed = () => {
       usedThisTick = true
     }
-    // Capture, because scroll doesn't bubble and views may stop propagation.
+    // Capture, because views may stop propagation.
     const listenerOptions = { capture: true, passive: true }
     for (const type of INPUT_EVENTS) window.addEventListener(type, markUsed, listenerOptions)
     const tick = window.setInterval(() => {

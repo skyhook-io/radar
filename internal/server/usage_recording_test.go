@@ -1,8 +1,12 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -162,6 +166,25 @@ func TestConnectionFailureTrackerCountsEpisodes(t *testing.T) {
 	}
 	want := []string{"auth", "tls", "network"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("recorded %v, want %v", got, want)
+	}
+}
+
+func TestCountRefusedSwitch(t *testing.T) {
+	var got []string
+	saved := recordConnectionFailure
+	recordConnectionFailure = func(errorType string) { got = append(got, errorType) }
+	t.Cleanup(func() { recordConnectionFailure = saved })
+
+	refused := func(probe *k8s.ContextProbeError) error {
+		return fmt.Errorf("%w: %w", k8s.ErrContextSwitchPreflight, probe)
+	}
+	countRefusedSwitch(refused(&k8s.ContextProbeError{Context: "prod", Err: context.DeadlineExceeded}))
+	countRefusedSwitch(refused(&k8s.ContextProbeError{Context: "prod", Err: errors.New("x"), PluginStuck: true}))
+	// A context that can't be loaded was never tried, so nothing failed to connect.
+	countRefusedSwitch(fmt.Errorf("%w: context not found", k8s.ErrContextSwitchPreflight))
+
+	if want := []string{"timeout", "auth-plugin-stuck"}; !slices.Equal(got, want) {
 		t.Fatalf("recorded %v, want %v", got, want)
 	}
 }

@@ -43,15 +43,16 @@ var knownMethods = map[string]bool{
 var actionReads = []string{"/exec", "/logs", "/logs/stream", "/debug"}
 
 // POST routes that only read, which the UI calls on its own from queries and
-// polls: cost panels, the drain estimate, the YAML editor's schemas and the
-// GitOps write check. A success is never someone's action; a failure still
-// counts as an error.
+// polls: cost panels, the drain estimate, the YAML editor's schemas, the GitOps
+// write check and the daily update check. A success is never someone's action;
+// a failure still counts as an error.
 var automaticReads = map[string]bool{
 	"POST /api/nodes/{name}/drain-plan":    true,
 	"POST /api/resources/schemas":          true,
 	"POST /api/gitops/write-evidence":      true,
 	"POST /api/opencost/application":       true,
 	"POST /api/opencost/application/trend": true,
+	"POST /api/version-check/browser":      true,
 }
 
 // Named UI moments without an API call of their own.

@@ -445,7 +445,6 @@ export function IssuesPane({
                   group={issue.group}
                   namespace={issue.namespace ?? ""}
                   name={issue.name}
-                  onActivate={() => recordUsageEvent({ type: "ui", name: "issue_action:investigate" })}
                 />
               </div>
             );

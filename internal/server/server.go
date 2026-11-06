@@ -4919,6 +4919,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+			countRefusedSwitch(err)
 			s.writeSwitchPreflightError(w, "", err)
 			return
 		}

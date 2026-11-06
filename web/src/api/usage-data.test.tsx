@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { automaticRequestHeaders } from './config'
+import { automaticRequestHeaders, setAutomaticRequestMarking } from './config'
 import { useUsageRecording, type UsageDataStatus } from './usage-data'
 import { exampleStatus } from './usage-data.fixtures'
 
@@ -86,7 +86,7 @@ describe('useUsageRecording active time', () => {
     expect(activeEvents()).toEqual([])
   })
 
-  it('counts scrolling inside the page', () => {
+  it('ignores a page that scrolls by itself, such as logs being followed', () => {
     render('resources:pods', on)
     const list = document.createElement('div')
     container.appendChild(list)
@@ -94,7 +94,7 @@ describe('useUsageRecording active time', () => {
       list.dispatchEvent(new Event('scroll'))
     })
     tick()
-    expect(activeEvents()).toEqual([{ type: 'active', minutes: 5, view: 'resources:pods' }])
+    expect(activeEvents()).toEqual([])
   })
 
   it('names the view on screen at the tick, for a window left open across days', () => {
@@ -120,12 +120,27 @@ describe('useUsageRecording active time', () => {
 })
 
 describe('automatic request marking', () => {
-  it('marks automatic requests only while usage data is recorded', () => {
+  afterEach(() => setAutomaticRequestMarking(false))
+
+  it('keeps an embedding host unmarked', () => {
     render('home', undefined)
+    expect(automaticRequestHeaders()).toEqual({})
+  })
+
+  it('stays marked until the status says usage data is not recorded', () => {
+    setAutomaticRequestMarking(true)
+    render('home', undefined)
+    expect(automaticRequestHeaders()).toEqual({ 'X-Radar-Request-Origin': 'auto' })
+    render('home', on)
+    expect(automaticRequestHeaders()).toEqual({ 'X-Radar-Request-Origin': 'auto' })
+    render('home', exampleStatus({ state: 'off', source: 'user' }))
+    expect(automaticRequestHeaders()).toEqual({})
+  })
+
+  it('marks requests when usage data is turned on later', () => {
+    render('home', exampleStatus({ state: 'off', source: 'user' }))
     expect(automaticRequestHeaders()).toEqual({})
     render('home', on)
     expect(automaticRequestHeaders()).toEqual({ 'X-Radar-Request-Origin': 'auto' })
-    render('home', undefined)
-    expect(automaticRequestHeaders()).toEqual({})
   })
 })
