@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { BellOff, Bot, Braces, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
+import { BellOff, Bot, Boxes, Braces, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -74,36 +74,42 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         id: 'kueue-stuck-jobs',
         icon: Layers,
         title: 'See why a Kueue job is stuck',
-        description: "Issues flag rejected checks and broken queues, not quota waits. See a job's place in line, its queue's Workloads, and its admission history.",
+        description: 'Issues flag rejected checks and broken queues, not quota waits. Browse queue Workloads, admission history and Kueue-reported pending positions.',
         importance: 7,
       },
       {
         id: 'issues-more-failures',
         icon: ShieldAlert,
         title: 'Issues explain more failures',
-        description: 'Failed cert-manager renewals, evicted Pods with their node, surge deadlocks on ReadWriteOnce volumes, and Pods blocked by slow admission webhooks.',
+        description: 'Failed cert-manager renewals, evicted Pods with their node, surge deadlocks on ReadWriteOnce volumes, and webhooks that may block Pod creation.',
         importance: 6,
         path: '/issues',
         cta: 'Open Issues',
       },
       {
+        id: 'deeper-operator-support',
+        icon: Boxes,
+        title: 'Deeper Strimzi, Ray, JobSet and KServe support',
+        description: 'See failed connector tasks even when Ready, JobSet members in Topology and current Ray Pod logs. KServe flags failed components, not planned stops.',
+        importance: 6,
+      },
+      {
         id: 'application-evidence',
         icon: Database,
-        title: 'Collect RabbitMQ, NATS and Vault evidence',
-        description: "When Radar runs locally, read a RabbitMQ, NATS or Vault Pod's own report on request: alarms, consumer progress or seal state.",
+        title: 'Collect RabbitMQ, NATS and Vault evidence locally',
+        description: "On local Radar, collect one Pod's RabbitMQ alarms, NATS consumer counters or Vault seal state from a default plaintext endpoint.",
         importance: 6,
       },
     ],
     improvements: [
       // The grid fills row by row: pair lines of similar length.
-      'Failed context switches keep your current cluster, and Cannot Connect says since when',
-      'Issue rows and Investigate buttons show the last investigation; try an example first',
-      'Strimzi shows failed tasks behind a Ready connector; deeper OpenTelemetry and Flagger diagnosis',
-      'Harden Helm installs: rbac.namespaces limits namespaces, disableExec turns off pod exec',
-      'JobSets appear in Topology with their member Jobs; stopped KServe models raise no issues',
-      'GitOps trees include workloads operators create, like Prometheus StatefulSets',
-      'Home and charts read CPU and memory correctly, ending impossible usage spikes',
-      'Deployment rollbacks restore the old revision exactly, like kubectl rollout undo',
+      'Switching to an unreachable context keeps your current cluster; Cannot Connect says since when',
+      'Issue rows and Investigate buttons show recent local investigations; see an example before your first',
+      'OpenTelemetry Collectors show their workload; Flagger reports missing targets',
+      'Limit what Radar can reach with rbac.namespaces, disableExec and --disable-auto-port-forward',
+      'GitOps trees show operator-created workloads; drawers link webhooks, issuers and Secrets',
+      'get_changes includes RBAC and Node edits; search finds resources by a pasted IP or ip:port',
+      'Deployment rollbacks match kubectl rollout undo; CPU and memory readings handle every quantity format',
     ],
   },
   {
