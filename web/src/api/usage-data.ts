@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJSON } from './client'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, setAutomaticRequestMarking } from './config'
@@ -32,7 +32,6 @@ export interface UsageReport {
     browsers: string[]
     aiConfigured: boolean
     trafficSource: string
-    gitopsReadable: boolean
   }
   engagement: { sessions: number; activeMinutes: string }
   views: Record<string, number>
@@ -130,9 +129,7 @@ type UsageEvent =
   | { type: 'view'; name: string }
   | { type: 'ui'; name: string }
   | { type: 'session' }
-  // `view` is the screen in use; the server counts it only when the report
-  // period has no views yet.
-  | { type: 'active'; minutes: number; view?: string }
+  | { type: 'active'; minutes: number }
 
 // Fire and forget; the server drops anything outside its allow-list.
 export function recordUsageEvent(event: UsageEvent): void {
@@ -155,15 +152,9 @@ const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchst
 
 // Counts views, one session per page load, and time in use in five-minute
 // ticks: a tick counts only if the page is visible and someone used it during
-// that tick. A counted tick names the view on screen, so a window left open
-// across report periods still reports what it was used for. Nothing is sent
-// unless usage data is on.
+// that tick. Nothing is sent unless usage data is on.
 export function useUsageRecording(view: string, status: UsageDataStatus | undefined) {
   const on = isRecording(status)
-  const viewRef = useRef(view)
-  useEffect(() => {
-    viewRef.current = view
-  }, [view])
 
   useEffect(() => {
     setUsageRecording(on)
@@ -192,7 +183,7 @@ export function useUsageRecording(view: string, status: UsageDataStatus | undefi
     const tick = window.setInterval(() => {
       const used = usedThisTick && document.visibilityState === 'visible'
       usedThisTick = false
-      if (used) recordUsageEvent({ type: 'active', minutes: ACTIVE_TICK_MINUTES, view: viewRef.current })
+      if (used) recordUsageEvent({ type: 'active', minutes: ACTIVE_TICK_MINUTES })
     }, ACTIVE_TICK_MINUTES * 60_000)
     return () => {
       window.clearInterval(tick)

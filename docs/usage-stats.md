@@ -28,9 +28,9 @@ Once a day, and only if Radar was used:
   Prometheus was found in the cluster or set by hand, cost source, and browser
   family.
 - Yes or no: whether you set up Radar's AI investigations (an agent Radar can
-  use is installed and you accepted Radar's AI disclosure for it), and whether
-  Radar can read Argo CD or Flux. Having Claude Code or Codex installed doesn't
-  count on its own. Which traffic source is in use, from a fixed list.
+  use is installed and you accepted Radar's AI disclosure for it). Having
+  Claude Code or Codex installed doesn't count on its own. Which traffic source
+  is in use, from a fixed list.
 - How often each view, action and MCP tool was used, how often the command
   palette and search were opened, which buttons on an issue were used (such as
   Investigate), which requests failed, and which screens crashed. Actions are
@@ -38,8 +38,8 @@ Once a day, and only if Radar was used:
   `POST /api/helm/releases/{namespace}/{name}/rollback`. A failed request
   carries its status code when it is a common one, such as `403` or `503`, and
   otherwise only `4xx` or `5xx`.
-  Deletes and restarts also name the kind when it is built into Kubernetes,
-  such as `pods`. Your own resource types are never named.
+  Deletes also name the kind when it is built into Kubernetes, such as
+  `pods`. Your own resource types are never named.
 - How often connecting to a cluster failed, by the kind of failure, such as
   `auth`, `network` or `tls`.
 - Sessions, and active time as a range.

@@ -69,7 +69,7 @@ describe('useUsageRecording active time', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' }))
     })
     tick()
-    expect(activeEvents()).toEqual([{ type: 'active', minutes: 5, view: 'topology' }])
+    expect(activeEvents()).toEqual([{ type: 'active', minutes: 5 }])
 
     // Input belongs to the tick it happened in.
     tick()
@@ -95,18 +95,6 @@ describe('useUsageRecording active time', () => {
     })
     tick()
     expect(activeEvents()).toEqual([])
-  })
-
-  it('names the view on screen at the tick, for a window left open across days', () => {
-    render('topology', on)
-    render('helm', on)
-    fetchMock.mockClear()
-    // A day later, nobody navigated: the tick still says what was in use.
-    act(() => {
-      window.dispatchEvent(new WheelEvent('wheel'))
-    })
-    tick()
-    expect(sentEvents()).toEqual([{ type: 'active', minutes: 5, view: 'helm' }])
   })
 
   it('sends nothing while usage data is off', () => {

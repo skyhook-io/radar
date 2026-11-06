@@ -9,7 +9,7 @@ export function exampleReport(patch: Partial<UsageReport> = {}): UsageReport {
     setup: {
       authMode: 'none', timelineStorage: 'memory', mcpEnabled: true, prometheus: 'none',
       costSource: 'auto', browsers: ['chrome'],
-      aiConfigured: false, trafficSource: 'none', gitopsReadable: false,
+      aiConfigured: false, trafficSource: 'none',
     },
     engagement: { sessions: 2, activeMinutes: '20-49' },
     views: {}, actions: {}, mcpTools: {}, uiEvents: {}, errors: {},

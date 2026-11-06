@@ -189,16 +189,13 @@ func TestCountRefusedSwitch(t *testing.T) {
 	}
 }
 
-func TestUsageDataActiveEventChecksView(t *testing.T) {
+func TestUsageDataSchema4Events(t *testing.T) {
 	for body, want := range map[string]int{
-		`{"type":"active","minutes":5,"view":"topology"}`:                http.StatusNoContent,
-		`{"type":"active","minutes":5,"view":"panel:logs"}`:              http.StatusNoContent,
-		`{"type":"active","minutes":5,"view":"cnpg"}`:                    http.StatusNoContent,
-		`{"type":"active","minutes":5,"view":"resources:my-crd"}`:        http.StatusNoContent,
-		`{"type":"active","minutes":5,"view":"/resources/pods/prod/db"}`: http.StatusNoContent,
-		`{"type":"ui","name":"issue_action:investigate"}`:                http.StatusNoContent,
-		`{"type":"ui","name":"ui_error:CloudNativePG"}`:                  http.StatusNoContent,
-		`{"type":"view","name":"panel:permissions"}`:                     http.StatusBadRequest,
+		`{"type":"view","name":"cnpg"}`:                   http.StatusNoContent,
+		`{"type":"view","name":"panel:logs"}`:             http.StatusNoContent,
+		`{"type":"ui","name":"issue_action:investigate"}`: http.StatusNoContent,
+		`{"type":"ui","name":"ui_error:CloudNativePG"}`:   http.StatusNoContent,
+		`{"type":"view","name":"panel:permissions"}`:      http.StatusBadRequest,
 	} {
 		r := httptest.NewRequest(http.MethodPost, "http://localhost:9280/api/usage-data/event", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")

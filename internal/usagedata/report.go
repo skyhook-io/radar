@@ -33,7 +33,7 @@ type Report struct {
 	MCPTools   map[string]int `json:"mcpTools"`
 	UIEvents   map[string]int `json:"uiEvents"`
 	Errors     map[string]int `json:"errors"`
-	// ActionKinds counts deletes and restarts by built-in kind, such as
+	// ActionKinds counts deletes by built-in kind, such as
 	// "delete:pods"; custom resource kinds are never named.
 	ActionKinds map[string]int `json:"actionKinds"`
 	// ConnectionFailures counts failed connections to a cluster by
@@ -61,9 +61,6 @@ type Setup struct {
 	// TrafficSource is the traffic source in use (hubble, caretta, istio,
 	// beyla) or "none".
 	TrafficSource string `json:"trafficSource"`
-	// GitOpsReadable is whether the cluster serves Argo CD or Flux resources
-	// and Radar can read them.
-	GitOpsReadable bool `json:"gitopsReadable"`
 }
 
 // Engagement is how much the UI was used that day.

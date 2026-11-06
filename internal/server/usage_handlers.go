@@ -26,7 +26,6 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
 )
 
@@ -235,7 +234,6 @@ func (s *Server) usageSetup() usagedata.Setup {
 		CostSource:      string(opencost.ConfigSnapshot().Source),
 		AIConfigured:    s.aiConfigured(),
 		TrafficSource:   usageTrafficSource(),
-		GitOpsReadable:  gitopsReadable(),
 	}
 }
 
@@ -283,36 +281,6 @@ func usageTrafficSource() string {
 		name, _ = lastUsageTrafficSource.Load().(string)
 	}
 	return usagedata.TrafficSource(name)
-}
-
-// gitopsKinds are the resources Radar's GitOps views are built on.
-var gitopsKinds = []struct{ kind, group string }{
-	{"Application", "argoproj.io"},
-	{"Kustomization", "kustomize.toolkit.fluxcd.io"},
-	{"HelmRelease", "helm.toolkit.fluxcd.io"},
-}
-
-// gitopsReadable reports whether the cluster serves Argo CD or Flux resources
-// and Radar's own identity can read them. Installed catalog kinds are watched
-// from startup, so an informer that is syncing or synced means the list was
-// allowed. It reads only discovery and cache bookkeeping, never the API.
-func gitopsReadable() bool {
-	d := k8s.GetResourceDiscovery()
-	dc := k8s.GetDynamicResourceCache()
-	if d == nil || dc == nil || dc.DynamicResourceCache == nil {
-		return false
-	}
-	for _, g := range gitopsKinds {
-		gvr, ok := d.GetGVRWithGroup(g.kind, g.group)
-		if !ok {
-			continue
-		}
-		switch dc.Observation(gvr).State {
-		case k8score.DynamicObservationSynced, k8score.DynamicObservationSyncing:
-			return true
-		}
-	}
-	return false
 }
 
 // Replaced in tests, which can't turn the process-wide collector on.
@@ -427,7 +395,6 @@ func (s *Server) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
 		Type    string `json:"type"`
 		Name    string `json:"name"`
 		Minutes int    `json:"minutes"`
-		View    string `json:"view"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid event")
@@ -449,10 +416,7 @@ func (s *Server) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
 	case "session":
 		usagedata.RecordSession(r.UserAgent())
 	case "active":
-		// The view on screen, counted only if the period has no views yet. A
-		// view outside the list (a custom resource's page) still counts the
-		// minutes; RecordActiveView leaves its name out.
-		usagedata.RecordActiveView(body.Minutes, body.View)
+		usagedata.RecordActive(body.Minutes)
 	default:
 		s.writeError(w, http.StatusBadRequest, "unknown event type")
 		return

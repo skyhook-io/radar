@@ -84,8 +84,7 @@ var exactStatuses = map[int]bool{
 // Routes whose successful requests also count the built-in kind they acted
 // on, as "<verb>:<plural>".
 var kindActions = map[string]string{
-	"DELETE /api/resources/{kind}/{namespace}/{name}":       "delete",
-	"POST /api/workloads/{kind}/{namespace}/{name}/restart": "restart",
+	"DELETE /api/resources/{kind}/{namespace}/{name}": "delete",
 }
 
 // k8s.ClassifyError's vocabulary.
@@ -165,29 +164,10 @@ func RecordSession(userAgent string) {
 
 // RecordActive adds minutes the UI was in use.
 func RecordActive(minutes int) {
-	RecordActiveView(minutes, "")
-}
-
-// RecordActiveView adds minutes the UI was in use, and counts view once if
-// the period has no views yet: a window left open since an earlier period is
-// used without navigating, and its report would otherwise show time but no
-// views.
-func RecordActiveView(minutes int, view string) {
 	if minutes <= 0 || minutes > 60 {
 		return
 	}
-	if !IsAllowedView(view) {
-		view = ""
-	}
-	if kind, ok := strings.CutPrefix(view, "resources:"); ok {
-		view = "resources:" + strings.ToLower(kind)
-	}
-	increment(func(p *pending) {
-		p.ActiveMinutes += minutes
-		if view != "" && len(p.Views) == 0 {
-			p.Views = bump(p.Views, view)
-		}
-	})
+	increment(func(p *pending) { p.ActiveMinutes += minutes })
 }
 
 // RecordConnectionFailure counts one failure to connect to a cluster by its

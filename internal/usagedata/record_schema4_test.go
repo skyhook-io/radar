@@ -90,10 +90,9 @@ func TestActionKindsNameBuiltinKindsOnly(t *testing.T) {
 	RecordRequest(APIRequest{Method: "DELETE", Pattern: del, Status: 200, Kind: "pods"})
 	RecordRequest(APIRequest{Method: "DELETE", Pattern: del, Status: 200, Kind: "Pods"})
 	RecordRequest(APIRequest{Method: "DELETE", Pattern: del, Status: 200, Kind: "configmaps", Group: ""})
-	RecordRequest(APIRequest{Method: "POST", Pattern: restart, Status: 200, Kind: "deploy", Group: "apps"})
-	RecordRequest(APIRequest{Method: "POST", Pattern: restart, Status: 200, Kind: "statefulsets"})
+	RecordRequest(APIRequest{Method: "POST", Pattern: restart, Status: 200, Kind: "deployments", Group: "apps"})
 	// Never named: custom kinds, a custom group sharing a built-in name,
-	// failures, and routes that don't count kinds.
+	// failures, and routes that don't count kinds, such as restart.
 	RecordRequest(APIRequest{Method: "DELETE", Pattern: del, Status: 200, Kind: "certificates", Group: "cert-manager.io"})
 	RecordRequest(APIRequest{Method: "DELETE", Pattern: del, Status: 200, Kind: "acme-payments-dbs"})
 	RecordRequest(APIRequest{Method: "DELETE", Pattern: del, Status: 200, Kind: "services", Group: "serving.knative.dev"})
@@ -104,10 +103,8 @@ func TestActionKindsNameBuiltinKindsOnly(t *testing.T) {
 
 	st := h.c.Status()
 	want := map[string]int{
-		"delete:pods":          2,
-		"delete:configmaps":    1,
-		"restart:deployments":  1,
-		"restart:statefulsets": 1,
+		"delete:pods":       2,
+		"delete:configmaps": 1,
 	}
 	if len(st.Preview.ActionKinds) != len(want) {
 		t.Errorf("actionKinds = %v, want %v", st.Preview.ActionKinds, want)
@@ -176,39 +173,6 @@ func TestErrorsAloneAreNotUse(t *testing.T) {
 	}
 }
 
-func TestActiveTickCountsViewOnlyForAPeriodWithoutViews(t *testing.T) {
-	releaseBuild(t)
-	h := newHarness(t, nil, false)
-	if _, err := h.c.SetChoice(true); err != nil {
-		t.Fatal(err)
-	}
-	RecordActiveView(5, "resources:Deployments")
-	RecordActiveView(5, "topology")
-	st := h.c.Status()
-	if len(st.Preview.Views) != 1 || st.Preview.Views["resources:deployments"] != 1 {
-		t.Fatalf("views = %v, want one resources:deployments", st.Preview.Views)
-	}
-	if st.Preview.Engagement.ActiveMinutes != "10-19" {
-		t.Errorf("activeMinutes = %q", st.Preview.Engagement.ActiveMinutes)
-	}
-
-	// The next period starts empty, so the window left open counts once more.
-	h.now = h.now.Add(reportInterval + time.Minute)
-	h.c.tick(context.Background())
-	if len(h.sent) != 1 {
-		t.Fatalf("sent %d reports, want 1", len(h.sent))
-	}
-	RecordActiveView(5, "/resources/secrets/prod/db")
-	if v := h.c.Status().Preview.Views; len(v) != 0 {
-		t.Fatalf("unknown view recorded: %v", v)
-	}
-	RecordActiveView(5, "topology")
-	RecordActiveView(5, "helm")
-	if v := h.c.Status().Preview.Views; len(v) != 1 || v["topology"] != 1 {
-		t.Fatalf("views = %v, want one topology", v)
-	}
-}
-
 func TestTrafficSourceVocabulary(t *testing.T) {
 	for in, want := range map[string]string{"hubble": "hubble", "caretta": "caretta", "istio": "istio", "beyla": "beyla", "": "none", "acme-mesh": "none"} {
 		if got := TrafficSource(in); got != want {
@@ -223,7 +187,7 @@ func TestSchema4Report(t *testing.T) {
 	h.c.opts.Setup = func() Setup {
 		return Setup{
 			AuthMode: "none", TimelineStorage: "memory", MCPEnabled: true, Prometheus: "discovered",
-			CostSource: "auto", AIConfigured: true, TrafficSource: "hubble", GitOpsReadable: true,
+			CostSource: "auto", AIConfigured: true, TrafficSource: "hubble",
 		}
 	}
 	if _, err := h.c.SetChoice(true); err != nil {
@@ -233,7 +197,7 @@ func TestSchema4Report(t *testing.T) {
 	RecordView("cnpg")
 	RecordView("panel:logs")
 	RecordUIEvent("issue_action:investigate")
-	RecordActiveView(5, "cnpg")
+	RecordActive(5)
 	RecordRequest(APIRequest{Method: "DELETE", Pattern: "/api/resources/{kind}/{namespace}/{name}", Status: 200, Kind: "pods"})
 	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/workloads/{kind}/{namespace}/{name}/restart", Status: 404, Kind: "deployments"})
 	RecordConnectionFailure("timeout")
@@ -247,7 +211,7 @@ func TestSchema4Report(t *testing.T) {
 	if r.Schema != 4 {
 		t.Errorf("schema = %d, want 4", r.Schema)
 	}
-	if !r.Setup.AIConfigured || r.Setup.TrafficSource != "hubble" || !r.Setup.GitOpsReadable || r.Setup.Prometheus != "discovered" {
+	if !r.Setup.AIConfigured || r.Setup.TrafficSource != "hubble" || r.Setup.Prometheus != "discovered" {
 		t.Errorf("setup = %+v", r.Setup)
 	}
 	if r.ActionKinds["delete:pods"] != 1 || r.ConnectionFailures["timeout"] != 1 {
@@ -260,7 +224,7 @@ func TestSchema4Report(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"schema": 4`, `"aiConfigured": true`, `"trafficSource": "hubble"`, `"gitopsReadable": true`, `"actionKinds"`, `"connectionFailures"`} {
+	for _, key := range []string{`"schema": 4`, `"aiConfigured": true`, `"trafficSource": "hubble"`, `"actionKinds"`, `"connectionFailures"`} {
 		if !strings.Contains(string(body), key) {
 			t.Errorf("report lacks %s", key)
 		}
@@ -273,25 +237,6 @@ func TestSchema4Report(t *testing.T) {
 		if !strings.Contains(string(empty), key) {
 			t.Errorf("empty preview lacks %s: %s", key, empty)
 		}
-	}
-}
-
-// Time on a custom resource's page is real use: the minutes count, the page
-// name (a custom kind) never leaves.
-func TestActiveTickOnACustomResourcePageCountsMinutesOnly(t *testing.T) {
-	releaseBuild(t)
-	h := newHarness(t, nil, false)
-	if _, err := h.c.SetChoice(true); err != nil {
-		t.Fatal(err)
-	}
-	RecordActiveView(5, "resources:certificates")
-	RecordActiveView(5, "resources:certificates")
-	st := h.c.Status()
-	if st.Preview.Engagement.ActiveMinutes != "10-19" {
-		t.Errorf("activeMinutes = %q, want 10-19", st.Preview.Engagement.ActiveMinutes)
-	}
-	if len(st.Preview.Views) != 0 {
-		t.Errorf("views = %v, want none: a custom kind is never named", st.Preview.Views)
 	}
 }
 
