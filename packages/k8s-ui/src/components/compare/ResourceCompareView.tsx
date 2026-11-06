@@ -173,7 +173,7 @@ export function ResourceCompareView({
     <div className="flex-1 min-w-0 flex flex-col h-full bg-theme-base">
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-400/70 via-skyhook-400/40 to-emerald-400/70" />
 
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
         <GitCompare className="w-5 h-5 text-skyhook-400 shrink-0" />
         <h2 className={clsx('text-sm font-semibold text-theme-text-primary whitespace-nowrap', sameResource ? 'min-w-0 max-w-[30%] truncate' : 'shrink-0')}>
           Compare <span className="text-theme-text-tertiary mx-0.5">·</span>{' '}
@@ -189,7 +189,8 @@ export function ResourceCompareView({
           )}
         </h2>
 
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        {/* The row wraps before the sides get too narrow to tell apart. */}
+        <div className="flex items-center gap-2 min-w-72 flex-1">
           <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} subtitleOnly={sameResource} />
           <Tooltip content="Swap A and B">
             <button
