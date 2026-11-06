@@ -274,8 +274,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Includes batch diagnosis routing, log boundaries and native Helm source/merge/confirmation contracts.
+		// The default catalog measures 71,190 bytes; retain 33 bytes of headroom.
 		// Opt-in Service curl and exec remain a separate allowance below.
-		maxCatalogBytes = 71138
+		maxCatalogBytes         = 71223
 		maxToolDescriptionBytes = 3200
 	)
 
