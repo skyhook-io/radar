@@ -380,8 +380,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"Use this first for Helm deployment debugging; if storageNamespace is present, pass that " +
 			"value as namespace to get_helm_release. Follow with get_helm_release include=history,operations " +
 			"for the full revision trail. When you can't read Helm's release Secrets, the result is an object: " +
-			"its summary says what's unknown, and observed rows come from labels and annotations on deployed " +
-			"objects, with no status, and may miss releases.",
+			"its summary says what's unknown, and observed rows come from labels and annotations on " +
+			"objects, with no status, may miss releases, and can't use get_helm_release.",
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 

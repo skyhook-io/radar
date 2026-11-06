@@ -37,7 +37,7 @@ describe('a refresh that fails while the drawer shows a release', () => {
   it('stops showing a release that is gone', () => {
     detail.current = { data: seen, error: new ApiError('not found', 404) }
     const text = mount(<ObservedHelmReleaseDrawer release={release} onClose={vi.fn()} />).textContent
-    expect(text).toContain('No object you can read carries this release')
+    expect(text).toContain('No release found on the objects you can read')
     expect(text).not.toContain('Object health')
   })
 

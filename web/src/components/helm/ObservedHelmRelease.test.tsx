@@ -88,7 +88,7 @@ describe('Helm list without Secret access', () => {
 
   it('does not let an empty list read as no releases', () => {
     const text = renderView({ data: denied([]) }).textContent
-    expect(text).toContain('No Helm metadata on any object you can read')
+    expect(text).toContain('No releases found on the objects you can read')
     expect(text).toContain('doesn’t mean there are no releases')
     expect(text).not.toContain('No Helm releases found')
     expect(text).not.toContain('Browse charts to install')
@@ -126,6 +126,20 @@ describe('Helm list without Secret access', () => {
   })
 })
 
+describe('health on an observed row', () => {
+  it('states healthy objects as a count, with no green mark beside an unknown status', () => {
+    const container = renderView({ data: denied([observed]) })
+    expect(row(container, 'api')).toContain('1/1 ready')
+    expect(container.querySelector('tbody .badge-sm .rounded-full')).toBeNull()
+  })
+
+  it('keeps the mark on a real problem', () => {
+    const container = renderView({ data: denied([{ ...observed, resourceHealth: 'unhealthy', healthSummary: '0/1 ready' }]) })
+    expect(row(container, 'api')).toContain('0/1 ready')
+    expect(container.querySelector('tbody .badge-sm .rounded-full')).not.toBeNull()
+  })
+})
+
 describe('ObservedHelmNotice', () => {
   it('names what it reads and that it can miss things, before any expanding', () => {
     const text = mount(<ObservedHelmNotice inventory={denied([observed])} />).textContent
@@ -133,7 +147,7 @@ describe('ObservedHelmNotice', () => {
     for (const name of ['meta.helm.sh/release-name', 'meta.helm.sh/release-namespace', 'helm.sh/chart', 'app.kubernetes.io/version']) {
       expect(text).toContain(name)
     }
-    expect(text).toContain('source of truth Helm itself uses, so this view can miss things')
+    expect(text).toContain('source of truth Helm itself uses, so this view can miss things, and a failed release can look fine')
     expect(text).toContain('in team-a, team-b')
   })
 
@@ -143,6 +157,7 @@ describe('ObservedHelmNotice', () => {
     expect(toggle.textContent).toContain('What’s affected')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(container.textContent).toContain('How to get the full view: get and list access to Secrets')
+    expect(container.textContent).toContain('That opens every Secret there')
     act(() => toggle.click())
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(container.textContent).toContain('Releases that failed before creating any object.')

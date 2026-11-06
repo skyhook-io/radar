@@ -122,7 +122,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
       <div className="flex-1 overflow-y-auto">
         <ObservedHelmDrawerNote />
         {!data || isStableClientError(error) ? (
-          <FetchResult loading={isLoading} error={error} notFoundMessage="No object you can read carries this release’s Helm metadata" className="h-32" />
+          <FetchResult loading={isLoading} error={error} notFoundMessage="No release found on the objects you can read" className="h-32" />
         ) : activeTab === 'overview' ? (
           <OverviewTab release={data} />
         ) : activeTab === 'history' ? (
@@ -154,7 +154,7 @@ function OverviewTab({ release }: { release: ObservedHelmReleaseDetail }) {
           <FactRow label="Chart version"><FactValue fact={fact(release.chartVersion, 'helm.sh/chart', 'No single version could be read from its objects.')} /></FactRow>
           <FactRow label="App version"><FactValue fact={fact(release.appVersion, 'app.kubernetes.io/version', 'No single app version could be read from its objects.')} /></FactRow>
           {release.otherCharts && release.otherCharts.length > 0 && (
-            <FactRow label={release.chart ? 'Subcharts' : 'Charts found'}>
+            <FactRow label={release.chart ? 'Other charts' : 'Charts found'}>
               <span className="text-theme-text-secondary">{release.otherCharts.join(', ')}</span>
             </FactRow>
           )}
@@ -196,7 +196,7 @@ function FluxHistory({ release }: { release: ObservedHelmReleaseDetail }) {
             <th className="py-1.5 pr-3 font-normal">Chart</th>
             <th className="py-1.5 pr-3 font-normal">App version</th>
             <th className="py-1.5 pr-3 font-normal">Last deployed</th>
-            <th className="py-1.5 font-normal">Digest</th>
+            <th className="py-1.5 font-normal">Release digest</th>
           </tr>
         </thead>
         <tbody className="table-divide-subtle">

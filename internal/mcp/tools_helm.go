@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/search"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 // userFromContext extracts the auth user attached by the HTTP middleware,
@@ -70,6 +71,7 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 	if inventory.StorageDenied == nil {
 		return toJSONResult(inventory.Releases)
 	}
+	inventory.StorageDenied = inventory.StorageDenied.Capped(resourceapi.MCPSetLimit)
 	return toJSONResult(partialHelmList{Summary: inventory.Summary(), ReleaseInventory: inventory})
 }
 
@@ -144,6 +146,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 
 	user := userFromContext(ctx)
 	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user)
+	if helm.ReleaseReadDeniedForCaller(err) {
+		return nil, nil, fmt.Errorf("can't read Helm's records for release %s/%s: access to its Secrets is denied, which doesn't mean it's missing. list_helm_releases shows what its objects say; inspect them with list_resources or search: %w", input.Namespace, input.Name, err)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("release %s/%s not found: %w", input.Namespace, input.Name, err)
 	}

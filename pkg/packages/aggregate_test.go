@@ -12,7 +12,7 @@ func TestSplitChart(t *testing.T) {
 		{"cert-manager-1.14.0", "cert-manager", "1.14.0"},
 		{"cert-manager-v1.14.0", "cert-manager", "v1.14.0"},
 		{"kube-prometheus-stack-45.27.2", "kube-prometheus-stack", "45.27.2"},
-		// scans backwards for first hyphen-followed-by-digit; finds 0.32.0-dev.
+		// A whole dotted version anchors the split, pre-release included.
 		{"karpenter-0.32.0-dev", "karpenter", "0.32.0-dev"},
 		{"foo", "foo", ""},
 		{"", "", ""},

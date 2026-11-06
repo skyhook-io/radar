@@ -312,7 +312,7 @@ func (h *Handlers) handleObservedRelease(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if detail == nil {
-		writeError(w, http.StatusNotFound, "no object you can read carries this release's Helm metadata")
+		writeError(w, http.StatusNotFound, "no release found on the objects you can read")
 		return
 	}
 	writeJSON(w, detail)

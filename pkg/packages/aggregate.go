@@ -273,10 +273,10 @@ func sourceRank(s SourceCode) int {
 var dottedChartVersion = regexp.MustCompile(`^v?\d+\.\d+(\.\d+)?([-+_.][0-9A-Za-z._+-]*)?$`)
 
 // SplitChart splits a Helm chart string like "cert-manager-1.14.0" or
-// "cert-manager-v1.14.0" into (name, version). Returns ("", "") if the
-// string doesn't look like name-version. Handles charts whose own name
-// contains hyphens ("kube-prometheus-stack-45.27.2") and versions whose
-// pre-release does ("foo-1.2.3-1").
+// "cert-manager-v1.14.0" into (name, version). Empty input returns ("", "").
+// Handles charts whose own name contains hyphens
+// ("kube-prometheus-stack-45.27.2") and versions whose pre-release does
+// ("foo-1.2.3-1").
 //
 // Heuristic: the first hyphen followed by a whole dotted version wins.
 // Otherwise find the last hyphen followed by a digit-or-v-digit; the

@@ -8,7 +8,6 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -303,12 +302,8 @@ func ToolOf(obj *unstructured.Unstructured) string {
 // release name helm-controller defaults to, the namespace it deploys into, and
 // the namespace Helm stores it in. status.history and status.storageNamespace
 // record the actual values once a release has been installed.
-func FluxHelmTarget(obj metav1.Object) (releaseName, targetNamespace, storageNamespace string) {
-	unstructuredObj, ok := obj.(interface{ UnstructuredContent() map[string]any })
-	if !ok {
-		return "", "", ""
-	}
-	spec, _ := unstructuredObj.UnstructuredContent()["spec"].(map[string]any)
+func FluxHelmTarget(obj *unstructured.Unstructured) (releaseName, targetNamespace, storageNamespace string) {
+	spec, _ := obj.Object["spec"].(map[string]any)
 	targetNamespace, _ = spec["targetNamespace"].(string)
 	if targetNamespace == "" {
 		targetNamespace = obj.GetNamespace()

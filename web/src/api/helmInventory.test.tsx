@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useHelmInventory } from './client'
+import { helmInventoryRefetchInterval, useHelmInventory } from './client'
 import type { HelmInventory } from '../types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -66,5 +66,25 @@ describe('useHelmInventory', () => {
     const { seen } = await readInventory({}, { '/helm/releases': () => json(403, { error: 'insufficient permissions to list Helm releases' }) })
     expect(seen.data).toBeUndefined()
     expect((seen.error as { status?: number }).status).toBe(403)
+  })
+})
+
+describe('helmInventoryRefetchInterval', () => {
+  const withGap = (action: string): HelmInventory => ({ releases: [], observed: [], objectCoverage: { gaps: [{ code: 'x', action }] } as unknown as HelmInventory['objectCoverage'] })
+
+  it('leaves a settled list alone', () => {
+    expect(helmInventoryRefetchInterval(undefined, 0)).toBe(false)
+    expect(helmInventoryRefetchInterval({ releases: [], observed: [] }, 0)).toBe(false)
+    expect(helmInventoryRefetchInterval(withGap('grant_access'), 0)).toBe(false)
+  })
+
+  it('follows both gaps that can clear by themselves', () => {
+    expect(helmInventoryRefetchInterval(withGap('retry'), 0)).toBe(5000)
+    expect(helmInventoryRefetchInterval(withGap('wait'), 0)).toBe(5000)
+  })
+
+  it('slows down, without stopping, once a gap outlasts the quick retries', () => {
+    expect(helmInventoryRefetchInterval(withGap('retry'), 24)).toBe(60000)
+    expect(helmInventoryRefetchInterval(withGap('wait'), 500)).toBe(60000)
   })
 })

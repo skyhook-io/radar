@@ -39,11 +39,16 @@ const AFFECTED: { heading: string; items: { term: ReactNode; detail?: ReactNode 
       { term: 'Releases that failed before creating any object.' },
       { term: 'Releases with no object you can read.' },
       { term: <>Charts that deploy only CRDs from <Code>crds/</Code>.</>, detail: 'Helm doesn’t label those.' },
+      { term: 'Releases whose objects all have a controller owner,', detail: 'as Helm operators arrange. Radar skips owned objects.' },
     ],
   },
   {
     heading: 'Can differ from Helm',
     items: [
+      {
+        term: 'A row is a claim, not proof.',
+        detail: 'Anyone who can edit an object can set these annotations, so a listed release may not exist.',
+      },
       {
         term: 'Objects kept after an uninstall',
         detail: <>can still show up as a release, for example with <Code>helm.sh/resource-policy: keep</Code>.</>,
@@ -52,7 +57,7 @@ const AFFECTED: { heading: string; items: { term: ReactNode; detail?: ReactNode 
         term: <>Charts without <Code>helm.sh/chart</Code></>,
         detail: <>show no chart or version. App version needs <Code>app.kubernetes.io/version</Code>.</>,
       },
-      { term: 'Partly visible releases', detail: 'can show a subchart as their chart, if that’s all you can read.' },
+      { term: 'A release can show a subchart as its chart', detail: 'if it’s named like one, or a subchart is all you can read.' },
       { term: 'Several charts on one release.', detail: 'If none matches the release name, Radar shows them all rather than pick one.' },
       { term: 'Object counts and health', detail: 'cover only what you can read, leaving out Secrets and kinds Radar isn’t watching.' },
     ],
@@ -99,12 +104,13 @@ export function ObservedHelmNotice({ inventory }: { inventory: HelmInventory }) 
     <NoticeCard>
       <p>
         {deniedScope(inventory)}, so {mixed ? 'releases there come' : 'this list comes'} from labels and annotations on deployed
-        objects. Those Secrets are the source of truth Helm itself uses, so this view can miss things.
+        objects. Those Secrets are the source of truth Helm itself uses, so this view can miss things, and a failed release can look fine.
       </p>
       {coverage && <p className="mt-1">{coverage}</p>}
       <p className="mt-2">
         <span className="font-medium text-theme-text-primary">How to get the full view:</span> get and list access to Secrets in the
-        namespace where Helm stores a release, usually the release’s namespace.
+        namespace where Helm stores a release, usually the release’s namespace. That opens every Secret there to whoever holds it. Without
+        sign-in, Radar’s own identity holds it, so it reaches everyone who can open Radar.
       </p>
       <Disclosure summary="What’s affected" className="mt-3" summaryClassName="font-medium text-accent-text">
         <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] gap-x-8 gap-y-5 border-t border-theme-border pt-3">
@@ -128,5 +134,5 @@ export function ObservedHelmNotice({ inventory }: { inventory: HelmInventory }) 
 
 /** The drawer's short form: the list carries the detail. */
 export function ObservedHelmDrawerNote() {
-  return <NoticeCard>Radar can’t read this release’s Helm Secret, which is Helm’s source of truth, so this view can miss things.</NoticeCard>
+  return <NoticeCard>Radar can’t read Helm’s release Secrets here, Helm’s source of truth, so this view can miss things, and a failed release can look fine.</NoticeCard>
 }

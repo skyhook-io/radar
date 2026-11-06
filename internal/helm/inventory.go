@@ -15,9 +15,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
-// ErrObjectsUnavailable means the object cache isn't ready, so the releases
-// the caller can't read from Helm's storage can't be observed either.
-var ErrObjectsUnavailable = errors.New("resource cache not available")
+// ErrObjectsUnavailable means objects can't answer yet: the cache isn't ready,
+// or a read found nothing while what it couldn't reach may still settle. A
+// retry can succeed.
+var ErrObjectsUnavailable = errors.New("resource cache isn't ready; try again")
 
 // ErrAccessCheckFailed means Radar couldn't work out which namespaces the
 // caller may read, so it attempted no read. That is not a denial, and a retry
@@ -112,7 +113,25 @@ func (i *ReleaseInventory) Summary() string {
 	} else if i.StorageDenied != nil && i.StorageDenied.Extent == resourceapi.ExtentUnknown {
 		where = "in some namespaces"
 	}
-	return fmt.Sprintf("Partial: %d releases read from Helm and %d observed. Helm's release Secrets can't be read %s, so observed rows come from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on objects you can read. Their status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume they are deployed or healthy. Absence proves nothing: a release that failed before creating any object, or whose objects you can't read, isn't listed, and objects kept after an uninstall can still appear. A cluster admin can grant get and list on Secrets for the full view.", len(i.Releases), len(i.Observed), where)
+	summary := fmt.Sprintf("Partial: %d releases read from Helm and %d observed. Helm's release Secrets can't be read %s, so observed rows come from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on objects you can read. Their status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume they are deployed or healthy, and get_helm_release is denied for them; inspect their objects with list_resources or search. Absence proves nothing: a release that failed before creating any object, or whose objects you can't read, isn't listed, and objects kept after an uninstall can still appear. Anyone who can edit an object can set these annotations, so a row is a claim, not proof that a release exists. Helm's records need get and list on Secrets for the identity Radar reads as here, which also exposes every Secret in those namespaces.", len(i.Releases), len(i.Observed), where)
+	return summary + i.objectGaps()
+}
+
+// objectGaps says in words what the object read didn't reach.
+func (i *ReleaseInventory) objectGaps() string {
+	if i.ObjectCoverage == nil || len(i.ObjectCoverage.Gaps) == 0 {
+		return ""
+	}
+	var codes []string
+	for _, gap := range i.ObjectCoverage.Gaps {
+		codes = append(codes, string(gap.Code))
+	}
+	slices.Sort(codes)
+	gaps := fmt.Sprintf(" Some objects weren't read (%s), so more may be missing.", strings.Join(slices.Compact(codes), ", "))
+	if coverageMaySettle(i.ObjectCoverage.Gaps) {
+		gaps += " Call list_helm_releases again shortly."
+	}
+	return gaps
 }
 
 // RequestedNamespaces is what a caller narrowed a read to: the namespaces it

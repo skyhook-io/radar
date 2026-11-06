@@ -70,6 +70,16 @@ func TestChooseChart(t *testing.T) {
 			wantApp:     "v3.15.0",
 		},
 		{
+			// A known limit, stated in the callout: the labels can't show which
+			// chart is the parent, so a release named after a subchart gets it.
+			name:        "release named after a subchart",
+			release:     "redis",
+			objects:     []stampedObject{{chartLabel: "platform-2.0.0"}, {chartLabel: "redis-19.0.0"}},
+			wantChart:   "redis",
+			wantVersion: "19.0.0",
+			wantOthers:  []string{"platform-2.0.0"},
+		},
+		{
 			name:    "no chart label",
 			release: "rel-a",
 			objects: []stampedObject{{}},
@@ -268,10 +278,34 @@ func TestAddObservedHealthDoesNotClaimHealthyOverAGap(t *testing.T) {
 
 func TestInventorySummarySaysWhatIsUnknown(t *testing.T) {
 	summary := (&ReleaseInventory{Releases: []HelmRelease{{Name: "a"}}, Observed: []ObservedRelease{{Name: "b"}}, StorageDenied: resourceapi.Names([]string{"team-b"}, resourceapi.MCPSetLimit)}).Summary()
-	for _, want := range []string{"Partial:", "1 releases read from Helm and 1 observed", "in team-b", "status, revision", "Absence proves nothing"} {
+	for _, want := range []string{"Partial:", "1 releases read from Helm and 1 observed", "in team-b", "status, revision", "Absence proves nothing", "get_helm_release is denied", "not proof that a release exists", "exposes every Secret"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary lacks %q: %s", want, summary)
 		}
+	}
+	if strings.Contains(summary, "weren't read") {
+		t.Errorf("summary reports a gap the read didn't have: %s", summary)
+	}
+}
+
+func TestInventorySummaryReportsObjectGaps(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		code      readreason.Code
+		wantRetry bool
+	}{
+		{"can settle", readreason.KindSyncPending, true},
+		{"needs someone to act", readreason.RadarKindNotCollected, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := (&ReleaseInventory{StorageDenied: resourceapi.AllNames(), ObjectCoverage: &resourceapi.SearchCoverage{Gaps: []resourceapi.Gap{{Code: tc.code}}}}).Summary()
+			if !strings.Contains(summary, "Some objects weren't read ("+string(tc.code)+")") {
+				t.Errorf("summary doesn't name the gap: %s", summary)
+			}
+			if got := strings.Contains(summary, "Call list_helm_releases again"); got != tc.wantRetry {
+				t.Errorf("retry instruction = %v, want %v: %s", got, tc.wantRetry, summary)
+			}
+		})
 	}
 }
 

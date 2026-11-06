@@ -6121,6 +6121,18 @@ function helmNamespaceParams(namespaces: string[] = []) {
   return namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
 }
 
+// Objects still loading clear on their own, so the list shouldn't wait for a
+// manual refresh to fill in. Some gaps outlast any quick retry, such as
+// permission checks spread over many namespaces, so polling slows rather than
+// repeating a full object read every few seconds.
+const HELM_INVENTORY_FAST_POLLS = 24;
+
+export function helmInventoryRefetchInterval(inventory: HelmInventory | undefined, updates: number): number | false {
+  const settling = inventory?.objectCoverage?.gaps.some((gap) => gap.action === "retry" || gap.action === "wait");
+  if (!settling) return false;
+  return updates < HELM_INVENTORY_FAST_POLLS ? 5000 : 60000;
+}
+
 // The Helm list as far as the caller's access reaches. An older Radar has no
 // inventory route: its list is the whole answer, and a denial stays a 403.
 export function useHelmInventory(namespaces: string[] = []) {
@@ -6136,9 +6148,7 @@ export function useHelmInventory(namespaces: string[] = []) {
         : { releases: await fetchJSON<HelmRelease[]>(`/helm/releases${params}`), observed: [] },
     enabled: !capabilitiesPending,
     staleTime: 30000, // 30 seconds
-    // Objects still loading clear on their own, so the list shouldn't wait for
-    // a manual refresh to fill in.
-    refetchInterval: (query) => (query.state.data?.objectCoverage?.gaps.some((gap) => gap.action === "retry") ? 5000 : false),
+    refetchInterval: (query) => helmInventoryRefetchInterval(query.state.data, query.state.dataUpdateCount),
   });
 }
 

@@ -1,4 +1,4 @@
-import type { DashboardHelmSummary } from '../../api/client'
+import { useRadarFeature, type DashboardHelmSummary } from '../../api/client'
 import { Package, ArrowRight, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from '../ui/Tooltip'
@@ -41,6 +41,7 @@ function getHealthDot(health?: string): string {
 }
 
 export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
+  const observedView = useRadarFeature('helmInventory').support === 'supported'
   return (
     <button
       onClick={onNavigate}
@@ -79,8 +80,8 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
         ) : data.restricted ? (
           <div className="flex flex-col items-center justify-center h-full py-4 text-theme-text-tertiary">
             <Shield className="w-8 h-8 text-amber-400 mb-2" />
-            <span className="text-xs font-medium text-theme-text-secondary">Access Restricted</span>
-            <span className="text-[11px] mt-1">Insufficient permissions to list Helm releases</span>
+            <span className="text-xs font-medium text-theme-text-secondary">{observedView ? 'Helm’s records are restricted' : 'Access Restricted'}</span>
+            <span className="text-[11px] mt-1">{observedView ? 'Open Helm to see releases from object labels and annotations' : 'Insufficient permissions to list Helm releases'}</span>
           </div>
         ) : data.error ? (
           <div className="flex flex-col items-center justify-center h-full py-4 text-theme-text-tertiary">

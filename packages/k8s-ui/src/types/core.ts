@@ -1228,6 +1228,8 @@ export interface ResourceDiff {
 export interface ObservedHelmRelease {
   name: string
   namespace: string
+  // Set when a readable Flux HelmRelease records another storage namespace.
+  // Absent doesn't say where it's stored.
   storageNamespace?: string
   chart?: string
   chartVersion?: string
@@ -1237,9 +1239,11 @@ export interface ObservedHelmRelease {
   otherCharts?: string[]
   // Objects the caller can read, which can be fewer than the release has.
   resourceCount: number
+  // 'unknown' when the object read had gaps, even beside a summary of what was read.
   resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
   healthIssue?: string
   healthSummary?: string
+  // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
   managedByFluxHelmRelease?: string
 }
 
@@ -1250,14 +1254,14 @@ export interface FluxHelmRevision {
   chartName?: string
   chartVersion?: string
   appVersion?: string
+  // Flux's checksum of the stored Helm release, not an image digest.
   digest?: string
-  configDigest?: string
-  firstDeployed?: string
   lastDeployed?: string
 }
 
 export interface ObservedHelmReleaseDetail extends ObservedHelmRelease {
   resources?: HelmOwnedResource[]
+  // Newest first. Absent means no Flux record was read, not that there are no revisions.
   fluxHistory?: FluxHelmRevision[]
   objectCoverage: SearchCoverage
 }

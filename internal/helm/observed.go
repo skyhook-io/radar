@@ -51,7 +51,8 @@ type ObservedRelease struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	// StorageNamespace is set only when a readable Flux HelmRelease records
-	// that Helm stores this release in another namespace.
+	// that Helm stores this release in another namespace. Empty doesn't say
+	// where it's stored: without that HelmRelease Radar can't know.
 	StorageNamespace string `json:"storageNamespace,omitempty"`
 	Chart            string `json:"chart,omitempty"`
 	ChartVersion     string `json:"chartVersion,omitempty"`
@@ -62,30 +63,36 @@ type ObservedRelease struct {
 	OtherCharts []string `json:"otherCharts,omitempty"`
 	// ResourceCount is how many of the caller's readable objects carry the
 	// release's stamps, which can be fewer than the release has.
-	ResourceCount  int    `json:"resourceCount"`
+	ResourceCount int `json:"resourceCount"`
+	// ResourceHealth is "unknown" rather than "healthy" when the object read
+	// had gaps. HealthSummary still counts what was read, so "unknown" can sit
+	// beside "2/2 ready".
 	ResourceHealth string `json:"resourceHealth,omitempty"`
 	HealthIssue    string `json:"healthIssue,omitempty"`
 	HealthSummary  string `json:"healthSummary,omitempty"`
 	// ManagedByFluxHelmRelease is "namespace/name" of a HelmRelease the caller
-	// can read that records this release.
+	// can read that records this release. Empty doesn't mean Flux isn't
+	// managing it: the caller may not be able to read that HelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
 	// Resources and FluxHistory are filled on the single-release read only.
-	Resources   []OwnedResource `json:"resources,omitempty"`
-	FluxHistory []FluxRevision  `json:"fluxHistory,omitempty"`
+	Resources []OwnedResource `json:"resources,omitempty"`
+	// FluxHistory is newest first. Empty means Radar got no Flux record, not
+	// that the release has no revisions.
+	FluxHistory []FluxRevision `json:"fluxHistory,omitempty"`
 }
 
 // FluxRevision is one entry of a Flux HelmRelease's status.history: what Flux
 // recorded, not what Helm's storage says now.
 type FluxRevision struct {
-	Revision      int        `json:"revision"`
-	Status        string     `json:"status,omitempty"`
-	ChartName     string     `json:"chartName,omitempty"`
-	ChartVersion  string     `json:"chartVersion,omitempty"`
-	AppVersion    string     `json:"appVersion,omitempty"`
-	Digest        string     `json:"digest,omitempty"`
-	ConfigDigest  string     `json:"configDigest,omitempty"`
-	FirstDeployed *time.Time `json:"firstDeployed,omitempty"`
-	LastDeployed  *time.Time `json:"lastDeployed,omitempty"`
+	Revision     int    `json:"revision"`
+	Status       string `json:"status,omitempty"`
+	ChartName    string `json:"chartName,omitempty"`
+	ChartVersion string `json:"chartVersion,omitempty"`
+	AppVersion   string `json:"appVersion,omitempty"`
+	// Digest is Flux's checksum of the stored Helm release, not an image or
+	// OCI artifact digest.
+	Digest       string     `json:"digest,omitempty"`
+	LastDeployed *time.Time `json:"lastDeployed,omitempty"`
 }
 
 // ObservedReleaseDetail is one observed release and what the read covered.
@@ -97,10 +104,16 @@ type ObservedReleaseDetail struct {
 // ObjectScope is a caller's view of the cached objects, built by each surface
 // from its own per-user checks.
 type ObjectScope struct {
-	Provider *search.CacheProvider
+	Provider objectProvider
 	Access   search.ScanAccess
 	// Requested is what the caller narrowed to; see RequestedNamespaces.
 	Requested []string
+}
+
+type objectProvider interface {
+	search.Provider
+	// Current reports whether the caches the read used are still the live ones.
+	Current() bool
 }
 
 type stampedObject struct {
@@ -192,7 +205,7 @@ func scanObservedReleases(ctx context.Context, scope *ObjectScope) (*stampScan, 
 	return scan, nil
 }
 
-func warmFluxHelmReleases(ctx context.Context, provider *search.CacheProvider) {
+func warmFluxHelmReleases(ctx context.Context, provider search.Provider) {
 	discovery := k8s.GetResourceDiscovery()
 	if discovery == nil {
 		return
@@ -230,15 +243,13 @@ func parseFluxEvidence(hr *unstructured.Unstructured) (fluxEvidence, bool) {
 			return value
 		}
 		evidence.history = append(evidence.history, FluxRevision{
-			Revision:      int(revision),
-			Status:        text("status"),
-			ChartName:     text("chartName"),
-			ChartVersion:  text("chartVersion"),
-			AppVersion:    text("appVersion"),
-			Digest:        text("digest"),
-			ConfigDigest:  text("configDigest"),
-			FirstDeployed: parseFluxTime(text("firstDeployed")),
-			LastDeployed:  parseFluxTime(text("lastDeployed")),
+			Revision:     int(revision),
+			Status:       text("status"),
+			ChartName:    text("chartName"),
+			ChartVersion: text("chartVersion"),
+			AppVersion:   text("appVersion"),
+			Digest:       text("digest"),
+			LastDeployed: parseFluxTime(text("lastDeployed")),
 		})
 		// Flux keeps the newest snapshot first, and it names the release
 		// exactly, where the spec only implies it.
@@ -303,7 +314,8 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) O
 // label their own objects, and they often outnumber the parent's (21 clickhouse
 // objects to 8 signoz in one real release), so a count can't identify the
 // parent. With several chart names, only one named exactly like the release is
-// chosen; otherwise none is, and all are returned for the reader to see.
+// chosen; otherwise none is, and all are returned for the reader to see. A name
+// match is a convention, not proof: a release can be named after a subchart.
 func chooseChart(release string, objects []stampedObject) (chart, version, appVersion string, others []string) {
 	names := map[string]bool{}
 	for _, o := range objects {
@@ -435,8 +447,9 @@ func coverageMaySettle(gaps []resourceapi.Gap) bool {
 }
 
 // GetObservedRelease reads one release from its stamps, with its resources and
-// any Flux history. It returns nil when no object the caller can read carries
-// the release's stamps.
+// any Flux history. It returns nil, nil only for a settled answer that no object
+// the caller can read counts toward the release. A read that may still settle
+// is ErrObjectsUnavailable, and a changed connection is ErrConnectionChanged.
 func GetObservedRelease(ctx context.Context, scope *ObjectScope, namespace, name string) (*ObservedReleaseDetail, error) {
 	scan, err := scanObservedReleases(ctx, scope)
 	if err != nil {

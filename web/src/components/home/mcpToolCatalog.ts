@@ -173,7 +173,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'list_helm_releases',
-    desc: 'All Helm releases with status, resource health, storage namespace, Flux ownership, current lastOperation, and capped operation trails for failed upgrades, rollbacks, or stuck pending operations.',
+    desc: 'All Helm releases with status, resource health, storage namespace, Flux ownership, current lastOperation, and capped operation trails for failed upgrades, rollbacks, or stuck pending operations. Without access to Helm’s Secrets, rows come from labels and annotations on objects you can read, with no status.',
     params: [{ arg: 'namespace', desc: 'filter to a specific namespace' }],
   },
   {

@@ -297,7 +297,7 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
               ) : degraded && rowCount === 0 ? (
                 <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center text-theme-text-tertiary">
                   <Package className="w-12 h-12 text-theme-text-disabled" />
-                  <span className="text-theme-text-secondary">No Helm metadata on any object you can read</span>
+                  <span className="text-theme-text-secondary">No releases found on the objects you can read</span>
                   <span className="max-w-lg text-sm">This doesn’t mean there are no releases: they may be in namespaces you can’t read, or have no objects.</span>
                 </div>
               ) : filteredReleases.length === 0 ? (
@@ -539,6 +539,11 @@ function operationSummary(operation: HelmOperation): string {
 function ReleaseHealthBadge({ release, observed }: { release: Pick<HelmRelease, 'resourceHealth' | 'healthIssue' | 'healthSummary'>; observed?: boolean }) {
   if (!release.resourceHealth || release.resourceHealth === 'unknown') return null
 
+  // Healthy objects say nothing about Helm's status, and a failed release can
+  // have them, so an observed row states the count instead of a green mark.
+  const neutral = observed && release.resourceHealth === 'healthy'
+  if (neutral && !release.healthSummary) return null
+
   const healthStyles: Record<string, { badge: string; dot: string }> = {
     healthy: { badge: SEVERITY_BADGE.success, dot: SEVERITY_DOT.success },
     degraded: { badge: SEVERITY_BADGE.warning, dot: SEVERITY_DOT.warning },
@@ -557,10 +562,10 @@ function ReleaseHealthBadge({ release, observed }: { release: Pick<HelmRelease, 
     <Tooltip content={tooltipContent}>
       <span className={clsx(
         'badge-sm shrink-0',
-        style.badge
+        neutral ? SEVERITY_BADGE.neutral : style.badge
       )}>
-        <span className={clsx('w-1.5 h-1.5 rounded-full', style.dot)} />
-        {release.healthIssue || (release.resourceHealth !== 'healthy' ? release.healthSummary : null)}
+        {!neutral && <span className={clsx('w-1.5 h-1.5 rounded-full', style.dot)} />}
+        {release.healthIssue || (neutral || release.resourceHealth !== 'healthy' ? release.healthSummary : null)}
       </span>
     </Tooltip>
   )
