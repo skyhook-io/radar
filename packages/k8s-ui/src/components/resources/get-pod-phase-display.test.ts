@@ -568,3 +568,60 @@ describe('getPodPhaseDisplay', () => {
     expect(r.level).toBe('healthy')
   })
 })
+
+describe('scheduling-gated pods', () => {
+  const oldTs = '2020-01-01T00:00:00Z'
+  const gated = {
+    metadata: { creationTimestamp: oldTs },
+    spec: { schedulingGates: [{ name: 'kueue.x-k8s.io/admission' }] },
+    status: { phase: 'Pending' },
+  }
+
+  it('getPodStatus reads a gated pod as neutral "Scheduling gated", not an aged Pending warning', () => {
+    const r = getPodStatus(gated)
+    expect(r.level).toBe('neutral')
+    expect(r.text).toBe('Scheduling gated')
+  })
+
+  it('getPodStatus still ages an ungated Pending pod into a degraded warning', () => {
+    const ungated = { metadata: { creationTimestamp: oldTs }, status: { phase: 'Pending' } }
+    expect(getPodStatus(ungated).level).toBe('degraded')
+  })
+
+  it('getPodPhaseDisplay explains the hold and names the gate in its hint', () => {
+    const r = getPodPhaseDisplay(gated)
+    expect(r.level).toBe('neutral')
+    expect(r.text).toContain('Scheduling gated')
+    expect(r.hint).toContain('kueue.x-k8s.io/admission')
+  })
+})
+
+describe('scheduling-gated detection on summary list payloads', () => {
+  // The summary list payload strips spec.schedulingGates but keeps the
+  // PodScheduled=SchedulingGated condition; getPodStatus must still read it as held.
+  const summaryGated = {
+    metadata: { creationTimestamp: '2020-01-01T00:00:00Z' },
+    spec: { containers: [{ name: 'trainer' }] },
+    status: {
+      phase: 'Pending',
+      conditions: [{ type: 'PodScheduled', status: 'False', reason: 'SchedulingGated' }],
+    },
+  }
+
+  it('getPodStatus reads a summary-shaped gated pod (no spec.schedulingGates) as neutral', () => {
+    const r = getPodStatus(summaryGated)
+    expect(r.level).toBe('neutral')
+    expect(r.text).toBe('Scheduling gated')
+  })
+
+  it('an Unschedulable condition is NOT treated as scheduling-gated', () => {
+    const unsched = {
+      metadata: { creationTimestamp: '2020-01-01T00:00:00Z' },
+      status: {
+        phase: 'Pending',
+        conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable' }],
+      },
+    }
+    expect(getPodStatus(unsched).text).toBe('Unschedulable')
+  })
+})

@@ -87,13 +87,13 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 	verdict := health.Pod(pod, now)
 	displayLevel := health.PodDisplayLevel(pod, now)
 	if displayLevel != verdict.Level {
+		// The display floor escalated the pod (unschedulable / stuck-terminating),
+		// so its explanation must describe that cause, not a lower-severity base
+		// reason. A deliberately held pod carries a benign "SchedulingGated" reason;
+		// overwrite it here so an escalated pod isn't mislabelled as merely held.
 		verdict.Level = displayLevel
-		if verdict.Reason == "" {
-			verdict.Reason = health.PodProblemReason(pod, now)
-		}
-		if verdict.Message == "" {
-			verdict.Message = health.PodProblemMessage(pod)
-		}
+		verdict.Reason = health.PodProblemReason(pod, now)
+		verdict.Message = health.PodProblemMessage(pod)
 	}
 	restartCount, lastTerminationReason := health.PodRestartContext(pod)
 	createdAt := ""
