@@ -261,20 +261,14 @@ type Query struct {
 	// don't overlap Groups is skipped.
 	Groups []string
 
-	// OtherKinds adds, to a query with no kind or name, the rows of kinds
-	// outside the curated ones that otherKindsCandidates reads: custom
-	// resources and Nodes.
+	// OtherKinds also reads, for a query with no kind or name, the rows of
+	// kinds outside the curated ones, custom resources and Nodes, into
+	// RecentResult.Other.
 	OtherKinds bool
-	// Uncapped returns every ranked candidate and leaves the page to the
-	// caller (SelectFeed); OutputCapped is then never set.
-	Uncapped bool
 
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
 	start time.Time
-	// end, when set, is the window's upper bound; tests replaying recorded
-	// history set it.
-	end time.Time
 }
 
 // Viewer gates the Pod and workload names a row carries beyond its own
@@ -313,6 +307,12 @@ type RecentResult struct {
 	// History reports whether Radar's held history covers the window; see
 	// HistoryCoverageSince.
 	History issuesapi.HistoryCoverage
+	// Other holds the ranked rows Query.OtherKinds reads, with their own
+	// truncation signal. Their read failing leaves the rest of the result
+	// valid.
+	Other               []issuesapi.RecentChange
+	OtherFetchSaturated bool
+	OtherErr            error
 }
 
 // Recent returns ranked changes plus two distinct truncation signals:
@@ -359,22 +359,18 @@ func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	}
 	events = append(events, got...)
 	saturated = saturated || full
-	if q.OtherKinds && len(q.Kinds) == 0 && q.Name == "" {
-		got, full, err := otherKindsCandidates(ctx, store, q, bound)
-		if err != nil {
-			return RecentResult{}, err
-		}
-		events = append(events, got...)
-		saturated = saturated || full
-	}
 
 	changes, capped := rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
-	return RecentResult{
+	result := RecentResult{
 		Changes:        changes,
 		OutputCapped:   capped,
 		FetchSaturated: saturated,
 		History:        historyCoverage(q.start, q.Namespaces),
-	}, nil
+	}
+	if q.OtherKinds && len(q.Kinds) == 0 && q.Name == "" {
+		result.Other, result.OtherFetchSaturated, result.OtherErr = otherKindsChanges(ctx, store, q, bound)
+	}
+	return result, nil
 }
 
 // historyCoverage is HistoryCoverageSince for an answer scoped to
@@ -696,7 +692,6 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		// Groups are matched against the recorded apiVersion.
 		RequireAPIVersion: len(q.Groups) > 0,
 		Since:             q.start,
-		Until:             q.end,
 		Sources:           []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:        eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the
@@ -859,10 +854,6 @@ func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query
 	annotateRunningPreviousValue(ctx, out, pods, q.Viewer)
 	if len(q.Kinds) == 0 && q.Name == "" {
 		out = collapseSecretUpdates(out)
-	}
-	if q.Uncapped {
-		RankAndCap(&out, 0)
-		return out, false
 	}
 	capped := len(out) > q.Limit
 	RankAndCap(&out, q.Limit)
@@ -1298,7 +1289,12 @@ func hasSpecConfigField(e timeline.TimelineEvent) bool {
 		if isNodeEvent(e) && (strings.HasPrefix(p, "metadata.labels") || strings.HasPrefix(p, "metadata.annotations")) {
 			return true
 		}
-		if p == "spec" || strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || (trackedGroup && (p == "immutable" || strings.HasPrefix(p, "data"))) {
+		// A generic diff that can't name fields records bare "spec". The
+		// curated kinds keep their stricter rule.
+		if p == "spec" && isCustomResourceEvent(e) && !TrackedKindForGroup(e.Kind, resourceid.GroupFromAPIVersion(e.APIVersion)) {
+			return true
+		}
+		if strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || (trackedGroup && (p == "immutable" || strings.HasPrefix(p, "data"))) {
 			return true
 		}
 	}

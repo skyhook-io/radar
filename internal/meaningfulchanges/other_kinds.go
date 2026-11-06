@@ -80,6 +80,19 @@ var controllerTaints = map[string]bool{
 	"DeletionCandidateOfClusterAutoscaler":           true,
 }
 
+// otherKindsChanges returns the ranked rows otherKindsCandidates reads, with
+// no limit: ComposeFeed picks from them. They are ranked apart from the curated
+// rows, so nothing here can change which curated rows a query returns.
+func otherKindsChanges(ctx context.Context, store timeline.EventStore, q Query, bound int) ([]issuesapi.RecentChange, bool, error) {
+	events, saturated, err := otherKindsCandidates(ctx, store, q, bound)
+	if err != nil {
+		return nil, false, err
+	}
+	q.Limit = 0
+	changes, _ := rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
+	return changes, saturated, nil
+}
+
 // otherKindsCandidates reads the default feed's rows outside the curated
 // kinds: desired-state edits, creates and deletes of unowned custom resources
 // outside churnKinds, and of Nodes. Status-only updates are dropped in the
@@ -89,7 +102,6 @@ func otherKindsCandidates(ctx context.Context, store timeline.EventStore, q Quer
 	base := timeline.QueryOptions{
 		Namespaces:          q.Namespaces,
 		Since:               q.start,
-		Until:               q.end,
 		Sources:             []timeline.EventSource{timeline.SourceInformer},
 		ClusterContext:      k8s.ActiveClusterContext(),
 		DesiredStateUpdates: true,
@@ -198,18 +210,16 @@ func onlyControllerNodeChanges(e timeline.TimelineEvent) bool {
 	return controllerFields > 0
 }
 
+// The default feed keeps the rows of its curated kinds ahead of other kinds':
+// other kinds get a small reserve of the page and whatever slots are left.
 const (
-	// perKindShown is how many rows of one kind the default feed shows
-	// while other kinds' rows are left out to make room.
-	perKindShown = 3
-	// Churn guard: a kind outside the curated set with at least
-	// churnMinRows rows in the window is controller churn when a controller
-	// rewrites the same objects (churnRowsPerObject rows per object on
-	// average) or creates objects only to delete them (most of its objects
-	// both created and deleted in the window). A bulk apply of many
-	// objects, once each, is neither.
-	churnMinRows       = 50
-	churnRowsPerObject = 5
+	// otherKindsReserve is the most page slots reserved for other kinds, and
+	// otherKindsReserveShare limits it to a share of the page, so a small
+	// limit stays with the curated kinds.
+	otherKindsReserve      = 5
+	otherKindsReserveShare = 5
+	// otherKindsReservedPerKind is the most reserved slots one kind can hold.
+	otherKindsReservedPerKind = 2
 )
 
 // KindCount names a kind and how many of its rows a selection left out.
@@ -219,151 +229,68 @@ type KindCount struct {
 	Count int
 }
 
-// FeedSelection is SelectFeed's result.
+// FeedSelection is ComposeFeed's result.
 type FeedSelection struct {
 	Changes []issuesapi.RecentChange
-	// Churn lists kinds left out as controller churn, with the rows left out.
-	Churn []KindCount
-	// Crowded lists kinds with rows left out so other kinds' rows fit.
-	Crowded []KindCount
+	// CuratedShown is how many of Changes came from the curated rows.
+	CuratedShown int
+	// LeftOut lists the other kinds with rows that didn't fit.
+	LeftOut []KindCount
 }
 
-// SelectFeed picks the default feed's page from every ranked candidate. A
-// kind outside the curated set whose rows mark it as controller churn (see
-// churnGuard) is left out, except from slots no other row needs. Then each
-// kind shows at most perKindShown rows while rows of other kinds are left
-// out; slots no other kind fills go back to those kinds in rank order, so a
-// window with one busy kind still fills the page.
-func SelectFeed(changes []issuesapi.RecentChange, limit int) FeedSelection {
-	RankAndCap(&changes, 0)
-	var sel FeedSelection
-	churn := churnGuard(changes)
-	candidates := changes[:0:0]
-	var churned []issuesapi.RecentChange
-	for _, c := range changes {
-		if _, ok := churn[changeGroupKind(c)]; ok {
-			churned = append(churned, c)
-		} else {
-			candidates = append(candidates, c)
-		}
-	}
-	// Slots no other row needs go to churn rows, best first.
-	if spare := limit - len(candidates); limit > 0 && spare > 0 && len(churned) > 0 {
-		shown := churned[:min(spare, len(churned))]
-		for _, c := range shown {
-			churn[changeGroupKind(c)]--
-		}
-		candidates = append(candidates, shown...)
-		RankAndCap(&candidates, 0)
-	}
-	for key, n := range churn {
-		if n > 0 {
-			sel.Churn = append(sel.Churn, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
-		}
-	}
-	sortKindCounts(sel.Churn)
+// ComposeFeed builds the default feed's page. Curated rows are cut by rank
+// alone, so rows of other kinds can only take the lowest-ranked curated
+// places, and only as many as the reserve allows. Other kinds are taken one
+// row per kind in turn, not by rank: a controller rewriting one kind's objects
+// keeps a row, which may be the lead, without burying the other kinds.
+func ComposeFeed(curated, other []issuesapi.RecentChange, limit int) FeedSelection {
+	RankAndCap(&curated, 0)
+	order, reservable := byKindInTurn(other)
+	reserved := min(otherKindsReserve, limit/otherKindsReserveShare, reservable)
+	shown := min(len(curated), limit-reserved)
+	taken := min(len(order), limit-shown)
 
-	if limit <= 0 || len(candidates) <= limit {
-		sel.Changes = candidates
-		return sel
-	}
-	shown := map[resourceid.GroupKind]int{}
-	keep := make([]bool, len(candidates))
-	kept := 0
-	for i, c := range candidates {
-		if kept == limit {
-			break
-		}
-		key := changeGroupKind(c)
-		if shown[key] < perKindShown {
-			shown[key]++
-			keep[i] = true
-			kept++
-		}
-	}
-	for i := range candidates {
-		if kept == limit {
-			break
-		}
-		if !keep[i] {
-			keep[i] = true
-			kept++
-		}
-	}
-	lastKept := 0
-	for i := range candidates {
-		if keep[i] {
-			lastKept = i
-		}
-	}
-	// A kind with a row left out while a lower-ranked row was kept made
-	// room for another kind; past lastKept, rows fell to the page limit
-	// alone. A crowded kind counts all its rows left out.
-	crowded := map[resourceid.GroupKind]bool{}
+	page := append(slices.Clone(curated[:shown]), order[:taken]...)
+	RankAndCap(&page, 0)
+
 	left := map[resourceid.GroupKind]int{}
-	for i, c := range candidates {
-		if keep[i] {
-			sel.Changes = append(sel.Changes, c)
-			continue
-		}
-		key := changeGroupKind(c)
-		left[key]++
-		crowded[key] = crowded[key] || i < lastKept
+	for _, c := range order[taken:] {
+		left[changeGroupKind(c)]++
 	}
-	for key, isCrowded := range crowded {
-		if isCrowded {
-			sel.Crowded = append(sel.Crowded, KindCount{Kind: key.Kind, Group: key.Group, Count: left[key]})
-		}
+	sel := FeedSelection{Changes: page, CuratedShown: shown}
+	for key, n := range left {
+		sel.LeftOut = append(sel.LeftOut, KindCount{Kind: key.Kind, Group: key.Group, Count: n})
 	}
-	sortKindCounts(sel.Crowded)
+	sortKindCounts(sel.LeftOut)
 	return sel
 }
 
-// churnGuard returns the kinds outside the curated set whose rows mark them
-// as controller churn, with their counts.
-func churnGuard(changes []issuesapi.RecentChange) map[resourceid.GroupKind]int {
-	type object struct{ created, deleted bool }
-	counts := map[resourceid.GroupKind]int{}
-	objects := map[resourceid.GroupKind]map[string]*object{}
-	for _, c := range changes {
+// byKindInTurn orders rows one per kind in turn, each kind's best row first
+// and kinds by their best row. reservable counts the rows inside
+// otherKindsReservedPerKind turns.
+func byKindInTurn(rows []issuesapi.RecentChange) (order []issuesapi.RecentChange, reservable int) {
+	RankAndCap(&rows, 0)
+	byKind := map[resourceid.GroupKind][]issuesapi.RecentChange{}
+	var kinds []resourceid.GroupKind
+	for _, c := range rows {
 		key := changeGroupKind(c)
-		if curatedGroupKind(key) {
-			continue
+		if byKind[key] == nil {
+			kinds = append(kinds, key)
 		}
-		counts[key]++
-		if objects[key] == nil {
-			objects[key] = map[string]*object{}
-		}
-		id := c.Namespace + "/" + c.Name
-		o := objects[key][id]
-		if o == nil {
-			o = &object{}
-			objects[key][id] = o
-		}
-		switch c.ChangeType {
-		case string(timeline.EventTypeAdd):
-			o.created = true
-		case string(timeline.EventTypeDelete):
-			o.deleted = true
-		}
+		byKind[key] = append(byKind[key], c)
 	}
-	out := map[resourceid.GroupKind]int{}
-	for key, n := range counts {
-		shortLived := 0
-		for _, o := range objects[key] {
-			if o.created && o.deleted {
-				shortLived++
+	order = make([]issuesapi.RecentChange, 0, len(rows))
+	for turn := 0; len(order) < len(rows); turn++ {
+		for _, key := range kinds {
+			if turn < len(byKind[key]) {
+				order = append(order, byKind[key][turn])
 			}
 		}
-		if n >= churnMinRows && (n >= churnRowsPerObject*len(objects[key]) || 2*shortLived > len(objects[key])) {
-			out[key] = n
+		if turn < otherKindsReservedPerKind {
+			reservable = len(order)
 		}
 	}
-	return out
-}
-
-func curatedGroupKind(key resourceid.GroupKind) bool {
-	return (key.Kind == "Secret" && key.Group == "") || TrackedKindForGroup(key.Kind, key.Group)
+	return order, reservable
 }
 
 func changeGroupKind(c issuesapi.RecentChange) resourceid.GroupKind {
@@ -379,37 +306,17 @@ func sortKindCounts(list []KindCount) {
 	})
 }
 
-// LeftOut is how many rows the selection left out and FeedSelectionGuidance
-// names: Churn's and Crowded's.
-func (sel FeedSelection) LeftOut() int {
-	n := 0
-	for _, list := range [][]KindCount{sel.Churn, sel.Crowded} {
-		for _, k := range list {
-			n += k.Count
-		}
-	}
-	return n
-}
-
-// FeedSelectionGuidance is the narrowHint text naming the kinds SelectFeed
-// left rows out of, or "".
+// FeedSelectionGuidance is the narrowHint text naming the other kinds
+// ComposeFeed left rows out of, or "".
 func FeedSelectionGuidance(sel FeedSelection) string {
-	if len(sel.Churn) == 0 && len(sel.Crowded) == 0 {
+	if len(sel.LeftOut) == 0 {
 		return ""
 	}
-	var parts []string
-	if len(sel.Churn) > 0 {
-		parts = append(parts, fmt.Sprintf("Left out as likely controller churn, objects rewritten or created and deleted over and over: %s.", kindCountList(sel.Churn)))
-	}
-	if len(sel.Crowded) > 0 {
-		parts = append(parts, fmt.Sprintf("Left out so more kinds fit on the page: %s.", kindCountList(sel.Crowded)))
-	}
-	all := append(slices.Clone(sel.Churn), sel.Crowded...)
 	pass := "kind=<Kind>"
-	if len(all) == 1 {
-		pass = "kind=" + all[0].Kind
+	if len(sel.LeftOut) == 1 {
+		pass = "kind=" + sel.LeftOut[0].Kind
 	}
-	return strings.Join(parts, " ") + " Pass " + pass + " to list them."
+	return fmt.Sprintf("Left out: %s. Pass %s to list them.", kindCountList(sel.LeftOut), pass)
 }
 
 func kindCountList(list []KindCount) string {

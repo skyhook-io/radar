@@ -340,6 +340,9 @@ func setGlobalStore(s EventStore) {
 	globalStoreMu.Unlock()
 }
 
+// SetStoreForTest replaces the global store, for tests that wrap it.
+func SetStoreForTest(s EventStore) { setGlobalStore(s) }
+
 // ResetStore stops and clears the event store.
 // This must be called before reinitializing when switching contexts.
 func ResetStore() {

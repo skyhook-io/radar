@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,9 +12,9 @@ import (
 )
 
 // Sixty ConfigMap edits, all newer than a custom resource's edit and ranked
-// the same: the unfiltered feed still lists the edit with its field, and
-// names the ConfigMaps it left out. The per-kind cap runs over every
-// candidate; a 50-row cut before it would drop the edit first.
+// the same: the unfiltered feed keeps the newest 24 of them, as many as a page
+// without the custom resource would at the old default, and still lists the
+// edit with its field.
 func TestGetChangesListsCustomResourceBesideBusyKind(t *testing.T) {
 	store := initCorrelationStore(t)
 	now := time.Now()
@@ -34,8 +35,8 @@ func TestGetChangesListsCustomResourceBesideBusyKind(t *testing.T) {
 	}
 
 	response, _ := getChangesForTest(t, context.Background(), getChangesInput{})
-	if len(response.Changes) != 20 {
-		t.Fatalf("got %d rows, want 20", len(response.Changes))
+	if len(response.Changes) != 25 {
+		t.Fatalf("got %d rows, want 25", len(response.Changes))
 	}
 	found := false
 	for _, c := range response.Changes {
@@ -46,8 +47,8 @@ func TestGetChangesListsCustomResourceBesideBusyKind(t *testing.T) {
 	if !found {
 		t.Fatalf("DestinationRule edit missing or without its field: %+v", response.Changes)
 	}
-	if !strings.Contains(response.NarrowHint, "41 ConfigMap changes") || !strings.Contains(response.NarrowHint, "kind=ConfigMap") || strings.Contains(response.NarrowHint, "highest-ranked") {
-		t.Fatalf("narrowHint = %q, want the ConfigMaps left out named", response.NarrowHint)
+	if !strings.Contains(response.NarrowHint, "highest-ranked") {
+		t.Fatalf("narrowHint = %q, want the omitted ConfigMaps mentioned", response.NarrowHint)
 	}
 
 	// A kind filter lists that kind's history, uncapped by kind.
@@ -55,4 +56,40 @@ func TestGetChangesListsCustomResourceBesideBusyKind(t *testing.T) {
 	if len(response.Changes) != 50 {
 		t.Fatalf("kind=ConfigMap got %d rows, want 50", len(response.Changes))
 	}
+}
+
+// A failed read of the other kinds costs only those rows, and the answer says
+// so instead of claiming it read everything.
+func TestGetChangesSurvivesOtherKindsReadFailure(t *testing.T) {
+	store := initCorrelationStore(t)
+	now := time.Now()
+	for i := range 30 {
+		appendInformerEvent(t, store, timeline.TimelineEvent{
+			ID: fmt.Sprintf("cm-%d", i), Timestamp: now.Add(-time.Duration(i+1) * time.Minute), APIVersion: "v1", Kind: "ConfigMap",
+			Namespace: "shop", Name: fmt.Sprintf("cfg-%d", i), EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.key", OldValue: "a", NewValue: "b"}}},
+		})
+	}
+	timeline.SetStoreForTest(failingOtherKindsStore{EventStore: store})
+
+	response, _ := getChangesForTest(t, context.Background(), getChangesInput{})
+	if len(response.Changes) != 25 {
+		t.Fatalf("got %d rows, want 25", len(response.Changes))
+	}
+	if len(response.SourcesErrored) != 1 || !strings.Contains(response.SourcesErrored[0], "custom resources and Nodes") {
+		t.Fatalf("sourcesErrored = %v", response.SourcesErrored)
+	}
+	if !strings.Contains(response.NarrowHint, "apart from custom resources and Nodes") {
+		t.Fatalf("narrowHint = %q", response.NarrowHint)
+	}
+}
+
+// failingOtherKindsStore fails only the desired-state reads the other kinds use.
+type failingOtherKindsStore struct{ timeline.EventStore }
+
+func (s failingOtherKindsStore) Query(ctx context.Context, opts timeline.QueryOptions) ([]timeline.TimelineEvent, error) {
+	if opts.DesiredStateUpdates {
+		return nil, errors.New("read failed")
+	}
+	return s.EventStore.Query(ctx, opts)
 }
