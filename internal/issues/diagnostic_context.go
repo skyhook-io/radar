@@ -365,6 +365,7 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 	// the pointer would attach arbitrarily — and leave it unset.
 	if len(grouped) > 0 {
 		assignIncidentParents(out, incidentEdges)
+		rewriteSealedSecretProducerActions(out)
 	}
 	return out
 }
@@ -455,6 +456,41 @@ func bestIncidentParent(ps []issuesapi.IncidentParent) (issuesapi.IncidentParent
 		return p, true
 	}
 	return issuesapi.IncidentParent{}, false
+}
+
+// rewriteSealedSecretProducerActions replaces the generic "restore the Secret"
+// action on a workload whose missing Secret is attributed to a failing
+// SealedSecret producer, pointing instead at the SealedSecret and its real
+// repair while keeping manual restore as a labelled workaround. It is gated on an
+// already-assigned IncidentParent, so the ambiguity (bestIncidentParent),
+// whole-row-coverage (collectRelated) and grouped-only guarantees all already
+// hold — the rewrite never fires where Radar isn't sure of a single root. It
+// fires only for an ABSENT Secret (Reason "Missing Secret"), never a missing KEY
+// (the Secret exists, so "isn't being produced" would be false). The produced
+// Secret shares the SealedSecret's own name, so the parent's name names both.
+func rewriteSealedSecretProducerActions(out []Issue) {
+	byID := make(map[string]*Issue, len(out))
+	for i := range out {
+		byID[out[i].ID] = &out[i]
+	}
+	for i := range out {
+		sym := &out[i]
+		p := sym.IncidentParent
+		if p == nil || p.Ref.Kind != "SealedSecret" || p.FactType != factSecretNotReady {
+			continue
+		}
+		if sym.Reason != "Missing Secret" {
+			continue
+		}
+		name := p.Ref.Name
+		parent := byID[p.ID]
+		decrypt := parent != nil && strings.Contains(strings.ToLower(parent.Message), "no key could decrypt")
+		if decrypt {
+			sym.Action = fmt.Sprintf("This Secret is produced by SealedSecret %q, which can't be decrypted (Synced=False), so the Secret isn't created. Fix it at the SealedSecret: confirm its name and namespace still match how it was sealed and that the controller still holds the key that sealed it — otherwise re-seal it from the plaintext with the current controller key. As a temporary workaround, restore Secret %q manually to unblock the workload — this does not fix reconciliation, and the controller may not adopt a Secret it doesn't own once decryption is fixed.", name, name)
+		} else {
+			sym.Action = fmt.Sprintf("This Secret is produced by SealedSecret %q, which is failing to reconcile (Synced=False) — see its row. As a temporary workaround, restore Secret %q manually to unblock the workload (temporary; may need cleanup once reconciliation is fixed).", name, name)
+		}
+	}
 }
 
 func confidenceRank(c issuesapi.Confidence) int {

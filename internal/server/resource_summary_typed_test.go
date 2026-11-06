@@ -38,6 +38,7 @@ func fatPod() *corev1.Pod {
 			ServiceAccountName: "web-sa",
 			NodeSelector:       map[string]string{"zone": "a"},
 			Tolerations:        []corev1.Toleration{{Key: "dedicated"}},
+			SchedulingGates:    []corev1.PodSchedulingGate{{Name: "kueue.x-k8s.io/admission"}},
 			Volumes:            []corev1.Volume{{Name: "data"}},
 			InitContainers: []corev1.Container{{
 				Name:          "sidecar",
@@ -141,6 +142,10 @@ func TestSummarizePodRowKeepsTableFields(t *testing.T) {
 	}
 	if got := dig(t, m, "spec", "nodeName"); got != "node-7" {
 		t.Errorf("spec.nodeName = %v", got)
+	}
+	gate := firstElem(t, dig(t, m, "spec", "schedulingGates"))
+	if gate["name"] != "kueue.x-k8s.io/admission" {
+		t.Errorf("spec.schedulingGates dropped — the status badge reads it to classify a held pod: %v", gate)
 	}
 	c := firstElem(t, dig(t, m, "spec", "containers"))
 	if c["name"] != "web" {

@@ -407,9 +407,9 @@ K8s ships with built-in ClusterRoles that work well with Radar. You don't need t
 
 | Built-in Role | What Users Can Do in Radar |
 |---------------|---------------------------|
-| `view` | See resources, topology, events, logs. No restart, scale, or Helm writes. |
-| `edit` | Everything in `view` + restart, scale, edit resources. Does NOT include exec or port-forward (those require `pods/exec` and `pods/portforward` subresources — use the custom `radar-operator` role below). |
-| `admin` | Everything in `edit` + manage RBAC within namespaces. Same exec/port-forward caveat as `edit`. |
+| `view` | See resources, topology, events, logs. No Secrets, exec, port-forward, restart, scale, or Helm writes. |
+| `edit` | Everything in `view` + restart, scale, edit resources, exec, and full access to Secrets. Also grants `pods/portforward`, which in-cluster Radar turns into a `kubectl` command to copy. To withhold exec or Secrets, use a custom role such as `radar-operator` below, without its optional exec rule. |
+| `admin` | Everything in `edit` + manage RBAC within namespaces. |
 | `cluster-admin` | Full access to everything across all namespaces, including exec and port-forward. |
 
 ```yaml

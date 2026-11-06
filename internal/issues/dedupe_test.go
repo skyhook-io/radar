@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -364,5 +365,55 @@ func TestDedupeConditionOverMissingRef(t *testing.T) {
 	}
 	if !keptAccepted {
 		t.Fatalf("non-ResolvedRefs route condition was incorrectly dropped: %+v", out)
+	}
+}
+
+// A missing PARENT Gateway finding shares the route and category with a backend
+// ResolvedRefs condition but describes a different failure; it must not suppress
+// that condition. A backend missing-ref finding on the same route still does.
+func TestDedupeConditionOverMissingRefParentKeepsBackendCondition(t *testing.T) {
+	parentMissing := Issue{
+		Source:    SourceMissingRef,
+		Group:     "gateway.networking.k8s.io",
+		Kind:      "HTTPRoute",
+		Namespace: "prod",
+		Name:      "broken",
+		Reason:    k8s.MissingGatewayParentReason,
+		Category:  issuesapi.CategoryGatewayRouteInvalid,
+	}
+	backendCondition := Issue{
+		Source:    SourceCondition,
+		Group:     "gateway.networking.k8s.io",
+		Kind:      "HTTPRoute",
+		Namespace: "prod",
+		Name:      "broken",
+		Reason:    "ResolvedRefs: BackendNotFound",
+		Category:  issuesapi.CategoryGatewayRouteInvalid,
+	}
+
+	out := dedupeConditionOverMissingRef([]Issue{parentMissing, backendCondition})
+	if len(out) != 2 {
+		t.Fatalf("a missing-parent finding must not suppress a backend condition: %+v", out)
+	}
+
+	// Add a backend structural finding and the ResolvedRefs echo should drop,
+	// while the independent parent row stays.
+	backendMissing := Issue{
+		Source:    SourceMissingRef,
+		Group:     "gateway.networking.k8s.io",
+		Kind:      "HTTPRoute",
+		Namespace: "prod",
+		Name:      "broken",
+		Reason:    "Missing Gateway backend Service",
+		Category:  issuesapi.CategoryGatewayRouteInvalid,
+	}
+	out = dedupeConditionOverMissingRef([]Issue{parentMissing, backendMissing, backendCondition})
+	for _, i := range out {
+		if i.Source == SourceCondition && i.Reason == "ResolvedRefs: BackendNotFound" {
+			t.Fatalf("backend missing-ref should still suppress its ResolvedRefs echo: %+v", out)
+		}
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected parent + backend structural rows to remain, got %+v", out)
 	}
 }
