@@ -1833,6 +1833,8 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
   );
   const failed = activity.reduce((n, item) => n + item.failedRuns, 0);
   const active = activity.reduce((n, item) => n + item.activeRuns, 0);
+  const rootActivity = activity.filter(item => item.workload.kind === 'JobSet' && item.workload.group === 'jobset.x-k8s.io')
+  const rootStates = [...new Set(rootActivity.map(item => item.latestRunPhase || 'Unknown'))].join(', ')
 
   return {
     latestValue: latest?.latestRunPhase || latest?.label || "None",
@@ -1841,9 +1843,9 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
       : "No retained runs",
     retainedValue:
       retained > 0 ? `${succeeded} succeeded / ${failed} failed` : "0 retained",
-    activeValue: active > 0 ? `${active} running` : "None",
+    activeValue: active > 0 ? `${active} running` : rootStates || "None",
     activeDetail:
-      active > 0 ? activeWorkloadNames(activity) : "No active batch work",
+      active > 0 ? activeWorkloadNames(activity) : rootStates ? "JobSet root lifecycle; running Pods are not inferred." : "No active batch work",
     scheduleValue:
       schedules.length === 0
         ? "None"
@@ -2068,6 +2070,9 @@ function workloadRuntimeStatus(workload: AppWorkload): {
       health: rolloutDisplayHealth(workload.rollout, workload.health),
     }
   }
+  if (workload.kind === 'JobSet' && workload.group === 'jobset.x-k8s.io') {
+    return { label: workload.batch?.latestRunPhase || 'Unknown', health: healthOf(workload.health) }
+  }
   const batch = workload.batch;
   if (!batch) {
     const health = healthOf(workload.health);
@@ -2085,6 +2090,7 @@ function workloadRuntimeStatus(workload: AppWorkload): {
 
 function workloadRuntimeDetail(workload: AppWorkload): string {
   if (workload.rollout && (workload.rollout.active || workload.rollout.phase === 'stalled')) return workload.rollout.detail || `${workload.ready}/${workload.desired} ready`
+  if (workload.kind === 'JobSet' && workload.group === 'jobset.x-k8s.io') return workload.batch?.message || `Root lifecycle: ${workload.batch?.latestRunPhase || 'Unknown'}`
   const batch = workload.batch;
   if (!batch) return `${workload.ready}/${workload.desired} ready`;
   if ((batch.activeRuns ?? 0) > 0)

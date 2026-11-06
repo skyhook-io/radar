@@ -452,6 +452,7 @@ trend charts remain unavailable for Kubecost.
 | `argocd.token` | Inline Argo CD API token (dev only — lands in the release state) | `""` |
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
+| `disableExec` | Turn off pod exec through Radar for everyone on this cluster. See [Turning exec off](#turning-exec-off) | `false` |
 | `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires exec access. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
 | `usageReporting.enabled` | Anonymous daily usage stats: views, actions and MCP tools used, plus this cluster's version, platform, node-count range and known integrations. Off unless `true`; Radar never asks in a cluster ([what is sent](https://radarhq.io/docs/configuration/usage-stats)) | unset |
 | `resources.requests.cpu` | CPU request | `200m` |
@@ -610,8 +611,30 @@ client. With proxy/OIDC impersonation, it uses the caller's Kubernetes permissio
 the SA grant does not grant the caller exec. In user-token mode, the chart emits
 no SA exec rule and execution uses the forwarded caller token. The chart's SA
 rule grants `create pods/exec` (SPDY); WebSocket also needs `get pods/exec`.
-`--disable-exec`, read-only mode and disabled MCP suppress registration regardless
+`disableExec` (`--disable-exec`), read-only mode and disabled MCP suppress registration regardless
 of either value. See [the exec contract](../../../docs/mcp.md#exec_pod).
+
+### Turning exec off
+
+`disableExec: true` turns off pod exec through Radar for everyone on this cluster,
+Owners included. It passes `--disable-exec` and removes the `pods/exec` rule from
+Radar's ServiceAccount, even if `rbac.podExec` is `true`. Set it per cluster, for
+example in production values only. To keep exec for some people, leave it off and
+control exec with Kubernetes RBAC instead.
+
+With exec off:
+
+- The pod terminal, debug containers and node debug shells are unavailable.
+- Pod file browsing and transfers are unavailable.
+- The MCP `exec_pod` tool is not registered, even with `mcp.execTools: true`.
+- CloudNativePG loses live sessions, cancel and terminate, PgBouncer state,
+  per-instance parameters and the restored-database read.
+- Inspecting a private image needs `get` on its pull Secret, because exec access
+  no longer authorizes it.
+
+Logs, port-forward, workload actions, Helm and alerts don't depend on exec. This
+setting only affects Radar: anyone Kubernetes RBAC allows can still use
+`kubectl exec`.
 
 ### In-app Agent Upgrades (opt-in, for Radar Cloud users)
 

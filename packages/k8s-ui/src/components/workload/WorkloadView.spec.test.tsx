@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
@@ -145,5 +145,45 @@ it.each(['Deployment', 'Pod', 'Pooler', 'ScheduledBackup'])('groups %s drawer ac
   if (kind === 'Pod') expect(object.textContent).toContain('Terminal')
   if (kind === 'Deployment') expect(object.textContent).toContain('Restart')
   if (kind === 'ScheduledBackup') { expect(object.querySelectorAll('button')).toHaveLength(3); expect(object.textContent).toContain('Run blocked: no backup destination') }
+  act(() => root.unmount())
+})
+
+it('does not carry a picked Pod to the next resource the view shows', () => {
+  const pods = (name: string) => ({ pods: [{ kind: 'Pod', namespace: 'db', name }] })
+  const seen: (string | null)[] = []
+  const Probe = ({ selectedPod, onSelectPod }: { selectedPod: string | null; onSelectPod: (pod: string | null) => void }) => {
+    useEffect(() => { seen.push(selectedPod) })
+    return <button data-pick onClick={() => onSelectPod('pg-1')}>pick</button>
+  }
+  const renderLogsTab = (tab: { selectedPod: string | null; onSelectPod: (pod: string | null) => void }) => <Probe {...tab} />
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  act(() => root.render(<WorkloadView {...props} activeTab="logs" relationships={pods('pg-1')} renderLogsTab={renderLogsTab} />))
+  act(() => host.querySelector<HTMLButtonElement>('[data-pick]')!.click())
+  expect(seen.at(-1)).toBe('pg-1')
+  const before = seen.length
+  act(() => root.render(<WorkloadView {...props} name="other" activeTab="logs" relationships={pods('other-1')} renderLogsTab={renderLogsTab} />))
+  expect(seen.slice(before)).not.toContain('pg-1')
+  act(() => root.unmount())
+})
+
+it('does not carry a picked Pod to a recreated resource with the same name', () => {
+  const relationships = { pods: [{ kind: 'Pod', namespace: 'db', name: 'pg-1' }] }
+  const seen: (string | null)[] = []
+  const Probe = ({ selectedPod, onSelectPod }: { selectedPod: string | null; onSelectPod: (pod: string | null) => void }) => {
+    useEffect(() => { seen.push(selectedPod) })
+    return <button data-pick onClick={() => onSelectPod('pg-1')}>pick</button>
+  }
+  const renderLogsTab = (tab: { selectedPod: string | null; onSelectPod: (pod: string | null) => void }) => <Probe {...tab} />
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const withUID = (uid: string) => ({ ...resource, metadata: { ...resource.metadata, uid } })
+  act(() => root.render(<WorkloadView {...props} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  act(() => host.querySelector<HTMLButtonElement>('[data-pick]')!.click())
+  act(() => root.render(<WorkloadView {...props} resource={withUID('a')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  expect(seen.at(-1)).toBe('pg-1')
+  const before = seen.length
+  act(() => root.render(<WorkloadView {...props} resource={withUID('b')} activeTab="logs" relationships={relationships} renderLogsTab={renderLogsTab} />))
+  expect(seen.slice(before)).not.toContain('pg-1')
   act(() => root.unmount())
 })

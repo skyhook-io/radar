@@ -597,6 +597,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 		maps.Copy(indexers, ownerUIDIndexers)
 	}
 	maps.Copy(indexers, gitopsMembersIndexers[gvr.GroupResource()])
+	maps.Copy(indexers, kueueQueueIndexers[gvr.GroupResource()])
 	for name := range informer.GetIndexer().GetIndexers() {
 		delete(indexers, name)
 	}
@@ -2964,7 +2965,20 @@ func (d *DynamicResourceCache) IsSynced(gvr schema.GroupVersionResource) bool {
 // among its informers, so every change after it was delivered. ok is false
 // when gvr isn't watched or an informer hasn't synced yet.
 func (d *DynamicResourceCache) WatchedSince(gvr schema.GroupVersionResource) (since time.Time, ok bool) {
-	entries := d.entriesForGVR(gvr)
+	return d.watchedSince(d.entriesForGVR(gvr))
+}
+
+// NamespaceWatchedSince is WatchedSince for only the informers serving namespace.
+// An empty namespace checks every informer. An unwatched or unsynced scope
+// returns ok=false; that is unknown coverage, never a zero-time boundary.
+func (d *DynamicResourceCache) NamespaceWatchedSince(gvr schema.GroupVersionResource, namespace string) (time.Time, bool) {
+	if namespace == "" {
+		return d.WatchedSince(gvr)
+	}
+	return d.watchedSince(d.readEntries(gvr, namespace))
+}
+
+func (d *DynamicResourceCache) watchedSince(entries []*informerEntry) (since time.Time, ok bool) {
 	if !d.servedSynced(entries) {
 		return time.Time{}, false
 	}

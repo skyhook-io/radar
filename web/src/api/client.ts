@@ -2,11 +2,15 @@ import { createListRefetchInterval, normalizeResourceList, type ResourceListBody
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
+import type { ReadGap } from '@skyhook-io/k8s-ui/types/read-coverage'
+import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import { useClusterConnected } from '../context/clusterConnected'
-import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
+import { kueueQueueRetryable } from '@skyhook-io/k8s-ui/utils/kueue-queue-workloads'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
@@ -28,7 +32,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { focusManager, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
+import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
@@ -236,6 +240,18 @@ export class ApiError extends Error {
 
 export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
+}
+
+// Answers that won't change on the next poll: a rejected request, a denial, a
+// missing or recreated root. A 401 (an expired session) can recover.
+export function isStableClientError(error: unknown): boolean {
+  return error instanceof ApiError && [400, 403, 404, 409].includes(error.status)
+}
+
+// An owner-UID query stops polling on an answer that will repeat; a recreated
+// root recovers when its new UID changes the query key.
+export function workloadPodsRefetchInterval(error: unknown, options?: { ownerUID?: string; refetchInterval?: number | false }): number | false {
+  return options?.ownerUID && isStableClientError(error) ? false : options?.refetchInterval ?? false
 }
 
 export function isNotFoundError(error: unknown): boolean {
@@ -915,6 +931,8 @@ export interface SubjectIssuesResponse {
   coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
   withheld?: { issues: number };
   visibility?: { state?: string; impact?: string };
+  /** Checks about this resource Radar couldn't make for the caller. */
+  unchecked_sources?: UncheckedSource[];
 }
 
 export function useSubjectIssues(
@@ -3332,8 +3350,12 @@ export interface WorkloadHistoryPage {
   events: TimelineEvent[];
   truncated: boolean;
   nextBeforeSeq?: number;
-  /** The workload has more related resources than the history follows. */
+  /** Related history may be missing because scope bounds or expired ownership records limit traversal. */
   incomplete?: boolean;
+  /** Radar may not hold every change since the workload existed; absent when it does, and from older Radars. */
+  historyCoverage?: WorkloadHistoryCoverage;
+  /** Related kinds this history can't include for the caller (a queued job's Kueue Workload); the same on every page. */
+  gaps?: ReadGap[];
 }
 
 function workloadHistoryPath(kind: string, namespace: string, name: string, group?: string, beforeSeq?: number): string {
@@ -7804,8 +7826,8 @@ export function useWorkloadPods(
       fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods${queryString}`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
-    refetchInterval: options?.refetchInterval ?? false,
-    retry: options?.ownerUID ? (count, error) => !(error instanceof ApiError && error.status === 409) && count < 2 : undefined,
+    refetchInterval: (query) => workloadPodsRefetchInterval(query.state.error, options),
+    retry: options?.ownerUID ? (count, error) => !isStableClientError(error) && count < 2 : undefined,
   });
 }
 
@@ -7862,6 +7884,32 @@ export function useKueueAdmission(namespace: string, name: string, uid: string |
       return 5000
     },
     retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
+  })
+}
+
+// Kueue's reported position for one pending Workload. Polls only while the
+// answer can change by itself: a refusal, an absent API or an unsupported
+// version gives the same answer until someone changes access or the cluster.
+const kueuePositionPolledStatuses = new Set(['listed', 'not_listed', 'limit_reached', 'queue_unknown'])
+
+export function kueuePositionRefetchInterval({ data, error }: { data?: KueuePositionResponse; error?: unknown }): number | false {
+  if (error && !shouldRetryRadarQuery(0, error)) return false
+  if (!data?.eligible || !data.position) return 30000
+  const { status, code } = data.position
+  return kueuePositionPolledStatuses.has(status) || (status === 'unavailable' && readActionFor(code) === 'retry') ? 30000 : false
+}
+
+/** UID and queueName invalidate the cache; the endpoint reads by namespace/name.
+ * Callers must check the returned UID and eligibility before displaying a position. */
+export function useKueuePendingPosition(namespace: string, name: string, uid: string | undefined, queueName: string | undefined, enabled: boolean) {
+  const { guard, gatedKey } = useRadarFeature('kueuePendingPosition')
+  return useQuery<KueuePositionResponse>({
+    queryKey: ['kueue-position', namespace, name, uid, queueName ?? '', ...gatedKey],
+    queryFn: () => guard(() => fetchJSON<KueuePositionResponse>(`/kueue/position/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`)),
+    enabled: enabled && Boolean(namespace && name && uid),
+    staleTime: 15000,
+    refetchInterval: (query) => kueuePositionRefetchInterval(query.state),
+    retry: shouldRetryRadarQuery,
   })
 }
 
@@ -8207,6 +8255,53 @@ export interface KueueProvisioningResponse {
     spec: { provisioningClassName: string }
     status?: { conditions: Array<{ type: string; status: string; reason?: string; message?: string; observedGeneration?: number }> }
   }>
+}
+
+// The Workloads that belong to a Kueue queue, page by page. Pages chain by
+// cursor; a refetch re-reads them from the first, so a list that changed is
+// traversed again rather than patched. Nothing is read until the queue's UID
+// is known, nor for a LocalQueue without its namespace.
+export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQueue'; namespace?: string; name: string; uid?: string }, filters: { membership?: KueueQueueMembership; state?: string }) {
+  const { membership, state } = filters
+  const { guard, gatedKey, support, upgrade } = useRadarFeature('kueueQueueWorkloads')
+  const path = queue.kind === 'ClusterQueue'
+    ? `/kueue/clusterqueues/${encodeURIComponent(queue.name)}/workloads`
+    : `/kueue/localqueues/${encodeURIComponent(queue.namespace ?? '')}/${encodeURIComponent(queue.name)}/workloads`
+  const query = useInfiniteQuery<KueueQueueWorkloadsResponse>({
+    queryKey: ['kueue-queue-workloads', queue.kind, queue.namespace ?? '', queue.name, queue.uid ?? '', membership ?? '', state ?? '', ...gatedKey],
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams()
+      if (membership) params.set('membership', membership)
+      if (state) params.set('state', state)
+      if (typeof pageParam === 'string') params.set('cursor', pageParam)
+      const qs = params.toString()
+      return guard(() => fetchJSON<KueueQueueWorkloadsResponse>(`${path}${qs ? `?${qs}` : ''}`, signal))
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: last => last.workloads?.next,
+    // A changed filter keeps the previous list on screen until the new one
+    // arrives; the renderer drops pages of another queue (by UID).
+    placeholderData: previous => previous,
+    enabled: Boolean(queue.name && queue.uid && (queue.kind === 'ClusterQueue' || queue.namespace)) && support !== 'unsupported',
+    staleTime: 5000,
+    // A paged list isn't replayed on mount (that would reread the queue once
+    // per page); the renderer restarts it from the first page instead.
+    refetchOnMount: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnWindowFocus: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnReconnect: query => (query.state.data?.pages.length ?? 0) <= 1,
+    // Poll the first page only: refetching an infinite query rereads every
+    // loaded page, so a list paged further waits for an explicit refresh.
+    // A part a retry can complete (still loading, a check that failed) is
+    // polled sooner.
+    refetchInterval: query => {
+      if (query.state.error instanceof ApiError && query.state.error.status < 500) return false
+      const pages = query.state.data?.pages ?? []
+      if (pages.length > 1) return false
+      return kueueQueueRetryable(pages[0]) ? 3000 : 15000
+    },
+    retry: shouldRetryRadarQuery,
+  })
+  return { ...query, upgrade, support }
 }
 
 export function useKueueProvisioning(namespace: string, name: string, uid: string | undefined, enabled: boolean) {

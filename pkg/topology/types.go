@@ -59,6 +59,7 @@ const (
 	KindNodeClass                      NodeKind = "NodeClass"            // Karpenter NodeClass (EC2NodeClass, AKSNodeClass, etc.)
 	KindScaledObject                   NodeKind = "ScaledObject"         // KEDA ScaledObject
 	KindScaledJob                      NodeKind = "ScaledJob"            // KEDA ScaledJob
+	KindJobSet                         NodeKind = "JobSet"               // jobset.x-k8s.io JobSet
 	KindGatewayClass                   NodeKind = "GatewayClass"         // Gateway API GatewayClass
 	KindVirtualService                 NodeKind = "VirtualService"       // Istio VirtualService
 	KindDestinationRule                NodeKind = "DestinationRule"      // Istio DestinationRule

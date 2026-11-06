@@ -1,4 +1,5 @@
 import { dedupeResourceRefs } from '../../utils/resource-refs'
+import { isKubeRayClusterIdentity } from '../resources/resource-utils-ray'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
 import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
@@ -38,10 +39,12 @@ import {
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
+import type { ReadGap } from '../../types/read-coverage'
+import { workloadHistoryNotes, type WorkloadHistoryCoverage } from '../../utils/workload-history-notes'
 import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
-import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
+import { jobSetMemberRunKey, neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, managerChipCoversGroup, managerChipPresentation, managerListing, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
@@ -230,8 +233,12 @@ interface WorkloadViewProps {
   /** allEvents holds only this workload's own history (what it runs and the
    *  resources attached to it), not its whole namespace. */
   historyScoped?: boolean
-  /** Some related resources' history isn't included: there were more than the host follows. */
+  /** Scope bounds or expired ownership records may leave related history out. */
   historyIncomplete?: boolean
+  /** Radar may not hold every change since the workload existed. */
+  historyCoverage?: WorkloadHistoryCoverage | null
+  /** Related kinds the history can't include for this viewer. */
+  historyGaps?: ReadGap[] | null
   historyError?: Error | null
   onRetryHistory?: () => void
   /** Persisted lifecycle events reconstructed for resources related to this workload. */
@@ -360,6 +367,12 @@ interface WorkloadViewProps {
     /** Place resource notices within the replacement layout's content area. */
     leadContent?: ReactNode
   }) => ReactNode
+  /** Called instead of navigating when a Topology-tab click lands on a member
+   *  Job of the JobSet this view shows, so the host can open the member in
+   *  place. `memberKey` is the member list's run key, `jobs/<namespace>/<name>`
+   *  (see `jobSetMemberRunKey`), not a node ID or UID. Omit to navigate as for
+   *  any node. */
+  onSelectTopologyMember?: (memberKey: string) => void
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render the Diagnose tab content - a path-shaped trace for network
@@ -480,6 +493,8 @@ export function WorkloadView({
   olderHistoryError = null,
   historyScoped = false,
   historyIncomplete = false,
+  historyCoverage,
+  historyGaps,
   historyError = null,
   onRetryHistory,
   relatedTimelineEvents = [],
@@ -509,6 +524,7 @@ export function WorkloadView({
   renderDiagnoseTab,
   reachableVia,
   renderExpandedOverview,
+  onSelectTopologyMember,
   renderSummary,
   extraTabs,
   tabOrder,
@@ -579,6 +595,21 @@ export function WorkloadView({
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
+  // Hosts reuse this view across resources, and a resource can be recreated
+  // under the same name: a Pod picked for one must not reach the next, not
+  // even for one render. A UID arriving with the first load is not a change.
+  const selectionIdentity = `${kind}\u0000${namespace}\u0000${name}`
+  // A host can briefly pass the previous resource with the new name.
+  const selectionUID = resource?.metadata?.name === name && (resource?.metadata?.namespace ?? '') === (namespace ?? '') ? resource?.metadata?.uid as string | undefined : undefined
+  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID })
+  if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
+    const recreated = selectionScope.identity === selectionIdentity && selectionScope.uid !== undefined
+    setSelectionScope({ identity: selectionIdentity, uid: selectionUID })
+    if (selectionScope.identity !== selectionIdentity || recreated) {
+      setSelectedPod(null)
+      setInitialContainer(null)
+    }
+  }
   const [copied, setCopied] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [recentImageSave, setRecentImageSave] = useState(false)
@@ -613,6 +644,7 @@ export function WorkloadView({
       groupByApp: true,
     })
   }, [allEvents, topology, kind, group, namespace, name, historyScoped])
+  const historyNotes = useMemo(() => workloadHistoryNotes(historyCoverage, historyGaps), [historyCoverage, historyGaps])
 
   // Topology tab — the seeded neighborhood around this one workload (its
   // ownership core + attached Services/config/policies), not the whole namespace.
@@ -667,6 +699,13 @@ export function WorkloadView({
   const yamlObject = yamlObjectId ? yamlObjects.find((o) => o.id === yamlObjectId) : undefined
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
+      const memberKey = onSelectTopologyMember && topology && neighborhoodFocusId
+        ? jobSetMemberRunKey(topology, neighborhoodFocusId, node)
+        : undefined
+      if (memberKey) {
+        onSelectTopologyMember?.(memberKey)
+        return
+      }
       const resourceKind = topologyNodeResourceKind(node)
       if (!onNavigateToResource || !resourceKind || !node.name) return
       const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
@@ -677,7 +716,7 @@ export function WorkloadView({
         group,
       })
     },
-    [onNavigateToResource],
+    [onNavigateToResource, onSelectTopologyMember, topology, neighborhoodFocusId],
   )
 
   // Flatten events from hierarchy
@@ -1433,6 +1472,7 @@ export function WorkloadView({
             olderError={olderHistoryError}
             scoped={historyScoped}
             incomplete={historyIncomplete}
+            notes={historyNotes}
             error={historyError}
             onRetry={onRetryHistory}
             selectedEventId={selectedEventId}
@@ -1741,6 +1781,7 @@ function EventsTab({
   olderError,
   scoped,
   incomplete,
+  notes = [],
   error,
   onRetry,
   selectedEventId,
@@ -1757,6 +1798,8 @@ function EventsTab({
   olderError?: Error | null
   scoped?: boolean
   incomplete?: boolean
+  /** Coverage and access sentences from workloadHistoryNotes. */
+  notes?: string[]
   error?: Error | null
   onRetry?: () => void
   selectedEventId: string | null
@@ -1914,14 +1957,15 @@ function EventsTab({
           )}
         </div>
       )}
-      {(scoped || truncated || incomplete) && (
+      {(scoped || truncated || incomplete || notes.length > 0) && (
         <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
           {scoped && (
             <span className="text-theme-text-tertiary">
               This workload, what it runs, and the Services, Ingresses, config and scalers attached to it.
             </span>
           )}
-          {incomplete && <span>This workload has more past runs and related resources than Radar follows, so some are left out.</span>}
+          {incomplete && <span>Some past runs or related resources may be outside the history Radar can follow.</span>}
+          {notes.map((note) => <span key={note}>{note}</span>)}
           {truncated && <span>Showing the most recent events. Older history exists.</span>}
           {truncated && olderError && (
             <span className="text-[var(--color-error)]" title={olderError.message}>Couldn't load older events.</span>
@@ -2182,6 +2226,7 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'clusterworkflowtemplates',
   'scaledjobs',
   'jobsets',
+  'rayclusters',
   'clusters',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
@@ -2199,6 +2244,8 @@ export function supportsLogsWithoutPods(
   if (normalizedKind === 'jobsets') {
     return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
   }
+  // A KubeRay RayCluster's tab reads the Pods it owns now, not recorded ones.
+  if (normalizedKind === 'rayclusters') return isKubeRayClusterIdentity(group, apiVersion)
   // A CloudNativePG Cluster's instance Pods are its children, not related
   // Pods, and its logs are resolved server-side from the Cluster itself.
   if (normalizedKind === 'clusters') {
