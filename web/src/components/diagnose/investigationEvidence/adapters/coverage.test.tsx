@@ -457,6 +457,22 @@ describe("listing cards (helm releases, packages, search)", () => {
     ]);
   });
 
+  it.each([[[]], [[{ name: "shop", namespace: "shop", chart: "shop" }]]])(
+    "keeps a partial Helm read's limits with its rows: %j",
+    (observed) => {
+      const summary = "Partial: 0 releases read from Helm and 1 observed.";
+      const projection = project([
+        tool("helm", "list_helm_releases", { summary, releases: [], observed }),
+      ]);
+      expect(projection.limitations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ source: "Helm releases", kind: "unknown" }),
+        ]),
+      );
+      expect(JSON.stringify(projection.limitations)).toContain(summary);
+    },
+  );
+
   it("lists Helm releases with their status and chart", () => {
     const projection = project([
       tool(

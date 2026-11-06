@@ -52,6 +52,7 @@ const AFFECTED: { heading: string; items: { term: ReactNode; detail?: ReactNode 
         term: <>Charts without <Code>helm.sh/chart</Code></>,
         detail: <>show no chart or version. App version needs <Code>app.kubernetes.io/version</Code>.</>,
       },
+      { term: 'Partly visible releases', detail: 'can show a subchart as their chart, if that’s all you can read.' },
       { term: 'Several charts on one release.', detail: 'If none matches the release name, Radar shows them all rather than pick one.' },
       { term: 'Object counts and health', detail: 'cover only what you can read, leaving out Secrets and kinds Radar isn’t watching.' },
     ],

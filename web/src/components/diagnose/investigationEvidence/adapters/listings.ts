@@ -37,6 +37,11 @@ export function adaptListHelmReleases(
     invalidPayload(builder, source);
     return;
   }
+  // A partial read can miss releases, which its rows can't show.
+  const partial = record(payload)?.summary;
+  if (nonEmptyString(partial)) {
+    builder.limit(source, "Helm releases", partial, "unknown");
+  }
   const args = record(parseJSON(source.args ?? ""));
   const namespace = nonEmptyString(args?.namespace)
     ? args.namespace
