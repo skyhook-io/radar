@@ -135,6 +135,7 @@ import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
 import { recordUsageEvent } from '../../api/usage-data'
+import { issueResourceOpener } from './issueResourceOpener'
 
 type TabType = WorkloadTabType
 
@@ -860,6 +861,7 @@ export function WorkloadView({
   }, [schedulingEvidence, handleTabChange])
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
+  const openIssueResource = issueResourceOpener(rest.onNavigateToResource)
   const {
     onCompareTo,
     onCompareAcrossClusters,
@@ -1341,10 +1343,7 @@ export function WorkloadView({
             {diagnoseHint}
             <RelatedFindingsSection
               data={resourceResponse?.relatedFindings}
-              onResourceClick={rest.onNavigateToResource ? (ref) => rest.onNavigateToResource?.({
-                kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '',
-              }) : undefined}
+              onResourceClick={openIssueResource}
             />
             <AuditOverviewSection
               findings={auditFindings ?? []}
@@ -1361,17 +1360,7 @@ export function WorkloadView({
             renderDetailSection={schedulingEvidence?.state === 'reported' ? ({ issue }) => issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason ? <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} /> : null : undefined}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
-            onResourceClick={
-              rest.onNavigateToResource
-                ? (ref) =>
-                    rest.onNavigateToResource?.({
-                      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                      namespace: ref.namespace ?? '',
-                      name: ref.name,
-                      group: ref.group ?? '',
-                    })
-                : undefined
-            }
+            onResourceClick={openIssueResource}
           />
           </div>
         )}

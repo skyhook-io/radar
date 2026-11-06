@@ -107,6 +107,8 @@ func countRefusedSwitch(err error) {
 	}
 }
 
+const connectionRetryRoute = "/api/connection/retry"
+
 // requestOriginHeader marks a request the UI made on its own; see
 // usagedata.APIRequest.Automatic.
 const requestOriginHeader = "X-Radar-Request-Origin"
@@ -340,17 +342,20 @@ func (s *Server) usageMiddleware(next http.Handler) http.Handler {
 		if pattern == "" {
 			return
 		}
+		route := strings.TrimPrefix(pattern, s.basePath)
 		recordUsageRequest(usagedata.APIRequest{
 			Method:    r.Method,
-			Pattern:   strings.TrimPrefix(pattern, s.basePath),
+			Pattern:   route,
 			Status:    ww.Status(),
 			Automatic: r.Header.Get(requestOriginHeader) == "auto",
 			// Handlers mark their own "not connected yet" answers, but many
 			// routes answer 503 on a missing client without marking it. While
-			// the cluster isn't connected, every 503 is that.
-			NotConnected: uw.notConnected || (ww.Status() == http.StatusServiceUnavailable && !clusterConnected()),
-			Kind:         rc.URLParam("kind"),
-			Group:        r.URL.Query().Get("group"),
+			// the cluster isn't connected, every 503 is that, except a retry's:
+			// it tried to connect and failed.
+			NotConnected: uw.notConnected ||
+				(ww.Status() == http.StatusServiceUnavailable && !clusterConnected() && route != connectionRetryRoute),
+			Kind:  rc.URLParam("kind"),
+			Group: r.URL.Query().Get("group"),
 		})
 	})
 }

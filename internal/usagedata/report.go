@@ -141,10 +141,12 @@ type pending struct {
 	ConnectionFailures map[string]int `json:"connectionFailures,omitempty"`
 }
 
-// empty means nobody used Radar in the period; cluster shape alone is not use.
+// empty means nobody used Radar in the period. Cluster shape alone is not use,
+// and neither are errors: an open tab keeps retrying and polling with nobody
+// there.
 func (p *pending) empty() bool {
 	return len(p.Views) == 0 && len(p.Actions) == 0 && len(p.MCPTools) == 0 &&
-		len(p.UIEvents) == 0 && len(p.Errors) == 0 && p.Sessions == 0 && p.ActiveMinutes == 0
+		len(p.UIEvents) == 0 && p.Sessions == 0 && p.ActiveMinutes == 0
 }
 
 // clone deep-copies p so it can be read outside the lock while recorders keep

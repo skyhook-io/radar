@@ -154,6 +154,28 @@ func TestConnectionFailuresUseFixedVocabulary(t *testing.T) {
 	}
 }
 
+func TestErrorsAloneAreNotUse(t *testing.T) {
+	releaseBuild(t)
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true); err != nil {
+		t.Fatal(err)
+	}
+	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/connection/retry", Status: 503, Automatic: true})
+	h.now = h.now.Add(reportInterval + time.Minute)
+	h.c.tick(context.Background())
+	if len(h.sent) != 0 {
+		t.Fatalf("sent a report for a day with only failed requests: %+v", h.sent)
+	}
+
+	RecordRequest(APIRequest{Method: "POST", Pattern: "/api/connection/retry", Status: 503})
+	RecordSession("Mozilla/5.0 Chrome/130.0")
+	h.now = h.now.Add(reportInterval + time.Minute)
+	h.c.tick(context.Background())
+	if len(h.sent) != 1 || h.sent[0].Errors["POST /api/connection/retry 503"] != 1 {
+		t.Fatalf("sent %+v, want one report carrying the failed retry", h.sent)
+	}
+}
+
 func TestActiveTickCountsViewOnlyForAPeriodWithoutViews(t *testing.T) {
 	releaseBuild(t)
 	h := newHarness(t, nil, false)

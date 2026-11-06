@@ -229,6 +229,30 @@ func TestUsageSetupVocabulary(t *testing.T) {
 
 // An unmarked 503 is "not connected" only while the cluster isn't connected;
 // once connected, a 503 is a real failure and still counts.
+func TestUsageMiddlewareKeepsFailedRetryAsFailure(t *testing.T) {
+	for _, origin := range []string{"", "auto"} {
+		t.Run("origin="+origin, func(t *testing.T) {
+			got := captureUsage(t)
+			prev := clusterConnected
+			clusterConnected = func() bool { return false }
+			t.Cleanup(func() { clusterConnected = prev })
+
+			r := chi.NewRouter()
+			r.Use((&Server{}).usageMiddleware)
+			r.Post(connectionRetryRoute, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			})
+			req := httptest.NewRequest(http.MethodPost, connectionRetryRoute, nil)
+			req.Header.Set(requestOriginHeader, origin)
+			r.ServeHTTP(httptest.NewRecorder(), req)
+
+			if len(*got) != 1 || (*got)[0].NotConnected || (*got)[0].Automatic != (origin == "auto") {
+				t.Fatalf("recorded %+v, want a failed retry, automatic=%v", *got, origin == "auto")
+			}
+		})
+	}
+}
+
 func TestUsageMiddlewareTreatsDisconnected503AsNotConnected(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
