@@ -1893,6 +1893,23 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 | TrainedModel | `serving.kserve.io/v1alpha1` | Ready condition |
 | LLMInferenceService | `serving.kserve.io` (v1alpha2, v1alpha1) | Ready / aggregate conditions |
 
+For `serving.kserve.io/v1beta1` InferenceServices, REST AI detail and MCP
+`get_resource` include a bounded serving summary: reported mode/runtime names,
+predictor model transitions and failure evidence, Knative revisions and configured
+traffic, and Standard-mode canaries. Absent facts remain unreported, not healthy
+or zero. A Ready root can still report a non-ready transformer.
+
+Per-field notes explain writer-specific limits beside the relevant raw fields.
+Their reference release is not a detected controller version. Model state and
+failure history can outlive a rollout; configured traffic and ready-copy counts
+do not prove what serves. Confirm with Pod, route and request evidence.
+
+This reads only the root: runtime names are unverified selections. ModelMesh
+gets only mode/runtime names; LLMInferenceService and list/search summaries are
+excluded. Raw spec/status remains available. Standard-mode status has live
+v0.20.0 proof; Knative traffic and serving-old/failing-new cases use writer-derived
+fixtures, not live proof.
+
 ### Gateway API Inference Extension
 
 | Resource | Group | Status source |
