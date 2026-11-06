@@ -20,6 +20,8 @@ import { admissionCheckSeverity, getKueueWorkloadStatus, getKueueWorkloadPriorit
 interface KueueWorkloadRendererProps {
   data: any
   provisioning?: ReactNode
+  /** Kueue's reported pending position, supplied by the host (it reads the visibility API). */
+  pendingPosition?: ReactNode
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
   /** The Workload's own REST relationships: its owner comes from the ownership answer. */
   relationships?: Relationships
@@ -51,7 +53,7 @@ export function getKueueWorkloadConditionTone(condition: any): ConditionTone {
   return 'unknown'
 }
 
-export function KueueWorkloadRenderer({ data, onNavigate, provisioning, relationships, reads }: KueueWorkloadRendererProps) {
+export function KueueWorkloadRenderer({ data, onNavigate, provisioning, pendingPosition, relationships, reads }: KueueWorkloadRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const workloadStatus = getKueueWorkloadStatus(data)
@@ -88,6 +90,7 @@ export function KueueWorkloadRenderer({ data, onNavigate, provisioning, relation
       <Section variant="card" title="Admission" icon={Gauge} defaultExpanded>
         <PropertyList>
           <Property label="Reported State" value={<Badge colorClass={stale ? undefined : workloadStatus.color} severity={stale ? 'neutral' : undefined}>{workloadStatus.text}</Badge>} />
+          {pendingPosition && <Property label="Queue Position" value={pendingPosition} />}
           {priority !== '-' && <Property label="Priority" value={priority} />}
           {checks.length > 0 && (
             <Property label="Reported Checks" value={Array.from(checkCounts).filter(([, count]) => count > 0).map(([state, count]) => `${count} ${state}`).join(' · ')} />

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // CELFilter aliased so callers don't need a separate import to set
@@ -84,6 +85,9 @@ type RelatedIssueOptions struct {
 	CanReadEvidence         func(EvidenceRead) bool
 	AllowUnfilteredEvidence bool
 	OnEvidenceWithheld      func(Issue)
+	// OnUnchecked, when set, receives the checks Radar couldn't make that
+	// name the resource, so an empty answer isn't read as none.
+	OnUnchecked func([]issuesapi.UncheckedSource)
 }
 
 const (

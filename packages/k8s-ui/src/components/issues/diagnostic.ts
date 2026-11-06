@@ -29,7 +29,7 @@ export function diagnosticFactLabel(type: string): string {
     case 'evicted_from_node':
       return 'Evicted by node';
     case 'owner_rollup':
-      return 'Grouped from pods';
+      return 'Grouped resources';
     case 'selected_backend_issue':
       return 'Backend pods';
     case 'service_config_mismatch':
@@ -58,6 +58,16 @@ export function diagnosticFactLabel(type: string): string {
       return 'Affected resources';
     case 'tls_certificate_consumers':
       return 'Used for TLS by';
+    case 'kueue_admission':
+      return 'Kueue admission';
+    case 'kueue_queue':
+      return 'Queue';
+    case 'kueue_affected_runs':
+      return 'Blocked runs';
+    case 'kueue_admission_check':
+      return 'Admission check';
+    case 'kueue_provisioning_request':
+      return 'Provisioning request';
     default:
       return type.replace(/_/g, ' ');
   }
@@ -72,6 +82,7 @@ export function incidentParentLabel(factType?: string, confidence?: string): str
     case 'pvc_blast_radius':
     case 'secret_not_ready':
     case 'admission_webhook_backend':
+    case 'kueue_queue':
       return 'Caused by';
     case 'apiservice_hpa':
       return 'Likely cause';

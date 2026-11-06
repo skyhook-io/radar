@@ -4,7 +4,7 @@ import { formatRelativeAgeTime } from '../../utils/format'
 import { Badge } from '../ui/Badge'
 import { AlertBanner, ResourceLink, Section } from '../ui/drawer-components'
 import { kindToPluralWithGroup } from '../../utils/navigation'
-import type { KueueAdmissionResponse, SchedulingCondition, SchedulingObservation, SchedulingRef } from '../../types/scheduling'
+import type { KueueAdmissionResponse, KueueAdmissionWorkload, SchedulingCondition, SchedulingObservation, SchedulingRef } from '../../types/scheduling'
 
 interface KueueAdmissionSectionProps {
   presentation?: 'card' | 'drawer'
@@ -17,12 +17,14 @@ interface KueueAdmissionSectionProps {
   hasOwner?: boolean
   onRetry?: () => void
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
+  /** Host-supplied extra content for one Workload, e.g. Kueue's reported queue position. */
+  renderWorkloadExtra?: (workload: KueueAdmissionWorkload) => React.ReactNode
 }
 
 const phases = { pending: 'Pending admission', quota_reserved: 'Quota reserved', admitted: 'Admitted', finished: 'Finished' }
 const phaseStates = new Set(['admitted', 'quota_reserved', 'finished'])
 
-export function KueueAdmissionSection({ presentation = 'card', data, loading, error, forbidden, hinted, externalExecution, hasOwner, onRetry, onNavigate }: KueueAdmissionSectionProps) {
+export function KueueAdmissionSection({ presentation = 'card', data, loading, error, forbidden, hinted, externalExecution, hasOwner, onRetry, onNavigate, renderWorkloadExtra }: KueueAdmissionSectionProps) {
   if (!loading && !error && data && data.workloads.length === 0 && !hinted) return null
   const link = (name: string, ref?: SchedulingRef) => ref
     ? <ResourceLink {...ref} kind={kindToPluralWithGroup(ref.kind, ref.group ?? '')} label={name} onNavigate={onNavigate} />
@@ -41,6 +43,7 @@ export function KueueAdmissionSection({ presentation = 'card', data, loading, er
                   {workload.projection === 'unsupported' ? <p className="text-theme-text-secondary">Associated Workload found. Scheduling projection is unavailable for {workload.apiVersion}; inspect the resource for native evidence.</p>
                     : workload.projection === 'forbidden' ? <p className="text-theme-text-secondary">Associated Workload found, but permission to get this Workload is required for its scheduling detail.</p>
                       : workload.scheduling?.observations?.map((observation, index) => <AdmissionObservation key={index} presentation={presentation} observation={observation} identity={link(workload.name, workload.ref)} sourceLink={workload.ref && onNavigate ? link("View Workload details", workload.ref) : undefined} generation={workload.generation} deleting={workload.deleting} link={link} />)}
+                  {renderWorkloadExtra?.(workload)}
                   {workload.linksLimited && <p className="text-xs text-theme-text-tertiary">Some resource links are unavailable. Names already reported by the Workload remain visible.</p>}
                 </article>)}
               </div>}

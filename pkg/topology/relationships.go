@@ -401,6 +401,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	kindLower := strings.ToLower(kind)
 
 	for _, edge := range outgoingEdges {
+		if earlierJobRunEdge(edge, nodeByID) {
+			continue
+		}
 		// This resource points TO something (outgoing edge)
 		ref := refForNodeID(edge.Target)
 		if ref == nil {
@@ -459,6 +462,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	for _, edge := range incomingEdges {
+		if earlierJobRunEdge(edge, nodeByID) {
+			continue
+		}
 		// Something points TO this resource (incoming edge)
 		ref := refForNodeID(edge.Source)
 		if ref == nil {

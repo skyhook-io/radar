@@ -1,0 +1,3972 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "32f07695-9af9-4741-976a-701855dcaa30"
+        },
+        "name": "job-borrower-1-c46aa",
+        "namespace": "gpu-night-819-busy",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "borrower-1",
+            "uid": "32f07695-9af9-4741-976a-701855dcaa30"
+          }
+        ],
+        "resourceVersion": "130630857",
+        "uid": "80999b65-f37e-434f-a7b0-6332eb4caa92"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-busy",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "150m",
+                "memory": "64Mi"
+              }
+            }
+          ]
+        },
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:33:13Z",
+            "message": "Fixture check controller: ready",
+            "name": "gpu-night-819-check",
+            "state": "Ready"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:57Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-busy",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:33:15Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "564a85e0-8676-4d88-b753-896c83106e7a"
+        },
+        "name": "job-borrower-2-91b4a",
+        "namespace": "gpu-night-819-busy",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "borrower-2",
+            "uid": "564a85e0-8676-4d88-b753-896c83106e7a"
+          }
+        ],
+        "resourceVersion": "130631134",
+        "uid": "ee822d0a-080b-41f6-a0fc-657cd9ad438a"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-busy",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "150m",
+                "memory": "64Mi"
+              }
+            }
+          ]
+        },
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:33:29Z",
+            "message": "Fixture check controller: ready",
+            "name": "gpu-night-819-check",
+            "state": "Ready"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:57Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-busy",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:33:32Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "65f36199-c4c5-4344-861c-dc18bba2fe33"
+        },
+        "name": "job-check-pending-f9319",
+        "namespace": "gpu-night-819-busy",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "check-pending",
+            "uid": "65f36199-c4c5-4344-861c-dc18bba2fe33"
+          }
+        ],
+        "resourceVersion": "130630433",
+        "uid": "73a76d3a-c4dd-40ea-b40d-7ea560b94072"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-busy",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "20m",
+                "memory": "16Mi"
+              }
+            }
+          ]
+        },
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "",
+            "name": "gpu-night-819-check",
+            "state": "Pending"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-busy",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 2,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "bdf825d1-912e-4b9c-b635-9832c634c18f"
+        },
+        "name": "job-check-rejected-779e4",
+        "namespace": "gpu-night-819-busy",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "check-rejected",
+            "uid": "bdf825d1-912e-4b9c-b635-9832c634c18f"
+          }
+        ],
+        "resourceVersion": "130631774",
+        "uid": "26690a95-16b8-4a0c-bf6e-820d78086b1e"
+      },
+      "spec": {
+        "active": false,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:34:09Z",
+            "message": "Reset to Pending after eviction. Previously: Rejected",
+            "name": "gpu-night-819-check",
+            "state": "Pending"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:34:09Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-819-check\" (Fixture check controller: rejected on purpose)",
+            "observedGeneration": 2,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:34:09Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-819-check\" (Fixture check controller: rejected on purpose)",
+            "observedGeneration": 2,
+            "reason": "DeactivatedDueToAdmissionCheck",
+            "status": "True",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:34:09Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-819-check\" (Fixture check controller: rejected on purpose)",
+            "observedGeneration": 2,
+            "reason": "DeactivatedDueToAdmissionCheck",
+            "status": "False",
+            "type": "Requeued"
+          }
+        ],
+        "schedulingStats": {
+          "evictions": [
+            {
+              "count": 1,
+              "reason": "Deactivated",
+              "underlyingCause": "AdmissionCheck"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "45b4dded-4246-4f6c-a56f-e1f5d877f305"
+        },
+        "name": "job-check-retry-92943",
+        "namespace": "gpu-night-819-busy",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "check-retry",
+            "uid": "45b4dded-4246-4f6c-a56f-e1f5d877f305"
+          }
+        ],
+        "resourceVersion": "130648539",
+        "uid": "403a0f17-48e7-4b22-b615-fd995d6e56eb"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-busy",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "20m",
+                "memory": "16Mi"
+              }
+            }
+          ]
+        },
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:34:22Z",
+            "message": "Reset to Pending after eviction. Previously: Retry",
+            "name": "gpu-night-819-check",
+            "retryCount": 1,
+            "state": "Pending"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:34:22Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-busy",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:34:22Z",
+            "message": "Previously: Evicted due to AdmissionCheck in Retry state: \"gpu-night-819-check\" (Fixture check controller: retry requested once)",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "False",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:34:22Z",
+            "message": "The workload backoff was finished",
+            "observedGeneration": 1,
+            "reason": "BackoffFinished",
+            "status": "True",
+            "type": "Requeued"
+          }
+        ],
+        "schedulingStats": {
+          "evictions": [
+            {
+              "count": 1,
+              "reason": "AdmissionCheck",
+              "underlyingCause": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "8ca5515f-bcab-4ed5-bc03-4f5336edcc49"
+        },
+        "name": "job-on-spare-11358",
+        "namespace": "gpu-night-819-busy",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "on-spare",
+            "uid": "8ca5515f-bcab-4ed5-bc03-4f5336edcc49"
+          }
+        ],
+        "resourceVersion": "130629125",
+        "uid": "115cba3b-6503-428b-a1d0-8c514a820f27"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-busy",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-spare",
+                "memory": "gpu-night-819-spare"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "50m",
+                "memory": "300Mi"
+              }
+            }
+          ]
+        },
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:01Z",
+            "message": "Fixture check controller: ready",
+            "name": "gpu-night-819-check",
+            "state": "Ready"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:11Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-busy",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:03Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:39Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "busy",
+        "namespace": "gpu-night-819-busy",
+        "resourceVersion": "130631803",
+        "uid": "872938f4-6bd9-4000-a9ef-33c434ada6b4"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-busy",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 3,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:59Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "340m"
+              },
+              {
+                "name": "memory",
+                "total": "160Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "300m"
+              },
+              {
+                "name": "memory",
+                "total": "128Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 0,
+        "reservingWorkloads": 5
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "borrower-1",
+        "namespace": "gpu-night-819-busy",
+        "uid": "32f07695-9af9-4741-976a-701855dcaa30",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "borrower-2",
+        "namespace": "gpu-night-819-busy",
+        "uid": "564a85e0-8676-4d88-b753-896c83106e7a",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "check-pending",
+        "namespace": "gpu-night-819-busy",
+        "uid": "65f36199-c4c5-4344-861c-dc18bba2fe33",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "check-rejected",
+        "namespace": "gpu-night-819-busy",
+        "uid": "bdf825d1-912e-4b9c-b635-9832c634c18f",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "check-retry",
+        "namespace": "gpu-night-819-busy",
+        "uid": "45b4dded-4246-4f6c-a56f-e1f5d877f305",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "on-spare",
+        "namespace": "gpu-night-819-busy",
+        "uid": "8ca5515f-bcab-4ed5-bc03-4f5336edcc49",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "3566ffd8-601d-46ec-aa7a-ee3c62c5b48e"
+        },
+        "name": "job-hidden-1-262cb",
+        "namespace": "gpu-night-819-busy-hidden",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "hidden-1",
+            "uid": "3566ffd8-601d-46ec-aa7a-ee3c62c5b48e"
+          }
+        ],
+        "resourceVersion": "130631344",
+        "uid": "e77555e9-35a5-4fe1-8593-c15b16a6f500"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-busy",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "50m",
+                "memory": "16Mi"
+              }
+            }
+          ]
+        },
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:33:43Z",
+            "message": "Fixture check controller: ready",
+            "name": "gpu-night-819-check",
+            "state": "Ready"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-busy",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:33:44Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "0ed5f0bb-29fc-4336-90db-99bad8c5fb5f"
+        },
+        "name": "job-hidden-2-c4b9e",
+        "namespace": "gpu-night-819-busy-hidden",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "hidden-2",
+            "uid": "0ed5f0bb-29fc-4336-90db-99bad8c5fb5f"
+          }
+        ],
+        "resourceVersion": "130631542",
+        "uid": "8d84a1e6-e879-41e7-ae6d-f702f1f21e46"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-busy",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "50m",
+                "memory": "16Mi"
+              }
+            }
+          ]
+        },
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:33:53Z",
+            "message": "Fixture check controller: ready",
+            "name": "gpu-night-819-check",
+            "state": "Ready"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-busy",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:33:55Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "a8d19b07-6595-4261-a40d-d9cd8f3b4c7a"
+        },
+        "name": "job-hidden-pending-02368",
+        "namespace": "gpu-night-819-busy-hidden",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "hidden-pending",
+            "uid": "a8d19b07-6595-4261-a40d-d9cd8f3b4c7a"
+          }
+        ],
+        "resourceVersion": "130630486",
+        "uid": "319dad37-39ff-462e-8dc8-ae243ddbeb71"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "busy"
+      },
+      "status": {
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "",
+            "name": "gpu-night-819-check",
+            "state": "Pending"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "couldn't assign flavors to pod set main: insufficient quota for cpu in flavor gpu-night-819-default, previously considered podsets requests (0) + current podset request (2) > maximum capacity (1200m)",
+            "observedGeneration": 1,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:39Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "busy",
+        "namespace": "gpu-night-819-busy-hidden",
+        "resourceVersion": "130631580",
+        "uid": "e2367e9a-fbe5-485f-ac11-a42608f142f3"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-busy",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 2,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:59Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "100m"
+              },
+              {
+                "name": "memory",
+                "total": "32Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "100m"
+              },
+              {
+                "name": "memory",
+                "total": "32Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 2
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "hidden-1",
+        "namespace": "gpu-night-819-busy-hidden",
+        "uid": "3566ffd8-601d-46ec-aa7a-ee3c62c5b48e",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "hidden-2",
+        "namespace": "gpu-night-819-busy-hidden",
+        "uid": "0ed5f0bb-29fc-4336-90db-99bad8c5fb5f",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "hidden-pending",
+        "namespace": "gpu-night-819-busy-hidden",
+        "uid": "a8d19b07-6595-4261-a40d-d9cd8f3b4c7a",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "busy",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:13Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "0781bbd5-b3ed-4f08-bdcc-94a4803c3101"
+        },
+        "name": "job-drained-20121",
+        "namespace": "gpu-night-819-drain",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "drained",
+            "uid": "0781bbd5-b3ed-4f08-bdcc-94a4803c3101"
+          }
+        ],
+        "resourceVersion": "130630227",
+        "uid": "b15d4eb0-0cb3-49cd-a008-877aebdce4a1"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "drain"
+      },
+      "status": {
+        "accumulatedPastExecutionTimeSeconds": 96,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:49Z",
+            "message": "ClusterQueue gpu-night-819-drain is inactive",
+            "observedGeneration": 1,
+            "reason": "Inadmissible",
+            "status": "False",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:49Z",
+            "message": "The ClusterQueue is stopped",
+            "observedGeneration": 1,
+            "reason": "ClusterQueueStopped",
+            "status": "True",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:49Z",
+            "message": "The workload has no reservation",
+            "observedGeneration": 1,
+            "reason": "NoReservation",
+            "status": "False",
+            "type": "Admitted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:49Z",
+            "message": "The ClusterQueue is stopped",
+            "observedGeneration": 1,
+            "reason": "ClusterQueueStopped",
+            "status": "False",
+            "type": "Requeued"
+          }
+        ],
+        "schedulingStats": {
+          "evictions": [
+            {
+              "count": 1,
+              "reason": "ClusterQueueStopped",
+              "underlyingCause": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:13Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "85b31372-af67-484f-a907-8007e66b3459"
+        },
+        "name": "job-pods-ready-timeout-63820",
+        "namespace": "gpu-night-819-drain",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "pods-ready-timeout",
+            "uid": "85b31372-af67-484f-a907-8007e66b3459"
+          }
+        ],
+        "resourceVersion": "130630098",
+        "uid": "d6a51e6c-b999-41e8-b281-5c240b9af9e6"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "drain"
+      },
+      "status": {
+        "accumulatedPastExecutionTimeSeconds": 90,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:43Z",
+            "message": "ClusterQueue gpu-night-819-drain is inactive",
+            "observedGeneration": 1,
+            "reason": "Inadmissible",
+            "status": "False",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:41Z",
+            "message": "Exceeded the PodsReady timeout default/pods-ready-timeout",
+            "observedGeneration": 1,
+            "reason": "PodsReadyTimeout",
+            "status": "True",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:43Z",
+            "message": "The workload has no reservation",
+            "observedGeneration": 1,
+            "reason": "NoReservation",
+            "status": "False",
+            "type": "Admitted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:43Z",
+            "message": "The workload backoff was finished",
+            "observedGeneration": 1,
+            "reason": "BackoffFinished",
+            "status": "True",
+            "type": "Requeued"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:43Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "drain",
+        "namespace": "gpu-night-819-drain",
+        "resourceVersion": "130630258",
+        "uid": "26deb468-d3a4-44ab-a935-7d4be6fad5ee"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-drain",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:38Z",
+            "message": "Can't submit new workloads to clusterQueue",
+            "observedGeneration": 1,
+            "reason": "ClusterQueueIsInactive",
+            "status": "False",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 2,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "drained",
+        "namespace": "gpu-night-819-drain",
+        "uid": "0781bbd5-b3ed-4f08-bdcc-94a4803c3101",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "drain",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "pods-ready-timeout",
+        "namespace": "gpu-night-819-drain",
+        "uid": "85b31372-af67-484f-a907-8007e66b3459",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:13Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "drain",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:41Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "empty",
+        "namespace": "gpu-night-819-empty",
+        "resourceVersion": "130627535",
+        "uid": "22df36c1-df0a-4da1-a40b-c47d40337d38"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-empty",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:41Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 0,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "cc2a8c59-acfb-41a6-b42f-eb3364b027c1"
+        },
+        "name": "job-held-5c7c3",
+        "namespace": "gpu-night-819-held",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "held",
+            "uid": "cc2a8c59-acfb-41a6-b42f-eb3364b027c1"
+          }
+        ],
+        "resourceVersion": "130628084",
+        "uid": "322411a6-edd4-4b39-ae18-b556c5d443e3"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "held"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:11Z",
+            "message": "ClusterQueue gpu-night-819-held is inactive",
+            "observedGeneration": 1,
+            "reason": "Inadmissible",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:40Z",
+        "generation": 3,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "held",
+        "namespace": "gpu-night-819-held",
+        "resourceVersion": "130634163",
+        "uid": "1182c298-c2d8-49bd-a3d1-df30820d4efd"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-held",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:40Z",
+            "message": "Can't submit new workloads to clusterQueue",
+            "observedGeneration": 3,
+            "reason": "ClusterQueueIsInactive",
+            "status": "False",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "held",
+        "namespace": "gpu-night-819-held",
+        "uid": "cc2a8c59-acfb-41a6-b42f-eb3364b027c1",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "held",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "69ef3547-d2d9-497a-9739-a67e9c4dabc2"
+        },
+        "name": "job-not-eligible-6abe4",
+        "namespace": "gpu-night-819-ineligible",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "not-eligible",
+            "uid": "69ef3547-d2d9-497a-9739-a67e9c4dabc2"
+          }
+        ],
+        "resourceVersion": "130628201",
+        "uid": "4aa924dd-e422-4516-830c-5fb77441788a"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "lifecycle"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:12Z",
+            "message": "Workload namespace doesn't match ClusterQueue selector",
+            "observedGeneration": 1,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:43Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "lifecycle",
+        "namespace": "gpu-night-819-ineligible",
+        "resourceVersion": "130628289",
+        "uid": "883068cf-d51e-49cf-a657-11d6d512ca38"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-lifecycle",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:43Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "not-eligible",
+        "namespace": "gpu-night-819-ineligible",
+        "uid": "69ef3547-d2d9-497a-9739-a67e9c4dabc2",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "lifecycle",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 2,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "4e214b4d-a472-4136-b937-719d82aee0fa"
+        },
+        "name": "job-deactivated-61c4d",
+        "namespace": "gpu-night-819-lifecycle",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "deactivated",
+            "uid": "4e214b4d-a472-4136-b937-719d82aee0fa"
+          }
+        ],
+        "resourceVersion": "130629549",
+        "uid": "0d4b4ff8-5172-4f36-b4b6-301e3580fd92"
+      },
+      "spec": {
+        "active": false,
+        "priority": 0,
+        "queueName": "lifecycle"
+      },
+      "status": {
+        "accumulatedPastExecutionTimeSeconds": 69,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:21Z",
+            "message": "The workload is deactivated",
+            "observedGeneration": 2,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:21Z",
+            "message": "The workload is deactivated",
+            "observedGeneration": 2,
+            "reason": "Deactivated",
+            "status": "True",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:21Z",
+            "message": "The workload has no reservation",
+            "observedGeneration": 2,
+            "reason": "NoReservation",
+            "status": "False",
+            "type": "Admitted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:21Z",
+            "message": "The workload is deactivated",
+            "observedGeneration": 2,
+            "reason": "Deactivated",
+            "status": "False",
+            "type": "Requeued"
+          }
+        ],
+        "schedulingStats": {
+          "evictions": [
+            {
+              "count": 1,
+              "reason": "Deactivated",
+              "underlyingCause": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "2fb355b1-fd2f-4613-946d-a3cab4d0dad7"
+        },
+        "name": "job-failed-9b9af",
+        "namespace": "gpu-night-819-lifecycle",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "failed",
+            "uid": "2fb355b1-fd2f-4613-946d-a3cab4d0dad7"
+          }
+        ],
+        "resourceVersion": "130628380",
+        "uid": "dee63e6a-9c6a-4548-aaf1-63212cc2356c"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "lifecycle"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-lifecycle",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "10m",
+                "memory": "16Mi"
+              }
+            }
+          ]
+        },
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:12Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-lifecycle",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:31:12Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:31:16Z",
+            "message": "Job has reached the specified backoff limit",
+            "observedGeneration": 1,
+            "reason": "Failed",
+            "status": "True",
+            "type": "Finished"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "b7df2a31-8033-4dca-b06b-6c1c0569190c"
+        },
+        "name": "job-finished-52b67",
+        "namespace": "gpu-night-819-lifecycle",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "finished",
+            "uid": "b7df2a31-8033-4dca-b06b-6c1c0569190c"
+          }
+        ],
+        "resourceVersion": "130628376",
+        "uid": "837269aa-771b-41a6-860b-0d22b350f8cf"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "lifecycle"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-lifecycle",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "10m",
+                "memory": "16Mi"
+              }
+            }
+          ]
+        },
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:12Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-lifecycle",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:31:12Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:31:16Z",
+            "message": "Reached expected number of succeeded pods",
+            "observedGeneration": 1,
+            "reason": "Succeeded",
+            "status": "True",
+            "type": "Finished"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "8d0ce46a-214b-4f56-b8d6-2c7e29d2ffa5"
+        },
+        "name": "job-high-priority-25eff",
+        "namespace": "gpu-night-819-lifecycle",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "high-priority",
+            "uid": "8d0ce46a-214b-4f56-b8d6-2c7e29d2ffa5"
+          }
+        ],
+        "resourceVersion": "130630516",
+        "uid": "158bf535-a94b-4f9c-8e43-31b62a9ec798"
+      },
+      "spec": {
+        "active": true,
+        "priority": 1000,
+        "priorityClassRef": {
+          "group": "kueue.x-k8s.io",
+          "kind": "WorkloadPriorityClass",
+          "name": "gpu-night-819-high"
+        },
+        "queueName": "preempt"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-preempt",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "150m",
+                "memory": "64Mi"
+              }
+            }
+          ]
+        },
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:59Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-preempt",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:59Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "f76cd267-1fab-4de7-9821-1510c6f91e01"
+        },
+        "name": "job-low-priority-b96f8",
+        "namespace": "gpu-night-819-lifecycle",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "low-priority",
+            "uid": "f76cd267-1fab-4de7-9821-1510c6f91e01"
+          }
+        ],
+        "resourceVersion": "130630520",
+        "uid": "d52ca88c-3cd1-44fd-b5fa-22f25aa8b717"
+      },
+      "spec": {
+        "active": true,
+        "priority": 100,
+        "priorityClassRef": {
+          "group": "kueue.x-k8s.io",
+          "kind": "WorkloadPriorityClass",
+          "name": "gpu-night-819-low"
+        },
+        "queueName": "preempt"
+      },
+      "status": {
+        "accumulatedPastExecutionTimeSeconds": 108,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:59Z",
+            "message": "couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor gpu-night-819-default, 100m more needed",
+            "observedGeneration": 1,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "Preempted to accommodate a workload (UID: 158bf535-a94b-4f9c-8e43-31b62a9ec798, JobUID: 8d0ce46a-214b-4f56-b8d6-2c7e29d2ffa5) due to prioritization in the ClusterQueue; preemptor path: /gpu-night-819-preempt; preemptee path: /gpu-night-819-preempt",
+            "observedGeneration": 1,
+            "reason": "Preempted",
+            "status": "True",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:59Z",
+            "message": "The workload has no reservation",
+            "observedGeneration": 1,
+            "reason": "NoReservation",
+            "status": "False",
+            "type": "Admitted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:58Z",
+            "message": "Preempted to accommodate a workload (UID: 158bf535-a94b-4f9c-8e43-31b62a9ec798, JobUID: 8d0ce46a-214b-4f56-b8d6-2c7e29d2ffa5) due to prioritization in the ClusterQueue; preemptor path: /gpu-night-819-preempt; preemptee path: /gpu-night-819-preempt",
+            "reason": "InClusterQueue",
+            "status": "True",
+            "type": "Preempted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:32:59Z",
+            "message": "Preempted to accommodate a workload (UID: 158bf535-a94b-4f9c-8e43-31b62a9ec798, JobUID: 8d0ce46a-214b-4f56-b8d6-2c7e29d2ffa5) due to prioritization in the ClusterQueue; preemptor path: /gpu-night-819-preempt; preemptee path: /gpu-night-819-preempt",
+            "observedGeneration": 1,
+            "reason": "Preempted",
+            "status": "True",
+            "type": "Requeued"
+          }
+        ],
+        "schedulingStats": {
+          "evictions": [
+            {
+              "count": 1,
+              "reason": "Preempted",
+              "underlyingCause": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "18ed7d57-6896-43ea-878a-f0897e8ae36a"
+        },
+        "name": "job-no-localqueue-8c90a",
+        "namespace": "gpu-night-819-lifecycle",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "no-localqueue",
+            "uid": "18ed7d57-6896-43ea-878a-f0897e8ae36a"
+          }
+        ],
+        "resourceVersion": "130628193",
+        "uid": "959c044e-fe74-4ce9-bfb1-da096ed3c25d"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "does-not-exist"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:12Z",
+            "message": "LocalQueue does-not-exist doesn't exist",
+            "observedGeneration": 1,
+            "reason": "Inadmissible",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:42Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "lifecycle",
+        "namespace": "gpu-night-819-lifecycle",
+        "resourceVersion": "130629579",
+        "uid": "b2192396-1079-43f3-81f2-5b57f3495651"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-lifecycle",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:42Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 0,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:42Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "preempt",
+        "namespace": "gpu-night-819-lifecycle",
+        "resourceVersion": "130630551",
+        "uid": "03ac0b11-7b62-4866-825d-dbdf29163a95"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-preempt",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 1,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:42Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 1
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "deactivated",
+        "namespace": "gpu-night-819-lifecycle",
+        "uid": "4e214b4d-a472-4136-b937-719d82aee0fa",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "lifecycle",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "failed",
+        "namespace": "gpu-night-819-lifecycle",
+        "uid": "2fb355b1-fd2f-4613-946d-a3cab4d0dad7",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "lifecycle",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "finished",
+        "namespace": "gpu-night-819-lifecycle",
+        "uid": "b7df2a31-8033-4dca-b06b-6c1c0569190c",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "lifecycle",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "high-priority",
+        "namespace": "gpu-night-819-lifecycle",
+        "uid": "8d0ce46a-214b-4f56-b8d6-2c7e29d2ffa5",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:58Z",
+        "labels": {
+          "kueue.x-k8s.io/priority-class": "gpu-night-819-high",
+          "kueue.x-k8s.io/queue-name": "preempt",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "low-priority",
+        "namespace": "gpu-night-819-lifecycle",
+        "uid": "f76cd267-1fab-4de7-9821-1510c6f91e01",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "labels": {
+          "kueue.x-k8s.io/priority-class": "gpu-night-819-low",
+          "kueue.x-k8s.io/queue-name": "preempt",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "no-localqueue",
+        "namespace": "gpu-night-819-lifecycle",
+        "uid": "18ed7d57-6896-43ea-878a-f0897e8ae36a",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:12Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "does-not-exist",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "5492c97a-d363-4f02-bdb1-ec1c0a6e78da"
+        },
+        "name": "job-admitted-a5dd2",
+        "namespace": "gpu-night-819-lq-denied",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "admitted",
+            "uid": "5492c97a-d363-4f02-bdb1-ec1c0a6e78da"
+          }
+        ],
+        "resourceVersion": "130628047",
+        "uid": "e2df191b-593f-4365-b9d5-c27948e247ee"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "workloads-hidden"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-lq-denied",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "100m",
+                "memory": "64Mi"
+              }
+            }
+          ]
+        },
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:11Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-lq-denied",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:31:11Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "ac7ea413-0ab5-4566-b435-d38fae13cab8"
+        },
+        "name": "job-pending-84d37",
+        "namespace": "gpu-night-819-lq-denied",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "pending",
+            "uid": "ac7ea413-0ab5-4566-b435-d38fae13cab8"
+          }
+        ],
+        "resourceVersion": "130628072",
+        "uid": "6cacf208-0d63-445a-b8ac-12ce93890b30"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "workloads-hidden"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:11Z",
+            "message": "couldn't assign flavors to pod set main: insufficient quota for cpu in flavor gpu-night-819-default, previously considered podsets requests (0) + current podset request (500m) > maximum capacity (200m)",
+            "observedGeneration": 1,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:41Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "workloads-hidden",
+        "namespace": "gpu-night-819-lq-denied",
+        "resourceVersion": "130628145",
+        "uid": "0b9eda1f-4185-47d3-9892-8378729d7822"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-lq-denied",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 1,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:41Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "100m"
+              },
+              {
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "100m"
+              },
+              {
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 1
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "admitted",
+        "namespace": "gpu-night-819-lq-denied",
+        "uid": "5492c97a-d363-4f02-bdb1-ec1c0a6e78da",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "workloads-hidden",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "pending",
+        "namespace": "gpu-night-819-lq-denied",
+        "uid": "ac7ea413-0ab5-4566-b435-d38fae13cab8",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "workloads-hidden",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "579bae7e-7a50-427f-9e77-07ef228957b3"
+        },
+        "name": "job-blocked-b8211",
+        "namespace": "gpu-night-819-missing-flavor",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "blocked",
+            "uid": "579bae7e-7a50-427f-9e77-07ef228957b3"
+          }
+        ],
+        "resourceVersion": "130628095",
+        "uid": "b6d04ea4-03ec-4e32-b0f0-536e6ee02dc1"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "missing-flavor"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:11Z",
+            "message": "ClusterQueue gpu-night-819-missing-flavor is inactive",
+            "observedGeneration": 1,
+            "reason": "Inadmissible",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:40Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "missing-flavor",
+        "namespace": "gpu-night-819-missing-flavor",
+        "resourceVersion": "130628204",
+        "uid": "4afaaf5a-0966-41c0-8b07-5f503759f01f"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-missing-flavor",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:40Z",
+            "message": "Can't submit new workloads to clusterQueue",
+            "observedGeneration": 1,
+            "reason": "ClusterQueueIsInactive",
+            "status": "False",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-does-not-exist",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-does-not-exist",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "blocked",
+        "namespace": "gpu-night-819-missing-flavor",
+        "uid": "579bae7e-7a50-427f-9e77-07ef228957b3",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:11Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "missing-flavor",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:31:10Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "bc08ab17-c848-4b72-989e-364dc1a6a9de"
+        },
+        "name": "job-fits-20423",
+        "namespace": "gpu-night-819-quota",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "fits",
+            "uid": "bc08ab17-c848-4b72-989e-364dc1a6a9de"
+          }
+        ],
+        "resourceVersion": "130628014",
+        "uid": "fc4f1a04-0562-428b-850e-12317a8b6475"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "quota"
+      },
+      "status": {
+        "admission": {
+          "clusterQueue": "gpu-night-819-quota",
+          "podSetAssignments": [
+            {
+              "count": 1,
+              "flavors": {
+                "cpu": "gpu-night-819-default",
+                "memory": "gpu-night-819-default"
+              },
+              "name": "main",
+              "resourceUsage": {
+                "cpu": "150m",
+                "memory": "64Mi"
+              }
+            }
+          ]
+        },
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:31:10Z",
+            "message": "Quota reserved in ClusterQueue gpu-night-819-quota",
+            "observedGeneration": 1,
+            "reason": "QuotaReserved",
+            "status": "True",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T01:31:10Z",
+            "message": "The workload is admitted",
+            "observedGeneration": 1,
+            "reason": "Admitted",
+            "status": "True",
+            "type": "Admitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "43dec357-9cd3-42ce-b3d8-6cd0fb344535"
+        },
+        "name": "job-too-big-215e5",
+        "namespace": "gpu-night-819-quota",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "too-big",
+            "uid": "43dec357-9cd3-42ce-b3d8-6cd0fb344535"
+          }
+        ],
+        "resourceVersion": "130630400",
+        "uid": "669c68be-fc98-4639-a915-2f820c30bf9f"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "quota"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:57Z",
+            "message": "couldn't assign flavors to pod set main: insufficient quota for cpu in flavor gpu-night-819-default, previously considered podsets requests (0) + current podset request (1) > maximum capacity (200m)",
+            "observedGeneration": 1,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "d8e75ab4-587e-4877-b36e-24548b10cb9f"
+        },
+        "name": "job-waits-for-quota-445d9",
+        "namespace": "gpu-night-819-quota",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "waits-for-quota",
+            "uid": "d8e75ab4-587e-4877-b36e-24548b10cb9f"
+          }
+        ],
+        "resourceVersion": "130630391",
+        "uid": "2a9edf97-fafe-4449-aeb8-2fa6c41ec525"
+      },
+      "spec": {
+        "active": true,
+        "priority": 0,
+        "queueName": "quota"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:57Z",
+            "message": "couldn't assign flavors to pod set main: insufficient unused quota for cpu in flavor gpu-night-819-default, 50m more needed",
+            "observedGeneration": 1,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:30:39Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "quota",
+        "namespace": "gpu-night-819-quota",
+        "resourceVersion": "130630453",
+        "uid": "1cdd318e-54d8-43e3-adfb-a58d6a1968c3"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-819-quota",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 1,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:39Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 2,
+        "reservingWorkloads": 1
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "fits",
+        "namespace": "gpu-night-819-quota",
+        "uid": "bc08ab17-c848-4b72-989e-364dc1a6a9de",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:31:10Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "quota",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "too-big",
+        "namespace": "gpu-night-819-quota",
+        "uid": "43dec357-9cd3-42ce-b3d8-6cd0fb344535",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "quota",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "waits-for-quota",
+        "namespace": "gpu-night-819-quota",
+        "uid": "d8e75ab4-587e-4877-b36e-24548b10cb9f",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T01:32:57Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "quota",
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:30:35Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 2,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-busy",
+        "resourceVersion": "130648494",
+        "uid": "b76b08b5-77dc-4f78-81d1-825d6e9919d9"
+      },
+      "spec": {
+        "admissionChecksStrategy": {
+          "admissionChecks": [
+            {
+              "name": "gpu-night-819-check"
+            }
+          ]
+        },
+        "cohortName": "gpu-night-819-cohort",
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "borrowingLimit": "0",
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 5,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:30:59Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 2,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "240m",
+                "name": "cpu",
+                "total": "440m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "192Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "200m",
+                "name": "cpu",
+                "total": "400m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "160Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 7
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T01:28:16Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 3,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-drain",
+        "resourceVersion": "130648508",
+        "uid": "0f31b35c-e5a0-4b36-8738-84bf48d70382"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "HoldAndDrain"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:32:38Z",
+            "message": "Can't admit new workloads: is stopped.",
+            "observedGeneration": 3,
+            "reason": "Stopped",
+            "status": "False",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 2,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:10Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 3,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-empty",
+        "resourceVersion": "130634193",
+        "uid": "e83a7649-68ad-45a7-98ea-0d5f8285cfe1"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:10Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 3,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 0,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:09Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-held",
+        "resourceVersion": "130633606",
+        "uid": "49bc6985-1c63-43c6-a5f7-14abfe9fa426"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "Hold"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:09Z",
+            "message": "Can't admit new workloads: is stopped.",
+            "observedGeneration": 1,
+            "reason": "Stopped",
+            "status": "False",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:09Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-lender",
+        "resourceVersion": "130625105",
+        "uid": "0ef836d1-8490-4940-9f9c-cf4deaa6737b"
+      },
+      "spec": {
+        "cohortName": "gpu-night-819-cohort",
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "1"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "1Gi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:09Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 0,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-lifecycle",
+        "resourceVersion": "130629580",
+        "uid": "4997baf7-5afe-4e68-afee-d2a9d2540a8a"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "500m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "512Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:11Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:10Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-lq-denied",
+        "resourceVersion": "130628146",
+        "uid": "0473cba4-5930-46c4-8ac7-0d60c7d27175"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 1,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:10Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "100m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "100m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 1
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:10Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-missing-flavor",
+        "resourceVersion": "130628205",
+        "uid": "999f1f0a-b9cd-4ca9-b0d5-7a905aa7c62c"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-does-not-exist",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:10Z",
+            "message": "Can't admit new workloads: references missing ResourceFlavor(s): gpu-night-819-does-not-exist.",
+            "observedGeneration": 1,
+            "reason": "FlavorNotFound",
+            "status": "False",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-does-not-exist",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-does-not-exist",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:11Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-preempt",
+        "resourceVersion": "130630552",
+        "uid": "51acbd7d-26ec-4372-beae-aef433003abc"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "LowerPriority"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 1,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:11Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 1,
+        "reservingWorkloads": 1
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:09Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-quota",
+        "resourceVersion": "130630454",
+        "uid": "aa4a8867-f0ce-4955-b7f5-87f4914805af"
+      },
+      "spec": {
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "radar.skyhook.io/kueue-eligible": "gpu-night-819"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-819-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "200m"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "256Mi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 1,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T01:28:09Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-819-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "150m"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "64Mi"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 2,
+        "reservingWorkloads": 1
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "AdmissionCheck",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T01:28:08Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night",
+          "radar.skyhook.io/kueue-scenarios": "gpu-night-819"
+        },
+        "name": "gpu-night-819-check",
+        "resourceVersion": "130679221",
+        "uid": "0aad5fc6-092a-4d6b-bd1b-59bac643f158"
+      },
+      "spec": {
+        "controllerName": "radar.skyhook.io/kueue-scenarios-check"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T02:24:46Z",
+            "message": "Driven by scripts/kueue-scenarios.sh",
+            "observedGeneration": 1,
+            "reason": "Active",
+            "status": "True",
+            "type": "Active"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -28,6 +28,7 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -134,6 +135,7 @@ type appRow struct {
 	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
 
 	sourceStrict bool
+	jobSetRoots  []appWorkload
 }
 
 type appSourceStatus struct {
@@ -261,6 +263,7 @@ type appWorkload struct {
 	// appAnnotation is app.skyhook.io/app — the user's explicit cross-cluster app
 	// declaration (authoritative, portable). Resolver input, not on the wire.
 	appAnnotation string
+	jobSetParent  string
 }
 
 type appBatchSummary struct {
@@ -604,6 +607,7 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		enrichRowsWithManagedSourceRefs(buildCtx, cache, rows, argoItems)
 		enrichRowsWithArgoStatus(rows, argoItems)
 		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, cache))
+		foldJobSetApplicationWorkloads(rows)
 		claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 		applicationsCacheMu.Lock()
 		if len(applicationsCache) >= applicationsCacheMaxEntries {
@@ -862,6 +866,11 @@ type appWorkloadInput struct {
 // not re-listed per workload.
 func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, canListClusterWorkflowTemplates bool) []appWorkloadInput {
 	var out []appWorkloadInput
+	jobSets := listDynamicByNamespacesGroup(ctx, cache, namespaces, jobset.Kind, jobset.Group)
+	jobSetByName := map[string]*unstructured.Unstructured{}
+	for _, root := range jobSets {
+		jobSetByName[root.GetNamespace()+"/"+root.GetName()] = root
+	}
 
 	podsByNS := indexPodsByNamespace(cache, namespaces)
 	eventsByObj := indexWarningEventsByObject(cache, namespaces, g)
@@ -1023,6 +1032,9 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 					primaryImage(j.Spec.Template.Spec.Containers),
 					batchHealth(batch, levelToPackagesHealth(health.Workload(j, time.Now()).Level)),
 					0, 0, j.Spec.Selector, nil, batch)
+				if owner := metav1.GetControllerOf(j); owner != nil && jobset.Controls(jobSetByName[j.Namespace+"/"+owner.Name], j) {
+					out[len(out)-1].wl.jobSetParent = resourceid.ResourceKey(jobset.Group, jobset.Kind, j.Namespace, owner.Name)
+				}
 			}
 		})
 	}
@@ -1049,6 +1061,11 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 					0, 0, nil, nil, batch)
 			}
 		})
+	}
+	for _, root := range jobSets {
+		batch, workloadHealth := jobSetApplicationBatch(root)
+		add(root, jobset.Kind, root.GetNamespace(), root.GetName(), root.GetLabels(), root.GetAnnotations(),
+			jobSetPrimaryImage(root), workloadHealth, 0, 0, nil, nil, batch)
 	}
 	addScaledJobWorkloads(ctx, cache, namespaces, add, scaledJobBatches)
 	addArgoBatchWorkloads(ctx, cache, namespaces, add, cronWorkflowBatches, canListClusterWorkflowTemplates)
@@ -1299,6 +1316,95 @@ func cronWorkflowBatchSummaries(ctx context.Context, cache *k8s.ResourceCache, n
 		applyRunToBatch(out[key], workflowRunInfo(wf))
 	}
 	return out
+}
+
+// Keep member evidence through grouping and identity resolution, then fold only
+// the visible workload list and runtime health onto the current JobSet root.
+func foldJobSetApplicationWorkloads(rows []appRow) {
+	for i := range rows {
+		row := &rows[i]
+		row.Workloads = append(row.Workloads, row.jobSetRoots...)
+		row.jobSetRoots = nil
+		roots := map[string]bool{}
+		for _, workload := range row.Workloads {
+			if workload.Kind == jobset.Kind && workload.Group == jobset.Group {
+				roots[resourceid.ResourceKey(jobset.Group, jobset.Kind, workload.Namespace, workload.Name)] = true
+			}
+		}
+		if len(roots) == 0 {
+			continue
+		}
+		visible := make([]appWorkload, 0, len(row.Workloads))
+		totalHealth, servingHealth := packages.Health(""), packages.Health("")
+		for _, workload := range row.Workloads {
+			if roots[workload.jobSetParent] {
+				continue
+			}
+			visible = append(visible, workload)
+			totalHealth = packages.WorseHealth(totalHealth, packages.Health(workload.Health))
+			if workload.WorkloadClass == "service" || workload.WorkloadClass == "worker" {
+				servingHealth = packages.WorseHealth(servingHealth, packages.Health(workload.Health))
+			}
+		}
+		row.Workloads = visible
+		if row.WorkloadClass == "mixed" && servingHealth != "" {
+			totalHealth = servingHealth
+		}
+		row.RuntimeHealth = string(totalHealth)
+		row.Health = row.RuntimeHealth
+		if row.SourceStatus != nil {
+			row.Health = string(packages.WorseHealth(totalHealth, argoDeliveryHealth(row.SourceStatus.Sync, row.SourceStatus.Health)))
+		}
+	}
+}
+
+func jobSetApplicationBatch(root *unstructured.Unstructured) (*appBatchSummary, packages.Health) {
+	state := jobset.Lifecycle(root)
+	batch := &appBatchSummary{RetainedRuns: 1, LatestRunName: root.GetName(), Message: state.Reason}
+	workloadHealth := packages.HealthNeutral
+	switch state.Phase {
+	case jobset.PhaseActive:
+		batch.LatestRunPhase = "Active"
+		if state.Condition == "RestartingJobSet" {
+			batch.LatestRunPhase = "Restarting"
+			workloadHealth = packages.HealthDegraded
+		} else if state.Condition == "StartupPolicyInProgress" {
+			batch.LatestRunPhase = "Starting"
+			workloadHealth = packages.HealthDegraded
+		}
+	case jobset.PhasePending:
+		batch.LatestRunPhase = "Pending"
+	case jobset.PhaseSuspended:
+		batch.Suspended = true
+		batch.LatestRunPhase = "Suspended"
+	case jobset.PhaseFinished:
+		if state.Outcome == jobset.OutcomeFailed {
+			batch.FailedRuns = 1
+			batch.LatestRunPhase = "Failed"
+			workloadHealth = packages.HealthUnhealthy
+		} else {
+			batch.SucceededRuns = 1
+			batch.LatestRunPhase = "Succeeded"
+		}
+	default:
+		batch.LatestRunPhase = "Unknown"
+		workloadHealth = packages.HealthUnknown
+	}
+	return batch, workloadHealth
+}
+
+func jobSetPrimaryImage(root *unstructured.Unstructured) string {
+	roles, _, _ := unstructured.NestedSlice(root.Object, "spec", "replicatedJobs")
+	for _, raw := range roles {
+		role, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if image := primaryUnstructuredImage(role, "template", "spec", "template", "spec", "containers"); image != "" {
+			return image
+		}
+	}
+	return ""
 }
 
 func addScaledJobWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, add addAppWorkloadFunc, batches map[string]*appBatchSummary) {
@@ -1721,10 +1827,35 @@ func forEachWorkloadNamespace(namespaces []string, fn func(ns string)) {
 // Satellites are attached but never used to merge: two apps that share a Service
 // stay two apps.
 func groupApplications(inputs []appWorkloadInput) []appRow {
+	memberRoots := map[string]bool{}
+	for _, input := range inputs {
+		if input.wl.jobSetParent != "" {
+			memberRoots[input.wl.jobSetParent] = true
+		}
+	}
+	deferredRoots := map[string]appWorkloadInput{}
+	evidence := make([]appWorkloadInput, 0, len(inputs))
+	for _, input := range inputs {
+		key := resourceid.ResourceKey(input.wl.Group, input.wl.Kind, input.wl.Namespace, input.wl.Name)
+		if input.wl.Kind == jobset.Kind && input.wl.Group == jobset.Group && memberRoots[key] {
+			deferredRoots[key] = input
+		} else {
+			evidence = append(evidence, input)
+		}
+	}
+	inputs = evidence
 	d := newDSU()
 	argoAppNamespaces := argoApplicationNamespaces(inputs)
 	for _, in := range inputs {
 		atoms := inputAtoms(in, argoAppNamespaces)
+		for i := 1; i < len(atoms); i++ {
+			d.union(atoms[0], atoms[i])
+		}
+	}
+	// The JobSet controller does not copy the JobSet's labels onto its Jobs, so
+	// a deferred root's own app declaration is still evidence for its members.
+	for _, root := range deferredRoots {
+		atoms := inputAtoms(root, argoAppNamespaces)
 		for i := 1; i < len(atoms); i++ {
 			d.union(atoms[0], atoms[i])
 		}
@@ -1751,7 +1882,16 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 	for _, comp := range order {
 		ins := members[comp]
 		r := &appRow{}
-		identifyApp(r, ins, rootGroups)
+		rootAdded := map[string]bool{}
+		identityInputs := ins
+		for _, input := range ins {
+			if root, ok := deferredRoots[input.wl.jobSetParent]; ok && !rootAdded[input.wl.jobSetParent] {
+				r.jobSetRoots = append(r.jobSetRoots, root.wl)
+				rootAdded[input.wl.jobSetParent] = true
+				identityInputs = append(identityInputs[:len(identityInputs):len(identityInputs)], root)
+			}
+		}
+		identifyApp(r, identityInputs, rootGroups)
 		servingHealth := packages.Health("")
 		appVers := map[string]struct{}{}
 		labeled := 0
@@ -2284,7 +2424,7 @@ func refKey(r topology.ResourceRef) string {
 
 func classifyWorkload(kind string, rels *appRelationships) string {
 	switch kind {
-	case "Job", "CronJob", "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "ScaledJob":
+	case "Job", "CronJob", "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "ScaledJob", "JobSet":
 		return "job"
 	case "Deployment", "StatefulSet", "DaemonSet", "Rollout":
 		if rels != nil && (len(rels.Services) > 0 || len(rels.Ingresses) > 0 || len(rels.Routes) > 0 ||
@@ -2305,6 +2445,8 @@ func appWorkloadAPIGroup(kind string) string {
 		return "batch"
 	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "Rollout":
 		return "argoproj.io"
+	case "JobSet":
+		return jobset.Group
 	case "ScaledJob":
 		return "keda.sh"
 	default:

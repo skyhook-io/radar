@@ -178,3 +178,12 @@ describe('affirmative mutation support', () => {
     expect(radarControlBlocked('unknown', false)).toBe(false)
   })
 })
+
+describe('RayCluster runtime Pods, whose flag came after its route', () => {
+  it('trusts the flag, and otherwise the first release that served the route', () => {
+    expect(radarFeatureSupport('rayClusterPods', { features: { rayClusterPods: true } }, 'v1.14.0')).toBe('supported')
+    expect(radarFeatureSupport('rayClusterPods', { features: { resourceIssues: true } }, 'v1.15.0')).toBe('supported')
+    expect(radarFeatureSupport('rayClusterPods', { features: { resourceIssues: true } }, 'v1.14.1')).toBe('unsupported')
+    expect(radarFeatureSupport('rayClusterPods', { features: {} }, 'dev')).toBe('unknown')
+  })
+})

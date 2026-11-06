@@ -105,6 +105,8 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"ClusterRole":                    {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
 	"RoleBinding":                    {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
 	"ClusterRoleBinding":             {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
+	"Workload":                       {group: "kueue.x-k8s.io", diff: diffKueueWorkload, backstopRoot: "spec"},
+	"ProvisioningRequest":            {group: "autoscaling.x-k8s.io", diff: diffProvisioningRequest, backstopRoot: "spec"},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and

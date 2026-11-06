@@ -348,11 +348,11 @@ func RedactIssueRelatedRefs(issue Issue, canRead func(Ref) bool) Issue {
 	kept := make([]issuesapi.DiagnosticFact, 0, len(facts))
 	changed := false
 	for _, fact := range facts {
-		if fact.Type == karpenterFactReferencedByNodePools && !diagnosticRefsReadable(fact.Refs, canRead) {
+		if (fact.Type == karpenterFactReferencedByNodePools || isKueueLinkFact(fact.Type)) && !diagnosticRefsReadable(fact.Refs, canRead) {
 			changed = true
 			continue
 		}
-		if fact.Type == factNetworkPolicyIsolates || fact.Type == factTLSCertificateConsumers {
+		if fact.Type == factNetworkPolicyIsolates || fact.Type == factTLSCertificateConsumers || fact.Type == factKueueAffectedRuns {
 			// issue.AffectedRefs now holds only the readable ones.
 			redacted, keep := redactAffectedRefsFact(fact, issue.AffectedRefs)
 			changed = true

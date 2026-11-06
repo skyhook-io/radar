@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"maps"
 	"sort"
 	"testing"
 
@@ -148,6 +149,12 @@ func TestEdgeTypesForAutoIncludesWorkflowDefinitionEdges(t *testing.T) {
 		if !edgeTypesForAuto(kind)[EdgeConfigures] {
 			t.Fatalf("auto profile for %s must include definition edges", kind)
 		}
+	}
+}
+
+func TestEdgeTypesForAutoTreatsJobSetAsWorkload(t *testing.T) {
+	if got, want := edgeTypesForAuto(KindJobSet), edgeTypesForAuto(KindCronJob); !maps.Equal(got, want) {
+		t.Fatalf("auto profile for JobSet = %v, want the CronJob workload profile %v", got, want)
 	}
 }
 
