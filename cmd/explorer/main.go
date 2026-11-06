@@ -25,6 +25,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/memlimit"
+	"github.com/skyhook-io/radar/internal/nodeimage"
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
@@ -43,6 +44,9 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "node-image" {
+		os.Exit(nodeimage.Run(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	// Subcommand dispatch (before flag parsing — subcommands own their flags).
 	// `radar diagnose <kind>/<name>` is a thin client for a RUNNING instance.
 	if len(os.Args) > 1 && os.Args[1] == "diagnose" {
