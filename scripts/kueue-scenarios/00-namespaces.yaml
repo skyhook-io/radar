@@ -1,0 +1,100 @@
+# Every object carries the ownership label radar.skyhook.io/kueue-scenarios=${PREFIX};
+# `down` deletes only labeled objects named with the prefix, and these namespaces
+# with everything in them. Namespaces Kueue may admit from also
+# carry radar.skyhook.io/kueue-eligible=${PREFIX}; ${PREFIX}-ineligible omits it on purpose.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-quota
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-busy-hidden
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-held
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-missing-flavor
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-lq-denied
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-empty
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-lifecycle
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-drain
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    radar.skyhook.io/kueue-eligible: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-ineligible
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PREFIX}-viewer
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}

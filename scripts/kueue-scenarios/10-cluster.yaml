@@ -1,0 +1,243 @@
+# Cluster-scoped Kueue configuration. Quotas are deliberately tiny CPU/memory
+# amounts so every scenario runs on any cluster; nothing requests accelerators.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: ${PREFIX}-default
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+---
+# Admits one Workload in the busy ClusterQueue and is then removed from that
+# queue's spec (see `up`). The Workload's admission keeps naming this flavor;
+# Kueue v0.18.0 drops it from the ClusterQueue's status.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: ${PREFIX}-spare
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Cohort
+metadata:
+  name: ${PREFIX}-cohort
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: ${PREFIX}-low
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+value: 100
+description: Preemptible fixture work
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: ${PREFIX}-high
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+value: 1000
+description: Fixture work that preempts lower priority
+---
+# No controller implements this controllerName. The scenario script plays the
+# check controller: it marks the check Active and writes per-Workload check
+# states, and Kueue reacts to them as it would to any external check.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: AdmissionCheck
+metadata:
+  name: ${PREFIX}-check
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  controllerName: radar.skyhook.io/kueue-scenarios-check
+---
+# Scenario 1: pending on quota.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-quota
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
+---
+# Scenario 2: lends its idle quota to ${PREFIX}-busy through the cohort.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-lender
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  cohortName: ${PREFIX}-cohort
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: "1"
+            - name: memory
+              nominalQuota: 1Gi
+---
+# Scenario 3: stopped on purpose.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-held
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  stopPolicy: Hold
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
+---
+# Scenario 4: references a ResourceFlavor that does not exist.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-missing-flavor
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-does-not-exist
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
+---
+# Scenario 6: the queue behind a LocalQueue whose Workloads the viewer cannot list.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-lq-denied
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
+---
+# Scenario 7: confirmed empty. No LocalQueue other than ${PREFIX}-empty/empty
+# points here and no Workload is ever submitted.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-empty
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
+---
+# Lifecycle states: finished, failed, deactivated, LocalQueue missing,
+# namespace not eligible.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-lifecycle
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 500m
+            - name: memory
+              nominalQuota: 512Mi
+---
+# Preemption by priority inside one ClusterQueue.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-preempt
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  preemption:
+    withinClusterQueue: LowerPriority
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
