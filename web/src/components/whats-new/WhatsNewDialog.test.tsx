@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Megaphone } from 'lucide-react'
 import type { WhatsNewState } from '../../api/client'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './WhatsNew'
-import { RELEASE_NOTES, type ReleaseNotes } from './releaseNotes'
+import { MAX_CARDS, RELEASE_NOTES, type ReleaseNotes } from './releaseNotes'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -273,6 +273,20 @@ describe('WhatsNew', () => {
     expect(dialog()).toBeNull()
     expect(seenPosts).toEqual([])
     expect(status.current.unread).toBe(true)
+  })
+
+  it('widens the dialog only for a full set of cards', async () => {
+    serverState = { currentVersion: 'v1.15.0', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    expect(document.querySelector('.w-\\[760px\\]')).not.toBeNull()
+    expect(document.querySelector('.w-\\[840px\\]')).toBeNull()
+  })
+
+  it('gives a full set of cards the wider dialog', async () => {
+    setCatalog({ ...HEADLINE, highlights: Array.from({ length: MAX_CARDS }, (_, i) => card(`card-${i}`, `Card ${i}`, 9)) })
+    serverState = { currentVersion: 'v1.15.0', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    expect(document.querySelector('.w-\\[840px\\]')).not.toBeNull()
   })
 
   it('composes the releases a user skipped, leading with the strongest', async () => {

@@ -19,6 +19,7 @@ import {
   type ComposedHighlight,
   type ComposedNotes,
   type ReleaseNotes,
+  MAX_CARDS,
 } from './releaseNotes'
 import type { UsageDataStatus } from '../../api/usage-data'
 import { UsageDataAsk } from '../usage-data/UsageDataAsk'
@@ -276,8 +277,11 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
 
   if (isCloud) return null
 
+  // A full grid wraps most descriptions a line longer at the default width.
+  const width = view?.notes.highlights.length === MAX_CARDS ? 'w-[840px]' : 'w-[760px]'
+
   return (
-    <DialogPortal open={open} onClose={close} ariaLabelledBy={titleId} className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[min(980px,calc(100vh-4rem))] flex flex-col overflow-hidden rounded-xl">
+    <DialogPortal open={open} onClose={close} ariaLabelledBy={titleId} className={clsx(width, 'max-w-[calc(100vw-2rem)] max-h-[min(980px,calc(100vh-4rem))] flex flex-col overflow-hidden rounded-xl')}>
       {view && (
         <WhatsNewContent
           titleId={titleId}
