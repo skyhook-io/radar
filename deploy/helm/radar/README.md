@@ -629,8 +629,9 @@ With exec off:
 - The MCP `exec_pod` tool is not registered, even with `mcp.execTools: true`.
 - CloudNativePG loses live sessions, cancel and terminate, PgBouncer state,
   per-instance parameters and the restored-database read.
-- Inspecting a private image needs `get` on its pull Secret, because exec access
-  no longer authorizes it.
+- For signed-in users, inspecting a private image needs `get` on its pull Secret,
+  and Radar's own registry credentials are no longer used. Without authentication,
+  image inspection doesn't change.
 
 Logs, port-forward, workload actions, Helm and alerts don't depend on exec. This
 setting only affects Radar: anyone Kubernetes RBAC allows can still use

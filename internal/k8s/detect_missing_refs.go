@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/envresolve"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -22,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 )
 
@@ -128,6 +130,16 @@ const MissingWebhookBackendReason = "Missing webhook backend Service"
 
 func WebhookBackendFingerprint(namespace, name string) string {
 	return missingRefFingerprint(MissingWebhookBackendReason, "clientConfig.service:"+namespace+"/"+name)
+}
+
+const MissingGatewayParentReason = "Parent Gateway not found"
+
+// GatewayParentFingerprint keys a missing parent-Gateway finding on the Gateway
+// itself, so every route pointing at the same absent Gateway shares one stable
+// identity regardless of which parentRef index, sectionName or port named it —
+// a per-Gateway grouping key siblings can later collapse on.
+func GatewayParentFingerprint(namespace, name string) string {
+	return missingRefFingerprint(MissingGatewayParentReason, "parentGateway:"+namespace+"/"+name)
 }
 
 // refLookupResult classifies a lister Get result into the honest tri-state
@@ -1055,12 +1067,12 @@ func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 	if cache == nil || dynamicCache == nil || discovery == nil {
 		return nil
 	}
-	svcLister := cache.Services()
-	if svcLister == nil {
-		return nil
-	}
 	now := time.Now()
+	// The Services lister gates only the backend check; parent-Gateway detection
+	// reads Gateways, so it must still run when the Services informer is absent.
+	svcLister := cache.Services()
 	getReferenceGrants := gatewayReferenceGrantGetter(dynamicCache, discovery)
+	gatewayGVR, gatewayKnown := discovery.GetGVRWithGroup("Gateway", "gateway.networking.k8s.io")
 	var out []Detection
 	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 		gvr, ok := discovery.GetGVRWithGroup(kind, "gateway.networking.k8s.io")
@@ -1084,7 +1096,12 @@ func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 			routes = items
 		}
 		for _, route := range routes {
-			out = append(out, detectGatewayRouteMissingBackends(cache, svcLister, getReferenceGrants, kind, route, now)...)
+			if svcLister != nil {
+				out = append(out, detectGatewayRouteMissingBackends(cache, svcLister, getReferenceGrants, kind, route, now)...)
+			}
+			if gatewayKnown {
+				out = append(out, detectGatewayRouteMissingParents(dynamicCache, gatewayGVR, kind, route, now)...)
+			}
 		}
 	}
 	return out
@@ -1188,6 +1205,58 @@ func detectGatewayRouteMissingBackends(cache *ResourceCache, svcLister corev1lis
 				}
 			}
 		}
+	}
+	return out
+}
+
+// detectGatewayRouteMissingParents flags each parentRef that names a Gateway
+// which does not exist. It complements detectGatewayRouteMissingBackends (which
+// reads only backendRefs) and the controller-status detector (silent when no
+// controller claims the route): a route with a valid backend but a nonexistent
+// parent is otherwise invisible. Absence is read through ReadableObject, which is
+// authoritative only when the serving informer had synced before the read — an
+// unsynced or unserved namespace yields no finding (never a false "missing"). The
+// finding carries a RequiredReads for the Gateway's namespace so a caller who
+// cannot read that namespace does not receive the derived absence claim. Severity
+// is a flat warning: the reference is a real config defect, but a dangling parent
+// is not proof the route is wanted, and existence of another parent would prove
+// neither compensation nor acceptance.
+func detectGatewayRouteMissingParents(dynamicCache *DynamicResourceCache, gatewayGVR schema.GroupVersionResource, kind string, route *unstructured.Unstructured, now time.Time) []Detection {
+	parents, found, err := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	if err != nil || !found {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []Detection
+	for pi, p := range parents {
+		pm, ok := p.(map[string]any)
+		if !ok || !configrefs.GatewayParentIsGateway(pm) {
+			continue
+		}
+		name, _ := pm["name"].(string)
+		if name == "" {
+			continue
+		}
+		ns := configrefs.GatewayRefNamespace(pm, route.GetNamespace())
+		key := ns + "/" + name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		_, exists, readable := dynamicCache.ReadableObject(gatewayGVR, ns, name)
+		if !readable || exists {
+			continue
+		}
+		source := fmt.Sprintf("spec.parentRefs[%d]", pi)
+		det := missingRefProblemSev(now, kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(),
+			"warning", MissingGatewayParentReason,
+			fmt.Sprintf("%s references Gateway %q in namespace %q which does not exist", source, name, ns),
+			route.GetCreationTimestamp().Time)
+		det.Fingerprint = GatewayParentFingerprint(ns, name)
+		det.RequiredReads = []issuesapi.EvidenceRead{{Group: "gateway.networking.k8s.io", Resource: gatewayGVR.Resource, Namespace: ns, Verb: "list"}}
+		out = append(out, withFix(det,
+			fmt.Sprintf("Gateway %q in namespace %q, named by this route's parentRef, doesn't exist, so the route is not attached to it.", name, ns),
+			fmt.Sprintf("Point the parentRef at an existing Gateway, remove the stale parentRef, or create Gateway %q in namespace %q if this route should attach to it.", name, ns)))
 	}
 	return out
 }

@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -133,6 +134,20 @@ func ArgoEmptyRenderGuardHolds(app *unstructured.Unstructured) bool {
 	}
 	sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
 	return strings.EqualFold(sync, "OutOfSync") && ArgoSyncPrunesEverything(app)
+}
+
+// ArgoCreateNamespaceEnabled reports whether an Application's
+// spec.syncPolicy.syncOptions turns on Argo's CreateNamespace behavior. Matches
+// Argo's own check (exact string equality on "CreateNamespace=true", as
+// SyncOptions.HasOption does): a differently-cased or mistyped value is not the
+// enabled option, so Radar must not treat it as set and mask the misconfiguration.
+// A nil Application or missing syncOptions is not set.
+func ArgoCreateNamespaceEnabled(app *unstructured.Unstructured) bool {
+	if app == nil {
+		return false
+	}
+	opts, _, _ := unstructured.NestedStringSlice(app.Object, "spec", "syncPolicy", "syncOptions")
+	return slices.Contains(opts, "CreateNamespace=true")
 }
 
 // ArgoConditionMessages returns the messages of an Argo Application's

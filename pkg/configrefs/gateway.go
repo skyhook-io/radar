@@ -29,3 +29,108 @@ func GatewayRefNamespace(ref map[string]any, routeNamespace string) string {
 	}
 	return routeNamespace
 }
+
+// GatewayParentRefInSpec reports whether a status.parents[].parentRef still
+// names one of the route's spec.parentRefs, by exact reference identity after
+// Gateway API defaulting: group, kind, namespace, name, sectionName and port
+// must all agree. sectionName and port are part of that identity and are NOT
+// wildcarded — an unset field matches only an unset field — so narrowing or
+// widening a parentRef's scope retires the status entry recorded for the old
+// scope. routeNamespace defaults an omitted namespace on EITHER side, resolved
+// independently, so an omitted status namespace never inherits an explicit spec
+// namespace. A status entry that matches no spec parentRef is stale and the
+// caller should ignore it.
+func GatewayParentRefInSpec(statusRef map[string]any, specParentRefs []any, routeNamespace string) bool {
+	if len(statusRef) == 0 {
+		return false
+	}
+	for _, sp := range specParentRefs {
+		specRef, ok := sp.(map[string]any)
+		if !ok {
+			continue
+		}
+		if gatewayParentRefsEqual(statusRef, specRef, routeNamespace) {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayParentRefsEqual(a, b map[string]any, routeNamespace string) bool {
+	if gatewayRefGroup(a) != gatewayRefGroup(b) {
+		return false
+	}
+	if gatewayRefKind(a) != gatewayRefKind(b) {
+		return false
+	}
+	if GatewayRefNamespace(a, routeNamespace) != GatewayRefNamespace(b, routeNamespace) {
+		return false
+	}
+	an, _ := a["name"].(string)
+	bn, _ := b["name"].(string)
+	if an != bn {
+		return false
+	}
+	as, _ := a["sectionName"].(string)
+	bs, _ := b["sectionName"].(string)
+	if as != bs {
+		return false
+	}
+	return gatewayRefPortEqual(a, b)
+}
+
+// gatewayRefGroup returns the parentRef's API group, distinguishing an omitted
+// group (defaults to the Gateway group) from an explicit empty group (the core
+// group) — mirroring GatewayParentIsGateway, and deliberately NOT collapsing ""
+// into the Gateway group the way the display-only detector helper does.
+func gatewayRefGroup(ref map[string]any) string {
+	if g, ok := ref["group"].(string); ok {
+		return g
+	}
+	return gatewayAPIGroup
+}
+
+// gatewayRefKind returns the parentRef's kind. Kind defaults to Gateway
+// independently of group; an absent or empty kind is Gateway.
+func gatewayRefKind(ref map[string]any) string {
+	if k, ok := ref["kind"].(string); ok && k != "" {
+		return k
+	}
+	return "Gateway"
+}
+
+// gatewayRefPortEqual compares the optional port of two parentRefs. Presence is
+// compared separately from value: both absent is equal, one absent is not, and
+// a present-but-unparseable port never compares equal (so schema-invalid data
+// cannot accidentally match).
+func gatewayRefPortEqual(a, b map[string]any) bool {
+	av, aPresent := a["port"]
+	bv, bPresent := b["port"]
+	if aPresent != bPresent {
+		return false
+	}
+	if !aPresent {
+		return true
+	}
+	an, aok := gatewayPortValue(av)
+	bn, bok := gatewayPortValue(bv)
+	if !aok || !bok {
+		return false
+	}
+	return an == bn
+}
+
+func gatewayPortValue(v any) (int64, bool) {
+	switch t := v.(type) {
+	case int64:
+		return t, true
+	case int32:
+		return int64(t), true
+	case int:
+		return int64(t), true
+	case float64:
+		return int64(t), true
+	default:
+		return 0, false
+	}
+}

@@ -402,10 +402,11 @@ func podReferencesSecret(pod *corev1.Pod, secretName string) bool {
 
 // PodsDependingOnSecretProducer resolves a Secret-producing CR (cert-manager
 // Certificate via spec.secretName, external-secrets ExternalSecret via
-// spec.target.name defaulting to its own name) to the pods that reference the
-// Secret it owns. The producer→Secret edge is declared in the CR spec and the
-// Pod→Secret edge is declared in the pod spec, so the chain is structural. Returns
-// nil when the CR can't be fetched or names no target.
+// spec.target.name defaulting to its own name, Bitnami SealedSecret which the
+// controller forces to its own name) to the pods that reference the Secret it
+// owns. The producer→Secret edge is declared in the CR spec and the Pod→Secret
+// edge is declared in the pod spec, so the chain is structural. Returns nil when
+// the CR can't be fetched or names no target.
 func (p *CacheProvider) PodsDependingOnSecretProducer(group, kind, namespace, name string) (string, []Ref) {
 	if p == nil || p.cache == nil || namespace == "" || name == "" {
 		return "", nil
@@ -423,6 +424,10 @@ func (p *CacheProvider) PodsDependingOnSecretProducer(group, kind, namespace, na
 		if secretName == "" {
 			secretName = name // ExternalSecret defaults the target Secret to its own name
 		}
+	case "SealedSecret":
+		// The controller forces the produced Secret's name to the SealedSecret's
+		// own name; spec.template.metadata.name is overwritten and does not name it.
+		secretName = name
 	}
 	if secretName == "" {
 		return "", nil
