@@ -24,7 +24,7 @@ function row(overrides: Partial<AppDeployRow>): AppDeployRow {
 }
 
 function deploys(rows: AppDeployRow[], overrides: Partial<AppDeploys> = {}): AppDeploys {
-  return { rows, partial: false, partialReasons: [], ...overrides }
+  return { rows, partial: false, partialReasons: [], stillLoading: [], ...overrides }
 }
 
 describe('ApplicationDeploys', () => {
@@ -56,6 +56,21 @@ describe('ApplicationDeploys', () => {
     await renderDeploys({ deploys: null })
 
     expect(text()).toContain('Loading deploys…')
+  })
+
+  it('keeps a loader until something has loaded', async () => {
+    await renderDeploys({ deploys: deploys([], { stillLoading: ['Still loading revisions for 2 workloads.'] }) })
+
+    expect(text()).toContain('Loading deploys…')
+    expect(text()).not.toContain('No deploys to show.')
+  })
+
+  it('shows what has loaded and says what is left', async () => {
+    await renderDeploys({ deploys: deploys([row({})], { stillLoading: ['Still loading revisions for 2 workloads.'] }) })
+
+    expect(text()).toContain('v2')
+    expect(text()).toContain('Still loading revisions for 2 workloads.')
+    expect(text()).not.toContain('Loading deploys…')
   })
 
   it('tells the host when it is on screen', async () => {

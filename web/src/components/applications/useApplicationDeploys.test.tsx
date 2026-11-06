@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAppDeploys, type AppSourceRef, type AppWorkload } from "@skyhook-io/k8s-ui";
-import { useApplicationDeploys } from "./useApplicationDeploys";
+import { MAX_WORKLOADS_READ, useApplicationDeploys } from "./useApplicationDeploys";
 
 vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 
@@ -81,13 +81,13 @@ describe("useApplicationDeploys", () => {
   };
 
   const history = { data: { appKey: "shop/app/checkout", anchors: [] }, isPending: false, isError: false };
-  const built = () => buildAppDeploys(latest.deploys!);
+  const built = () => buildAppDeploys(latest!);
 
   it("reads nothing until the view is on screen", async () => {
     await paint(<Probe workloads={[deployment]} history={history} visible={false} />);
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(latest).toEqual({ deploys: null, deploysPending: true });
+    expect(latest).toBeNull();
   });
 
   it("reads each workload that has revisions, by its plural kind", async () => {
@@ -123,12 +123,90 @@ describe("useApplicationDeploys", () => {
     expect(built().partialReasons).toEqual(["Revision history for Deployment worker couldn't be read."]);
   });
 
-  it("waits for the source history before answering", async () => {
+  it("shows revisions while the source history loads", async () => {
     fetchMock.mockImplementation(async () => respond(200, [revision]));
-    await paint(<Probe workloads={[deployment]} history={{ isPending: true, isError: false }} visible />);
+    const sourceRef: AppSourceRef = { type: "helm", tool: "helm", kind: "HelmRelease", namespace: "shop", name: "checkout" };
+    await paint(<Probe workloads={[deployment]} sourceRef={sourceRef} history={{ isPending: true, isError: false }} visible />);
     await settle();
 
-    expect(latest).toEqual({ deploys: null, deploysPending: true });
+    expect(built().rows).toMatchObject([{ revision: 1, live: true }]);
+    expect(built().stillLoading).toEqual(["Still loading Helm history for checkout."]);
+  });
+
+  it("shows the workloads that answered while one is still pending", async () => {
+    const worker = { ...deployment, name: "worker" };
+    fetchMock.mockImplementation(async (url) =>
+      String(url).includes("/worker/") ? new Promise<Response>(() => {}) : respond(200, [revision]),
+    );
+    await paint(<Probe workloads={[deployment, worker]} history={history} visible />);
+    await vi.waitFor(async () => {
+      await flush();
+      expect(client.isFetching()).toBe(1);
+    });
+    await flush();
+
+    expect(built().rows).toMatchObject([{ revision: 1, live: true }]);
+    expect(built().stillLoading).toEqual(["Still loading revisions for 1 workload."]);
+    expect(built().partial).toBe(false);
+  });
+
+  describe("request budget", () => {
+    const many = Array.from({ length: 100 }, (_, i) => ({ ...deployment, name: `checkout-worker-${i}` }));
+    const requests = () => fetchMock.mock.calls.length;
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      fetchMock.mockImplementation(async () => respond(200, [revision]));
+    });
+
+    afterEach(() => {
+      focusManager.setFocused(undefined);
+      vi.useRealTimers();
+    });
+
+    it("reads a bounded number of workloads per refresh, and says the list is incomplete", async () => {
+      await paint(<Probe workloads={many} history={history} visible />);
+      await advance(1_000);
+      expect(requests()).toBe(MAX_WORKLOADS_READ);
+
+      await advance(20_000);
+      expect(requests()).toBe(2 * MAX_WORKLOADS_READ);
+      expect(built().partialReasons).toEqual([
+        `Showing revisions for ${MAX_WORKLOADS_READ} of 100 workloads. Open a workload to see its own.`,
+      ]);
+    });
+
+    it("reads the workloads rolling out first", async () => {
+      const rollout = { phase: "stalled", active: false, manual: false, label: "Stalled", desired: 1, updated: 0, ready: 0, available: 0 } as const;
+      const last = { ...many[99], rollout };
+      await paint(<Probe workloads={[...many.slice(0, 99), last]} history={history} visible />);
+      await advance(1_000);
+
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes(last.name))).toBe(true);
+    });
+
+    it("stops refreshing while the page is hidden", async () => {
+      await paint(<Probe workloads={[deployment]} history={history} visible />);
+      await advance(1_000);
+      expect(requests()).toBe(1);
+
+      await act(async () => focusManager.setFocused(false));
+      await advance(60_000);
+      expect(requests()).toBe(1);
+    });
+
+    it("stops refreshing when the view closes", async () => {
+      await paint(<Probe workloads={[deployment]} history={history} visible />);
+      await advance(1_000);
+
+      await paint(<Probe workloads={[deployment]} history={history} visible={false} />);
+      await advance(60_000);
+      expect(requests()).toBe(1);
+    });
   });
 
   it("says a revision list could not be read rather than showing none", async () => {

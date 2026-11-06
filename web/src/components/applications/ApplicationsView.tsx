@@ -287,7 +287,7 @@ function AppDetailRoute({
     const selected = workloads.find((workload) => workloadKey(workload) === selectedWorkloadKey);
     return selected ? [selected] : workloads;
   }, [app.workloads, selectedWorkloadKey]);
-  const { deploys, deploysPending } = useApplicationDeploys({
+  const deploys = useApplicationDeploys({
     workloads: deployWorkloads,
     sourceRef: app.sourceRef,
     history: historyQuery,
@@ -689,7 +689,6 @@ function AppDetailRoute({
         selectedView={selectedView}
         onSelectView={selectView}
         deploys={deploys}
-        deploysLoading={deploysPending}
         onDeploysVisibleChange={setDeploysVisible}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}
