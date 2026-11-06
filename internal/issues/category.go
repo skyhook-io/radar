@@ -164,11 +164,13 @@ func Classify(in classifyInput) issuesapi.Category {
 		case g == "external-secrets.io":
 			return issuesapi.CategorySecretSyncFailed
 		case g == "bitnami.com":
-			// A SealedSecret that can't produce its Secret (Synced=False, e.g.
-			// "no key could decrypt") is a secret-production failure — the same
-			// bucket as External Secrets — so the secret-producer root-cause link
-			// recognizes it as a producer. Other bitnami.com conditions are generic.
-			if in.Kind == "SealedSecret" {
+			// Only a SealedSecret whose Synced condition is False failed to
+			// PRODUCE its Secret (e.g. "no key could decrypt") — that is the
+			// secret-production failure the producer root-cause link keys on, the
+			// same bucket as External Secrets. Any other condition type (Ready,
+			// Available, …) or other bitnami.com kind is generic: don't mislabel
+			// it "secret sync failed" or make it a secret-producer root.
+			if in.Kind == "SealedSecret" && conditionTypeFromReason(in.Reason) == "Synced" {
 				return issuesapi.CategorySecretSyncFailed
 			}
 			return issuesapi.CategoryOperatorConditionFail
@@ -196,6 +198,15 @@ func Classify(in classifyInput) issuesapi.Category {
 		return classifyProblem(in)
 	}
 	return issuesapi.CategoryUnknown
+}
+
+// conditionTypeFromReason extracts the condition type from a condTypeReason-encoded
+// string: "Synced: UnsealError" or "Ready=False" → "Synced" / "Ready".
+func conditionTypeFromReason(reason string) string {
+	if i := strings.IndexAny(reason, ":="); i >= 0 {
+		return strings.TrimSpace(reason[:i])
+	}
+	return strings.TrimSpace(reason)
 }
 
 // classifyProblem handles the broad source=problem channel (radar's per-kind
