@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Anchor, Code, GitBranch, History, Link2, Package, RefreshCw, Settings, X } from 'lucide-react'
 import { FactGrid, FactRow, FactValue, FetchResult, type Fact } from '@skyhook-io/k8s-ui'
-import { useObservedHelmRelease } from '../../api/client'
+import { isStableClientError, useObservedHelmRelease } from '../../api/client'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { getHelmStatusColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -121,7 +121,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
 
       <div className="flex-1 overflow-y-auto">
         <ObservedHelmDrawerNote />
-        {!data ? (
+        {!data || isStableClientError(error) ? (
           <FetchResult loading={isLoading} error={error} notFoundMessage="No object you can read carries this release’s Helm metadata" className="h-32" />
         ) : activeTab === 'overview' ? (
           <OverviewTab release={data} />
