@@ -327,6 +327,37 @@ describe('buildAppDeploys', () => {
       expect(rows.find((row) => row.source === 'helm')?.via).toBe('Helm revision 8')
     })
 
+    it('credits a record to one revision of a workload', () => {
+      const { rows } = buildAppDeploys({
+        sourceRef: helmSource,
+        anchors: [{ ...helmAnchor, source: 'checkout-1.4.2 · v2' }],
+        workloads: [{
+          ref: deployment,
+          revisions: [
+            revision(3, { isCurrent: true, createdAt: '2026-11-02T10:01:20Z', image: 'shop/checkout:v3' }),
+            revision(2, { createdAt: '2026-11-02T10:00:00Z', image: 'shop/checkout:v2' }),
+          ],
+        }],
+      })
+
+      expect(byRevision(rows).get(2)?.via).toBe('Helm revision 7 · checkout-1.4.2 · v2')
+      expect(byRevision(rows).get(3)?.via).toBeUndefined()
+    })
+
+    it('credits one record to a revision in each workload it touched', () => {
+      const worker = { ...deployment, name: 'worker' }
+      const { rows } = buildAppDeploys({
+        sourceRef: helmSource,
+        anchors: [helmAnchor],
+        workloads: [
+          { ref: deployment, revisions: [revision(2, { isCurrent: true })] },
+          { ref: worker, revisions: [revision(2, { isCurrent: true })] },
+        ],
+      })
+
+      expect(rows.map((row) => row.via)).toEqual(['Near Helm revision 7 · checkout-1.4.2', 'Near Helm revision 7 · checkout-1.4.2'])
+    })
+
     it('keeps a failed attempt as its own row, even when it names the version', () => {
       const { rows } = buildAppDeploys({
         sourceRef: helmSource,

@@ -485,6 +485,7 @@ export function ApplicationDetail({
     // A source-backed app has a deploy history even when this workload has no
     // revisions of its own, as a CronJob doesn't.
     if (!selectedWorkload || shownDeploys === undefined) return {};
+    if (!app.sourceRef && !workloadHasRevisions(selectedWorkload.kind)) return {};
     return {
       extraTabs: [
         {
@@ -505,6 +506,7 @@ export function ApplicationDetail({
       ],
     };
   }, [
+    app.sourceRef,
     selectedWorkload,
     shownDeploys,
     deploysLoading,

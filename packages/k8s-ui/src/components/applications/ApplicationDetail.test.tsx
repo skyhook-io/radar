@@ -857,6 +857,27 @@ describe("ApplicationDetail shell", () => {
       expect(contexts).toEqual([{}]);
     });
 
+    it("gives a workload with no revisions the tab only when the app has a source", () => {
+      const cron = { ...app.workloads[0], kind: "CronJob", name: "nightly" };
+      const tabsOf = (sourceRef?: AppRow["sourceRef"]) => {
+        let tabs: unknown;
+        renderDetail({
+          app: { ...app, sourceRef, workloads: [app.workloads[0], cron] },
+          deploys,
+          selectedWorkloadKey: workloadKey(cron),
+          onSelectWorkload: () => {},
+          renderWorkload: (_, context) => {
+            tabs = context.extraTabs;
+            return null;
+          },
+        });
+        return tabs;
+      };
+
+      expect(tabsOf(undefined)).toBeUndefined();
+      expect(tabsOf({ type: "helm", kind: "HelmRelease", namespace: "shop", name: "checkout" })).toHaveLength(1);
+    });
+
     it("reaches a single-workload app as a tab of the workload", () => {
       const contexts: Array<{ extraTabs?: Array<{ id: string }> }> = [];
       renderDetail({

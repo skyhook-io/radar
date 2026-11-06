@@ -25,7 +25,8 @@ export interface AppDeployRow {
   source: AppDeploySource
   /** Where it came from: "Helm revision 12", "Argo CD sync by alice". "Near …" means only that the times line up. */
   via?: string
-  /** A change-cause note the previous revision had too. */
+  /** A change-cause note the previous revision had too. Kubernetes copies the
+   *  workload's note onto each new revision, so it may not be about this one. */
   repeatedCause?: string
   at?: string
   live: boolean | 'unknown'
@@ -149,24 +150,31 @@ interface AnchorPairing {
   proven: boolean
 }
 
-function pairAnchor(revision: WorkloadRevision, anchors: AppHistoryAnchor[]): AnchorPairing | undefined {
-  const created = timeOf(revision.createdAt)
-  if (created === undefined) return undefined
-  const version = imageVersion(revision.image)
-  let closest: AnchorPairing | undefined
-  let closestGap = Infinity
-  for (const anchor of anchors) {
-    const at = timeOf(anchor.timestamp)
-    if (at === undefined || anchorFailed(anchor)) continue
-    const gap = at - created
-    if (gap > ANCHOR_AFTER_REVISION_MS || gap < -ANCHOR_BEFORE_REVISION_MS) continue
-    const proven = anchorNamesVersion(anchor, version)
-    if (!closest || (proven === closest.proven ? Math.abs(gap) < closestGap : proven)) {
-      closest = { anchor, proven }
-      closestGap = Math.abs(gap)
+// One record explains one revision of a workload, though it can explain a
+// revision in each workload it touched. Evidence goes first, then closeness.
+function pairAnchors(revisions: WorkloadRevision[], anchors: AppHistoryAnchor[]): Map<WorkloadRevision, AnchorPairing> {
+  const candidates: Array<AnchorPairing & { revision: WorkloadRevision; gap: number }> = []
+  for (const revision of revisions) {
+    const created = timeOf(revision.createdAt)
+    if (created === undefined) continue
+    const version = imageVersion(revision.image)
+    for (const anchor of anchors) {
+      const at = timeOf(anchor.timestamp)
+      if (at === undefined || anchorFailed(anchor)) continue
+      const gap = at - created
+      if (gap > ANCHOR_AFTER_REVISION_MS || gap < -ANCHOR_BEFORE_REVISION_MS) continue
+      candidates.push({ revision, anchor, proven: anchorNamesVersion(anchor, version), gap: Math.abs(gap) })
     }
   }
-  return closest
+  candidates.sort((a, b) => Number(b.proven) - Number(a.proven) || a.gap - b.gap)
+  const pairings = new Map<WorkloadRevision, AnchorPairing>()
+  const taken = new Set<AppHistoryAnchor>()
+  for (const { revision, anchor, proven } of candidates) {
+    if (pairings.has(revision) || taken.has(anchor)) continue
+    pairings.set(revision, { anchor, proven })
+    taken.add(anchor)
+  }
+  return pairings
 }
 
 function anchorVia(anchor: AppHistoryAnchor): string {
@@ -208,20 +216,23 @@ interface SortableRow {
   sortAt: number
 }
 
+function ownCauseOf(revision: WorkloadRevision, previous: WorkloadRevision | undefined): string | undefined {
+  return revision.changeCause !== previous?.changeCause ? revision.changeCause : undefined
+}
+
 function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[], matched: Set<AppHistoryAnchor>): SortableRow[] {
   const { ref, revisions = [], desired, stale } = input
   const newestFirst = [...revisions].sort((a, b) => b.number - a.number)
+  // The revision's own note is firmer than any record paired by time or version.
+  const pairings = pairAnchors(newestFirst.filter((revision, i) => !ownCauseOf(revision, newestFirst[i + 1])), anchors)
   const rows: SortableRow[] = []
   let sortAt = -Infinity
   for (let i = newestFirst.length - 1; i >= 0; i--) {
     const revision = newestFirst[i]
     const previous = newestFirst[i + 1]
     const cause = revision.changeCause
-    // Kubernetes copies the workload's change-cause onto each new revision, so
-    // a repeat may not be about this one.
-    const ownCause = cause !== previous?.changeCause ? cause : undefined
-    // The revision's own note is firmer than any record paired by time or version.
-    const pairing = ownCause ? undefined : pairAnchor(revision, anchors)
+    const ownCause = ownCauseOf(revision, previous)
+    const pairing = pairings.get(revision)
     const anchor = pairing?.anchor
     if (anchor) matched.add(anchor)
     const version = imageVersion(revision.image)
