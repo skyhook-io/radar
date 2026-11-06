@@ -114,7 +114,7 @@ var categoryDescription = map[Category]string{
 	CategoryMissingConfigRef:     "A pod references a ConfigMap, Secret, or volume that doesn't exist, so it can't start.",
 	CategoryInvalidConfiguration: "A workload contains contradictory or redundant configuration that can make the application behave differently from its manifest's apparent intent.",
 	CategoryPDBBlocksEvictions:   "A PodDisruptionBudget is blocking evictions — node drains and upgrades can't make progress.",
-	CategorySecretSyncFailed:     "An external secret sync (e.g. External Secrets Operator) failed to materialize a Secret.",
+	CategorySecretSyncFailed:     "A secret-producing controller (e.g. External Secrets Operator, or a SealedSecret) failed to materialize a Secret.",
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
 	CategoryServiceMixedBackends:  "A Service's selector matches pods of workloads that don't all serve it (different applications, or a port some don't declare), so part of its traffic reaches pods that may not serve it.",
