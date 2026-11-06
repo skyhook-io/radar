@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/release"
@@ -209,7 +210,7 @@ func TestObservedOutsideStorage(t *testing.T) {
 		return out
 	}
 
-	got := names(observedOutsideStorage(scan, []string{"readable", "flux-target"}, nil))
+	got := names(observedOutsideStorage(scan, []string{"readable", "flux-target"}, nil, nil))
 	// Helm's own answer stands where its storage was read, so an object kept
 	// after an uninstall doesn't resurrect the release there. A Flux release is
 	// judged by where Flux records it's stored, not by its target namespace.
@@ -218,14 +219,21 @@ func TestObservedOutsideStorage(t *testing.T) {
 		t.Fatalf("rows = %v, want %v", got, want)
 	}
 
-	got = names(observedOutsideStorage(scan, nil, []string{"elsewhere"}))
+	got = names(observedOutsideStorage(scan, nil, []string{"elsewhere"}, nil))
 	if !reflect.DeepEqual(got, []string{"elsewhere/cache"}) {
 		t.Fatalf("a namespace filter selects by the release's namespace: %v", got)
 	}
 
 	scan.stamped = append(scan.stamped, stampedObject{kind: "ClusterRole", name: "cache-reader", release: "cache", releaseNS: "elsewhere"})
-	rows := observedOutsideStorage(scan, nil, []string{"elsewhere"})
+	rows := observedOutsideStorage(scan, nil, []string{"elsewhere"}, nil)
 	if len(rows) != 1 || rows[0].ResourceCount != 2 {
 		t.Fatalf("a namespace filter must keep a release's cluster-scoped objects: %+v", rows)
+	}
+
+	// Helm returned this one from a namespace the scan can't connect it to, so
+	// it would otherwise appear twice.
+	got = names(observedOutsideStorage(scan, nil, nil, []HelmRelease{{Name: "api", Namespace: "denied", StorageNamespace: "flux-system"}}))
+	if slices.Contains(got, "denied/api") {
+		t.Fatalf("a release Helm returned must not repeat as observed: %v", got)
 	}
 }

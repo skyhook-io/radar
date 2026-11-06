@@ -34,14 +34,15 @@ func TestSkipScanKindNeverReadsSecrets(t *testing.T) {
 		skip        bool
 	}{
 		{"Secret", "", true},
-		{"Pod", "", true},
-		{"ReplicaSet", "apps", true},
 		{"Event", "events.k8s.io", true},
 		{"Deployment", "apps", false},
 		{"ConfigMap", "", false},
+		// A chart can deploy these directly; what a controller made is skipped
+		// by its owner, not its kind.
+		{"Pod", "", false},
+		{"ReplicaSet", "apps", false},
 		// A custom kind with a built-in's name is not that built-in.
 		{"Secret", "example.com", false},
-		{"Pod", "example.com", false},
 	} {
 		if got := skipScanKind(tc.kind, tc.group); got != tc.skip {
 			t.Errorf("skipScanKind(%q, %q) = %t, want %t", tc.kind, tc.group, got, tc.skip)
@@ -167,12 +168,17 @@ func TestStampScanKeepsOnlyWhatHelmDeployed(t *testing.T) {
 		Labels: map[string]string{"app.kubernetes.io/managed-by": "Helm", chartLabelKey: "api-1.0.0"}}}})
 	scan.add(search.ScannedObject{Kind: "ConfigMap", Object: &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "half", Namespace: "apps",
 		Annotations: map[string]string{releaseNameAnnotation: "api"}}}})
+	// A chart can deploy a bare Pod.
+	scan.add(search.ScannedObject{Kind: "Pod", Object: &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "one-off", Namespace: "apps", Annotations: stamps("api", "apps")}}})
+	// A Deployment copies its annotations onto its ReplicaSets.
+	scan.add(search.ScannedObject{Kind: "ReplicaSet", Group: "apps", Object: &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "api-abc", Namespace: "apps",
+		Annotations: stamps("api", "apps"), OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "api", Controller: &owner}}}}})
 	// An operator copied the stamps onto an object it created.
 	scan.add(search.ScannedObject{Kind: "StatefulSet", Group: "apps", Object: &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "copy", Namespace: "apps",
 		Annotations: stamps("api", "apps"), OwnerReferences: []metav1.OwnerReference{{Kind: "Installation", Name: "x", Controller: &owner}}}}})
 
-	if len(scan.stamped) != 1 || scan.stamped[0].name != "api" {
-		t.Fatalf("stamped = %+v, want only the Deployment", scan.stamped)
+	if len(scan.stamped) != 2 || scan.stamped[0].name != "api" || scan.stamped[1].name != "one-off" {
+		t.Fatalf("stamped = %+v, want the Deployment and the bare Pod", scan.stamped)
 	}
 }
 

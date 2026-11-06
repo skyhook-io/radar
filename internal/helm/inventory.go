@@ -91,7 +91,7 @@ func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*Rele
 		return nil, err
 	}
 	inventory.ObjectCoverage = &scan.coverage
-	inventory.Observed = observedOutsideStorage(scan, read, req.Scope.Requested)
+	inventory.Observed = observedOutsideStorage(scan, read, req.Scope.Requested, inventory.Releases)
 	// Health reads the current cache, so this has to come after it. It also
 	// keeps a storage read from one cluster from pairing with objects of another.
 	if !req.Scope.Provider.Current() {
@@ -200,8 +200,13 @@ func namesOrNil(namespaces []string) *resourceapi.NameSet {
 // objects are leftovers, as Helm's own list would agree. A Flux release stored
 // elsewhere is judged by where it's stored. Requested filters on the release's
 // namespace, after the scan, so a release keeps the objects it placed in other
-// namespaces and its cluster-scoped ones.
-func observedOutsideStorage(scan *stampScan, read, requested []string) []ObservedRelease {
+// namespaces and its cluster-scoped ones. A release Helm already returned is
+// left out however it was stored: without its HelmRelease, the scan can't tell.
+func observedOutsideStorage(scan *stampScan, read, requested []string, releases []HelmRelease) []ObservedRelease {
+	known := make(map[releaseKey]bool, len(releases))
+	for _, release := range releases {
+		known[releaseKey{release.Namespace, release.Name}] = true
+	}
 	rows := []ObservedRelease{}
 	partial := scan.coverage.Status != resourceapi.CoverageComplete
 	for key, objects := range groupStamped(scan.stamped) {
@@ -210,7 +215,7 @@ func observedOutsideStorage(scan *stampScan, read, requested []string) []Observe
 		if storage == "" {
 			storage = row.Namespace
 		}
-		if slices.Contains(read, storage) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
+		if known[key] || slices.Contains(read, storage) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
 			continue
 		}
 		addObservedHealth(&row, objects, partial)

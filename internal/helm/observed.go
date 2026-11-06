@@ -121,15 +121,12 @@ type fluxEvidence struct {
 }
 
 // skipScanKind leaves out what must not or need not be read. Secrets are never
-// read here: that is this path's whole contract. Pods and ReplicaSets inherit
-// their owner's labels and annotations, so they would add objects Helm didn't
-// deploy; Nodes and Events never carry stamps.
+// read here: that is this path's whole contract. Nodes and Events never carry
+// stamps, and a chart can't deploy them in any useful way.
 func skipScanKind(kind, group string) bool {
 	switch group {
 	case "":
-		return kind == "Secret" || kind == "Pod" || kind == "Event" || kind == "Node"
-	case "apps":
-		return kind == "ReplicaSet" || kind == "ControllerRevision"
+		return kind == "Secret" || kind == "Event" || kind == "Node"
 	case "events.k8s.io":
 		return kind == "Event"
 	}
@@ -145,8 +142,8 @@ type stampScan struct {
 }
 
 // add records what one object says about Helm. A controller-owned object is
-// skipped because operators copy their parent's annotations onto what they
-// create, and Helm didn't deploy those.
+// skipped because controllers copy their parent's annotations onto what they
+// create, as a Deployment does to its ReplicaSets, and Helm didn't deploy those.
 func (s *stampScan) add(o search.ScannedObject) {
 	if o.Kind == fluxHelmReleaseKind && o.Group == fluxHelmReleaseGroup {
 		if u, ok := o.Object.(*unstructured.Unstructured); ok {

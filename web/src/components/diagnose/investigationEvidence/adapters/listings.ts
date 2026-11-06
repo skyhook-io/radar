@@ -8,6 +8,23 @@ import type { InvestigationEvidenceSource } from "../types";
 // the text that matched. They render on the inventory card so a citation
 // can name a row the way it names a resource in a listing.
 
+// A caller who can't read all of Helm's storage gets an object, whose observed
+// rows have no status of their own; the card must not read as though they did.
+function helmReleaseRows(payload: unknown): unknown[] | undefined {
+  if (Array.isArray(payload)) return payload;
+  const value = record(payload);
+  if (!value || !Array.isArray(value.releases) || !Array.isArray(value.observed)) {
+    return undefined;
+  }
+  return [
+    ...value.releases,
+    ...value.observed.map((entry) => {
+      const item = record(entry);
+      return item ? { ...item, status: "status unknown" } : entry;
+    }),
+  ];
+}
+
 export function adaptListHelmReleases(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
@@ -15,7 +32,8 @@ export function adaptListHelmReleases(
 ): void {
   // Retained runs may contain the Helm producer's nil-slice encoding.
   if (payload === null) payload = [];
-  if (!Array.isArray(payload)) {
+  const rows = helmReleaseRows(payload);
+  if (!rows) {
     invalidPayload(builder, source);
     return;
   }
@@ -26,7 +44,7 @@ export function adaptListHelmReleases(
   adaptListResources(
     builder,
     source,
-    payload.map((entry) => {
+    rows.map((entry) => {
       const item = record(entry);
       if (!item) return entry;
       const chart = [item.chart, item.chartVersion]
