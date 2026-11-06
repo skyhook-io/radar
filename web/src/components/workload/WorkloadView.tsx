@@ -5,8 +5,7 @@ import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } fro
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { workloadPodAwaitsScheduling } from '../capacity/podDemandGate'
-import { clsx } from 'clsx'
-import { Terminal, Stethoscope } from 'lucide-react'
+import { Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
   EditableYamlView,
@@ -57,7 +56,6 @@ import {
   fetchWorkloadHistoryPage,
   useChanges,
   useResourceWithRelationships,
-  usePodLogs,
   useTopology,
   useUpdateResource,
   usePreviewResources,
@@ -108,6 +106,9 @@ import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, Reachab
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
+import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
+import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
+import { isKubeRayCluster } from '../logs/rayClusterPods'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -1223,6 +1224,8 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            resourceLoading={resourceLoading}
+            resourceError={resourceError}
             group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
@@ -1521,6 +1524,8 @@ function LogsTabContent({
   selectedRunKey,
   onSelectRun,
   viewNamespaces,
+  resourceLoading,
+  resourceError,
 }: {
   kind: string
   apiKind: string
@@ -1536,6 +1541,8 @@ function LogsTabContent({
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
   viewNamespaces: string[]
+  resourceLoading: boolean
+  resourceError: Error | null
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1554,6 +1561,22 @@ function LogsTabContent({
 
   const integrationLogs = resourceLogs({ kind, group, namespace, name }, resource)
   if (integrationLogs) return integrationLogs
+
+  if (isKubeRayCluster(kind, group, resource?.apiVersion)) {
+    return (
+      <RayClusterLogsTab
+        namespace={namespace}
+        name={name}
+        uid={resource?.metadata?.uid}
+        suspendRequested={resource?.spec?.suspend === true}
+        rootLoading={resourceLoading}
+        rootError={resourceError}
+        historyPods={pods}
+        selectedPod={selectedPod}
+        onSelectPod={onSelectPod}
+      />
+    )
+  }
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
@@ -1646,85 +1669,6 @@ function PodLogsTab({
         initialContainer={initialContainer || undefined}
         autoStream={autoStream}
       />
-    </div>
-  )
-}
-
-function MultiPodLogsTab({
-  pods,
-  namespace,
-  selectedPod,
-  onSelectPod,
-  initialContainer,
-}: {
-  pods: ResourceRef[]
-  namespace: string
-  selectedPod: string | null
-  onSelectPod: (name: string | null) => void
-  initialContainer?: string | null
-}) {
-  useEffect(() => {
-    if (pods.length > 0 && !selectedPod) {
-      onSelectPod(pods[0].name)
-    }
-  }, [pods, selectedPod, onSelectPod])
-
-  const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
-
-  // Fetch container list for the selected pod
-  const { data: logsData } = usePodLogs(podNamespace, selectedPod || '', {
-    tailLines: 1,
-  })
-  const containers = logsData?.containers || []
-
-  // A terminated pod (common for Job/CronJob children) has nothing to follow —
-  // only stream live ones. Wait for the pod to load before deciding so we don't
-  // briefly auto-stream a completed pod while its phase is still unknown.
-  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, selectedPod || '')
-  const phase = selectedPodResource?.status?.phase
-  const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
-
-  if (pods.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-        <Terminal className="w-12 h-12 mb-4 opacity-50" />
-        <p>No pods available</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="h-full flex flex-col">
-      {pods.length > 1 && (
-        <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
-          {pods.map((pod) => (
-            <button
-              key={pod.name}
-              onClick={() => onSelectPod(pod.name)}
-              className={clsx(
-                'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
-                selectedPod === pod.name
-                  ? 'bg-blue-500 text-theme-text-primary'
-                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover',
-              )}
-            >
-              {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
-            </button>
-          ))}
-        </div>
-      )}
-      {selectedPod && containers.length > 0 && (
-        <div className="flex-1 min-h-0">
-          <LogsViewer
-            key={selectedPod}
-            namespace={podNamespace}
-            podName={selectedPod}
-            containers={containers}
-            initialContainer={initialContainer || undefined}
-            autoStream={autoStream}
-          />
-        </div>
-      )}
     </div>
   )
 }
