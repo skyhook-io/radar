@@ -38,7 +38,8 @@ export interface ReadObjectRef {
  * Part of an answer Radar did not read, and why. A gap covers every
  * combination of its axes. An axis that applies is always present, listed or
  * as an extent; an absent axis doesn't apply to the gap (namespaces on a
- * cluster-scoped kind). Within one answer a namespace is in at most one gap.
+ * cluster-scoped kind). Within a single-kind answer a namespace is in at most one gap;
+ * multi-kind answers may name it for different kinds and reasons.
  * `action` is what the code calls for, so a code the client doesn't know still
  * says what resolves it.
  */

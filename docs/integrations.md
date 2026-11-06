@@ -1806,6 +1806,18 @@ or relationship graph. Follow Workload references for admission and Pods for
 runtime diagnosis. An empty Issues list does not establish runtime health;
 undecided Workloads, unrecognized reasons and MultiKueue handoff are not covered.
 
+**Admission history.** A queued root's Timeline includes controller-owned
+Workloads and their ProvisioningRequests by owner UID. It records observed
+admission, check, reservation, requeue and configuration changes, suppressing
+counter-only and quantity-only retry noise. It cannot reconstruct unwatched
+transitions or deleted provisioning attempts. Initial rows marked "from metadata"
+date only the last status transition, not its current reason or message.
+
+Coverage says when observation started late, retention removed rows, ownership
+records expired, or access/collection withheld related kinds. A gap never asserts
+that a hidden resource exists; an empty Timeline is not proof nothing happened.
+History belongs to the root workload; queue-scoped history is not provided.
+
 ### KubeRay
 
 | Resource | Group | Status source |

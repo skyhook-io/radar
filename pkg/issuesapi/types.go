@@ -681,8 +681,8 @@ type Issue struct {
 type HistoryGapReason string
 
 const (
-	// HistoryObservationStartedLate: this Radar process started observing
-	// after the window began, so earlier changes were never recorded by it.
+	// HistoryObservationStartedLate: Radar began observing the process or a
+	// dependent kind after the window began; earlier changes may be missing.
 	HistoryObservationStartedLate HistoryGapReason = "observation_started_late"
 	// HistoryEventsEvicted: Radar deleted recorded events from the window to
 	// stay within its history size or retention limit.
@@ -691,8 +691,9 @@ const (
 
 // HistoryCoverage reports that a change answer's window starts before the
 // history Radar holds, so an empty or short answer does not establish that
-// nothing changed. Present only when Incomplete. CompleteSince is when the
-// held history becomes complete; it is store-wide, so it is sent only to
+// nothing changed. Present only when Incomplete. CompleteSince is the
+// retained-history boundary, including a later dependent-kind watch when
+// applicable. It can include store-wide activity, so it is sent only to
 // callers who can read the whole cluster.
 type HistoryCoverage struct {
 	Incomplete    bool               `json:"incomplete"`
