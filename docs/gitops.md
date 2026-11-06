@@ -35,7 +35,7 @@ Click any row to open a detail page with three top-level tabs.
 
 ### Topology tab
 
-Graph or table sub-modes. The graph starts from the resources the controller recorded and follows owner references to what they create: Prometheus → StatefulSet → Pod, Certificate → CertificateRequest, and on into nested Applications and Kustomizations. A HelmRelease without a recorded inventory is found by its Helm labels. Filter by kind, sync, health, role, namespace, or search. Large Pod sets appear as groups; click a group to expand.
+Graph or table sub-modes. The graph starts from the resources the controller recorded and follows owner references to what they create: Prometheus → StatefulSet → Pod, Certificate → CertificateRequest, and on into nested Applications and Kustomizations. A HelmRelease without a recorded inventory is found by Flux's origin labels (`helm.toolkit.fluxcd.io/name` and `/namespace`), leaving out Helm hooks and objects a controller generated, which show under that controller when the tree reaches it. Filter by kind, sync, health, role, namespace, or search. Large Pod sets appear as groups; click a group to expand.
 
 You see only the resources you can read. A readable resource under a hidden parent stays visible. Resources on another cluster, from a remote Application or a Flux object with `spec.kubeConfig`, are not expanded. When Radar can't read part of the tree, a **Limited resource view** notice says so.
 

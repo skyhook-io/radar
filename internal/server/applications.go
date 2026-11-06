@@ -30,7 +30,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -600,7 +602,19 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 			g = buildAppGraph(cache, namespaces)
 			graphAt = time.Now()
 		}
-		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, canListClusterWorkflowTemplates)
+		session, err := k8s.BeginOwnershipRead(cache)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+		}
+		// Rows are shared by every caller with these namespaces, and a row's
+		// source names only its manager, so managers are read as Radar reads
+		// them, as the managed-source pass below reads every Application and
+		// Kustomization.
+		managers := ownership.NewView(session, ownership.Unrestricted())
+		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, managers, canListClusterWorkflowTemplates)
+		if err := session.ValidateCaches(); err != nil {
+			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+		}
 		rows := groupApplications(wls)
 		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, cache)
 		appSetByKey := appSetFanouts(appSetChildren)
@@ -864,7 +878,7 @@ type appWorkloadInput struct {
 // each to its structural root and label overlay, and classifies add-on
 // machinery. Pods and Warning events are indexed once per namespace and joined,
 // not re-listed per workload.
-func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, canListClusterWorkflowTemplates bool) []appWorkloadInput {
+func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, managers *ownership.View, canListClusterWorkflowTemplates bool) []appWorkloadInput {
 	var out []appWorkloadInput
 	jobSets := listDynamicByNamespacesGroup(ctx, cache, namespaces, jobset.Kind, jobset.Group)
 	jobSetByName := map[string]*unstructured.Unstructured{}
@@ -903,6 +917,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 			group = resourceid.GroupFromAPIVersion(resource.GetAPIVersion())
 		}
 		rootKey, rootKind, rootGroup, rootIdentity := g.rootOf(group, kind, ns, name)
+		source := workloadSourceRef(managers, resourceid.NewRef(group, kind, ns, name), obj)
 		rels := g.relationshipsFor(kind, ns, name, obj)
 		addon, why := packages.ClassifyAddon(lbls["helm.sh/chart"], lbls["app.kubernetes.io/name"], lbls["app.kubernetes.io/part-of"], name, lbls["addonmanager.kubernetes.io/mode"], image)
 		out = append(out, appWorkloadInput{
@@ -927,7 +942,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				appAnnotation: strings.TrimSpace(anns[appIdentityAnnotation]),
 			},
 			overlay:      overlay,
-			source:       sourceRefForInput(overlay, rootKind, rootGroup, rootKey),
+			source:       source,
 			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, workloadUID(obj), pods),
 			rels:         rels,
 			rootKey:      rootKey,
@@ -2137,13 +2152,38 @@ func managerTier(kind, group string) (tier int, confidence string, ok bool) {
 	return 0, "", false
 }
 
-func sourceRefForInput(overlay *subject.AppOverlay, rootKind, rootGroup, rootKey string) *appSourceRef {
-	if overlay != nil {
-		if ref := sourceRefFromSubject(overlay.Winner.Ref); ref != nil {
-			return ref
-		}
+// workloadSourceRef answers ref's source from the managers' evidence. Workflow
+// template rows carry their object as its raw map.
+func workloadSourceRef(managers *ownership.View, ref resourceid.Ref, obj any) *appSourceRef {
+	meta, ok := obj.(metav1.Object)
+	if raw, isMap := obj.(map[string]any); isMap {
+		meta, ok = &unstructured.Unstructured{Object: raw}, true
 	}
-	return sourceRefFromRoot(rootKind, rootGroup, rootKey)
+	if !ok {
+		return nil
+	}
+	observed := ownership.Observe(ref, meta)
+	managers.Seed(observed)
+	answer := managers.Manager(ref)
+	// The session may hold a newer incarnation than the listed row describes.
+	if answer.Subject.Read.Object.UID != observed.UID {
+		return nil
+	}
+	return sourceRefFromManager(answer)
+}
+
+// sourceRefFromManager is the source system object a workload's manager answer
+// leads with, by the rule list and search summaries apply to a manager lead:
+// a manager whose list names the workload or its nearest controller ancestor,
+// a claim naming a manager that exists here (whose list may name it, lag
+// behind it or be unreadable), or a native Helm release named by its
+// annotations.
+func sourceRefFromManager(answer ownership.ManagerAnswer) *appSourceRef {
+	if resourcecontext.ManagerSummary(answer) == nil {
+		return nil
+	}
+	lead := answer.Lead
+	return sourceRefFromSubject(subject.Ref{Group: lead.Group, Kind: lead.Kind, Namespace: lead.Namespace, Name: lead.Name})
 }
 
 func sourceRefFromSubject(ref subject.Ref) *appSourceRef {
@@ -2159,24 +2199,6 @@ func sourceRefFromSubject(ref subject.Ref) *appSourceRef {
 		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 	case ref.Kind == "HelmRelease" && ref.Group == "helm.toolkit.fluxcd.io":
 		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
-	default:
-		return nil
-	}
-}
-
-func sourceRefFromRoot(rootKind, rootGroup, rootKey string) *appSourceRef {
-	parts := strings.SplitN(rootKey, "/", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
-		return nil
-	}
-	ns, name := parts[0], parts[2]
-	switch {
-	case rootKind == string(topology.KindApplication) && rootGroup == "argoproj.io":
-		return &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: ns, Name: name}
-	case rootKind == string(topology.KindKustomization) && rootGroup == "kustomize.toolkit.fluxcd.io":
-		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: ns, Name: name}
-	case rootKind == string(topology.KindHelmRelease) && rootGroup == "helm.toolkit.fluxcd.io":
-		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: ns, Name: name}
 	default:
 		return nil
 	}

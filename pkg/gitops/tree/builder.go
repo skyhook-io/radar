@@ -230,6 +230,20 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	if helmProjection {
+		// Topology carries labels, not annotations or owner references. The
+		// live object rules out a label match that is a Helm hook or that a
+		// controller generated: the latter shows under its controller, if the
+		// tree reaches it, rather than as a member beside it.
+		managed = slices.DeleteFunc(managed, func(res managedResource) bool {
+			obj := objects[refKey(res.Ref)]
+			if obj == nil {
+				return false
+			}
+			release, member := gitops.FluxHelmLabelledRelease(obj)
+			return !member || release != identity(rootRef)
+		})
+	}
 	// A referenced chart's source is local to that observed chart. Follow only
 	// the already-prefetched chart, never every chart in the cluster.
 	var chartSources []relatedResource
