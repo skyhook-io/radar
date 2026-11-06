@@ -282,8 +282,13 @@ function AppDetailRoute({
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
     enabled: !selectedWorkloadKey || deploysVisible,
   });
+  const deployWorkloads = useMemo(() => {
+    const workloads = app.workloads ?? [];
+    const selected = workloads.find((workload) => workloadKey(workload) === selectedWorkloadKey);
+    return selected ? [selected] : workloads;
+  }, [app.workloads, selectedWorkloadKey]);
   const { deploys, deploysPending } = useApplicationDeploys({
-    workloads: appWorkloads,
+    workloads: deployWorkloads,
     sourceRef: app.sourceRef,
     history: historyQuery,
     visible: deploysVisible,
