@@ -290,10 +290,10 @@ describe('buildAppDeploys', () => {
       const { rows } = buildAppDeploys({
         sourceRef: helmSource,
         anchors: [{ ...helmAnchor, source: 'checkout-1.4.2 · 2.0.1' }],
-        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image: 'shop/checkout:v2.0.1' })] }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image: 'shop/checkout:v2.0.1' }), revision(1, { createdAt: '2026-10-30T10:00:00Z' })] }],
       })
 
-      expect(rows).toHaveLength(1)
+      expect(rows).toHaveLength(2)
       expect(rows[0]).toMatchObject({ via: 'Near Helm revision 7 · checkout-1.4.2 · 2.0.1', status: 'deployed', detail: 'Upgrade complete' })
     })
 
@@ -301,13 +301,14 @@ describe('buildAppDeploys', () => {
       const synced = (image: string) => buildAppDeploys({
         sourceRef: gitopsSource,
         anchors: [{ type: 'gitops', title: 'Argo CD sync', revision: 'a1b2c3d4e5f60718', timestamp: '2026-11-02T10:01:00Z' }],
-        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image })] }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, serving: true, image }), revision(1, { createdAt: '2026-10-30T10:00:00Z' })] }],
       }).rows
 
-      expect(synced('shop/checkout:a1b2c3d')).toMatchObject([{ via: 'Near Argo CD sync · a1b2c3d4e5f60718' }])
-      expect(synced('shop/checkout:main-a1b2c3d4')).toMatchObject([{ via: 'Near Argo CD sync · a1b2c3d4e5f60718' }])
-      expect(synced('shop/checkout:a1b2c3d4e5f60718')).toMatchObject([{ via: 'Near Argo CD sync' }])
-      expect(synced('shop/checkout:ffffffffff')).toHaveLength(2)
+      expect(synced('shop/checkout:a1b2c3d')[0]).toMatchObject({ via: 'Near Argo CD sync · a1b2c3d4e5f60718' })
+      expect(synced('shop/checkout:main-a1b2c3d4')[0]).toMatchObject({ via: 'Near Argo CD sync · a1b2c3d4e5f60718' })
+      expect(synced('shop/checkout:a1b2c3d4e5f60718')[0]).toMatchObject({ via: 'Near Argo CD sync' })
+      expect(synced('shop/checkout:a1b2c3d')).toHaveLength(2)
+      expect(synced('shop/checkout:ffffffffff')).toHaveLength(3)
     })
 
     it('does not take a same-version rollout restart for the record beside it', () => {
@@ -326,6 +327,18 @@ describe('buildAppDeploys', () => {
       expect(rows.find((row) => row.source === 'helm')).toMatchObject({ status: 'deployed', at: '2026-11-03T10:00:30Z' })
       expect(byRevision(rows).get(3)?.via).toBe('Near Helm revision 7 · checkout-1.4.2 · v2')
       expect(byRevision(rows).get(3)?.status).toBeUndefined()
+    })
+
+    it('does not fold a record into a revision whose predecessor was pruned', () => {
+      const { rows } = buildAppDeploys({
+        sourceRef: helmSource,
+        anchors: [{ ...helmAnchor, source: 'checkout-1.4.2 · v2' }],
+        workloads: [{ ref: deployment, revisions: [revision(2, { isCurrent: true, image: 'shop/checkout:v2' })] }],
+      })
+
+      expect(rows.map((row) => row.source)).toEqual(['helm', 'revision'])
+      expect(rows[1].via).toBe('Near Helm revision 7 · checkout-1.4.2 · v2')
+      expect(rows[1].status).toBeUndefined()
     })
 
     it('pairs a restart right after a deploy with nothing', () => {
@@ -366,7 +379,7 @@ describe('buildAppDeploys', () => {
       })
 
       expect(revisionRow(rows)?.via).toBe('Near Helm revision 7 · checkout-1.4.2 · 2.0.1')
-      expect(rows.find((row) => row.source === 'helm')?.via).toBe('Helm revision 8')
+      expect(rows.filter((row) => row.source === 'helm').map((row) => row.via)).toContain('Helm revision 8')
     })
 
     it('shows the one Argo CD sync that status.history and operationState both report', () => {
@@ -602,7 +615,7 @@ describe('imageVersion', () => {
       sourceRef: { type: 'helm' as const, kind: 'HelmRelease', namespace: 'prod', name: 'checkout' },
       anchors: [helm],
       workloads: [
-        { ref: deployment, revisions: [revision(2, { isCurrent: true })] },
+        { ref: deployment, revisions: [revision(2, { isCurrent: true }), revision(1, { createdAt: '2026-10-30T10:00:00Z' })] },
         { ref: worker, revisions: undefined },
         { ref: cron },
       ],
@@ -611,7 +624,7 @@ describe('imageVersion', () => {
     it('keeps only its revisions', () => {
       const { rows } = buildAppDeploys(input, deployment)
 
-      expect(rows.map((row) => row.workload.name)).toEqual([deployment.name])
+      expect(new Set(rows.map((row) => row.workload.name))).toEqual(new Set([deployment.name]))
     })
 
     it('keeps a source record that another workload folded', () => {

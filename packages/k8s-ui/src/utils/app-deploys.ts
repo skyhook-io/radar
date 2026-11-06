@@ -169,7 +169,8 @@ function pairAnchors(revisions: Array<{ revision: WorkloadRevision; previous?: W
     const created = timeOf(revision.createdAt)
     if (created === undefined) continue
     const version = imageVersion(revision.image)
-    const versionChanged = version !== imageVersion(previous?.image)
+    // Without the previous revision there's no telling whether the version moved.
+    const versionChanged = previous !== undefined && version !== imageVersion(previous.image)
     for (const anchor of anchors) {
       const at = timeOf(anchor.timestamp)
       if (at === undefined) continue

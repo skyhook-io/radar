@@ -183,6 +183,22 @@ describe('ApplicationDeploys', () => {
     expect(text()).toContain(workload.name)
   })
 
+  it('names the namespace when an app spans several', async () => {
+    await renderDeploys({
+      deploys: deploys([row({ id: 'a' }), row({ id: 'b', workload: { ...workload, name: 'worker' } })]),
+    })
+    expect(text()).not.toContain(`prod/${workload.name}`)
+
+    await renderDeploys({
+      deploys: deploys([
+        row({ id: 'a', workload: { ...workload, namespace: 'prod', name: 'api' } }),
+        row({ id: 'b', workload: { ...workload, namespace: 'staging', name: 'api' } }),
+      ]),
+    })
+    expect(text()).toContain('prod/api')
+    expect(text()).toContain('staging/api')
+  })
+
   it('caps long histories until asked', async () => {
     const rows = Array.from({ length: 45 }, (_, i) => row({ id: `r${i}`, revision: i + 1, version: `version-${i}` }))
     await renderDeploys({ deploys: deploys(rows) })
