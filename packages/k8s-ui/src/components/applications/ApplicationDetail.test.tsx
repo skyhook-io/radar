@@ -101,6 +101,13 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain('2/3 updated · 3 available')
   })
 
+  it("renders the host's header actions before the health pill, and nothing without them", () => {
+    const html = renderDetail({ headerActions: <button type="button">host action</button> });
+    expect(html.indexOf("host action")).toBeGreaterThan(html.indexOf("</h1>"));
+    expect(html.indexOf("host action")).toBeLessThan(html.indexOf("Healthy"));
+    expect(renderDetail()).not.toContain("host action");
+  });
+
   it("preserves the built-in issue surface when the host slot is omitted", () => {
     const html = renderDetail({ renderOverviewIssues: undefined });
 
