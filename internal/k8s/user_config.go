@@ -120,12 +120,21 @@ func (t *systemReviewTransport) RoundTrip(req *http.Request) (*http.Response, er
 	allowed, err := t.reviewer.allowed(req.Context(), spec)
 	if err != nil {
 		log.Printf("[auth] SubjectAccessReview for %s failed: %v", SanitizeForLog(t.user.Username), err)
-		return denyStatus(req, http.StatusServiceUnavailable, "Radar could not check permissions for "+t.user.Username+" with the API server", metav1.StatusReasonServiceUnavailable)
+		return denyStatus(req, http.StatusServiceUnavailable, permissionCheckFailedMessage+t.user.Username+" with the API server", metav1.StatusReasonServiceUnavailable)
 	}
 	if !allowed {
 		return deny(req, fmt.Sprintf("%s is not allowed to %s this resource", t.user.Username, reviewSpec(spec).verb()), metav1.StatusReasonForbidden)
 	}
 	return t.next.RoundTrip(req)
+}
+
+const permissionCheckFailedMessage = "Radar could not check permissions for "
+
+// IsPermissionCheckFailed reports whether msg carries the refusal of a
+// background identity's read because Radar could not check its permissions,
+// rather than a refusal or failure from the API server.
+func IsPermissionCheckFailed(msg string) bool {
+	return strings.Contains(msg, permissionCheckFailedMessage)
 }
 
 const userTokenRequiredMessage = "Live actions need a user token, which only single sign-on sessions carry; this request has none."

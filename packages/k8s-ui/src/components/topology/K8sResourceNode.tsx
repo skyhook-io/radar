@@ -267,6 +267,7 @@ export const NODE_DIMENSIONS: Record<
   HorizontalPodAutoscaler: { width: 280, height: 84 },
   Job: { width: 300, height: 84 },
   CronJob: { width: 200, height: 84 },
+  JobSet: { width: 260, height: 84 },
   Workflow: { width: 400, height: 84 },
   CronWorkflow: { width: 240, height: 84 },
   WorkflowTemplate: { width: 240, height: 84 },
@@ -391,6 +392,10 @@ export interface ServicePortEntry {
 }
 
 export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
+  if (typeof nodeData.earlierJobRun === 'string') {
+    const state = Number(nodeData.terminating) > 0 ? ' • terminating' : ''
+    return `Earlier run${state}`
+  }
   if (nodeData.deploymentMembership === 'source-only') {
     return `Declared by ${nodeData.deploymentSourceLabel ?? 'deployment source'}`
   }
@@ -534,6 +539,18 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
     case "Node": {
       const instanceType = nodeData.instanceType as string;
       return instanceType || "";
+    }
+    case "JobSet": {
+      // Another API group's JobSet comes from the generic pass, without these fields.
+      if (!String(nodeData.apiVersion ?? "").startsWith("jobset.x-k8s.io/")) return "";
+      // Declared, not observed: a JobSet holding roles behind dependencies
+      // has created fewer Jobs than its spec asks for.
+      // An older Radar draws an owned JobSet without a phase; its status
+      // color then comes from generic conditions, so don't claim "Unknown".
+      const phase = (nodeData.phase as string) || "";
+      if (!phase) return "";
+      const declared = nodeData.declaredJobs as number | undefined;
+      return typeof declared === "number" ? `${phase} • ${declared} ${declared === 1 ? "Job" : "Jobs"} declared` : phase;
     }
     case "AnalysisRun": {
       const phase = (nodeData.phase as string) || "Unknown";
@@ -839,7 +856,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                 </div>
               </Tooltip>
             ) : (
-              <div className="text-xs text-theme-text-secondary truncate mt-0.5">
+              <div className="text-xs text-theme-text-secondary truncate mt-0.5" title={typeof nodeData.earlierJobRun === 'string' ? `Earlier run of Job ${nodeData.earlierJobRun}` : undefined}>
                 {subtitle}
               </div>
             )

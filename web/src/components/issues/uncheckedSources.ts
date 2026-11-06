@@ -8,6 +8,7 @@ const SOURCE_LINES: Record<string, string> = {
   resources: "Some resources couldn't be checked, so their issues may be missing.",
   custom_resources: "Custom resources couldn't be checked, so failing ones may be missing.",
   karpenter: "Karpenter resources couldn't be checked, so NodePool and NodeClaim issues may be missing.",
+  kueue: "Kueue resources couldn't be checked, so blocked runs and broken queues may be missing.",
 };
 
 // For a source this version doesn't know, sent by a newer Radar.
@@ -46,6 +47,11 @@ function kindsLine(source: UncheckedSource): string | undefined {
   }
   const names = nameList(kinds);
   switch (source.reason) {
+    case "caller_access_denied":
+      if (source.source === "kueue") {
+        return `You can't read ${names}, so Radar can't tell you whether a queue your runs wait on is stopped on purpose or broken.`;
+      }
+      return `You can't read ${names}, so Radar didn't check the issues that depend on them.`;
     case "kind_sync_pending":
       return `Still loading ${names}, so their issues may be missing.`;
     case "kind_sync_failed":
@@ -71,4 +77,16 @@ export function uncheckedSourceLines(sources: IssuesResponse["unchecked_sources"
     else unknown = true;
   }
   return unknown ? [...known, UNKNOWN_SOURCE_LINE] : [...known];
+}
+
+/** Why an empty per-resource answer can't be read as "none", for the gaps that name the resource. */
+export function uncheckedSubjectWhy(sources: UncheckedSource[] | undefined): string | undefined {
+  const first = sources?.[0];
+  if (!first) return undefined;
+  const plural = [...new Set((first.kinds ?? []).map((k) => englishPlural(k.kind)))];
+  const kinds = plural.length > 0 ? nameList(plural) : undefined;
+  if (first.reason === "caller_access_denied") {
+    return kinds ? `you can't read ${kinds}, which this check needs` : "you can't read what this check needs";
+  }
+  return kinds ? `${kinds} couldn't be checked` : "some checks couldn't run";
 }
