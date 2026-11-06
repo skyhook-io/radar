@@ -62,7 +62,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryIngressBackendMissing
 		case "Missing IngressClass":
 			return issuesapi.CategoryIngressClassMissing
-		case "Missing Gateway backend Service", "Missing Gateway backend Service port", "Missing Gateway ReferenceGrant":
+		case "Missing Gateway backend Service", "Missing Gateway backend Service port", "Missing Gateway ReferenceGrant", k8s.MissingGatewayParentReason:
 			return issuesapi.CategoryGatewayRouteInvalid
 		case k8s.MissingWebhookBackendReason:
 			return issuesapi.CategoryWebhookBackendDown
