@@ -4,6 +4,7 @@ import {
   AlertBanner,
   Badge,
   DiffViewer,
+  FieldManagersLine,
   TerminalBlock,
   formatRelativeAgeTime,
   pluralize,
@@ -250,6 +251,7 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
               {change.summary}
             </p>
           ) : null}
+          <FieldManagersLine labels={change.field_managers} className="mt-1" />
           {change.running_previous_value ? (
             <AlertBanner
               variant="warning"

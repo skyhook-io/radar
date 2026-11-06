@@ -584,7 +584,17 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	// be called pre-Run (returns ErrRunning otherwise). If it ever
 	// fails we log and continue — the informer still functions, just
 	// with fattier cached objects.
-	if err := informer.SetTransform(DropUnstructuredManagedFields); err != nil {
+	// Each informer gets its own field-manager index so a reaped or replaced
+	// informer takes its summaries with it.
+	var fieldManagers *fieldManagerIndex
+	if d.config.TrackFieldManagers && !isEventResource(gvr) {
+		fieldManagers = newFieldManagerIndex()
+	}
+	transform := func(obj any) (any, error) {
+		fieldManagers.capture(obj)
+		return DropUnstructuredManagedFields(obj)
+	}
+	if err := informer.SetTransform(transform); err != nil {
 		log.Printf("Warning: SetTransform failed for %v: %v (cache will retain managedFields/CRD schemas)", gvr, err)
 	}
 	// The factory makes one informer per GVR and Radar never drops a
@@ -617,14 +627,19 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	}()
 	d.informerGeneration++
 	d.informers[key] = &informerEntry{
-		informer:  informer,
-		cancel:    cancel,
+		informer: informer,
+		// The factory keeps a stopped informer, and through its transform
+		// the index; release the summaries with the watch.
+		cancel: func() {
+			cancel()
+			fieldManagers.close()
+		},
 		startedAt: time.Now().UTC(),
 	}
 	delete(d.observations, gvr)
 
 	kind := d.gvrToKind(gvr)
-	d.addDynamicChangeHandlers(informer, kind, gvr)
+	d.addDynamicChangeHandlers(informer, kind, gvr, fieldManagers)
 	// Re-apply handlers registered via AddGVRChangeHandler so informers created
 	// lazily (or re-created after an idle reap) still feed derived caches.
 	for _, h := range d.gvrHandlers[gvr] {
@@ -1433,21 +1448,21 @@ func (d *DynamicResourceCache) safeCallback(name string, fn func()) {
 	fn()
 }
 
-func (d *DynamicResourceCache) addDynamicChangeHandlers(inf cache.SharedIndexInformer, kind string, gvr schema.GroupVersionResource) {
+func (d *DynamicResourceCache) addDynamicChangeHandlers(inf cache.SharedIndexInformer, kind string, gvr schema.GroupVersionResource, fieldManagers *fieldManagerIndex) {
 	_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
-			d.enqueueDynamicChange(kind, gvr, obj, nil, OpAdd)
+			d.enqueueDynamicChange(kind, gvr, obj, nil, OpAdd, fieldManagers)
 		},
 		UpdateFunc: func(oldObj, newObj any) {
-			d.enqueueDynamicChange(kind, gvr, newObj, oldObj, OpUpdate)
+			d.enqueueDynamicChange(kind, gvr, newObj, oldObj, OpUpdate, fieldManagers)
 		},
 		DeleteFunc: func(obj any) {
-			d.enqueueDynamicChange(kind, gvr, obj, nil, OpDelete)
+			d.enqueueDynamicChange(kind, gvr, obj, nil, OpDelete, fieldManagers)
 		},
 	})
 }
 
-func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.GroupVersionResource, obj any, oldObj any, op string) {
+func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.GroupVersionResource, obj any, oldObj any, op string, fieldManagers *fieldManagerIndex) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -1502,6 +1517,14 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 		Diff:      diff,
 		Group:     gvr.Group,
 		Resource:  gvr.Resource,
+	}
+	switch op {
+	case OpUpdate:
+		if oldU, ok := oldObj.(*unstructured.Unstructured); ok {
+			change.FieldManagers = fieldManagers.update(oldU, u)
+		}
+	case OpDelete:
+		fieldManagers.forget(uid)
 	}
 
 	// Always fire OnChange (even during sync adds — Radar uses this for timeline)

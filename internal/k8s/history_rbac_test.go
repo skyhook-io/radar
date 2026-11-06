@@ -122,7 +122,7 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 	}
 	t.Cleanup(timeline.ResetStore)
 
-	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-1", "delete", testRoleBinding(vpaUpdaterSA), nil, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-1", "delete", testRoleBinding(vpaUpdaterSA), nil, nil, false, nil)
 	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"RoleBinding"}})
 	if err != nil || len(events) != 1 {
 		t.Fatalf("events = %+v, err = %v", events, err)
@@ -147,8 +147,8 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 		rb.Name, rb.CreationTimestamp = name, metav1.Now()
 		return rb
 	}
-	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-2", "add", nil, created("vpa-updater", vpaUpdaterSA), nil, false)
-	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "local", "rb-3", "add", nil, created("local", rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: "saleor", Name: "app"}), nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "vpa-updater", "rb-2", "add", nil, created("vpa-updater", vpaUpdaterSA), nil, false, nil)
+	recordToTimelineStore(ActiveClusterContext(), "RoleBinding", "saleor", "local", "rb-3", "add", nil, created("local", rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Namespace: "saleor", Name: "app"}), nil, false, nil)
 	events, _ = timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"RoleBinding"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd}})
 	if len(events) != 2 {
 		t.Fatalf("creates = %+v", events)
@@ -167,7 +167,7 @@ func TestRecordBindingDeleteKeepsWhatItGranted(t *testing.T) {
 	}
 
 	// Other kinds' deletes stay content-free.
-	recordToTimelineStore(ActiveClusterContext(), "Role", "saleor", "vpa-updater", "role-1", "delete", &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "vpa-updater", Namespace: "saleor"}}, nil, nil, false)
+	recordToTimelineStore(ActiveClusterContext(), "Role", "saleor", "vpa-updater", "role-1", "delete", &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "vpa-updater", Namespace: "saleor"}}, nil, nil, false, nil)
 	events, _ = timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Role"}})
 	if len(events) != 1 || events[0].Diff != nil {
 		t.Fatalf("Role delete = %+v, want no diff", events)

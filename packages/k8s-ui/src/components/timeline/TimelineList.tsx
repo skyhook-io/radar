@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Collapse, CollapseChevron } from '../ui/Collapse'
-import { DiffViewer, DiffBadge } from './DiffViewer'
+import { DiffViewer, DiffBadge, FieldManagersLine, fieldManagerLabels } from './DiffViewer'
 import { TimelineToolbar } from './TimelineToolbar'
 import {
   matchesActivityFilter,
@@ -741,6 +741,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
                     {isHistorical && item.reason ? item.reason : item.eventType}
                   </span>
                   {item.diff && <DiffBadge diff={item.diff} />}
+                  <FieldManagersLine labels={fieldManagerLabels(item.diff)} />
                   {item.healthState && item.healthState !== 'unknown' && (
                     <span className={clsx('badge-sm', getHealthBadgeColor(item.healthState))}>
                       {item.healthState}
@@ -793,7 +794,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
           <Collapse open={expanded} mountLazily>
             <div className="mt-3 pt-3 border-t-subtle">
               <div className="text-xs text-theme-text-tertiary mb-2">Changes:</div>
-              <DiffViewer diff={item.diff} />
+              <DiffViewer diff={item.diff} hideFieldManagers />
             </div>
           </Collapse>
         )}

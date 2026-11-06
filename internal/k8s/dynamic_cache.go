@@ -111,6 +111,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 					obj,
 					change.Diff,
 					true,
+					change.FieldManagers,
 				)
 			},
 			OnDrop: func(kind, ns, name, reason, op string) {
@@ -122,6 +123,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
 				return ComputeDiff(kind, oldObj, newObj)
 			},
+			TrackFieldManagers: true,
 		})
 		if err != nil {
 			initErr = err

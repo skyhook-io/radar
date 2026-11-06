@@ -65,6 +65,11 @@ type ResourceChange struct {
 	UID       string
 	Operation string    // "add", "update", "delete"
 	Diff      *DiffInfo // Diff details for updates (optional)
+	// FieldManagers names, for an update, the field managers whose
+	// managedFields entries changed between the old and new versions. Set
+	// only when the cache was configured with TrackFieldManagers; empty when
+	// no entry changed or a version's summary was not captured.
+	FieldManagers []FieldManagerWrite
 
 	// Group and Resource carry the GVR coordinates for per-kind RBAC
 	// authorization of change frames. Populated by the dynamic cache (which
@@ -80,6 +85,11 @@ type ResourceChange struct {
 type DiffInfo struct {
 	Fields  []FieldChange `json:"fields"`
 	Summary string        `json:"summary"`
+	// FieldManagers names the field managers active between the two observed
+	// versions (see ResourceChange.FieldManagers). Managers are labels the
+	// writing client chose, such as kubectl-edit or helm, not users. Absent
+	// when unknown.
+	FieldManagers []FieldManagerWrite `json:"fieldManagers,omitempty"`
 }
 
 // FieldChange represents a single field that changed.
@@ -153,6 +163,11 @@ type CacheConfig struct {
 	// Secret values, which become digests). Callers may inspect the object
 	// but must not mutate it. May be nil.
 	OnTransform func(obj any)
+
+	// TrackFieldManagers keeps a compact summary of each object's
+	// managedFields (about 120 bytes per object) before they are stripped,
+	// so updates carry ResourceChange.FieldManagers.
+	TrackFieldManagers bool
 
 	// OnObservedChange is called for every non-Event resource change after diff
 	// computation, including changes excluded by noisy filtering or initial-add
@@ -370,6 +385,10 @@ type DynamicCacheConfig struct {
 	// ComputeDiff is called for update operations to diff old/new objects.
 	// May be nil.
 	ComputeDiff func(kind string, oldObj, newObj any) *DiffInfo
+
+	// TrackFieldManagers is CacheConfig.TrackFieldManagers for dynamic
+	// informers.
+	TrackFieldManagers bool
 
 	// NamespaceScoped restricts informers to a single namespace.
 	NamespaceScoped bool
