@@ -210,7 +210,7 @@ rules:
     verbs: ["get"]
   {{- end }}
 
-  {{- if and .Values.rbac.podExec (include "radar.userTokenMode" . | eq "false") }}
+  {{- if and .Values.rbac.podExec (not .Values.disableExec) (include "radar.userTokenMode" . | eq "false") }}
   # Pod exec (opt-in - enables terminal feature)
   - apiGroups: [""]
     resources:

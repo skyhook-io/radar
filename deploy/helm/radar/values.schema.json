@@ -124,6 +124,7 @@
         }
       }
     },
+    "disableExec": { "type": "boolean", "description": "Turn off pod exec through Radar for everyone on this cluster. Wins over rbac.podExec and mcp.execTools." },
     "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
     "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
     "podSecurityContext": { "type": "object" },
