@@ -1745,6 +1745,20 @@ object missing. An intentionally stopped parent softens a LocalQueue's alert
 only when fresh evidence establishes that the stop is its sole cause; table
 status retains the LocalQueue's own report.
 
+#### Workloads in a queue
+
+Queue detail lists and filters member Workloads by admission state. A
+ClusterQueue row distinguishes submission through a LocalQueue's **current**
+target from the Workload's recorded reservation; these can name different queues.
+Finished and deleting Workloads remain listed while retained, so Radar's member
+counts can differ from Kueue's live counts. List order is not admission order.
+
+Workloads and LocalQueues require exact per-kind list access in each namespace.
+Unread namespaces and unresolved submission membership are disclosed, with
+counts shown as lower bounds. A denied Workload read can still leave readable
+LocalQueues and their controller counts. Empty means confirmed empty only with
+complete, unnarrowed coverage and no unresolved submission membership.
+
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
 detail shows native outcomes, reasons, requested Pod counts and PodTemplate

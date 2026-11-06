@@ -814,6 +814,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/jobsets/{namespace}/{name}/logs", s.handleJobSetLogs)
 			r.Get("/kueue/admission/{kind}/{namespace}/{name}", s.handleKueueAdmission)
 			r.Get("/kueue/provisioning/{namespace}/{name}", s.handleKueueProvisioning)
+			r.Get("/kueue/clusterqueues/{name}/workloads", s.handleKueueClusterQueueWorkloads)
+			r.Get("/kueue/localqueues/{namespace}/{name}/workloads", s.handleKueueLocalQueueWorkloads)
 
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
@@ -1513,6 +1515,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,
+		KueueQueueWorkloads:      true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
