@@ -61,6 +61,15 @@ import (
 type applicationsResponse struct {
 	Applications []appRow    `json:"applications"`
 	ArgoClaims   []argoClaim `json:"argoClaims,omitempty"`
+	// Access is set per request and never cached; absent means this caller's
+	// access couldn't be determined.
+	Access *applicationsAccess `json:"access,omitempty"`
+}
+
+// applicationsAccess tells a fleet reader whether a missing row can be explained
+// by this view being narrowed, which only the producer knows.
+type applicationsAccess struct {
+	Restricted bool `json:"restricted"`
 }
 
 // argoClaim propagates a declared Argo Application identity to the cluster its
@@ -75,6 +84,8 @@ type argoClaim struct {
 	DestServer    string        `json:"destServer,omitempty"`
 	DestName      string        `json:"destName,omitempty"`
 	DestNamespace string        `json:"destNamespace,omitempty"`
+	AppNamespace  string        `json:"appNamespace,omitempty"` // the Application itself, on the controller cluster
+	AppName       string        `json:"appName,omitempty"`
 	Workloads     []workloadRef `json:"workloads,omitempty"` // managed workloads (status.resources)
 }
 
@@ -252,6 +263,9 @@ type appWorkload struct {
 	Reason        string                          `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
 	Rollout       *health.WorkloadRolloutActivity `json:"rollout,omitempty"`
 	Batch         *appBatchSummary                `json:"batch,omitempty"`
+	// LatestRevisionAt is when the newest retained ReplicaSet or ControllerRevision
+	// was created. A rollback reuses an old revision, so it doesn't move this.
+	LatestRevisionAt string `json:"latestRevisionAt,omitempty"`
 
 	// envLabel is the explicit environment label, when the workload carries
 	// one (see envLabelOf) — app-identity resolver input, not on the wire.
@@ -292,7 +306,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := s.parseNamespacesForUser(r)
+	namespaces, accessUnknown := s.parseNamespacesForUserWithStatus(r)
 	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
@@ -303,7 +317,22 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, s.filterApplicationAuthenticationRefs(r, resp))
+	out := *s.filterApplicationAuthenticationRefs(r, resp)
+	if perms := k8s.GetCachedPermissionResult(); !accessUnknown && perms != nil {
+		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms.ReadsApplicationsInEvery)}
+	}
+	s.writeJSON(w, &out)
+}
+
+// applicationsViewRestricted reports whether access, not the caller's own filter,
+// left applications out. requested is what the URL asked for (nil = all), effective
+// what the listing ran with, and readable whether Radar's own identity reads those
+// namespaces in full, the empty namespace meaning all of them.
+func applicationsViewRestricted(requested, effective []string, readable func(namespaces []string) bool) bool {
+	if requested == nil {
+		return effective != nil || !readable([]string{""})
+	}
+	return len(effective) < len(requested) || !readable(effective)
 }
 
 // handleApplicationHistory serves a focused app-level change narrative.
@@ -878,6 +907,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	scaledJobBatches := scaledJobBatchSummaries(cache, namespaces)
 	cronWorkflowBatches := cronWorkflowBatchSummaries(ctx, cache, namespaces)
 	argoRollouts := listDynamicByNamespacesGroup(ctx, cache, namespaces, "Rollout", "argoproj.io")
+	latestRevisions := latestRevisionTimes(ctx, cache, namespaces)
 	var updatedRevisionTargets map[string]workloadRevisionTarget
 	var updatedRevisionTargetsOnce sync.Once
 	rolloutReferencedDeployments := map[string]bool{}
@@ -905,26 +935,31 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 		rootKey, rootKind, rootGroup, rootIdentity := g.rootOf(group, kind, ns, name)
 		rels := g.relationshipsFor(kind, ns, name, obj)
 		addon, why := packages.ClassifyAddon(lbls["helm.sh/chart"], lbls["app.kubernetes.io/name"], lbls["app.kubernetes.io/part-of"], name, lbls["addonmanager.kubernetes.io/mode"], image)
+		var latestRevisionAt string
+		if at, ok := latestRevisions[workloadUID(obj)]; ok {
+			latestRevisionAt = at.UTC().Format(time.RFC3339)
+		}
 		out = append(out, appWorkloadInput{
 			wl: appWorkload{
-				Kind:          kind,
-				Group:         group,
-				Namespace:     ns,
-				Name:          name,
-				WorkloadClass: classifyWorkload(kind, rels),
-				Image:         image,
-				Version:       imageutil.ImageTag(image),
-				AppVersion:    lbls["app.kubernetes.io/version"],
-				Health:        string(workloadHealth),
-				Ready:         ready,
-				Desired:       desired,
-				Restarts:      restarts,
-				Reason:        reason,
-				Rollout:       rollout,
-				Batch:         batch,
-				envLabel:      envLabelOf(lbls),
-				nameLabel:     lbls["app.kubernetes.io/name"],
-				appAnnotation: strings.TrimSpace(anns[appIdentityAnnotation]),
+				Kind:             kind,
+				Group:            group,
+				Namespace:        ns,
+				Name:             name,
+				WorkloadClass:    classifyWorkload(kind, rels),
+				Image:            image,
+				Version:          imageutil.ImageTag(image),
+				AppVersion:       lbls["app.kubernetes.io/version"],
+				Health:           string(workloadHealth),
+				Ready:            ready,
+				Desired:          desired,
+				Restarts:         restarts,
+				Reason:           reason,
+				Rollout:          rollout,
+				Batch:            batch,
+				LatestRevisionAt: latestRevisionAt,
+				envLabel:         envLabelOf(lbls),
+				nameLabel:        lbls["app.kubernetes.io/name"],
+				appAnnotation:    strings.TrimSpace(anns[appIdentityAnnotation]),
 			},
 			overlay:      overlay,
 			source:       sourceRefForInput(overlay, rootKind, rootGroup, rootKey),
@@ -1127,6 +1162,45 @@ func applicationServingHealth(ready, desired int) packages.Health {
 		return packages.HealthDegraded
 	}
 	return packages.HealthUnhealthy
+}
+
+// latestRevisionTimes indexes the newest revision creation by owning workload,
+// from one walk of the cached ReplicaSets and ControllerRevisions. Rollouts own
+// ReplicaSets too, so the same index covers them.
+func latestRevisionTimes(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) map[types.UID]time.Time {
+	var revisions []metav1.Object
+	if cache.ReplicaSets() != nil {
+		forEachWorkloadNamespace(namespaces, func(namespace string) {
+			var replicaSets []*appsv1.ReplicaSet
+			if namespace == "" {
+				replicaSets, _ = cache.ReplicaSets().List(labels.Everything())
+			} else {
+				replicaSets, _ = cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
+			}
+			for _, replicaSet := range replicaSets {
+				revisions = append(revisions, replicaSet)
+			}
+		})
+	}
+	if cache.StatefulSets() != nil || cache.DaemonSets() != nil {
+		for _, revision := range listDynamicByNamespacesGroup(ctx, cache, namespaces, "ControllerRevision", "apps") {
+			revisions = append(revisions, revision)
+		}
+	}
+	return newestRevisionByOwner(revisions)
+}
+
+func newestRevisionByOwner(revisions []metav1.Object) map[types.UID]time.Time {
+	newest := make(map[types.UID]time.Time)
+	for _, revision := range revisions {
+		createdAt := revision.GetCreationTimestamp().Time
+		for _, owner := range revision.GetOwnerReferences() {
+			if existing, ok := newest[owner.UID]; !ok || createdAt.After(existing) {
+				newest[owner.UID] = createdAt
+			}
+		}
+	}
+	return newest
 }
 
 func applicationRevisionTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, argoRollouts []*unstructured.Unstructured) map[string]workloadRevisionTarget {
