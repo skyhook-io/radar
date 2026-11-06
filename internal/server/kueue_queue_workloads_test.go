@@ -312,8 +312,18 @@ func TestKueueQueueWorkloadsPaging(t *testing.T) {
 	if _, err := dyn.Resource(kueueClusterQueueGVR).Create(ctx, recreated, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	// The cache sees the delete first, so the queue can read as missing until it
+	// sees the create.
 	waitFor(t, 5*time.Second, func() bool {
-		return get("/api/kueue/clusterqueues/cq/workloads", http.StatusOK).Queue.UID == "ClusterQueue--cq-again"
+		response, err := http.Get(testServer.URL + "/api/kueue/clusterqueues/cq/workloads")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode == http.StatusNotFound {
+			response.Body.Close()
+			return false
+		}
+		return decodeQueueWorkloads(t, response, http.StatusOK).Queue.UID == "ClusterQueue--cq-again"
 	})
 	get("/api/kueue/clusterqueues/cq/workloads?limit=1&cursor="+url.QueryEscape(stale.Workloads.Next), http.StatusBadRequest)
 	get("/api/kueue/localqueues/team-a/missing/workloads", http.StatusNotFound)
