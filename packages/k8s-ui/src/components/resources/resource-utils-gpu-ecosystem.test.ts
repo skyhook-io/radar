@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   getClusterQueueCohort,
@@ -333,5 +335,15 @@ describe('JobSet status evidence boundaries', () => {
     const conditions = [{ type: 'Suspended', status: 'True' }, { type: 'StartupPolicyInProgress', status: 'True' }]
     expect(getJobSetStatus({ spec: { suspend: false }, status: { conditions } }).text).toBe('Starting')
     expect(getJobSetStatus({ spec: { suspend: true }, status: { conditions } }).text).toBe('Suspended')
+  })
+})
+
+// The topology node (pkg/topology) and Go's lifecycle read the same vectors.
+describe('JobSet status shared lifecycle vectors', () => {
+  const vectors = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../../pkg/jobset/testdata/lifecycle.json', import.meta.url)), 'utf8')) as {
+    cases: { name: string; jobSet: unknown; label: string; level: string }[]
+  }
+  it.each(vectors.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    expect(getJobSetStatus(c.jobSet)).toMatchObject({ text: c.label, level: c.level })
   })
 })

@@ -284,6 +284,7 @@ Table-based resource browser with smart columns per resource kind.
 </p>
 
 - Browse all resource types including CRDs
+- Inspect CRD definitions, versions, instances, and searchable schemas
 - Search by name, filter by status or problems (CrashLoopBackOff, ImagePullBackOff, etc.)
 - Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
@@ -494,9 +495,9 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 | **Cost (OpenCost / Kubecost)** | Namespace/workload/node cost via compatible Prometheus metrics or the Kubecost 3 Aggregator (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
-### Local runtime evidence via MCP
+### Local runtime evidence
 
-When Radar runs locally, MCP clients can explicitly collect evidence from one Pod after operator approval.
+When Radar runs locally, use **Collect RabbitMQ evidence**, **Collect NATS evidence** or **Collect Vault evidence** in resource details to select a Pod and collect explicitly. MCP clients can also collect after operator approval.
 
 These observations describe one Pod endpoint, not overall application health, and do not add automatic Issues detection. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
 

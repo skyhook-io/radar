@@ -246,8 +246,9 @@ drawer section in
   `EdgeConfigures` (configuration), `EdgeUses` (scaling/usage), `EdgeProtects`
   (protection). These affect Related Resources grouping, not just appearance.
 - [ ] Reuse lists between node/edge construction and handle cache errors. Check
-  the generic CRD pass and `kindsHandledOutsideGenericCRDPass` for duplicates and
-  collisions. Keep pseudo-kind `KindForGVK`, node IDs and `buildNodeID` /
+  the generic CRD pass for duplicates and collisions: it skips an object a typed
+  pass already drew (matched by resource key, `nodeResourceKeys`) and only adds
+  its owner edges. Keep pseudo-kind `KindForGVK`, node IDs and `buildNodeID` /
   `normalizeKind` in `relationships.go` consistent; use unique node-ID prefixes
   for colliding kinds and test navigation in both directions.
 - [ ] For cluster-scoped kinds, check `ClusterScopedKinds` in

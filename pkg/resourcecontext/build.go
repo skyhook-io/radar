@@ -2058,6 +2058,10 @@ func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac 
 		}
 		out.ConcurrentAdmission = &concurrent
 	}
+	if scheduling.Admission != nil {
+		admission := scheduling.Admission.Clone()
+		out.Admission = &admission
+	}
 
 	out.PodSetAssignments = nil
 	for _, assignment := range scheduling.PodSetAssignments {

@@ -52,12 +52,13 @@ func GroupTitle(g CategoryGroup) string {
 // enum + group map.
 var catalogOrder = []Category{
 	// Scheduling
-	CategoryUnschedulable, CategoryQuotaExceeded, CategoryAdmissionWebhookBlocking,
+	CategoryUnschedulable, CategoryQuotaExceeded, CategoryAdmissionWebhookBlocking, CategoryQueueAdmissionBlocked,
 	// Startup
 	CategoryImagePullFailed, CategoryContainerWaiting, CategoryInitContainerFailed,
 	// Runtime
 	CategoryCrashLoop, CategoryOOMKilled, CategoryLivenessProbeFail, CategoryReadinessFailed,
 	CategoryWorkloadDegraded, CategoryHighRestart, CategoryPodEvicted, CategoryJobFailed, CategoryCronJobFailed,
+	CategoryBatchRunStopped,
 	// Configuration
 	CategoryMissingConfigRef, CategoryInvalidConfiguration, CategoryPDBBlocksEvictions, CategorySecretSyncFailed,
 	// Networking
@@ -70,7 +71,7 @@ var catalogOrder = []Category{
 	// Scaling
 	CategoryRolloutStalled, CategoryHPALimitedOrFailed,
 	// Security
-	CategoryRBACForbidden, CategoryCertificateNotReady, CategoryPodSecurityViolation,
+	CategoryRBACForbidden, CategoryCertificateNotReady, CategoryCertificateRenewalFailed, CategoryPodSecurityViolation,
 	// Control plane
 	CategoryTerminationStuck, CategoryNodeNotReady, CategoryAPIServiceUnavailable,
 	CategoryNodeProvisioningFail, CategoryCrossplaneReconcile, CategoryOperatorConditionFail,
@@ -93,6 +94,7 @@ var categoryDescription = map[Category]string{
 	CategoryUnschedulable:            "Pods can't be placed on any node — none satisfies their CPU/memory requests, node selector, affinity, taints, or topology constraints.",
 	CategoryQuotaExceeded:            "A ResourceQuota or LimitRange rejected the workload — the namespace is out of its CPU, memory, or object budget.",
 	CategoryAdmissionWebhookBlocking: "An admission webhook denied the request or its call failed, or the API server timed out creating the resource (for example while waiting on slow webhooks), blocking resource creation.",
+	CategoryQueueAdmissionBlocked:    "Kueue will not admit a batch run as configured (the queue offers no quota for a requested resource, its namespace or queue is wrong, or an admission check rejected it), or a queue admits nothing because its configuration is broken.",
 	// Startup
 	CategoryImagePullFailed:     "A container image can't be pulled — wrong name/tag, a private registry without credentials, or the registry is unreachable (ImagePullBackOff).",
 	CategoryContainerWaiting:    "A container is stuck Waiting and never reached Running — blocked on config, secrets, volumes, its image, or a pod sandbox / IP from the CNI.",
@@ -107,6 +109,7 @@ var categoryDescription = map[Category]string{
 	CategoryPodEvicted:        "The kubelet evicted a pod because its node ran low on memory, disk, or PIDs, or because the pod exceeded its own ephemeral-storage limit.",
 	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline — or has been running too long with no completions.",
 	CategoryCronJobFailed:     "A CronJob's recent runs are failing, or its schedule isn't producing successful jobs.",
+	CategoryBatchRunStopped:   "Kueue stopped trying a batch run: it was requeued too many times, or it exceeded its maximum execution time.",
 	// Configuration
 	CategoryMissingConfigRef:     "A pod references a ConfigMap, Secret, or volume that doesn't exist, so it can't start.",
 	CategoryInvalidConfiguration: "A workload contains contradictory or redundant configuration that can make the application behave differently from its manifest's apparent intent.",
@@ -136,9 +139,10 @@ var categoryDescription = map[Category]string{
 	CategoryRolloutStalled:     "A workload rollout is stuck — the new revision isn't progressing (progressDeadlineExceeded).",
 	CategoryHPALimitedOrFailed: "A HorizontalPodAutoscaler can't scale — missing metrics, pinned at max replicas, or scaling errors.",
 	// Security
-	CategoryRBACForbidden:        "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
-	CategoryCertificateNotReady:  "A certificate isn't usable or soon won't be — cert-manager issuance is failing or pending, or a certificate (including CloudNativePG's operator-managed ones) is expiring or has expired, or a live Ingress or Gateway uses a TLS Secret whose certificate is expired, not yet valid or about to expire.",
-	CategoryPodSecurityViolation: "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
+	CategoryRBACForbidden:            "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
+	CategoryCertificateNotReady:      "A certificate isn't usable or soon won't be — cert-manager issuance is failing or pending, or a certificate (including CloudNativePG's operator-managed ones) is expiring or has expired, or a live Ingress or Gateway uses a TLS Secret whose certificate is expired, not yet valid or about to expire.",
+	CategoryCertificateRenewalFailed: "Failed issuance after cert-manager's reported renewal time, with the latest failure, retry status and recorded certificate expiry.",
+	CategoryPodSecurityViolation:     "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
 	// Control plane
 	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer hasn't been released, often because its controller is down, missing, or failing its cleanup.",
 	CategoryNodeNotReady:          "A node is NotReady — its kubelet isn't reporting healthy, putting the pods on it at risk.",

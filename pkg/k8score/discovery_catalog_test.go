@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -113,5 +115,37 @@ func TestCatalogIsCompleteOnlyAfterACleanDiscovery(t *testing.T) {
 	_ = d.Refresh()
 	if !d.Catalog().Complete {
 		t.Fatal("a clean refresh must make the catalog complete again")
+	}
+}
+
+func TestCurrentKindResolutionDoesNotInferCertaintyAfterDiscoveryFailure(t *testing.T) {
+	client := &scriptedDiscovery{lists: widgetLists()}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := resourceid.UnqualifiedReference("Widget", "default", "example")
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || got.Uncertain {
+		t.Fatalf("clean discovery: %+v", got)
+	}
+	client.lists, client.err = nil, errors.New("discovery unavailable")
+	if err := d.Refresh(); err == nil {
+		t.Fatal("expected discovery failure")
+	}
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || !got.Uncertain {
+		t.Fatalf("stale discovery must not establish current uniqueness: %+v", got)
+	}
+	client.lists = widgetLists()
+	client.err = errors.New("discovery interrupted")
+	_ = d.Refresh()
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || !got.Uncertain {
+		t.Fatalf("resources with an error must not establish uniqueness: %+v", got)
+	}
+	client.err = nil
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || got.Uncertain {
+		t.Fatalf("recovered discovery: %+v", got)
 	}
 }

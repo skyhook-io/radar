@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"github.com/skyhook-io/radar/internal/podlogs"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,6 +33,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -367,7 +371,7 @@ func TestJobSetMemberRunsRequireExactControllerIdentity(t *testing.T) {
 				jobSetJobGroupIndexLabel:   "2",
 			},
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: jobSetAPIVersion,
+				APIVersion: jobset.APIVersion,
 				Kind:       "JobSet",
 				Name:       "distributed",
 				UID:        types.UID("jobset-current"),
@@ -437,7 +441,7 @@ func TestJobSetLauncherRequiresValidatedLiveParent(t *testing.T) {
 		Name:      "distributed-workers-0",
 		Namespace: "training",
 		OwnerReferences: []metav1.OwnerReference{{
-			APIVersion: jobSetAPIVersion,
+			APIVersion: jobset.APIVersion,
 			Kind:       "JobSet",
 			Name:       "distributed",
 			UID:        types.UID("jobset-current"),
@@ -463,7 +467,7 @@ func TestJobRunInfoDoesNotGuessJobSetBacklinkWithoutValidatedRoot(t *testing.T) 
 		Name:      "orphaned-member",
 		Namespace: "training",
 		OwnerReferences: []metav1.OwnerReference{{
-			APIVersion: jobSetAPIVersion,
+			APIVersion: jobset.APIVersion,
 			Kind:       "JobSet",
 			Name:       "recreated",
 			UID:        "deleted-root",
@@ -489,7 +493,7 @@ func TestJobSetMemberRunsAreBoundedAndProblemFirst(t *testing.T) {
 				jobSetJobIndexLabel:    strconv.Itoa(i),
 			},
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: jobSetAPIVersion,
+				APIVersion: jobset.APIVersion,
 				Kind:       "JobSet",
 				Name:       "wide",
 				UID:        types.UID("wide-uid"),
@@ -516,7 +520,7 @@ func TestJobSetMemberRunsPutTerminatingAttemptsAfterReplacements(t *testing.T) {
 	jobSet := testJobSet("training", "restarting", types.UID("restarting-uid"))
 	controller := true
 	owner := metav1.OwnerReference{
-		APIVersion: jobSetAPIVersion,
+		APIVersion: jobset.APIVersion,
 		Kind:       "JobSet",
 		Name:       "restarting",
 		UID:        types.UID("restarting-uid"),
@@ -546,24 +550,24 @@ func TestJobSetMemberRunsPutTerminatingAttemptsAfterReplacements(t *testing.T) {
 }
 
 func TestSupportedJobSetRequiresV1Alpha2GVK(t *testing.T) {
-	if !isSupportedJobSet(testJobSet("training", "supported", "uid")) {
+	if !jobset.Supported(testJobSet("training", "supported", "uid")) {
 		t.Fatal("expected v1alpha2 JobSet to be supported")
 	}
 	future := testJobSet("training", "future", "uid")
 	future.SetAPIVersion("jobset.x-k8s.io/v1beta1")
-	if isSupportedJobSet(future) {
+	if jobset.Supported(future) {
 		t.Fatal("future JobSet version was treated as supported")
 	}
 	foreign := testJobSet("training", "foreign", "uid")
 	foreign.SetAPIVersion("example.io/v1alpha2")
-	if isSupportedJobSet(foreign) {
+	if jobset.Supported(foreign) {
 		t.Fatal("foreign same-kind resource was treated as supported")
 	}
 }
 
 func testJobSet(namespace, name string, uid types.UID) *unstructured.Unstructured {
 	jobSet := &unstructured.Unstructured{}
-	jobSet.SetAPIVersion(jobSetAPIVersion)
+	jobSet.SetAPIVersion(jobset.APIVersion)
 	jobSet.SetKind("JobSet")
 	jobSet.SetNamespace(namespace)
 	jobSet.SetName(name)
@@ -799,7 +803,7 @@ func TestWorkloadRunsHTTPContract(t *testing.T) {
 	emptyJobSet := testJobSet("training", "empty", "jobset-empty")
 	member := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
 		Namespace: "training", Name: "distributed-workers-0",
-		OwnerReferences: []metav1.OwnerReference{{APIVersion: jobSetAPIVersion, Kind: "JobSet", Name: "distributed", UID: "jobset-current", Controller: &controller}},
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: jobset.APIVersion, Kind: "JobSet", Name: "distributed", UID: "jobset-current", Controller: &controller}},
 		Labels:          map[string]string{replicatedJobNameLabel: "workers", replicatedJobReplicasLabel: "1", jobSetJobIndexLabel: "0", jobSetGlobalReplicasLabel: "1", jobSetJobGlobalIndexLabel: "0", jobSetGroupNameLabel: "trainers", jobSetGroupReplicasLabel: "1", jobSetJobGroupIndexLabel: "0"},
 		Annotations:     map[string]string{jobSetRestartAttemptAnnotation: "0", jobSetJobRestartAttemptAnnotation: "0"},
 	}}
@@ -888,5 +892,37 @@ func TestCronJobRunsRejectPredecessorAndWrongGroup(t *testing.T) {
 	runs, err := (&Server{}).getWorkloadRuns(context.Background(), "cronjobs", "ci", cj.Name, nil, true)
 	if err != nil || len(runs) != 1 || runs[0].Name != "current-run" {
 		t.Fatalf("runs=%+v error=%v, want only current incarnation", runs, err)
+	}
+}
+
+// The member API must list exactly the members the shared vectors name; the
+// topology graph draws its JobSet → Job edges from the same file.
+func TestJobSetMemberRunsAgreeWithMembershipVectors(t *testing.T) {
+	raw, err := os.ReadFile("../../pkg/jobset/testdata/membership.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		JobSet  map[string]any `json:"jobSet"`
+		Jobs    []batchv1.Job  `json:"jobs"`
+		Members []string       `json:"members"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	jobs := make([]*batchv1.Job, 0, len(vectors.Jobs))
+	for i := range vectors.Jobs {
+		jobs = append(jobs, &vectors.Jobs[i])
+	}
+	result := jobSetMemberRuns(&unstructured.Unstructured{Object: vectors.JobSet}, jobs, jobSetMemberQuery{})
+	var got []string
+	for _, run := range result.Runs {
+		got = append(got, run.Name)
+	}
+	sort.Strings(got)
+	want := append([]string(nil), vectors.Members...)
+	sort.Strings(want)
+	if !slices.Equal(got, want) || result.Total != len(want) {
+		t.Fatalf("member runs = %v (total %d), want %v", got, result.Total, want)
 	}
 }

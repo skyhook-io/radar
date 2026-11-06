@@ -251,6 +251,15 @@ export function adaptDiagnose(
       : "producer-related";
   };
   addNarrowHint(builder, source, value);
+  const resourceOnly = nonEmptyString(value.coverage);
+  if (resourceOnly) {
+    builder.limit(
+      source,
+      "Diagnosis coverage",
+      value.coverage as string,
+      "unknown",
+    );
+  }
 
   const relatedRaw = value.relatedIssues;
   const related = Array.isArray(relatedRaw)
@@ -682,7 +691,7 @@ export function adaptDiagnose(
         `events:diagnose:${scopeFromArgs(source)}`,
         typeof value.eventsTotalGroups !== "number" ||
           value.eventsTotalGroups <= events.length,
-        true,
+        !resourceOnly,
         relatedRelevance,
       );
     } else {
@@ -699,7 +708,7 @@ export function adaptDiagnose(
       [],
       `events:diagnose:${scopeFromArgs(source)}`,
       true,
-      true,
+      !resourceOnly,
       relatedRelevance,
     );
   } else if (eventsRaw !== undefined) {

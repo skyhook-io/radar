@@ -78,7 +78,7 @@ func applicationActionReason(p *corev1.Pod, c collector.Candidate) string {
 	case evidence.Vault:
 		return "The Vault container is not ready; its initialization and seal state may explain why it is not serving. Standby alone is not a fault."
 	case evidence.RabbitMQ:
-		return "The RabbitMQ alarm-specific readiness check is failing; collect its node-local disk and memory alarm state. An alarm-free node does not rule out problems on other nodes."
+		return "The RabbitMQ alarm-specific readiness check is failing; collect its node-local disk/memory alarms and available resource measurements. An alarm-free node does not rule out problems on other nodes."
 	}
 
 	return ""

@@ -170,6 +170,7 @@ export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
+ applicationEvidence?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
@@ -193,6 +194,7 @@ export interface FeatureCapabilities {
   rayClusterPods?: boolean
   // Workload Pod info marks native sidecars (containerStatuses[].sidecar).
   podSidecarMarks?: boolean
+  kueueQueueWorkloads?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -247,6 +249,7 @@ export type CoreNodeKind =
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'JobSet' // jobset.x-k8s.io JobSet
   | 'Workflow'
   | 'CronWorkflow'
   | 'WorkflowTemplate'

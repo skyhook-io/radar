@@ -253,6 +253,12 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 					b.add(issuesapi.DiagnosticRoleContext, fact)
 				case factNetworkPolicyIsolates, factTLSCertificateConsumers:
 					b.add(issuesapi.DiagnosticRoleCandidate, fact)
+				case factKueueQueue:
+					b.add(issuesapi.DiagnosticRoleCandidate, fact)
+				case factKueueAffectedRuns:
+					b.add(issuesapi.DiagnosticRoleAffected, fact)
+				case factKueueAdmission, factKueueAdmissionCheck, factKueueProvisioningRequest:
+					b.add(issuesapi.DiagnosticRoleContext, fact)
 				}
 			}
 		}
@@ -338,6 +344,10 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 
 		if secretProvider != nil && secretProducerRootCategories[i.Category] {
 			addSecretProducerContext(&b, *i, &incidentEdges, secretProvider, flatByResource, groupedByID)
+		}
+
+		if isKueueClusterQueueRow(*i) {
+			addKueueClusterQueueEdges(*i, &incidentEdges, groupedByID)
 		}
 
 		if ctx := b.build(); ctx != nil {

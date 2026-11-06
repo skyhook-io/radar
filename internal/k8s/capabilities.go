@@ -167,6 +167,7 @@ type FeatureCapabilities struct {
 	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
 	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
 	SearchCoverage        bool `json:"searchCoverage"`
+	ApplicationEvidence   bool `json:"applicationEvidence"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
@@ -205,6 +206,9 @@ type FeatureCapabilities struct {
 	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
 	// without this, an absent mark doesn't mean "not a sidecar".
 	PodSidecarMarks bool `json:"podSidecarMarks"`
+	// GET /api/kueue/clusterqueues/{name}/workloads and
+	// /api/kueue/localqueues/{namespace}/{name}/workloads
+	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -347,7 +351,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	// Check each capability in parallel.
 	// Try cluster-wide first, then namespace-scoped as fallback for namespace-scoped users.
 	// Track API errors to avoid caching transient failures for the full TTL.
-	fallbackNs := GetEffectiveNamespace()
+	fallbackNs := capabilityProbeNamespace()
 	var hadErrors atomic.Bool
 
 	type capCheck struct {
@@ -641,7 +645,7 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 				return
 			}
 			// Try namespace-scoped fallback
-			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" && c.namespaceFallback {
+			if fallbackNs := capabilityProbeNamespace(); fallbackNs != "" && c.namespaceFallback {
 				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true

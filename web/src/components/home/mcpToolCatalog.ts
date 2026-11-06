@@ -110,17 +110,17 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'diagnose',
-    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. For workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
+    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. Batch targets return cached context, Issues and events without runtime logs or metrics. For pod-backed workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
     params: [
-      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
+      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, Job, JobSet, RayJob, Kueue Workload, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
       { arg: 'group', desc: 'API group for CRDs or kind collisions (for example argoproj.io for Rollout); built-ins are inferred' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'probe', desc: 'network kinds only: add active DNS/TCP/TLS/HTTP probes against the declared path (0-3s wall time)' },
       { arg: 'in_cluster', desc: 'network kinds: run the probe from inside the cluster via short-lived self-destructing pods (real dataplane) - confirms a route the apiserver proxy could only reach indirectly. Creates up to 5 short-lived probe pods (one per dialed target) under your RBAC' },
-      { arg: 'container', desc: 'workload kinds: specific container (defaults to all)' },
-      { arg: 'tail_lines', desc: 'workload kinds: lines per pod/stream (default 100)' },
-      { arg: 'since', desc: 'workload kinds: only logs newer than this duration' },
+      { arg: 'container', desc: 'log-collecting targets only: specific container (defaults to all)' },
+      { arg: 'tail_lines', desc: 'log-collecting targets only: lines per pod/stream (default 100)' },
+      { arg: 'since', desc: 'log-collecting targets only: only logs newer than this duration' },
     ],
   },
   {
@@ -324,7 +324,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'collect_application_evidence',
     localOnly: true,
-    desc: 'Read one Pod’s RabbitMQ alarms, NATS JetStream counters or Vault seal/init state. Local only, with operator approval and Pod-read/port-forward permissions. Unavailable evidence is not a health verdict.',
+    desc: 'Read one Pod’s RabbitMQ alarms/resource values, NATS JetStream observations or Vault node state. Local only, with operator approval and Pod-read/port-forward permissions. Unavailable evidence is not a health verdict.',
     params: [
       { arg: 'application', required: true, desc: 'rabbitmq, nats, or vault' },
       { arg: 'namespace', required: true, desc: 'Pod namespace' },

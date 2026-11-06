@@ -1,4 +1,4 @@
-import { admissionCheckSeverity, isKueueConditionStale } from './resource-utils-kueue'
+import { admissionCheckSeverity, isKueueConditionStale, kueueAdmissionStateHint, kueueAdmissionStatePresentation } from './resource-utils-kueue'
 import { Disclosure } from '../ui/Disclosure'
 import { formatRelativeAgeTime } from '../../utils/format'
 import { Badge } from '../ui/Badge'
@@ -20,6 +20,7 @@ interface KueueAdmissionSectionProps {
 }
 
 const phases = { pending: 'Pending admission', quota_reserved: 'Quota reserved', admitted: 'Admitted', finished: 'Finished' }
+const phaseStates = new Set(['admitted', 'quota_reserved', 'finished'])
 
 export function KueueAdmissionSection({ presentation = 'card', data, loading, error, forbidden, hinted, externalExecution, hasOwner, onRetry, onNavigate }: KueueAdmissionSectionProps) {
   if (!loading && !error && data && data.workloads.length === 0 && !hinted) return null
@@ -95,7 +96,10 @@ function GateEvidence({ gate, link }: { gate: Gate; link: Link }) {
 function AdmissionObservation({ observation, identity, sourceLink, generation, deleting, presentation, link }: { observation: SchedulingObservation; identity: React.ReactNode; sourceLink?: React.ReactNode; generation: number; deleting: boolean; presentation: 'card' | 'drawer'; link: Link }) {
   const kueue = observation.kueue
   const condition = observation.primaryCondition
-  const stale = isKueueConditionStale(condition, observation.subjectGeneration)
+  const admission = kueue?.admission
+  // The server decides staleness from the evidence behind the state; an
+  // older Radar sends no admission block, so fall back to the condition.
+  const stale = admission ? !!admission.stale : isKueueConditionStale(condition, observation.subjectGeneration)
   const secondary = [...(observation.disruptions ?? []), kueue?.podsReady, kueue?.waitingForReplacementPods]
     .filter((entry) => entry != null)
     .filter((entry) => entry.type !== condition?.type)
@@ -113,8 +117,29 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
   const split = presentation === 'card' && (visible.length > 0 || preemption.length > 0)
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
-      : observation.decision === 'satisfied' ? 'success' : 'warning'
-  const qualifier = observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
+      // With a classification, the state badge carries the tone unless the
+      // state is the phase itself.
+      : admission ? admission.state === 'admitted' ? 'success' : 'neutral'
+        : observation.decision === 'satisfied' ? 'success' : 'warning'
+  // The phase badge already says these states. A withdrawn Workload is not
+  // waiting, so its state replaces the pending phase rather than following it;
+  // one still admitted keeps its phase until it releases the quota.
+  // An unclassified reason the primary condition already states adds nothing.
+  const restatesPrimary = admission?.state === 'unrecognized' && admission.blocker?.reason === condition?.reason
+  const reason = admission && !phaseStates.has(admission.state) && !restatesPrimary ? kueueAdmissionStatePresentation(admission) : null
+  const withdrawn = !!admission?.inactive && kueue?.phase === 'pending'
+  // An unrecognized reason is Kueue's own word; say that rather than Radar's.
+  // Kueue's coarse reasons (Pending, Inadmissible) repeat what the phase and
+  // the primary condition already say, so name only a reason that adds to it.
+  const unrecognizedReason = admission?.state === 'unrecognized' && admission.blocker?.reason !== condition?.reason ? admission.blocker?.reason : undefined
+  const hint = admission && !admission.stale ? kueueAdmissionStateHint(admission) : undefined
+  // Show the condition behind the state when nothing else on the card says
+  // it: backoff or Kueue's deactivation cause. Checks have their own card.
+  const decidingFact = admission && [admission.inactive, admission.blocker, admission.disruption].find((fact) => fact?.code === admission.state)
+  const factEvidence = reason && decidingFact?.source === 'condition' && decidingFact.name !== condition?.type &&
+    !observation.disruptions?.some((entry) => entry.type === decidingFact.name)
+    ? decidingFact : undefined
+  const qualifier = admission ? null : observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
     <div className={split ? 'grid min-w-0 items-start gap-4 @min-[1024px]/admission:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]' : 'space-y-4'}>
     <div className="min-w-0 space-y-4">
@@ -123,15 +148,26 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
       <div className="space-y-2 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium break-all">{identity}</span>
-        <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>
+        {!withdrawn && <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>}
+        {reason && <Badge severity={reason.severity}>{unrecognizedReason ? <>Kueue: <code>{unrecognizedReason}</code></> : reason.label}</Badge>}
         {qualifier && <span className="text-xs text-theme-text-secondary">{qualifier}</span>}
-        {kueue?.active === false && <Badge severity="neutral">Workload inactive</Badge>}
+        {!admission && kueue?.active === false && <Badge severity="neutral">Workload inactive</Badge>}
         {deleting && <Badge severity="alert">Deleting</Badge>}
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
-        {stale && <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>}
-        {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
-        {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
+        {stale && (admission
+          ? <p className={`text-xs ${reason ? 'text-warning-text' : 'text-theme-text-tertiary'}`}>Reported before the Workload's spec last changed; it may not reflect the current spec.</p>
+          : <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>)}
+        {admission && !stale && isKueueConditionStale(condition, observation.subjectGeneration) && <p className="text-xs text-theme-text-tertiary">The {factEvidence ? 'condition in Technical details' : 'condition below'} was reported before the Workload's spec last changed.</p>}
+        {hint && <p className="max-w-3xl text-xs text-theme-text-secondary">{hint}</p>}
+        {factEvidence ? <>
+          <p className="max-w-3xl whitespace-pre-wrap break-words">{factEvidence.name}{factEvidence.reason && ` · ${factEvidence.reason}`}{factEvidence.message && `: ${factEvidence.message}`}</p>
+          {factEvidence.since && <p className="text-xs text-theme-text-tertiary">{factEvidence.name} since <time dateTime={factEvidence.since} title={factEvidence.since}>{formatRelativeAgeTime(factEvidence.since)}</time></p>}
+          {factEvidence.stale && <p className="text-xs text-theme-text-tertiary">This reported cause predates the Workload's current spec.</p>}
+        </> : <>
+          {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
+          {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
+        </>}
       <div className="empty:hidden flex flex-wrap gap-x-5 gap-y-2 border-t border-theme-border pt-2 text-xs text-theme-text-secondary">
       {sourceLink && <span>{sourceLink}</span>}
       {(!!observation.queues?.length || kueue?.concurrentAdmission) && <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-theme-text-secondary">
@@ -148,7 +184,7 @@ function AdmissionObservation({ observation, identity, sourceLink, generation, d
         <p>Decision: {observation.decision} · Generation {generation}</p>
         {[condition, ...secondary].filter((entry) => entry != null).map((entry) => <div key={entry.type}>
           <p>{entry.type}={entry.status}{entry.reason && ` · Reason: ${entry.reason}`}{entry.observedGeneration != null && ` · Observed generation ${entry.observedGeneration}`}{entry.lastTransitionTime && ` · Status since ${formatRelativeAgeTime(entry.lastTransitionTime)}`}</p>
-          {supporting.includes(entry) && entry.message && <p className="whitespace-pre-wrap break-words">{entry.message}</p>}
+          {(supporting.includes(entry) || (factEvidence && entry === condition && entry.message !== factEvidence.message)) && entry.message && <p className="whitespace-pre-wrap break-words">{entry.message}</p>}
         </div>)}
         {(observation.gates ?? []).filter((gate) => gate.retryCount === 0 || gate.requeueAfterSeconds === 0).map((gate, index) => <p key={index}>{gate.kind === 'preemption_gate' ? 'Preemption gate' : 'Admission check'} {gate.name}{gate.retryCount === 0 && ' · Retries: 0'}{gate.requeueAfterSeconds === 0 && ' · Requeue delay: 0s'}</p>)}
         {kueue?.requeueState?.count === 0 && !kueue.requeueState.requeueAt && <p>Requeues: 0</p>}

@@ -1,3 +1,4 @@
+import { resourceSearchAliases } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { useMemo } from "react";
 import {
   Home,
@@ -184,7 +185,7 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
         category: "Resource Kinds",
         icon: getResourceIcon(r.kind),
         action: () => cb.onNavigateKind(r.name, r.group),
-        searchTerms: [r.name, r.kind],
+        searchTerms: [r.name, r.kind, ...resourceSearchAliases(r)],
         priorityBonus: groupPriorityBonus(r.group),
       });
     }

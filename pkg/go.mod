@@ -7,14 +7,14 @@ require (
 	github.com/robfig/cron v1.2.0
 	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
-	k8s.io/api v0.37.1
-	k8s.io/apimachinery v0.37.1
-	k8s.io/client-go v0.37.1
-	k8s.io/component-helpers v0.37.1
-	k8s.io/csi-translation-lib v0.37.1
+	k8s.io/api v0.37.2
+	k8s.io/apimachinery v0.37.2
+	k8s.io/client-go v0.37.2
+	k8s.io/component-helpers v0.37.2
+	k8s.io/csi-translation-lib v0.37.2
 	k8s.io/klog/v2 v2.140.0
-	k8s.io/kubectl v0.37.1
-	k8s.io/streaming v0.37.1
+	k8s.io/kubectl v0.37.2
+	k8s.io/streaming v0.37.2
 	sigs.k8s.io/yaml v1.6.0
 )
 

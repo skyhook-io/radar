@@ -12,6 +12,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -43,6 +45,19 @@ func useHelmStorageAnswering(t *testing.T, status int, body string) {
 		t.Fatal(err)
 	}
 	previousClient := k8s.SetTestClient(client)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	discovered := make(chan struct{})
+	dc := k8s.GetDynamicResourceCache()
+	dc.OnCRDDiscoveryComplete(func() { close(discovered) })
+	dc.DiscoverAllCRDs()
+	select {
+	case <-discovered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("empty CRD discovery did not complete")
+	}
 	helm.ResetClient()
 	if err := helm.InitializeWithRESTConfig(config); err != nil {
 		t.Fatal(err)
@@ -219,6 +234,19 @@ func useHelmStorageFailingIn(t *testing.T, failing ...string) {
 		t.Fatal(err)
 	}
 	previousClient := k8s.SetTestClient(client)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	discovered := make(chan struct{})
+	dc := k8s.GetDynamicResourceCache()
+	dc.OnCRDDiscoveryComplete(func() { close(discovered) })
+	dc.DiscoverAllCRDs()
+	select {
+	case <-discovered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("empty CRD discovery did not complete")
+	}
 	helm.ResetClient()
 	if err := helm.InitializeWithRESTConfig(config); err != nil {
 		t.Fatal(err)

@@ -1,5 +1,11 @@
 package runtimeevidence
 
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
+
 type NATSFacts struct {
 	JetStreamEnabled  bool           `json:"jetStreamEnabled"`
 	Totals            *NATSTotals    `json:"totals,omitempty"`
@@ -19,12 +25,22 @@ type NATSTotals struct {
 }
 
 type NATSConsumer struct {
-	Account     string `json:"account"`
-	Stream      string `json:"stream"`
-	Name        string `json:"name"`
-	Pending     uint64 `json:"pending"`
-	AckPending  uint64 `json:"ackPending"`
-	Redelivered uint64 `json:"redelivered"`
+	Account             string        `json:"account"`
+	Stream              string        `json:"stream"`
+	Name                string        `json:"name"`
+	Pending             uint64        `json:"pending"`
+	AckPending          uint64        `json:"ackPending"`
+	Redelivered         uint64        `json:"redelivered"`
+	Delivered           *NATSSequence `json:"delivered,omitempty"`
+	AckFloor            *NATSSequence `json:"ackFloor,omitempty"`
+	WaitingPullRequests *uint64       `json:"waitingPullRequests,omitempty"`
+}
+
+type NATSSequence struct {
+	// Decimal strings preserve uint64 sequence identifiers in JavaScript clients.
+	ConsumerSequence string `json:"consumerSequence,omitempty"`
+	StreamSequence   string `json:"streamSequence,omitempty"`
+	LastActive       string `json:"lastActive,omitempty"`
 }
 
 func parseNATS(body []byte) (*NATSFacts, error) {
@@ -39,10 +55,13 @@ func parseNATS(body []byte) (*NATSFacts, error) {
 			Streams []struct {
 				Name      string `json:"name"`
 				Consumers []struct {
-					Name        string  `json:"name"`
-					Pending     *uint64 `json:"num_pending"`
-					AckPending  *uint64 `json:"num_ack_pending"`
-					Redelivered *uint64 `json:"num_redelivered"`
+					Name        string          `json:"name"`
+					Pending     *uint64         `json:"num_pending"`
+					AckPending  *uint64         `json:"num_ack_pending"`
+					Redelivered *uint64         `json:"num_redelivered"`
+					Delivered   json.RawMessage `json:"delivered"`
+					AckFloor    json.RawMessage `json:"ack_floor"`
+					Waiting     json.RawMessage `json:"num_waiting"`
 				} `json:"consumer_detail"`
 			} `json:"stream_detail"`
 		} `json:"account_details"`
@@ -82,7 +101,14 @@ func parseNATS(body []byte) (*NATSFacts, error) {
 				seenConsumers[consumer.Name] = true
 				result.ReturnedConsumers++
 				if len(result.Consumers) < MaxConsumers {
-					result.Consumers = append(result.Consumers, NATSConsumer{Account: account.ID, Stream: stream.Name, Name: consumer.Name, Pending: *consumer.Pending, AckPending: *consumer.AckPending, Redelivered: *consumer.Redelivered})
+					item := NATSConsumer{Account: account.ID, Stream: stream.Name, Name: consumer.Name, Pending: *consumer.Pending, AckPending: *consumer.AckPending, Redelivered: *consumer.Redelivered,
+						Delivered: parseNATSSequence(consumer.Delivered), AckFloor: parseNATSSequence(consumer.AckFloor)}
+					var waiting *uint64
+					// Counts remain JSON numbers, so values outside JavaScript exact integer range are unavailable.
+					if json.Unmarshal(consumer.Waiting, &waiting) == nil && waiting != nil && *waiting <= 1<<53-1 {
+						item.WaitingPullRequests = waiting
+					}
+					result.Consumers = append(result.Consumers, item)
 				}
 			}
 		}
@@ -92,4 +118,34 @@ func parseNATS(body []byte) (*NATSFacts, error) {
 		result.Coverage = "partial"
 	}
 	return result, nil
+}
+
+func parseNATSSequence(raw json.RawMessage) *NATSSequence {
+	var value struct {
+		Consumer   json.RawMessage `json:"consumer_seq"`
+		Stream     json.RawMessage `json:"stream_seq"`
+		LastActive json.RawMessage `json:"last_active"`
+	}
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	result := &NATSSequence{ConsumerSequence: natsSequenceNumber(value.Consumer), StreamSequence: natsSequenceNumber(value.Stream)}
+	var lastActive string
+	if json.Unmarshal(value.LastActive, &lastActive) == nil && len(lastActive) <= len("2006-01-02T15:04:05.999999999+07:00") {
+		if timestamp, err := time.Parse(time.RFC3339Nano, lastActive); err == nil {
+			result.LastActive = timestamp.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	if *result == (NATSSequence{}) {
+		return nil
+	}
+	return result
+}
+
+func natsSequenceNumber(raw json.RawMessage) string {
+	var value *uint64
+	if json.Unmarshal(raw, &value) != nil || value == nil {
+		return ""
+	}
+	return strconv.FormatUint(*value, 10)
 }
