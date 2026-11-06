@@ -1708,7 +1708,7 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ## GPU & Batch Ecosystem (basic support)
 
-The baseline for the GPU scheduling, batch, and inference-serving ecosystem is **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Kueue Workloads, LocalQueues and ClusterQueues also have native detail views for admission evidence, quota accounting and policy. JobSet `v1alpha2` has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity. Other kinds use the standard spec/status renderer; selected resources also provide structured REST/MCP context as described below.
+The baseline for the GPU scheduling, batch, and inference-serving ecosystem is **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Kueue Workloads, LocalQueues and ClusterQueues also have native detail views for admission evidence, quota accounting and policy. JobSet `v1alpha2` has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity, and is drawn in Topology as the root of its member Jobs and Pods. Other kinds use the standard spec/status renderer; selected resources also provide structured REST/MCP context as described below.
 
 These integrations expose resource state and selected admission/execution relationships, not physical GPU accounting. They do not inventory physical devices, distinguish virtual or fractional GPUs such as HAMi, measure GPU utilization, or provide a complete scheduling simulation. JobSet's current CPU/memory observations and Kueue's request-based quota accounting have different meanings and are described separately below.
 
@@ -1919,19 +1919,21 @@ fixtures, not live proof.
 
 ### Batch: LeaderWorkerSet, JobSet, Volcano, Kubeflow Training
 
-| Resource | Group | Status source |
-|----------|-------|---------------|
-| LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions |
-| JobSet | `jobset.x-k8s.io/v1alpha2` | Completed / Failed / Suspended conditions |
-| Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group |
-| Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) |
-| PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition |
-| JobFlow / JobTemplate | `flow.volcano.sh/v1alpha1` | state.phase / — |
-| Queue (KAI) | `scheduling.run.ai/v2` | Orphan / OverQuota conditions + allocation |
-| PodGroup (KAI) | `scheduling.run.ai/v2alpha2` | phase + scheduling conditions |
-| PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern |
-| MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern |
-| TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
+| Resource | Group | Status source | Topology |
+|----------|-------|---------------|----------|
+| LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions | No |
+| JobSet | `jobset.x-k8s.io/v1alpha2` | Root terminal state, conditions and reported child counts | Yes: JobSet → member Job → Pod |
+| Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group | No |
+| Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) | No |
+| PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition | No |
+| JobFlow / JobTemplate | `flow.volcano.sh/v1alpha1` | state.phase / — | No |
+| Queue (KAI) | `scheduling.run.ai/v2` | Orphan / OverQuota conditions + allocation | No |
+| PodGroup (KAI) | `scheduling.run.ai/v2alpha2` | phase + scheduling conditions | No |
+| PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern | No |
+| MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern | No |
+| TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs | No |
+
+"No" means no dedicated nodes: a kind appears only when something already drawn owns it.
 
 For `jobset.x-k8s.io/v1alpha2` JobSets, REST AI detail and MCP `get_resource`
 include `resourceContext.execution`: root lifecycle and outcome, controller evidence,
@@ -1963,6 +1965,16 @@ Extended-resource requests are declared demand, not GPU/TPU utilization. Logs ca
 scoped to one Job (live) or a role/all current members (bounded snapshots with source
 attribution and read failures). Historical goodput and archived logs are not collected.
 
+**Topology:** the resources view draws JobSets, including roots with no Jobs,
+and their exact controller-owned member Jobs and Pods. Status uses the same
+root lifecycle as detail; child failures alone do not make the root failed.
+Declared Job counts can exceed created members. Only v1alpha2 is interpreted;
+other served versions show unknown status and a warning without member links.
+
+With Jobs hidden, current member Pods attach to the JobSet. Pods from earlier
+same-named Jobs stay separate. The JobSet Topology tab shows at most 24 members,
+favoring failed and active Jobs, and clicking a member opens its Overview.
+Traffic, scheduling and dependency edges are not provided.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

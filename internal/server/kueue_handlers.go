@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
@@ -119,7 +120,7 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		if (!isRayJob && !isSupportedJobSet(root)) || (isRayJob && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob")) {
+		if (!isRayJob && !jobset.Supported(root)) || (isRayJob && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob")) {
 			s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports JobSet v1alpha2 and RayJob v1")
 			return
 		}
@@ -170,7 +171,7 @@ func admissionRootControls(root *unstructured.Unstructured, child metav1.Object)
 	if root == nil || child == nil || root.GetUID() == "" || root.GetNamespace() != child.GetNamespace() {
 		return false
 	}
-	if !isSupportedJobSet(root) && (root.GetAPIVersion() != "batch/v1" || root.GetKind() != "Job") && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob") {
+	if !jobset.Supported(root) && (root.GetAPIVersion() != "batch/v1" || root.GetKind() != "Job") && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob") {
 		return false
 	}
 	owner := metav1.GetControllerOf(child)

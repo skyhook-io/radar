@@ -1050,6 +1050,46 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 	}
 }
 
+// A JobSet's member Jobs resolve to the JobSet as their structural root, as an
+// operator CR's workloads do, so they group as one application rather than one
+// per Job.
+func TestStructuralRoot_JobSetMembersShareTheJobSetRoot(t *testing.T) {
+	jobSetID := "jobset/ml/train/jobset.x-k8s.io"
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: jobSetID, Kind: topology.KindJobSet, Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "jobset.x-k8s.io/v1alpha2"}},
+			{ID: "job/ml/train-driver-0", Kind: topology.KindJob, Name: "train-driver-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/train-workers-0", Kind: topology.KindJob, Name: "train-workers-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/standalone", Kind: topology.KindJob, Name: "standalone", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+		},
+		Edges: []topology.Edge{
+			{Source: jobSetID, Target: "job/ml/train-driver-0", Type: topology.EdgeManages},
+			{Source: jobSetID, Target: "job/ml/train-workers-0", Type: topology.EdgeManages},
+		},
+	}
+	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+	for _, node := range topo.Nodes {
+		g.byID[node.ID] = node
+		kind := topology.KubernetesKindForNode(&node)
+		ns, _ := node.Data["namespace"].(string)
+		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
+	}
+
+	want := resourceid.ResourceKey("jobset.x-k8s.io", "JobSet", "ml", "train")
+	if root, kind, group, identity := g.rootOf("jobset.x-k8s.io", "JobSet", "ml", "train"); root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+		t.Fatalf("JobSet workload root = %q %q %q %q", root, kind, group, identity)
+	}
+	for _, name := range []string{"train-driver-0", "train-workers-0"} {
+		root, kind, group, identity := g.rootOf("batch", "Job", "ml", name)
+		if root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+			t.Fatalf("%s root = %q %q %q %q, want the JobSet", name, root, kind, group, identity)
+		}
+	}
+	if root, _, _, _ := g.rootOf("batch", "Job", "ml", "standalone"); root != "ml/Job/standalone" {
+		t.Fatalf("a Job outside the JobSet resolved to %q", root)
+	}
+}
+
 func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
