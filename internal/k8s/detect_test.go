@@ -2549,10 +2549,11 @@ func TestDetectProblems_PDBBlocksEvictions(t *testing.T) {
 	}
 }
 
-// TestDetectProblems_SharedRWOVolume pins the multi-replica ReadWriteOnce
-// conflict detector: a Deployment wanting >1 replica that mounts an RWO PVC is
-// flagged (only one node can attach it), while a single-replica RWO mount and a
-// multi-replica ReadWriteMany mount are not.
+// TestDetectProblems_SharedRWOVolume pins the multi-replica single-node volume
+// detector: a Deployment wanting >1 replica that mounts a ReadWriteOnce PVC is
+// info posture (replicas on one node share it fine), a ReadWriteOncePod mount is
+// high (only one pod can use it), and a single-replica RWO mount and a
+// multi-replica ReadWriteMany mount are not flagged.
 func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	defer ResetTestState()
 
@@ -2594,7 +2595,9 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 		mkDeploy("single", &one, "rwo-pvc"),   // 1 replica + RWO → fine
 		mkDeploy("rwx", &three, "rwx-pvc"),    // 3 replicas + RWX → fine
 		mkDeploy("pending", &two, "pending-pvc"),
+		mkDeploy("rwop", &two, "rwop-pvc"),
 		mkPVC("rwo-pvc", corev1.ReadWriteOnce),
+		mkPVC("rwop-pvc", corev1.ReadWriteOncePod),
 		mkPVC("rwx-pvc", corev1.ReadWriteMany),
 		mkPVCPhase("pending-pvc", corev1.ClaimPending, corev1.ReadWriteOnce),
 	)
@@ -2603,7 +2606,7 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	}
 	cache := GetResourceCache()
 
-	const reason = "ReadWriteOnce volume shared across replicas"
+	const reason = SharedRWOVolumeReason
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if hasProblem(DetectProblems(cache, "prod"), "Deployment", "conflict", reason) {
@@ -2613,7 +2616,15 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	}
 	problems := DetectProblems(cache, "prod")
 
-	assertProblem(t, problems, "Deployment", "conflict", reason, "high")
+	assertProblem(t, problems, "Deployment", "conflict", reason, "info")
+	if p, _ := lookupProblem(problems, "Deployment", "conflict", reason); strings.Contains(p.Message, "can't start") ||
+		!strings.Contains(p.Message, "only one node mount the volume") || !strings.Contains(p.Message, "replicas on that node can share it") {
+		t.Errorf("RWO message should describe the node-level risk, not claim replicas can't start: %q", p.Message)
+	}
+	assertProblem(t, problems, "Deployment", "rwop", SharedRWOPVolumeReason, "high")
+	if p, _ := lookupProblem(problems, "Deployment", "rwop", SharedRWOPVolumeReason); !strings.Contains(p.Message, "only one replica can run") {
+		t.Errorf("RWOP message = %q", p.Message)
+	}
 	if hasProblem(problems, "Deployment", "single", reason) {
 		t.Errorf("single-replica RWO mount should not be flagged: %+v", problems)
 	}

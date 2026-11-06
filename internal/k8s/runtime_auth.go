@@ -451,6 +451,7 @@ func transitionConnectedToRuntimeAuthFailure(classification string) bool {
 		Error:       message,
 		ErrorType:   classification,
 	}
+	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 

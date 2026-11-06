@@ -14,10 +14,12 @@ export function HomeAgentBlock({
   mcpUrl,
   readOnly,
   execTools,
+  applicationEvidenceAvailable,
 }: {
   mcpUrl: string
   readOnly?: boolean
   execTools?: boolean
+  applicationEvidenceAvailable?: boolean
 }) {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const d = useDiagnose()
@@ -52,9 +54,16 @@ export function HomeAgentBlock({
         mcpUrl={mcpUrl}
         readOnly={readOnly}
         execTools={execTools}
+        onInvestigate={showInvestigate && d.available ? () => openComposer(d) : undefined}
+        applicationEvidenceAvailable={applicationEvidenceAvailable}
       />
     </div>
   )
+}
+
+function openComposer(d: ReturnType<typeof useDiagnose>) {
+  if (d.questions) d.openQuestion({})
+  else d.openWorkspace()
 }
 
 function InvestigateLine() {
@@ -66,9 +75,9 @@ function InvestigateLine() {
         <button
           type="button"
           onClick={d.openHome}
-          className="flex w-full items-center gap-2 rounded px-0.5 text-left text-xs font-medium text-purple-600 hover:underline dark:text-purple-400"
+          className="flex w-full items-center gap-2 rounded px-0.5 text-left text-xs font-medium text-accent-text hover:underline"
         >
-          <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
           {label}
         </button>
       </Tooltip>
@@ -81,10 +90,10 @@ function InvestigateLine() {
         type="button"
         // Opens the investigations panel's question composer, focused: the
         // composer is where the scope and look-back are chosen before a run.
-        onClick={() => (d.questions ? d.openQuestion({}) : d.openWorkspace())}
+        onClick={() => openComposer(d)}
         className="flex w-full items-center gap-2 rounded border border-theme-border bg-theme-surface px-2 py-1.5 text-left text-xs text-theme-text-tertiary transition-colors hover:border-purple-500/40 hover:text-theme-text-secondary"
       >
-        <Sparkles className="h-3.5 w-3.5 shrink-0 text-purple-600 dark:text-purple-400" aria-hidden />
+        <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
         <span className="truncate">
           {d.questions ? `Ask ${d.agentLabel} about this cluster…` : `Investigate with ${d.agentLabel}`}
         </span>

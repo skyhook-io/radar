@@ -1,0 +1,161 @@
+{
+  "apiVersion": "serving.kserve.io/v1beta1",
+  "kind": "InferenceService",
+  "metadata": {
+    "name": "iris-canary",
+    "namespace": "ml-serving",
+    "generation": 1,
+    "annotations": {
+      "modelFormat": "sklearn",
+      "serving.kserve.io/deploymentMode": "Standard"
+    }
+  },
+  "spec": {
+    "canary": [
+      {
+        "predictor": {
+          "model": {
+            "modelFormat": {
+              "name": "sklearn"
+            },
+            "name": "",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "50m",
+                "memory": "192Mi"
+              }
+            },
+            "storageUri": "gs://kfserving-examples/models/sklearn/1.0/model"
+          },
+          "name": "v2-good"
+        },
+        "trafficPercent": 10
+      },
+      {
+        "predictor": {
+          "minReplicas": 1,
+          "model": {
+            "modelFormat": {
+              "name": "sklearn"
+            },
+            "name": "",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "50m",
+                "memory": "192Mi"
+              }
+            },
+            "storageUri": "gs://kfserving-examples/models/sklearn/missing-model"
+          },
+          "name": "v3-bad"
+        },
+        "trafficPercent": 20
+      }
+    ],
+    "predictor": {
+      "maxReplicas": 1,
+      "minReplicas": 1,
+      "model": {
+        "modelFormat": {
+          "name": "sklearn"
+        },
+        "name": "",
+        "resources": {
+          "limits": {
+            "cpu": "500m",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "192Mi"
+          }
+        },
+        "storageUri": "gs://kfserving-examples/models/sklearn/1.0/model"
+      },
+      "name": "stable"
+    }
+  },
+  "status": {
+    "address": {
+      "url": "http://iris-canary-stable-predictor.ml-serving.svc.cluster.local"
+    },
+    "canaryStatuses": [
+      {
+        "modelStatus": {
+          "transitionStatus": ""
+        },
+        "name": "v2-good",
+        "ready": false,
+        "trafficPercent": 10
+      },
+      {
+        "modelStatus": {
+          "transitionStatus": ""
+        },
+        "name": "v3-bad",
+        "ready": false,
+        "trafficPercent": 20
+      }
+    ],
+    "clusterServingRuntimeName": "kserve-sklearnserver",
+    "components": {
+      "predictor": {
+        "url": "http://iris-canary-stable-predictor-ml-serving.example.com"
+      }
+    },
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-03T02:19:34Z",
+        "reason": "CanariesNotReady",
+        "severity": "Info",
+        "status": "False",
+        "type": "CanaryPredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:19:34Z",
+        "status": "True",
+        "type": "IngressReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:19:59Z",
+        "message": "ReplicaSet \"iris-canary-stable-predictor-67656b84cc\" has successfully progressed.",
+        "reason": "NewReplicaSetAvailable",
+        "status": "True",
+        "type": "PredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:19:59Z",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:19:34Z",
+        "severity": "Info",
+        "status": "False",
+        "type": "Stopped"
+      }
+    ],
+    "deploymentMode": "Standard",
+    "modelStatus": {
+      "copies": {
+        "failedCopies": 0,
+        "totalCopies": 1
+      },
+      "states": {
+        "activeModelState": "Loaded",
+        "targetModelState": "Loaded"
+      },
+      "transitionStatus": "UpToDate"
+    },
+    "observedGeneration": 1,
+    "url": "http://iris-canary-ml-serving.example.com"
+  }
+}

@@ -435,16 +435,26 @@ func OtherManagingControllers(rel *Relationships, v *ownership.View, subject res
 	if rel == nil {
 		return nil, true
 	}
-	if len(rel.manageSources) == 0 {
-		return nil, false
+	managers, incomplete, _ = SpecGenerators(v, subject, rel.manageSources)
+	return managers, incomplete
+}
+
+// SpecGenerators classifies observed graph sources after excluding owner
+// references, controller shortcuts, GitOps membership and implementation selectors.
+// Unsettled means the controller chain cannot rule out a shortcut; incomplete
+// means a candidate source could not be checked. Neither establishes that all
+// possible spec relations were observed.
+func SpecGenerators(v *ownership.View, subject resourceid.Ref, sources []ResourceRef) (managers []ResourceRef, incomplete, unsettled bool) {
+	if len(sources) == 0 {
+		return nil, false, false
 	}
 	chain := v.ControllerChain(subject)
 	if !settled(chain) {
-		return nil, false
+		return nil, false, true
 	}
 	named := namedOwners(chain.Subject.Read.Object)
 	var out []ResourceRef
-	for _, source := range rel.manageSources {
+	for _, source := range sources {
 		r := refIdentity(source)
 		if ownership.IsRecordingManager(r.GroupKind()) || r.Kind == "HelmRelease" && r.Group == "" {
 			continue
@@ -465,7 +475,7 @@ func OtherManagingControllers(rel *Relationships, v *ownership.View, subject res
 		}
 	}
 	slices.SortFunc(out, func(a, b ResourceRef) int { return strings.Compare(refIdentity(a).String(), refIdentity(b).String()) })
-	return out, incomplete
+	return out, incomplete, false
 }
 
 func managingSource(v *ownership.View, ref resourceid.Ref, named map[resourceid.Ref]bool, chain ownership.ControllerChainAnswer) bool {

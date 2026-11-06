@@ -107,28 +107,30 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	ConfigManagement string                   `json:"configManagement"`
-	Exec             bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
-	LocalTerminal    bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
-	Logs             bool                     `json:"logs"`           // Can get pods/log (log viewer)
-	PortForward      bool                     `json:"portForward"`    // Can create pods/portforward
-	Secrets          bool                     `json:"secrets"`        // Can list secrets
-	SecretsUpdate    bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
-	HelmWrite        bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite        bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites   WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
-	MCPReadOnly      bool                     `json:"mcpReadOnly"`
-	MCPExecTools     bool                     `json:"mcpExecTools"`
-	MCPEnabled       bool                     `json:"mcpEnabled"`              // MCP server is running
-	Deployment       DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
-	Features         FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
-	AuthEnabled      bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
-	Username         string                   `json:"username,omitempty"`      // Authenticated username (when auth enabled)
-	Resources        *ResourcePermissions     `json:"resources,omitempty"`     // Per-resource-type permissions
-	Visibility       *VisibilitySummary       `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
-	Karpenter        IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
-	PolicyReports    *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
-	CloudConnect     *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+	ConfigManagement       string                   `json:"configManagement"`
+	Exec                   bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
+	LocalTerminal          bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
+	LocalShell             string                   `json:"localShell"`     // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
+	Logs                   bool                     `json:"logs"`           // Can get pods/log (log viewer)
+	PortForward            bool                     `json:"portForward"`    // Can create pods/portforward
+	Secrets                bool                     `json:"secrets"`        // Can list secrets
+	SecretsUpdate          bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
+	HelmWrite              bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite              bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	MCPReadOnly            bool                     `json:"mcpReadOnly"`
+	MCPExecTools           bool                     `json:"mcpExecTools"`
+	MCPApplicationEvidence bool                     `json:"mcpApplicationEvidence"`
+	MCPEnabled             bool                     `json:"mcpEnabled"`              // MCP server is running
+	Deployment             DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	Features               FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
+	AuthEnabled            bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
+	Username               string                   `json:"username,omitempty"`      // Authenticated username (when auth enabled)
+	Resources              *ResourcePermissions     `json:"resources,omitempty"`     // Per-resource-type permissions
+	Visibility             *VisibilitySummary       `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
+	Karpenter              IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
+	PolicyReports          *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
+	CloudConnect           *CloudConnectCapability  `json:"cloudConnect,omitempty"`
 }
 
 type IntegrationCapability struct {
@@ -165,6 +167,7 @@ type FeatureCapabilities struct {
 	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
 	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
 	SearchCoverage        bool `json:"searchCoverage"`
+	ApplicationEvidence   bool `json:"applicationEvidence"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
@@ -180,9 +183,34 @@ type FeatureCapabilities struct {
 	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
 	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
 	AgentSigninCheck      bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
+	// the history entry (id 0 included), and .../resume also clears
+	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
+	// operation.rollback the API server prunes, and leaves enabled: false set.
+	ArgoRollbackSync bool `json:"argoRollbackSync"`
+	// POST /api/argo/applications/{namespace}/{name}/sync (and
+	// .../validate-resource) with syncOptions omitted uses the Application's
+	// spec.syncPolicy.syncOptions, and an omitted prune does not prune. An
+	// older Radar syncs with no options and prunes. Also signals that enabling
+	// auto-sync on a never-suspended Application starts with prune off.
+	ArgoSyncInheritance bool `json:"argoSyncInheritance"`
+	// Enabling auto-sync on a never-suspended Application starts with selfHeal
+	// off, as in Argo CD. An older Radar turns it on.
+	ArgoEnableSelfHealOff bool `json:"argoEnableSelfHealOff"`
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
+	// GET /api/kueue/position/{namespace}/{name}
+	KueuePendingPosition bool `json:"kueuePendingPosition"`
+	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
+	// from v1.15.0 serve the route without advertising this flag.
+	RayClusterPods bool `json:"rayClusterPods"`
+	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
+	// without this, an absent mark doesn't mean "not a sidecar".
+	PodSidecarMarks bool `json:"podSidecarMarks"`
+	// GET /api/kueue/clusterqueues/{name}/workloads and
+	// /api/kueue/localqueues/{namespace}/{name}/workloads
+	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -325,7 +353,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	// Check each capability in parallel.
 	// Try cluster-wide first, then namespace-scoped as fallback for namespace-scoped users.
 	// Track API errors to avoid caching transient failures for the full TTL.
-	fallbackNs := GetEffectiveNamespace()
+	fallbackNs := capabilityProbeNamespace()
 	var hadErrors atomic.Bool
 
 	type capCheck struct {
@@ -619,7 +647,7 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 				return
 			}
 			// Try namespace-scoped fallback
-			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" && c.namespaceFallback {
+			if fallbackNs := capabilityProbeNamespace(); fallbackNs != "" && c.namespaceFallback {
 				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true

@@ -206,15 +206,23 @@ func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string,
 
 // withholdDirectLookups drops what the user may not list from the
 // relationships read straight from the shared caches rather than the
-// user's graph: a StorageClass's volumes and the Pods on a Node.
+// user's graph: a StorageClass's volumes and claims, a claim's volume and
+// class, a volume's claim and class, and the Pods on a Node.
 func (s *Server) withholdDirectLookups(r *http.Request, rel *topology.Relationships) {
-	if len(rel.Pods) > 0 {
+	isClaim := func(c topology.ResourceRef) bool { return c.Kind == "PersistentVolumeClaim" && c.Group == "" }
+	if len(rel.Pods) > 0 || slices.ContainsFunc(rel.Consumers, isClaim) {
 		if namespaces := s.getUserNamespaces(r, nil); namespaces != nil {
 			rel.Pods = slices.DeleteFunc(rel.Pods, func(p topology.ResourceRef) bool { return !slices.Contains(namespaces, p.Namespace) })
+			rel.Consumers = slices.DeleteFunc(rel.Consumers, func(c topology.ResourceRef) bool { return isClaim(c) && !slices.Contains(namespaces, c.Namespace) })
 		}
 	}
 	isVolume := func(c topology.ResourceRef) bool { return c.Kind == "PersistentVolume" && c.Group == "" }
-	if slices.ContainsFunc(rel.Consumers, isVolume) && !s.canRead(r, "", "persistentvolumes", "", "list") {
+	if (slices.ContainsFunc(rel.Consumers, isVolume) || slices.ContainsFunc(rel.StorageRefs, isVolume)) && !s.canRead(r, "", "persistentvolumes", "", "list") {
 		rel.Consumers = slices.DeleteFunc(rel.Consumers, isVolume)
+		rel.StorageRefs = slices.DeleteFunc(rel.StorageRefs, isVolume)
+	}
+	isClass := func(c topology.ResourceRef) bool { return c.Kind == "StorageClass" && c.Group == "storage.k8s.io" }
+	if slices.ContainsFunc(rel.ConfigRefs, isClass) && !s.canRead(r, "storage.k8s.io", "storageclasses", "", "list") {
+		rel.ConfigRefs = slices.DeleteFunc(rel.ConfigRefs, isClass)
 	}
 }

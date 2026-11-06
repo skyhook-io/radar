@@ -1016,7 +1016,7 @@ function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | 
 }
 
 // ownerNote says why no owner is named, when there is an owner reference.
-function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
+export function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
   const ref = coverage?.ownerRef
   const named = ref?.kind && ref.name ? `${ref.kind} ${ref.name}` : 'the owner it names'
   switch (coverage?.primaryOwnerState) {

@@ -18,25 +18,31 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // ResourceContext is the top-level enrichment block attached to a resource
 // response. Every field is optional; the zero value is a valid (empty)
 // "basic"-tier context.
 //
-// All fields are structured. A prose `Hints []string` projection was
-// considered (and prototyped) but cut from v1: our dominant agent consumer
-// composes triage prose from the structured fields itself, the additional
-// wire bytes earned no net signal, and once shipped, agents pattern-matching
-// on hint substrings would have ossified the wording. If a real consumer
-// emerges that needs deterministic prose, add it as a separate
-// `explain_resource` tool rather than re-introducing it inline here.
+// Context carries structured evidence rather than generated triage prose.
+// Provider field notes may supply fixed writer semantics keyed to raw fields;
+// they must not compose a verdict or hint from the resource's values.
 type ResourceContext struct {
-	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
+	// RelatedFindings is an optional association bundle; absence is not an all-clear.
+	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
+	// AutoInstrumentation contains provider-specific declared injection evidence,
+	// not successful injection or telemetry delivery. Absence is not an all-clear.
+	AutoInstrumentation *AutoInstrumentationContext `json:"autoInstrumentation,omitempty"`
+	CrossplanePause     CrossplanePauseState        `json:"crossplanePause,omitempty"`
 
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`
 	Owner      *ContextRef        `json:"owner,omitempty"`
+	// Children names current direct children supplied by the host,
+	// resolved by owner-reference UID, never labels or generated names. Hosts
+	// currently supply this for Collector/Canary roots only; absent is not empty.
+	Children *ChildrenContext `json:"children,omitempty"`
 	// ManagedBy names the highest readable controller and separately observed
 	// non-GitOps managing controllers. Manager carries GitOps/Helm evidence.
 	// An incomplete controller walk is reported in Omitted.
@@ -44,44 +50,110 @@ type ResourceContext struct {
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
 	// controller's when its own doesn't settle it.
-	Manager         *ManagerContext    `json:"manager,omitempty"`
-	Exposes         []ContextRef       `json:"exposes,omitempty"`        // Union of upstream routing resources and backends; retained for compatibility.
-	ExposedBy       []ContextRef       `json:"exposedBy,omitempty"`      // Upstream resources routing to this resource.
-	Backends        []ContextRef       `json:"backends,omitempty"`       // Resources this routes to.
-	Monitors        []ContextRef       `json:"monitors,omitempty"`       // Prometheus Operator monitors scraping this resource.
-	MonitorTargets  []ContextRef       `json:"monitorTargets,omitempty"` // Targets scraped by this monitor.
-	Protects        []ContextRef       `json:"protects,omitempty"`       // Targets selected by this budget or policy.
-	HealthChecks    []ContextRef       `json:"healthChecks,omitempty"`   // MachineHealthChecks associated with this Cluster.
-	StagedPolicies  []ContextRef       `json:"stagedPolicies,omitempty"` // Non-enforcing staged policy selectors.
-	SelectedBy      []ContextRef       `json:"selectedBy,omitempty"`
-	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
-	Uses            *UsesBlock         `json:"uses,omitempty"`
-	RunsOn          *ContextRef        `json:"runsOn,omitempty"`
-	Dependencies    []ContextRef       `json:"dependencies,omitempty"`
-	Dependents      []ContextRef       `json:"dependents,omitempty"`
-	ScaledBy        []ScalerRef        `json:"scaledBy,omitempty"`
-	StatusSummary   *StatusSummary     `json:"statusSummary,omitempty"`
-	Scheduling      *SchedulingSummary `json:"scheduling,omitempty"`
-	Execution       *ExecutionSummary  `json:"execution,omitempty"`
-	Serving         *ServingSummary    `json:"serving,omitempty"`
-	PodSummary      *PodSummary        `json:"podSummary,omitempty"`
-	WorkloadSummary *WorkloadSummary   `json:"workloadSummary,omitempty"`
-	ServiceSummary  *ServiceSummary    `json:"serviceSummary,omitempty"`
-	IngressSummary  *IngressSummary    `json:"ingressSummary,omitempty"`
-	NodeSummary     *NodeSummary       `json:"nodeSummary,omitempty"`
-	PVCSummary      *PVCSummary        `json:"pvcSummary,omitempty"`
-	JobSummary      *JobSummary        `json:"jobSummary,omitempty"`
-	CronJobSummary  *CronJobSummary    `json:"cronJobSummary,omitempty"`
-	HPASummary      *HPASummary        `json:"hpaSummary,omitempty"`
-	IssueSummary    *IssueSummary      `json:"issueSummary,omitempty"`
-	AuditSummary    *AuditSummary      `json:"auditSummary,omitempty"`
-	PolicySummary   *PolicySummary     `json:"policySummary,omitempty"`
-	AppReferences   *AppReferences     `json:"appReferences,omitempty"`
+	Manager               *ManagerContext        `json:"manager,omitempty"`
+	Exposes               []ContextRef           `json:"exposes,omitempty"`        // Union of upstream routing resources and backends; retained for compatibility.
+	ExposedBy             []ContextRef           `json:"exposedBy,omitempty"`      // Upstream resources routing to this resource.
+	Backends              []ContextRef           `json:"backends,omitempty"`       // Resources this routes to.
+	Monitors              []ContextRef           `json:"monitors,omitempty"`       // Prometheus Operator monitors scraping this resource.
+	MonitorTargets        []ContextRef           `json:"monitorTargets,omitempty"` // Targets scraped by this monitor.
+	Protects              []ContextRef           `json:"protects,omitempty"`       // Targets selected by this budget or policy.
+	HealthChecks          []ContextRef           `json:"healthChecks,omitempty"`   // MachineHealthChecks associated with this Cluster.
+	StagedPolicies        []ContextRef           `json:"stagedPolicies,omitempty"` // Non-enforcing staged policy selectors.
+	SelectedBy            []ContextRef           `json:"selectedBy,omitempty"`
+	ReferencedBy          *ReferencedBy          `json:"referencedBy,omitempty"`
+	Uses                  *UsesBlock             `json:"uses,omitempty"`
+	RunsOn                *ContextRef            `json:"runsOn,omitempty"`
+	Dependencies          []ContextRef           `json:"dependencies,omitempty"`
+	Dependents            []ContextRef           `json:"dependents,omitempty"`
+	ScaledBy              []ScalerRef            `json:"scaledBy,omitempty"`
+	StatusSummary         *StatusSummary         `json:"statusSummary,omitempty"`
+	Scheduling            *SchedulingSummary     `json:"scheduling,omitempty"`
+	Execution             *ExecutionSummary      `json:"execution,omitempty"`
+	Serving               *ServingSummary        `json:"serving,omitempty"`
+	PodSummary            *PodSummary            `json:"podSummary,omitempty"`
+	WorkloadSummary       *WorkloadSummary       `json:"workloadSummary,omitempty"`
+	ServiceSummary        *ServiceSummary        `json:"serviceSummary,omitempty"`
+	IngressSummary        *IngressSummary        `json:"ingressSummary,omitempty"`
+	ServiceAccountSummary *ServiceAccountSummary `json:"serviceAccountSummary,omitempty"`
+	NodeSummary           *NodeSummary           `json:"nodeSummary,omitempty"`
+	PVCSummary            *PVCSummary            `json:"pvcSummary,omitempty"`
+	JobSummary            *JobSummary            `json:"jobSummary,omitempty"`
+	CronJobSummary        *CronJobSummary        `json:"cronJobSummary,omitempty"`
+	HPASummary            *HPASummary            `json:"hpaSummary,omitempty"`
+	IssueSummary          *IssueSummary          `json:"issueSummary,omitempty"`
+	AuditSummary          *AuditSummary          `json:"auditSummary,omitempty"`
+	PolicySummary         *PolicySummary         `json:"policySummary,omitempty"`
+	AppReferences         *AppReferences         `json:"appReferences,omitempty"`
 	// TemplateDivergence compares live Pods with their owner's current
 	// template. It is context, not proof: it says what differs and what could
 	// have changed it, never who did.
 	TemplateDivergence *TemplateDivergence `json:"templateDivergence,omitempty"`
 	Omitted            []OmittedField      `json:"omitted,omitempty"`
+}
+
+// AutoInstrumentationContext separates native provider observations. Missing
+// providers were not established; this is not an exhaustive injector inventory.
+type AutoInstrumentationContext struct {
+	OpenTelemetry *OpenTelemetryAutoInstrumentationContext `json:"openTelemetry,omitempty"`
+}
+
+// OpenTelemetryAutoInstrumentationContext checks each language's current reference for a
+// hypothetical new Pod. This is not the combined webhook admission result:
+// one failing language selection can prevent injection of the other languages.
+// Workload metadata annotations do not configure Pods created from its template.
+type OpenTelemetryAutoInstrumentationContext struct {
+	// NamespaceDefaultsUnknown means Namespace annotations could not be read;
+	// absent requests do not rule out inherited configuration for other languages.
+	NamespaceDefaultsUnknown bool `json:"namespaceDefaultsUnknown,omitempty"`
+
+	RequestsIfPodCreatedNow []OpenTelemetryInjectionRequest `json:"requestsIfPodCreatedNow,omitempty"`
+	// IgnoredWorkloadMetadataAnnotations contains supported injection annotation
+	// keys, not values, found on workload metadata instead of the Pod template.
+	// Omitted means no such supported keys were detected, not all keys checked.
+	IgnoredWorkloadMetadataAnnotations []string `json:"ignoredWorkloadMetadataAnnotations,omitempty"`
+}
+
+// OpenTelemetryInjectionResolution is a per-language reference lookup result,
+// not evidence that this or any other language will be injected.
+type OpenTelemetryInjectionResolution string
+
+const (
+	OpenTelemetryInjectionDisabled         OpenTelemetryInjectionResolution = "disabled"
+	OpenTelemetryInjectionResolved         OpenTelemetryInjectionResolution = "resolved"
+	OpenTelemetryInjectionMissing          OpenTelemetryInjectionResolution = "missing"
+	OpenTelemetryInjectionInvalidReference OpenTelemetryInjectionResolution = "invalid_reference"
+	OpenTelemetryInjectionUnknown          OpenTelemetryInjectionResolution = "unknown"
+	OpenTelemetryInjectionDefaultResolved  OpenTelemetryInjectionResolution = "default_resolved"
+	OpenTelemetryInjectionDefaultMissing   OpenTelemetryInjectionResolution = "default_missing"
+	OpenTelemetryInjectionDefaultAmbiguous OpenTelemetryInjectionResolution = "default_ambiguous"
+)
+
+// OpenTelemetryInjectionRequest evaluates configuration for a hypothetical Pod created
+// now. It does not describe the admission history of an existing Pod.
+type OpenTelemetryInjectionRequest struct {
+	// Language is the native injection component identifier: the exact suffix of
+	// instrumentation.opentelemetry.io/inject-. It includes sdk and server modules
+	// as well as application languages; it is not a provider-neutral language enum.
+	Language string `json:"language"`
+	// Source names the Pod, workload template's object, or Namespace whose
+	// effective annotation was used. Pod=true can inherit a Namespace name.
+	Source ContextRef `json:"source"`
+	// Resolution: disabled, resolved, missing, invalid_reference, unknown,
+	// default_resolved, default_missing, or default_ambiguous. Missing requires
+	// a synced, caller-readable inventory; unknown never means absent. Unknown
+	// can reflect hidden Namespace inheritance, a named ref that could not be
+	// checked, or unreadable default-selection inventory; inspect the context
+	// qualifiers and declared Instrumentation coordinates to choose a follow-up.
+	Resolution OpenTelemetryInjectionResolution `json:"resolution"`
+	// Instrumentation is the declared/selected reference. When Resolution is
+	// unknown a named annotation still supplies coordinates, not existence proof.
+	Instrumentation *ContextRef `json:"instrumentation,omitempty"`
+	// AnnotationPath is the JSON pointer within Source, including Pod-template
+	// nesting for workloads, and the escaped annotation key.
+	AnnotationPath string `json:"annotationPath"`
+	// AssumesOperatorCRDMode qualifies every true/default selection. If the
+	// operator uses inline configuration instead, its selection can differ.
+	AssumesOperatorCRDMode bool `json:"assumesOperatorCRDMode,omitempty"`
 }
 
 // TemplateDivergence reports differences between live Pods and the current
@@ -477,6 +549,8 @@ type KueueScheduling struct {
 	PodSetAssignmentsTruncated bool                      `json:"podSetAssignmentsTruncated,omitempty"`
 	RequeueState               *KueueRequeueState        `json:"requeueState,omitempty"`
 	ConcurrentAdmission        *KueueConcurrentAdmission `json:"concurrentAdmission,omitempty"`
+	Admission                  *KueueAdmissionState      `json:"admission,omitempty"`
+	PendingPosition            *KueuePendingPosition     `json:"pendingPosition,omitempty"`
 }
 
 // KueuePhase is Radar's compact projection of the Kueue admission lifecycle.
@@ -840,6 +914,11 @@ type IssueSummary struct {
 	// so a reader can go to it without another lookup.
 	TopSubject *ContextRef    `json:"topSubject,omitempty"`
 	BySource   map[string]int `json:"bySource,omitempty"`
+	// Unchecked lists checks Radar couldn't make that it attributes to this
+	// resource, so an absent issue there is not established. Count can be 0
+	// with it. Its absence means no such gap was attributed, not that every
+	// check about the resource was made.
+	Unchecked []issuesapi.UncheckedSource `json:"unchecked,omitempty"`
 }
 
 // AuditSummary is a rollup of static posture findings scoped to the subject
@@ -911,4 +990,27 @@ type ReflectionContext struct {
 	Automatic             *bool        `json:"automatic,omitempty"`
 	VisibleMirrors        []ContextRef `json:"visibleMirrors,omitempty"`
 	Truncated             bool         `json:"truncated,omitempty"`
+}
+
+// ChildrenContext previews direct owner-reference children of any resource kind,
+// not an operator's runtime set. An absent block is not an empty inventory.
+type ChildrenContext struct {
+	Items []ContextRef `json:"items"`
+	// Complete means every direct child in the caller-readable scope is included.
+	// False means this was not established, not necessarily that children are missing.
+	// Uncollected kinds, loading/read/unresolved inventory gaps or truncation
+	// make this false, without implying a runtime failure.
+	Complete bool `json:"complete"`
+	// Narrowed means permissions may exclude children, not that hidden children exist.
+	Narrowed bool `json:"narrowed,omitempty"`
+	// Truncated means known children were omitted by the response cap.
+	// When true, Complete is false; false does not rule out inventory gaps.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// ServiceAccountSummary distinguishes declared Secret associations from pull
+// credentials. Neither list asserts that an existing Pod reads those Secrets.
+type ServiceAccountSummary struct {
+	SecretRefs       []ContextRef `json:"secretRefs,omitempty"`
+	ImagePullSecrets []ContextRef `json:"imagePullSecrets,omitempty"`
 }

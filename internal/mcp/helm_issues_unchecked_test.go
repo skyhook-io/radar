@@ -8,9 +8,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
@@ -59,6 +62,19 @@ func TestIssuesToolSaysWhenHelmReleasesCouldNotBeChecked(t *testing.T) {
 				t.Fatalf("InitTestResourceCache: %v", err)
 			}
 			t.Cleanup(k8s.ResetTestState)
+			if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			discovered := make(chan struct{})
+			dc := k8s.GetDynamicResourceCache()
+			dc.OnCRDDiscoveryComplete(func() { close(discovered) })
+			dc.DiscoverAllCRDs()
+			select {
+			case <-discovered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("empty CRD discovery did not complete")
+			}
 
 			storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")

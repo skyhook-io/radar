@@ -14,6 +14,7 @@ package portforward
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -36,6 +37,20 @@ const (
 	// EstablishTimeout lets compound discovery flows budget for each managed tunnel attempt.
 	EstablishTimeout = 10 * time.Second
 )
+
+// ErrAutoDisabled is returned instead of opening a forward when the operator
+// turned automatic port-forwarding off (--disable-auto-port-forward).
+var ErrAutoDisabled = errors.New("automatic port-forwarding is turned off")
+
+var autoDisabled atomic.Bool
+
+// SetAutoDisabled turns automatic port-forwarding off or on for the process.
+// It covers every forward Radar opens on its own: the owners in this package
+// and Argo CD discovery. Port forwards a user starts are not affected.
+func SetAutoDisabled(disabled bool) { autoDisabled.Store(disabled) }
+
+// AutoDisabled reports whether automatic port-forwarding is turned off.
+func AutoDisabled() bool { return autoDisabled.Load() }
 
 // metricsForward is one owner's active port-forward state.
 type metricsForward struct {
@@ -156,6 +171,9 @@ func Start(owner Owner, ctx context.Context, namespace, serviceName string, targ
 // StartWithClients keeps candidate discovery tied to its captured cluster even
 // when the application's active context changes while the forward is starting.
 func StartWithClients(owner Owner, ctx context.Context, namespace, serviceName string, targetPort int, contextName string, client kubernetes.Interface, config *rest.Config) (*ConnectionInfo, error) {
+	if AutoDisabled() {
+		return nil, ErrAutoDisabled
+	}
 	reg.mu.Lock()
 	f := forwardFor(owner)
 	if f.matches(namespace, serviceName, targetPort, contextName) {

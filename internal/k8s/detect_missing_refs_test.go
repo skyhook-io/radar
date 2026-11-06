@@ -31,6 +31,30 @@ func TestMissingRefProblemUsesInjectedClockForResourceAge(t *testing.T) {
 	}
 }
 
+func TestDynamicScaleTargetRequiresObservedInventory(t *testing.T) {
+	t.Cleanup(ResetTestState)
+	t.Cleanup(ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"},
+		&unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"name": "present", "namespace": "shop"}}})
+	if err := InitTestDynamicResourceCache(client, []APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Rollout", Namespaced: true, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	cache := GetDynamicResourceCache()
+	if checked, _ := dynamicScaleTargetExists(cache, gvr, "shop", "absent"); checked {
+		t.Fatal("a kind with no informer was treated as an empty inventory")
+	}
+	if err := cache.EnsureWatching(gvr); err != nil || !cache.WaitForSync(gvr, 2*time.Second) {
+		t.Fatalf("Rollout informer not ready: %v", err)
+	}
+	if checked, exists := dynamicScaleTargetExists(cache, gvr, "shop", "present"); !checked || !exists {
+		t.Fatalf("observed target: checked=%v exists=%v", checked, exists)
+	}
+	if checked, exists := dynamicScaleTargetExists(cache, gvr, "shop", "absent"); !checked || exists {
+		t.Fatalf("authoritative absence: checked=%v exists=%v", checked, exists)
+	}
+}
+
 // TestDetectMissingRefs covers each dangling-ref check exactly once
 // against a single fixture. Each assertion pins one production-impact
 // path (pod-won't-schedule, route-returns-nothing, binding-grants-no-permissions, etc.).

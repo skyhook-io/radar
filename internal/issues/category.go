@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -38,7 +39,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			// Pod Security admission (built-in PSA) is NOT a webhook — don't
 			// mislabel it as such.
 			return issuesapi.CategoryPodSecurityViolation
-		case "WebhookDenied", "WebhookUnavailable":
+		case "WebhookDenied", "WebhookUnavailable", "CreateTimeout":
 			return issuesapi.CategoryAdmissionWebhookBlocking
 		case "RBACForbidden":
 			return issuesapi.CategoryRBACForbidden
@@ -77,12 +78,27 @@ func Classify(in classifyInput) issuesapi.Category {
 
 	case SourceCondition:
 		switch in.Reason {
+		case ReasonCertificateRenewalFailed:
+			return issuesapi.CategoryCertificateRenewalFailed
 		case ReasonKarpenterNodePoolNotReady,
 			ReasonKarpenterNodeClassNotReady,
 			ReasonKarpenterNodeClassNotFound,
 			ReasonKarpenterNodeClassKindNotInstalled,
 			ReasonKarpenterNodeClaimProvisioningFailed:
 			return issuesapi.CategoryNodeProvisioningFail
+		}
+		switch in.Reason {
+		case ReasonKueueResourceUnavailable,
+			ReasonKueueNamespaceNotEligible,
+			ReasonKueueLocalQueueMissing,
+			ReasonKueueClusterQueueMissing,
+			ReasonKueueClusterQueueInactive,
+			ReasonKueueInvalidWorkload,
+			ReasonKueueAdmissionCheckRejected,
+			ReasonKueueDeactivatedByKueue:
+			return issuesapi.CategoryQueueAdmissionBlocked
+		case ReasonKueueRequeuingLimitExceeded, ReasonKueueMaximumExecutionTimeExceeded:
+			return issuesapi.CategoryBatchRunStopped
 		}
 		// Generic CRD .status.conditions[]=False fallback. Discriminate the
 		// well-known controller families by API group.
@@ -222,6 +238,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		if in.Reason == "OOMKilled" {
 			return issuesapi.CategoryOOMKilled
 		}
+		if in.Reason == health.PodEvictedReason {
+			return issuesapi.CategoryPodEvicted
+		}
 		switch in.Reason {
 		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ImageInspectError":
 			return issuesapi.CategoryImagePullFailed
@@ -271,9 +290,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		if in.Reason == "Rollout stuck" || in.Reason == "ReplicaFailure" {
 			return issuesapi.CategoryRolloutStalled
 		}
-		// Stable reason literal emitted by sharedRWOVolumeConflicts —
-		// a multi-replica Deployment mounting a ReadWriteOnce volume.
-		if in.Reason == "ReadWriteOnce volume shared across replicas" {
+		// A multi-replica Deployment mounting a single-node volume. Only the
+		// ReadWriteOncePod form reaches issues; ReadWriteOnce is info posture.
+		if in.Reason == k8s.SharedRWOPVolumeReason || in.Reason == k8s.SharedRWOVolumeReason {
 			return issuesapi.CategoryVolumeAccessModeConflict
 		}
 		// "{avail}/{desired} available" / "{ready}/{desired} ready" /
@@ -407,7 +426,7 @@ func classifyGitOpsReason(reason string, fallback issuesapi.Category) issuesapi.
 		return issuesapi.CategoryGitOpsRenderFailed
 	case "InvalidSpecError":
 		return issuesapi.CategoryGitOpsSpecInvalid
-	case "OperationFailed", "SyncError", "StuckDriftLoop":
+	case "OperationFailed", "SyncError", "StuckDriftLoop", "RollbackRevisionMismatch":
 		return issuesapi.CategoryGitOpsOperationFailed
 	case "AutoSyncBlockedEmpty":
 		return issuesapi.CategoryGitOpsSyncFailed

@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -58,6 +59,7 @@ const (
 	KindNodeClass                      NodeKind = "NodeClass"            // Karpenter NodeClass (EC2NodeClass, AKSNodeClass, etc.)
 	KindScaledObject                   NodeKind = "ScaledObject"         // KEDA ScaledObject
 	KindScaledJob                      NodeKind = "ScaledJob"            // KEDA ScaledJob
+	KindJobSet                         NodeKind = "JobSet"               // jobset.x-k8s.io JobSet
 	KindGatewayClass                   NodeKind = "GatewayClass"         // Gateway API GatewayClass
 	KindVirtualService                 NodeKind = "VirtualService"       // Istio VirtualService
 	KindDestinationRule                NodeKind = "DestinationRule"      // Istio DestinationRule
@@ -791,6 +793,8 @@ type ResourceWithRelationships struct {
 	Relationships   *Relationships         `json:"relationships,omitempty"`
 	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
 	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
+	// RelatedFindings does not affect parent health; absence is not an all-clear.
+	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.

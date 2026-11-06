@@ -6,9 +6,10 @@ import { KueueAdmission } from '../../execution/JobSetAdmission'
 type Props = { data: any; onNavigate?: (ref: ResourceRef) => void }
 
 export function JobRenderer({ data, onNavigate }: Props) {
-  return <BaseJobRenderer data={data} admissionContent={
-    data.apiVersion === 'batch/v1' && data.kind === 'Job' && <KueueAdmission presentation="drawer" resource={data} namespace={data.metadata.namespace} name={data.metadata.name} onNavigate={onNavigate} />
-  } />
+  if (data.apiVersion !== 'batch/v1' || data.kind !== 'Job') return <BaseJobRenderer data={data} />
+  return <KueueAdmission presentation="drawer" resource={data} namespace={data.metadata.namespace} name={data.metadata.name} onNavigate={onNavigate}>
+    {(admissionContent, kueueManaged) => <BaseJobRenderer data={data} admissionContent={admissionContent} kueueManaged={kueueManaged} />}
+  </KueueAdmission>
 }
 
 export function JobSetRenderer({ data, onNavigate }: Props) {

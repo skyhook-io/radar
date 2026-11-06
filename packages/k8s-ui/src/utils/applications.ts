@@ -1203,7 +1203,7 @@ export const CLASS_META: Record<
     label: "Job",
     pill: CHIP_TONE.amber,
     tooltip:
-      "Finite or scheduled work (Job/CronJob/Workflow/CronWorkflow/WorkflowTemplate/ClusterWorkflowTemplate/ScaledJob).",
+      "Finite or scheduled work (Job/CronJob/Workflow/CronWorkflow/WorkflowTemplate/ClusterWorkflowTemplate/ScaledJob/JobSet).",
   },
   mixed: {
     label: "Mixed",
@@ -1293,6 +1293,8 @@ export function batchSignalForApp(app: AppRow): BatchSignal | null {
 function batchSignalForWorkload(workload: AppWorkload): BatchSignal | null {
   const batch = workload.batch;
   if (!batch) return null;
+  const root = jobSetBatchRuntime(workload)
+  if (root) return { tone: root.health === 'unhealthy' ? 'rose' : root.health === 'degraded' ? 'amber' : 'sky', label: `JobSet ${root.label}`, detail: root.detail, workload }
   const latestPhase = batch.latestRunPhase || "";
   const name = `${workload.kind}/${workload.name}`;
   if (latestPhase === "Failed" || latestPhase === "Error") {
@@ -1330,7 +1332,23 @@ export interface AppBatchRuntime {
   detail: string;
 }
 
+function jobSetBatchRuntime(workload: AppWorkload): AppBatchRuntime | null {
+  if (workload.kind !== 'JobSet' || workload.group !== 'jobset.x-k8s.io') return null
+  return {
+    label: workload.batch?.latestRunPhase || 'Unknown',
+    health: healthOf(workload.health),
+    detail: workload.batch?.message || `JobSet/${workload.name} root lifecycle.`,
+  }
+}
+
 export function batchRuntimeForApp(app: AppRow): AppBatchRuntime {
+  const jobSets = (app.workloads || []).filter(w => w.kind === 'JobSet' && w.group === 'jobset.x-k8s.io')
+  if (jobSets.length > 0) {
+    const runtimes: AppBatchRuntime[] = jobSets.map(workload => jobSetBatchRuntime(workload)!)
+    const others = (app.workloads || []).filter(w => !jobSets.includes(w))
+    if (others.length > 0) runtimes.push(batchRuntimeForApp({ ...app, workloads: others }))
+    return runtimes.reduce((worst, next) => HEALTH_RANK[next.health] > HEALTH_RANK[worst.health] ? next : worst)
+  }
   const activity = batchActivityForApp(app);
   if (
     activity.some(
@@ -1504,6 +1522,13 @@ function batchActivityForWorkload(
   const activeRuns = batch.activeRuns ?? 0;
   const retainedRuns = batch.retainedRuns ?? 0;
   const failedRuns = batch.failedRuns ?? 0;
+  const root = jobSetBatchRuntime(workload)
+  if (root) return {
+    workload, tone: root.health === 'unhealthy' ? 'rose' : root.health === 'degraded' ? 'amber' : 'sky',
+    rank: root.health === 'unhealthy' ? 50 : root.health === 'degraded' ? 40 : 10,
+    label: root.label, detail: root.detail, latestRunName: batch.latestRunName,
+    latestRunPhase: latestPhase, activeRuns, retainedRuns, failedRuns,
+  }
   if (latestPhase === "Failed" || latestPhase === "Error") {
     return {
       workload,
