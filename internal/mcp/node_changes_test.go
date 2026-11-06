@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	corev1 "k8s.io/api/core/v1"
@@ -51,8 +52,16 @@ func TestGetChangesNodeConfiguration(t *testing.T) {
 	if len(response.Changes) != 3 {
 		t.Fatalf("get_changes kind=Node lost rows: %+v", response)
 	}
+	// The default feed lists Node configuration, unless the operator turned
+	// the other-kinds read off.
+	response, _ = getChangesForTest(t, context.Background(), getChangesInput{})
+	if len(response.Changes) != 3 {
+		t.Fatalf("default get_changes feed = %+v, want the 3 Node rows", response)
+	}
+	meaningfulchanges.SetOtherKinds(false)
+	t.Cleanup(func() { meaningfulchanges.SetOtherKinds(true) })
 	response, _ = getChangesForTest(t, context.Background(), getChangesInput{})
 	if len(response.Changes) != 0 || len(response.Created) != 0 {
-		t.Fatalf("Node leaked into default get_changes feed: %+v", response)
+		t.Fatalf("Node listed with the other-kinds read off: %+v", response)
 	}
 }

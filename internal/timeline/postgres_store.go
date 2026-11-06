@@ -1067,6 +1067,11 @@ func (s *PostgresStore) ownedUIDs(ctx context.Context, clusterContext string, ow
 	return out, rows.Err()
 }
 
+// postgresDesiredStateUpdatesSQL is QueryOptions.DesiredStateUpdates, a
+// format string for the update event type's placeholder number.
+var postgresDesiredStateUpdatesSQL = " AND (event_type <> $%d OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(diff_json->'fields') = 'array' THEN diff_json->'fields' ELSE '[]'::jsonb END) AS f(value) WHERE " +
+	strings.ReplaceAll(desiredStatePathSQL("lower(f.value->>'path')"), "%", "%%") + "))"
+
 const postgresAPIGroupExpr = "CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END"
 
 // Identities returns the distinct resources the rows matching q were about.
@@ -1178,6 +1183,19 @@ func (s *PostgresStore) buildQuery(opts QueryOptions, excludeManaged bool) (stri
 		// Unknown versions stay visible; known group collisions must be excluded
 		// before LIMIT so they cannot crowd out the requested resource's changes.
 		addFilter(" AND (COALESCE(api_version, '') = '' OR CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END = ANY($%d::text[]))", opts.APIGroups)
+	}
+	// Exclusions match known versions only; an unknown version is no evidence
+	// of the excluded group.
+	if len(opts.ExcludeAPIGroups) > 0 {
+		addFilter(" AND (COALESCE(api_version, '') = '' OR NOT ("+postgresAPIGroupExpr+" = ANY($%d::text[])))", opts.ExcludeAPIGroups)
+	}
+	for _, gk := range opts.ExcludeGroupKinds {
+		query.WriteString(fmt.Sprintf(" AND (COALESCE(api_version, '') = '' OR NOT (kind = $%d AND "+postgresAPIGroupExpr+" = $%d))", argN, argN+1))
+		args = append(args, gk.Kind, gk.Group)
+		argN += 2
+	}
+	if opts.DesiredStateUpdates {
+		addFilter(postgresDesiredStateUpdatesSQL, string(EventTypeUpdate))
 	}
 	if len(opts.Names) > 0 {
 		vals := make([]any, len(opts.Names))

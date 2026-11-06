@@ -618,6 +618,10 @@ func DirectConfigReferences(obj any) []configrefs.Ref {
 	return out
 }
 
+// WithFixedWindow fixes when the query's window starts, so separate reads made
+// for one answer cover the same window however long the reads between them take.
+func (q Query) WithFixedWindow() Query { return normalizeQuery(q) }
+
 func normalizeQuery(q Query) Query {
 	if q.Since <= 0 {
 		q.Since = DefaultSince
@@ -1237,9 +1241,10 @@ func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {
 			}
 			return "", ""
 		}
-		// Candidate queries restrict the default feed's kinds; explicit kind
-		// or name queries also admit custom-resource lifecycle rows.
-		if !isConfigKind(e.Kind) && !isSpecKind(e.Kind) && !isCustomResourceEvent(e) {
+		// Candidate queries restrict the default feed's kinds; custom
+		// resources and Nodes come from the other-kinds read or an explicit
+		// kind or name query.
+		if !isConfigKind(e.Kind) && !isSpecKind(e.Kind) && !isCustomResourceEvent(e) && !isNodeEvent(e) {
 			return "", ""
 		}
 		if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated && e.Diff != nil && len(e.Diff.Fields) > 0 {
@@ -1271,6 +1276,11 @@ func hasSpecConfigField(e timeline.TimelineEvent) bool {
 	for _, f := range e.Diff.Fields {
 		p := strings.ToLower(f.Path)
 		if isNodeEvent(e) && (strings.HasPrefix(p, "metadata.labels") || strings.HasPrefix(p, "metadata.annotations")) {
+			return true
+		}
+		// A generic diff that can't name fields records bare "spec". The
+		// curated kinds keep their stricter rule.
+		if p == "spec" && isCustomResourceEvent(e) && !TrackedKindForGroup(e.Kind, resourceid.GroupFromAPIVersion(e.APIVersion)) {
 			return true
 		}
 		if strings.HasPrefix(p, "spec.") || strings.HasPrefix(p, "metadata.generation") || (trackedGroup && (p == "immutable" || strings.HasPrefix(p, "data"))) {

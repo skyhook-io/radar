@@ -286,15 +286,15 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"often faster than reading " +
 			"ReplicaSet histories or audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Bound the window with since; narrow by " +
-			"namespace, kind or name; custom-resource kinds outside Argo CD, Flux, Rollouts and " +
-			"Gateway API appear only with kind or name. Runs of 5+ plain creates are listed " +
+			"namespace, kind or name. Unfiltered, it adds Nodes and unowned custom resources of " +
+			"watched kinds (edits, creates, deletes; no Nodes with namespace). Runs of 5+ plain creates are listed " +
 			"in `created` as `+<seconds after first>s Kind/name` lines, counted in limit. " +
 			"A namespace query (no kind/name) adds clusterScopedChanges: webhook config " +
 			"changes that may affect it. Omit namespace for other changes outside it. " +
 			"Also includes native Helm " +
 			"history as `source: helm` changes (failed upgrades, rollbacks, current revisions). " +
-			"If `sourcesErrored` includes helm, treat the result as partial rather than proof " +
-			"that no Helm deployment happened. Use get_helm_release include=history,operations " +
+			"If `sourcesErrored` names a source, treat the result as partial, not proof " +
+			"that it had no change. Use get_helm_release include=history,operations " +
 			"for the full Helm revision trail. Other edited fields list under `other spec " +
 			"changes`; hidden values: `(value hidden)`/`(set)`.",
 		Annotations: readOnly,
@@ -772,7 +772,7 @@ type getChangesInput struct {
 	Kind      string `json:"kind,omitempty" jsonschema:"filter to a resource kind (e.g. Deployment, Pod)"`
 	Name      string `json:"name,omitempty" jsonschema:"filter to a specific resource name"`
 	Since     string `json:"since,omitempty" jsonschema:"duration to look back, e.g. 1h, 24h, 7d, 14d (default 1h)"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"max changes to return (default 20, max 50)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max changes to return (default 25, or 20 with kind or name; max 50)"`
 }
 
 type podLogsInput struct {
@@ -1636,6 +1636,9 @@ func isPodKind(kind string) bool {
 	return kind == "pod" || kind == "pods"
 }
 
+// otherKindsBudget bounds get_changes' read of custom resources and Nodes.
+var otherKindsBudget = 3 * time.Second
+
 func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getChangesInput) (*mcp.CallToolResult, any, error) {
 	if err := requireConnected(); err != nil {
 		return nil, nil, err
@@ -1649,7 +1652,17 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		since = parsed
 	}
 
+	// Without kind or name, the feed also reads custom resources and Nodes.
+	// A call that sets no limit reserves slots for them on a page larger by
+	// as many, so it keeps every curated row a 20-row page lists; one that
+	// sets a limit gives them only the slots curated rows leave empty.
+	otherKinds := input.Kind == "" && input.Name == "" && meaningfulchanges.OtherKindsEnabled()
 	limit := 20
+	otherKindsReserve := 0
+	if otherKinds && input.Limit <= 0 {
+		otherKindsReserve = meaningfulchanges.OtherKindsReserve
+		limit += otherKindsReserve
+	}
 	if input.Limit > 0 {
 		limit = min(input.Limit, 50)
 	}
@@ -1710,6 +1723,7 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if input.Kind != "" {
 		query.Kinds = []string{input.Kind}
 	}
+	query = query.WithFixedWindow()
 
 	var recentResult meaningfulchanges.RecentResult
 	if allowed == nil || len(allowed) > 0 {
@@ -1745,19 +1759,44 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		// timeline rows were filtered by query.Allow before their own cut.
 		changes = append(changes, helmChanges...)
 	}
+	var clusterScoped *issuesapi.ClusterScopedChanges
+	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
+		clusterScoped = mcpClusterScopedChanges(ctx, input.Namespace, since, false)
+	}
+	// Last and on its own budget, access checks included: every other source
+	// is already in hand, so a slow read here costs only its own rows.
+	var other meaningfulchanges.OtherKindsResult
+	var otherErr error
+	if otherKinds {
+		otherCtx, cancel := context.WithTimeout(ctx, otherKindsBudget)
+		otherQuery := query
+		otherQuery.Allow = recentChangeReadFilter(otherCtx)
+		other, otherErr = meaningfulchanges.RecentOtherKinds(otherCtx, otherQuery)
+		cancel()
+		if otherErr != nil {
+			sourcesErrored = append(sourcesErrored, "custom resources and Nodes: "+otherErr.Error())
+		}
+	}
+	otherIncomplete := other.FetchSaturated || otherErr != nil
 	totalMatched := len(changes)
-	meaningfulchanges.RankAndCap(&changes, limit)
+	var curatedShown int
+	var selection meaningfulchanges.FeedSelection
+	if otherKinds {
+		selection = meaningfulchanges.ComposeFeed(changes, other.Changes, limit, otherKindsReserve)
+		changes, curatedShown = selection.Changes, selection.CuratedShown
+	} else {
+		meaningfulchanges.RankAndCap(&changes, limit)
+		curatedShown = len(changes)
+	}
 
 	// Always wrap so capped + uncapped agree on wire shape
 	// ({changes: [...], narrowHint?: "..."}).
 	resp := getChangesResponseMCP{
-		Changes:         changes,
-		SourcesErrored:  sourcesErrored,
-		HistoryCoverage: meaningfulchanges.HistoryCoverageFor(recentResult.History, callerReadsAllNamespaces(ctx)),
-		Coverage:        collection.coverage,
-	}
-	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
-		resp.ClusterScopedChanges = mcpClusterScopedChanges(ctx, input.Namespace, since, false)
+		Changes:              changes,
+		SourcesErrored:       sourcesErrored,
+		ClusterScopedChanges: clusterScoped,
+		HistoryCoverage:      meaningfulchanges.HistoryCoverageFor(recentResult.History, callerReadsAllNamespaces(ctx)),
+		Coverage:             collection.coverage,
 	}
 	// What Radar doesn't collect comes first: it decides whether an empty
 	// answer means anything.
@@ -1772,9 +1811,23 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		hints = append(hints, meaningfulchanges.FetchSaturatedGuidance+
 			" Narrow with namespace=, kind= or name=. limit changes how many rows are returned, not the fetch bound."+
 			" Shorten since= only if the shorter window still covers the incident.")
-	} else if recentResult.OutputCapped || totalMatched > len(changes) {
-		hints = append(hints, "Radar fetched every recorded change in this window but returned only the highest-ranked; lower-ranked changes were omitted."+
+	} else if recentResult.OutputCapped || totalMatched > curatedShown {
+		fetched := "Radar fetched every recorded change in this window"
+		if otherIncomplete {
+			fetched = "Radar fetched every recorded change in this window apart from custom resources and Nodes"
+		}
+		returned := "only the highest-ranked"
+		if selection.Reserved > 0 {
+			returned = "the highest-ranked and some custom resources and Nodes"
+		}
+		hints = append(hints, fetched+" but returned "+returned+"; lower-ranked changes were omitted."+
 			" Narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50).")
+	}
+	if other.FetchSaturated {
+		hints = append(hints, "Custom resource and Node changes may be incomplete: their read reached its bound. Pass kind= to list one kind.")
+	}
+	if guidance := meaningfulchanges.FeedSelectionGuidance(selection); guidance != "" {
+		hints = append(hints, guidance)
 	}
 	if resp.HistoryCoverage != nil {
 		hints = append(hints, meaningfulchanges.HistoryCoverageGuidance(*resp.HistoryCoverage))

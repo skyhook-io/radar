@@ -85,10 +85,21 @@ type QueryOptions struct {
 	APIGroups []string
 	// RequireAPIVersion excludes unknown identities for exact resource drill-downs.
 	RequireAPIVersion bool
-	Since             time.Time     // Filter events after this time
-	Until             time.Time     // Filter events before this time
-	Sources           []EventSource // Filter by event source (empty = all)
-	EventTypes        []EventType   // Filter by event type, e.g. add/delete (empty = all)
+	// ExcludeAPIGroups drops rows whose recorded apiVersion's group is listed,
+	// and ExcludeGroupKinds rows whose group and kind match an entry, before
+	// pagination limits are applied. Rows that did not record apiVersion are
+	// unknown and match neither; pair with RequireAPIVersion to drop them.
+	ExcludeAPIGroups  []string
+	ExcludeGroupKinds []resourceid.GroupKind
+	// DesiredStateUpdates keeps an update row only when its diff records a
+	// field IsDesiredStatePath accepts, before pagination limits are applied,
+	// so status-only updates cannot fill the limit. Rows of other event types
+	// are unaffected.
+	DesiredStateUpdates bool
+	Since               time.Time     // Filter events after this time
+	Until               time.Time     // Filter events before this time
+	Sources             []EventSource // Filter by event source (empty = all)
+	EventTypes          []EventType   // Filter by event type, e.g. add/delete (empty = all)
 	// ClusterContext scopes results to one cluster's events (empty = all).
 	// Anything answering "what happened on THIS cluster" must set it: the
 	// SQLite store outlives context switches, and rows written before the
