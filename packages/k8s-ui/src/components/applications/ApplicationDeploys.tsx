@@ -75,12 +75,14 @@ function readyLabel(row: AppDeployRow): string | undefined {
 function DeployRowView({
   row,
   showWorkload,
+  showNamespace,
   liveUnknownTip,
   expanded,
   onToggle,
 }: {
   row: AppDeployRow;
   showWorkload: boolean;
+  showNamespace: boolean;
   liveUnknownTip: string;
   expanded: boolean;
   onToggle: () => void;
@@ -127,8 +129,10 @@ function DeployRowView({
         </td>
         {showWorkload && (
           <td className="min-w-0 py-1.5 pr-3">
-            <Tooltip content={`${row.workload.kind}/${row.workload.name}`} delay={150} wrapperClassName="block min-w-0">
-              <span className="block truncate text-xs text-theme-text-secondary">{row.workload.name}</span>
+            <Tooltip content={`${row.workload.kind} ${row.workload.namespace}/${row.workload.name}`} delay={150} wrapperClassName="block min-w-0">
+              <span className="block truncate text-xs text-theme-text-secondary">
+                {showNamespace ? `${row.workload.namespace}/${row.workload.name}` : row.workload.name}
+              </span>
             </Tooltip>
           </td>
         )}
@@ -201,6 +205,7 @@ export function ApplicationDeploys({
     rows.filter((row) => row.source === "revision").map((row) => `${row.workload.kind}/${row.workload.namespace}/${row.workload.name}`),
   ).size;
   const showWorkload = workloadCount > 1;
+  const showNamespace = new Set(rows.filter((row) => row.source === "revision").map((row) => row.workload.namespace)).size > 1;
   const liveUnknown = rows.some((row) => row.source === "revision" && row.live === "unknown" && !row.stale);
   const liveUnknownTip = deploys.agentOutdated ? OUTDATED_AGENT_NOTE : UNKNOWN_LIVE_TIP;
   const visibleRows = showAll ? rows : rows.slice(0, INITIAL_ROWS);
@@ -275,6 +280,7 @@ export function ApplicationDeploys({
                   key={row.id}
                   row={row}
                   showWorkload={showWorkload}
+                  showNamespace={showNamespace}
                   liveUnknownTip={liveUnknownTip}
                   expanded={expandedId === row.id}
                   onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
