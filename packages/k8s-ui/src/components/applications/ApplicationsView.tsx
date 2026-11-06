@@ -125,6 +125,8 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
 
 // Whatever a host puts here acts by itself. A click would otherwise open the row,
 // and Enter would reach the table's shortcut and open the highlighted one instead.
+// A key the control used is kept from the table too. Anything else still reaches
+// it, so j and k work after clicking something in a row.
 function RowLeading({ children }: { children: ReactNode }) {
   if (children == null || children === false) return null
   return (
@@ -132,7 +134,7 @@ function RowLeading({ children }: { children: ReactNode }) {
       className="inline-flex shrink-0 items-center"
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
-        if (event.key === 'Enter') event.stopPropagation()
+        if (event.key === 'Enter' || event.defaultPrevented) event.stopPropagation()
       }}
     >
       {children}
@@ -166,8 +168,8 @@ export interface ApplicationsViewProps {
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
   /** Rendered before the app name. On a folded group `entry` is its first member
-   *  and `group` holds them all. For a small control such as a button: clicks and
-   *  Enter stay in the slot, and other keys still reach the table's shortcuts. */
+   *  and `group` holds them all. Clicks, Enter and any key the control prevents
+   *  stay in the slot. Other keys still reach the table's shortcuts. */
   renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
 }
 
