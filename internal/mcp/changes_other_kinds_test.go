@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +144,31 @@ func TestGetChangesBoundsOtherKindsRead(t *testing.T) {
 	if len(response.SourcesErrored) != 1 || !strings.Contains(response.SourcesErrored[0], "deadline") {
 		t.Fatalf("sourcesErrored = %v", response.SourcesErrored)
 	}
+}
+
+// Every other store read comes first, so running out the other kinds' budget
+// or the caller's deadline there can't cost them.
+func TestGetChangesReadsOtherKindsLast(t *testing.T) {
+	store := initCorrelationStore(t)
+	recorder := &recordingStore{EventStore: store}
+	timeline.SetStoreForTest(recorder)
+
+	getChangesForTest(t, context.Background(), getChangesInput{Namespace: "shop"})
+	first := slices.Index(recorder.otherKinds, true)
+	if first < 0 || slices.Contains(recorder.otherKinds[first:], false) {
+		t.Fatalf("reads, true for other kinds = %v, want those last", recorder.otherKinds)
+	}
+}
+
+// recordingStore notes, per read, whether it was an other-kinds one.
+type recordingStore struct {
+	timeline.EventStore
+	otherKinds []bool
+}
+
+func (s *recordingStore) Query(ctx context.Context, opts timeline.QueryOptions) ([]timeline.TimelineEvent, error) {
+	s.otherKinds = append(s.otherKinds, opts.DesiredStateUpdates)
+	return s.EventStore.Query(ctx, opts)
 }
 
 // failingOtherKindsStore fails only the desired-state reads the other kinds use.

@@ -1723,6 +1723,7 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if input.Kind != "" {
 		query.Kinds = []string{input.Kind}
 	}
+	query = query.WithFixedWindow()
 
 	var recentResult meaningfulchanges.RecentResult
 	if allowed == nil || len(allowed) > 0 {
@@ -1758,13 +1759,19 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		// timeline rows were filtered by query.Allow before their own cut.
 		changes = append(changes, helmChanges...)
 	}
-	// Last and on its own budget: the curated rows and Helm are already in
-	// hand, so a slow read here costs only its own rows.
+	var clusterScoped *issuesapi.ClusterScopedChanges
+	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
+		clusterScoped = mcpClusterScopedChanges(ctx, input.Namespace, since, false)
+	}
+	// Last and on its own budget, access checks included: every other source
+	// is already in hand, so a slow read here costs only its own rows.
 	var other meaningfulchanges.OtherKindsResult
 	var otherErr error
 	if otherKinds {
 		otherCtx, cancel := context.WithTimeout(ctx, otherKindsBudget)
-		other, otherErr = meaningfulchanges.RecentOtherKinds(otherCtx, query)
+		otherQuery := query
+		otherQuery.Allow = recentChangeReadFilter(otherCtx)
+		other, otherErr = meaningfulchanges.RecentOtherKinds(otherCtx, otherQuery)
 		cancel()
 		if otherErr != nil {
 			sourcesErrored = append(sourcesErrored, "custom resources and Nodes: "+otherErr.Error())
@@ -1785,13 +1792,11 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	// Always wrap so capped + uncapped agree on wire shape
 	// ({changes: [...], narrowHint?: "..."}).
 	resp := getChangesResponseMCP{
-		Changes:         changes,
-		SourcesErrored:  sourcesErrored,
-		HistoryCoverage: meaningfulchanges.HistoryCoverageFor(recentResult.History, callerReadsAllNamespaces(ctx)),
-		Coverage:        collection.coverage,
-	}
-	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
-		resp.ClusterScopedChanges = mcpClusterScopedChanges(ctx, input.Namespace, since, false)
+		Changes:              changes,
+		SourcesErrored:       sourcesErrored,
+		ClusterScopedChanges: clusterScoped,
+		HistoryCoverage:      meaningfulchanges.HistoryCoverageFor(recentResult.History, callerReadsAllNamespaces(ctx)),
+		Coverage:             collection.coverage,
 	}
 	// What Radar doesn't collect comes first: it decides whether an empty
 	// answer means anything.

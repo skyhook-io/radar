@@ -618,6 +618,10 @@ func DirectConfigReferences(obj any) []configrefs.Ref {
 	return out
 }
 
+// WithFixedWindow fixes when the query's window starts, so separate reads made
+// for one answer cover the same window however long the reads between them take.
+func (q Query) WithFixedWindow() Query { return normalizeQuery(q) }
+
 func normalizeQuery(q Query) Query {
 	if q.Since <= 0 {
 		q.Since = DefaultSince

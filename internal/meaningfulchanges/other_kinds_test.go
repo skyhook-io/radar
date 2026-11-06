@@ -172,6 +172,25 @@ func TestRecentKeepsOtherKindsApart(t *testing.T) {
 	}
 }
 
+// One answer's reads share a window: a row inside it when the answer starts
+// stays in the later read, however long the reads between them take.
+func TestRecentOtherKindsKeepsTheAnswersWindow(t *testing.T) {
+	store := initFetchBoundStore(t, 1000)
+	appendEvent(t, store, timeline.TimelineEvent{
+		ID: "dr", Timestamp: time.Now(), APIVersion: "networking.istio.io/v1", Kind: "DestinationRule", Name: "reviews",
+		EventType: timeline.EventTypeUpdate, Diff: desiredDiff("spec.trafficPolicy"),
+	})
+	q := Query{Since: 100 * time.Millisecond}.WithFixedWindow()
+	time.Sleep(150 * time.Millisecond)
+	other, err := RecentOtherKinds(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changeNames(other.Changes); !slices.Contains(got, "DestinationRule/reviews") {
+		t.Fatalf("rows = %v, want the edit from the answer's window", got)
+	}
+}
+
 // A context ending while rows are authorized reads as an error, not as rows
 // that never existed.
 func TestRecentOtherKindsReportsContextEnd(t *testing.T) {
