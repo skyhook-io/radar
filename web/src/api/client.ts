@@ -8,7 +8,7 @@ import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/ut
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import { useClusterConnected } from '../context/clusterConnected'
-import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
 import { kueueQueueRetryable } from '@skyhook-io/k8s-ui/utils/kueue-queue-workloads'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
@@ -7884,6 +7884,32 @@ export function useKueueAdmission(namespace: string, name: string, uid: string |
       return 5000
     },
     retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
+  })
+}
+
+// Kueue's reported position for one pending Workload. Polls only while the
+// answer can change by itself: a refusal, an absent API or an unsupported
+// version gives the same answer until someone changes access or the cluster.
+const kueuePositionPolledStatuses = new Set(['listed', 'not_listed', 'limit_reached', 'queue_unknown'])
+
+export function kueuePositionRefetchInterval({ data, error }: { data?: KueuePositionResponse; error?: unknown }): number | false {
+  if (error && !shouldRetryRadarQuery(0, error)) return false
+  if (!data?.eligible || !data.position) return 30000
+  const { status, code } = data.position
+  return kueuePositionPolledStatuses.has(status) || (status === 'unavailable' && readActionFor(code) === 'retry') ? 30000 : false
+}
+
+/** UID and queueName invalidate the cache; the endpoint reads by namespace/name.
+ * Callers must check the returned UID and eligibility before displaying a position. */
+export function useKueuePendingPosition(namespace: string, name: string, uid: string | undefined, queueName: string | undefined, enabled: boolean) {
+  const { guard, gatedKey } = useRadarFeature('kueuePendingPosition')
+  return useQuery<KueuePositionResponse>({
+    queryKey: ['kueue-position', namespace, name, uid, queueName ?? '', ...gatedKey],
+    queryFn: () => guard(() => fetchJSON<KueuePositionResponse>(`/kueue/position/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`)),
+    enabled: enabled && Boolean(namespace && name && uid),
+    staleTime: 15000,
+    refetchInterval: (query) => kueuePositionRefetchInterval(query.state),
+    retry: shouldRetryRadarQuery,
   })
 }
 

@@ -189,6 +189,7 @@ export interface FeatureCapabilities {
   argoSyncInheritance?: boolean
   argoEnableSelfHealOff?: boolean
   clusterScopedPlaceholder?: boolean
+  kueuePendingPosition?: boolean
   // GET /api/workloads/rayclusters/{namespace}/{name}/pods. Older Radars that
   // serve the route omit the flag; radarFeatures falls back to v1.15.0.
   rayClusterPods?: boolean

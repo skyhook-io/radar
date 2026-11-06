@@ -213,7 +213,7 @@ rbac:
     kuberay: true           # ray.io (RayClusters, RayJobs, RayServices)
     kubeshark: true         # kubeshark.io
     kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
-    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests)
+    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests) + get localqueues/pendingworkloads in visibility.kueue.x-k8s.io (pending position)
     kured: true             # kured.io
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
     lws: true               # leaderworkerset.x-k8s.io

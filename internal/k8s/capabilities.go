@@ -200,6 +200,8 @@ type FeatureCapabilities struct {
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
+	// GET /api/kueue/position/{namespace}/{name}
+	KueuePendingPosition bool `json:"kueuePendingPosition"`
 	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
 	// from v1.15.0 serve the route without advertising this flag.
 	RayClusterPods bool `json:"rayClusterPods"`

@@ -49,6 +49,7 @@ export const RADAR_FEATURES = {
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },
+  kueuePendingPosition: { label: 'Kueue queue positions', flag: 'kueuePendingPosition', flagShippedWithEndpoint: true },
   kueueQueueWorkloads: { label: 'Workload lists on Kueue queues', flag: 'kueueQueueWorkloads', flagShippedWithEndpoint: true },
   // One flag, two controls. An older Radar's rollback never runs, and its
   // resume reports success while leaving automated.enabled: false in place.

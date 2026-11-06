@@ -1672,6 +1672,13 @@ workloads; other direct children remain followable through Related Resources.
 
 A recorded `Failed` phase describes Flagger's last rollout result. Current-UID Warning events may explain it, while an empty event sample does not prove no prior failure. Neither the phase nor configured weight establishes live availability or traffic distribution. Provider endpoints, live traffic and telemetry delivery are not probed.
 
+## Kueue pending position
+
+Workload `get_resource` may include `scheduling.observations[].kueue.pendingPosition`:
+Kueue's snapshot ordering, read as the caller, not admission order or a start time.
+Absent, unlisted or capped results do not establish that it is no longer pending.
+See [the integration limits and required access](integrations.md#pending-position-kueues-visibility-api).
+
 ## Auto-instrumentation reference context
 
 Pod and supported workload detail reads can include `resourceContext.autoInstrumentation.openTelemetry`. It evaluates declared injection requests for a hypothetical new Pod, even when the subject is an existing Pod. It does not establish observed injection, application health or telemetry delivery.
