@@ -54,6 +54,7 @@ import (
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/executioninsight"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/policyreports"
@@ -719,7 +720,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 	// surfaces the grouped issues its pods are evidence for, and on a pod beyond
 	// the inline-Members cap too. The old flat-by-exact-resource match missed
 	// both (a Deployment matched no Kind=Pod evidence rows → empty summary).
+	var unchecked []issuesapi.UncheckedSource
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked:            func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		SkipPodTemplateContext: !includeFacts,
 		Namespaces:             namespaces,
 		CanReadClusterScoped:   canReadClusterScoped,
@@ -728,6 +731,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		CanReadEvidence:        canReadEvidence,
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
+		if len(unchecked) > 0 {
+			return &resourcecontext.IssueSummary{Unchecked: unchecked}, nil
+		}
 		return nil, nil
 	}
 	bySource := make(map[string]int, len(matched))
@@ -753,6 +759,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		TopReason:       topReason,
 		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
+		Unchecked:       unchecked,
 	}, matched
 }
 

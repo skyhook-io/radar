@@ -917,6 +917,11 @@ type IssueSummary struct {
 	// so a reader can go to it without another lookup.
 	TopSubject *ContextRef    `json:"topSubject,omitempty"`
 	BySource   map[string]int `json:"bySource,omitempty"`
+	// Unchecked lists checks Radar couldn't make that it attributes to this
+	// resource, so an absent issue there is not established. Count can be 0
+	// with it. Its absence means no such gap was attributed, not that every
+	// check about the resource was made.
+	Unchecked []issuesapi.UncheckedSource `json:"unchecked,omitempty"`
 }
 
 // AuditSummary is a rollup of static posture findings scoped to the subject

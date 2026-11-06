@@ -917,6 +917,8 @@ export interface SubjectIssuesResponse {
   coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
   withheld?: { issues: number };
   visibility?: { state?: string; impact?: string };
+  /** Checks about this resource Radar couldn't make for the caller. */
+  unchecked_sources?: UncheckedSource[];
 }
 
 export function useSubjectIssues(

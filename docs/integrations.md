@@ -1786,6 +1786,26 @@ confirm freshness, and transition times do not date scheduling attempts.
 Older Kueue wording is best-effort; unrecognized reasons remain visible.
 Radar does not infer fairness, Pod placement, physical capacity or runtime health.
 
+#### Kueue in Issues
+
+Issues surfaces actionable admission blockers, Kueue-stopped runs and broken
+queue configuration. Waiting for quota, preemption, checks or backoff, deliberate
+pauses, stale reports and uncertain flavor fit remain admission context.
+Pending or having no Pods alone is never an Issue. New configuration gets a
+short grace period; recovered queues suppress outdated blocked reports.
+
+Findings follow the run's controller chain; queue incidents group affected runs.
+Links follow the viewer's access. Broken-queue checks require
+ClusterQueue list permission; missing access or collection appears as unchecked
+coverage on affected resource pages and counts, rather than a healthy answer.
+ClusterQueue findings appear only in views not narrowed to namespaces.
+
+`diagnose` on Job, JobSet, RayJob or Kueue Workload returns cached context,
+related Issues and resource events. It collects no Pods, runtime logs, metrics
+or relationship graph. Follow Workload references for admission and Pods for
+runtime diagnosis. An empty Issues list does not establish runtime health;
+undecided Workloads, unrecognized reasons and MultiKueue handoff are not covered.
+
 ### KubeRay
 
 | Resource | Group | Status source |
@@ -1890,8 +1910,9 @@ requested suspension, and JobSet-specific role, child-Job, and recreation counts
 Missing observations remain distinct from zero. Activity does not guarantee running
 Pods, and a suspension request does not prove observed suspension or its cause.
 Root outcomes require root evidence; child failures alone are not terminal.
-Native spec/status remain available. This does not add JobSet `diagnose`, infer
-admission causes, or replace the JobSet→Job→Pod ownership chain.
+Native spec/status remain available. Generic JobSet `diagnose` returns this cached
+context, related Issues and resource events; it does not collect runtime logs or
+metrics, infer admission causes, or replace the JobSet→Job→Pod ownership chain.
 
 Job and JobSet drawer and fullscreen details connect the root to exact
 controller-owned Kueue Workloads, showing each admission decision, native reason, queues, checks, and
