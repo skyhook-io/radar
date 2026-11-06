@@ -3978,10 +3978,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !opts.MatchesNamespaceFilter(namespace) {
 					continue
 				}
-				targetName, _, _ := unstructured.NestedString(sealedSecret.Object, "spec", "template", "metadata", "name")
-				if targetName == "" {
-					targetName = sealedSecret.GetName()
-				}
+				// The controller forces the produced Secret's name to the
+				// SealedSecret's own name; spec.template.metadata.name is
+				// overwritten and does not name the output Secret.
+				targetName := sealedSecret.GetName()
 				key := workloadRefKey{namespace: namespace, name: targetName}
 				consumers := secretConsumers[key]
 				if len(consumers) == 0 {

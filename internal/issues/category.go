@@ -163,6 +163,15 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryOperatorConditionFail
 		case g == "external-secrets.io":
 			return issuesapi.CategorySecretSyncFailed
+		case g == "bitnami.com":
+			// A SealedSecret that can't produce its Secret (Synced=False, e.g.
+			// "no key could decrypt") is a secret-production failure — the same
+			// bucket as External Secrets — so the secret-producer root-cause link
+			// recognizes it as a producer. Other bitnami.com conditions are generic.
+			if in.Kind == "SealedSecret" {
+				return issuesapi.CategorySecretSyncFailed
+			}
+			return issuesapi.CategoryOperatorConditionFail
 		case g == "keda.sh":
 			return issuesapi.CategoryHPALimitedOrFailed
 		case strings.Contains(g, "karpenter"):
