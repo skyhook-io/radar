@@ -142,10 +142,13 @@ describe('ObservedHelmNotice', () => {
     const toggle = container.querySelector('button')!
     expect(toggle.textContent).toContain('What’s affected')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(container.textContent).toContain('How to get the full view: get and list access to Secrets')
     act(() => toggle.click())
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(container.textContent).toContain('failed before creating any object')
-    expect(container.textContent).toContain('Get and list access to Secrets')
+    expect(container.textContent).toContain('Releases that failed before creating any object.')
+    for (const heading of ['Not shown', 'Not listed', 'Can differ from Helm']) {
+      expect(container.querySelector(`section[aria-label="${heading}"]`)).not.toBeNull()
+    }
   })
 
   it('counts namespaces it cannot name', () => {

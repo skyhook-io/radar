@@ -1,31 +1,61 @@
+import type { ReactNode } from 'react'
 import { Info } from 'lucide-react'
-import { AlertBanner } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import { gapReasonText } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { HelmInventory } from '../../types'
 
 const TITLE = 'Built from labels and annotations, not Helm’s own records'
 
-const SOURCES = (
-  <>
-    the <Code>meta.helm.sh/release-name</Code> and <Code>meta.helm.sh/release-namespace</Code> annotations and
-    the <Code>helm.sh/chart</Code> and <Code>app.kubernetes.io/version</Code> labels on deployed objects
-  </>
-)
-
 function Code({ children }: { children: string }) {
-  return <code className="font-mono text-[11px]">{children}</code>
+  return <code className="inline-block max-w-full rounded bg-theme-elevated px-1 font-mono text-xs [overflow-wrap:anywhere] text-theme-text-primary">{children}</code>
 }
 
-const DETAILS = [
-  'Status, revision and last update are unknown, so a release listed here may be failed or part-way through an upgrade.',
-  'History, compare, values, rendered manifest, notes and hooks live in the same Secrets, so they aren’t shown. For a release managed by Flux, you’ll see the history Flux recorded if you can read its HelmRelease.',
-  'A release isn’t listed if it failed before creating any object, if you can’t read any of its objects, or if it deploys only CRDs from a chart’s crds/ directory, which Helm doesn’t label.',
-  'Objects kept after an uninstall, for example with helm.sh/resource-policy: keep, can still show up as a release.',
-  'Charts that don’t set helm.sh/chart show no chart or version, and app version appears only if the chart sets app.kubernetes.io/version. If a release’s objects name several charts and none matches the release name, Radar shows them all rather than pick one.',
-  'Object counts and health cover only what you can read, and leave out Secrets and any kinds Radar isn’t watching.',
-  'Install, upgrade, rollback and uninstall aren’t available here, because Helm records each of them in those Secrets.',
-  'Get and list access to Secrets in the namespace where Helm stores a release gives the full view of it. That’s usually the release’s namespace.',
+const AFFECTED: { heading: string; items: { term: ReactNode; detail?: ReactNode }[] }[] = [
+  {
+    heading: 'Where this comes from',
+    items: [
+      {
+        term: <><Code>meta.helm.sh/release-name</Code> and <Code>meta.helm.sh/release-namespace</Code></>,
+        detail: 'annotations name the release.',
+      },
+      { term: <Code>helm.sh/chart</Code>, detail: 'label gives the chart and version.' },
+      { term: <Code>app.kubernetes.io/version</Code>, detail: 'label gives the app version.' },
+    ],
+  },
+  {
+    heading: 'Not shown',
+    items: [
+      { term: 'Status, revision and last update.', detail: 'A listed release may be failed or part-way through an upgrade.' },
+      {
+        term: 'History, compare, values, manifest, notes and hooks.',
+        detail: 'Helm keeps these in the same Secrets. For a Flux-managed release, you’ll see the history Flux recorded if you can read its HelmRelease.',
+      },
+      { term: 'Install, upgrade, rollback and uninstall.', detail: 'Helm records each of them in those Secrets.' },
+    ],
+  },
+  {
+    heading: 'Not listed',
+    items: [
+      { term: 'Releases that failed before creating any object.' },
+      { term: 'Releases with no object you can read.' },
+      { term: <>Charts that deploy only CRDs from <Code>crds/</Code>.</>, detail: 'Helm doesn’t label those.' },
+    ],
+  },
+  {
+    heading: 'Can differ from Helm',
+    items: [
+      {
+        term: 'Objects kept after an uninstall',
+        detail: <>can still show up as a release, for example with <Code>helm.sh/resource-policy: keep</Code>.</>,
+      },
+      {
+        term: <>Charts without <Code>helm.sh/chart</Code></>,
+        detail: <>show no chart or version. App version needs <Code>app.kubernetes.io/version</Code>.</>,
+      },
+      { term: 'Several charts on one release.', detail: 'If none matches the release name, Radar shows them all rather than pick one.' },
+      { term: 'Object counts and health', detail: 'cover only what you can read, leaving out Secrets and kinds Radar isn’t watching.' },
+    ],
+  },
 ]
 
 /** Where Helm's storage couldn't be read, for the opening sentence. */
@@ -46,43 +76,56 @@ function coverageSentence(inventory: HelmInventory): string | null {
   return `Some objects weren’t read (${reasons.join(', ')}), so this list may be missing more than usual.`
 }
 
+function NoticeCard({ children }: { children: ReactNode }) {
+  return (
+    <section aria-label={TITLE} className="mx-4 mt-4 rounded-xl border border-theme-border bg-theme-surface p-4 shadow-theme-sm [contain:inline-size]">
+      <div className="flex items-start gap-3">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-theme-text-primary">{TITLE}</h2>
+          <div className="mt-1 text-sm text-theme-text-secondary">{children}</div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 /** The callout above a Helm list that isn't entirely from Helm's storage. */
 export function ObservedHelmNotice({ inventory }: { inventory: HelmInventory }) {
   const coverage = coverageSentence(inventory)
   const mixed = inventory.releases.length > 0
   return (
-    <AlertBanner
-      variant="info"
-      icon={Info}
-      title={TITLE}
-      className="mx-4 mt-4 mb-0"
-      message={
-        <>
-          <p>
-            {deniedScope(inventory)}, so {mixed ? 'releases there come' : 'this list comes'} from {SOURCES}. Those Secrets are the
-            source of truth Helm itself uses, so this view can miss things.
-          </p>
-          {coverage && <p className="mt-1">{coverage}</p>}
-          <Disclosure summary="What’s affected, and how to get the full view" className="mt-2" summaryClassName="font-medium">
-            <ul className="mt-1.5 list-disc space-y-1 pl-4">
-              {DETAILS.map((detail) => <li key={detail}>{detail}</li>)}
-            </ul>
-          </Disclosure>
-        </>
-      }
-    />
+    <NoticeCard>
+      <p>
+        {deniedScope(inventory)}, so {mixed ? 'releases there come' : 'this list comes'} from labels and annotations on deployed
+        objects. Those Secrets are the source of truth Helm itself uses, so this view can miss things.
+      </p>
+      {coverage && <p className="mt-1">{coverage}</p>}
+      <p className="mt-2">
+        <span className="font-medium text-theme-text-primary">How to get the full view:</span> get and list access to Secrets in the
+        namespace where Helm stores a release, usually the release’s namespace.
+      </p>
+      <Disclosure summary="What’s affected" className="mt-3" summaryClassName="font-medium text-accent-text">
+        <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] gap-x-8 gap-y-5 border-t border-theme-border pt-3">
+          {AFFECTED.map(({ heading, items }) => (
+            <section key={heading} aria-label={heading}>
+              <h3 className="mb-2 font-semibold text-theme-text-primary">{heading}</h3>
+              <ul className="space-y-2 text-xs leading-5">
+                {items.map(({ term, detail }, index) => (
+                  <li key={index}>
+                    <span className="font-medium text-theme-text-primary">{term}</span>{detail && <> {detail}</>}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+      </Disclosure>
+    </NoticeCard>
   )
 }
 
 /** The drawer's short form: the list carries the detail. */
 export function ObservedHelmDrawerNote() {
-  return (
-    <AlertBanner
-      variant="info"
-      icon={Info}
-      title={TITLE}
-      className="mx-4 mt-4 mb-0"
-      message="Radar can’t read this release’s Helm Secret, which is Helm’s source of truth, so this view can miss things."
-    />
-  )
+  return <NoticeCard>Radar can’t read this release’s Helm Secret, which is Helm’s source of truth, so this view can miss things.</NoticeCard>
 }
