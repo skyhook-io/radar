@@ -609,3 +609,31 @@ func TestUnreachablePreservesCandidateCause(t *testing.T) {
 		}
 	}
 }
+
+// With automatic port-forwarding turned off, discovery off-cluster ends after
+// the direct pass, like in-cluster, and says why instead of reporting a failed
+// port-forward.
+func TestDiscover_AutoPortForwardDisabledStopsAfterDirectProbe(t *testing.T) {
+	portforward.SetAutoDisabled(true)
+	t.Cleanup(func() { portforward.SetAutoDisabled(false) })
+	cs := fake.NewSimpleClientset(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "10.0.0.50",
+			Ports:     []corev1.ServicePort{{Name: "http", Port: 9090}},
+		},
+	})
+	c := &Client{
+		httpClient:  &http.Client{Timeout: time.Second},
+		k8sClient:   cs,
+		contextName: "laptop",
+	}
+
+	_, _, err := c.discover(context.Background(), c.discoveryGen)
+	if !errors.Is(err, errAutoPortForwardDisabled) || !IsUnreachable(err) {
+		t.Fatalf("discovery with port-forwarding off: err=%v, want the turned-off explanation", err)
+	}
+	if c.GetStatus().Service != nil {
+		t.Fatal("no candidate was connected, so none may be reported as the discovered service")
+	}
+}

@@ -1,6 +1,8 @@
+import { HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
+import { getGenericResourceStatus } from '../resources/generic-status'
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
+import { ResourceRendererDispatch, diagnoseHealthHint, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
 import { getCellFilterValue } from '../resources/resource-utils'
 import type { ResourceRef } from '../../types'
 
@@ -1150,4 +1152,21 @@ describe('Strimzi KafkaConnector exact group', () => {
       expect(renderKind('kafkaconnectors',other)).not.toContain('Reported Runtime')
     }
   })
+})
+
+it('keeps foreign customresourcedefinitions on generic renderer and status', () => {
+  const data = { apiVersion: 'foreign.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'foreign' }, spec: { example: 'generic-sentinel' }, status: { conditions: [{ type: 'Established', status: 'True' }] } }
+  const html = renderToString(<ResourceRendererDispatch resource={{ kind: 'customresourcedefinitions', name: 'foreign', namespace: '' }} data={data} onCopy={() => {}} copied={null} showCommonSections={false} />)
+  expect(html).toContain('generic-sentinel')
+  expect(html).not.toContain('Names &amp; conversion')
+  expect(getGenericResourceStatus(data)).toEqual({ text: 'Established', tone: 'unknown' })
+  expect(getResourceStatus('customresourcedefinitions', data)).toEqual({ text: 'Established', color: HEALTH_BADGE_COLORS.unknown })
+})
+
+it('gives Diagnose the CRD health the header badge shows', () => {
+  const crd = (conditions: any[], extra: any = {}) => ({ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'widgets.example.io', ...extra }, status: { conditions } })
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }]))).toBe('healthy')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'NamesAccepted', status: 'False', reason: 'ListKindConflict' }]))).toBe('problem')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }], { deletionTimestamp: '2026-01-01T00:00:00Z' }))).toBe('problem')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([]))).toBe('unknown')
 })

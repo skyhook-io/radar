@@ -1,3 +1,5 @@
+import { CRDVersionsCell } from './renderers/crd-cells'
+import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
@@ -1728,6 +1730,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'holder', label: 'Holder', width: 'w-48' },
     { key: 'renewTime', label: 'Last Renewed', width: 'w-32', tooltip: 'Time since the recorded renewal; red means it exceeds leaseDurationSeconds. Check holder health and API connectivity' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  customresourcedefinitions: [
+    { key: 'name', label: 'Name' },
+    { key: 'kind', label: 'Kind', width: 'w-56' },
+    { key: 'scope', label: 'Scope', width: 'w-32' },
+    { key: 'versions', label: 'Served Versions', width: 'w-64' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   priorityclasses: [
@@ -7727,6 +7737,8 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <IngressClassCell resource={resource} column={column} />
     case 'leases':
       return <LeaseCell resource={resource} column={column} />
+    case 'customresourcedefinitions':
+      return isApiGroup(resource.apiVersion, 'apiextensions.k8s.io') ? <CRDCell resource={resource} column={column} /> : <GenericCell resource={resource} column={column} />
     case 'priorityclasses':
       return <PriorityClassCell resource={resource} column={column} />
     case 'runtimeclasses':
@@ -9935,4 +9947,12 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
+}
+
+function CRDCell({ resource, column }: { resource: any; column: string }) {
+  if (column === 'status') return <GenericCell resource={resource} column={column} />
+  const spec = resource.spec || {}
+  if (column === 'versions') return <CRDVersionsCell versions={spec.versions || []} />
+  const value = getCRDColumnValue(resource, column)
+  return <span className="text-sm text-theme-text-secondary">{value || '-'}</span>
 }

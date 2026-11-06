@@ -190,6 +190,7 @@ export interface FeatureCapabilities {
   argoEnableSelfHealOff?: boolean
   clusterScopedPlaceholder?: boolean
   kueuePendingPosition?: boolean
+  kueueQueueWorkloads?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -244,6 +245,7 @@ export type CoreNodeKind =
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'JobSet' // jobset.x-k8s.io JobSet
   | 'Workflow'
   | 'CronWorkflow'
   | 'WorkflowTemplate'

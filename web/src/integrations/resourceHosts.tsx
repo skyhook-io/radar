@@ -6,6 +6,7 @@ import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
+import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
   type DetailSlots, type HostResource, type HostFeatures, type HostKind, type KindListProps,
@@ -60,6 +61,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   cnpgResourceHost,
+  crdResourceHost,
 ]
 
 export const resourceRendererOverrides = composeResourceHosts(resourceHosts)

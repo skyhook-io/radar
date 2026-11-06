@@ -197,3 +197,7 @@ export { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } 
 export { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from './FlaggerRenderers'
 
 export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
+
+export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
+
+export { CRDSchemaBrowser, type CRDSchemaBrowserProps } from './CRDSchemaBrowser'

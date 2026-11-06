@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/auth"
@@ -74,6 +76,24 @@ func invalidateAuditCache() {
 
 const auditCacheTTL = 5 * time.Second
 
+// slowAuditScan is when a scan is worth a log line: scans run inside the
+// request and can approach the server's request timeout on large clusters.
+const slowAuditScan = 20 * time.Second
+
+// runAuditScan is the scan itself; tests replace it.
+var runAuditScan = audit.RunFromCache
+
+// auditScans runs one scan per key at a time. Polls from several screens or
+// browsers asking for the same scope share it instead of each scanning. The
+// key carries both cache identities and the full options, including the
+// caller's secret namespaces and cluster-resource grants, so callers whose
+// access differs never share a result.
+var auditScans singleflight.Group
+
+func (k auditResultKey) flightKey() string {
+	return fmt.Sprintf("%p\x00%p\x00%s", k.cache, k.dynamic, k.options)
+}
+
 // getCachedResults returns cached scan results if fresh, or runs a new scan.
 func getCachedResults(cache *k8s.ResourceCache, namespaces []string, opts *audit.RunOptions) *bp.ScanResults {
 	key := auditKey(cache, namespaces, opts)
@@ -86,15 +106,21 @@ func getCachedResults(cache *k8s.ResourceCache, namespaces []string, opts *audit
 	}
 	auditCache.mu.RUnlock()
 
-	results := audit.RunFromCache(cache, namespaces, opts)
+	results, _, _ := auditScans.Do(key.flightKey(), func() (any, error) {
+		start := time.Now()
+		results := runAuditScan(cache, namespaces, opts)
+		if elapsed := time.Since(start); elapsed > slowAuditScan {
+			log.Printf("[audit] Scan took %v (%d namespaces requested)", elapsed.Truncate(time.Millisecond), len(namespaces))
+		}
 
-	auditCache.mu.Lock()
-	auditCache.results = results
-	auditCache.key = key
-	auditCache.expiresAt = time.Now().Add(auditCacheTTL)
-	auditCache.mu.Unlock()
-
-	return results
+		auditCache.mu.Lock()
+		auditCache.results = results
+		auditCache.key = key
+		auditCache.expiresAt = time.Now().Add(auditCacheTTL)
+		auditCache.mu.Unlock()
+		return results, nil
+	})
+	return results.(*bp.ScanResults)
 }
 
 // applyAuditSettings filters results based on user settings.

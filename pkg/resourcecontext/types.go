@@ -25,13 +25,9 @@ import (
 // response. Every field is optional; the zero value is a valid (empty)
 // "basic"-tier context.
 //
-// All fields are structured. A prose `Hints []string` projection was
-// considered (and prototyped) but cut from v1: our dominant agent consumer
-// composes triage prose from the structured fields itself, the additional
-// wire bytes earned no net signal, and once shipped, agents pattern-matching
-// on hint substrings would have ossified the wording. If a real consumer
-// emerges that needs deterministic prose, add it as a separate
-// `explain_resource` tool rather than re-introducing it inline here.
+// Context carries structured evidence rather than generated triage prose.
+// Provider field notes may supply fixed writer semantics keyed to raw fields;
+// they must not compose a verdict or hint from the resource's values.
 type ResourceContext struct {
 	// RelatedFindings is an optional association bundle; absence is not an all-clear.
 	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
@@ -918,6 +914,11 @@ type IssueSummary struct {
 	// so a reader can go to it without another lookup.
 	TopSubject *ContextRef    `json:"topSubject,omitempty"`
 	BySource   map[string]int `json:"bySource,omitempty"`
+	// Unchecked lists checks Radar couldn't make that it attributes to this
+	// resource, so an absent issue there is not established. Count can be 0
+	// with it. Its absence means no such gap was attributed, not that every
+	// check about the resource was made.
+	Unchecked []issuesapi.UncheckedSource `json:"unchecked,omitempty"`
 }
 
 // AuditSummary is a rollup of static posture findings scoped to the subject

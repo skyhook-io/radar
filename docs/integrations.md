@@ -1708,7 +1708,7 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ## GPU & Batch Ecosystem (basic support)
 
-The baseline for the GPU scheduling, batch, and inference-serving ecosystem is **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Kueue Workloads, LocalQueues and ClusterQueues also have native detail views for admission evidence, quota accounting and policy. JobSet `v1alpha2` has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity. Other kinds use the standard spec/status renderer; selected resources also provide structured REST/MCP context as described below.
+The baseline for the GPU scheduling, batch, and inference-serving ecosystem is **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Kueue Workloads, LocalQueues and ClusterQueues also have native detail views for admission evidence, quota accounting and policy. JobSet `v1alpha2` has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity, and is drawn in Topology as the root of its member Jobs and Pods. Other kinds use the standard spec/status renderer; selected resources also provide structured REST/MCP context as described below.
 
 These integrations expose resource state and selected admission/execution relationships, not physical GPU accounting. They do not inventory physical devices, distinguish virtual or fractional GPUs such as HAMi, measure GPU utilization, or provide a complete scheduling simulation. JobSet's current CPU/memory observations and Kueue's request-based quota accounting have different meanings and are described separately below.
 
@@ -1745,6 +1745,20 @@ object missing. An intentionally stopped parent softens a LocalQueue's alert
 only when fresh evidence establishes that the stop is its sole cause; table
 status retains the LocalQueue's own report.
 
+#### Workloads in a queue
+
+Queue detail lists and filters member Workloads by admission state. A
+ClusterQueue row distinguishes submission through a LocalQueue's **current**
+target from the Workload's recorded reservation; these can name different queues.
+Finished and deleting Workloads remain listed while retained, so Radar's member
+counts can differ from Kueue's live counts. List order is not admission order.
+
+Workloads and LocalQueues require exact per-kind list access in each namespace.
+Unread namespaces and unresolved submission membership are disclosed, with
+counts shown as lower bounds. A denied Workload read can still leave readable
+LocalQueues and their controller counts. Empty means confirmed empty only with
+complete, unnarrowed coverage and no unresolved submission membership.
+
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
 detail shows native outcomes, reasons, requested Pod counts and PodTemplate
@@ -1771,6 +1785,38 @@ Kueue's last attempt. Stale evidence is marked; an absent stale marker does not
 confirm freshness, and transition times do not date scheduling attempts.
 Older Kueue wording is best-effort; unrecognized reasons remain visible.
 Radar does not infer fairness, Pod placement, physical capacity or runtime health.
+
+#### Kueue in Issues
+
+Issues surfaces actionable admission blockers, Kueue-stopped runs and broken
+queue configuration. Waiting for quota, preemption, checks or backoff, deliberate
+pauses, stale reports and uncertain flavor fit remain admission context.
+Pending or having no Pods alone is never an Issue. New configuration gets a
+short grace period; recovered queues suppress outdated blocked reports.
+
+Findings follow the run's controller chain; queue incidents group affected runs.
+Links follow the viewer's access. Broken-queue checks require
+ClusterQueue list permission; missing access or collection appears as unchecked
+coverage on affected resource pages and counts, rather than a healthy answer.
+ClusterQueue findings appear only in views not narrowed to namespaces.
+
+`diagnose` on Job, JobSet, RayJob or Kueue Workload returns cached context,
+related Issues and resource events. It collects no Pods, runtime logs, metrics
+or relationship graph. Follow Workload references for admission and Pods for
+runtime diagnosis. An empty Issues list does not establish runtime health;
+undecided Workloads, unrecognized reasons and MultiKueue handoff are not covered.
+
+**Admission history.** A queued root's Timeline includes controller-owned
+Workloads and their ProvisioningRequests by owner UID. It records observed
+admission, check, reservation, requeue and configuration changes, suppressing
+counter-only and quantity-only retry noise. It cannot reconstruct unwatched
+transitions or deleted provisioning attempts. Initial rows marked "from metadata"
+date only the last status transition, not its current reason or message.
+
+Coverage says when observation started late, retention removed rows, ownership
+records expired, or access/collection withheld related kinds. A gap never asserts
+that a hidden resource exists; an empty Timeline is not proof nothing happened.
+History belongs to the root workload; queue-scoped history is not provided.
 
 #### Pending position (Kueue's visibility API)
 
@@ -1861,6 +1907,23 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 | TrainedModel | `serving.kserve.io/v1alpha1` | Ready condition |
 | LLMInferenceService | `serving.kserve.io` (v1alpha2, v1alpha1) | Ready / aggregate conditions |
 
+For `serving.kserve.io/v1beta1` InferenceServices, REST AI detail and MCP
+`get_resource` include a bounded serving summary: reported mode/runtime names,
+predictor model transitions and failure evidence, Knative revisions and configured
+traffic, and Standard-mode canaries. Absent facts remain unreported, not healthy
+or zero. A Ready root can still report a non-ready transformer.
+
+Per-field notes explain writer-specific limits beside the relevant raw fields.
+Their reference release is not a detected controller version. Model state and
+failure history can outlive a rollout; configured traffic and ready-copy counts
+do not prove what serves. Confirm with Pod, route and request evidence.
+
+This reads only the root: runtime names are unverified selections. ModelMesh
+gets only mode/runtime names; LLMInferenceService and list/search summaries are
+excluded. Raw spec/status remains available. Standard-mode status has live
+v0.20.0 proof; Knative traffic and serving-old/failing-new cases use writer-derived
+fixtures, not live proof.
+
 ### Gateway API Inference Extension
 
 | Resource | Group | Status source |
@@ -1870,19 +1933,21 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 
 ### Batch: LeaderWorkerSet, JobSet, Volcano, Kubeflow Training
 
-| Resource | Group | Status source |
-|----------|-------|---------------|
-| LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions |
-| JobSet | `jobset.x-k8s.io/v1alpha2` | Completed / Failed / Suspended conditions |
-| Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group |
-| Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) |
-| PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition |
-| JobFlow / JobTemplate | `flow.volcano.sh/v1alpha1` | state.phase / — |
-| Queue (KAI) | `scheduling.run.ai/v2` | Orphan / OverQuota conditions + allocation |
-| PodGroup (KAI) | `scheduling.run.ai/v2alpha2` | phase + scheduling conditions |
-| PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern |
-| MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern |
-| TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
+| Resource | Group | Status source | Topology |
+|----------|-------|---------------|----------|
+| LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions | No |
+| JobSet | `jobset.x-k8s.io/v1alpha2` | Root terminal state, conditions and reported child counts | Yes: JobSet → member Job → Pod |
+| Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group | No |
+| Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) | No |
+| PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition | No |
+| JobFlow / JobTemplate | `flow.volcano.sh/v1alpha1` | state.phase / — | No |
+| Queue (KAI) | `scheduling.run.ai/v2` | Orphan / OverQuota conditions + allocation | No |
+| PodGroup (KAI) | `scheduling.run.ai/v2alpha2` | phase + scheduling conditions | No |
+| PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern | No |
+| MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern | No |
+| TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs | No |
+
+"No" means no dedicated nodes: a kind appears only when something already drawn owns it.
 
 For `jobset.x-k8s.io/v1alpha2` JobSets, REST AI detail and MCP `get_resource`
 include `resourceContext.execution`: root lifecycle and outcome, controller evidence,
@@ -1890,8 +1955,9 @@ requested suspension, and JobSet-specific role, child-Job, and recreation counts
 Missing observations remain distinct from zero. Activity does not guarantee running
 Pods, and a suspension request does not prove observed suspension or its cause.
 Root outcomes require root evidence; child failures alone are not terminal.
-Native spec/status remain available. This does not add JobSet `diagnose`, infer
-admission causes, or replace the JobSet→Job→Pod ownership chain.
+Native spec/status remain available. Generic JobSet `diagnose` returns this cached
+context, related Issues and resource events; it does not collect runtime logs or
+metrics, infer admission causes, or replace the JobSet→Job→Pod ownership chain.
 
 Job and JobSet drawer and fullscreen details connect the root to exact
 controller-owned Kueue Workloads, showing each admission decision, native reason, queues, checks, and
@@ -1913,6 +1979,16 @@ Extended-resource requests are declared demand, not GPU/TPU utilization. Logs ca
 scoped to one Job (live) or a role/all current members (bounded snapshots with source
 attribution and read failures). Historical goodput and archived logs are not collected.
 
+**Topology:** the resources view draws JobSets, including roots with no Jobs,
+and their exact controller-owned member Jobs and Pods. Status uses the same
+root lifecycle as detail; child failures alone do not make the root failed.
+Declared Job counts can exceed created members. Only v1alpha2 is interpreted;
+other served versions show unknown status and a warning without member links.
+
+With Jobs hidden, current member Pods attach to the JobSet. Pods from earlier
+same-named Jobs stay separate. The JobSet Topology tab shows at most 24 members,
+favoring failed and active Jobs, and clicking a member opens its Overview.
+Traffic, scheduling and dependency edges are not provided.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

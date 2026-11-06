@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { batchRunParentNodes, neighborhoodFor, tagWorkloadOwnership, workloadKey } from './topology-neighborhood'
+import { batchRunParentNodes, jobSetMemberRunKey, neighborhoodFor, tagWorkloadOwnership, workloadKey } from './topology-neighborhood'
 import type { Topology, NodeKind, EdgeType } from '../types/core'
 
 function node(id: string, kind: string, ns: string, name: string): Topology['nodes'][number] {
@@ -453,5 +453,94 @@ describe('tagWorkloadOwnership', () => {
     expect(dataOf(topology, 'secret').ownerWorkloadId).toBe('Deployment/app/web')
     expect(dataOf(topology, 'sealed').ownerWorkloadId).toBe('Deployment/app/web')
     expect(dataOf(topology, 'cert').ownerWorkloadId).toBe('Deployment/app/web')
+  })
+})
+
+describe('JobSet ownership in the neighborhood', () => {
+  const jobSetID = 'jobset/ml/train/jobset.x-k8s.io'
+  const topo: Topology = {
+    nodes: [
+      crdNode(jobSetID, 'JobSet', 'ml', 'train', 'jobset.x-k8s.io/v1alpha2'),
+      crdNode('job/ml/train-workers-0', 'Job', 'ml', 'train-workers-0', 'batch/v1'),
+      crdNode('job/ml/train-workers-1', 'Job', 'ml', 'train-workers-1', 'batch/v1'),
+      node('pod/ml/train-workers-0-a', 'Pod', 'ml', 'train-workers-0-a'),
+      node('pod/ml/train-workers-1-a', 'Pod', 'ml', 'train-workers-1-a'),
+      crdNode('job/ml/standalone', 'Job', 'ml', 'standalone', 'batch/v1'),
+      crdNode('job/ml/train-workers-0/batch.volcano.sh', 'Job', 'ml', 'train-workers-0', 'batch.volcano.sh/v1alpha1'),
+    ],
+    edges: [
+      edge(jobSetID, 'job/ml/train-workers-0', 'manages'),
+      edge(jobSetID, 'job/ml/train-workers-1', 'manages'),
+      edge('job/ml/train-workers-0', 'pod/ml/train-workers-0-a', 'manages'),
+      edge('job/ml/train-workers-1', 'pod/ml/train-workers-1-a', 'manages'),
+      { ...edge(jobSetID, 'pod/ml/train-workers-0-a', 'manages'), id: 'shortcut-0', skipIfKindVisible: 'Job' },
+      { ...edge(jobSetID, 'job/ml/train-workers-0/batch.volcano.sh', 'manages'), id: 'foreign' },
+    ],
+  }
+
+  it('walks a JobSet down to every member Job and Pod, not capped as retained runs', () => {
+    const out = neighborhoodFor(topo, [{ kind: 'JobSet', group: 'jobset.x-k8s.io', namespace: 'ml', name: 'train' }])
+    const ids = new Set(out.nodes.map((n) => n.id))
+    for (const id of ['job/ml/train-workers-0', 'job/ml/train-workers-1', 'pod/ml/train-workers-0-a', 'pod/ml/train-workers-1-a']) {
+      expect(ids.has(id)).toBe(true)
+    }
+    expect(ids.has('job/ml/standalone')).toBe(false)
+    // Jobs are present, so the collapsed shortcut is dropped.
+    expect(out.edges.some((e) => e.id === 'shortcut-0')).toBe(false)
+    expect(out.warnings ?? []).toEqual([])
+  })
+
+  it('shows the JobSet as context from a member Job without pulling in sibling members', () => {
+    const out = neighborhoodFor(topo, [{ kind: 'Job', group: 'batch', namespace: 'ml', name: 'train-workers-1' }])
+    const ids = new Set(out.nodes.map((n) => n.id))
+    expect(ids.has(jobSetID)).toBe(true)
+    expect(ids.has('job/ml/train-workers-0')).toBe(false)
+  })
+
+  it('keys only directly controlled batch/v1 member Jobs for in-place selection', () => {
+    const byId = new Map(topo.nodes.map((n) => [n.id, n]))
+    expect(jobSetMemberRunKey(topo, jobSetID, byId.get('job/ml/train-workers-0')!)).toBe('jobs/ml/train-workers-0')
+    expect(batchRunParentNodes(topo, byId.get('job/ml/train-workers-0')!)).toEqual([byId.get(jobSetID)])
+    expect(batchRunParentNodes(topo, byId.get('job/ml/train-workers-0/batch.volcano.sh')!)).toEqual([])
+    expect(jobSetMemberRunKey(topo, jobSetID, byId.get('job/ml/standalone')!)).toBeUndefined()
+    expect(jobSetMemberRunKey(topo, jobSetID, byId.get('job/ml/train-workers-0/batch.volcano.sh')!)).toBeUndefined()
+    expect(jobSetMemberRunKey(topo, jobSetID, byId.get('pod/ml/train-workers-0-a')!)).toBeUndefined()
+    // Only a JobSet of the exact group selects members.
+    expect(jobSetMemberRunKey(topo, 'job/ml/train-workers-0', byId.get('pod/ml/train-workers-0-a')!)).toBeUndefined()
+  })
+})
+
+describe('JobSet member cap', () => {
+  it('keeps failed and active members first and says how many it left out', () => {
+    const jobSetID = 'jobset/ml/big/jobset.x-k8s.io'
+    const nodes: Topology['nodes'] = [crdNode(jobSetID, 'JobSet', 'ml', 'big', 'jobset.x-k8s.io/v1alpha2')]
+    const edges: Topology['edges'] = []
+    for (let i = 0; i < 40; i++) {
+      const id = `job/ml/big-w-${String(i).padStart(2, '0')}`
+      const job = { ...crdNode(id, 'Job', 'ml', `big-w-${String(i).padStart(2, '0')}`, 'batch/v1'), status: 'neutral' as const }
+      if (i === 39) job.status = 'unhealthy' as never
+      if (i === 38) job.data = { ...job.data, active: 1 }
+      if (i !== 38) job.data = { ...job.data, completionTime: '2026-11-01T00:00:00Z', succeeded: 1 }
+      nodes.push(job)
+      edges.push(edge(jobSetID, id, 'manages'))
+      const pod = `pod/ml/big-w-${i}-a`
+      nodes.push(node(pod, 'Pod', 'ml', `big-w-${i}-a`))
+      edges.push(edge(id, pod, 'manages'))
+      edges.push({ ...edge(jobSetID, pod, 'manages'), id: `shortcut-${i}`, skipIfKindVisible: 'Job' })
+    }
+    nodes.push(crdNode('workload/ml/big', 'Workload', 'ml', 'big', 'kueue.x-k8s.io/v1beta2'))
+    edges.push(edge(jobSetID, 'workload/ml/big', 'manages'))
+
+    const out = neighborhoodFor({ nodes, edges }, [{ kind: 'JobSet', group: 'jobset.x-k8s.io', namespace: 'ml', name: 'big' }])
+    const ids = new Set(out.nodes.map((n) => n.id))
+    const jobs = out.nodes.filter((n) => n.kind === 'Job')
+    expect(jobs).toHaveLength(24)
+    expect(ids.has('job/ml/big-w-39')).toBe(true) // failed first
+    expect(ids.has('job/ml/big-w-38')).toBe(true) // active next
+    // Pods only of the shown members: shortcuts don't bring back the rest.
+    expect(out.nodes.filter((n) => n.kind === 'Pod')).toHaveLength(24)
+    // Other things the JobSet owns aren't capped as members.
+    expect(ids.has('workload/ml/big')).toBe(true)
+    expect(out.warnings).toEqual(['Topology view: showing 24 of 40 member Jobs of JobSet/big, failed and active first. Find any member in the Overview\'s member list.'])
   })
 })

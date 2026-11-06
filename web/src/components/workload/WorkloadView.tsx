@@ -556,6 +556,13 @@ export function WorkloadView({
     },
     [searchParams, setSearchParams],
   )
+  // A pushed entry, so Back returns to the graph.
+  const handleSelectTopologyMember = useCallback(
+    (memberKey: string) => {
+      setSearchParams(memberOverviewParams(searchParams, memberKey), { state: location.state })
+    },
+    [searchParams, setSearchParams, location.state],
+  )
 
   // Fetch resource with relationships
   const {
@@ -1187,6 +1194,8 @@ export function WorkloadView({
         olderHistoryError={historyFallback ? null : olderHistoryError}
         historyScoped={!historyFallback}
         historyIncomplete={!historyFallback && Boolean(historyQuery.data?.incomplete)}
+        historyCoverage={historyFallback ? undefined : historyQuery.data?.historyCoverage}
+        historyGaps={historyFallback ? undefined : historyQuery.data?.gaps}
         historyError={(historyFallback ? namespaceChanges.error : historyQuery.error) as Error | null}
         onRetryHistory={() => void (historyFallback ? namespaceChanges.refetch() : historyQuery.refetch())}
         relatedTimelineEvents={relatedTimelineEvents}
@@ -1221,6 +1230,7 @@ export function WorkloadView({
           />
         )}
         {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
+        onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
@@ -1380,6 +1390,16 @@ export function WorkloadView({
       {comparePicker}
     </>
   )
+}
+
+/** The search params that open `memberKey` in the Overview: the member and
+ *  the tab change in one write, since two writes from the same render would
+ *  each start from the old params and the second would drop the first. */
+export function memberOverviewParams(current: URLSearchParams, memberKey: string): URLSearchParams {
+  const params = new URLSearchParams(current)
+  params.set('run', memberKey)
+  params.delete('tab')
+  return params
 }
 
 export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {

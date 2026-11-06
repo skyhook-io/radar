@@ -29,6 +29,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--disable-exec` | `false` | Disable pod terminal, debug shells and pod file browsing |
 | `--disable-helm-write` | `false` | Disable Helm write operations |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
+| `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
 | `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
@@ -315,6 +316,7 @@ below describe that installation-scoped behavior.
   "port": 9280,
   "noBrowser": false,
   "noVersionCheck": false,
+  "disableAutoPortForward": false,
   "browser": "",
   "timelineStorage": "memory",
   "timelineDbPath": "~/.radar/timeline.db",
@@ -344,6 +346,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `noVersionCheck` | Disable automatic version checks; Desktop's manual Check for Updates remains available |
+| `disableAutoPortForward` | Never open a port-forward on Radar's own initiative (same as `--disable-auto-port-forward`) |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
 | `timelineStorage` | `memory`, `sqlite`, or `postgres` |
 | `timelineDbPath` | Path to SQLite database (sqlite only) |
@@ -495,6 +498,8 @@ Radar supports switching between Kubernetes contexts at runtime through the UI. 
 In shared OSS installations (in-cluster or authentication-enabled), context switching is disabled. The operator selects the connection at startup. This includes Helm installations and Pods using an explicit kubeconfig on a non-loopback listener; a personal loopback CLI in a development Pod remains local.
 
 Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps pointing wherever it pointed before.
+
+While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once. If a switch fails after Radar has already left the previous cluster, the same button switches back to it.
 
 ### Expired credentials
 
@@ -756,6 +761,28 @@ checks and their limits. Other name-based metrics do not have those checks.
 In-cluster Radar has no context switcher. Configure the integration for that
 installation, using Secret-backed environment variables for credentials where
 supported; local config persistence is not a replacement for deployment configuration.
+
+#### Automatic port-forwarding
+
+Running locally, Radar reaches the services it discovers in a cluster (Prometheus,
+Hubble Relay, Caretta's metrics store, Kubecost, Argo CD) through a port-forward when
+it can't reach them directly. Each port-forward is a `pods/portforward` request, which
+some clusters audit or alert on.
+
+To stop this, start Radar with `--disable-auto-port-forward`, or set
+`"disableAutoPortForward": true` in the config file. It applies to every context for
+the whole run. Prometheus, Hubble and Argo CD discovery still try a direct
+connection to the Service. Caretta and Kubecost discovery have no direct path from
+your machine. An integration Radar can't reach shows as unavailable and says why.
+For metrics (which Caretta traffic also reads), Kubecost and Argo CD, save the URL
+for that cluster in Settings to use it. Hubble has no URL setting, so it needs a
+direct route to the `hubble-relay` Service.
+
+Port-forwards you start from the UI, and evidence collection you trigger from the UI
+or an AI agent, still open port-forwards.
+
+A placeholder `--prometheus-url` does not do the same job: it applies only to the
+launch context, so switching to another context goes back to discovery.
 
 ## Workload metrics overrides by run mode
 
