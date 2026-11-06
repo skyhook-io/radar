@@ -597,21 +597,34 @@ describe('scheduling-gated pods', () => {
 })
 
 describe('scheduling-gated detection on summary list payloads', () => {
-  // The summary list payload strips spec.schedulingGates but keeps the
-  // PodScheduled=SchedulingGated condition; getPodStatus must still read it as held.
+  // The summary list payload keeps spec.schedulingGates (with an otherwise minimal
+  // spec), so the badge classifies a held pod straight from the authoritative spec
+  // field — no dependency on the scheduler's PodScheduled condition.
   const summaryGated = {
     metadata: { creationTimestamp: '2020-01-01T00:00:00Z' },
-    spec: { containers: [{ name: 'trainer' }] },
-    status: {
-      phase: 'Pending',
-      conditions: [{ type: 'PodScheduled', status: 'False', reason: 'SchedulingGated' }],
-    },
+    spec: { schedulingGates: [{ name: 'kueue.x-k8s.io/admission' }], containers: [{ name: 'trainer' }] },
+    status: { phase: 'Pending' },
   }
 
-  it('getPodStatus reads a summary-shaped gated pod (no spec.schedulingGates) as neutral', () => {
+  it('getPodStatus reads a summary-shaped gated pod as neutral', () => {
     const r = getPodStatus(summaryGated)
     expect(r.level).toBe('neutral')
     expect(r.text).toBe('Scheduling gated')
+  })
+
+  it('a released pod is aged normally even if a stale SchedulingGated condition lingers', () => {
+    // Gates removed (empty spec) but the scheduler has not yet rewritten the
+    // condition: the spec is authoritative, so the pod must age, not read as held.
+    const released = {
+      metadata: { creationTimestamp: '2020-01-01T00:00:00Z' },
+      spec: { containers: [{ name: 'trainer' }] },
+      status: {
+        phase: 'Pending',
+        conditions: [{ type: 'PodScheduled', status: 'False', reason: 'SchedulingGated' }],
+      },
+    }
+    expect(getPodStatus(released).level).toBe('degraded')
+    expect(getPodStatus(released).text).toBe('Pending')
   })
 
   it('an Unschedulable condition is NOT treated as scheduling-gated', () => {

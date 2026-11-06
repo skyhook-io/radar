@@ -20,13 +20,15 @@ func TestGetDashboardHealth_SchedulingGatedCountsHealthy(t *testing.T) {
 	// later-ordered test that relies on a connected cluster.
 	oldCreate := metav1.NewTime(time.Now().Add(-30 * time.Minute))
 
+	container := []corev1.Container{{Name: "app", Image: "app:1"}}
 	gated := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "gated", Namespace: "prod", CreationTimestamp: oldCreate},
-		Spec:       corev1.PodSpec{SchedulingGates: []corev1.PodSchedulingGate{{Name: "kueue.x-k8s.io/admission"}}},
+		Spec:       corev1.PodSpec{Containers: container, SchedulingGates: []corev1.PodSchedulingGate{{Name: "kueue.x-k8s.io/admission"}}},
 		Status:     corev1.PodStatus{Phase: corev1.PodPending},
 	}
 	ungated := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "ungated", Namespace: "prod", CreationTimestamp: oldCreate},
+		Spec:       corev1.PodSpec{Containers: container},
 		Status:     corev1.PodStatus{Phase: corev1.PodPending},
 	}
 	if err := k8s.InitTestResourceCache(kubernetesfake.NewClientset(gated, ungated)); err != nil {

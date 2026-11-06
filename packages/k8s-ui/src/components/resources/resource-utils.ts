@@ -212,18 +212,11 @@ function podUnschedulable(pod: any): boolean {
 // A non-empty spec.schedulingGates means a controller is deliberately holding the
 // pod in Pending (Kueue admission, topology assignment, a custom gate). Mirrors the
 // backend health.PodHasSchedulingGates — keep the two in lockstep (the cross-language
-// golden fixture pins it).
-//
-// The summary list payload strips spec down to containers, so also accept the
-// scheduler's PodScheduled=SchedulingGated condition (which the summary keeps) as
-// evidence — the same condition-based path podUnschedulable uses. The scheduler sets
-// that condition only while the gates are present, so it tracks the spec in practice.
+// golden fixture pins it). The spec field is authoritative and is kept in the summary
+// list payload, so this reads it directly rather than racing the scheduler's
+// PodScheduled=SchedulingGated condition (which lags gate changes in both directions).
 function podSchedulingGated(pod: any): boolean {
-  if ((pod?.spec?.schedulingGates || []).length > 0) return true
-  const conds = pod?.status?.conditions || []
-  return conds.some(
-    (c: any) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'SchedulingGated'
-  )
+  return (pod?.spec?.schedulingGates || []).length > 0
 }
 
 function schedulingGateNames(pod: any): string[] {
