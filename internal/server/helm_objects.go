@@ -35,9 +35,5 @@ func (s *Server) helmObjectScope(r *http.Request) *helm.ObjectScope {
 		},
 		DynamicKindAccess: s.searchKindAccess(r, kindRBAC),
 	}
-	requested := parseNamespaces(r.URL.Query())
-	if pin != nil {
-		requested = []string{*pin}
-	}
-	return &helm.ObjectScope{Provider: provider, Access: access, Requested: requested}
+	return &helm.ObjectScope{Provider: provider, Access: access, Requested: helm.RequestedNamespaces(parseNamespaces(r.URL.Query()), pin)}
 }

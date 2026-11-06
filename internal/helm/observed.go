@@ -98,8 +98,7 @@ type ObservedReleaseDetail struct {
 type ObjectScope struct {
 	Provider *search.CacheProvider
 	Access   search.ScanAccess
-	// Requested is what the caller narrowed to: namespaces it named, or
-	// Radar's --namespace-scope pin. Nil means everything it can read.
+	// Requested is what the caller narrowed to; see RequestedNamespaces.
 	Requested []string
 }
 

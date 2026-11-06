@@ -101,14 +101,11 @@ func mcpHelmObjectScope(ctx context.Context, namespace string) *helm.ObjectScope
 		},
 		DynamicKindAccess: mcpSearchKindAccess(ctx, kindRBAC),
 	}
-	var requested []string
-	switch {
-	case pin != nil:
-		requested = []string{*pin}
-	case namespace != "":
-		requested = []string{namespace}
+	var named []string
+	if namespace != "" {
+		named = []string{namespace}
 	}
-	return &helm.ObjectScope{Provider: provider, Access: access, Requested: requested}
+	return &helm.ObjectScope{Provider: provider, Access: access, Requested: helm.RequestedNamespaces(named, pin)}
 }
 
 func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {

@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
-import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
+import { CertaintyGlyph, PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
 import { useHelmInventory, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
@@ -42,7 +42,9 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
   const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade checks failed'
 
   const { connection } = useConnection()
-  const refetchAll = () => Promise.all([refetchReleases(), refetchUpgradeInfo()])
+  // A manual refetch ignores the query's enabled flag, and with no rows from
+  // Helm there is nothing to check.
+  const refetchAll = () => Promise.all([refetchReleases(), ...(releases?.length ? [refetchUpgradeInfo()] : [])])
 
   // Filter releases by search term
   // Resources-table cycle: asc → desc → off (null restores the server's order).
@@ -624,18 +626,14 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
       </td>
       <td className="px-4 py-3 w-40 phone:w-[6.5rem] phone:px-3">
         <Tooltip content={UNREAD_FROM_HELM}>
-          <span className="badge border border-theme-border bg-theme-elevated text-theme-text-secondary">Unknown</span>
+          <span className={clsx('badge', SEVERITY_BADGE.neutral)}>Unknown</span>
         </Tooltip>
       </td>
       <td className="px-4 py-3 w-16 phone:hidden">
-        <Tooltip content={UNREAD_FROM_HELM}>
-          <span className="text-sm text-theme-text-disabled cursor-help">—</span>
-        </Tooltip>
+        <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
       </td>
       <td className="px-4 py-3 w-24 phone:hidden">
-        <Tooltip content={UNREAD_FROM_HELM}>
-          <span className="text-sm text-theme-text-disabled cursor-help">—</span>
-        </Tooltip>
+        <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
       </td>
     </tr>
   )

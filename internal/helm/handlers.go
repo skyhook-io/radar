@@ -325,7 +325,7 @@ func writeInventoryError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(r.Context().Err(), context.Canceled):
 		// The caller left; this is not a Helm failure.
-	case errors.Is(err, ErrObjectsUnavailable):
+	case errors.Is(err, ErrObjectsUnavailable), errors.Is(err, ErrAccessCheckFailed):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, ErrConnectionChanged):
 		writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
@@ -348,20 +348,27 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	user := userCreds(r)
 	release, err := client.GetReleaseAsUser(namespace, name, user)
 	if err != nil {
-		if ReleaseReadDeniedForCaller(err) {
-			writeErrorCode(w, http.StatusForbidden, ReleaseReadDeniedCode, "insufficient permissions to get Helm release")
-			return
-		}
-		if IsForbiddenError(err) {
-			writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeGetReleaseError(w, err)
 		return
 	}
 	EnrichHookDiagnosticsWithClusterEvidence(r.Context(), release, k8s.ClientFromContext(r.Context()))
 
 	writeJSON(w, release)
+}
+
+// writeGetReleaseError tags only the caller's own denial, which is what tells
+// the UI to show the release from its objects instead. Any other 403 is Radar's
+// access failing, and the same fallback would hide that behind a permissions
+// note.
+func writeGetReleaseError(w http.ResponseWriter, err error) {
+	switch {
+	case ReleaseReadDeniedForCaller(err):
+		writeErrorCode(w, http.StatusForbidden, ReleaseReadDeniedCode, "insufficient permissions to get Helm release")
+	case IsForbiddenError(err):
+		writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 // handleGetManifest returns the rendered manifest for a release. Read as

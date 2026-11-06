@@ -19,6 +19,11 @@ import (
 // the caller can't read from Helm's storage can't be observed either.
 var ErrObjectsUnavailable = errors.New("resource cache not available")
 
+// ErrAccessCheckFailed means Radar couldn't work out which namespaces the
+// caller may read, so it attempted no read. That is not a denial, and a retry
+// can succeed.
+var ErrAccessCheckFailed = errors.New("couldn't check your namespace access; try again")
+
 // ReleaseInventory is the Helm list as far as the caller's access reaches:
 // releases read from Helm's storage, plus, where that read was denied,
 // releases observed from the stamps on deployed objects.
@@ -54,7 +59,13 @@ type InventoryRequest struct {
 // no object read.
 func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*ReleaseInventory, error) {
 	inventory := &ReleaseInventory{Releases: []HelmRelease{}, Observed: []ObservedRelease{}}
+	if req.Scope != nil && req.Scope.Requested != nil && len(req.Scope.Requested) == 0 {
+		return inventory, nil
+	}
 	var read, denied []string
+	if req.StorageNamespaces != nil && len(req.StorageNamespaces) == 0 && req.Scope != nil && req.Scope.Access.NamespaceCheckFailed {
+		return nil, ErrAccessCheckFailed
+	}
 	if req.StorageNamespaces == nil || len(req.StorageNamespaces) > 0 {
 		client, err := c.storageClient(req.User)
 		if err != nil {
@@ -97,6 +108,20 @@ func (i *ReleaseInventory) Summary() string {
 		where = "in some namespaces"
 	}
 	return fmt.Sprintf("Partial: %d releases read from Helm and %d observed. Helm's release Secrets can't be read %s, so observed rows come from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on objects you can read. Their status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume they are deployed or healthy. Absence proves nothing: a release that failed before creating any object, or whose objects you can't read, isn't listed, and objects kept after an uninstall can still appear. A cluster admin can grant get and list on Secrets for the full view.", len(i.Releases), len(i.Observed), where)
+}
+
+// RequestedNamespaces is what a caller narrowed a read to: the namespaces it
+// named, within Radar's --namespace-scope pin if there is one. Nil means no
+// narrowing. Non-nil empty means it named nothing Radar covers, so there is
+// nothing to answer, which isn't a denial.
+func RequestedNamespaces(named []string, pin *string) []string {
+	if pin == nil {
+		return named
+	}
+	if *pin == "" || (named != nil && !slices.Contains(named, *pin)) {
+		return []string{}
+	}
+	return []string{*pin}
 }
 
 // listReleasesRecordingAccess is listReleasesAcrossNamespacesWithClient that

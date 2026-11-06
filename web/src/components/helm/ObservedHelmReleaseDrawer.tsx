@@ -56,7 +56,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
           <div className="flex items-center gap-2 flex-wrap">
             <span className={clsx('badge', SEVERITY_BADGE.info)}>Helm Release</span>
             <Tooltip content={UNREAD}>
-              <span className="badge border border-theme-border bg-theme-elevated text-theme-text-secondary">Status unknown</span>
+              <span className={clsx('badge', SEVERITY_BADGE.neutral)}>Status unknown</span>
             </Tooltip>
           </div>
           <div className="flex items-center gap-1">

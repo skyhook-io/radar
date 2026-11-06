@@ -11,16 +11,21 @@ import { ObservedHelmNotice } from './ObservedHelmNotice'
 
 const inventoryState = vi.hoisted(() => ({
   current: { data: undefined, isPending: false, error: null } as { data?: unknown; isPending: boolean; error: unknown },
+  refetchUpgrades: vi.fn(),
 }))
 
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
   useHelmInventory: () => ({ ...inventoryState.current, dataUpdatedAt: 0, isFetching: false, refetch: vi.fn() }),
-  useHelmBatchUpgradeInfo: () => ({ data: undefined, isLoading: false, error: null, refetch: vi.fn() }),
+  useHelmBatchUpgradeInfo: () => ({ data: undefined, isLoading: false, error: null, refetch: inventoryState.refetchUpgrades }),
 }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { state: 'connected' } }) }))
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({ useRegisterShortcuts: () => undefined }))
 vi.mock('./ChartBrowser', () => ({ ChartBrowser: () => null }))
+vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@skyhook-io/k8s-ui')>()),
+  FreshnessControl: ({ onRefresh }: { onRefresh: () => void }) => <button onClick={onRefresh}>Refresh</button>,
+}))
 vi.mock('./InstallWizard', () => ({ InstallWizard: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -93,6 +98,23 @@ describe('Helm list without Secret access', () => {
     const text = renderView({ data: { releases: [], observed: [] } }).textContent
     expect(text).toContain('No Helm releases found')
     expect(text).not.toContain('Built from labels and annotations')
+  })
+
+  it('does not refresh upgrade checks when no row came from Helm', () => {
+    inventoryState.refetchUpgrades.mockClear()
+    const container = renderView({ data: denied([observed]) })
+    const refresh = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Refresh')!
+    act(() => refresh.click())
+    expect(inventoryState.refetchUpgrades).not.toHaveBeenCalled()
+  })
+
+  it('still refreshes upgrade checks for rows from Helm', () => {
+    inventoryState.refetchUpgrades.mockClear()
+    const release = { name: 'x', namespace: 'ns', chart: 'c', chartVersion: '1', appVersion: '1', status: 'deployed', revision: 1, updated: '2026-01-01T00:00:00Z' }
+    const container = renderView({ data: { releases: [release], observed: [] } })
+    const refresh = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Refresh')!
+    act(() => refresh.click())
+    expect(inventoryState.refetchUpgrades).toHaveBeenCalledOnce()
   })
 
   it('waits rather than saying there are no releases while the read has not started', () => {

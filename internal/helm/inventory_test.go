@@ -145,6 +145,54 @@ func TestUnreadStorage(t *testing.T) {
 	}
 }
 
+func TestReadInventoryDoesNotCallAnUnansweredReadADenial(t *testing.T) {
+	_, err := (&Client{}).ReadInventory(context.Background(), InventoryRequest{
+		StorageNamespaces: []string{},
+		User:              &pkgauth.User{Username: "dev"},
+		Scope:             &ObjectScope{Access: search.ScanAccess{NamespaceCheckFailed: true}},
+	})
+	if !errors.Is(err, ErrAccessCheckFailed) {
+		t.Fatalf("err = %v, want a retryable failure, not a denial", err)
+	}
+}
+
+func TestReadInventoryOutsideThePinIsEmptyNotDenied(t *testing.T) {
+	inventory, err := (&Client{}).ReadInventory(context.Background(), InventoryRequest{
+		StorageNamespaces: []string{},
+		Scope:             &ObjectScope{Requested: RequestedNamespaces([]string{"team-b"}, ptr("team-a"))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventory.StorageDenied != nil || inventory.ObjectCoverage != nil || len(inventory.Observed) != 0 {
+		t.Fatalf("inventory = %+v, want nothing and no denial", inventory)
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+func TestRequestedNamespaces(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		named []string
+		pin   *string
+		want  []string
+	}{
+		{name: "nothing narrows it"},
+		{name: "named", named: []string{"a", "b"}, want: []string{"a", "b"}},
+		{name: "pin alone", pin: ptr("a"), want: []string{"a"}},
+		{name: "named inside the pin", named: []string{"a", "b"}, pin: ptr("a"), want: []string{"a"}},
+		{name: "named outside the pin", named: []string{"b"}, pin: ptr("a"), want: []string{}},
+		{name: "a pin with no target", pin: ptr(""), want: []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RequestedNamespaces(tc.named, tc.pin); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestObservedOutsideStorage(t *testing.T) {
 	stamped := func(release, namespace string) stampedObject {
 		return stampedObject{kind: "ConfigMap", namespace: namespace, name: release, release: release, releaseNS: namespace}

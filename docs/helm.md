@@ -51,6 +51,8 @@ Objects are read through the same walk and per-user gates as search (`internal/s
 
 A Radar too old to serve the inventory doesn't advertise `helmInventory`, so the UI reads `/api/helm/releases` and keeps its "Access Restricted" state.
 
+A failed read isn't a denial: if Radar can't check which namespaces the caller may read, the inventory returns 503 so the request can be retried, and any failure of the storage read other than the caller's own denial fails it as it fails `/api/helm/releases`. A request naming only namespaces outside the `--namespace-scope` pin gets an empty answer with no `storageDenied`.
+
 ## Release Detail
 
 The drawer includes:
