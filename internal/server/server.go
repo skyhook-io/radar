@@ -1517,6 +1517,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		HelmSourceIdentity:       true,
 		ClusterScopedPlaceholder: true,
 		KueuePendingPosition:     true,
+		RayClusterPods:           true,
+		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()

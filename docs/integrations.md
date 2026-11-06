@@ -1845,9 +1845,20 @@ RayCluster detail separates head readiness from ready, running and desired worke
 Pod counts. Worker-group sizing and autoscaling are declared configuration; they
 do not imply per-group health. The OSS host provides a bounded Pod list filtered
 by the current RayCluster controller UID, with head/group selection and ordinary
-Pod/log navigation. Controller-reported counts use Ray labels and may differ from
+Pod navigation. Controller-reported counts use Ray labels and may differ from
 that owned-Pod list. Missing access, cache warming and recreated roots are explicit;
 no RayCluster-wide log stream or lifecycle actions are added.
+
+The RayCluster **Logs** tab uses current owner-UID-matched Pods, with per-Pod
+Runtime Pods buttons. It opens the least healthy Pod, selecting an unfinished
+regular init container for a Pending or Failed Pod when identifiable, otherwise
+an application container. Native sidecars are not selected first.
+
+Each Pod list is capped at 200; narrow to the head or a worker group to reach
+others. Unreadable owned lists fall back to recorded Pods with an explanation;
+older Radars show an upgrade note. Logs are container output, not Ray session
+files under `/tmp/ray`, and deleted Pods have no retrievable logs. Already loaded
+lines may remain visible. RayClusters served before `ray.io/v1` use generic logs.
 
 RayJob detail separates the controller lifecycle from the last reported application
 state, with links to the runtime RayCluster and a UID-verified submitter Job for
