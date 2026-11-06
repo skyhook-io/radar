@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { BellOff, Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
+import { Activity, BellOff, Bot, Boxes, Braces, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -48,6 +48,76 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.20.0',
+    highlights: [
+      {
+        id: 'crd-schema-browser',
+        icon: Braces,
+        title: 'Explore CRDs and their schemas',
+        description: 'CRDs now have a sidebar row and a schema browser. Search fields, paste a path from an API error, and read types, defaults and validation rules.',
+        leadDescription: "CustomResourceDefinitions now have a sidebar row, and typing crd finds them in Cmd-K. The drawer and a full Schema tab show each version's fields in a tree like kubectl explain, with types, defaults and validation rules. Paste a path from an API server error to find the field and see the rules on its parents.",
+        importance: 8,
+        path: '/resources/customresourcedefinitions?apiGroup=apiextensions.k8s.io',
+        cta: 'Open CRDs',
+      },
+      {
+        id: 'rollbacks-safer-syncs',
+        icon: Undo2,
+        title: 'Reliable rollbacks and safer Argo CD syncs',
+        description: "Argo CD rollback works and reports what it deployed; Deployment rollback matches kubectl. Syncs keep the Application's options and leave pruning off.",
+        importance: 7,
+        path: '/gitops',
+        cta: 'Open GitOps',
+      },
+      {
+        id: 'kueue-support',
+        icon: Layers,
+        title: 'Deep Kueue support',
+        description: 'Browse queue Workloads, admission history and Kueue-reported pending positions. Issues flag rejected checks and broken queues, not quota waits.',
+        importance: 7,
+      },
+      {
+        id: 'issues-more-failures',
+        icon: ShieldAlert,
+        title: 'Issues explain more failures',
+        description: 'Failed cert-manager renewals, evicted Pods with their node, surge deadlocks on ReadWriteOnce volumes, and webhooks that may block Pod creation.',
+        importance: 6,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'deeper-operator-support',
+        icon: Boxes,
+        title: 'Deeper Strimzi, Ray, JobSet and KServe support',
+        description: 'See failed connector tasks even when Ready, JobSet members in Topology and current Ray Pod logs. KServe flags failed components, not planned stops.',
+        importance: 6,
+      },
+      {
+        id: 'application-evidence',
+        icon: Database,
+        title: 'Collect RabbitMQ, NATS and Vault evidence locally',
+        description: "On local Radar, collect one Pod's RabbitMQ alarms, NATS consumer counters or Vault seal state from a default plaintext endpoint.",
+        importance: 6,
+      },
+      {
+        id: 'otel-flagger',
+        icon: Activity,
+        title: 'Deeper OpenTelemetry and Flagger support',
+        description: 'Flagger Issues name missing targets, metric templates and provider Secrets. AI diagnosis reads Collectors and Canaries through current workloads.',
+        importance: 5,
+      },
+    ],
+    improvements: [
+      // The grid fills row by row: pair lines of similar length.
+      'Switching to an unreachable context keeps your current cluster; Cannot Connect says since when',
+      'Issue rows and Investigate buttons show recent local investigations; see an example before your first',
+      'Limit what Radar can reach with rbac.namespaces, disableExec and --disable-auto-port-forward',
+      'GitOps trees show operator-created workloads; drawers link webhooks, issuers and Secrets',
+      'get_changes includes RBAC and Node edits; search finds resources by a pasted IP or ip:port',
+      'Issues link a missing Secret to its SealedSecret and report missing parent Gateways',
+    ],
+  },
   {
     version: 'v1.19.0',
     highlights: [
@@ -374,7 +444,10 @@ export function unreadReleases(
 // skipped releases sees the best of them, weighted toward the newest; older
 // releases than this list covers are left to the changelog.
 export const RELEASE_WEIGHTS = [1, 0.75, 0.5]
-export const MAX_CARDS = 5
+export const MAX_CARDS = 7
+// Auto-open weighs only the strongest cards, so a release can't clear the bar
+// on a long list of minor ones.
+export const SCORED_CARDS = 5
 export const MAX_LINES = 8
 // A fuller set of useful improvements can merit an announcement even without
 // a single release-defining feature.
@@ -396,7 +469,7 @@ export interface ComposedNotes {
   /** The first one leads the dialog at full width. */
   highlights: ComposedHighlight[]
   lines: ComposedLine[]
-  /** Sum of the shown highlights' scores. */
+  /** Sum of the strongest shown highlights' scores, up to SCORED_CARDS. */
   score: number
   /** False when older unseen releases were left out. */
   complete: boolean
@@ -419,7 +492,7 @@ export function composeReleaseNotes(releases: ReleaseNotes[]): ComposedNotes {
     versions: shown.map(notes => notes.version),
     highlights,
     lines,
-    score: highlights.reduce((sum, h) => sum + h.score, 0),
+    score: highlights.slice(0, SCORED_CARDS).reduce((sum, h) => sum + h.score, 0),
     complete: shown.length === releases.length,
   }
 }
