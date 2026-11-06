@@ -22,6 +22,14 @@ describe('ResourceCompareView sides', () => {
     expect(text).toContain('payments-us')
   })
 
+  it('keeps a cut-off location readable on hover', () => {
+    const html = renderToStaticMarkup(
+      <ResourceCompareView a={checkout} b={checkout} aData={{}} bData={{}} onSwap={() => {}} onClose={() => {}} aSubtitle="payments-eu" bSubtitle="payments-us" />,
+    )
+    expect(html).toContain('title="payments-eu"')
+    expect(html).toContain('title="payments-us"')
+  })
+
   it('names both sides when they are different resources', () => {
     const text = header({ b: { ...checkout, name: 'billing' }, aSubtitle: 'payments-eu', bSubtitle: 'payments-eu' })
     expect(text).toContain('shop/checkout')

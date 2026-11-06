@@ -85,7 +85,7 @@ function ResourcePill({
         {label}
       </span>
       {error && <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" aria-hidden />}
-      <span className={clsx('truncate min-w-0', error ? 'text-red-300' : 'text-theme-text-primary')}>
+      <span className={clsx('truncate min-w-0', error ? 'text-red-300' : 'text-theme-text-primary')} title={subtitleOnly ? subtitle : undefined}>
         {subtitleOnly ? (
           subtitle
         ) : (
@@ -175,7 +175,7 @@ export function ResourceCompareView({
 
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
         <GitCompare className="w-5 h-5 text-skyhook-400 shrink-0" />
-        <h2 className={clsx('text-sm font-semibold text-theme-text-primary whitespace-nowrap', sameResource ? 'min-w-0 max-w-[40%] truncate' : 'shrink-0')}>
+        <h2 className={clsx('text-sm font-semibold text-theme-text-primary whitespace-nowrap', sameResource ? 'min-w-0 max-w-[30%] truncate' : 'shrink-0')}>
           Compare <span className="text-theme-text-tertiary mx-0.5">·</span>{' '}
           <span className="text-theme-text-secondary font-medium">{kindLabel}</span>
           {sameResource && (
