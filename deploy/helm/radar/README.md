@@ -618,8 +618,10 @@ of either value. See [the exec contract](../../../docs/mcp.md#exec_pod).
 
 `disableExec: true` turns off pod exec through Radar for everyone on this cluster,
 Owners included. It passes `--disable-exec` and removes the `pods/exec` rule from
-Radar's ServiceAccount, even if `rbac.podExec` is `true`. Set it per cluster, for
-example in production values only. To keep exec for some people, leave it off and
+Radar's ServiceAccount, even if `rbac.podExec` is `true`. Without authentication,
+`rbac.helm: true` separately gives the ServiceAccount write access to all resources,
+including exec, so set `rbac.helm: false` to remove that too. Set `disableExec` per
+cluster, for example in production values only. To keep exec for some people, leave it off and
 control exec with Kubernetes RBAC instead.
 
 With exec off:
