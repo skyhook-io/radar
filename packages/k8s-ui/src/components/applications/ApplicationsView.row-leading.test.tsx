@@ -91,6 +91,23 @@ describe('ApplicationsView renderRowLeading', () => {
     expect(onSelect).toHaveBeenCalledWith('shop/checkout')
   })
 
+  it('keeps a key the control used from the table, and lets other keys through', () => {
+    const menu = () => (
+      <button type="button" data-testid="menu" onKeyDown={(event) => { if (event.key === 'ArrowDown') event.preventDefault() }}>
+        menu
+      </button>
+    )
+    const { host } = show([app('checkout'), app('orders')], { renderRowLeading: menu })
+    const highlighted = () => host.querySelectorAll('tbody tr.selection').length
+    const press = (key: string) => act(() => {
+      host.querySelector('[data-testid="menu"]')!.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+    })
+    press('ArrowDown')
+    expect(highlighted()).toBe(0)
+    press('j')
+    expect(highlighted()).toBe(1)
+  })
+
   it('leaves no gap when the host has nothing for a row', () => {
     const { host } = show([app('checkout')], { renderRowLeading: () => null })
     const withSlot = rowOf(host, 'checkout').innerHTML
