@@ -59,12 +59,15 @@ function ResourcePill({
   error,
   onChange,
   subtitle,
+  subtitleOnly,
 }: {
   resource: CompareResourceRef
   side: CompareSide
   error?: string
   onChange?: () => void
   subtitle?: string
+  /** Both sides are the same resource, so where it runs is all that tells them apart. */
+  subtitleOnly?: boolean
 }) {
   const tones = SIDE_TONES[side]
   const errTone = 'border-red-400/50 bg-red-500/10'
@@ -83,12 +86,18 @@ function ResourcePill({
       </span>
       {error && <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" aria-hidden />}
       <span className={clsx('truncate min-w-0', error ? 'text-red-300' : 'text-theme-text-primary')}>
-        {resource.namespace && <span className="opacity-60">{resource.namespace}/</span>}
-        {resource.name}
-        {subtitle && (
-          <span className="opacity-60 ml-1" aria-label={`Source: ${subtitle}`}>
-            · {subtitle}
-          </span>
+        {subtitleOnly ? (
+          subtitle
+        ) : (
+          <>
+            {resource.namespace && <span className="opacity-60">{resource.namespace}/</span>}
+            {resource.name}
+            {subtitle && (
+              <span className="opacity-60 ml-1" aria-label={`Source: ${subtitle}`}>
+                · {subtitle}
+              </span>
+            )}
+          </>
         )}
       </span>
       {onChange && (
@@ -144,6 +153,10 @@ export function ResourceCompareView({
   // blank the editor. When the A/B identity changes (navigating to a
   // new pair on the same route), the latch resets so the loader shows
   // again until the new fetches settle.
+  // The same resource from two places: say what it is once, up top, so the pills
+  // can show the one thing that differs. Long names no longer push that out of view.
+  const sameResource = a.kind === b.kind && a.group === b.group && a.namespace === b.namespace && a.name === b.name &&
+    Boolean(aSubtitle && bSubtitle) && aSubtitle !== bSubtitle
   const settleKey = `${a.kind}|${a.namespace}|${a.name}|${a.group ?? ''}|${aSubtitle ?? ''}` +
     `|${b.kind}|${b.namespace}|${b.name}|${b.group ?? ''}|${bSubtitle ?? ''}`
   const settleKeyRef = useRef(settleKey)
@@ -162,13 +175,22 @@ export function ResourceCompareView({
 
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
         <GitCompare className="w-5 h-5 text-skyhook-400 shrink-0" />
-        <h2 className="text-sm font-semibold text-theme-text-primary shrink-0 whitespace-nowrap">
+        <h2 className={clsx('text-sm font-semibold text-theme-text-primary whitespace-nowrap', sameResource ? 'min-w-0 max-w-[40%] truncate' : 'shrink-0')}>
           Compare <span className="text-theme-text-tertiary mx-0.5">·</span>{' '}
           <span className="text-theme-text-secondary font-medium">{kindLabel}</span>
+          {sameResource && (
+            <>
+              <span className="text-theme-text-tertiary mx-0.5">·</span>{' '}
+              <span className="text-theme-text-secondary font-medium" title={`${a.namespace}/${a.name}`}>
+                {a.namespace && <span className="opacity-60">{a.namespace}/</span>}
+                {a.name}
+              </span>
+            </>
+          )}
         </h2>
 
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} />
+          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} subtitleOnly={sameResource} />
           <Tooltip content="Swap A and B">
             <button
               onClick={onSwap}
@@ -177,7 +199,7 @@ export function ResourceCompareView({
               <ArrowLeftRight className="w-3.5 h-3.5" />
             </button>
           </Tooltip>
-          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} subtitle={bSubtitle} />
+          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} subtitle={bSubtitle} subtitleOnly={sameResource} />
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
