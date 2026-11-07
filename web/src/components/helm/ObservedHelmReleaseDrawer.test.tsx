@@ -41,9 +41,31 @@ describe('a refresh that fails while the drawer shows a release', () => {
     expect(text).not.toContain('Object health')
   })
 
-  it('keeps what it has through a passing failure', () => {
+  it('keeps what it has through a passing failure, and says it did', () => {
     detail.current = { data: seen, error: new ApiError('unavailable', 503) }
     const text = mount(<ObservedHelmReleaseDrawer release={release} onClose={vi.fn()} />).textContent
     expect(text).toContain('Object health')
+    expect(text).toContain('couldn’t refresh this, so it shows the last read')
+  })
+})
+
+describe('tabs on an observed release', () => {
+  const tabLabels = (container: HTMLElement) => [...container.querySelectorAll('button')].map((b) => b.textContent?.trim()).filter(Boolean)
+
+  it('offers only what can hold data', () => {
+    detail.current = { data: seen }
+    const labels = tabLabels(mount(<ObservedHelmReleaseDrawer release={release} onClose={vi.fn()} />))
+    expect(labels).toEqual(expect.arrayContaining(['Overview', 'Resources']))
+    for (const gone of ['History', 'Manifest', 'Values', 'Hooks']) expect(labels).not.toContain(gone)
+  })
+
+  it('adds History where Flux recorded one', () => {
+    detail.current = { data: { ...seen, fluxHistory: [{ revision: 1 }] } }
+    expect(tabLabels(mount(<ObservedHelmReleaseDrawer release={release} onClose={vi.fn()} />))).toContain('History')
+  })
+
+  it('says what the read missed', () => {
+    detail.current = { data: { ...seen, objectCoverage: { gaps: [{ code: 'kind_sync_pending' }] } } }
+    expect(mount(<ObservedHelmReleaseDrawer release={release} onClose={vi.fn()} />).textContent).toContain('so this release may be missing more than usual')
   })
 })

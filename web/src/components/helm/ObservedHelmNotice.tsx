@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Info } from 'lucide-react'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import { gapReasonText } from '@skyhook-io/k8s-ui/utils/read-actions'
-import type { HelmInventory } from '../../types'
+import type { HelmInventory, ObservedHelmReleaseDetail } from '../../types'
 
 const TITLE = 'Built from labels and annotations, not Helm’s own records'
 
@@ -75,11 +75,11 @@ function deniedScope(inventory: HelmInventory): string {
 }
 
 /** What the object read itself didn't reach, on top of what stamps can't say. */
-function coverageSentence(inventory: HelmInventory): string | null {
-  const gaps = inventory.objectCoverage?.gaps ?? []
+function coverageSentence(coverage: HelmInventory['objectCoverage'], subject: string): string | null {
+  const gaps = coverage?.gaps ?? []
   if (gaps.length === 0) return null
   const reasons = [...new Set(gaps.map((gap) => gapReasonText(gap.code)))]
-  return `Some objects weren’t read (${reasons.join(', ')}), so this list may be missing more than usual.`
+  return `Some objects weren’t read (${reasons.join(', ')}), so ${subject} may be missing more than usual.`
 }
 
 function NoticeCard({ children }: { children: ReactNode }) {
@@ -98,7 +98,7 @@ function NoticeCard({ children }: { children: ReactNode }) {
 
 /** The callout above a Helm list that isn't entirely from Helm's storage. */
 export function ObservedHelmNotice({ inventory }: { inventory: HelmInventory }) {
-  const coverage = coverageSentence(inventory)
+  const coverage = coverageSentence(inventory.objectCoverage, 'this list')
   const mixed = inventory.releases.length > 0
   return (
     <NoticeCard>
@@ -133,6 +133,14 @@ export function ObservedHelmNotice({ inventory }: { inventory: HelmInventory }) 
 }
 
 /** The drawer's short form: the list carries the detail. */
-export function ObservedHelmDrawerNote() {
-  return <NoticeCard>Radar can’t read Helm’s release Secrets here, Helm’s source of truth, so this view can miss things, and a failed release can look fine.</NoticeCard>
+export function ObservedHelmDrawerNote({ coverage, refreshFailed }: { coverage?: ObservedHelmReleaseDetail['objectCoverage']; refreshFailed?: boolean }) {
+  const gaps = coverageSentence(coverage, 'this release')
+  return (
+    <NoticeCard>
+      Radar can’t read Helm’s release Secrets here, Helm’s source of truth, so this view can miss things, and a failed release can look
+      fine. Helm’s history, manifest, values and hooks aren’t available.
+      {gaps && <p className="mt-1">{gaps}</p>}
+      {refreshFailed && <p className="mt-1">Radar couldn’t refresh this, so it shows the last read.</p>}
+    </NoticeCard>
+  )
 }

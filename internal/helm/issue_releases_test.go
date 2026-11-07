@@ -388,6 +388,23 @@ func TestIssueReleasesSkipOnlyDeniedNamespaces(t *testing.T) {
 	}
 }
 
+// Someone with no Secret access sees releases in the Helm view, so their Issues
+// list has to say it didn't check those rather than read as nothing wrong.
+func TestIssueReadUncheckedTellsACompletelyDeniedCaller(t *testing.T) {
+	denied := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", fmt.Errorf("denied"))
+	got, unchecked := IssueReadUnchecked(context.Background(), denied)
+	want := issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonCallerAccessDenied}
+	if !unchecked || !reflect.DeepEqual(got, want) {
+		t.Fatalf("unchecked = %v %+v, want %+v", unchecked, got, want)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, unchecked := IssueReadUnchecked(ctx, denied); unchecked {
+		t.Fatal("a caller who left was told about a denial")
+	}
+}
+
 // When no namespace was read, the whole source is unchecked, with no
 // namespace list to suggest the rest was complete.
 func TestIssueReleasesFailWholeWhenNoNamespaceWasRead(t *testing.T) {

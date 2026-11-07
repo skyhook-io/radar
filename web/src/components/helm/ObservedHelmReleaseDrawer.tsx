@@ -1,7 +1,7 @@
 import { useEffect, useState, type ComponentType } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { Anchor, Code, GitBranch, History, Link2, Package, RefreshCw, Settings, X } from 'lucide-react'
+import { GitBranch, History, Link2, Package, RefreshCw, X } from 'lucide-react'
 import { FactGrid, FactRow, FactValue, FetchResult, type Fact } from '@skyhook-io/k8s-ui'
 import { isStableClientError, useObservedHelmRelease } from '../../api/client'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
@@ -13,15 +13,14 @@ import { formatDate } from './helm-utils'
 import { ObservedHelmDrawerNote } from './ObservedHelmNotice'
 import { OwnedResources } from './OwnedResources'
 
-type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks'
+type TabId = 'overview' | 'history' | 'resources'
 
+// Only what can hold data here: Helm's own tabs would all say the same thing,
+// and the note above says it once. History is what Flux recorded, if anything.
 const TABS: { id: TabId; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: 'overview', label: 'Overview', icon: Package },
   { id: 'history', label: 'History', icon: History },
-  { id: 'manifest', label: 'Manifest', icon: Code },
-  { id: 'values', label: 'Values', icon: Settings },
   { id: 'resources', label: 'Resources', icon: Link2 },
-  { id: 'hooks', label: 'Hooks', icon: Anchor },
 ]
 
 const UNREAD = 'Helm keeps this in its release Secret, which Radar can’t read here.'
@@ -48,6 +47,8 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
   useEffect(() => setActiveTab('overview'), [release.namespace, release.name])
 
   const flux = data?.managedByFluxHelmRelease
+  const tabs = TABS.filter((tab) => tab.id !== 'history' || data?.fluxHistory?.length)
+  const shownTab = tabs.some((tab) => tab.id === activeTab) ? activeTab : 'overview'
 
   return (
     <>
@@ -101,13 +102,13 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
         </div>
 
         <div className="flex items-center gap-1 px-4 pb-2 overflow-x-auto">
-          {TABS.map((tab) => (
+          {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap',
-                activeTab === tab.id
+                shownTab === tab.id
                   ? 'bg-theme-elevated text-theme-text-primary'
                   : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated/50'
               )}
@@ -120,17 +121,15 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <ObservedHelmDrawerNote />
+        <ObservedHelmDrawerNote coverage={data?.objectCoverage} refreshFailed={Boolean(data && error && !isStableClientError(error))} />
         {!data || isStableClientError(error) ? (
           <FetchResult loading={isLoading} error={error} notFoundMessage="No release found on the objects you can read" className="h-32" />
-        ) : activeTab === 'overview' ? (
+        ) : shownTab === 'overview' ? (
           <OverviewTab release={data} />
-        ) : activeTab === 'history' ? (
+        ) : shownTab === 'history' ? (
           <FluxHistory release={data} />
-        ) : activeTab === 'resources' ? (
-          <OwnedResources resources={data.resources ?? []} onNavigate={onNavigateToResource} summaryLabel="with this release’s Helm metadata" />
         ) : (
-          <Unavailable what={activeTab === 'manifest' ? 'The rendered manifest' : activeTab === 'values' ? 'Values' : 'Hooks'} />
+          <OwnedResources resources={data.resources ?? []} onNavigate={onNavigateToResource} summaryLabel="with this release’s Helm metadata" />
         )}
       </div>
     </>
@@ -181,8 +180,7 @@ function OverviewTab({ release }: { release: ObservedHelmReleaseDetail }) {
 }
 
 function FluxHistory({ release }: { release: ObservedHelmReleaseDetail }) {
-  const history = release.fluxHistory
-  if (!history?.length) return <Unavailable what="Revision history" />
+  const history = release.fluxHistory ?? []
   return (
     <div className="p-4 space-y-2">
       <p className="text-sm text-theme-text-secondary">
@@ -219,14 +217,5 @@ function FluxHistoryRow({ entry }: { entry: FluxHelmRevision }) {
         {entry.digest ? <Tooltip content={entry.digest}><span>{entry.digest.replace('sha256:', '').slice(0, 12)}</span></Tooltip> : '—'}
       </td>
     </tr>
-  )
-}
-
-function Unavailable({ what }: { what: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center">
-      <p className="text-sm text-theme-text-secondary">{what} can’t be shown here.</p>
-      <p className="text-sm text-theme-text-tertiary">{UNREAD} Get and list access to Secrets where Helm stores this release would show it.</p>
-    </div>
   )
 }

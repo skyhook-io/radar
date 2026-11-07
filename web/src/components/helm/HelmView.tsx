@@ -30,6 +30,8 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
   const releases = inventory?.releases
   const observed = inventory?.observed
   const degraded = Boolean(inventory?.storageDenied)
+  // Revision and update time exist only on rows from Helm's storage.
+  const showHelmColumns = !degraded || Boolean(releases?.length)
   const rowCount = inventory ? inventory.releases.length + inventory.observed.length : undefined
   const isForbidden = isForbiddenError(releasesError)
   const releasesErrorMessage = releasesError instanceof Error ? releasesError.message : 'Failed to load Helm releases'
@@ -332,8 +334,8 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                       <SortableTh label="Chart" sortKey="chart" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-[22%] phone:hidden" />
                       <SortableTh label="App Version" sortKey="appVersion" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-24 hidden xl:table-cell" />
                       <SortableTh label="Status" sortKey="status" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-40 phone:w-[6.5rem]" />
-                      <SortableTh label="Rev" sortKey="revision" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-16 phone:hidden" />
-                      <SortableTh label="Updated" sortKey="updated" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-24 phone:hidden" />
+                      {showHelmColumns && <SortableTh label="Rev" sortKey="revision" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-16 phone:hidden" />}
+                      {showHelmColumns && <SortableTh label="Updated" sortKey="updated" activeKey={effectiveSort?.key ?? null} direction={effectiveSort?.dir ?? 'asc'} onSort={onSort} className="w-24 phone:hidden" />}
                     </tr>
                   </thead>
                   <tbody className="table-divide-subtle">
@@ -350,7 +352,7 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                         onMouseEnter: () => setHighlightedIndex(-1),
                       }
                       return row.observed ? (
-                        <ObservedReleaseRow key={releaseIdentityKey(release)} {...shared} release={row.release} />
+                        <ObservedReleaseRow key={releaseIdentityKey(release)} {...shared} release={row.release} showHelmColumns={showHelmColumns} />
                       ) : (
                         <ReleaseRow key={releaseIdentityKey(release)} {...shared} release={row.release} upgradeInfo={upgradeInfo?.releases[releaseIdentityKey(release)]} />
                       )
@@ -428,7 +430,7 @@ interface ReleaseRowProps {
   onMouseEnter?: () => void
 }
 
-type ObservedReleaseRowProps = Omit<ReleaseRowProps, 'release' | 'upgradeInfo'> & { release: ObservedHelmRelease }
+type ObservedReleaseRowProps = Omit<ReleaseRowProps, 'release' | 'upgradeInfo'> & { release: ObservedHelmRelease; showHelmColumns: boolean }
 
 // Get actionable tooltip content for health issues
 function getActionableTooltip(issue: string | undefined, summary: string | undefined, health: string): React.ReactNode {
@@ -585,7 +587,7 @@ function observedChartLabel(release: ObservedHelmRelease): { text: string; toolt
 }
 
 const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowProps>(
-  function ObservedReleaseRow({ release, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
+  function ObservedReleaseRow({ release, showHelmColumns, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
   const chart = observedChartLabel(release)
   return (
     <tr
@@ -634,12 +636,16 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
           <span className={clsx('badge', SEVERITY_BADGE.neutral)}>Unknown</span>
         </Tooltip>
       </td>
-      <td className="px-4 py-3 w-16 phone:hidden">
-        <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
-      </td>
-      <td className="px-4 py-3 w-24 phone:hidden">
-        <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
-      </td>
+      {showHelmColumns && (
+        <>
+          <td className="px-4 py-3 w-16 phone:hidden">
+            <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
+          </td>
+          <td className="px-4 py-3 w-24 phone:hidden">
+            <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
+          </td>
+        </>
+      )}
     </tr>
   )
 })

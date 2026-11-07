@@ -36,7 +36,7 @@ func TestWriteInventoryError(t *testing.T) {
 		wantCode string
 	}{
 		{"cache not ready", ErrObjectsUnavailable, http.StatusServiceUnavailable, ""},
-		{"access check failed", ErrAccessCheckFailed, http.StatusServiceUnavailable, ""},
+		{"access check failed", ErrAccessCheckFailed, http.StatusServiceUnavailable, "user_permission_check_failed"},
 		{"connection changed", ErrConnectionChanged, http.StatusConflict, "connection_changed"},
 		{"other", errors.New("boom"), http.StatusInternalServerError, ""},
 	} {

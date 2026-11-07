@@ -26,28 +26,29 @@ import (
 // checked, rather than read their absence as healthy.
 func TestIssuesToolSaysWhenHelmReleasesCouldNotBeChecked(t *testing.T) {
 	cases := []struct {
-		name          string
-		status        int
-		body          string
-		wantUnchecked bool
+		name     string
+		status   int
+		body     string
+		wantWire string
 	}{
 		{
-			name:          "API server error",
-			status:        http.StatusInternalServerError,
-			body:          `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"etcdserver: request timed out","code":500}`,
-			wantUnchecked: true,
+			name:     "API server error",
+			status:   http.StatusInternalServerError,
+			body:     `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"etcdserver: request timed out","code":500}`,
+			wantWire: `[{"reason":"read_failed","source":"helm"}]`,
 		},
 		{
-			name:   "caller may not list release Secrets",
-			status: http.StatusForbidden,
-			body:   `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"secrets is forbidden","reason":"Forbidden","code":403}`,
+			name:     "caller may not list release Secrets",
+			status:   http.StatusForbidden,
+			body:     `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"secrets is forbidden","reason":"Forbidden","code":403}`,
+			wantWire: `[{"reason":"caller_access_denied","source":"helm"}]`,
 		},
 		{
 			// Radar's own credentials failing is not the caller's permissions.
-			name:          "API server rejects Radar's credentials",
-			status:        http.StatusUnauthorized,
-			body:          `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"Unauthorized","reason":"Unauthorized","code":401}`,
-			wantUnchecked: true,
+			name:     "API server rejects Radar's credentials",
+			status:   http.StatusUnauthorized,
+			body:     `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"Unauthorized","reason":"Unauthorized","code":401}`,
+			wantWire: `[{"reason":"read_failed","source":"helm"}]`,
 		},
 		{
 			name:   "read succeeded",
@@ -102,10 +103,10 @@ func TestIssuesToolSaysWhenHelmReleasesCouldNotBeChecked(t *testing.T) {
 			}
 			got, present := wire["unchecked_sources"]
 			gotJSON, _ := json.Marshal(got)
-			if tc.wantUnchecked && string(gotJSON) != `[{"reason":"read_failed","source":"helm"}]` {
-				t.Errorf("unchecked_sources = %s, want the helm read_failed entry", gotJSON)
+			if tc.wantWire != "" && string(gotJSON) != tc.wantWire {
+				t.Errorf("unchecked_sources = %s, want %s", gotJSON, tc.wantWire)
 			}
-			if !tc.wantUnchecked && present {
+			if tc.wantWire == "" && present {
 				t.Errorf("unchecked_sources = %s, want it absent", gotJSON)
 			}
 		})

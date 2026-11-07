@@ -126,6 +126,21 @@ describe('Helm list without Secret access', () => {
   })
 })
 
+describe('columns only Helm can fill', () => {
+  const headers = (container: HTMLElement) => [...container.querySelectorAll('th')].map((th) => th.textContent)
+
+  it('drops revision and update time when no row has them', () => {
+    const labels = headers(renderView({ data: denied([observed]) }))
+    expect(labels.join()).toContain('Status')
+    expect(labels.join()).not.toMatch(/Rev|Updated/)
+  })
+
+  it('keeps them when any row came from Helm', () => {
+    const data = { ...denied([observed]), releases: [{ name: 'web', namespace: 'team-a', chart: 'web', chartVersion: '1', appVersion: '1', status: 'deployed', revision: 2, updated: '2026-01-01T00:00:00Z' }] }
+    expect(headers(renderView({ data })).join()).toMatch(/Rev.*Updated/)
+  })
+})
+
 describe('health on an observed row', () => {
   it('states healthy objects as a count, with no green mark beside an unknown status', () => {
     const container = renderView({ data: denied([observed]) })

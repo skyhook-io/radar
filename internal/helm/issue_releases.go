@@ -102,15 +102,18 @@ func isImpersonationDenied(err error) bool {
 }
 
 // IssueReadUnchecked reports what a failed ListIssueReleasesAcrossNamespaces
-// leaves unchecked, if anything. A denial leaves nothing unchecked: the caller
-// may not read release Secrets, so it sees no Helm issues, like any other kind
-// it can't list. Neither does a caller that left, since nobody gets the
-// answer. Radar's own request deadline does: the caller is still waiting. A
-// *PartialReadError names the namespaces that failed; the releases returned
-// with it are still valid.
+// leaves unchecked, if anything. A caller denied all of it gets no Helm issues,
+// and is told, because the Helm view still lists releases for them and "no
+// issues" would otherwise read as those releases being fine. A caller that left
+// leaves nothing unchecked, since nobody gets the answer. Radar's own request
+// deadline does: the caller is still waiting. A *PartialReadError names the
+// namespaces that failed; the releases returned with it are still valid.
 func IssueReadUnchecked(ctx context.Context, err error) (issuesapi.UncheckedSource, bool) {
-	if err == nil || ReleaseReadDeniedForCaller(err) || errors.Is(ctx.Err(), context.Canceled) {
+	if err == nil || errors.Is(ctx.Err(), context.Canceled) {
 		return issuesapi.UncheckedSource{}, false
+	}
+	if ReleaseReadDeniedForCaller(err) {
+		return issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonCallerAccessDenied}, true
 	}
 	unchecked := issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: issueReadReason(err)}
 	var partial *PartialReadError

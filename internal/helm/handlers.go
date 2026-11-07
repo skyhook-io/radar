@@ -329,8 +329,10 @@ func writeInventoryError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(r.Context().Err(), context.Canceled):
 		// The caller left; this is not a Helm failure.
-	case errors.Is(err, ErrObjectsUnavailable), errors.Is(err, ErrAccessCheckFailed):
+	case errors.Is(err, ErrObjectsUnavailable):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, ErrAccessCheckFailed):
+		writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.UserPermissionCheckFailed), err.Error())
 	case errors.Is(err, ErrConnectionChanged):
 		writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
 	default:

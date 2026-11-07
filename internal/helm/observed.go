@@ -74,11 +74,6 @@ type ObservedRelease struct {
 	// can read that records this release. Empty doesn't mean Flux isn't
 	// managing it: the caller may not be able to read that HelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
-	// Resources and FluxHistory are filled on the single-release read only.
-	Resources []OwnedResource `json:"resources,omitempty"`
-	// FluxHistory is newest first. Empty means Radar got no Flux record, not
-	// that the release has no revisions.
-	FluxHistory []FluxRevision `json:"fluxHistory,omitempty"`
 }
 
 // FluxRevision is one entry of a Flux HelmRelease's status.history: what Flux
@@ -98,6 +93,10 @@ type FluxRevision struct {
 // ObservedReleaseDetail is one observed release and what the read covered.
 type ObservedReleaseDetail struct {
 	ObservedRelease
+	Resources []OwnedResource `json:"resources,omitempty"`
+	// FluxHistory is newest first. Empty means Radar got no Flux record, not
+	// that the release has no revisions.
+	FluxHistory    []FluxRevision             `json:"fluxHistory,omitempty"`
 	ObjectCoverage resourceapi.SearchCoverage `json:"objectCoverage"`
 }
 
