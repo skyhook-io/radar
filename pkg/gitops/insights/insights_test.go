@@ -3023,3 +3023,72 @@ func TestArgoApplicationConditionsCreateNamespaceAlreadySet(t *testing.T) {
 		}
 	})
 }
+
+func fluxKustomization(status map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+		"kind":       "Kustomization",
+		"metadata":   map[string]any{"namespace": "team", "name": "app"},
+		"status":     status,
+	}}
+}
+
+// Ready moves on every reconcile, so a healthy Kustomization that deployed weeks
+// ago must not read as deployed just now.
+func TestKustomizationHistoryDatesARevisionByItsFirstReconcile(t *testing.T) {
+	root := fluxKustomization(map[string]any{
+		"lastAppliedRevision": "main@sha1:bbb",
+		"conditions": []any{map[string]any{
+			"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded",
+			"message": "Applied revision: main@sha1:bbb", "lastTransitionTime": "2026-11-07T00:52:54Z",
+		}},
+		"history": []any{
+			map[string]any{"digest": "sha256:b", "firstReconciled": "2026-11-07T00:32:53Z", "lastReconciled": "2026-11-07T00:52:54Z", "lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:bbb"}},
+			map[string]any{"digest": "sha256:a", "firstReconciled": "2026-11-01T10:00:00Z", "lastReconciled": "2026-11-07T00:30:00Z", "lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:aaa"}},
+		},
+	})
+
+	got := BuildHistory(root)
+	if len(got) != 2 {
+		t.Fatalf("history = %+v, want one item per revision", got)
+	}
+	if got[0].Revision != "main@sha1:bbb" || got[0].DeployedAt != "2026-11-07T00:32:53Z" || got[0].Phase != "Succeeded" {
+		t.Fatalf("newest item = %+v", got[0])
+	}
+	if got[1].Revision != "main@sha1:aaa" || got[1].DeployedAt != "2026-11-01T10:00:00Z" {
+		t.Fatalf("older item = %+v", got[1])
+	}
+}
+
+func TestKustomizationHistoryKeepsAFailedReconcile(t *testing.T) {
+	root := fluxKustomization(map[string]any{
+		"lastAppliedRevision": "main@sha1:aaa",
+		"conditions": []any{map[string]any{
+			"type": "Ready", "status": "False", "reason": "BuildFailed",
+			"message": "kustomization path not found", "lastTransitionTime": "2026-11-07T01:00:00Z",
+		}},
+		"history": []any{
+			map[string]any{"digest": "sha256:a", "firstReconciled": "2026-11-01T10:00:00Z", "lastReconciledStatus": "ReconciliationSucceeded", "metadata": map[string]any{"revision": "main@sha1:aaa"}},
+		},
+	})
+
+	got := BuildHistory(root)
+	if len(got) != 2 || got[0].Phase != "Failed" || got[0].DeployedAt != "2026-11-07T01:00:00Z" {
+		t.Fatalf("history = %+v, want the failure first", got)
+	}
+}
+
+func TestKustomizationWithoutHistoryFallsBackToConditions(t *testing.T) {
+	root := fluxKustomization(map[string]any{
+		"lastAppliedRevision": "main@sha1:aaa",
+		"conditions": []any{map[string]any{
+			"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded",
+			"message": "Applied revision: main@sha1:aaa", "lastTransitionTime": "2026-11-07T00:52:54Z",
+		}},
+	})
+
+	got := BuildHistory(root)
+	if len(got) != 1 || got[0].DeployedAt != "2026-11-07T00:52:54Z" {
+		t.Fatalf("history = %+v", got)
+	}
+}

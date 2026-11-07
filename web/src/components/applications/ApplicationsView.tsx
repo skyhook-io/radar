@@ -55,6 +55,7 @@ import { useTimelineSource } from "../../context/TimelineSource";
 import { apiVersionToGroup, buildWorkloadPath, kindToPluralWithGroup } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
+import { useApplicationDeploys } from "./useApplicationDeploys";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
 
@@ -75,7 +76,7 @@ const APPLICATION_TIMELINE_FOCUS_MS = 60 * 60 * 1000;
 const APPLICATION_TIMELINE_AFTER_MS = 45 * 60 * 1000;
 
 const APPLICATION_VIEWS: ReadonlySet<ApplicationRouteView> =
-  new Set<ApplicationRouteView>(["overview", "topology", "history", "cost"]);
+  new Set<ApplicationRouteView>(["overview", "deploys", "topology", "history", "cost"]);
 
 function parseApplicationView(value: string | null): ApplicationRouteView {
   if (!value || !APPLICATION_VIEWS.has(value as ApplicationRouteView))
@@ -277,8 +278,20 @@ function AppDetailRoute({
     appWorkloads.some((workload) => isOpenCostWorkloadKind(workload.kind));
   const applicationCostSelected =
     selectedRouteView === "cost" && applicationCostAvailable;
+  const [deploysVisible, setDeploysVisible] = useState(false);
   const historyQuery = useApplicationHistory(app.key, appHistoryNamespaces, {
-    enabled: !selectedWorkloadKey,
+    enabled: !selectedWorkloadKey || deploysVisible,
+  });
+  const deployWorkloads = useMemo(() => {
+    const workloads = app.workloads ?? [];
+    const selected = workloads.find((workload) => workloadKey(workload) === selectedWorkloadKey);
+    return selected ? [selected] : workloads;
+  }, [app.workloads, selectedWorkloadKey]);
+  const deploys = useApplicationDeploys({
+    workloads: deployWorkloads,
+    sourceRef: app.sourceRef,
+    history: historyQuery,
+    visible: deploysVisible,
   });
   const [retainedHistoryRange, setRetainedHistoryRange] =
     useState<ApplicationHistoryRange>("7d");
@@ -675,6 +688,8 @@ function AppDetailRoute({
         onSelectWorkload={selectWorkload}
         selectedView={selectedView}
         onSelectView={selectView}
+        deploys={deploys}
+        onDeploysVisibleChange={setDeploysVisible}
         costViewSelected={applicationCostSelected}
         onSelectCostView={() => selectView("cost")}
         renderCostView={
@@ -700,9 +715,10 @@ function AppDetailRoute({
           />
         )}
         hasOverviewIssues={appIssues.length > 0}
-        renderWorkload={(workload: SelectedAppWorkload) => (
+        renderWorkload={(workload: SelectedAppWorkload, context) => (
           <div className="h-full overflow-hidden">
             <WorkloadView
+              {...context}
               kind={kindToPluralWithGroup(workload.kind, workload.group ?? "")}
               group={workload.group}
               namespace={workload.namespace}

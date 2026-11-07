@@ -69,6 +69,48 @@ func TestBuildRevisionsReadsPerRevisionReadiness(t *testing.T) {
 	}
 }
 
+// Traffic moves to the new revision before post-promotion analysis finishes,
+// while stableRS still names the old one.
+func TestBuildRevisionsFollowsTheBlueGreenActiveSelector(t *testing.T) {
+	ro := rolloutForTest("prod", "web", func(o map[string]any) {
+		o["status"] = map[string]any{
+			"currentPodHash": "hash-v2",
+			"stableRS":       "hash-v1",
+			"blueGreen":      map[string]any{"activeSelector": "hash-v2", "previewSelector": "hash-v2"},
+		}
+	})
+	v1 := replicaSetForTest("prod", "web-1", "1", "hash-v1", "web:v1", "rollout-uid")
+	v2 := replicaSetForTest("prod", "web-2", "2", "hash-v2", "web:v2", "rollout-uid")
+	for _, rs := range []*unstructured.Unstructured{v1, v2} {
+		_ = unstructured.SetNestedField(rs.Object, int64(1), "status", "readyReplicas")
+	}
+
+	revisions := BuildRevisions([]unstructured.Unstructured{*v1, *v2}, ro)
+	byNumber := map[int64]Revision{}
+	for _, r := range revisions {
+		byNumber[r.Number] = r
+	}
+	if s := byNumber[2].Serving; s == nil || !*s {
+		t.Errorf("active revision serving = %v, want true", s)
+	}
+	if s := byNumber[1].Serving; s == nil || *s {
+		t.Errorf("old revision serving = %v, want false", s)
+	}
+	if !byNumber[1].IsStable {
+		t.Errorf("rev 1 should still be stable")
+	}
+}
+
+func TestBuildRevisionsLeavesCanaryServingUnset(t *testing.T) {
+	ro := rolloutForTest("prod", "web", func(o map[string]any) {
+		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v1", "blueGreen": map[string]any{}}
+	})
+	revisions := BuildRevisions([]unstructured.Unstructured{*replicaSetForTest("prod", "web-1", "1", "hash-v1", "web:v1", "rollout-uid")}, ro)
+	if len(revisions) != 1 || revisions[0].Serving != nil {
+		t.Fatalf("revisions = %+v, want Serving unset", revisions)
+	}
+}
+
 func TestBuildRevisionsIgnoresForeignReplicaSets(t *testing.T) {
 	ro := rolloutForTest("prod", "web", nil)
 	rsList := []unstructured.Unstructured{

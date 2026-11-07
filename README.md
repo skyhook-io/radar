@@ -289,6 +289,7 @@ Table-based resource browser with smart columns per resource kind.
 - Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
 - Set regular or init-container images on Deployments, StatefulSets, DaemonSets, and Argo Rollouts, with live rollout progress in tables, drawers, workload views, and Applications
+- See an application's deploys: which revision is live, which is newest, what started each one and what changed
 
 ### Image Filesystem Viewer
 
