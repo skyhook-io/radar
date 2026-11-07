@@ -11,8 +11,11 @@ import (
 
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/internal/search"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 // userFromContext extracts the auth user attached by the HTTP middleware,
@@ -50,12 +53,14 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 		return nil, nil, fmt.Errorf("helm is not available (no releases found or helm not installed)")
 	}
 
-	user := userFromContext(ctx)
-	namespaces := resolveHelmListNamespaces(ctx, input.Namespace)
-	if namespaces != nil && len(namespaces) == 0 {
-		return toJSONResult([]helm.HelmRelease{})
-	}
-	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, user)
+	// The scope comes first, as in the REST handler: its namespace check caches
+	// the answer the resolver then reads.
+	scope := mcpHelmObjectScope(ctx, input.Namespace)
+	inventory, err := helmClient.ReadInventory(ctx, helm.InventoryRequest{
+		StorageNamespaces: resolveHelmListNamespaces(ctx, input.Namespace),
+		User:              userFromContext(ctx),
+		Scope:             scope,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -63,7 +68,49 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 	// Return the typed HelmRelease structs directly — they already have
 	// health fields (ResourceHealth, HealthIssue, HealthSummary) which
 	// provide the AI with actionable status information.
-	return toJSONResult(releases)
+	if inventory.StorageDenied == nil {
+		return toJSONResult(inventory.Releases)
+	}
+	inventory.StorageDenied = inventory.StorageDenied.Capped(resourceapi.MCPSetLimit)
+	return toJSONResult(partialHelmList{Summary: inventory.Summary(), ReleaseInventory: inventory})
+}
+
+// partialHelmList is what list_helm_releases returns when the caller can't read
+// all of Helm's storage: the summary first, so it survives truncation that
+// keeps only the head of a long result.
+type partialHelmList struct {
+	Summary string `json:"summary"`
+	*helm.ReleaseInventory
+}
+
+// mcpHelmObjectScope is Server.helmObjectScope for MCP: the same gates as the
+// search tool.
+func mcpHelmObjectScope(ctx context.Context, namespace string) *helm.ObjectScope {
+	provider := search.NewCacheProvider()
+	if provider == nil {
+		return nil
+	}
+	ceiling, checkFailed := filterNamespacesForUserWithStatus(ctx, nil)
+	var pin *string
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		pin = &target
+	}
+	kindRBAC := mcpSearchKindRBAC(ctx)
+	access := search.ScanAccess{
+		Selection:            search.SelectNamespaces(provider, search.Query{}, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !checkFailed}, pin),
+		NamespaceCheckFailed: checkFailed,
+		TypedKindAccess:      kindRBAC,
+		CanReadClusterScoped: func(_, group, resource string) (bool, bool) {
+			return canReadInNamespaceDecision(ctx, group, resource, "", "list")
+		},
+		DynamicKindAccess: mcpSearchKindAccess(ctx, kindRBAC),
+	}
+	var named []string
+	if namespace != "" {
+		named = []string{namespace}
+	}
+	return &helm.ObjectScope{Provider: provider, Access: access, Requested: helm.RequestedNamespaces(named, pin)}
 }
 
 func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
@@ -99,6 +146,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 
 	user := userFromContext(ctx)
 	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user)
+	if helm.ReleaseReadDeniedForCaller(err) {
+		return nil, nil, fmt.Errorf("can't read Helm's records for release %s/%s: access to its Secrets is denied, which doesn't mean it's missing. list_helm_releases shows what its objects say; inspect them with list_resources or search: %w", input.Namespace, input.Name, err)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("release %s/%s not found: %w", input.Namespace, input.Name, err)
 	}

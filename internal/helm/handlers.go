@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"helm.sh/helm/v3/pkg/storage/driver"
 )
 
@@ -102,7 +103,15 @@ type Handlers struct {
 	// depend on its per-user RBAC plumbing. May be nil in tests that don't
 	// exercise the list endpoints.
 	resolveNamespaces func(r *http.Request) ([]string, bool)
+	// ObjectScope builds the caller's view of cached objects for reads that
+	// don't touch Helm's storage. Nil, or a nil result, means the cache isn't
+	// available. Injected for the same reason as resolveNamespaces.
+	ObjectScope func(r *http.Request) *ObjectScope
 }
+
+// ReleaseReadDeniedCode tags a 403 that is Kubernetes refusing the caller's own
+// read of Helm's storage, not any other refusal on the same route.
+const ReleaseReadDeniedCode = "release_read_denied"
 
 // NewHandlers creates a new Handlers instance. resolveNamespaces lets the list
 // endpoints degrade gracefully for namespace-restricted identities (see
@@ -125,6 +134,8 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Route("/helm", func(r chi.Router) {
 		// Release management
 		r.Get("/releases", h.handleListReleases)
+		r.Get("/inventory", h.handleInventory)
+		r.Get("/inventory/{namespace}/{name}", h.handleObservedRelease)
 		r.Post("/releases", h.handleInstall)
 		r.Post("/releases/install-stream", h.handleInstallStream)
 		r.Get("/releases/{namespace}/{name}", h.handleGetRelease)
@@ -259,6 +270,77 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, releases)
 }
 
+// handleInventory returns the Helm list as far as the caller's access reaches.
+// Helm's storage is read as the caller, and that is the only Secret read here.
+// Where it is denied, rows come from the stamps on objects the caller can
+// already read, through the same per-user gates as search, so nothing in them
+// exceeds the caller's access. Without authentication the caller is Radar's
+// own identity, and the route shows no more than /api/resources does.
+func (h *Handlers) handleInventory(w http.ResponseWriter, r *http.Request) {
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	// The scope comes first: its namespace check caches the caller's answer, so
+	// the resolver can't get a different one and pass off a failed check as no
+	// access.
+	scope := h.objectScope(r)
+	namespaces, ok := h.listNamespaces(r)
+	if !ok {
+		namespaces = []string{}
+	}
+	inventory, err := client.ReadInventory(r.Context(), InventoryRequest{StorageNamespaces: namespaces, User: userCreds(r), Scope: scope})
+	if err != nil {
+		writeInventoryError(w, r, err)
+		return
+	}
+	writeJSON(w, inventory)
+}
+
+// handleObservedRelease returns one release built from its stamps, for a caller
+// whose read of Helm's storage was denied. It reads no Secret.
+func (h *Handlers) handleObservedRelease(w http.ResponseWriter, r *http.Request) {
+	scope := h.objectScope(r)
+	if scope == nil {
+		writeInventoryError(w, r, ErrObjectsUnavailable)
+		return
+	}
+	detail, err := GetObservedRelease(r.Context(), scope, chi.URLParam(r, "namespace"), chi.URLParam(r, "name"))
+	if err != nil {
+		writeInventoryError(w, r, err)
+		return
+	}
+	if detail == nil {
+		writeError(w, http.StatusNotFound, "no release found on the objects you can read")
+		return
+	}
+	writeJSON(w, detail)
+}
+
+func (h *Handlers) objectScope(r *http.Request) *ObjectScope {
+	if h.ObjectScope == nil {
+		return nil
+	}
+	return h.ObjectScope(r)
+}
+
+func writeInventoryError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(r.Context().Err(), context.Canceled):
+		// The caller left; this is not a Helm failure.
+	case errors.Is(err, ErrObjectsUnavailable):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, ErrAccessCheckFailed):
+		writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.UserPermissionCheckFailed), err.Error())
+	case errors.Is(err, ErrConnectionChanged):
+		writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
+	default:
+		log.Printf("[helm] Failed to read Helm inventory %s: %v", r.URL.Path, err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
 // handleGetRelease returns details for a specific release
 func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
@@ -273,16 +355,27 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	user := userCreds(r)
 	release, err := client.GetReleaseAsUser(namespace, name, user)
 	if err != nil {
-		if IsForbiddenError(err) {
-			writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeGetReleaseError(w, err)
 		return
 	}
 	EnrichHookDiagnosticsWithClusterEvidence(r.Context(), release, k8s.ClientFromContext(r.Context()))
 
 	writeJSON(w, release)
+}
+
+// writeGetReleaseError tags only the caller's own denial, which is what tells
+// the UI to show the release from its objects instead. Any other 403 is Radar's
+// access failing, and the same fallback would hide that behind a permissions
+// note.
+func writeGetReleaseError(w http.ResponseWriter, err error) {
+	switch {
+	case ReleaseReadDeniedForCaller(err):
+		writeErrorCode(w, http.StatusForbidden, ReleaseReadDeniedCode, "insufficient permissions to get Helm release")
+	case IsForbiddenError(err):
+		writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 // handleGetManifest returns the rendered manifest for a release. Read as

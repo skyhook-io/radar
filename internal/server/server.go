@@ -821,6 +821,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
 			helmHandlers.ConfigWriteAllowed = s.requireHelmSourceConfigWrite
+			helmHandlers.ObjectScope = s.helmObjectScope
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -1470,6 +1471,40 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, info)
 }
 
+// advertisedFeatures lists what this binary serves. Every flag is true here;
+// an older binary simply lacks it.
+func advertisedFeatures() k8s.FeatureCapabilities {
+	return k8s.FeatureCapabilities{
+		ApplicationEvidence:      true,
+		ResourceReadCoverage:     true,
+		SearchCoverage:           true,
+		YAMLReview:               true,
+		YAMLSchemas:              true,
+		WorkloadImages:           true,
+		ResourceIssues:           true,
+		ResourceIssueCoverage:    true,
+		PodEnvironment:           true,
+		PolicyResource:           true,
+		WorkloadHistory:          true,
+		CNPGWorkspace:            true,
+		CNPGProtectionSetup:      true,
+		ServiceEndpointSlices:    true,
+		TrafficRecords:           true,
+		GitOpsWriteEvidence:      true,
+		ArgoRollbackSync:         true,
+		ArgoSyncInheritance:      true,
+		ArgoEnableSelfHealOff:    true,
+		AgentSigninCheck:         true,
+		HelmSourceIdentity:       true,
+		HelmInventory:            true,
+		ClusterScopedPlaceholder: true,
+		KueuePendingPosition:     true,
+		RayClusterPods:           true,
+		PodSidecarMarks:          true,
+		KueueQueueWorkloads:      true,
+	}
+}
+
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	var caps *k8s.Capabilities
 	var err error
@@ -1493,34 +1528,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
-	caps.Features = k8s.FeatureCapabilities{
-		ApplicationEvidence:      true,
-		ResourceReadCoverage:     true,
-		SearchCoverage:           true,
-		YAMLReview:               true,
-		YAMLSchemas:              true,
-		WorkloadImages:           true,
-		ResourceIssues:           true,
-		ResourceIssueCoverage:    true,
-		PodEnvironment:           true,
-		PolicyResource:           true,
-		WorkloadHistory:          true,
-		CNPGWorkspace:            true,
-		CNPGProtectionSetup:      true,
-		ServiceEndpointSlices:    true,
-		TrafficRecords:           true,
-		GitOpsWriteEvidence:      true,
-		ArgoRollbackSync:         true,
-		ArgoSyncInheritance:      true,
-		ArgoEnableSelfHealOff:    true,
-		AgentSigninCheck:         true,
-		HelmSourceIdentity:       true,
-		ClusterScopedPlaceholder: true,
-		KueuePendingPosition:     true,
-		RayClusterPods:           true,
-		PodSidecarMarks:          true,
-		KueueQueueWorkloads:      true,
-	}
+	caps.Features = advertisedFeatures()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
