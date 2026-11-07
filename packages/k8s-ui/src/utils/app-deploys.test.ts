@@ -596,13 +596,26 @@ describe('imageVersion', () => {
     })
   })
 
-  it('calls nothing Newest while a paused Deployment holds a change with no revision', () => {
+  it('calls nothing Newest while a Deployment holds a change with no revision', () => {
     const { rows, partialReasons } = buildAppDeploys({
-      workloads: [{ ref: deployment, unrolledChange: true, revisions: [revision(1, { isCurrent: true, replicas: 2, readyReplicas: 2, serving: true })] }],
+      workloads: [{ ref: deployment, revisions: [revision(1, { isCurrent: true, matchesDesired: false, replicas: 2, readyReplicas: 2, serving: true })] }],
     })
 
     expect(rows[0]).toMatchObject({ live: true, newest: false, ready: 2 })
-    expect(partialReasons).toEqual([`Deployment ${deployment.name} is paused. Its latest change has no revision yet, so no row here is Newest.`])
+    expect(partialReasons).toEqual([`Deployment ${deployment.name} has a change with no revision yet, so no row here is Newest.`])
+  })
+
+  it('calls the revision the spec asks for Newest, even when it is not the highest', () => {
+    const { rows, partialReasons } = buildAppDeploys({
+      workloads: [{
+        ref: deployment,
+        revisions: [revision(2, { isCurrent: true, matchesDesired: false }), revision(1, { matchesDesired: true })],
+      }],
+    })
+
+    expect(byRevision(rows).get(1)?.newest).toBe(true)
+    expect(byRevision(rows).get(2)?.newest).toBe(false)
+    expect(partialReasons).toEqual([])
   })
 
   it('says how many workloads it left out', () => {
