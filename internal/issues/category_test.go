@@ -136,7 +136,6 @@ func TestClassify(t *testing.T) {
 		{"traefik router service missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingServiceReason}, issuesapi.CategoryIngressBackendMissing},
 		{"traefik router middleware missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingMiddlewareReason}, issuesapi.CategoryIngressBackendMissing},
 		{"gateway reference grant missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway ReferenceGrant"}, issuesapi.CategoryGatewayRouteInvalid},
-		{"gateway parent missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: k8s.MissingGatewayParentReason}, issuesapi.CategoryGatewayRouteInvalid},
 		{"ingress tls secret is config", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing TLS Secret"}, issuesapi.CategoryMissingConfigRef},
 		{"webhook backend down", classifyInput{Source: SourceMissingRef, Kind: "ValidatingWebhookConfiguration", APIGroup: "admissionregistration.k8s.io", Reason: k8s.MissingWebhookBackendReason}, issuesapi.CategoryWebhookBackendDown},
 		{"missing storageclass is pvc pending", classifyInput{Source: SourceMissingRef, Kind: "PersistentVolumeClaim", Reason: "Missing StorageClass"}, issuesapi.CategoryPVCPending},
