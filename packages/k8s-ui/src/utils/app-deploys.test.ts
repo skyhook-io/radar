@@ -223,6 +223,7 @@ describe('buildAppDeploys', () => {
   it('returns no rows and no partial note for an app with empty history', () => {
     expect(buildAppDeploys({ workloads: [{ ref: deployment, revisions: [] }] })).toEqual({
       rows: [],
+      workloadCount: 1,
       partial: false,
       partialReasons: [],
       stillLoading: [],
@@ -593,6 +594,15 @@ describe('imageVersion', () => {
     it('does not wait on history for an app with no source', () => {
       expect(buildAppDeploys({ sourceLoading: true, workloads: [{ ref: deployment, revisions: [] }] }).stillLoading).toEqual([])
     })
+  })
+
+  it('calls nothing Newest while a paused Deployment holds a change with no revision', () => {
+    const { rows, partialReasons } = buildAppDeploys({
+      workloads: [{ ref: deployment, unrolledChange: true, revisions: [revision(1, { isCurrent: true, replicas: 2, readyReplicas: 2, serving: true })] }],
+    })
+
+    expect(rows[0]).toMatchObject({ live: true, newest: false, ready: 2 })
+    expect(partialReasons).toEqual([`Deployment ${deployment.name} is paused. Its latest change has no revision yet, so no row here is Newest.`])
   })
 
   it('says how many workloads it left out', () => {

@@ -1,6 +1,7 @@
 package k8score
 
 import (
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -209,4 +210,28 @@ func TestApplyControllerRevisionServing(t *testing.T) {
 			t.Fatalf("revision = %+v", got[0])
 		}
 	})
+}
+
+func TestBuildControllerRevisionsReadsChangeCause(t *testing.T) {
+	revision := func(number int64, cause string) unstructured.Unstructured {
+		cr := unstructured.Unstructured{Object: map[string]any{
+			"revision": number,
+			"metadata": map[string]any{
+				"name":            fmt.Sprintf("api-%d", number),
+				"ownerReferences": []any{map[string]any{"uid": "owner", "kind": "StatefulSet"}},
+			},
+		}}
+		if cause != "" {
+			cr.SetAnnotations(map[string]string{"kubernetes.io/change-cause": cause})
+		}
+		return cr
+	}
+
+	revisions := BuildControllerRevisions([]unstructured.Unstructured{revision(1, ""), revision(2, "release 42")}, "owner")
+	if len(revisions) != 2 {
+		t.Fatalf("got %d revisions, want 2", len(revisions))
+	}
+	if revisions[0].ChangeCause != "release 42" || revisions[1].ChangeCause != "" {
+		t.Fatalf("change causes = %q, %q", revisions[0].ChangeCause, revisions[1].ChangeCause)
+	}
 }
