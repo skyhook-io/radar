@@ -11,12 +11,14 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 )
 
-// UpgradePreflightError means validation/preparation failed before Helm ran.
-// Other writers may still change the release independently.
-type UpgradePreflightError struct{ Err error }
+// OperationPreflightError means validation/preparation failed before Helm ran.
+// Used by MCP fresh install and the shared values upgrade path. Failures inside
+// Helm may also change nothing, but are conservatively unclassified. Other writers
+// may still change the release independently.
+type OperationPreflightError struct{ Err error }
 
-func (e *UpgradePreflightError) Error() string { return e.Err.Error() }
-func (e *UpgradePreflightError) Unwrap() error { return e.Err }
+func (e *OperationPreflightError) Error() string { return e.Err.Error() }
+func (e *OperationPreflightError) Unwrap() error { return e.Err }
 
 // MCPUpgradeRequest keeps previews and writes on the same caller-scoped path.
 // Empty Version retains the stored chart only when history is unambiguous.

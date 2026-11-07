@@ -231,24 +231,12 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 			result["notesDiffError"] = errMsg
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
-			diff, err := helmClient.GetNotesDiffAsUser(input.Namespace, input.Name, rev1, rev2, user)
+			diff, err := helmClient.GetRedactedNotesDiffAsUser(input.Namespace, input.Name, rev1, rev2, user, redactHelmNotes)
 			if err != nil {
 				log.Printf("[mcp] Failed to get notes diff for %s/%s: %v", input.Namespace, input.Name, err)
 				result["notesDiffError"] = err.Error()
 			} else {
-				safe := true
-				for _, revision := range []int{rev1, rev2} {
-					values, readErr := helmClient.GetValuesRevisionAsUser(input.Namespace, input.Name, true, revision, user)
-					if readErr != nil {
-						result["notesDiffError"] = "could not read revision values to redact notes diff"
-						safe = false
-						break
-					}
-					diff.Diff = redactHelmNotes(redactHelmNotes(diff.Diff, values.Computed), values.UserSupplied)
-				}
-				if safe {
-					result["notesDiff"] = diff
-				}
+				result["notesDiff"] = diff
 			}
 		}
 	}

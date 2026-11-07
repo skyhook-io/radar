@@ -112,3 +112,11 @@ func TestHelmNotesKeepsBooleanFlagsAndMasksNumericCredentials(t *testing.T) {
 		t.Fatalf("wrong scalar masking: %s", got)
 	}
 }
+
+func TestHelmNotesRedactsMultilineCredentialBeforeDiff(t *testing.T) {
+	secret := "first-private-line\nsecond-private-line"
+	got := redactHelmNotes("instructions\n"+secret, map[string]any{"credentials": secret})
+	if strings.Contains(got, "private-line") || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("multiline credential leaked: %s", got)
+	}
+}

@@ -185,9 +185,9 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 		if in.DryRun {
 			return nil, nil, fmt.Errorf("Helm upgrade preview failed without applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", err)
 		}
-		var preflight *helm.UpgradePreflightError
+		var preflight *helm.OperationPreflightError
 		if errors.As(err, &preflight) {
-			return nil, nil, fmt.Errorf("Helm upgrade refused before applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", err)
+			return nil, nil, fmt.Errorf("Helm %s refused before applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", in.Action, err)
 		}
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
 	}

@@ -60,7 +60,14 @@ func validateOverrideReplacement(stored, overrides map[string]any) error {
 	return check(redacted, overrides)
 }
 
-func (c *Client) installFreshWith(cfg *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
+func (c *Client) installFreshWith(cfg *action.Configuration, req *InstallRequest) (result *HelmRelease, err error) {
+	started := false
+	defer func() {
+		if err != nil && !started {
+			err = &OperationPreflightError{Err: err}
+		}
+	}()
+
 	if err := freshInstallCheck(cfg, req.ReleaseName, req.Namespace); err != nil {
 		return nil, err
 	}
@@ -85,6 +92,7 @@ func (c *Client) installFreshWith(cfg *action.Configuration, req *InstallRequest
 		return nil, err
 	}
 	req.resolvedSource = &selected
+	started = true
 	rel, err := runInstallOrUpgrade(cfg, req, loaded, installFresh)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)

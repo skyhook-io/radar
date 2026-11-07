@@ -821,6 +821,9 @@ func getValuesWith(actionConfig *action.Configuration, name string, allValues bo
 	result := &HelmValues{UserSupplied: userSupplied}
 
 	if allValues {
+		if rel.Chart == nil || rel.Chart.Metadata == nil {
+			return nil, fmt.Errorf("release revision %d has no usable stored chart for computed values", rel.Version)
+		}
 		computed, err := chartutil.CoalesceValues(rel.Chart, rel.Config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute helm release values: %w", err)
@@ -913,15 +916,24 @@ func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 in
 
 // GetNotesDiff returns a release notes diff between two revisions.
 func (c *Client) GetNotesDiff(namespace, name string, revision1, revision2 int) (*NotesDiff, error) {
-	return c.getNotesDiff(namespace, name, revision1, revision2, nil)
+	return c.getNotesDiff(namespace, name, revision1, revision2, nil, nil)
 }
 
 // GetNotesDiffAsUser is GetNotesDiff with K8s impersonation.
 func (c *Client) GetNotesDiffAsUser(namespace, name string, revision1, revision2 int, user *pkgauth.User) (*NotesDiff, error) {
-	return c.getNotesDiff(namespace, name, revision1, revision2, user)
+	return c.getNotesDiff(namespace, name, revision1, revision2, user, nil)
 }
 
-func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, user *pkgauth.User) (*NotesDiff, error) {
+// GetRedactedNotesDiffAsUser masks each revision before adding diff prefixes.
+// redact must mask known sensitive values from a notes string; nil is refused.
+func (c *Client) GetRedactedNotesDiffAsUser(namespace, name string, revision1, revision2 int, user *pkgauth.User, redact func(string, map[string]any) string) (*NotesDiff, error) {
+	if redact == nil {
+		return nil, fmt.Errorf("notes redactor is required")
+	}
+	return c.getNotesDiff(namespace, name, revision1, revision2, user, redact)
+}
+
+func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, user *pkgauth.User, redact func(string, map[string]any) string) (*NotesDiff, error) {
 	rel1, err := c.getReleaseRevisionAsUser(namespace, name, revision1, user)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision1, err)
@@ -930,11 +942,17 @@ func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
 	}
-	return &NotesDiff{
-		Revision1: revision1,
-		Revision2: revision2,
-		Diff:      computeDiff(releaseNotes(rel1), releaseNotes(rel2), revision1, revision2),
-	}, nil
+	notes := []string{releaseNotes(rel1), releaseNotes(rel2)}
+	if redact != nil {
+		for i, rel := range []*release.Release{rel1, rel2} {
+			values, err := c.GetValuesRevisionAsUser(namespace, name, true, rel.Version, user)
+			if err != nil {
+				return nil, fmt.Errorf("could not read revision %d values to redact notes: %w", rel.Version, err)
+			}
+			notes[i] = redact(redact(notes[i], values.Computed), values.UserSupplied)
+		}
+	}
+	return &NotesDiff{Revision1: revision1, Revision2: revision2, Diff: computeDiff(notes[0], notes[1], revision1, revision2)}, nil
 }
 
 // computeRedactedManifestDiff diffs two manifests with every Secret's data and
@@ -1813,26 +1831,26 @@ type renderedResource struct {
 
 func parseManifestResourceObjects(manifest, defaultNamespace string) ([]renderedResource, int) {
 	resources := []renderedResource{}
-	manifests := releaseutil.SplitManifests(manifest)
 	parseErrorCount := 0
-
-	for _, m := range manifests {
-		m = strings.TrimSpace(m)
-		if m == "" {
-			continue
+	var appendObject func(*unstructured.Unstructured)
+	appendObject = func(obj *unstructured.Unstructured) {
+		// Helm's resource builder flattens List and typed-list documents recursively.
+		// Do not silently report their children as absent from a preview.
+		if obj.IsList() {
+			items := obj.Object["items"].([]any)
+			for _, item := range items {
+				child, ok := item.(map[string]any)
+				if !ok {
+					parseErrorCount++
+					continue
+				}
+				appendObject(&unstructured.Unstructured{Object: child})
+			}
+			return
 		}
-		jsonBytes, err := yaml.YAMLToJSON([]byte(m))
-		if err != nil {
+		if obj.GetKind() == "" || obj.GetName() == "" || obj.GetAPIVersion() == "" {
 			parseErrorCount++
-			continue
-		}
-		var obj unstructured.Unstructured
-		if err := json.Unmarshal(jsonBytes, &obj.Object); err != nil {
-			parseErrorCount++
-			continue
-		}
-		if obj.GetKind() == "" || obj.GetName() == "" {
-			continue
+			return
 		}
 		apiGroup := ""
 		if group, _, ok := strings.Cut(obj.GetAPIVersion(), "/"); ok {
@@ -1849,14 +1867,26 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 				Name:       obj.GetName(),
 				Namespace:  obj.GetNamespace(),
 			},
-			Object: &obj,
+			Object: obj,
 		})
 	}
-
-	sort.Slice(resources, func(i, j int) bool {
-		return resourceRefKey(resources[i].Ref) < resourceRefKey(resources[j].Ref)
-	})
-
+	for _, m := range releaseutil.SplitManifests(manifest) {
+		if strings.TrimSpace(m) == "" {
+			continue
+		}
+		encoded, err := yaml.YAMLToJSON([]byte(m))
+		if err != nil {
+			parseErrorCount++
+			continue
+		}
+		var obj unstructured.Unstructured
+		if err := json.Unmarshal(encoded, &obj.Object); err != nil {
+			parseErrorCount++
+			continue
+		}
+		appendObject(&obj)
+	}
+	sort.Slice(resources, func(i, j int) bool { return resourceRefKey(resources[i].Ref) < resourceRefKey(resources[j].Ref) })
 	return resources, parseErrorCount
 }
 
@@ -2591,7 +2621,7 @@ func (c *Client) runValuesUpgrade(actionConfig *action.Configuration, name, targ
 	started := false
 	defer func() {
 		if err != nil && !started {
-			err = &UpgradePreflightError{Err: err}
+			err = &OperationPreflightError{Err: err}
 		}
 	}()
 

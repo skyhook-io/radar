@@ -1,11 +1,16 @@
 package helm
 
 import (
+	"encoding/json"
 	"errors"
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/storage/driver"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"reflect"
 	"strings"
 	"testing"
@@ -287,7 +292,7 @@ func TestMCPUpgradePreflightIsNotPartialMutation(t *testing.T) {
 	cfg := memoryActionConfig(t)
 	seedRelease(t, cfg, "demo", release.StatusDeployed, 2)
 	_, _, err := newChartSourceTestClient(t).runValuesUpgrade(cfg, "demo", "", "", nil, valuesUpgradeOptions{expectedRevision: 1}, progressSender(nil))
-	var preflight *UpgradePreflightError
+	var preflight *OperationPreflightError
 	if !errors.As(err, &preflight) || !strings.Contains(err.Error(), "expected 1") {
 		t.Fatalf("stale refusal not classified: %v", err)
 	}
@@ -310,5 +315,126 @@ func TestStoredChartDependencyEvidenceDoesNotVetoVersionChange(t *testing.T) {
 	baseline := &release.Release{Chart: &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}}, Manifest: "# Source: fixture/charts/removed/templates/cm.yaml\n"}
 	if err := validateStoredChartDependencyBodies(target, baseline); err != nil {
 		t.Fatalf("previous version prevents deliberate chart change: %v", err)
+	}
+}
+
+func TestMCPNotesValuesRejectCorruptHistoricalChart(t *testing.T) {
+	cfg := memoryActionConfig(t)
+	seedRelease(t, cfg, "demo", release.StatusSuperseded, 1)
+	seedRelease(t, cfg, "demo", release.StatusDeployed, 2)
+	latest, _ := cfg.Releases.Get("demo", 2)
+	latest.Chart = &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}}
+	if err := cfg.Releases.Update(latest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := getValuesWith(cfg, "demo", true, 1); err == nil || !strings.Contains(err.Error(), "revision 1") {
+		t.Fatalf("corrupt historical chart not refused: %v", err)
+	}
+	if _, err := getValuesWith(cfg, "demo", true, 2); err != nil {
+		t.Fatalf("valid latest chart refused: %v", err)
+	}
+}
+
+func TestMCPPreviewExpandsListDocuments(t *testing.T) {
+	ch := &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}}
+	old := `apiVersion: v1
+kind: ConfigMapList
+items:
+- apiVersion: v1
+  kind: ConfigMap
+  metadata: {name: removed}
+- apiVersion: v1
+  kind: ConfigMap
+  metadata: {name: changed}
+  data: {message: old}
+`
+	next := `apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: List
+  items:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata: {name: added}
+- apiVersion: v1
+  kind: ConfigMap
+  metadata: {name: changed}
+  data: {message: new}
+`
+	before := &release.Release{Chart: ch, Version: 1, Namespace: "default", Manifest: old}
+	after := &release.Release{Chart: ch, Version: 2, Namespace: "default", Manifest: next}
+	got, err := mcpUpgradeResult(before, after, true)
+	if err != nil || got.ParseErrors != 0 || len(got.Added) != 1 || len(got.Removed) != 1 || len(got.Changed) != 1 {
+		t.Fatalf("list changes lost: %+v %v", got, err)
+	}
+	if got.Added[0].Name != "added" || got.Removed[0].Name != "removed" || got.Changed[0].Name != "changed" {
+		t.Fatalf("wrong list identities: %+v", got)
+	}
+	if refs := parseManifestResources(old, "default"); len(refs) != 2 {
+		t.Fatalf("uninstall preview lost list contents: %v", refs)
+	}
+	for _, malformed := range []string{`kind: ConfigMap`, `apiVersion: v1
+kind: List
+items: broken`, `apiVersion: v1
+kind: List
+items: [42]`} {
+		_, errors := parseManifestResourceObjects(malformed, "default")
+		if errors == 0 {
+			t.Fatalf("unidentified document counted complete: %s", malformed)
+		}
+	}
+}
+
+func TestMCPNotesDiffRedactsBeforeAddingLinePrefixes(t *testing.T) {
+	secrets := fake.NewClientset().CoreV1().Secrets("default")
+	store := driver.NewSecrets(secrets)
+	credential := "first-private-line\nsecond-private-line"
+	for revision, word := range []string{"before", "after"} {
+		rel := &release.Release{Name: "demo", Namespace: "default", Version: revision + 1, Chart: &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}}, Config: map[string]any{"password": credential}, Info: &release.Info{Status: release.StatusDeployed, Notes: word + "\n" + credential}}
+		if err := store.Create("sh.helm.release.v1.demo.v"+string(rune('1'+revision)), rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("unexpected mutation %s", r.Method)
+		}
+		if r.URL.Path == "/version" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"gitVersion": "v1.36.2"})
+			return
+		}
+		secret, err := secrets.Get(r.Context(), path.Base(r.URL.Path), metav1.GetOptions{})
+		if err != nil {
+			http.Error(w, err.Error(), 404)
+			return
+		}
+		secret.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(secret)
+	}))
+	defer api.Close()
+	client := NewStandaloneClient(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	result, err := client.GetRedactedNotesDiffAsUser("default", "demo", 1, 2, nil, func(notes string, values map[string]any) string {
+		secret, _ := values["password"].(string)
+		if secret != "" {
+			return strings.ReplaceAll(notes, secret, "[REDACTED]")
+		}
+		return notes
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(result.Diff, "private-line") || !strings.Contains(result.Diff, "[REDACTED]") || !strings.Contains(result.Diff, "after") {
+		t.Fatalf("credential escaped diff masking: %s", result.Diff)
+	}
+}
+
+func TestMCPFreshInstallErrorIsPreflight(t *testing.T) {
+	_, err := newChartSourceTestClient(t).installFreshWith(memoryActionConfig(t), &InstallRequest{ReleaseName: "demo", Namespace: "default", ChartName: "fixture", Repository: "https://unconfigured.test", Version: "1.0.0"})
+	var preflight *OperationPreflightError
+	if !errors.As(err, &preflight) {
+		t.Fatalf("source refusal not classified: %v", err)
 	}
 }

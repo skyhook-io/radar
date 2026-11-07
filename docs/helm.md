@@ -184,5 +184,4 @@ semantics are documented in [MCP Helm lifecycle](mcp.md).
 See [MCP](mcp.md#write-tools) for the input and confirmation contract.
 
 MCP installs require a configured repository and refuse any existing release history.
-Configure the source in the Helm repository configuration used by Radar first (for a local CLI installation, `helm repo add NAME URL`). MCP cannot register sources. Cloud first-install source setup is not self-service here; pod-local owner configuration is ephemeral, and `helm.ociSources` is rejected with `cloud.enabled`. Upgrades also require a confirmed
-source on the release. This avoids implicit recovery or source changes through install.
+Configure the source in the Helm repository configuration used by Radar first (for a local CLI installation, `helm repo add NAME URL`). MCP cannot register sources. Cloud first-install source setup is not self-service here; pod-local owner configuration is ephemeral, and `helm.ociSources` is rejected with `cloud.enabled`. Version changes and edits that must reconstruct an incomplete stored chart require a confirmed source on the release. This avoids implicit recovery or source changes through install.
