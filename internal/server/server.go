@@ -105,6 +105,7 @@ type Server struct {
 	mcpReadOnlyHandler      http.Handler
 	mcpInvestigationHandler http.Handler
 	mcpExecTools            bool
+	mcpHTTPTools            bool
 	diagConfig              *DiagConfig
 	effectiveConfig         *config.Config // running config for GET /api/config
 	stopUsageData           context.CancelFunc
@@ -225,6 +226,7 @@ type Config struct {
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	MCPExecTools            bool                        // effective exec tool registration on the public MCP handler
+	MCPHTTPTools            bool                        // effective HTTP tool registration on the public MCP handler
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
 	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
@@ -269,6 +271,7 @@ func New(cfg Config) *Server {
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
 		mcpExecTools:            cfg.MCPExecTools,
+		mcpHTTPTools:            cfg.MCPHTTPTools,
 		diagConfig:              cfg.DiagConfig,
 		effectiveConfig:         cfg.EffectiveConfig,
 		promURLFlag:             cfg.PrometheusURLFlag,
@@ -1490,6 +1493,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPEnabled = s.mcpEnabled()
 	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.MCPExecTools = s.mcpHandler != nil && s.mcpExecTools
+	caps.MCPHTTPTools = s.mcpHandler != nil && s.mcpHTTPTools
+	caps.MCPHelmTools = s.mcpHandler != nil && !k8s.ForceDisableHelmWrite
 	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()

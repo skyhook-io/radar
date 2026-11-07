@@ -51,6 +51,7 @@ type Config struct {
 	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
 	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
 	MCPExecTools             *bool             `json:"mcpExecTools,omitempty"`
+	MCPHTTPTools             *bool             `json:"mcpHttpTools,omitempty"`
 	MCPReadOnly              *bool             `json:"mcpReadOnly,omitempty"`
 	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 	// DebugImage is the image used for ephemeral debug containers and node debug

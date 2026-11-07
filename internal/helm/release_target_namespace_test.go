@@ -210,13 +210,13 @@ func TestReleaseTargetNamespaceAndLiveRollbackEffects(t *testing.T) {
 }
 
 func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
-	for _, operation := range []string{"upgrade", "upgrade with progress", "upgrade with values", "apply values", "preview values", "install recovery"} {
+	for _, operation := range []string{"upgrade", "upgrade with progress", "upgrade with values", "upgrade with overrides", "upgrade with empty overrides", "omitted overrides after failure", "empty overrides after failure", "apply values", "preview values", "install recovery"} {
 		t.Run(operation, func(t *testing.T) {
 			cfg, writes := targetNamespaceActionConfig(t)
 			seedRelease(t, cfg, "demo", release.StatusDeployed, 1)
 			rel, _ := cfg.Releases.Get("demo", 1)
 			rel.Namespace = "app"
-			rel.Config = map[string]any{"message": "old"}
+			rel.Config = map[string]any{"message": "old", "auth": map[string]any{"password": "stored-secret", "user": "old-user"}}
 			rel.Manifest = targetNamespaceManifest("update", "explicit")
 			template := strings.ReplaceAll(rel.Manifest, "message: old", "message: {{ .Values.message }}\n  releaseNamespace: {{ .Release.Namespace }}")
 			rel.Chart = &chart.Chart{Metadata: &chart.Metadata{Name: "radar", Version: "1.0.0", APIVersion: "v2"}, Templates: []*chart.File{{Name: "templates/configmap.yaml", Data: []byte(template)}}}
@@ -244,6 +244,18 @@ func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
 				t.Fatal(err)
 			}
 			values := map[string]any{"message": "new"}
+			afterFailure := strings.HasSuffix(operation, "after failure")
+			if afterFailure {
+				failed := *rel
+				info := *rel.Info
+				info.Status = release.StatusFailed
+				failed.Info = &info
+				failed.Version = 2
+				failed.Config = map[string]any{"message": "failed", "auth": nil}
+				if err := cfg.Releases.Create(&failed); err != nil {
+					t.Fatal(err)
+				}
+			}
 			noop := func(string, string, string) {}
 			var rendered *release.Release
 			switch operation {
@@ -257,6 +269,14 @@ func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
 				}
 			case "upgrade with values":
 				err = client.upgradeWithValues(cfg, "demo", "2.0.0", repoName, values, noop)
+			case "upgrade with overrides":
+				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, map[string]any{"message": "new", "auth": map[string]any{"user": "new-user"}}, false, noop)
+			case "upgrade with empty overrides":
+				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, map[string]any{}, false, noop)
+			case "omitted overrides after failure":
+				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, nil, false, noop)
+			case "empty overrides after failure":
+				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, map[string]any{}, false, noop)
 			case "apply values":
 				err = client.applyValuesWith(cfg, "demo", values)
 			case "preview values":
@@ -288,11 +308,29 @@ func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
 			}
 			stored, err := cfg.Releases.Last("demo")
 			revision := 2
+			if afterFailure {
+				revision = 3
+			}
 			if dryRun {
 				revision = 1
 			}
 			if err != nil || stored.Version != revision || stored.Namespace != "app" {
 				t.Fatalf("stored release: %+v %v", stored, err)
+			}
+			if operation == "upgrade with overrides" || operation == "upgrade with empty overrides" || afterFailure {
+				auth := stored.Config["auth"].(map[string]any)
+				if auth["password"] != "stored-secret" {
+					t.Fatalf("stored credential lost: %#v", stored.Config)
+				}
+				if operation == "upgrade with overrides" && auth["user"] != "new-user" {
+					t.Fatal("override did not merge")
+				}
+				if (operation == "upgrade with empty overrides" || afterFailure) && stored.Config["message"] != "old" {
+					t.Fatal("empty override reset values")
+				}
+			}
+			if operation == "upgrade with values" && stored.Config["auth"] != nil {
+				t.Fatal("explicit replacement retained old values")
 			}
 			if !dryRun && strings.Count(stored.Manifest, "releaseNamespace: app") != 2 {
 				t.Fatalf("stored manifest rendered a different release namespace: %s", stored.Manifest)

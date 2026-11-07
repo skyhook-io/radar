@@ -453,7 +453,8 @@ trend charts remain unavailable for Kubecost.
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
 | `disableExec` | Turn off pod exec through Radar for everyone on this cluster. See [Turning exec off](#turning-exec-off) | `false` |
-| `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires exec access. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
+| `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires pods/exec. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
+| `mcp.httpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`); requires get services/proxy. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with disabled or read-only MCP; independent of exec | `false` |
 | `usageReporting.enabled` | Anonymous daily usage stats: views, actions and MCP tools used, plus this cluster's version, platform, node-count range and known integrations. Off unless `true`; Radar never asks in a cluster ([what is sent](https://radarhq.io/docs/configuration/usage-stats)) | unset |
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
@@ -596,8 +597,7 @@ Disabled by default for security:
 
 ### MCP container commands
 
-`mcp.execTools` registers `exec_pod`; `rbac.podExec` grants Radar's ServiceAccount
-exec permission. These are separate controls:
+`mcp.execTools` registers `exec_pod`. `mcp.httpTools` independently registers `curl_service`; both default off. `rbac.podExec` grants Radar's ServiceAccount exec permission; it does not grant `get services/proxy`. Service GETs require that separate permission on the target Service, as the signed-in caller or Radar's ServiceAccount without auth. The chart does not add it to the ServiceAccount; see [the scoped Service HTTP grant](#granting-service-http-access-without-authentication). The table below describes only exec access:
 
 | `mcp.execTools` | `rbac.podExec` | Result |
 |---|---|---|
@@ -613,6 +613,48 @@ no SA exec rule and execution uses the forwarded caller token. The chart's SA
 rule grants `create pods/exec` (SPDY); WebSocket also needs `get pods/exec`.
 `disableExec` (`--disable-exec`), read-only mode and disabled MCP suppress registration regardless
 of either value. See [the exec contract](../../../docs/mcp.md#exec_pod).
+
+### Granting Service HTTP access without authentication
+
+For a no-auth Radar listener, enable `mcp.httpTools` and explicitly grant Radar's
+ServiceAccount `get services/proxy` on the intended target. For example, this
+namespace Role permits only the Service named `app` in `team-a`. Replace the
+ServiceAccount name and namespace with those used by your Radar installation.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: radar-service-http
+  namespace: team-a
+rules:
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: ["app"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: radar-service-http
+  namespace: team-a
+subjects:
+  - kind: ServiceAccount
+    name: radar
+    namespace: radar
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: radar-service-http
+```
+
+Every reachable unauthenticated MCP client shares this access. With authentication,
+the signed-in caller needs the grant instead. Prefer a namespace Role to adding
+`services/proxy` through `rbac.additionalRules`: those rules extend a ClusterRole,
+so a resource-name restriction there applies to that name across namespaces.
+This grant delegates Radar-to-Service network access; it does not isolate where a
+Service routes. Constrain EndpointSlice/GitOps-controller changes and network
+policy for a shared cluster. The chart does not apply this grant automatically.
 
 ### Turning exec off
 

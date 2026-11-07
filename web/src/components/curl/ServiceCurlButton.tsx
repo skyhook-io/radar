@@ -36,8 +36,8 @@ export function defaultPathForPort(port: number, name?: string, appProtocol?: st
 }
 
 export function isHttpishPort(port: number, name?: string, appProtocol?: string, protocol?: string): boolean {
-  // HTTP rides TCP — a UDP port is never a GET target (e.g. statsd "metrics-udp").
-  if ((protocol || '').toUpperCase() === 'UDP') return false
+  // HTTP rides TCP — UDP and SCTP ports are never GET targets (e.g. statsd "metrics-udp").
+  if (protocol && protocol.toUpperCase() !== 'TCP') return false
   const proto = (appProtocol || '').toLowerCase()
   if (proto === 'http' || proto === 'https' || proto === 'http2') return true
   if (proto && proto !== 'tcp') {
@@ -124,7 +124,10 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 // Small toggle button rendered in a port row's action slot. The panel itself
 // renders inline within the port card (see CurlPanel), not as an overlay.
-export function CurlButton({ active, onClick }: { active: boolean; onClick: () => void }) {
+export function CurlButton({ active, onClick }: {
+  active: boolean
+  onClick: () => void
+}) {
   return (
     <Tooltip content="Curl this endpoint — GET from inside the cluster">
       <button

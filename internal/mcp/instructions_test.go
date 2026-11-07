@@ -300,6 +300,8 @@ func TestExecServerInstructions(t *testing.T) {
 // each with the reason. Every other write tool must be named, or an agent that
 // loads tools on demand never learns it can fix through it.
 var unroutedWriteTools = map[string]string{
+	"manage_helm":                  "dependency lifecycle requires an explicit ask; excluded from built-in investigation/apply, discover via its tool catalog entry",
+	"curl_service":                 "application endpoint checks are not a routine Kubernetes fix; opt-in tool catalog describes this external-client capability",
 	"delete_resource":              "deletion is never a routine fix; it takes a reviewed preview and an explicit ask",
 	"collect_application_evidence": "explicit endpoint collection is not a fix; relevant diagnose responses provide targeted routing",
 	"exec_pod":                     "routed on its own Pod checks line",

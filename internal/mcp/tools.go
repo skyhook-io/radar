@@ -389,8 +389,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
-			"Request values, history, operations, or " +
-			"revision comparisons with `include`; returned values are key-aware redacted.",
+			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=notes for bounded untrusted notes. Request values, history, operations, or " +
+			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
+			"manage_helm merges deployed values, which may differ after failure; check history/values_diff.",
 		Annotations: readOnly,
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
 
@@ -609,6 +610,14 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
 	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))
 
+	if !k8s.ForceDisableHelmWrite {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name:        "manage_helm",
+			Description: "Install/upgrade/rollback/uninstall native Helm as the caller. Install needs an exact version and configured source; refuses existing history. Upgrade can reuse a complete stored chart without a source; version omission requires latest/deployed agreement. Other upgrades need a confirmed configured source. dry_run previews with identical merge rules; expected_revision checks for stale edits, not an atomic lock. Upgrade merges last deployed overrides (latest failed/superseded if none deployed). Latest get_helm_release values may differ: inspect history/values_diff after failure. Maps merge, lists replace; hidden-credential container replacement is refused unless replace_values=true replaces ALL overrides. Change GitOps dependencies in git. Uninstall without confirm previews resources; return the reviewed token to delete. Coordinate writers: Helm has no atomic revision-conditioned uninstall. Hooks may run; operations take minutes and can outlive client timeouts. Inspect get_helm_release before retrying; use wait_for for readiness. Never pass literal credentials.",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
+		}, logToolCall("manage_helm", handleManageHelm))
+	}
+
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
@@ -715,6 +724,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 
+	if includeExec && httpToolsEnabled.Load() && k8s.IsInCluster() {
+		registerHTTPTools(server, paramRegistry, &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)})
+	}
 	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
 	if includeExec && execToolsEnabled.Load() {
 		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{

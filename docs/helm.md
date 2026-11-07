@@ -168,3 +168,20 @@ When an HTTP repository index advertises a SHA-256 checksum, Radar checks the do
 If the download does not match, refresh the repository and retry. If it still fails, contact the repository maintainer. A stale index and a changed archive can both cause a mismatch.
 
 Existing local Helm flows still accept repositories that omit checksums. Prepared installs for Cloud enrollment continue to require one. A checksum checks agreement with the index; it does not prove who published the chart. OCI pulls keep their registry digest handling. If an HTTP index lists an OCI chart URL, Radar also checks its advertised SHA-256 against the downloaded chart archive.
+
+### Agent operations
+
+External MCP clients can use `manage_helm` to install a dependency, edit values using
+a complete stored chart or upgrade from a confirmed saved source, roll back to an explicit revision, or preview and
+confirm an uninstall. It uses the same Helm permission preflight and caller identity
+as the UI. On upgrade, supplied `values` merge into stored overrides on the server;
+omitted map keys are preserved. Lists replace as whole units; null and type changes
+can remove values. Partial overrides cannot replace a container with hidden credentials. `replace_values: true` explicitly
+replaces all overrides. Never feed redacted values from a read back into a write.
+Use `dry_run: true` for a matching advisory upgrade preview and `expected_revision`
+to reject an observed stale revision. Stored-chart reads, source limits and preview
+semantics are documented in [MCP Helm lifecycle](mcp.md).
+See [MCP](mcp.md#write-tools) for the input and confirmation contract.
+
+MCP installs require a configured repository and refuse any existing release history.
+Configure the source in the Helm repository configuration used by Radar first (for a local CLI installation, `helm repo add NAME URL`). MCP cannot register sources. Cloud first-install source setup is not self-service here; pod-local owner configuration is ephemeral, and `helm.ociSources` is rejected with `cloud.enabled`. Version changes and edits that must reconstruct an incomplete stored chart require a confirmed source on the release. This avoids implicit recovery or source changes through install.

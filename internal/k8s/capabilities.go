@@ -120,6 +120,8 @@ type Capabilities struct {
 	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
 	MCPReadOnly            bool                     `json:"mcpReadOnly"`
 	MCPExecTools           bool                     `json:"mcpExecTools"`
+	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
+	MCPHTTPTools           bool                     `json:"mcpHttpTools"`
 	MCPApplicationEvidence bool                     `json:"mcpApplicationEvidence"`
 	MCPEnabled             bool                     `json:"mcpEnabled"`              // MCP server is running
 	Deployment             DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
@@ -131,6 +133,10 @@ type Capabilities struct {
 	Karpenter              IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
 	PolicyReports          *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
 	CloudConnect           *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+
+	// HelmWriteUnavailable records a failed or unavailable Helm-write lookup from CheckCapabilities.
+	// It is internal preflight state, not a wire capability.
+	HelmWriteUnavailable bool `json:"-"`
 }
 
 type IntegrationCapability struct {
@@ -297,7 +303,8 @@ var (
 	nsCapCache map[string]*nsCapEntry
 	nsCapMu    sync.RWMutex
 
-	// ForceDisableHelmWrite overrides the helmWrite capability to false (for dev testing)
+	// ForceDisableHelmWrite disables the Helm write preflight and manage_helm registration.
+	// Signed-in global repository/OCI management and Cloud install/upgrade are unaffected.
 	ForceDisableHelmWrite bool
 	// ForceDisableExec turns off exec (--disable-exec): the capability reports false
 	// and the exec, debug and pod-file routes refuse requests.
@@ -331,14 +338,14 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	if GetClient() == nil {
 		// Return all false if client not initialized (fail closed)
 		log.Printf("Warning: K8s client not initialized, returning restricted capabilities")
-		return &Capabilities{Exec: false, Logs: false, PortForward: false, Secrets: false, SecretsUpdate: false, HelmWrite: false}, nil
+		return &Capabilities{HelmWriteUnavailable: true}, nil
 	}
 
 	// Don't start RBAC checks when disconnected — the exec credential plugin
 	// serializes all API calls per-process, so browser-polled capability checks
 	// would block retry/context-switch connectivity tests.
 	if GetConnectionStatus().State == StateDisconnected {
-		return &Capabilities{}, nil
+		return &Capabilities{HelmWriteUnavailable: true}, nil
 	}
 
 	// Use the operation context so RBAC checks are canceled on context switch.
@@ -400,6 +407,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 			}
 			if apiErr {
 				hadErrors.Store(true)
+				if c.result == &caps.HelmWrite {
+					caps.HelmWriteUnavailable = true
+				}
 			}
 		}(check)
 	}

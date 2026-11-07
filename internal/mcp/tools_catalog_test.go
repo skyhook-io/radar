@@ -36,6 +36,7 @@ var toolNameInCatalog = regexp.MustCompile(`(?m)^\s*name:\s*'([a-z][a-z0-9_]*)'`
 // through that dialog.
 func TestSetupDialogCoversAllTools(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	registered := map[string]bool{}
 	for _, tool := range listRegisteredTools(t) {
 		registered[tool.Name] = true
@@ -272,9 +273,11 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Includes batch diagnosis routing and log-argument boundaries.
-		maxCatalogBytes = 68661
-
+		// Includes batch diagnosis routing, log boundaries and native Helm source/merge/confirmation contracts.
+		// Stored-chart navigation, advisory dry_run and stale-revision semantics add
+		// 992 bytes without new tool names. Measured 72,182; retain 33 bytes headroom.
+		// Opt-in Service curl and exec remain a separate allowance below.
+		maxCatalogBytes         = 72215
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -282,11 +285,14 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			previous := execToolsEnabled.Load()
 			SetExecToolsEnabled(enabled)
+			if enabled {
+				enableHTTPToolsForTest(t)
+			}
 			t.Cleanup(func() { SetExecToolsEnabled(previous) })
 			budget := maxCatalogBytes
-			// exec_pod adds 2,370 measured description/schema bytes; the default cap stays fixed.
+			// Optional exec_pod and curl_service use 3,595 description/schema bytes.
 			if enabled {
-				budget += 2370
+				budget += 3800
 			}
 			total := 0
 			for _, tool := range listRegisteredTools(t) {
@@ -438,9 +444,11 @@ func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
 
 func TestRegisteredToolAnnotations(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	tools := listRegisteredTools(t)
 	writeTools := map[string]bool{
 		"manage_workload": true,
+		"manage_helm":     true,
 		"manage_rollout":  true,
 		"manage_cronjob":  true,
 		"manage_gitops":   true,
@@ -449,6 +457,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"delete_resource": true,
 		"manage_node":     true,
 		"exec_pod":        true,
+		"curl_service":    true,
 	}
 
 	seenWriteTools := map[string]bool{}
@@ -456,8 +465,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		if tool.Annotations == nil {
 			t.Fatalf("tool %q missing annotations", tool.Name)
 		}
-		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod") {
-			t.Errorf("tool %q openWorldHint should be true only for exec_pod", tool.Name)
+		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod" || tool.Name == "manage_helm" || tool.Name == "curl_service") {
+			t.Errorf("tool %q openWorldHint should be true only for exec_pod or manage_helm", tool.Name)
 		}
 		if writeTools[tool.Name] {
 			seenWriteTools[tool.Name] = true
@@ -498,8 +507,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 
 // writeToolNames is the mutating tool set the read-only mount must exclude.
 var writeToolNames = []string{
-	"manage_workload", "manage_rollout", "manage_cronjob", "manage_gitops",
-	"apply_resource", "patch_resource", "delete_resource", "manage_node", "exec_pod",
+	"manage_workload", "manage_helm", "manage_rollout", "manage_cronjob", "manage_gitops",
+	"apply_resource", "patch_resource", "delete_resource", "manage_node", "exec_pod", "curl_service",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the
@@ -507,6 +516,7 @@ var writeToolNames = []string{
 // mutating tool. If a tool is reclassified, this fails until the lists agree.
 func TestReadOnlyServerExcludesWriteTools(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	ro := map[string]bool{}
 	for _, tool := range listRegisteredToolsWith(t, false) {
 		ro[tool.Name] = true

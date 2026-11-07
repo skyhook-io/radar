@@ -13,6 +13,7 @@ import (
 
 func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	httpServer := httptest.NewServer(NewApplyHandler())
 	defer httpServer.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -41,13 +42,13 @@ func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 			break
 		}
 	}
-	for _, name := range []string{"collect_application_evidence", "exec_pod", "delete_resource"} {
+	for _, name := range []string{"collect_application_evidence", "exec_pod", "delete_resource", "manage_helm", "curl_service"} {
 		if names[name] {
 			t.Fatalf("%s listed on apply handler", name)
 		}
 	}
 	for _, tool := range listRegisteredToolsWith(t, true) {
-		if tool.Name != "collect_application_evidence" && tool.Name != "exec_pod" && tool.Name != "delete_resource" && !names[tool.Name] {
+		if tool.Name != "collect_application_evidence" && tool.Name != "exec_pod" && tool.Name != "delete_resource" && tool.Name != "manage_helm" && tool.Name != "curl_service" && !names[tool.Name] {
 			t.Errorf("existing tool %s missing from apply handler", tool.Name)
 		}
 	}

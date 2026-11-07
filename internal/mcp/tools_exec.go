@@ -74,6 +74,7 @@ type execStreams func(ctx context.Context, namespace, pod, container string, com
 // call runs as the caller: the API server checks pods/exec
 // against the caller's RBAC.
 func registerExecTools(server *mcp.Server, paramRegistry *toolParamRegistry, annotations *mcp.ToolAnnotations) {
+
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "exec_pod",
 		Description: "Run one non-interactive command in a running container and return its stdout, stderr and exit code, like kubectl exec <pod> -- <cmd>. " +

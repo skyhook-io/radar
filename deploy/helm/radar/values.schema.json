@@ -381,7 +381,8 @@
       "additionalProperties": true,
       "properties": {
         "enabled": { "type": "boolean" },
-        "execTools": { "type": "boolean" }
+        "execTools": { "type": "boolean" },
+        "httpTools": { "type": "boolean" }
       }
     },
     "cost": {
