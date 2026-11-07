@@ -46,7 +46,7 @@ type WorkloadRevision struct {
 	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
 	// Serving says whether this revision's pods are running and ready. Nil means
 	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
-	// per revision. Rollouts leave it nil; IsStable is their signal.
+	// per revision, and a canary Rollout leaves it to IsStable.
 	Serving *bool `json:"serving,omitempty"`
 	// ChangeCause is the kubernetes.io/change-cause note on this revision, the
 	// one record of why it exists when no Helm or GitOps source does.
@@ -973,6 +973,7 @@ func (m *WorkloadManager) listRolloutRevisions(ctx context.Context, namespace, n
 			Replicas:      r.Replicas,
 			Template:      r.Template,
 			ReadyReplicas: &readyReplicas,
+			Serving:       r.Serving,
 		})
 	}
 	return out, nil

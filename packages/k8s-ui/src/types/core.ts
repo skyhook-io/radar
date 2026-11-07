@@ -1825,8 +1825,8 @@ export interface WorkloadRevision {
   // This revision's own ready pods. Absent when the kind has no per-revision count.
   readyReplicas?: number
   // Whether this revision's pods are running and ready. Absent means unknown:
-  // a StatefulSet or DaemonSet mid-update has no per-revision split. Rollouts
-  // leave it unset; isStable is their signal.
+  // a StatefulSet or DaemonSet mid-update has no per-revision split. A canary
+  // Rollout leaves it unset; isStable is its signal.
   serving?: boolean
   // The kubernetes.io/change-cause note, when the rollout set one.
   changeCause?: string
