@@ -235,3 +235,53 @@ func TestBuildControllerRevisionsReadsChangeCause(t *testing.T) {
 		t.Fatalf("change causes = %q, %q", revisions[0].ChangeCause, revisions[1].ChangeCause)
 	}
 }
+
+func TestApplyDeploymentDesiredTemplate(t *testing.T) {
+	template := func(image string, hash string) map[string]any {
+		labels := map[string]any{"app": "api"}
+		if hash != "" {
+			labels["pod-template-hash"] = hash
+		}
+		return map[string]any{
+			"metadata": map[string]any{"labels": labels},
+			"spec":     map[string]any{"containers": []any{map[string]any{"name": "web", "image": image}}},
+		}
+	}
+	replicaSet := func(number, image, hash string) unstructured.Unstructured {
+		rs := unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{
+				"name":        "api-" + hash,
+				"annotations": map[string]any{"deployment.kubernetes.io/revision": number},
+				"labels":      map[string]any{"pod-template-hash": hash},
+			},
+			"spec": map[string]any{"template": template(image, hash)},
+		}}
+		rs.SetOwnerReferences([]metav1.OwnerReference{{UID: types.UID("deployment-uid")}})
+		return rs
+	}
+	deployment := func(image string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"template": template(image, "")}}}
+	}
+	rsList := []unstructured.Unstructured{replicaSet("1", "nginx:1.26", "aaa"), replicaSet("2", "nginx:1.27", "bbb")}
+
+	tests := []struct {
+		name  string
+		image string
+		want  map[int64]bool
+	}{
+		{name: "the highest revision matches", image: "nginx:1.27", want: map[int64]bool{1: false, 2: true}},
+		{name: "a change with no revision yet", image: "nginx:1.28", want: map[int64]bool{1: false, 2: false}},
+		{name: "changed back to an older revision", image: "nginx:1.26", want: map[int64]bool{1: true, 2: false}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			revisions := BuildDeploymentRevisions(rsList, "deployment-uid")
+			applyDeploymentDesiredTemplate(revisions, rsList, deployment(tc.image), "deployment-uid")
+			for _, revision := range revisions {
+				if revision.MatchesDesired == nil || *revision.MatchesDesired != tc.want[revision.Number] {
+					t.Fatalf("revision %d MatchesDesired = %v, want %v", revision.Number, revision.MatchesDesired, tc.want[revision.Number])
+				}
+			}
+		})
+	}
+}

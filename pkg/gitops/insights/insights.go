@@ -1565,7 +1565,15 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 	// Same message + same reason = one logical event surfaced redundantly.
 	seen := make(map[string]struct{})
 	revision := firstNonEmpty(nestedString(root.Object, "status", "lastAppliedRevision"), nestedString(root.Object, "status", "lastAttemptedRevision"))
+	recorded := fluxKustomizationHistory(root)
+	out = append(out, recorded...)
 	for _, c := range conditions(root) {
+		// A Kustomization's Ready condition moves on every reconcile, so it dates
+		// the last check, not the deploy. Its history dates each revision; only a
+		// failure says something the history doesn't.
+		if len(recorded) > 0 && c.status == "True" {
+			continue
+		}
 		key := c.message + "|" + c.reason
 		if _, ok := seen[key]; ok {
 			continue
@@ -1580,6 +1588,35 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].DeployedAt > out[j].DeployedAt })
+	return out
+}
+
+// fluxKustomizationHistory reads status.history, which Flux keeps for a
+// Kustomization with one entry per revision applied.
+func fluxKustomizationHistory(root *unstructured.Unstructured) []HistoryItem {
+	if root.GetKind() != "Kustomization" {
+		return nil
+	}
+	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
+	out := make([]HistoryItem, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		revision, _, _ := unstructured.NestedString(m, "metadata", "revision")
+		firstReconciled := gitops.StringValue(m["firstReconciled"])
+		if revision == "" || firstReconciled == "" {
+			continue
+		}
+		out = append(out, HistoryItem{
+			ID:         gitops.StringValue(m["digest"]),
+			Phase:      fluxPhaseLabel("True", gitops.StringValue(m["lastReconciledStatus"])),
+			Message:    "Applied revision: " + revision,
+			DeployedAt: firstReconciled,
+			Revision:   revision,
+		})
+	}
 	return out
 }
 

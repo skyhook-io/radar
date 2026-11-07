@@ -57,8 +57,6 @@ export interface AppDeployWorkloadInput {
   loading?: boolean
   /** Left out to bound the reads a large app makes. */
   notRead?: boolean
-  /** Paused with a change no revision holds yet, so its highest revision isn't what it was last told to run. */
-  unrolledChange?: boolean
 }
 
 export interface BuildAppDeploysInput {
@@ -240,7 +238,7 @@ function ownCauseOf(revision: WorkloadRevision, previous: WorkloadRevision | und
 }
 
 function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[], matched: Set<AppHistoryAnchor>): SortableRow[] {
-  const { ref, revisions = [], desired, stale, unrolledChange } = input
+  const { ref, revisions = [], desired, stale } = input
   const newestFirst = [...revisions].sort((a, b) => b.number - a.number)
   // The revision's own note is firmer than any record paired by time or version.
   const pairings = pairAnchors(
@@ -270,7 +268,7 @@ function revisionRows(input: AppDeployWorkloadInput, anchors: AppHistoryAnchor[]
       repeatedCause: !pairing && !ownCause ? cause : undefined,
       at: revision.createdAt,
       live: liveOf(ref.kind, revision, revisions),
-      newest: revision.isCurrent && !unrolledChange,
+      newest: revision.matchesDesired ?? revision.isCurrent,
       status: folded?.status,
       detail: folded?.message,
       ready: revision.readyReplicas,
@@ -314,8 +312,10 @@ export function buildAppDeploys(
   const reading = revisioned.filter((workload) => workload.loading).length
   for (const workload of revisioned) {
     const label = `${workload.ref.kind} ${workload.ref.name}`
-    if (workload.unrolledChange) partialReasons.push(`${label} is paused. Its latest change has no revision yet, so no row here is Newest.`)
     if (workload.notRead || workload.loading) continue
+    if (workload.revisions?.length && workload.revisions.every((revision) => revision.matchesDesired === false)) {
+      partialReasons.push(`${label} has a change with no revision yet, so no row here is Newest.`)
+    }
     if (workload.revisions === undefined) {
       partialReasons.push(`Revision history for ${label} couldn't be read.`)
     } else if (workload.stale) {

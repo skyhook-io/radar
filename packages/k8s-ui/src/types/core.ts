@@ -1830,6 +1830,9 @@ export interface WorkloadRevision {
   serving?: boolean
   // The kubernetes.io/change-cause note, when the rollout set one.
   changeCause?: string
+  // Deployments only: whether the spec asks for this revision's pod template.
+  // isCurrent is just the highest number, which isn't it while a change waits.
+  matchesDesired?: boolean
 }
 
 // Workload log stream event data

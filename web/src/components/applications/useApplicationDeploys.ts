@@ -21,12 +21,6 @@ function rollingOut(workload: AppWorkload): boolean {
   return workload.rollout ? isRolloutActivityVisible(workload.rollout) : false;
 }
 
-// A paused Deployment makes no ReplicaSet for a new template, so none of its
-// pods are on the newest template and no revision holds it.
-function hasUnrolledChange({ kind, rollout }: AppWorkload): boolean {
-  return kind === "Deployment" && rollout?.phase === "paused" && rollout.updated === 0 && rollout.desired > 0;
-}
-
 interface UseApplicationDeploysOptions {
   workloads: AppWorkload[];
   sourceRef?: AppSourceRef;
@@ -73,7 +67,6 @@ export function useApplicationDeploys({
         stale: query?.isError,
         loading: query?.isPending,
         notRead: !query,
-        unrolledChange: hasUnrolledChange(workload),
       };
     }),
     anchors: history.data?.anchors ?? (history.data ? [] : undefined),
