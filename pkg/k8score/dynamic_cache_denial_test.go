@@ -3,6 +3,10 @@ package k8score
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,7 +15,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -238,5 +244,92 @@ func TestStoppedCacheServesNoDenial(t *testing.T) {
 	d.Stop()
 	if err := d.recentDenial(deniedWidgets, ""); err != nil {
 		t.Fatalf("stopped cache answered from memory: %v", err)
+	}
+}
+
+// candidateBarrierClient refuses every list. Namespace checks wait until want
+// of them are in flight, or for patience, and peak is the most it saw at once.
+// It is an HTTP server because the fake dynamic client runs reactors one at a
+// time.
+func candidateBarrierClient(t *testing.T, want int32, patience time.Duration) (client dynamic.Interface, peak *atomic.Int32) {
+	t.Helper()
+	var inFlight atomic.Int32
+	peak = &atomic.Int32{}
+	full := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/namespaces/") {
+			n := inFlight.Add(1)
+			defer inFlight.Add(-1)
+			for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+			}
+			if n == want {
+				close(full)
+			}
+			select {
+			case <-full:
+			case <-time.After(patience):
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := dynamic.NewForConfig(&rest.Config{Host: srv.URL, QPS: 10000, Burst: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, peak
+}
+
+func TestSpareProbeSlotsCheckCandidatesAtOnce(t *testing.T) {
+	namespaces := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	client, peak := candidateBarrierClient(t, int32(len(namespaces)), time.Second)
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: client, NamespaceFallbacks: namespaces})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if err := d.EnsureWatching(deniedWidgets); !apierrors.IsForbidden(err) {
+		t.Fatal(err)
+	}
+	if got := peak.Load(); got != int32(len(namespaces)) {
+		t.Fatalf("%d candidates in flight at once, want %d", got, len(namespaces))
+	}
+	if err := d.recentDenial(deniedWidgets, ""); err == nil {
+		t.Fatal("a walk checked at once did not end in a complete denial")
+	}
+}
+
+// Other walks holding the slots leave this one to its own: it never adds to
+// what is running, so a busy startup stays within the shared limit.
+func TestBusyProbeSlotsCheckCandidatesInTurn(t *testing.T) {
+	namespaces := []string{"a", "b", "c"}
+	client, peak := candidateBarrierClient(t, int32(len(namespaces)), 5*time.Millisecond)
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: client, NamespaceFallbacks: namespaces})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	d.probeSlots = make(chan struct{}, 1)
+	if err := d.EnsureWatching(deniedWidgets); !apierrors.IsForbidden(err) {
+		t.Fatal(err)
+	}
+	if got := peak.Load(); got != 1 {
+		t.Fatalf("%d candidates in flight with no spare slot, want 1", got)
+	}
+}
+
+// Candidates finish in any order; the scopes a walk returns must not.
+func TestConcurrentWalkKeepsCandidateOrder(t *testing.T) {
+	namespaces := []string{"e", "d", "c", "b", "a"}
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: rateLimitedLists(deniedWidgets, namespaces, nil), NamespaceFallbacks: namespaces})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	scopes, complete, err := d.probeScopes(deniedWidgets, "")
+	if err != nil || !complete || !slices.Equal(scopes, namespaces) {
+		t.Fatalf("scopes %v complete %v err %v, want %v", scopes, complete, err, namespaces)
 	}
 }

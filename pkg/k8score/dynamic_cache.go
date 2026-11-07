@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -923,6 +924,8 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 	complete := true
 	var unanswered error
 	var unauthorized error
+	// mu guards the walk's results while candidates are checked at once.
+	var mu sync.Mutex
 	// probe lists one candidate under its own deadline and records the
 	// answer. It reports whether the walk can go on, and the probe's error.
 	probe := func(ns string, deadline time.Duration) (bool, error) {
@@ -933,6 +936,8 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 		nsCtx, nsCancel := context.WithTimeout(ctx, deadline)
 		probeErr := d.listProbe(nsCtx, gvr, ns)
 		nsCancel()
+		mu.Lock()
+		defer mu.Unlock()
 		switch {
 		case apierrors.IsUnauthorized(probeErr):
 			unauthorized = probeErr
@@ -958,19 +963,48 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 	// refused are retried after the others, each with an equal share of what
 	// is left of the budget, so none can starve the rest.
 	var throttled []string
-	for _, ns := range fallbacks {
-		if ctx.Err() != nil {
-			complete = false
-			break
-		}
+	var stopped atomic.Bool
+	check := func(ns string) {
 		ok, probeErr := probe(ns, 2*time.Second)
 		if !ok {
-			break
-		}
-		if IsClientRateLimited(probeErr) {
+			stopped.Store(true)
+		} else if IsClientRateLimited(probeErr) {
+			mu.Lock()
 			throttled = append(throttled, ns)
+			mu.Unlock()
 		}
 	}
+	// One at a time, a kind refused everywhere costs a round trip per
+	// candidate, which adds up to minutes on a page reading many such kinds.
+	// Candidates share only the slots no other walk holds, so the checks
+	// running at once stay capped and a busy startup walks as it always did.
+	var candidates sync.WaitGroup
+	for _, ns := range fallbacks {
+		if ctx.Err() != nil {
+			mu.Lock()
+			complete = false
+			mu.Unlock()
+			break
+		}
+		if stopped.Load() {
+			break
+		}
+		select {
+		case d.probeSlots <- struct{}{}:
+			candidates.Go(func() {
+				defer func() { <-d.probeSlots }()
+				check(ns)
+			})
+		default:
+			check(ns)
+		}
+	}
+	candidates.Wait()
+	byCandidateOrder := func(a, b string) int {
+		return slices.Index(fallbacks, a) - slices.Index(fallbacks, b)
+	}
+	slices.SortFunc(granted, byCandidateOrder)
+	slices.SortFunc(throttled, byCandidateOrder)
 	deadline, _ := ctx.Deadline()
 	for i, ns := range throttled {
 		if ctx.Err() != nil {
