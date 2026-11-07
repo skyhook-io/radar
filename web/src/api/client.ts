@@ -5731,6 +5731,7 @@ export interface WorkloadRevision {
   readyReplicas?: number;
   serving?: boolean;
   changeCause?: string;
+  matchesDesired?: boolean;
 }
 
 export function workloadRevisionsQuery(
