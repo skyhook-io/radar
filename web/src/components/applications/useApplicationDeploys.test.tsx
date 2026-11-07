@@ -103,6 +103,18 @@ describe("useApplicationDeploys", () => {
     expect(built().partial).toBe(false);
   });
 
+  it("marks a paused Deployment with nothing updated as holding a change", async () => {
+    fetchMock.mockImplementation(async () => respond(200, [revision]));
+    const rollout = { phase: "paused", active: true, manual: true, label: "Rollout paused", desired: 2, updated: 0, ready: 2, available: 2 } as const;
+    await paint(<Probe workloads={[{ ...deployment, rollout }]} history={history} visible />);
+    await settle();
+    expect(built().rows[0].newest).toBe(false);
+
+    await paint(<Probe workloads={[{ ...deployment, rollout: { ...rollout, updated: 2 } }]} history={history} visible />);
+    await settle();
+    expect(built().rows[0].newest).toBe(true);
+  });
+
   it("reads a null answer as no revisions", async () => {
     fetchMock.mockImplementation(async () => respond(200, null));
     await paint(<Probe workloads={[deployment]} history={history} visible />);
