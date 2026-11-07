@@ -121,6 +121,21 @@ describe('buildAppDeploys', () => {
     expect(byRevision(rows).get(1)).toMatchObject({ live: false, newest: false })
   })
 
+  it('follows the active revision of a blue-green Rollout, not the stable one', () => {
+    const { rows } = buildAppDeploys({
+      workloads: [{
+        ref: { kind: 'Rollout', namespace: 'prod', name: 'storefront', group: 'argoproj.io' },
+        revisions: [
+          revision(2, { isCurrent: true, isStable: false, replicas: 1, readyReplicas: 1, serving: true }),
+          revision(1, { isCurrent: false, isStable: true, replicas: 1, readyReplicas: 1, serving: false }),
+        ],
+      }],
+    })
+
+    expect(byRevision(rows).get(2)?.live).toBe(true)
+    expect(byRevision(rows).get(1)?.live).toBe(false)
+  })
+
   it('does not call a stable Rollout revision with no ready pods Live', () => {
     const { rows } = buildAppDeploys({
       workloads: [{

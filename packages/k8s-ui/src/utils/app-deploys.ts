@@ -117,10 +117,10 @@ function predatesRevisionSignals({ ref, revisions = [] }: AppDeployWorkloadInput
 }
 
 function liveOf(kind: string, revision: WorkloadRevision, revisions: WorkloadRevision[]): boolean | 'unknown' {
-  if (kind === 'Rollout') {
+  if (kind === 'Rollout' && revision.serving === undefined) {
     if (!revisions.some((r) => r.isStable)) return 'unknown'
     if (revision.readyReplicas === 0) return false
-    // Canary and preview pods can be ready without taking traffic.
+    // Canary pods can be ready without taking traffic.
     return revision.isStable && revision.readyReplicas !== undefined ? true : 'unknown'
   }
   return revision.serving ?? 'unknown'
