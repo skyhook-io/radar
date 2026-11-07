@@ -29,7 +29,7 @@ import (
 // Workload tool input types
 
 type manageWorkloadInput struct {
-	Action    string `json:"action" jsonschema:"action to perform: restart, scale, or rollback"`
+	Action    string `json:"action" jsonschema:"action to perform: restart, scale, rollback, pause, or resume"`
 	Kind      string `json:"kind" jsonschema:"workload kind: deployment, statefulset, daemonset, or rollout"`
 	Namespace string `json:"namespace" jsonschema:"workload namespace"`
 	Name      string `json:"name" jsonschema:"workload name"`
@@ -160,8 +160,35 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		}
 		return toJSONResult(resp)
 
+	case "pause", "resume":
+		action := strings.ToLower(input.Action)
+		if kind != "deployments" {
+			return nil, nil, fmt.Errorf("%s is only supported for Deployments", action)
+		}
+		paused := action == "pause"
+		if err := k8s.SetDeploymentPausedWithClient(ctx, input.Namespace, input.Name, paused, dynClient); err != nil {
+			return nil, nil, fmt.Errorf("%s failed: %w", action, err)
+		}
+		return toJSONResult(deploymentPausedResult(input.Namespace, input.Name, paused))
+
 	default:
-		return nil, nil, fmt.Errorf("unknown action %q: must be restart, scale, or rollback", input.Action)
+		return nil, nil, fmt.Errorf("unknown action %q: must be restart, scale, rollback, pause, or resume", input.Action)
+	}
+}
+
+// deploymentPausedResult offers wait_for only after a resume: a paused
+// Deployment starts no rollout, so there is nothing to wait for.
+func deploymentPausedResult(namespace, name string, paused bool) map[string]any {
+	if paused {
+		return map[string]any{
+			"status":  "ok",
+			"message": fmt.Sprintf("Paused rollouts of Deployment %s/%s: pod template changes wait, and rollback is refused, until action=resume", namespace, name),
+		}
+	}
+	return map[string]any{
+		"next":    fmt.Sprintf("wait_for Deployment %s in %s to see any held rollout finish", name, namespace),
+		"status":  "ok",
+		"message": fmt.Sprintf("Resumed rollouts of Deployment %s/%s", namespace, name),
 	}
 }
 

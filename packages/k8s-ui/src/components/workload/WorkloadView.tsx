@@ -36,7 +36,9 @@ import {
   Network,
   Stethoscope,
   Coins,
+  Pause,
 } from 'lucide-react'
+import { isPausedDeployment } from '../../utils/bulk-workload-actions'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { ReadGap } from '../../types/read-coverage'
@@ -80,7 +82,7 @@ import {
   getWorkloadDisplayStatus,
 } from '../resources/resource-utils'
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
-import { rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
+import { isRolloutActivityVisible, rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
 import { isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -885,6 +887,17 @@ export function WorkloadView({
   // A 404 with a cached copy: the object was deleted while this view was
   // open. Everything below that copy describes the past.
   const resourceGone = Boolean(resource) && isFetchError(resourceError) && resourceError.status === 404
+  // A held rollout already reads "Rollout paused" in the status chip. With nothing
+  // pending the chip shows plain health, so this badge is the only paused signal.
+  const statusSaysRolloutPaused = rolloutActivity?.phase === 'paused' && isRolloutActivityVisible(rolloutActivity)
+  const deploymentPausedBadge = !resourceGone && !statusSaysRolloutPaused && isPausedDeployment(resource) && (
+    <Tooltip content="Pod template changes wait until the rollout is resumed">
+      <Badge severity="warning" className="gap-1 whitespace-nowrap">
+        <Pause className="w-3 h-3 shrink-0" aria-hidden />
+        Paused
+      </Badge>
+    </Tooltip>
+  )
   const status = resourceGone
     ? { text: 'Deleted', color: 'status-unknown' }
     : rolloutDisplay?.status ?? getResourceStatus(apiKind, resource)
@@ -1024,6 +1037,7 @@ export function WorkloadView({
                 </span>
               )}
               {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
+              {deploymentPausedBadge}
             </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
               {diagnoseAction}
@@ -1263,6 +1277,7 @@ export function WorkloadView({
               </span>
             )}
             {!resourceGone && crossplaneResource && <CrossplanePauseChip state={getCrossplanePauseState(resource)} />}
+            {deploymentPausedBadge}
             {!resourceGone && statusNote}
           </>
         )

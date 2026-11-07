@@ -835,6 +835,32 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 	return nil
 }
 
+// SetDeploymentPaused sets spec.paused on a Deployment, as kubectl rollout pause
+// and resume do. The API server treats a patch to the value already set as a
+// no-op, so a repeated call succeeds and changes nothing without a prior read.
+func (m *WorkloadManager) SetDeploymentPaused(ctx context.Context, namespace, name string, paused bool) error {
+	if m.dynClient == nil {
+		return fmt.Errorf("dynamic client not initialized")
+	}
+	if m.discovery == nil {
+		return fmt.Errorf("resource discovery not initialized")
+	}
+
+	deploymentGVR, ok := m.discovery.GetGVR("deployments")
+	if !ok {
+		return fmt.Errorf("deployments resource not found")
+	}
+
+	patch := fmt.Sprintf(`{"spec":{"paused":%t}}`, paused)
+	if _, err := m.dynClient.Resource(deploymentGVR).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
+	); err != nil {
+		return fmt.Errorf("failed to patch deployment: %w", err)
+	}
+
+	return nil
+}
+
 // ScaleWorkload scales a Deployment, StatefulSet, or Rollout to the specified replica count.
 func (m *WorkloadManager) ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error {
 	if m.dynClient == nil {

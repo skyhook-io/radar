@@ -98,6 +98,12 @@ interface ResourceActionsBarProps {
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRestarting?: boolean
 
+  // Deployment rollout pause. A host passes both callbacks only when the caller may patch Deployments.
+  onPauseDeployment?: (params: { kind: string; namespace: string; name: string }) => void
+  onResumeDeployment?: (params: { kind: string; namespace: string; name: string }) => void
+  isPausingDeployment?: boolean
+  isResumingDeployment?: boolean
+
   onLoadImages?: (params: { kind: string; namespace: string; name: string }) => Promise<WorkloadImageInventory>
   onSetImages?: (params: { kind: string; namespace: string; name: string; updates: WorkloadImageUpdate[] }) => Promise<unknown>
   isSettingImages?: boolean
@@ -187,6 +193,7 @@ export function ResourceActionsBar({
   renderPortForward,
   onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
+  onPauseDeployment, onResumeDeployment, isPausingDeployment, isResumingDeployment,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onRolloutPromoteFull,
@@ -478,6 +485,17 @@ export function ResourceActionsBar({
                 {isRestarting ? 'Restarting workload' : ''}
               </span>
             </>
+          )}
+          {onPauseDeployment && onResumeDeployment && kind === 'deployments' && isApiGroup(data?.apiVersion, 'apps') && !data?.metadata?.deletionTimestamp && (
+            <DeploymentPauseButton
+              paused={data?.spec?.paused === true}
+              busy={isPausingDeployment || isResumingDeployment}
+              onClick={() => {
+                const target = { kind: resource.kind, namespace: resource.namespace, name: resource.name }
+                if (data?.spec?.paused === true) onResumeDeployment(target)
+                else onPauseDeployment(target)
+              }}
+            />
           )}
           {isRollbackKind && onRollback && (
             <Tooltip content={hasMultipleRevisions ? 'View revision history and rollback' : 'Only one revision exists'} delay={150}>
@@ -812,6 +830,28 @@ export function ResourceActionsBar({
 // ============================================================================
 // FLUX ACTIONS
 // ============================================================================
+
+function DeploymentPauseButton({ paused, busy, onClick }: { paused: boolean; busy?: boolean; onClick: () => void }) {
+  const Icon = paused ? Play : Pause
+  return (
+    <>
+      <Tooltip content={paused ? 'Roll out any pod template changes held while paused' : 'Hold pod template changes until the rollout is resumed'} delay={150}>
+        <button
+          onClick={onClick}
+          disabled={busy}
+          aria-busy={busy}
+          className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+        >
+          <Icon className={`w-3.5 h-3.5 ${busy ? 'animate-pulse' : ''}`} />
+          {paused ? 'Resume rollout' : 'Pause rollout'}
+        </button>
+      </Tooltip>
+      <span className="sr-only" aria-live="polite">
+        {busy ? (paused ? 'Resuming rollout' : 'Pausing rollout') : ''}
+      </span>
+    </>
+  )
+}
 
 function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSource, isSyncing, onSuspend, isSuspending, onResume, isResuming }: {
   resource: SelectedResource; data: any
