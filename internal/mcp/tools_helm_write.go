@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,16 +20,18 @@ import (
 )
 
 type manageHelmInput struct {
-	Action        string         `json:"action" jsonschema:"install, upgrade, rollback, or uninstall"`
-	Namespace     string         `json:"namespace" jsonschema:"release storage namespace (target namespace for install)"`
-	Name          string         `json:"name" jsonschema:"Helm release name"`
-	Chart         string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
-	Repository    string         `json:"repository,omitempty" jsonschema:"install: required configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
-	Version       string         `json:"version,omitempty" jsonschema:"exact chart version; required for install and upgrade"`
-	Values        map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; merge uses the deployed baseline, not necessarily the latest values read; replace_values=true resets overrides; no redacted output or literal credentials"`
-	ReplaceValues bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false merges maps and refuses hidden-credential container replacement; true drops omitted overrides, including hidden credentials"`
-	Revision      int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
-	Confirm       string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`
+	Action           string         `json:"action" jsonschema:"install, upgrade, rollback, or uninstall"`
+	Namespace        string         `json:"namespace" jsonschema:"release storage namespace (target namespace for install)"`
+	Name             string         `json:"name" jsonschema:"Helm release name"`
+	Chart            string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
+	Repository       string         `json:"repository,omitempty" jsonschema:"install: required configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
+	Version          string         `json:"version,omitempty" jsonschema:"exact chart version; required for install; upgrade omission keeps the stored version only when latest and deployed history agree"`
+	DryRun           bool           `json:"dry_run,omitempty" jsonschema:"upgrade only: render a non-mutating advisory preview with the same values merge and caller lookups; default false executes"`
+	ExpectedRevision int            `json:"expected_revision,omitempty" jsonschema:"upgrade only: refuse if latest release revision differs; use revision from get_helm_release or currentRevision from preview; not an atomic lock"`
+	Values           map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; merge uses the deployed baseline, not necessarily the latest values read; replace_values=true resets overrides; no redacted output or literal credentials"`
+	ReplaceValues    bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false merges maps and refuses hidden-credential container replacement; true drops omitted overrides, including hidden credentials"`
+	Revision         int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
+	Confirm          string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`
 }
 
 func (in manageHelmInput) validate() error {
@@ -44,9 +47,6 @@ func (in manageHelmInput) validate() error {
 			return fmt.Errorf("install requires chart, repository and version")
 		}
 	case "upgrade":
-		if in.Version == "" {
-			return fmt.Errorf("upgrade requires version; configure and confirm the release's source in Radar first if it is unknown")
-		}
 	case "rollback":
 		if in.Revision <= 0 {
 			return fmt.Errorf("rollback requires a positive revision from get_helm_release include=history")
@@ -66,6 +66,9 @@ func (in manageHelmInput) validate() error {
 	}
 	if in.Action != "uninstall" && in.Confirm != "" {
 		return fmt.Errorf("confirm is only valid for uninstall")
+	}
+	if in.ExpectedRevision < 0 || (in.Action != "upgrade" && (in.DryRun || in.ExpectedRevision != 0)) {
+		return fmt.Errorf("dry_run and a positive expected_revision are only valid for upgrade")
 	}
 	if in.Version != "" {
 		if _, err := semver.StrictNewVersion(strings.TrimPrefix(in.Version, "v")); err != nil {
@@ -160,27 +163,68 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 	}
 	audit.Outcome = "failed_or_unconfirmed"
 	var err error
+	var upgrade *helm.MCPUpgradeResult
 	switch in.Action {
 	case "install":
 		_, err = client.InstallFreshAsUser(&helm.InstallRequest{ReleaseName: in.Name, Namespace: in.Namespace, ChartName: in.Chart, Repository: in.Repository, Version: in.Version, Values: in.Values}, user)
 	case "upgrade":
-		if !in.ReplaceValues {
-			err = client.UpgradeWithOverridesAsUser(in.Namespace, in.Name, in.Version, in.Repository, in.Values, user)
-		} else {
-			err = client.UpgradeWithValuesProgressAsUser(in.Namespace, in.Name, in.Version, in.Repository, in.Values, user, nil)
-		}
+		upgrade, err = client.UpgradeForMCPAsUser(helm.MCPUpgradeRequest{Namespace: in.Namespace, Name: in.Name, Version: in.Version, Repository: in.Repository, Values: in.Values, ReplaceValues: in.ReplaceValues, DryRun: in.DryRun, ExpectedRevision: in.ExpectedRevision}, user)
 	case "rollback":
 		err = client.RollbackAsUser(in.Namespace, in.Name, in.Revision, user)
 	case "uninstall":
 		err = client.UninstallAsUser(in.Namespace, in.Name, user)
 	}
 	if err != nil {
+		var history *helm.ReleaseHistoryError
+		if errors.As(err, &history) {
+			if history.Status == string(release.StatusFailed) || history.Status == string(release.StatusSuperseded) {
+				return nil, nil, fmt.Errorf("%w; inspect get_helm_release include=history,values, then use action=upgrade with reviewed overrides if the stored chart and source are usable; install never recovers existing history", err)
+			}
+			return nil, nil, fmt.Errorf("%w; use a new release name or ask an operator to recover retained history; upgrade cannot reinstall an uninstalled release", err)
+		}
+		if in.DryRun {
+			return nil, nil, fmt.Errorf("Helm upgrade preview failed without applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", err)
+		}
+		var preflight *helm.UpgradePreflightError
+		if errors.As(err, &preflight) {
+			return nil, nil, fmt.Errorf("Helm upgrade refused before applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", err)
+		}
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
+	}
+	if in.DryRun {
+		audit.Outcome = "preview"
+		return helmUpgradePreviewResult(in, upgrade)
 	}
 	audit.Outcome = "completed"
 	message := "Helm operation completed. Use get_helm_release and wait_for to verify workload readiness; completion does not prove application behavior."
 	if in.Action == "uninstall" {
 		message = "Helm uninstall completed. Inspect retained resources and hooks; use wait_for condition=deleted for workloads expected to disappear. A missing Helm release alone does not prove all resources or data were deleted."
 	}
-	return toJSONResult(map[string]any{"action": in.Action, "state": "completed", "namespace": in.Namespace, "name": in.Name, "message": message})
+	result := map[string]any{"action": in.Action, "state": "completed", "namespace": in.Namespace, "name": in.Name, "message": message}
+	if upgrade != nil {
+		result["chartVersion"], result["revision"], result["baselineRevision"] = upgrade.ChartVersion, upgrade.Revision, upgrade.BaselineRevision
+	}
+	return toJSONResult(result)
+}
+
+func helmUpgradePreviewResult(in manageHelmInput, preview *helm.MCPUpgradeResult) (*mcp.CallToolResult, any, error) {
+	result := map[string]any{"action": "upgrade", "state": "preview", "namespace": in.Namespace, "name": in.Name,
+		"chartVersion": preview.ChartVersion, "currentRevision": preview.Revision - 1, "baselineRevision": preview.BaselineRevision,
+		"valuesRedacted": true, "parseErrors": preview.ParseErrors,
+		"message": "Advisory preview only; nothing was applied. Values compare stored overrides after merging, not all chart defaults; hidden changes may be redacted. Resource identities compare release manifests, exclude hooks and are incomplete when parsing or output is truncated; removal does not guarantee deletion (retention policies apply). Rendering uses caller-authorized lookups; hooks, admission, future lookups/random values and readiness are not verified. To execute, set dry_run=false with the same inputs and expected_revision=currentRevision. This precondition is not a lock against other writers."}
+	buf := &cappedBuffer{limit: 16 * 1024}
+	_, _ = buf.Write([]byte(preview.ValuesDiff))
+	addTruncation(result, "valuesDiff", buf)
+	for key, refs := range map[string][]helm.ResourceRef{"added": preview.Added, "changed": preview.Changed, "removed": preview.Removed} {
+		result[key+"Count"] = len(refs)
+		result[key+"Truncated"] = len(refs) > 100
+		if len(refs) > 100 {
+			refs = refs[:100]
+		}
+		if refs == nil {
+			refs = []helm.ResourceRef{}
+		}
+		result[key] = refs
+	}
+	return toJSONResult(result)
 }

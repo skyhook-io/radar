@@ -658,6 +658,10 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		return nil, fmt.Errorf("failed to get helm release %s/%s: %w", namespace, name, err)
 	}
 
+	if rel.Chart == nil || rel.Chart.Metadata == nil || rel.Info == nil {
+		return nil, fmt.Errorf("release has no usable stored chart or status; ask an operator to recover it")
+	}
+
 	// Get release history
 	historyAction := action.NewHistory(actionConfig)
 	historyAction.Max = releaseHistoryMax
@@ -2572,57 +2576,100 @@ func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, tar
 }
 
 func (c *Client) upgradeWithValuesMode(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, replace bool, sendProgress func(phase, message, detail string)) error {
-	getAction := action.NewGet(actionConfig)
-	rel, err := getAction.Run(name)
-	if err != nil {
-		return fmt.Errorf("failed to get current release: %w", err)
-	}
+	_, _, err := c.runValuesUpgrade(actionConfig, name, targetVersion, repositoryName, newValues, valuesUpgradeOptions{replace: replace}, sendProgress)
+	return err
+}
 
-	if !replace {
+type valuesUpgradeOptions struct {
+	replace          bool
+	dryRun           bool
+	allowStoredChart bool
+	expectedRevision int
+}
+
+func (c *Client) runValuesUpgrade(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, options valuesUpgradeOptions, sendProgress func(phase, message, detail string)) (before, after *release.Release, err error) {
+	started := false
+	defer func() {
+		if err != nil && !started {
+			err = &UpgradePreflightError{Err: err}
+		}
+	}()
+
+	op, err := releaseContext(actionConfig, name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read release before upgrade: %w", err)
+	}
+	rel := op.Latest
+	if options.expectedRevision != 0 && rel.Version != options.expectedRevision {
+		return nil, nil, fmt.Errorf("release is now revision %d, expected %d; inspect it and preview again", rel.Version, options.expectedRevision)
+	}
+	if !options.replace {
 		if newValues == nil {
 			newValues = map[string]any{}
 		}
-		releaseCtx, err := releaseContext(actionConfig, name)
-		if err != nil {
-			return err
-		}
-		if err := validateOverrideReplacement(releaseCtx.Baseline.Config, newValues); err != nil {
-			return err
+		if err := validateOverrideReplacement(op.Baseline.Config, newValues); err != nil {
+			return nil, nil, err
 		}
 	}
+	if rel.Chart == nil || rel.Chart.Metadata == nil || op.Baseline.Chart == nil || op.Baseline.Chart.Metadata == nil {
+		return nil, nil, fmt.Errorf("release has no usable stored chart; ask an operator to recover it")
+	}
+	if failedSourceChange(op) {
+		return nil, nil, errSourceRequired
+	}
+	if targetVersion == "" {
+		if rel.Chart.Metadata.Version != op.Baseline.Chart.Metadata.Version || chartSourceBinding(rel.Chart) != chartSourceBinding(op.Baseline.Chart) {
+			return nil, nil, fmt.Errorf("latest revision %d uses chart %s with different version or content from deployed baseline revision %d (%s); choose an exact version to retry, or explicitly rollback to revision %d before editing values", rel.Version, rel.Chart.Metadata.Version, op.Baseline.Version, op.Baseline.Chart.Metadata.Version, op.Baseline.Version)
+		}
+		targetVersion = rel.Chart.Metadata.Version
+	}
 
-	source, sourceErr := c.normalUpgradeSource(actionConfig, rel, repositoryName)
-	if sourceErr != nil {
-		return sourceErr
+	var source *ChartSourceCandidate
+	if options.allowStoredChart && targetVersion == rel.Chart.Metadata.Version && repositoryName == "" && validateStoredChartDependencyBodies(rel.Chart, rel, op.Baseline) == nil {
+		if confirmed, ok := confirmedChartSource(rel); ok {
+			source = confirmed
+		}
+	} else {
+		source, err = c.normalUpgradeSource(actionConfig, rel, repositoryName)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	targetChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
-	upgradeAction.Labels = boundChartSourceLabels(rel.Labels, source, targetChart)
-	upgradeAction.ResetValues = replace
-	upgradeAction.ResetThenReuseValues = !replace // Helm overlays supplied values on stored overrides, then new chart defaults.
+	if source != nil {
+		upgradeAction.Labels = boundChartSourceLabels(rel.Labels, source, targetChart)
+	}
+	upgradeAction.ResetValues = options.replace
+	upgradeAction.ResetThenReuseValues = !options.replace
+	if options.dryRun {
+		upgradeAction.DryRun = true
+		upgradeAction.DryRunOption = "server"
+	}
 
 	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", rel.Chart.Metadata.Name, targetVersion), "")
 
 	if err := releaseSourceUnchanged(actionConfig, rel); err != nil {
-		return err
+		return nil, nil, err
 	}
-	_, err = upgradeAction.Run(name, targetChart, newValues)
+	started = true
+	next, err := upgradeAction.Run(name, targetChart, newValues)
 	if err != nil {
-		return fmt.Errorf("upgrade failed: %w", err)
+		return nil, nil, fmt.Errorf("upgrade failed: %w", err)
 	}
 
 	sendProgress("complete", fmt.Sprintf("Successfully upgraded %s to %s", name, targetVersion), "")
-	return nil
+	return op.Baseline, next, nil
 }
 
 func (c *Client) chartForUpgradeTarget(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) (*chart.Chart, error) {
@@ -2652,9 +2699,18 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 		targetVersion = currentVersion
 	}
 
+	evidence := []*release.Release{rel}
+	if actionConfig != nil {
+		op, err := releaseReadContext(actionConfig, rel.Name)
+		if err != nil {
+			return nil, err
+		}
+		evidence = append(evidence, op.Baseline)
+	}
+
 	reconstructingStoredChart := false
 	if targetVersion == currentVersion {
-		if err := validateChartDependencyBodies(rel.Chart); err == nil {
+		if err := validateStoredChartDependencyBodies(rel.Chart, evidence...); err == nil {
 			return rel.Chart, nil
 		}
 		reconstructingStoredChart = true
@@ -2674,6 +2730,9 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 		return nil, fmt.Errorf("cannot use chart %s version %s: the package declares subcharts but does not include them, so rendering it would delete the resources those subcharts created. The chart needs fixing where it is published: %w", rel.Chart.Metadata.Name, targetVersion, err)
 	}
 	if reconstructingStoredChart {
+		if err := validateStoredChartDependencyBodies(loaded, evidence...); err != nil {
+			return nil, fmt.Errorf("reconstructed chart still lacks previously rendered subcharts: %w", err)
+		}
 		if err := storedChartMatchesReconstructed(rel.Chart, loaded); err != nil {
 			return nil, fmt.Errorf("cannot edit values for this release: Radar found %s version %s in a configured Helm repository, but that copy does not match the chart this release was installed from, so applying it could replace your release with a different chart. Add the repository this release came from so Radar can pick the right one: %w", rel.Chart.Metadata.Name, targetVersion, err)
 		}
@@ -2770,6 +2829,63 @@ func canonicalMatch(label string, stored, loaded any) error {
 	}
 	if !bytes.Equal(storedJSON, loadedJSON) {
 		return fmt.Errorf("%s differ from the installed release", label)
+	}
+	return nil
+}
+
+// validateStoredChartDependencyBodies also checks rendered provenance: Helm permits
+// undeclared vendored subcharts, but release storage drops all child chart bodies.
+// Both latest and deployed manifests matter after a failed upgrade.
+func validateStoredChartDependencyBodies(ch *chart.Chart, releases ...*release.Release) error {
+	if err := validateChartDependencyBodies(ch); err != nil {
+		return err
+	}
+	paths := []string{}
+	for _, rel := range releases {
+		if rel == nil {
+			continue
+		}
+		// A deliberate version change may remove subcharts. Evidence from another
+		// version cannot require the target chart to keep those dependencies.
+		if rel.Chart != nil && rel.Chart.Metadata != nil && rel.Chart.Metadata.Version != ch.Metadata.Version {
+			continue
+		}
+		for _, line := range strings.Split(rel.Manifest, "\n") {
+			if strings.HasPrefix(line, "# Source: ") {
+				paths = append(paths, strings.TrimSpace(strings.TrimPrefix(line, "# Source: ")))
+			}
+		}
+		for _, hook := range rel.Hooks {
+			if hook != nil {
+				paths = append(paths, hook.Path)
+			}
+		}
+	}
+	for _, source := range paths {
+		parts := strings.Split(source, "/")
+		node := ch
+		for i := 1; i+1 < len(parts) && parts[i] == "charts"; i += 2 {
+			var child *chart.Chart
+			for _, candidate := range node.Dependencies() {
+				if candidate == nil || candidate.Metadata == nil {
+					continue
+				}
+				matches := candidate.Metadata.Name == parts[i+1]
+				for _, declared := range node.Metadata.Dependencies {
+					if declared != nil && declared.Alias == parts[i+1] && declared.Name == candidate.Metadata.Name {
+						matches = true
+					}
+				}
+				if matches {
+					child = candidate
+					break
+				}
+			}
+			if child == nil {
+				return fmt.Errorf("previously rendered dependency body %q is missing", strings.Join(parts[:i+2], "/"))
+			}
+			node = child
+		}
 	}
 	return nil
 }

@@ -171,13 +171,16 @@ Existing local Helm flows still accept repositories that omit checksums. Prepare
 
 ### Agent operations
 
-External MCP clients can use `manage_helm` to install a dependency, upgrade a release
-from its confirmed saved source, roll back to an explicit revision, or preview and
+External MCP clients can use `manage_helm` to install a dependency, edit values using
+a complete stored chart or upgrade from a confirmed saved source, roll back to an explicit revision, or preview and
 confirm an uninstall. It uses the same Helm permission preflight and caller identity
 as the UI. On upgrade, supplied `values` merge into stored overrides on the server;
 omitted map keys are preserved. Lists replace as whole units; null and type changes
 can remove values. Partial overrides cannot replace a container with hidden credentials. `replace_values: true` explicitly
 replaces all overrides. Never feed redacted values from a read back into a write.
+Use `dry_run: true` for a matching advisory upgrade preview and `expected_revision`
+to reject an observed stale revision. Stored-chart reads, source limits and preview
+semantics are documented in [MCP Helm lifecycle](mcp.md).
 See [MCP](mcp.md#write-tools) for the input and confirmation contract.
 
 MCP installs require a configured repository and refuse any existing release history.

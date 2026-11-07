@@ -389,7 +389,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
-			"Request values, history, operations, or " +
+			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=notes for bounded untrusted notes. Request values, history, operations, or " +
 			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
 			"manage_helm merges deployed values, which may differ after failure; check history/values_diff.",
 		Annotations: readOnly,
@@ -613,7 +613,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	if !k8s.ForceDisableHelmWrite {
 		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 			Name:        "manage_helm",
-			Description: "Install/upgrade/rollback/uninstall native Helm as the caller. Install/upgrade need an exact version and preconfigured source. Install refuses existing history. Upgrade uses the confirmed source and last deployed overrides (latest failed/superseded if none deployed). Latest get_helm_release values may differ: inspect history/values_diff after failure. Maps merge, lists replace; hidden-credential container replacement is refused unless replace_values=true replaces ALL overrides. Change GitOps dependencies in git. Uninstall without confirm previews resources; return the reviewed token to delete. Coordinate writers: Helm has no atomic revision-conditioned uninstall. Hooks may run; operations take minutes and can outlive client timeouts. Inspect get_helm_release before retrying; use wait_for for readiness. Never pass literal credentials.",
+			Description: "Install/upgrade/rollback/uninstall native Helm as the caller. Install needs an exact version and configured source; refuses existing history. Upgrade can reuse a complete stored chart without a source; version omission requires latest/deployed agreement. Other upgrades need a confirmed configured source. dry_run previews with identical merge rules; expected_revision checks for stale edits, not an atomic lock. Upgrade merges last deployed overrides (latest failed/superseded if none deployed). Latest get_helm_release values may differ: inspect history/values_diff after failure. Maps merge, lists replace; hidden-credential container replacement is refused unless replace_values=true replaces ALL overrides. Change GitOps dependencies in git. Uninstall without confirm previews resources; return the reviewed token to delete. Coordinate writers: Helm has no atomic revision-conditioned uninstall. Hooks may run; operations take minutes and can outlive client timeouts. Inspect get_helm_release before retrying; use wait_for for readiness. Never pass literal credentials.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
 		}, logToolCall("manage_helm", handleManageHelm))
 	}

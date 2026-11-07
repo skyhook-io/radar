@@ -20,17 +20,6 @@ func (c *Client) InstallFreshAsUser(req *InstallRequest, user *pkgauth.User) (*H
 	return c.installFreshWith(cfg, req)
 }
 
-// UpgradeWithOverridesAsUser overlays values onto the stored user overrides on
-// the server. The caller never has to round-trip redacted credentials.
-// An empty repositoryName uses the release's confirmed saved source.
-func (c *Client) UpgradeWithOverridesAsUser(namespace, name, targetVersion, repositoryName string, values map[string]any, user *pkgauth.User) error {
-	cfg, err := c.getActionConfigForUser(namespace, user)
-	if err != nil {
-		return err
-	}
-	return c.upgradeWithValuesMode(cfg, name, targetVersion, repositoryName, values, false, progressSender(nil))
-}
-
 // validateOverrideReplacement prevents a partial override from replacing a
 // container whose current contents are hidden from an MCP client. Maps merge,
 // but Helm replaces lists and null/type-changing values as whole units.
