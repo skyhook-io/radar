@@ -386,6 +386,65 @@ items: [42]`} {
 	}
 }
 
+func TestManifestCommentDocumentsAndTypedListIdentity(t *testing.T) {
+	for _, manifest := range []string{"# Source: fixture/templates/disabled.yaml\n# Copyright fixture", "null", "~"} {
+		objects, failures := parseManifestResourceObjects(manifest, "default")
+		if len(objects) != 0 || failures != 0 {
+			t.Fatalf("empty document counted incomplete: %q: %v %d", manifest, objects, failures)
+		}
+	}
+	for _, tc := range []struct {
+		name, fields string
+		wantErrors   int
+	}{
+		{"inherited", "", 0},
+		{"explicit", "  kind: ConfigMap\n  apiVersion: v1\n", 0},
+		{"partial kind", "  kind: ConfigMap\n", 1},
+		{"partial version", "  apiVersion: v1\n", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objects, failures := parseManifestResourceObjects("apiVersion: v1\nkind: ConfigMapList\nitems:\n- metadata: {name: inherited}\n"+tc.fields, "default")
+			if failures != tc.wantErrors {
+				t.Fatalf("failures=%d want %d", failures, tc.wantErrors)
+			}
+			if tc.wantErrors == 0 && (len(objects) != 1 || objects[0].Ref.Kind != "ConfigMap" || objects[0].Ref.APIVersion != "v1" || objects[0].Ref.Namespace != "default") {
+				t.Fatalf("wrong inherited identity: %+v", objects)
+			}
+		})
+	}
+	objects, failures := parseManifestResourceObjects("apiVersion: v1\nkind: List\nitems:\n- metadata: {name: ambiguous}\n", "default")
+	if failures != 1 || len(objects) != 0 {
+		t.Fatalf("generic List invented an item kind: %+v %d", objects, failures)
+	}
+}
+
+func TestMCPPreviewMatchesIdentityAcrossAPIVersions(t *testing.T) {
+	ch := &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}}
+	manifest := "apiVersion: autoscaling/v2beta2\nkind: HorizontalPodAutoscaler\nmetadata: {name: app, namespace: default}\nspec: {minReplicas: 1}\n"
+	for _, tc := range []struct {
+		name, next string
+		changed    bool
+	}{
+		{"version", strings.ReplaceAll(manifest, "autoscaling/v2beta2", "autoscaling/v2"), true},
+		{"group", strings.ReplaceAll(manifest, "autoscaling/v2beta2", "other.example/v2"), false},
+		{"namespace", strings.ReplaceAll(manifest, "namespace: default", "namespace: other"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := mcpUpgradeResult(&release.Release{Chart: ch, Version: 1, Namespace: "default", Manifest: manifest}, &release.Release{Chart: ch, Version: 2, Namespace: "default", Manifest: tc.next}, true)
+			if err != nil || got.ParseErrors != 0 {
+				t.Fatalf("preview failed: %+v %v", got, err)
+			}
+			if tc.changed {
+				if len(got.Added) != 0 || len(got.Removed) != 0 || len(got.Changed) != 1 || got.Changed[0].APIVersion != "autoscaling/v2" {
+					t.Fatalf("API version change misclassified: %+v", got)
+				}
+			} else if len(got.Added) != 1 || len(got.Removed) != 1 || len(got.Changed) != 0 {
+				t.Fatalf("different identity collapsed: %+v", got)
+			}
+		})
+	}
+}
+
 func TestMCPNotesDiffRedactsBeforeAddingLinePrefixes(t *testing.T) {
 	secrets := fake.NewClientset().CoreV1().Secrets("default")
 	store := driver.NewSecrets(secrets)

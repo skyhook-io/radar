@@ -926,6 +926,8 @@ func (c *Client) GetNotesDiffAsUser(namespace, name string, revision1, revision2
 
 // GetRedactedNotesDiffAsUser masks each revision before adding diff prefixes.
 // redact must mask known sensitive values from a notes string; nil is refused.
+// It receives raw values, first computed then user-supplied for each revision,
+// and must accept already-masked text. A values-read error returns no diff.
 func (c *Client) GetRedactedNotesDiffAsUser(namespace, name string, revision1, revision2 int, user *pkgauth.User, redact func(string, map[string]any) string) (*NotesDiff, error) {
 	if redact == nil {
 		return nil, fmt.Errorf("notes redactor is required")
@@ -1844,7 +1846,14 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 					parseErrorCount++
 					continue
 				}
-				appendObject(&unstructured.Unstructured{Object: child})
+				itemObject := &unstructured.Unstructured{Object: child}
+				// Match Kubernetes' typed-list decoder; partially specified types
+				// stay invalid instead of having an inferred field filled in.
+				if itemObject.GetKind() == "" && itemObject.GetAPIVersion() == "" {
+					itemObject.SetKind(strings.TrimSuffix(obj.GetKind(), "List"))
+					itemObject.SetAPIVersion(obj.GetAPIVersion())
+				}
+				appendObject(itemObject)
 			}
 			return
 		}
@@ -1877,6 +1886,11 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 		encoded, err := yaml.YAMLToJSON([]byte(m))
 		if err != nil {
 			parseErrorCount++
+			continue
+		}
+		// Helm's resource builder skips null documents, including templates
+		// that render only comments when their resource condition is false.
+		if string(encoded) == "null" {
 			continue
 		}
 		var obj unstructured.Unstructured

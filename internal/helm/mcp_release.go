@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"helm.sh/helm/v3/pkg/chart"
@@ -72,14 +73,34 @@ func mcpUpgradeResult(before, after *release.Release, dryRun bool) (*MCPUpgradeR
 	out.ValuesDiff = aicontext.RedactSecrets(out.ValuesDiff)
 	left, leftErrors := parseManifestResourceObjects(before.Manifest, before.Namespace)
 	right, rightErrors := parseManifestResourceObjects(after.Manifest, after.Namespace)
-	removed, added, common := diffResourceRefs(resourceRefsFromRendered(left), resourceRefsFromRendered(right))
-	leftMap, rightMap := renderedResourceMap(left), renderedResourceMap(right)
-	out.Removed, out.Added, out.ParseErrors = removed, added, leftErrors+rightErrors
-	for _, ref := range common {
+	// Helm matches live resources without API version: changing the served
+	// version of the same group/kind/name updates it rather than deleting it.
+	identity := func(r renderedResource) string {
+		return resourceid.ResourceKey(r.Object.GroupVersionKind().Group, r.Ref.Kind, r.Ref.Namespace, r.Ref.Name)
+	}
+	leftMap := make(map[string]renderedResource, len(left))
+	for _, r := range left {
+		leftMap[identity(r)] = r
+	}
+	rightKeys := make(map[string]bool, len(right))
+	out.ParseErrors = leftErrors + rightErrors
+	for _, r := range right {
+		key := identity(r)
+		rightKeys[key] = true
+		old, exists := leftMap[key]
+		if !exists {
+			out.Added = append(out.Added, r.Ref)
+			continue
+		}
 		// Compare complete rendered objects, not the timeline's kind-specific summary.
 		// Metadata is part of the proposed change, including helm.sh/chart labels.
-		if !reflect.DeepEqual(leftMap[resourceRefKey(ref)].Object.Object, rightMap[resourceRefKey(ref)].Object.Object) {
-			out.Changed = append(out.Changed, ref)
+		if !reflect.DeepEqual(old.Object.Object, r.Object.Object) {
+			out.Changed = append(out.Changed, r.Ref)
+		}
+	}
+	for _, r := range left {
+		if !rightKeys[identity(r)] {
+			out.Removed = append(out.Removed, r.Ref)
 		}
 	}
 	return out, nil

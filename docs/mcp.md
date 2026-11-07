@@ -1397,7 +1397,7 @@ workload and runs no hooks. It does not prove admission, hook success or readine
 subsequent lookups and random template output may differ. The response names the
 resolved `chartVersion`, `currentRevision`, and `baselineRevision`, with a redacted
 `valuesDiff` (stored overrides, not all effective defaults), plus `added`, `changed`
-and `removed` resource identities. `changed` compares complete rendered objects, including labels and annotations; changing `helm.sh/chart` can therefore mark every chart object changed. Kubernetes List documents are expanded. `valuesRedacted: true` marks the masked override comparison. It returns no rendered manifests. Each resource
+and `removed` resource identities. `changed` compares complete rendered objects, including labels and annotations; changing `helm.sh/chart` can therefore mark every chart object changed. Kubernetes List documents are expanded; comment-only documents are ignored. Resources match by API group, kind, namespace and name, so an API-version-only change appears in `changed` with the proposed version. `valuesRedacted: true` marks the masked override comparison. It returns no rendered manifests. Each resource
 list is capped at 100 and has a `Count` and `Truncated` companion; `parseErrors`
 signals incomplete comparison. Values diffs have a 16 KiB head/tail budget and
 truncation metadata. Hooks are outside this comparison; retained resources may
