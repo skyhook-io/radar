@@ -24,7 +24,7 @@ function row(overrides: Partial<AppDeployRow>): AppDeployRow {
 }
 
 function deploys(rows: AppDeployRow[], overrides: Partial<AppDeploys> = {}): AppDeploys {
-  return { rows, partial: false, partialReasons: [], stillLoading: [], ...overrides }
+  return { rows, workloadCount: 1, partial: false, partialReasons: [], stillLoading: [], ...overrides }
 }
 
 describe('ApplicationDeploys', () => {
@@ -129,6 +129,19 @@ describe('ApplicationDeploys', () => {
     expect(text()).not.toContain('0/0')
   })
 
+  it('reads a superseded StatefulSet revision, which has no desired count, as scaled down', async () => {
+    await renderDeploys({ deploys: deploys([row({ ready: 0, desired: undefined })]) })
+
+    expect(text()).toContain('Scaled down')
+    expect(text()).not.toContain('0 ready')
+  })
+
+  it('still shows a revision that wants pods and has none ready', async () => {
+    await renderDeploys({ deploys: deploys([row({ ready: 0, desired: 3 })]) })
+
+    expect(text()).toContain('0/3 ready')
+  })
+
   it('shows no Live badge on source rows', async () => {
     await renderDeploys({
       deploys: deploys([row({ id: 'h', source: 'helm', revision: undefined, version: 'chart-1.2', via: 'Helm revision 7', live: 'unknown' })]),
@@ -178,14 +191,20 @@ describe('ApplicationDeploys', () => {
     expect(text()).not.toContain(workload.name)
 
     await renderDeploys({
-      deploys: deploys([row({ id: 'a' }), row({ id: 'b', workload: { ...workload, name: 'worker' } })]),
+      deploys: deploys([row({ id: 'a' }), row({ id: 'b', workload: { ...workload, name: 'worker' } })], { workloadCount: 2 }),
     })
+    expect(text()).toContain(workload.name)
+  })
+
+  it('names the workload while another one in the app has no rows yet', async () => {
+    await renderDeploys({ deploys: deploys([row({})], { workloadCount: 2, stillLoading: ['Still loading revisions for 1 workload.'] }) })
+
     expect(text()).toContain(workload.name)
   })
 
   it('names the namespace when an app spans several', async () => {
     await renderDeploys({
-      deploys: deploys([row({ id: 'a' }), row({ id: 'b', workload: { ...workload, name: 'worker' } })]),
+      deploys: deploys([row({ id: 'a' }), row({ id: 'b', workload: { ...workload, name: 'worker' } })], { workloadCount: 2 }),
     })
     expect(text()).not.toContain(`prod/${workload.name}`)
 
@@ -193,7 +212,7 @@ describe('ApplicationDeploys', () => {
       deploys: deploys([
         row({ id: 'a', workload: { ...workload, namespace: 'prod', name: 'api' } }),
         row({ id: 'b', workload: { ...workload, namespace: 'staging', name: 'api' } }),
-      ]),
+      ], { workloadCount: 2 }),
     })
     expect(text()).toContain('prod/api')
     expect(text()).toContain('staging/api')

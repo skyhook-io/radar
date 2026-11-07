@@ -68,7 +68,7 @@ function RowBadges({ row, liveUnknownTip }: { row: AppDeployRow; liveUnknownTip:
 
 function readyLabel(row: AppDeployRow): string | undefined {
   if (row.ready === undefined) return undefined;
-  if (row.ready === 0 && row.desired === 0) return "Scaled down";
+  if (row.ready === 0 && !row.desired) return "Scaled down";
   return `${row.desired === undefined ? row.ready : `${row.ready}/${row.desired}`} ready`;
 }
 
@@ -201,10 +201,7 @@ export function ApplicationDeploys({
   if (!deploys) return <PaneLoader label="Loading deploys…" className="flex-1" />;
 
   const rows = deploys.rows;
-  const workloadCount = new Set(
-    rows.filter((row) => row.source === "revision").map((row) => `${row.workload.kind}/${row.workload.namespace}/${row.workload.name}`),
-  ).size;
-  const showWorkload = workloadCount > 1;
+  const showWorkload = deploys.workloadCount > 1;
   const showNamespace = new Set(rows.filter((row) => row.source === "revision").map((row) => row.workload.namespace)).size > 1;
   const liveUnknown = rows.some((row) => row.source === "revision" && row.live === "unknown" && !row.stale);
   const liveUnknownTip = deploys.agentOutdated ? OUTDATED_AGENT_NOTE : UNKNOWN_LIVE_TIP;

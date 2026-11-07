@@ -1176,11 +1176,12 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 			podHash = cr.GetName()
 		}
 		revisions = append(revisions, WorkloadRevision{
-			Number:    revNum,
-			CreatedAt: cr.GetCreationTimestamp().Time,
-			Image:     image,
-			Template:  templateStr,
-			PodHash:   podHash,
+			Number:      revNum,
+			CreatedAt:   cr.GetCreationTimestamp().Time,
+			Image:       image,
+			Template:    templateStr,
+			PodHash:     podHash,
+			ChangeCause: cr.GetAnnotations()["kubernetes.io/change-cause"],
 		})
 	}
 
