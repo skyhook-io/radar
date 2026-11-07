@@ -26,7 +26,7 @@ const CAUSE_TIP =
 const REPEATED_CAUSE_TIP =
   "The revision before this one has the same note. Kubernetes copies it to each new revision, so it may not describe this one.";
 const UNKNOWN_LIVE_TIP =
-  "Radar can't tell whether this revision's pods are serving. A StatefulSet or DaemonSet mid-update has no per-revision split, and a Rollout's canary or preview pods may not be taking traffic.";
+  "Radar can't tell whether this revision's pods are serving. A StatefulSet or DaemonSet mid-update has no per-revision split, and a Rollout's canary pods may not be taking traffic.";
 const OUTDATED_AGENT_NOTE =
   "The Radar agent on this cluster needs upgrading to report which revision's pods are serving.";
 
