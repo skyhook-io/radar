@@ -172,12 +172,12 @@ func rolloutPodSelector(selector *metav1.LabelSelector) *metav1.LabelSelector {
 // GetContainersForPod returns container names to target for log collection.
 // A non-empty selectedContainer is validated against the Pod's containers, and
 // against its init containers when includeInit is set. An empty one means every
-// main container and, with includeInit, each init container that has
-// run while the Pod is still initializing: until then the main containers have
-// no output, and the init container is usually the reason the Pod is stuck. A
-// native sidecar counts only until it has started: one that started isn't
-// blocking initialization and keeps running after it, where the default
-// selection no longer includes it.
+// main container and, with includeInit, each init container that is failing
+// while the Pod is still initializing: the main containers have no output then,
+// and the failure is why the Pod is stuck. Init steps that succeeded or are
+// still making progress are left out, so routine startup during a rollout
+// doesn't flood the merged view; they stay selectable by name. A native sidecar
+// that has started isn't blocking initialization and is left out too.
 func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit bool) []string {
 	if selectedContainer != "" {
 		for _, c := range pod.Spec.Containers {
@@ -206,7 +206,7 @@ func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit 
 			if sidecars[status.Name] && status.Started != nil && *status.Started {
 				continue
 			}
-			if status.State.Running != nil || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil {
+			if initContainerFailing(status, sidecars[status.Name]) {
 				containers = append(containers, status.Name)
 			}
 		}
@@ -215,6 +215,23 @@ func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit 
 		containers = append(containers, c.Name)
 	}
 	return containers
+}
+
+// initContainerFailing reports an init container whose last run failed, or
+// that is backing off or retrying after one. A run fails when it exits non-zero
+// or is OOM-killed, as the kubelet judges it; a native sidecar is restarted
+// whatever its exit code, so any exit before it has started counts.
+func initContainerFailing(status corev1.ContainerStatus, sidecar bool) bool {
+	failed := func(run *corev1.ContainerStateTerminated) bool {
+		return run != nil && (sidecar || run.ExitCode != 0 || run.Reason == "OOMKilled")
+	}
+	if terminated := status.State.Terminated; terminated != nil {
+		return failed(terminated)
+	}
+	if waiting := status.State.Waiting; waiting != nil && waiting.Reason == "CrashLoopBackOff" {
+		return true
+	}
+	return failed(status.LastTerminationState.Terminated)
 }
 
 func podInitialized(pod *corev1.Pod) bool {

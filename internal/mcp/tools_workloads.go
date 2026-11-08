@@ -268,8 +268,8 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 }
 
 // workloadPodsHaveContainer accepts every container a log read can target,
-// including init containers, which the default selection returns while a Pod
-// is still initializing.
+// including init containers, which the default selection returns while one is
+// failing during initialization.
 func workloadPodsHaveContainer(pods []*corev1.Pod, name string) bool {
 	for _, pod := range pods {
 		if len(k8s.GetContainersForPod(pod, name, true)) > 0 {
