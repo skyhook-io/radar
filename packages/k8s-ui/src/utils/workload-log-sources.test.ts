@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkloadPodContainerInfo, WorkloadPodInfo } from '../types/core'
-import { initContainerNames, initializingPodsNotice } from './workload-log-sources'
+import { initContainerNames, initializingPodsNotice, viewMixesContainers } from './workload-log-sources'
 
 const app = (state: WorkloadPodContainerInfo['state'], reason?: string): WorkloadPodContainerInfo => ({ name: 'kserve-container', ready: state === 'running', restartCount: 0, state, reason })
 const init = (state: WorkloadPodContainerInfo['state'], reason?: string, extra: Partial<WorkloadPodContainerInfo> = {}): WorkloadPodContainerInfo => ({ name: 'storage-initializer', init: true, ready: false, restartCount: 3, state, reason, ...extra })
@@ -46,5 +46,25 @@ describe('initContainerNames', () => {
   it('lists regular init containers, not sidecars', () => {
     const proxy = { ...init('running', undefined, { sidecar: true }), name: 'istio-proxy' }
     expect([...initContainerNames([pod('p-1', [init('waiting'), proxy, app('waiting')])])]).toEqual(['storage-initializer'])
+  })
+})
+
+describe('viewMixesContainers', () => {
+  const completed = { ...init('terminated', 'Completed'), name: 'copyutil' }
+  const running = (name: string): WorkloadPodContainerInfo => ({ name, ready: true, restartCount: 0, state: 'running' })
+
+  it('treats one app container beside a finished init container as a single source', () => {
+    expect(viewMixesContainers([pod('repo-1', [completed, running('repo-server')])], ['repo-server'])).toBe(false)
+  })
+
+  it('mixes for several app containers, an initializing Pod, or init output on screen', () => {
+    expect(viewMixesContainers([pod('kserve-1', [running('manager'), running('kube-rbac-proxy')])], [])).toBe(true)
+    expect(viewMixesContainers([pod('p-1', [init('waiting', 'CrashLoopBackOff'), app('waiting', 'PodInitializing')])], [])).toBe(true)
+    expect(viewMixesContainers([pod('repo-1', [completed, running('repo-server')])], ['copyutil', 'repo-server'])).toBe(true)
+  })
+
+  it('does not count a native sidecar as a second app container', () => {
+    const proxy = { ...init('running', undefined, { sidecar: true, started: true }), name: 'istio-proxy' }
+    expect(viewMixesContainers([pod('api-1', [proxy, running('api')])], ['api'])).toBe(false)
   })
 })

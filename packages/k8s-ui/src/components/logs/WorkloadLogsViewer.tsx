@@ -11,7 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
-import { initContainerNames, initializingPodsNotice } from '../../utils/workload-log-sources'
+import { initContainerNames, initializingPodsNotice, viewMixesContainers } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -318,6 +318,11 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
     [entries, selectedPods],
   )
+  const showContainerName = useMemo(() => {
+    if (selectedContainer !== '') return false
+    const shownPods = pods.filter(pod => selectedPods.has(pod.name))
+    return viewMixesContainers(shownPods, new Set(filteredEntries.map(entry => entry.container)))
+  }, [selectedContainer, pods, selectedPods, filteredEntries])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
     const filename = `${name}-logs.${extension}`
@@ -457,7 +462,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       showPodName
-      showContainerName={selectedContainer === '' && allContainers.length > 1}
+      showContainerName={showContainerName}
       initContainers={initContainers}
       emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}

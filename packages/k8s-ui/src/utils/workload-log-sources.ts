@@ -11,6 +11,28 @@ export function initContainerNames(pods: WorkloadPodInfo[]): Set<string> {
   return names
 }
 
+/**
+ * Whether "All containers" can mix output from several containers, so each
+ * line should name its container: more than one app container, a shown Pod
+ * still initializing, or init-container lines already on screen. A Pod with one
+ * app container and a finished init container reads as a single source.
+ */
+export function viewMixesContainers(pods: WorkloadPodInfo[], entryContainers: Iterable<string>): boolean {
+  const init = initContainerNames(pods)
+  const sidecars = new Set<string>()
+  for (const pod of pods) {
+    for (const status of pod.containerStatuses ?? []) if (status.sidecar) sidecars.add(status.name)
+  }
+  const apps = new Set<string>()
+  for (const pod of pods) {
+    for (const name of pod.containers) if (!init.has(name) && !sidecars.has(name)) apps.add(name)
+  }
+  if (apps.size > 1) return true
+  if (pods.some(pod => (pod.containerStatuses ?? []).some(status => !status.init && status.state === 'waiting' && status.reason === 'PodInitializing'))) return true
+  for (const name of entryContainers) if (init.has(name) || sidecars.has(name)) return true
+  return false
+}
+
 // The init container a Pod is waiting on: the first regular one that hasn't
 // completed, or a native sidecar that hasn't started.
 function blockingInitContainer(statuses: WorkloadPodContainerInfo[]): WorkloadPodContainerInfo | undefined {
