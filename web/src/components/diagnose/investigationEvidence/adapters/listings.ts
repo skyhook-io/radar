@@ -1,7 +1,10 @@
 import { adaptListResources } from "./resource";
 import { nonEmptyString, parseJSON, record, stringArray } from "../parse";
 import { invalidPayload, type ProjectionBuilder } from "../observations";
-import type { InvestigationEvidenceSource } from "../types";
+import type {
+  InvestigationEvidenceRelevance,
+  InvestigationEvidenceSource,
+} from "../types";
 
 // Helm releases, installed packages and search hits are inventories: rows
 // with a kind, a name and a namespace, one line of status, and for a hit
@@ -29,6 +32,7 @@ export function adaptListHelmReleases(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   payload: unknown,
+  relevance?: InvestigationEvidenceRelevance,
 ): void {
   // Retained runs may contain the Helm producer's nil-slice encoding.
   if (payload === null) payload = [];
@@ -67,7 +71,10 @@ export function adaptListHelmReleases(
           : {}),
       };
     }),
-    { title: namespace ? `Helm releases in ${namespace}` : "Helm releases" },
+    {
+      title: namespace ? `Helm releases in ${namespace}` : "Helm releases",
+      relevance,
+    },
   );
 }
 

@@ -125,6 +125,28 @@ function helmOperation(value: unknown): InvestigationHelmOperation | undefined {
     return undefined;
   return candidate as unknown as InvestigationHelmOperation;
 }
+// The release manages the target when the target is among the resources
+// Helm rendered for it; a release is never the investigated object itself.
+// Without an API version the owned row cannot tell colliding kinds apart
+// (CNPG vs CAPI Cluster), so it establishes nothing.
+function releaseRelevance(
+  builder: ProjectionBuilder,
+  resources: readonly InvestigationHelmOwnedResource[],
+): InvestigationEvidenceRelevance {
+  return resources.some(
+    (owned) =>
+      owned.apiVersion !== undefined &&
+      resourceMatchesTarget(builder.target, {
+        kind: owned.kind,
+        group: apiVersionToGroup(owned.apiVersion),
+        namespace: owned.namespace || undefined,
+        name: owned.name,
+      }),
+  )
+    ? "producer-related"
+    : "broader";
+}
+
 export function adaptHelmRelease(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
@@ -147,6 +169,14 @@ export function adaptHelmRelease(
         }),
       },
       { summary: value.summary, releases: [], observed: [observed] },
+      releaseRelevance(
+        builder,
+        (Array.isArray(observed.resources) ? observed.resources : [])
+          .map(helmOwnedResource)
+          .filter((item): item is InvestigationHelmOwnedResource =>
+            Boolean(item),
+          ),
+      ),
     );
     return;
   }
@@ -227,22 +257,7 @@ export function adaptHelmRelease(
     ...(hooks ? { hooks } : {}),
     ...(values ? { values } : {}),
   };
-  // The release manages the target when the target is among the resources
-  // Helm rendered for it; a release is never the investigated object itself.
-  // Without an API version the owned row cannot tell colliding kinds apart
-  // (CNPG vs CAPI Cluster), so it establishes nothing.
-  const relevance: InvestigationEvidenceRelevance = resources.some(
-    (owned) =>
-      owned.apiVersion !== undefined &&
-      resourceMatchesTarget(builder.target, {
-        kind: owned.kind,
-        group: apiVersionToGroup(owned.apiVersion),
-        namespace: owned.namespace || undefined,
-        name: owned.name,
-      }),
-  )
-    ? "producer-related"
-    : "broader";
+  const relevance = releaseRelevance(builder, resources);
   const status = release.status.toLowerCase();
   const operationFailed =
     lastOperation?.status === "failed" ||

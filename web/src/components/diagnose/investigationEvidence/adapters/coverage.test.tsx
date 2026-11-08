@@ -548,6 +548,27 @@ describe("listing cards (helm releases, packages, search)", () => {
     expect(JSON.stringify(projection.limitations)).not.toContain("couldn't summarize");
   });
 
+  it.each([
+    ["owns the target", "api", "producer-related"],
+    ["doesn't own it", "worker", "broader"],
+  ])("ranks an observed Helm release by whether it %s", (_, name, relevance) => {
+    const projection = project([
+      tool("diag", "diagnose", targetBundle),
+      tool("helm", "get_helm_release", {
+        summary: "Observed: Helm's release Secrets can't be read here.",
+        observed: {
+          name: "shop",
+          namespace: "shop",
+          chart: "shop",
+          resourceCount: 1,
+          resources: [{ kind: "Deployment", apiVersion: "apps/v1", namespace: "shop", name }],
+        },
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "inventory");
+    expect(group.latest.relevance).toBe(relevance);
+  });
+
   it("lists packages with their version and sources", () => {
     const projection = project([
       tool(
