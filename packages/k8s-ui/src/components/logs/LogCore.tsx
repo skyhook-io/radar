@@ -1415,7 +1415,7 @@ function ContainerLabel({ container, isInit, width, palette }: { container: stri
   return (
     <span
       className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap max-w-[200px] truncate`}
-      style={width ? { minWidth: `calc(${width}ch + 0.5rem)` } : undefined}
+      style={width ? { minWidth: `min(calc(${width}ch + 0.5rem), 25%)` } : undefined}
       title={isInit ? `Init container ${container}` : `Container ${container}`}
     >
       {container}
