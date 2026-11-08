@@ -141,9 +141,11 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
       </div>
 
       {unreadLine && data && !data.restricted && !data.error && (
-        <div className={clsx('px-4 py-1.5 border-t border-theme-border/50 text-[11px] truncate', SEVERITY_TEXT.warning)} title={unreadLine}>
-          {unreadLine}
-        </div>
+        <Tooltip content={unreadLine} wrapperClassName="!block min-w-0 w-full">
+          <div className={clsx('px-4 py-1.5 border-t border-theme-border/50 text-[11px] truncate', SEVERITY_TEXT.warning)}>
+            {unreadLine}
+          </div>
+        </Tooltip>
       )}
       <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-between">
         <span className="text-[10px] text-theme-text-tertiary">

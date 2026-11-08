@@ -170,6 +170,7 @@ Use `issues` for currently broken native Helm releases: active failed and stuck 
 - When rendered object identities do not overlap, Radar reports added/removed context instead of guessing a rename.
 - Hook evidence can disappear after Helm records the failure. Radar reports the absence and likely reasons, but cannot reconstruct deleted Job/Pod logs unless Kubernetes or Helm retained them.
 - Flux-managed releases should be changed through Flux. Radar links them to the owning `HelmRelease` and warns that direct `helm upgrade` changes may be reconciled back.
+- Without sign-in, Radar asks on each read whether it can list Secrets cluster-wide. When it can't, it skips the namespaces where its permission probe saw Secrets refused and reads the rest, including any the probe didn't answer. On a default install that is one cluster-wide list, whose denial covers every namespace, instead of one denied list per namespace on every load. A Secrets grant in a single namespace made after the probe isn't seen until Radar probes again, on a context switch or restart.
 - Upgrade source detection depends on source data available to the running Radar environment. Local OSS can use local Helm repo/OCI configuration; Radar Cloud should not assume that local repo config exists, so unresolved source states are reported explicitly.
 
 

@@ -52,7 +52,11 @@ type InventoryRequest struct {
 	// be denied. The read then fails as retryable rather than reporting a
 	// denial.
 	StorageCheckFailed bool
-	User               *pkgauth.User
+	// StorageSkipped are namespaces the storage scope left out because the
+	// reading identity can't list Secrets there. Without a user they are,
+	// with denials, the only namespaces left unread.
+	StorageSkipped []string
+	User           *pkgauth.User
 	// Scope is the caller's view of cached objects. Nil means the cache isn't
 	// available.
 	Scope *ObjectScope
@@ -195,10 +199,10 @@ func unreadStorage(req InventoryRequest, read, denied []string) *resourceapi.Nam
 		}
 	}
 	if wanted == nil {
-		// Without a user the storage scope already is what Radar's own
-		// identity reaches, so only a denial leaves a namespace unread.
+		// Without a user the storage scope is what Radar's own identity
+		// reaches, so only a denial or a namespace it skipped is unread.
 		if req.User == nil || req.Scope == nil {
-			return namesOrNil(denied)
+			return namesOrNil(UnreadStorageNamespaces(req.StorageSkipped, denied))
 		}
 		wanted = k8s.AllNamespaceNames()
 		if len(wanted) == 0 {

@@ -569,6 +569,10 @@ func TestAddUnreadNamespaces(t *testing.T) {
 		{name: "a read that checked nothing stays whole", unchecked: helmSource(failed), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(failed), wantIncomplete: true},
 		{name: "a whole denial stays a denial when the namespaces left out were denied too", unchecked: helmSource(denied), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(denied), wantIncomplete: true},
 		{name: "a whole denial isn't kept when a check behind the namespaces left out went unanswered", unchecked: helmSource(denied), incomplete: true, unread: []string{"team-b"}, want: helmSource(failed), wantIncomplete: true},
+		// No check succeeded, so the read fell back to one cluster-wide list
+		// and nothing was left out; its 403 still isn't the caller's fault.
+		{name: "an unanswered check downgrades a whole denial with nothing left out", unchecked: helmSource(denied), incomplete: true, want: helmSource(failed), wantIncomplete: true},
+		{name: "a complete read stays complete when a check went unanswered", want: issuesapi.UncheckedSource{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, incomplete := AddUnreadNamespaces(tc.unchecked, tc.incomplete, tc.unread, tc.checked)

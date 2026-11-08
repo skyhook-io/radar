@@ -145,6 +145,13 @@ func uncheckedReason(err error) issuesapi.UncheckedReason {
 // (not checked). A read that already left everything unchecked stays so, with
 // the generic reason if the two reasons differ.
 func AddUnreadNamespaces(unchecked issuesapi.UncheckedSource, incomplete bool, unread []string, checked bool) (issuesapi.UncheckedSource, bool) {
+	// A refusal can't be blamed on the caller when a check behind the storage
+	// scope went unanswered: the namespaces it would have allowed were never
+	// read. That holds even when the scope left nothing out, as when no check
+	// succeeded and the read fell back to one cluster-wide list.
+	if !checked && incomplete && unchecked.Reason == issuesapi.UncheckedReasonCallerAccessDenied {
+		unchecked.Reason = issuesapi.UncheckedReasonReadFailed
+	}
 	if len(unread) == 0 {
 		return unchecked, incomplete
 	}

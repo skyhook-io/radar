@@ -131,6 +131,14 @@ func TestUnreadStorage(t *testing.T) {
 			read: []string{"a"},
 		},
 		{
+			// The probe found Radar can't list Secrets in b, so b was never
+			// read; its releases still can't be answered from Helm.
+			name: "no user and a namespace the probe skipped",
+			req:  InventoryRequest{StorageNamespaces: []string{"a"}, StorageSkipped: []string{"b"}, Scope: scopeSeeing(nil, nil)},
+			read: []string{"a"},
+			want: listed("b"),
+		},
+		{
 			name:   "no user and a denial",
 			req:    InventoryRequest{StorageNamespaces: []string{"a", "b"}, Scope: scopeSeeing(nil, nil)},
 			read:   []string{"a"},

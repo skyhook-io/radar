@@ -252,9 +252,12 @@ type DashboardTrafficSummary struct {
 }
 
 type DashboardHelmSummary struct {
-	Total      int                    `json:"total"`
-	Releases   []DashboardHelmRelease `json:"releases"`
-	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases (RBAC-denied)
+	Total    int                    `json:"total"`
+	Releases []DashboardHelmRelease `json:"releases"`
+	// Restricted is true when no Helm records could be read and the caller was
+	// refused. A refusal in only some namespaces leaves it false and fills
+	// UnreadNamespaces instead.
+	Restricted bool `json:"restricted,omitempty"`
 	// Error + ErrorCode are populated when the Helm read failed for a
 	// reason other than RBAC (Helm client not initialized, no resolved
 	// rest.Config, network error). Lets the dashboard widget render
@@ -264,9 +267,11 @@ type DashboardHelmSummary struct {
 	// unreachable, timed_out, unconfigured, auth_required).
 	Error     string `json:"error,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
-	// UnreadNamespaces are namespaces whose Helm records the caller can't
-	// read, so their releases are missing from Total and Releases. The Helm
-	// view still lists them from their objects.
+	// UnreadNamespaces are namespaces whose Helm records weren't read: the
+	// caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases; the Helm
+	// view may still list them from objects the caller can read. Absent when
+	// every namespace in scope was read, and on a restricted or failed answer.
 	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
@@ -456,13 +461,13 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces, ok, _, unread := s.resolveHelmStorageScope(r)
+	namespaces, ok, checked, unread := s.resolveHelmStorageScope(r)
 	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
 		return
 	}
 
-	summary := s.getDashboardHelmSummary(r, namespaces, unread...)
+	summary := s.getDashboardHelmSummary(r, namespaces, checked, unread...)
 	s.writeJSON(w, summary)
 }
 
@@ -1206,8 +1211,9 @@ func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 }
 
 // unread are namespaces the storage scope already left out because the caller
-// can't list Secrets there.
-func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, unread ...string) DashboardHelmSummary {
+// can't list Secrets there; checked is false when a permission check behind
+// that went unanswered.
+func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, checked bool, unread ...string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
 		return DashboardHelmSummary{
@@ -1218,13 +1224,20 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, u
 	}
 
 	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()))
-	if err == nil && len(read) == 0 && len(denied) > 0 {
+	if (err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err) {
+		// With a permission check unanswered, the read may have fallen back
+		// to a cluster-wide list the caller can't make even though some
+		// namespace would allow it, so the refusal doesn't establish that.
+		if !checked {
+			return DashboardHelmSummary{
+				Releases:  []DashboardHelmRelease{},
+				Error:     "Couldn't check your access to Helm's records. Try again shortly.",
+				ErrorCode: ErrCodeUnreachable,
+			}
+		}
 		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
 	}
 	if err != nil {
-		if helm.ReleaseReadDeniedForCaller(err) {
-			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
-		}
 		if !errors.Is(r.Context().Err(), context.Canceled) {
 			log.Printf("[dashboard] Failed to list Helm releases: %v", err)
 		}

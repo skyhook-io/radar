@@ -808,9 +808,11 @@ type UncheckedSource struct {
 	// queue is one of them) may be missing too. Absent
 	// means the whole source, or that Radar can't tell which kinds.
 	Kinds []UncheckedKind `json:"kinds,omitempty"`
-	// Namespaces names the namespaces whose read failed when the source was
-	// read in the others, so issues outside them are complete. Absent means
-	// the gap is not limited to particular namespaces.
+	// Namespaces names the namespaces this entry's gap is limited to: the
+	// source was checked in the others, so issues outside them are complete,
+	// and wasn't checked in these (the read failed or was refused there, or
+	// Radar didn't read there because the caller can't). Absent means the gap
+	// is not limited to particular namespaces.
 	Namespaces []string `json:"namespaces,omitempty"`
 	// Subjects are resources whose own issues this gap may hide, when a
 	// check knows them. They supplement kind-wide inventory gaps when
@@ -851,8 +853,10 @@ const (
 type UncheckedReason string
 
 const (
-	// UncheckedReasonReadFailed: the read failed, for example an API server
-	// error, rejected credentials, or Radar's own request deadline.
+	// UncheckedReasonReadFailed: the read, or a permission check it depended
+	// on, failed, for example an API server error, rejected credentials,
+	// Radar's own request deadline, or an unanswered access check. Also used
+	// when one entry covers namespaces that failed for different reasons.
 	UncheckedReasonReadFailed UncheckedReason = "read_failed"
 	// UncheckedReasonSyncPending: Radar is still loading these kinds, for
 	// example right after it starts. A later request can succeed.

@@ -1237,8 +1237,11 @@ export interface ObservedHelmRelease {
   // Other helm.sh/chart labels on its objects. With no chart, these are the
   // candidates Radar wouldn't choose between.
   otherCharts?: string[]
-  // The versions found when the chart's objects disagree, as after an
-  // interrupted upgrade. chartVersion or appVersion is then absent.
+  // The distinct versions, sorted, found when the chart's objects disagree, as
+  // after an interrupted upgrade; chartVersion or appVersion is then absent.
+  // From object labels only: when a readable Flux HelmRelease names the chart
+  // in its history, its versions replace them. Absent doesn't prove the
+  // objects agree.
   chartVersions?: string[]
   appVersions?: string[]
   // Objects the caller can read, which can be fewer than the release has.

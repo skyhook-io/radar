@@ -182,3 +182,58 @@ func TestParseLineAcceptsAllKubernetesTimestampPrecisions(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectPodsReadsInitContainerOfInitializingPod(t *testing.T) {
+	var mu sync.Mutex
+	requested := []string{}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		container := r.URL.Query().Get("container")
+		mu.Lock()
+		requested = append(requested, container)
+		mu.Unlock()
+		if container != "storage-initializer" {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"container \"kserve-container\" in pod \"predictor\" is waiting to start: PodInitializing","reason":"BadRequest","code":400}`)
+			return
+		}
+		fmt.Fprint(w, "2026-11-08T03:46:34Z Storage initialization failed: HTTP resource not found\n")
+	}))
+	defer api.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "predictor", Namespace: "inference"},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "storage-initializer"}},
+			Containers:     []corev1.Container{{Name: "kserve-container"}},
+		},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodPending,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodInitialized, Status: corev1.ConditionFalse}},
+			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name:                 "storage-initializer",
+				State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}},
+			}},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  "kserve-container",
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}},
+			}},
+		},
+	}
+	for _, bounded := range []bool{false, true} {
+		got := CollectPods(context.Background(), client, "inference", []*corev1.Pod{pod}, "", 100, nil, bounded)
+		if len(got.Logs) != 1 || got.Logs[0].Container != "storage-initializer" || !strings.Contains(got.Logs[0].Content, "Storage initialization failed") {
+			t.Fatalf("bounded=%t logs=%+v notice=%q", bounded, got.Logs, got.Notice)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, container := range requested {
+		if container == "" {
+			t.Fatalf("log read without a container: %v", requested)
+		}
+	}
+}
