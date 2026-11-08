@@ -164,6 +164,30 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "release changed since the preview") {
 		t.Fatalf("status-only change accepted: %v", err)
 	}
+
+	// A retried confirm must not start a second uninstall while the release
+	// still reads deployed (before Helm stores uninstalling, or if that write
+	// failed). The fake API fails the test on any write.
+	rel.Info.Status = release.StatusDeployed
+	if err := storage.Update(key, rel); err != nil {
+		t.Fatal(err)
+	}
+	output, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview = map[string]any{}
+	if err := json.Unmarshal([]byte(output.Content[0].(*mcp.TextContent).Text), &preview); err != nil {
+		t.Fatal(err)
+	}
+	token := preview["confirm"].(string)
+	if !consumeMutationConfirmation(token) { // the first confirm, still in flight
+		t.Fatal("fresh token reported as used")
+	}
+	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo", Confirm: token})
+	if err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("a repeated confirm must be refused: %v", err)
+	}
 }
 
 func TestManageHelmDeniesBeforeFetchingChart(t *testing.T) {

@@ -32,7 +32,7 @@ type manageHelmInput struct {
 	Values           map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; merge uses the deployed baseline, not necessarily the latest values read; replace_values=true resets overrides; no redacted output or literal credentials"`
 	ReplaceValues    bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false merges maps and refuses hidden-credential container replacement; true drops omitted overrides, including hidden credentials"`
 	Revision         int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
-	Confirm          string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (expires after 5 minutes)"`
+	Confirm          string         `json:"confirm,omitempty" jsonschema:"uninstall only: omit to preview release resources; pass the reviewed preview token to uninstall (single-use, expires after 5 minutes)"`
 }
 
 func (in manageHelmInput) validate() error {
@@ -170,6 +170,13 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 				}
 				if confirmed != binding {
 					return nil, nil, fmt.Errorf("release changed since the preview; omit confirm and review a new preview")
+				}
+				// Helm stores the uninstalling status when it records the first hook run
+				// (or after hooks, with none). Until then, or if that write fails, the
+				// release still reads deployed and a retried confirm would pass the
+				// binding and start a second uninstall.
+				if !consumeMutationConfirmation(in.Confirm) {
+					return nil, nil, fmt.Errorf("this confirmation was already used; an uninstall may still be running, so inspect get_helm_release, then omit confirm for a fresh preview if needed")
 				}
 			} else {
 				preview, err := client.UninstallPreviewAsUser(in.Namespace, in.Name, user)

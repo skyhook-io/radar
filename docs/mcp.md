@@ -1397,9 +1397,10 @@ For uninstall, `state: preview` additionally returns `revision` and the expiring
 - `historyOnly: true` when the release is already uninstalled with its history kept. Uninstall then only purges
   that history: no hooks run and nothing is deleted, so `resources` and `deleteHooks` are empty.
 
-The preview's `message` includes the observed release status. The token is not
-single-use: it remains valid for five minutes while its bound caller, cluster and
-release state match. `state: completed` means the Helm action returned, not that workloads are healthy.
+The preview's `message` includes the observed release status. The token is
+single-use within the Radar process: a repeated confirm, such as a retry after a client timeout, is refused even in the
+moments before Helm stores the release as uninstalling, or if that write fails. It
+expires after five minutes and requires the bound caller, cluster and release state to match. `state: completed` means the Helm action returned, not that workloads are healthy.
 Read `get_helm_release` for the resulting revision and readiness. Failures are MCP tool
 errors; an operation may have changed resources, so inspect before retrying.
 
