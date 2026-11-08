@@ -39,6 +39,19 @@ type podLogSourceResult struct {
 	err    error
 }
 
+// dropDeselectedNotices forgets warnings about the Pod's containers outside
+// keep, including ones whose follow already ended; it reports a change.
+func dropDeselectedNotices(unavailable podlogs.UnavailableSources, podName string, keep map[string]bool) bool {
+	changed := false
+	for key := range unavailable {
+		name, container, _ := strings.Cut(key, "/")
+		if name == podName && !keep[container] && unavailable.Drop(key) {
+			changed = true
+		}
+	}
+	return changed
+}
+
 // stopDeselectedLogStreams stops following the Pod's containers that the
 // current selection no longer includes while they keep running: the default
 // selection drops a native sidecar once it has started. A container whose run

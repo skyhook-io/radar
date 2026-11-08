@@ -63,3 +63,24 @@ func TestUnavailableSourcesDropForgetsAWarning(t *testing.T) {
 		t.Fatal("dropping an absent source reported a change")
 	}
 }
+
+func TestDropDeselectedNoticesClearsEndedFollows(t *testing.T) {
+	sources := podlogs.UnavailableSources{}
+	sources.Add("api-0/istio-proxy", 1, "kubelet notice")
+	sources.Add("api-0/app", 1, "container is waiting")
+	sources.Add("api-1/istio-proxy", 1, "kubelet notice")
+	if !dropDeselectedNotices(sources, "api-0", map[string]bool{"app": true}) {
+		t.Fatal("no change reported")
+	}
+	if _, ok := sources["api-0/istio-proxy"]; ok {
+		t.Fatal("deselected container kept its warning")
+	}
+	for _, key := range []string{"api-0/app", "api-1/istio-proxy"} {
+		if _, ok := sources[key]; !ok {
+			t.Fatalf("%s lost its warning", key)
+		}
+	}
+	if dropDeselectedNotices(sources, "api-0", map[string]bool{"app": true}) {
+		t.Fatal("second pass reported a change")
+	}
+}
