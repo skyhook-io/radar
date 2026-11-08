@@ -286,6 +286,20 @@ func TestObservedRowUsesFluxRecordOverLabels(t *testing.T) {
 	}
 }
 
+// Two HelmReleases deploying the same release can't be told apart by its
+// objects, so the row takes neither's name, storage namespace or chart.
+func TestObservedRowCreditsNeitherOfTwoHelmReleases(t *testing.T) {
+	key := releaseKey{"apps", "web"}
+	objects := []stampedObject{{chartLabel: "web-1.0.0", appVersion: "1"}}
+	row := observedRow(key, objects, []fluxEvidence{
+		{ref: "team-a/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "team-a", historyChart: "web", historyVersion: "1.0.0"},
+		{ref: "team-b/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "team-b", historyChart: "web", historyVersion: "2.0.0"},
+	})
+	if row.ManagedByFluxHelmRelease != "" || row.StorageNamespace != "" || row.ChartVersion != "1.0.0" {
+		t.Fatalf("row = %+v, want labels only", row)
+	}
+}
+
 func TestObservedReleaseHasNoFieldToGuessFrom(t *testing.T) {
 	fields := reflect.TypeOf(ObservedRelease{})
 	for i := range fields.NumField() {
@@ -309,7 +323,7 @@ func TestAddObservedHealthDoesNotClaimHealthyOverAGap(t *testing.T) {
 
 func TestInventorySummarySaysWhatIsUnknown(t *testing.T) {
 	summary := (&ReleaseInventory{Releases: []HelmRelease{{Name: "a"}}, Observed: []ObservedRelease{{Name: "b"}}, StorageDenied: resourceapi.Names([]string{"team-b"}, resourceapi.MCPSetLimit)}).Summary()
-	for _, want := range []string{"Partial:", "1 releases read from Helm and 1 observed", "in team-b", "status, revision", "Absence proves nothing", "get_helm_release is denied", "not proof that a release exists", "exposes every Secret"} {
+	for _, want := range []string{"Partial:", "1 releases read from Helm and 1 observed", "in team-b", "status, revision", "Absence proves nothing", "get_helm_release returns one of them", "not proof that a release exists", "exposes every Secret"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary lacks %q: %s", want, summary)
 		}

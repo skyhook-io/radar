@@ -1846,6 +1846,12 @@ export interface WorkloadPodContainerInfo {
   sidecar?: boolean
   ready: boolean
   restartCount: number
+  /** Current run's state. Absent from older Radars. */
+  state?: 'waiting' | 'running' | 'terminated'
+  /** Waiting or terminated reason, e.g. PodInitializing, CrashLoopBackOff, Completed. */
+  reason?: string
+  /** Past its startup probe; a started native sidecar no longer holds up initialization. */
+  started?: boolean
 }
 
 export interface WorkloadPodInfo {
@@ -1874,6 +1880,7 @@ export type WorkloadLogEventType =
   | 'log'
   | 'pod_added'
   | 'pod_removed'
+  | 'pod_updated'
   | 'end'
   | 'error'
 

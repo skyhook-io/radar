@@ -3,6 +3,7 @@ package helm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -300,10 +301,7 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) O
 	choice := chooseChart(key.name, objects)
 	row.Chart, row.ChartVersion, row.AppVersion, row.OtherCharts = choice.chart, choice.version, choice.appVersion, choice.others
 	row.ChartVersions, row.AppVersions = choice.versions, choice.appVersions
-	for _, f := range flux {
-		if f.releaseNamespace != key.namespace || f.releaseName != key.name {
-			continue
-		}
+	if f, ok := fluxRecordFor(key, flux); ok {
 		row.ManagedByFluxHelmRelease = f.ref
 		if f.storageNamespace != key.namespace {
 			row.StorageNamespace = f.storageNamespace
@@ -316,9 +314,24 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) O
 				return name == f.historyChart
 			})
 		}
-		break
 	}
 	return row
+}
+
+// fluxRecordFor is the one readable Flux HelmRelease that deploys the release.
+// Stamps record only the release's own namespace and name, so when two deploy
+// it (storing it in different namespaces) neither is credited.
+func fluxRecordFor(key releaseKey, flux []fluxEvidence) (fluxEvidence, bool) {
+	var found []fluxEvidence
+	for _, f := range flux {
+		if f.releaseNamespace == key.namespace && f.releaseName == key.name {
+			found = append(found, f)
+		}
+	}
+	if len(found) != 1 {
+		return fluxEvidence{}, false
+	}
+	return found[0], true
 }
 
 // chartChoice is what a release's object labels say about its chart.
@@ -481,7 +494,95 @@ func GetObservedRelease(ctx context.Context, scope *ObjectScope, namespace, name
 	if err != nil {
 		return nil, err
 	}
-	key := releaseKey{namespace, name}
+	return observedDetail(scope, scan, releaseKey{namespace, name}, scan.flux)
+}
+
+// ErrAmbiguousStorage means more than one readable Flux HelmRelease matches
+// the release asked for, and its objects can't say which one they belong to.
+var ErrAmbiguousStorage = errors.New("more than one Flux HelmRelease matches this release, so Radar won't pick one")
+
+// ErrStoredElsewhere means the namespace asked for is the release's own, but a
+// readable Flux HelmRelease stores it in another one, which is the namespace
+// to ask with. Its message names that namespace.
+var ErrStoredElsewhere = errors.New("a Flux HelmRelease stores this release in another namespace")
+
+// GetObservedReleaseInStorage is GetObservedRelease for a caller that names the
+// release by the namespace Helm stores it in, as get_helm_release does. The two
+// differ only when a Flux HelmRelease sets a storage namespace, so a readable
+// one that maps the name decides. Otherwise the namespace is taken as the
+// release's own, as Helm stores a release in its own namespace.
+func GetObservedReleaseInStorage(ctx context.Context, scope *ObjectScope, storageNamespace, name string) (*ObservedReleaseDetail, error) {
+	scan, err := scanObservedReleases(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	return observedInStorage(scope, scan, storageNamespace, name)
+}
+
+func observedInStorage(scope *ObjectScope, scan *stampScan, storageNamespace, name string) (*ObservedReleaseDetail, error) {
+	key, flux, err := resolveStoredRelease(scan.flux, storageNamespace, name)
+	if err != nil {
+		return nil, err
+	}
+	return observedDetail(scope, scan, key, flux)
+}
+
+// resolveStoredRelease finds the release Helm stores as storageNamespace/name,
+// and the Flux evidence to describe it with. Object stamps record only the
+// release's own namespace and name, so when two readable HelmReleases deploy
+// the same one from different storage namespaces its objects could belong to
+// either, and it refuses rather than credit them to one.
+func resolveStoredRelease(flux []fluxEvidence, storageNamespace, name string) (releaseKey, []fluxEvidence, error) {
+	var stored []fluxEvidence
+	for _, f := range flux {
+		if f.storageNamespace == storageNamespace && f.releaseName == name {
+			stored = append(stored, f)
+		}
+	}
+	if len(stored) > 1 {
+		return releaseKey{}, nil, ambiguousStorage(stored)
+	}
+	key := releaseKey{storageNamespace, name}
+	if len(stored) == 1 {
+		key.namespace = stored[0].releaseNamespace
+	}
+	// HelmReleases deploying this release that store it somewhere other than
+	// the namespace asked for.
+	var elsewhere []fluxEvidence
+	for _, f := range flux {
+		if f.releaseNamespace == key.namespace && f.releaseName == name && f.storageNamespace != storageNamespace {
+			elsewhere = append(elsewhere, f)
+		}
+	}
+	switch {
+	case len(stored) == 1 && len(elsewhere) > 0:
+		return releaseKey{}, nil, ambiguousStorage(append(stored, elsewhere...))
+	case len(stored) == 1:
+		return key, stored, nil
+	case len(elsewhere) > 0:
+		namespaces := make([]string, 0, len(elsewhere))
+		refs := make([]string, 0, len(elsewhere))
+		for _, f := range elsewhere {
+			namespaces = append(namespaces, f.storageNamespace)
+			refs = append(refs, f.ref)
+		}
+		slices.Sort(namespaces)
+		sort.Strings(refs)
+		return releaseKey{}, nil, fmt.Errorf("%w: pass namespace=%s (HelmRelease %s)", ErrStoredElsewhere, strings.Join(slices.Compact(namespaces), " or "), strings.Join(refs, ", "))
+	}
+	return key, flux, nil
+}
+
+func ambiguousStorage(matches []fluxEvidence) error {
+	refs := make([]string, len(matches))
+	for i, f := range matches {
+		refs[i] = f.ref
+	}
+	sort.Strings(refs)
+	return fmt.Errorf("%w: %s", ErrAmbiguousStorage, strings.Join(refs, ", "))
+}
+
+func observedDetail(scope *ObjectScope, scan *stampScan, key releaseKey, flux []fluxEvidence) (*ObservedReleaseDetail, error) {
 	objects := groupStamped(scan.stamped)[key]
 	if len(objects) == 0 {
 		if !scope.Provider.Current() {
@@ -501,17 +602,14 @@ func GetObservedRelease(ctx context.Context, scope *ObjectScope, namespace, name
 		}
 		return objects[i].name < objects[j].name
 	})
-	detail := &ObservedReleaseDetail{ObservedRelease: observedRow(key, objects, scan.flux), ObjectCoverage: scan.coverage}
+	detail := &ObservedReleaseDetail{ObservedRelease: observedRow(key, objects, flux), ObjectCoverage: scan.coverage}
 	detail.Resources = addObservedHealth(&detail.ObservedRelease, objects, scan.coverage.Status != resourceapi.CoverageComplete)
 	// Health reads the current cache, so this has to come after it.
 	if !scope.Provider.Current() {
 		return nil, ErrConnectionChanged
 	}
-	for _, f := range scan.flux {
-		if f.releaseNamespace == namespace && f.releaseName == name {
-			detail.FluxHistory = f.history
-			break
-		}
+	if f, ok := fluxRecordFor(key, flux); ok {
+		detail.FluxHistory = f.history
 	}
 	return detail, nil
 }

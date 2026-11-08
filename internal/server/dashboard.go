@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -420,20 +421,42 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	resp.Audit = s.getDashboardAudit(r, cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
+	// A zero would read as an empty cluster, so a kind that neither the caller
+	// nor Radar's own identity can list is marked restricted. Without auth
+	// canRead is always true, yet Radar may have no informer for the kind.
+	nodesCounted := false
 	if canReadNodes {
 		if nodeLister := cache.Nodes(); nodeLister != nil {
 			nodeList, _ := nodeLister.List(labels.Everything())
 			resp.ResourceCounts.Nodes = health.CountNodeFleet(nodeList, time.Now())
+			nodesCounted = true
 		}
 	}
+	if !nodesCounted {
+		resp.ResourceCounts.Restricted = append(resp.ResourceCounts.Restricted, "nodes")
+	}
+	namespacesCounted := false
 	if canReadNamespaces {
 		if nsLister := cache.Namespaces(); nsLister != nil {
 			nss, _ := nsLister.List(labels.Everything())
 			resp.ResourceCounts.Namespaces = len(nss)
+			namespacesCounted = true
 		}
-	} else if len(namespaces) > 0 {
-		// Restricted user — surface their accessible count instead of "0".
-		resp.ResourceCounts.Namespaces = len(namespaces)
+	}
+	if !namespacesCounted {
+		// Count the namespaces the caller can see that Radar collects Pods in,
+		// whatever the picker narrowed this request to, as the listed count
+		// would be. It is a lower bound: the cluster may hold more.
+		// KindNamespaces is nil both for cluster-wide Pods and for no Pods at
+		// all; only the first may stand in for every namespace.
+		collected := cache.KindNamespaces(k8score.Pods)
+		if cache.KindReadinessFor(k8score.Pods) == k8s.KindUnavailable {
+			collected = []string{}
+		}
+		if visible := s.getUserNamespaces(r, nil); !readscope.NoNamespaceAccess(visible) {
+			resp.ResourceCounts.Namespaces = len(readscope.SelectNamespaces(collected, visible))
+		}
+		resp.ResourceCounts.Restricted = append(resp.ResourceCounts.Restricted, "namespaces")
 	}
 
 	if canReadNodes && cache.Nodes() != nil {

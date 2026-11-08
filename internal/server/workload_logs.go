@@ -472,10 +472,23 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	follows := 0
 	generation := 0
 
+	// The containers each Pod's last discovery pass selected. Reports from a
+	// container outside it come from a follow that is no longer wanted.
+	selected := map[string]map[string]bool{}
+
 	// Start streaming from each pod/container
 	startPodStreams := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
 			containers := k8s.GetContainersForPod(pod, container, true)
+			keep := make(map[string]bool, len(containers))
+			for _, c := range containers {
+				keep[c] = true
+			}
+			selected[pod.Name] = keep
+			stopDeselectedLogStreams(&activeStreams, pod, containers)
+			if dropDeselectedNotices(unavailable, pod.Name, keep) {
+				sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
+			}
 			for _, c := range containers {
 				key := pod.Name + "/" + c
 				if value, exists := activeStreams.Load(key); exists {
@@ -525,6 +538,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	for _, p := range pods {
 		knownPods[p.Name] = p.UID
 	}
+	sentPodInfo := podlogs.NewSentPodInfo(podInfos)
 
 	// Main loop: forward logs and handle pod discovery
 	for {
@@ -544,8 +558,8 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 		case result := <-resultCh:
 			key := result.key
 			// A stream canceled during pod removal can still deliver its report.
-			podName, _, _ := strings.Cut(key, "/")
-			if uid, known := knownPods[podName]; known && uid == result.uid {
+			podName, containerName, _ := strings.Cut(key, "/")
+			if uid, known := knownPods[podName]; known && uid == result.uid && selected[podName][containerName] {
 				changed := false
 				if result.err != nil {
 					changed = unavailable.Add(key, result.follow, result.err.Error())
@@ -584,9 +598,15 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 						sendSSEEvent(w, flusher, "pod_removed", map[string]string{"pod": p.Name, "reason": "replaced"})
 					}
 					knownPods[p.Name] = p.UID
+					info := podlogs.BuildPodInfo(p, time.Now())
+					sentPodInfo.Changed(info)
 					// Notify frontend about new pod
 					sendSSEEvent(w, flusher, "pod_added", map[string]any{
-						"pods": []podlogs.PodInfo{podlogs.BuildPodInfo(p, time.Now())},
+						"pods": []podlogs.PodInfo{info},
+					})
+				} else if info := podlogs.BuildPodInfo(p, time.Now()); sentPodInfo.Changed(info) {
+					sendSSEEvent(w, flusher, "pod_updated", map[string]any{
+						"pods": []podlogs.PodInfo{info},
 					})
 				}
 			}
@@ -595,6 +615,8 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			for podName := range knownPods {
 				if !currentPodNames[podName] {
 					delete(knownPods, podName)
+					delete(sentPodInfo, podName)
+					delete(selected, podName)
 					stopPodLogStreams(&activeStreams, cursors, podName)
 					if unavailable.RemovePod(podName) {
 						sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})

@@ -411,3 +411,42 @@ func TestNewResourceDiscoveryRejectsAPlainNilClient(t *testing.T) {
 		t.Fatal("expected an error for a nil discovery client")
 	}
 }
+
+func TestGetResourceWithGroupPrefersMostStableVersionInEitherOrder(t *testing.T) {
+	for _, order := range [][]string{{"v1beta1", "v1beta2"}, {"v1beta2", "v1beta1"}} {
+		d := &ResourceDiscovery{
+			resourceMap: make(map[string]APIResource),
+			gvrMap:      make(map[string]schema.GroupVersionResource),
+		}
+		for _, version := range order {
+			d.AddAPIResource(APIResource{Group: "kueue.x-k8s.io", Version: version, Kind: "ClusterQueue", Name: "clusterqueues", IsCRD: true, Verbs: []string{"get", "list", "watch"}})
+		}
+		for _, lookup := range []string{"ClusterQueue", "clusterqueues"} {
+			res, ok := d.GetResourceWithGroup(lookup, "kueue.x-k8s.io")
+			if !ok || res.Version != "v1beta2" || res.Name != "clusterqueues" || res.Namespaced {
+				t.Fatalf("discovery order %v, lookup %q: got %+v ok=%v, want cluster-scoped v1beta2", order, lookup, res, ok)
+			}
+		}
+	}
+}
+
+// An aggregated API registers each version on its own, so one resource can be
+// namespaced at one version and cluster-scoped at another.
+func TestNamespacedGVRReadsTheExactVersion(t *testing.T) {
+	d := &ResourceDiscovery{
+		resourceMap: make(map[string]APIResource),
+		gvrMap:      make(map[string]schema.GroupVersionResource),
+	}
+	d.AddAPIResource(APIResource{Group: "widgets.example.io", Version: "v1beta1", Kind: "Widget", Name: "widgets", Namespaced: true, Verbs: []string{"get", "list", "watch"}})
+	d.AddAPIResource(APIResource{Group: "widgets.example.io", Version: "v1", Kind: "Widget", Name: "widgets", Namespaced: false, Verbs: []string{"get", "list", "watch"}})
+
+	for version, want := range map[string]bool{"v1beta1": true, "v1": false} {
+		got, known := d.NamespacedGVR(schema.GroupVersionResource{Group: "widgets.example.io", Version: version, Resource: "widgets"})
+		if !known || got != want {
+			t.Errorf("%s: namespaced=%v known=%v, want %v", version, got, known, want)
+		}
+	}
+	if _, known := d.NamespacedGVR(schema.GroupVersionResource{Group: "widgets.example.io", Version: "v2", Resource: "widgets"}); known {
+		t.Error("a version discovery doesn't serve must be unknown")
+	}
+}

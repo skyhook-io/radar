@@ -381,7 +381,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"value as namespace to get_helm_release. Follow with get_helm_release include=history,operations " +
 			"for the full revision trail. When you can't read Helm's release Secrets, the result is an object: " +
 			"its summary says what's unknown, and observed rows come from labels and annotations on " +
-			"objects, with no status, may miss releases, and can't use get_helm_release.",
+			"objects, with no status, and may miss releases.",
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
@@ -393,7 +393,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"from list_helm_releases when present, otherwise use the release namespace. " +
 			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=versions for exact upgrade versions, include=notes for bounded untrusted notes. Request values, history, operations, or " +
 			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
-			"manage_helm merges deployed values, which may differ after failure; check history/values_diff.",
+			"manage_helm merges deployed values, which may differ after failure; check history/values_diff. " +
+			"Without Helm's Secrets it returns {summary, observed}, built from the release's objects.",
 		// include=versions contacts the release's chart source, outside the cluster API.
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
 	}, logToolCall("get_helm_release", handleGetHelmRelease))

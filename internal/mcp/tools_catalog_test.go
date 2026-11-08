@@ -274,13 +274,14 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Includes batch diagnosis routing, log-argument boundaries and native Helm source/merge/confirmation contracts.
+		// get_helm_release names the shape it returns without Helm's Secrets.
 		// Stored-chart navigation, advisory dry_run and stale-revision semantics add
 		// 992 bytes without new tool names; release version listing adds 155 more,
 		// and rollback preview plus workload-to-release rollback routing 291 more.
 		// get_helm_chart (chart versions before install) adds 707.
-		// Measured 73,579; retain 33 bytes headroom.
+		// Measured 73,640 after merging main; retain 33 bytes headroom.
 		// Opt-in Service curl and exec remain a separate allowance below.
-		maxCatalogBytes         = 73612
+		maxCatalogBytes         = 73673
 		maxToolDescriptionBytes = 3200
 	)
 

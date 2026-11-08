@@ -121,4 +121,16 @@ func TestObservedReadsNeverListSecrets(t *testing.T) {
 		}
 		assertNoSecretRead(t, p)
 	})
+
+	t.Run("detail by storage namespace", func(t *testing.T) {
+		p := newProvider()
+		detail, err := GetObservedReleaseInStorage(context.Background(), &ObjectScope{Provider: p}, "apps", "web")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if detail == nil || detail.ResourceCount != 1 || detail.Resources[0].Kind != "ConfigMap" {
+			t.Fatalf("detail = %+v, want web with only its ConfigMap", detail)
+		}
+		assertNoSecretRead(t, p)
+	})
 }
