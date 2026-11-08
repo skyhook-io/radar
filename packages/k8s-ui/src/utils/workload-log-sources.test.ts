@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkloadPodContainerInfo, WorkloadPodInfo } from '../types/core'
-import { initContainerNames, initializingPodsNotice, containerRole, viewMixesContainers, viewMixesPods, containerColumnWidth } from './workload-log-sources'
+import { initContainerNames, initializingPodsNotice, containerRole, viewMixesContainers, viewMixesPods, containerColumnWidth, unshownBlockingInitContainer } from './workload-log-sources'
 
 const app = (state: WorkloadPodContainerInfo['state'], reason?: string): WorkloadPodContainerInfo => ({ name: 'kserve-container', ready: state === 'running', restartCount: 0, state, reason })
 const init = (state: WorkloadPodContainerInfo['state'], reason?: string, extra: Partial<WorkloadPodContainerInfo> = {}): WorkloadPodContainerInfo => ({ name: 'storage-initializer', init: true, ready: false, restartCount: 3, state, reason, ...extra })
@@ -64,6 +64,32 @@ describe('init container identity', () => {
   })
 })
 
+describe('unshownBlockingInitContainer', () => {
+  const slow = (name: string) => pod(name, [init('running'), app('waiting', 'PodInitializing')])
+  it('names the init container every stuck Pod waits on while none has shown its lines', () => {
+    expect(unshownBlockingInitContainer([slow('p-1'), slow('p-2')])).toBe('storage-initializer')
+    expect(unshownBlockingInitContainer([slow('p-1')], { containersWithOutput: new Set(['p-1/storage-initializer']) })).toBeUndefined()
+    expect(unshownBlockingInitContainer([slow('p-1')], { selectedContainer: 'kserve-container' })).toBeUndefined()
+    expect(unshownBlockingInitContainer([pod('p-1', [running('kserve-container')])])).toBeUndefined()
+    const other = pod('p-2', [{ ...init('running'), name: 'migrate' }, app('waiting', 'PodInitializing')])
+    expect(unshownBlockingInitContainer([slow('p-1'), other])).toBeUndefined()
+  })
+})
+
+describe('blocking init container', () => {
+  const proxy = (extra: Partial<WorkloadPodContainerInfo>): WorkloadPodContainerInfo => ({ name: 'proxy', init: true, sidecar: true, ready: false, restartCount: 1, state: 'running', ...extra })
+  const migrate = (extra: Partial<WorkloadPodContainerInfo>): WorkloadPodContainerInfo => ({ name: 'migrate', init: true, ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing', ...extra })
+  it('blames a later step that is running, not an earlier sidecar restarting on its own', () => {
+    const p = pod('p-1', [proxy({ started: false }), migrate({ state: 'running', reason: undefined }), app('waiting', 'PodInitializing')])
+    expect(initializingPodsNotice([p])).toBe("kserve-container hasn't started: init container migrate is still running.")
+    expect(unshownBlockingInitContainer([p])).toBe('migrate')
+  })
+  it('blames a sidecar that hasn\'t started while the next step waits on it', () => {
+    const p = pod('p-1', [proxy({ started: false }), migrate({}), app('waiting', 'PodInitializing')])
+    expect(initializingPodsNotice([p])).toBe("kserve-container hasn't started: sidecar proxy hasn't finished starting.")
+  })
+})
+
 describe('containerColumnWidth', () => {
   const awsNode = pod('aws-node-abcde', [
     { name: 'aws-vpc-cni-init', init: true, ready: false, restartCount: 0, state: 'terminated', reason: 'Completed' },
@@ -102,9 +128,9 @@ describe('viewMixesContainers', () => {
     expect(viewMixesContainers([pod('repo-1', [completed, running('repo-server')])], [{ pod: 'repo-1', container: 'repo-server' }])).toBe(false)
   })
 
-  it('mixes for several app containers, an initializing Pod, init output, or lines from several containers', () => {
+  it('mixes for several app containers, init output, or lines from several containers', () => {
     expect(viewMixesContainers([pod('kserve-1', [running('manager'), running('kube-rbac-proxy')])], [])).toBe(true)
-    expect(viewMixesContainers([stuck('p-1')], [])).toBe(true)
+    expect(viewMixesContainers([stuck('p-1')], [{ pod: 'p-1', container: 'storage-initializer', containerRole: 'init' }])).toBe(true)
     expect(viewMixesContainers([pod('repo-1', [completed, running('repo-server')])], [{ pod: 'repo-1', container: 'copyutil' }])).toBe(true)
     expect(viewMixesContainers([pod('api-2', [running('app')])], [{ pod: 'api-1', container: 'metrics' }, { pod: 'api-2', container: 'app' }])).toBe(true)
   })

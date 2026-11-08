@@ -305,3 +305,33 @@ it('names each line\'s Pod only while the view holds more than one Pod', async (
   expect(element.querySelector('[title="web-0"]')?.textContent).toBe('[web-0]')
   expect(element.querySelector('[title="web-1"]')?.textContent).toBe('[web-1]')
 })
+
+it('offers a slow init container\'s logs from the status line, since All containers leaves it out', async () => {
+  await act(async () =>
+    root.render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 20 }}>
+        <ToastProvider>
+          <WorkloadLogsViewer name="predictor" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+        </ToastProvider>
+      </VirtuosoMockContext.Provider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  await act(async () => source.emit('connected', { pods: [{
+    name: 'p-0',
+    containers: ['storage-initializer', 'kserve-container'],
+    ready: false,
+    containerStatuses: [
+      { name: 'storage-initializer', init: true, ready: false, restartCount: 0, state: 'running' },
+      { name: 'kserve-container', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' },
+    ],
+  }] }))
+  expect(element.textContent).toContain("kserve-container hasn't started: init container storage-initializer is still running.")
+  expect(element.querySelector('[title^="Container "]')).toBeNull()
+  const show = [...element.querySelectorAll('button')].find(button => button.textContent === 'Show its logs')
+  if (!show) throw new Error('no Show its logs action')
+  await act(async () => show.click())
+  const picker = [...element.querySelectorAll('select')].find(select => [...select.options].some(option => option.value === 'storage-initializer'))
+  expect(picker?.value).toBe('storage-initializer')
+})

@@ -62,9 +62,10 @@ export function viewMixesPods(pods: { name: string }[], entries: Iterable<{ pod?
 
 /**
  * Whether "All containers" mixes output from several containers, so each line
- * should name its container: more than one app container, a shown Pod still
- * initializing, or lines from more than one container, or from an init
- * container or sidecar, on screen. One app container beside a finished init
+ * should name its container: more than one app container, or lines from more
+ * than one container, or from an init container or sidecar, on screen. A Pod
+ * that is merely initializing doesn't count, so routine startup during a
+ * rollout doesn't toggle the column. One app container beside a finished init
  * container reads as a single source.
  */
 export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string; containerRole?: 'init' | 'sidecar' }>): boolean {
@@ -81,7 +82,6 @@ export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{
       if (status?.init || status?.sidecar) supporting.add(podContainerKey(pod.name, name))
       else apps.add(name)
     }
-    if (statuses.some(status => !status.init && status.state === 'waiting' && status.reason === 'PodInitializing')) return true
   }
   if (apps.size > 1) return true
   let first: string | undefined
@@ -94,11 +94,15 @@ export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{
 }
 
 // The init container a Pod is waiting on: the first regular one that hasn't
-// completed, or a native sidecar that hasn't started.
+// completed, once it has run. Before it runs, a native sidecar ahead of it that
+// hasn't started is what holds it back; after it runs, the kubelet restarts
+// earlier sidecars on their own, so a restarting one isn't the blocker.
 function blockingInitContainer(statuses: WorkloadPodContainerInfo[]): WorkloadPodContainerInfo | undefined {
-  return statuses.find(status => status.init && (status.sidecar
-    ? !status.started
-    : !(status.state === 'terminated' && status.reason === 'Completed')))
+  const inits = statuses.filter(status => status.init)
+  const index = inits.findIndex(status => !status.sidecar && !(status.state === 'terminated' && status.reason === 'Completed'))
+  const step = index >= 0 ? inits[index] : undefined
+  if (step && (step.state !== 'waiting' || (step.reason && step.reason !== 'PodInitializing'))) return step
+  return (index >= 0 ? inits.slice(0, index) : inits).find(status => status.sidecar && !status.started) ?? step
 }
 
 function blockerText(status: WorkloadPodContainerInfo): string {
@@ -119,16 +123,9 @@ interface InitializingNoticeOptions {
   podLabel?: (pod: WorkloadPodInfo) => string
 }
 
-/**
- * Explains why app containers in the shown Pods have no output: they are
- * waiting for an init container. Empty when no shown Pod is initializing, or
- * when the Radar serving the logs doesn't report container states. Pod status
- * arrives when a Pod is first seen, so a container that has since produced
- * lines is no longer reported as waiting.
- */
-export function initializingPodsNotice(pods: WorkloadPodInfo[], options: InitializingNoticeOptions = {}): string {
-  const { selectedContainer = '', containersWithOutput, podLabel = pod => pod.name } = options
-  const stuck: { pod: WorkloadPodInfo; message: string }[] = []
+function stuckPods(pods: WorkloadPodInfo[], options: InitializingNoticeOptions) {
+  const { selectedContainer = '', containersWithOutput } = options
+  const stuck: { pod: WorkloadPodInfo; message: string; blocker: string }[] = []
   for (const pod of pods) {
     const statuses = pod.containerStatuses ?? []
     const waiting = statuses.filter(status => !status.init && status.state === 'waiting' && status.reason === 'PodInitializing'
@@ -137,12 +134,40 @@ export function initializingPodsNotice(pods: WorkloadPodInfo[], options: Initial
     const blocker = blockingInitContainer(statuses)
     if (waiting.length === 0 || !blocker) continue
     const subject = waiting.length === 1 ? `${waiting[0].name} hasn't started` : `${waiting.map(status => status.name).join(', ')} haven't started`
-    stuck.push({ pod, message: `${subject}: ${blockerText(blocker)}.` })
+    stuck.push({ pod, message: `${subject}: ${blockerText(blocker)}.`, blocker: blocker.name })
   }
+  return stuck
+}
+
+/**
+ * Explains why app containers in the shown Pods have no output: they are
+ * waiting for an init container. Empty when no shown Pod is initializing, or
+ * when the Radar serving the logs doesn't report container states. Pod status
+ * arrives when a Pod is first seen, so a container that has since produced
+ * lines is no longer reported as waiting.
+ */
+export function initializingPodsNotice(pods: WorkloadPodInfo[], options: InitializingNoticeOptions = {}): string {
+  const { podLabel = pod => pod.name } = options
+  const stuck = stuckPods(pods, options)
   if (stuck.length === 0) return ''
   const distinct = new Set(stuck.map(item => item.message))
   if (pods.length === 1) return stuck[0].message
   if (stuck.length === 1) return `Pod ${podLabel(stuck[0].pod)}: ${stuck[0].message}`
   if (distinct.size === 1) return `${stuck.length} of ${pods.length} Pods: ${stuck[0].message}`
   return `${stuck.length} of ${pods.length} Pods have app containers waiting on init containers.`
+}
+
+/**
+ * The init container the notice names, when every stuck Pod waits on the same
+ * one and none of them has shown its lines. "All containers" reads an init
+ * container only while it is failing, so this is how to reach the output of
+ * one that is slow but still making progress.
+ */
+export function unshownBlockingInitContainer(pods: WorkloadPodInfo[], options: InitializingNoticeOptions = {}): string | undefined {
+  if (options.selectedContainer) return undefined
+  const stuck = stuckPods(pods, options)
+  const names = new Set(stuck.map(item => item.blocker))
+  if (names.size !== 1) return undefined
+  const [name] = names
+  return stuck.some(item => options.containersWithOutput?.has(podContainerKey(item.pod.name, name))) ? undefined : name
 }

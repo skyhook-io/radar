@@ -11,7 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
-import { initContainerNames, initializingPodsNotice, containerRole, podContainerKey, viewMixesContainers, viewMixesPods, containerColumnWidth } from '../../utils/workload-log-sources'
+import { initContainerNames, initializingPodsNotice, containerRole, podContainerKey, viewMixesContainers, viewMixesPods, containerColumnWidth, unshownBlockingInitContainer } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -370,6 +370,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     containersWithOutput: outputKeys,
     podLabel: pod => sourceLabels[pod.name] || pod.stepName || pod.name.split('-').slice(-2).join('-'),
   }), [connecting, streamError, shownPods, selectedContainer, outputKeys, sourceLabels])
+  const unshownBlocker = useMemo(() => initNotice ? unshownBlockingInitContainer(shownPods, { selectedContainer, containersWithOutput: outputKeys }) : undefined,
+    [initNotice, shownPods, selectedContainer, outputKeys])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
     const filename = `${name}-logs.${extension}`
@@ -484,6 +486,11 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             <span className="inline-flex min-w-0 items-baseline gap-1.5">
               <AlertTriangle className={`h-3 w-3 shrink-0 self-center ${toneTextClass('degraded')}`} aria-hidden />
               <span>{text}</span>
+              {text === initNotice && unshownBlocker && (
+                <button type="button" onClick={() => setSelectedContainer(unshownBlocker)} className="whitespace-nowrap text-accent-text hover:underline">
+                  Show its logs
+                </button>
+              )}
             </span>
           </span>
         ))}
