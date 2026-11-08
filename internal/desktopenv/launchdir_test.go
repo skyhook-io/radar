@@ -78,8 +78,9 @@ func TestResolveAgainst(t *testing.T) {
 		path string
 		want string
 	}{
-		{name: "relative path", dir: launch, path: "kube/config", want: filepath.Join(launch, "kube", "config")},
-		{name: "dot path", dir: launch, path: "./config", want: filepath.Join(launch, "config")},
+		{name: "relative path", dir: launch, path: "kube/config", want: launch + "/kube/config"},
+		{name: "dot path", dir: launch, path: "./config", want: launch + "/./config"},
+		{name: "parent through a symlink stays unresolved", dir: launch, path: "current/../ai-runs.db", want: launch + "/current/../ai-runs.db"},
 		{name: "absolute path", dir: launch, path: abs, want: abs},
 		{name: "home path", dir: launch, path: "~/.kube/config", want: "~/.kube/config"},
 		{name: "empty path", dir: launch, path: "", want: ""},
@@ -102,15 +103,17 @@ func TestResolvedLaunchEnv(t *testing.T) {
 		"RADAR_AI_CLI_BIN": "codex",
 		"HELM_PLUGINS":     strings.Join([]string{"plugins", "/opt/helm/plugins"}, sep),
 		"SSL_CERT_FILE":    "certs/ca.pem",
+		"DOCKER_CONFIG":    "creds/docker",
 		"AWS_CONFIG_FILE":  "/home/u/.aws/config",
 		"TMPDIR":           "",
 		"UNRELATED_PATH":   "relative/file",
 	}
 	got := resolvedLaunchEnv(launch, lookupFrom(env))
 	want := map[string]string{
-		"KUBECONFIG":    strings.Join([]string{"/home/u/work/kc.yaml", "/etc/kube/admin", "~/.kube/config", "", "/home/u/shared/kc"}, sep),
+		"KUBECONFIG":    strings.Join([]string{"/home/u/work/kc.yaml", "/etc/kube/admin", "~/.kube/config", "", "/home/u/work/../shared/kc"}, sep),
 		"HELM_PLUGINS":  strings.Join([]string{"/home/u/work/plugins", "/opt/helm/plugins"}, sep),
 		"SSL_CERT_FILE": "/home/u/work/certs/ca.pem",
+		"DOCKER_CONFIG": "/home/u/work/creds/docker",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("resolvedLaunchEnv() = %v, want %v", got, want)
@@ -127,5 +130,27 @@ func TestResolvedLaunchEnv(t *testing.T) {
 	}
 	if got := resolvedLaunchEnv("", lookupFrom(env)); len(got) != 0 {
 		t.Errorf("outside an AppImage nothing changes, got %v", got)
+	}
+}
+
+// A relative path is resolved by walking it from the launch folder, symlinks
+// included, the way the shell that started the AppImage would.
+func TestResolveAgainstFollowsSymlinksLikeTheShell(t *testing.T) {
+	root := t.TempDir()
+	launch := filepath.Join(root, "launch")
+	releases := filepath.Join(root, "data", "releases")
+	for _, d := range []string{launch, filepath.Join(releases, "v1")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(releases, "ai-runs.db"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(releases, "v1"), filepath.Join(launch, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(resolveAgainst(launch, "current/../ai-runs.db")); err != nil {
+		t.Errorf("current/../ai-runs.db from the launch folder should reach data/releases/ai-runs.db: %v", err)
 	}
 }

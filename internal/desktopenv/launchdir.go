@@ -83,7 +83,9 @@ func resolveAgainst(dir, path string) string {
 	if dir == "" || path == "" || filepath.IsAbs(path) || strings.HasPrefix(path, "~") {
 		return path
 	}
-	return filepath.Join(dir, path)
+	// Not filepath.Join: cleaning "link/.." would skip the symlink the
+	// kernel follows when it resolves the path from the launch folder.
+	return strings.TrimSuffix(dir, string(filepath.Separator)) + string(filepath.Separator) + path
 }
 
 // launchPathEnv lists environment variables that hold paths Radar, or a
@@ -120,6 +122,9 @@ var launchPathEnv = []struct {
 	{key: "XDG_CACHE_HOME"},
 	{key: "XDG_CONFIG_HOME"},
 	{key: "XDG_DATA_HOME"},
+	// Registry credentials for image inspection (go-containerregistry).
+	{key: "DOCKER_CONFIG"},
+	{key: "REGISTRY_AUTH_FILE"},
 	{key: "SSL_CERT_FILE"},
 	{key: "SSL_CERT_DIR", list: true},
 	{key: "TMPDIR"},
