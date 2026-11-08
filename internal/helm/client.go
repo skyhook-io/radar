@@ -2648,11 +2648,7 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 // the supplied user values (WYSIWYG — ResetValues, no merge with prior overrides).
 // The plain upgradeWith path keeps ResetThenReuseValues for the blind carry-over case.
 func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, sendProgress func(phase, message, detail string)) error {
-	return c.upgradeWithValuesMode(actionConfig, name, targetVersion, repositoryName, newValues, true, sendProgress)
-}
-
-func (c *Client) upgradeWithValuesMode(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, replace bool, sendProgress func(phase, message, detail string)) error {
-	_, _, err := c.runValuesUpgrade(actionConfig, name, targetVersion, repositoryName, newValues, valuesUpgradeOptions{replace: replace}, sendProgress)
+	_, _, err := c.runValuesUpgrade(actionConfig, name, targetVersion, repositoryName, newValues, valuesUpgradeOptions{replace: true}, sendProgress)
 	return err
 }
 

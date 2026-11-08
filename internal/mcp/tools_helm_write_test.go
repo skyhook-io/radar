@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"helm.sh/helm/v3/pkg/chart"
@@ -151,7 +152,7 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	if !strings.Contains(preview["message"].(string), "deployed") {
 		t.Fatalf("preview omitted status: %v", preview)
 	}
-	if preview["history"] != "purged on successful uninstall" || preview["historyOnly"] != false || preview["resourcesCount"] != float64(0) || preview["deleteHooks"] == nil || preview["kept"] == nil {
+	if preview["history"] != "purged once resources are deleted, even if a post-delete hook then fails" || preview["historyOnly"] != false || preview["resourcesCount"] != float64(0) || preview["deleteHooks"] == nil || preview["kept"] == nil {
 		t.Fatalf("preview must state history, hooks and kept resources: %v", preview)
 	}
 	in.Confirm = preview["confirm"].(string)
@@ -405,6 +406,16 @@ func TestManageHelmRollbackPreviewReadsLiveObjectsAsCaller(t *testing.T) {
 	}
 	if strings.Join(liveReads, ",") != "a@rollback-previewer,b@rollback-previewer,c@rollback-previewer" {
 		t.Fatalf("live reads must target the release namespace as the caller: %v", liveReads)
+	}
+	// After a failed uninstall the agent must learn whether Helm already purged
+	// the release: it purges history even when a post-delete hook then fails.
+	helmClient := helm.NewStandaloneClient(cfg)
+	user := userFromContext(ctx)
+	if uninstallPurgedDespiteError(helmClient, manageHelmInput{Namespace: "team-a", Name: "demo"}, user) {
+		t.Fatal("a release still in storage must not be reported as purged")
+	}
+	if !uninstallPurgedDespiteError(helmClient, manageHelmInput{Namespace: "team-a", Name: "gone"}, user) {
+		t.Fatal("a release missing from storage after a failed uninstall must be reported as purged")
 	}
 }
 

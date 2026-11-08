@@ -270,13 +270,13 @@ func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
 			case "upgrade with values":
 				err = client.upgradeWithValues(cfg, "demo", "2.0.0", repoName, values, noop)
 			case "upgrade with overrides":
-				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, map[string]any{"message": "new", "auth": map[string]any{"user": "new-user"}}, false, noop)
+				_, _, err = client.runValuesUpgrade(cfg, "demo", "2.0.0", repoName, map[string]any{"message": "new", "auth": map[string]any{"user": "new-user"}}, valuesUpgradeOptions{}, noop)
 			case "upgrade with empty overrides":
-				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, map[string]any{}, false, noop)
+				_, _, err = client.runValuesUpgrade(cfg, "demo", "2.0.0", repoName, map[string]any{}, valuesUpgradeOptions{}, noop)
 			case "omitted overrides after failure":
-				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, nil, false, noop)
+				_, _, err = client.runValuesUpgrade(cfg, "demo", "2.0.0", repoName, nil, valuesUpgradeOptions{}, noop)
 			case "empty overrides after failure":
-				err = client.upgradeWithValuesMode(cfg, "demo", "2.0.0", repoName, map[string]any{}, false, noop)
+				_, _, err = client.runValuesUpgrade(cfg, "demo", "2.0.0", repoName, map[string]any{}, valuesUpgradeOptions{}, noop)
 			case "apply values":
 				err = client.applyValuesWith(cfg, "demo", values)
 			case "preview values":

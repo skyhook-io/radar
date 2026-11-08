@@ -148,7 +148,7 @@ func TestMCPOverridesValidateDeployedBaselineAfterFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := newChartSourceTestClient(t)
-	err := client.upgradeWithValuesMode(cfg, "demo", "1.0.0", "", map[string]any{"auth": nil}, false, func(string, string, string) {})
+	_, _, err := client.runValuesUpgrade(cfg, "demo", "1.0.0", "", map[string]any{"auth": nil}, valuesUpgradeOptions{}, func(string, string, string) {})
 	if err == nil || !strings.Contains(err.Error(), "hidden credentials") {
 		t.Fatalf("deployed baseline guard missed: %v", err)
 	}
