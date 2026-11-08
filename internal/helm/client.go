@@ -81,6 +81,10 @@ type Client struct {
 	// leave it nil and use locateChartPath, which wires Helm's registry client
 	// for OCI references.
 	chartPathLocator func(*action.Configuration, string, string) (string, error)
+	// ociTags is a test seam for OCI tag listing; production uses the registry client.
+	ociTags ociTagLister
+	// listings shares recent classic-index downloads between version listings.
+	listings recentIndexes
 	// restConfig, when set, is the explicit rest.Config all actions target —
 	// used by callers that resolve the cluster themselves before Radar's k8s
 	// singleton is up (the CLI install driver), so Helm can't diverge onto a

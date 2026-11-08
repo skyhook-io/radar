@@ -189,6 +189,14 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'get_helm_chart',
+    desc: 'Versions of a chart in a configured repository or OCI source, newest first, read live before installing it; latest is the newest non-prerelease.',
+    params: [
+      { arg: 'repository', required: true, desc: 'configured repository name or URL, or OCI prefix: the value an install uses' },
+      { arg: 'chart', required: true, desc: 'chart name' },
+    ],
+  },
+  {
     name: 'list_packages',
     desc: 'Unified "what\'s installed" view across Helm releases, workload labels, CRD registrations, and GitOps declarations (Argo + Flux), with sources, versions, health, and a sourceLegend for the stable source codes.',
     params: [
@@ -356,7 +364,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'name', required: true, desc: 'release name' },
       { arg: 'chart', desc: 'chart name for install' },
       { arg: 'repository', desc: 'configured install source; upgrade optionally asserts the confirmed saved source and requires it to be configured' },
-      { arg: 'version', desc: 'exact version for install; upgrade choices come from get_helm_release include=versions; omit on upgrade only when latest and deployed charts agree' },
+      { arg: 'version', desc: 'exact version for install (choices from get_helm_chart); upgrade choices come from get_helm_release include=versions; omit on upgrade only when latest and deployed charts agree' },
       { arg: 'values', desc: 'upgrade overrides merge with stored values; no literal credentials' },
       { arg: 'replace_values', desc: 'upgrade only: explicitly replace all stored overrides with values' },
       { arg: 'dry_run', desc: 'upgrade or rollback: advisory preview (upgrade: same merge rules; rollback: stored diff plus live takeover and retention checks); false executes' },

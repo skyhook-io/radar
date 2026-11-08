@@ -155,6 +155,37 @@ func resolveHelmStorageScope(ctx context.Context, namespace string) (namespaces 
 	return namespaces, true, skipped
 }
 
+type getHelmChartInput struct {
+	Repository string `json:"repository" jsonschema:"configured repository name or URL, or OCI prefix (oci://host/path): the value manage_helm install takes"`
+	Chart      string `json:"chart" jsonschema:"chart name, e.g. redis"`
+}
+
+// handleGetHelmChart lists a chart's versions before it is installed. Like the
+// UI chart browser it needs no Kubernetes permission, and it reads only
+// sources Radar's configuration owner configured.
+func handleGetHelmChart(ctx context.Context, req *mcp.CallToolRequest, input getHelmChartInput) (*mcp.CallToolResult, any, error) {
+	if input.Repository == "" || input.Chart == "" {
+		return nil, nil, fmt.Errorf("repository and chart are required")
+	}
+	helmClient := helm.GetClient()
+	if helmClient == nil {
+		if err := requireConnected(); err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, fmt.Errorf("helm is not available")
+	}
+	versions, err := helmClient.ChartVersions(input.Repository, input.Chart)
+	if err != nil {
+		// The repository argument can carry credentials; don't echo it, and
+		// mask anything credential-like in the underlying error.
+		if helm.SourceTimedOut(err) {
+			return nil, nil, redactedError{fmt.Errorf("can't list versions of chart %s: %w; the source didn't respond in time: retry in a minute", input.Chart, err)}
+		}
+		return nil, nil, redactedError{fmt.Errorf("can't list versions of chart %s: %w", input.Chart, err)}
+	}
+	return toJSONResult(versions)
+}
+
 func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input getHelmReleaseInput) (*mcp.CallToolResult, any, error) {
 	if input.ChartPath != "" && (!parseIncludes(input.Include)["chart"] || !strings.HasPrefix(input.ChartPath, "/")) {
 		return nil, nil, fmt.Errorf("chart_path requires include=chart and a JSON pointer starting with /")

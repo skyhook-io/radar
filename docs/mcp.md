@@ -252,7 +252,7 @@ rejected.
 
 | Action | Fields |
 |---|---|
-| `install` | `chart`, `repository`, exact `version` (required); `values` |
+| `install` | `chart`, `repository`, exact `version` (required; list with [`get_helm_chart`](#reading-charts-versions-and-notes)); `values` |
 | `upgrade` | `version`, `repository`, `values`, `replace_values`, `dry_run`, `expected_revision` |
 | `rollback` | `revision` (required); `dry_run`, `expected_revision` |
 | `uninstall` | `confirm` (omit to preview) |
@@ -271,7 +271,9 @@ release before retrying.
 - `expected_revision` refuses an upgrade or rollback if the latest revision
   differs. It is not a lock, and neither is the uninstall confirmation: Helm has
   no revision-conditioned writes, so coordinate with other release writers,
-  including Radar UI users.
+  including Radar UI users. When two upgrades or rollbacks race for the same
+  revision, Helm's release storage accepts one; the other fails before changing
+  anything, and the error says so.
 - `values` must never contain literal credentials or redacted output;
   `[REDACTED]` placeholders are refused. Errors are redacted, since Helm errors can
   echo chart text or values.
@@ -282,7 +284,10 @@ release before retrying.
 
 Install needs a source configured by Radar's configuration owner, and refuses any
 existing release history, including failed and uninstalled releases. It refreshes
-the index itself, so no warmed cache is needed. MCP can't register sources,
+the index itself, so no warmed cache is needed. Each install or upgrade downloads
+its own copy for checksum verification, so several at once from a large
+repository that throttles parallel downloads can time out; the refusal applies
+nothing and says to retry. MCP can't register sources,
 confirm a release's source or create namespaces.
 
 - **Local:** `helm repo add NAME URL` in the Helm configuration Radar uses.
@@ -316,7 +321,8 @@ override can't replace a map or list that contains a hidden credential.
   revisions use the same chart. After a failed version change, name the version or
   roll back first.
 - A version the source doesn't have fails with a pointer to
-  [`include=versions`](#reading-charts-versions-and-notes).
+  [`include=versions`](#reading-charts-versions-and-notes) (`get_helm_chart` for
+  an install).
 
 **Preview.** `dry_run: true` uses the same chart selection, merge and
 caller-authorized `lookup` as execution, but writes nothing and runs no hooks. It
@@ -406,12 +412,27 @@ PVCs and external data aren't listed, and hook contents aren't enumerated.
   and no `schemaError` means the chart stored none.
 - **`include=versions`** lists up to 50 versions an upgrade can target, newest
   first, from the release's confirmed source (`availableVersions`: `source`,
-  `versions`, `truncated`). It is the only include that contacts the source: a
-  classic index is downloaded fresh (up to 32 MiB), never from cache; OCI tags use
-  Radar's registry credentials. `versionsError` gives the reason when there is no
-  list: no confirmed source, a failed source change, an operation in progress, or
-  an unreachable source. A listed version can still fail to download. Charts not
-  installed yet aren't covered.
+  `versions`, `latest`, `truncated`). `latest` is the newest non-prerelease,
+  the version Helm picks when none is given, and is absent when the source offers
+  only prereleases; prereleases stay in `versions`.
+  It is the only include that contacts the source: a classic index is downloaded
+  fresh (up to 32 MiB, 30 seconds), or reused from a download that finished in
+  the last 60 seconds, so concurrent calls share one download; it is never read
+  from Radar's repository cache, which can be days old. OCI tags use Radar's
+  registry credentials, with a timeout per registry request but no overall
+  deadline. The 50-version cap limits the output, not the fetch. `versionsError`
+  gives the reason when there is no list: no confirmed source, a failed source
+  change, an operation in progress, an unreachable source, or a source that lists
+  no versions of the chart. Versions are what the source advertises; a listed
+  version can still fail to download.
+- **`get_helm_chart`** returns the same fields for a chart that isn't installed
+  yet: pass the `repository` and `chart` you would give `manage_helm install`.
+  It reads only sources the install path accepts (a configured repository name or
+  URL, or a configured OCI prefix), refuses anything else before any request
+  leaves Radar, and returns an error, not an empty list, when the source doesn't
+  have the chart. Like the UI's chart browser, it needs no Kubernetes permission,
+  so any caller of the endpoint can list the versions in Radar's configured
+  sources, private ones included; it is also on `/mcp-readonly`.
 - **`include=notes`** returns install notes (8 KiB) with known sensitive values
   and credential patterns masked, best-effort. `include=notes_diff` masks each
   revision with its own values before diffing.
@@ -1127,6 +1148,7 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 | `list_packages` | Installed packages (Helm releases, label-managed workloads, CRDs, Argo Applications, Flux HelmReleases + Kustomizations) with source provenance, versions, and health, in one call. Response includes `sourceLegend` for the stable source codes. | `namespace` (optional), `source` (optional: `H`/`helm`, `L`/`labels`, `C`/`crds`, `A`/`argocd`, `F`/`fluxcd`), `chart` (optional substring) |
 | `list_helm_releases` | List Helm releases with status, resource health, storage namespace, Flux ownership, current `lastOperation`, and a capped `operations` trail when Helm history indicates failed upgrades, rollback-after-failure, rollbacks, or stuck pending operations. Use this first for Helm deployment debugging. When the caller can't read all of Helm's release Secrets, it returns `{summary, releases, observed, storageDenied, objectCoverage}` instead of an array: `observed` rows come from labels and annotations on objects the caller can read, and have no status, and `get_helm_release` is denied for them. See [Without access to Secrets](helm.md#without-access-to-secrets). | `namespace` (optional) |
 | `get_helm_release` | Returns the release with its owned resources, `hooks` with their outcome, `history` (the newest ten stored revisions; `include=history` returns them all) and the user-supplied `values` (redacted). Detailed Helm release info with owned resources, resource health, Flux ownership, current `lastOperation`, `operationInsight` (active/recovered state, likely resource to inspect, suggested compare), hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when still available. Use `include=history,operations` for the full Helm revision trail; `include=values` for key-aware redacted user values; `include=chart,notes,versions` for [stored chart defaults, install notes and upgrade versions](#reading-charts-versions-and-notes); `include=diff,values_diff,notes_diff,resource_diff` for revision comparison. Manifest `diff` redacts Secret values while preserving key changes; `notes_diff` uses pattern-based redaction. For releases with `storageNamespace`, pass that value as `namespace`. | `namespace` (required: Helm storage namespace), `name` (required), `include` (optional: `chart,notes,versions,values,history,operations,diff,values_diff,notes_diff,resource_diff`), `chart_path` (optional JSON pointer with `include=chart`), `diff_revision_1` (required when `include` contains a diff token) / `diff_revision_2` (optional, defaults to current) |
+| `get_helm_chart` | [Versions of a chart in a configured source](#reading-charts-versions-and-notes) before it is installed, newest first, with the newest stable as `latest`. | `repository`, `chart` (both required) |
 | `list_namespaces` | List all namespaces with status | (none) |
 | `get_subject_permissions` | Effective RBAC permissions of a ServiceAccount / User / Group. Without `verb`/`resource`, returns the existing bindings, deduplicated flat rules, and (for SAs) Pods using it. With both fields, runs an authoritative SubjectAccessReview for a ServiceAccount and returns a focused allow/deny result; this requires the caller itself to have `create subjectaccessreviews.authorization.k8s.io`. | `kind` (required: `ServiceAccount`, `User`, or `Group`), `namespace` (required for ServiceAccount; omit for User/Group), `name` (required), `verb` + `resource` (optional pair; ServiceAccount only), `group`, `resource_namespace` (defaults to subject namespace; explicitly empty for a cluster-scoped or cluster-wide API request, not aggregation of namespace-local grants), `subresource`, `resource_name` (optional check refinements) |
 | `query_prometheus` | Execute PromQL against the cluster's Prometheus (auto-discovered or `--prometheus-url`; works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). `type=instant` returns current values; `type=range` returns time-series history with automatic step adjustment. Empty results include a bounded list of related active metric names when a metric family can be inferred. Oversized results return a label-cardinality summary + suggested `topk` rewrite instead of raw data. Backend qualifications appear in bounded `warnings` and `infos`, with `annotationsOmitted` for overflow and `partial` when stores did not all answer; common PromQL errors include corrective hints. Every response carries `selectors`, the vector selectors the query reads (metric + label matchers), with `selectorsUnknown: true` when the query could not be tokenized and its scope must be treated as unbounded. | `query` (required), `type` (optional: `instant` default, `range`), `since` (optional, e.g. `30m`, `1h`, `24h`, `7d`; default `1h`), `start` / `end` (optional RFC3339, override `since`), `step` (optional, auto-calculated when omitted), `max_points` (optional, default 300, max 600), `timeout` (optional seconds, default 30, max 180) |

@@ -433,3 +433,69 @@ func TestManageHelmRedactsStructuredErrors(t *testing.T) {
 		t.Fatalf("credential reached the agent: %s", text)
 	}
 }
+
+// Helm stores a new revision before it touches resources. When another writer
+// stores that revision first, the call changed nothing, and the agent must hear
+// that rather than a generic failure that may have partially applied.
+func TestManageHelmReportsLostRevisionRaceAsNoChange(t *testing.T) {
+	secrets := fake.NewClientset().CoreV1().Secrets("team-a")
+	storage := driver.NewSecrets(secrets)
+	for version, status := range map[int]release.Status{1: release.StatusSuperseded, 2: release.StatusDeployed} {
+		rel := &release.Release{Name: "demo", Namespace: "team-a", Version: version,
+			Chart: &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}},
+			Info:  &release.Info{Status: status}}
+		if err := storage.Create(fmt.Sprintf("sh.helm.release.v1.demo.v%d", version), rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/version":
+			json.NewEncoder(w).Encode(map[string]string{"gitVersion": "v1.34.0"})
+		case r.Method == http.MethodPost && r.URL.Path == "/apis/authorization.k8s.io/v1/subjectaccessreviews":
+			json.NewEncoder(w).Encode(authv1.SubjectAccessReview{TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"}, Status: authv1.SubjectAccessReviewStatus{Allowed: true}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/team-a/secrets":
+			list, err := secrets.List(r.Context(), metav1.ListOptions{LabelSelector: r.URL.Query().Get("labelSelector")})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			list.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "SecretList"}
+			json.NewEncoder(w).Encode(list)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/team-a/secrets/"):
+			secret, err := secrets.Get(r.Context(), strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/team-a/secrets/"), metav1.GetOptions{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			secret.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
+			json.NewEncoder(w).Encode(secret)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/team-a/secrets":
+			// Another writer stored revision 3 first.
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(metav1.Status{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"}, Status: metav1.StatusFailure, Reason: metav1.StatusReasonAlreadyExists, Code: http.StatusConflict})
+		default:
+			t.Errorf("unexpected request (must not touch resources): %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	cfg := &rest.Config{Host: api.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	defer func() {
+		k8s.SetTestClient(oldClient)
+		k8s.SetTestConfig(oldConfig)
+		k8s.SetConnectionStatus(oldStatus)
+	}()
+	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "helm-mcp-race"})
+	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "rollback", Namespace: "team-a", Name: "demo", Revision: 1, ExpectedRevision: 2})
+	if err == nil || !strings.Contains(err.Error(), "refused before applying changes: another operation stored the next revision") {
+		t.Fatalf("lost revision race must report no change: %v", err)
+	}
+}

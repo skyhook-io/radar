@@ -28,7 +28,7 @@ type manageHelmInput struct {
 	Name             string         `json:"name" jsonschema:"Helm release name"`
 	Chart            string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
 	Repository       string         `json:"repository,omitempty" jsonschema:"install: required configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
-	Version          string         `json:"version,omitempty" jsonschema:"exact chart version; required for install; upgrade choices: get_helm_release include=versions; omission keeps the stored version only when latest and deployed history agree"`
+	Version          string         `json:"version,omitempty" jsonschema:"exact chart version; required for install (choices: get_helm_chart); upgrade choices: get_helm_release include=versions; omission keeps the stored version only when latest and deployed history agree"`
 	DryRun           bool           `json:"dry_run,omitempty" jsonschema:"upgrade or rollback: non-mutating advisory preview (upgrade: same merge and caller lookups; rollback: stored diff, live takeover/retention); default false executes"`
 	ExpectedRevision int            `json:"expected_revision,omitempty" jsonschema:"upgrade or rollback: refuse if latest release revision differs; use revision from get_helm_release or currentRevision from preview; not an atomic lock"`
 	Values           map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; merge uses the deployed baseline, not necessarily the latest values read; replace_values=true resets overrides; no redacted output or literal credentials"`
@@ -47,7 +47,7 @@ func (in manageHelmInput) validate() error {
 	switch in.Action {
 	case "install":
 		if in.Chart == "" || in.Repository == "" || in.Version == "" {
-			return fmt.Errorf("install requires chart, repository and version")
+			return fmt.Errorf("install requires chart, repository and an exact version; list versions with get_helm_chart")
 		}
 	case "upgrade":
 	case "rollback":
@@ -230,9 +230,26 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			}
 			return nil, nil, fmt.Errorf("%w; use a new release name or ask an operator to recover retained history; upgrade cannot reinstall an uninstalled release", err)
 		}
-		if in.Action == "upgrade" && in.Version != "" && helm.ChartVersionUnavailable(err) {
+		if !in.DryRun && (in.Action == "upgrade" || in.Action == "rollback") && errors.Is(err, driver.ErrReleaseExists) {
+			// Helm stores the new revision before touching resources, so losing
+			// that race to another writer leaves the release unchanged.
+			audit.Outcome = "refused"
+			return nil, nil, fmt.Errorf("Helm %s refused before applying changes: another operation stored the next revision of this release first (%w); inspect get_helm_release, then retry only if the change is still wanted", in.Action, err)
+		}
+		if in.Version != "" && helm.ChartVersionUnavailable(err) {
 			// A wrong version only says it is missing; point at the real choices.
-			err = fmt.Errorf("%w; if version %s may not exist, list exact versions with get_helm_release include=versions", err, in.Version)
+			lister := "get_helm_release include=versions"
+			if in.Action == "install" {
+				lister = "get_helm_chart"
+			}
+			err = fmt.Errorf("%w; if version %s may not exist, list exact versions with %s", err, in.Version, lister)
+		}
+		if (refused || in.DryRun) && helm.SourceTimedOut(err) {
+			outcome := "refused before applying changes"
+			if in.DryRun {
+				outcome = "preview failed without applying changes"
+			}
+			return nil, nil, fmt.Errorf("Helm %s %s: %w; the chart source didn't respond in time (a large index, or a source throttling parallel downloads): retry in a minute", in.Action, outcome, err)
 		}
 		if in.DryRun && in.Action == "rollback" {
 			return nil, nil, fmt.Errorf("Helm rollback preview failed without applying changes: %w; inspect get_helm_release include=history", err)

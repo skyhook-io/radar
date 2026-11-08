@@ -18,7 +18,7 @@ var ReadOnlyTools = []string{
 	"get_dashboard", "top_resources", "list_resources", "get_resource",
 	"get_topology", "get_neighborhood", "get_events", "get_pod_logs",
 	"diagnose", "list_namespaces", "get_changes", "get_cluster_audit",
-	"list_helm_releases", "get_helm_release", "list_packages", "issues",
+	"list_helm_releases", "get_helm_release", "get_helm_chart", "list_packages", "issues",
 	"search", "get_subject_permissions", "query_prometheus", "discover_metrics",
 	"get_prometheus_rules", "get_workload_logs", "get_cluster_upgrade_readiness",
 	"get_cost", "get_rightsizing", "wait_for", "get_runtime_versions",

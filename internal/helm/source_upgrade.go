@@ -2,12 +2,14 @@ package helm
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +36,19 @@ var (
 // lacking the requested chart version or failing to download it.
 func ChartVersionUnavailable(err error) bool {
 	return errors.Is(err, errChartVersionMissing) || errors.Is(err, errChartDownload)
+}
+
+var errSourceTimedOut = errors.New("the chart source didn't respond in time")
+
+// SourceTimedOut reports whether err comes from a chart source that didn't
+// answer in time: a large index, or a source throttling parallel downloads.
+// Retrying shortly is the remedy, not reconfiguring the source.
+func SourceTimedOut(err error) bool {
+	if errors.Is(err, errSourceTimedOut) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 type SourceUpgradeSelection struct {
@@ -147,20 +162,12 @@ func (c *Client) fetchSelectedRepositoryIndex(selected ChartSourceCandidate, dir
 		return repo.Entry{}, nil, errSourceConflict
 	}
 	snapshot := *configured
-	snapshot.Name = "selected"
 	snapshot.URL = selected.URL
-	repository, err := repo.NewChartRepository(&snapshot, c.repositoryGettersWithLimits(&snapshot, timeout, maxBytes))
+	index, err := c.downloadRepositoryIndex(snapshot, dir, timeout, maxBytes)
 	if err != nil {
 		return repo.Entry{}, nil, err
 	}
-	repository.CachePath = dir
-	if _, err := repository.DownloadIndexFile(); err != nil {
-		return repo.Entry{}, nil, fmt.Errorf("could not refresh the selected repository: %w", err)
-	}
-	index, err := repo.LoadIndexFile(filepath.Join(dir, "selected-index.yaml"))
-	if err != nil {
-		return repo.Entry{}, nil, fmt.Errorf("read selected repository index: %w", err)
-	}
+	snapshot.Name = "selected"
 	return snapshot, index, nil
 }
 

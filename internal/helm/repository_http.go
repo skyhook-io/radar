@@ -83,7 +83,11 @@ func (g repositoryHTTPGetter) getContext(ctx context.Context, target string) (*b
 	req.Header.Set("User-Agent", "Helm/"+strings.TrimPrefix(chartutil.DefaultCapabilities.HelmVersion.Version, "v"))
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("repository request failed: %s", repositoryRefreshErrorURL.ReplaceAllString(err.Error(), "<redacted>"))
+		redacted := repositoryRefreshErrorURL.ReplaceAllString(err.Error(), "<redacted>")
+		if SourceTimedOut(err) {
+			return nil, fmt.Errorf("repository request failed: %w: %s", errSourceTimedOut, redacted)
+		}
+		return nil, fmt.Errorf("repository request failed: %s", redacted)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

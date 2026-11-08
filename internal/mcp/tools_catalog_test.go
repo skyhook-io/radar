@@ -277,9 +277,10 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Stored-chart navigation, advisory dry_run and stale-revision semantics add
 		// 992 bytes without new tool names; release version listing adds 155 more,
 		// and rollback preview plus workload-to-release rollback routing 291 more.
-		// Measured 72,872 after merging main; retain 33 bytes headroom.
+		// get_helm_chart (chart versions before install) adds 707.
+		// Measured 73,579; retain 33 bytes headroom.
 		// Opt-in Service curl and exec remain a separate allowance below.
-		maxCatalogBytes         = 72905
+		maxCatalogBytes         = 73612
 		maxToolDescriptionBytes = 3200
 	)
 
@@ -467,8 +468,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		if tool.Annotations == nil {
 			t.Fatalf("tool %q missing annotations", tool.Name)
 		}
-		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod" || tool.Name == "manage_helm" || tool.Name == "get_helm_release" || tool.Name == "curl_service") {
-			t.Errorf("tool %q openWorldHint should be true only for tools that reach outside the cluster API: exec_pod, manage_helm, get_helm_release (chart source versions), curl_service", tool.Name)
+		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod" || tool.Name == "manage_helm" || tool.Name == "get_helm_release" || tool.Name == "get_helm_chart" || tool.Name == "curl_service") {
+			t.Errorf("tool %q openWorldHint should be true only for tools that reach outside the cluster API: exec_pod, manage_helm, get_helm_release and get_helm_chart (chart source versions), curl_service", tool.Name)
 		}
 		if writeTools[tool.Name] {
 			seenWriteTools[tool.Name] = true

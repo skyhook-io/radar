@@ -3,13 +3,13 @@ package helm
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/repo"
@@ -60,25 +60,36 @@ func (c *Client) sourceVersionsWithIndexes(source ChartSourceCandidate, chartNam
 // ociSourceTags lists the registry's tags live; OCI has no index to cache.
 // The registry client bounds every request with ociProbeTimeout.
 func (c *Client) ociSourceTags(selected ChartSourceCandidate) ([]string, error) {
-	lister := c.newRegistryClient()
+	lister := c.ociTags
+	if lister == nil {
+		lister = c.newRegistryClient()
+	}
 	if lister == nil {
 		return nil, fmt.Errorf("%w: selected OCI registry could not be reached", errSourceUnavailable)
 	}
 	tags, err := lister.Tags(strings.TrimPrefix(selected.Reference, "oci://"))
+	if err != nil && SourceTimedOut(err) {
+		return nil, fmt.Errorf("%w: %w: could not read versions from the selected OCI source", errSourceUnavailable, errSourceTimedOut)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not read versions from the selected OCI source", errSourceUnavailable)
 	}
 	return tags, nil
 }
 
-// ReleaseVersions lists chart versions offered by a release's confirmed source.
+// ReleaseVersions lists the chart versions a configured source advertises.
 type ReleaseVersions struct {
-	Source    ChartSourceCandidate `json:"source"`
-	Versions  []string             `json:"versions"` // newest first
-	Truncated bool                 `json:"truncated"`
+	Source   ChartSourceCandidate `json:"source"`
+	Versions []string             `json:"versions"` // newest first, prereleases included
+	// Latest is the newest non-prerelease version, the one Helm picks when no
+	// version is given; empty when the source offers only prereleases.
+	Latest    string `json:"latest,omitempty"`
+	Truncated bool   `json:"truncated"`
 }
 
-const freshVersionsTimeout = 15 * time.Second
+// freshVersionsTimeout matches the upgrade path's source fetch, so a source an
+// upgrade can read can also be listed; large indexes (Bitnami's is ~28 MB) need it.
+var freshVersionsTimeout = 30 * time.Second
 
 // FreshReleaseVersionsAsUser reads the release as the caller, then lists its
 // chart's versions from the source an upgrade would use: a freshly downloaded
@@ -107,25 +118,46 @@ func (c *Client) freshReleaseVersionsWith(cfg *action.Configuration, name string
 	if err != nil {
 		return nil, err
 	}
+	return c.freshSourceVersions(selected, chartName)
+}
+
+// ChartVersions lists the versions of a chart in a source the install path
+// accepts, so any listed version can be installed with the same repository.
+// Like the UI's chart browser, it needs no Kubernetes permission: it reads
+// only operator-configured sources.
+func (c *Client) ChartVersions(repository, chartName string) (*ReleaseVersions, error) {
+	selected, err := c.configuredInstallSource(&InstallRequest{Repository: repository, ChartName: chartName})
+	if err != nil {
+		return nil, err
+	}
+	return c.freshSourceVersions(selected, chartName)
+}
+
+// freshSourceVersions reads a selected source live: a classic index downloaded
+// within the last minute (never Radar's repository cache, which can be cold or
+// days old) or the registry's OCI tags.
+func (c *Client) freshSourceVersions(selected ChartSourceCandidate, chartName string) (*ReleaseVersions, error) {
+	var err error
 	var versions []string
 	if selected.Type == "repository" {
-		dir, err := os.MkdirTemp("", "radar-versions-")
-		if err != nil {
-			return nil, err
-		}
-		defer os.RemoveAll(dir)
-		_, index, err := c.fetchSelectedRepositoryIndex(selected, dir, freshVersionsTimeout, maxPreparedIndexBytes)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", errSourceUnavailable, err)
-		}
-		for _, entry := range index.Entries[chartName] {
-			versions = append(versions, entry.Version)
+		if versions, err = c.recentIndexVersions(selected, chartName); err != nil {
+			return nil, fmt.Errorf("%w: %w", errSourceUnavailable, err)
 		}
 	} else if versions, err = c.ociSourceTags(selected); err != nil {
 		return nil, err
 	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("the selected source lists no versions of chart %s", chartName)
+	}
 	sorted := sortVersionsDesc(versions)
-	return &ReleaseVersions{Source: selected, Versions: capVersions(sorted), Truncated: len(sorted) > maxAvailableVersions}, nil
+	result := &ReleaseVersions{Source: selected, Versions: capVersions(sorted), Truncated: len(sorted) > maxAvailableVersions}
+	for _, v := range sorted {
+		if parsed, err := semver.NewVersion(v); err == nil && parsed.Prerelease() == "" {
+			result.Latest = v
+			break
+		}
+	}
+	return result, nil
 }
 
 func (c *Client) sourceSuggestions(chartName, version string, recorded *ChartSourceCandidate) []ChartSourceSuggestion {

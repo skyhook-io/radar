@@ -3,6 +3,7 @@ package helm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
@@ -60,6 +61,28 @@ func validateOverrideReplacement(stored, overrides map[string]any) error {
 	return check(redacted, overrides)
 }
 
+// configuredInstallSource resolves an install's repository to a source Radar's
+// configuration owner configured, before anything is fetched.
+func (c *Client) configuredInstallSource(req *InstallRequest) (ChartSourceCandidate, error) {
+	const notConfigured = "chart source is not configured: ask the Radar configuration owner to configure it (operator-managed installations use startup Helm configuration)"
+	source, err := c.installChartSource(req)
+	if errors.Is(err, errInvalidRepositoryRequest) {
+		// Not echoed: the caller's repository string can carry credentials.
+		return ChartSourceCandidate{}, fmt.Errorf("%s: %w: no configured repository has that name", notConfigured, errInvalidRepositoryRequest)
+	}
+	if err != nil {
+		return ChartSourceCandidate{}, err
+	}
+	if source == nil {
+		return ChartSourceCandidate{}, fmt.Errorf("install requires a configured, credential-free chart source")
+	}
+	selected, err := c.exactConfiguredSource(*source, req.ChartName)
+	if err != nil {
+		return selected, fmt.Errorf("%s: %w", notConfigured, err)
+	}
+	return selected, nil
+}
+
 func (c *Client) installFreshWith(cfg *action.Configuration, req *InstallRequest) (result *HelmRelease, err error) {
 	started := false
 	defer func() {
@@ -71,16 +94,9 @@ func (c *Client) installFreshWith(cfg *action.Configuration, req *InstallRequest
 	if err := freshInstallCheck(cfg, req.ReleaseName, req.Namespace); err != nil {
 		return nil, err
 	}
-	source, err := c.installChartSource(req)
+	selected, err := c.configuredInstallSource(req)
 	if err != nil {
 		return nil, err
-	}
-	if source == nil {
-		return nil, fmt.Errorf("install requires a configured, credential-free chart source")
-	}
-	selected, err := c.exactConfiguredSource(*source, req.ChartName)
-	if err != nil {
-		return nil, fmt.Errorf("chart source is not configured: ask the Radar configuration owner to configure it (operator-managed installations use startup Helm configuration): %w", err)
 	}
 	// Reuse fresh authenticated index loading and exact metadata/dependency checks.
 	// A mounted repository config needs no warmed local index cache.
