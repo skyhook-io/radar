@@ -1502,6 +1502,111 @@ func TestTraceCacheStillSyncing(t *testing.T) {
 	}
 }
 
+// TestTraceRouteEntry_DrainedUnreadableBackendKeepsVerdict: a route sends all
+// traffic to a healthy backend and weights a second one to 0, in a namespace
+// the Services cache doesn't collect. The drained backend carries no traffic,
+// so not being able to read it must not leave the whole trace unknown: the
+// verdict is the same as for the route without it. Without probes a Route
+// entry can't read healthy from declared config alone, so the baseline is that
+// route's own verdict and reason rather than a fixed "healthy".
+func TestTraceRouteEntry_DrainedUnreadableBackendKeepsVerdict(t *testing.T) {
+	labelsMap := map[string]string{"app": "api"}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Spec: corev1.ServiceSpec{
+			Selector: labelsMap,
+			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromString("http")}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "prod", Labels: labelsMap},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:  "main",
+			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+			ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromString("http")},
+			}},
+		}}},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now())}},
+		},
+	}
+	route := func(backends ...map[string]any) *unstructured.Unstructured {
+		refs := make([]any, 0, len(backends))
+		for _, b := range backends {
+			refs = append(refs, b)
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata":   map[string]any{"name": "web", "namespace": "prod"},
+			"spec":       map[string]any{"rules": []any{map[string]any{"backendRefs": refs}}},
+		}}
+	}
+	active := map[string]any{"name": "api", "port": int64(80), "weight": int64(100)}
+	drained := map[string]any{"name": "old", "namespace": "legacy", "port": int64(80), "weight": int64(0)}
+
+	trace := func(t *testing.T, r *unstructured.Unstructured) *Trace {
+		t.Helper()
+		defer k8s.ResetTestState()
+		defer k8s.ResetTestDynamicState()
+		// Services are collected in prod only, so the legacy backend can't be read.
+		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(svc, pod), map[string]k8score.ResourceScope{
+			"services": {Enabled: true, Namespace: "prod"},
+			"pods":     {Enabled: true},
+		}); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+		gwGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+		dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{gwGVR: "GatewayList", routeGVR: "HTTPRouteList"}, r)
+		if err := k8s.InitTestDynamicResourceCache(dynClient, []k8s.APIResource{
+			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true, Verbs: []string{"list", "watch"}},
+			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
+		}); err != nil {
+			t.Fatalf("InitTestDynamicResourceCache: %v", err)
+		}
+		dynCache := k8s.GetDynamicResourceCache()
+		for _, gvr := range []schema.GroupVersionResource{gwGVR, routeGVR} {
+			if err := dynCache.EnsureWatching(gvr); err != nil {
+				t.Fatalf("EnsureWatching %s: %v", gvr.Resource, err)
+			}
+			if !dynCache.WaitForSync(gvr, 2*time.Second) {
+				t.Fatalf("dynamic cache did not sync %s", gvr.Resource)
+			}
+		}
+		deps := Deps{Cache: k8s.GetResourceCache(), Dynamic: dynCache, Discovery: k8s.GetResourceDiscovery(), Issues: issues.NewCacheProvider()}
+		tr, err := BuildTraceWithOptions(context.Background(), deps, "HTTPRoute", "prod", "web", Options{})
+		if err != nil {
+			t.Fatalf("BuildTraceWithOptions: %v", err)
+		}
+		return tr
+	}
+
+	baseline := trace(t, route(active))
+	if hasUnverifiableEndpoints(baseline) || baseline.Verdict == VerdictBroken {
+		t.Fatalf("route with only the healthy backend reads %q (%s); the comparison below would be meaningless", baseline.Verdict, baseline.Reason)
+	}
+	withDrained := trace(t, route(active, drained))
+	var sawDrained bool
+	for _, hop := range withDrained.Downstream {
+		if hop.Resource.Name == "old" {
+			sawDrained = isDrainedBackendHop(hop)
+		}
+	}
+	if !sawDrained {
+		t.Fatalf("no drained hop for the weight-0 backend: %+v", withDrained.Downstream)
+	}
+	if hasUnverifiableEndpoints(withDrained) {
+		t.Error("an unreadable drained backend marked the trace unverifiable")
+	}
+	if withDrained.Verdict != baseline.Verdict || withDrained.Reason != baseline.Reason {
+		t.Errorf("an unreadable drained backend changed the verdict: %q (%s), want %q (%s)", withDrained.Verdict, withDrained.Reason, baseline.Verdict, baseline.Reason)
+	}
+}
+
 // TestBuildPodsHop_PartialSelectionDoesNotClaimNoneReady: a Pods store still
 // filling its initial sync can hold a crash-looping pod before its ready
 // siblings. That selection is unreadable, and "none are Ready" can't be said

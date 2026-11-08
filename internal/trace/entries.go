@@ -1646,9 +1646,16 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 			Findings: hopFindings(deps, svcRef),
 		}
 		svc, svcErr := deps.Cache.Services().Services(b.Namespace).Get(b.Name)
+		// A backend explicitly weighted to 0 while a sibling carries traffic is
+		// drained by design - it serves no requests, so trace it informationally
+		// (no pod fan-out, no probes) and keep it out of the verdict/coverage
+		// failure tally. Folding a down weight-0 backend in would false-condemn a
+		// path that intentionally carries zero traffic, and an unreadable one
+		// would leave the whole trace unknown for the same zero traffic.
+		drained := routeBackendDrained(route, b.Namespace, b.Name)
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
-		} else if backendServiceUnverified(deps, b.Namespace, b.Name, svcErr) {
+		} else if !drained && backendServiceUnverified(deps, b.Namespace, b.Name, svcErr) {
 			// RBAC denial, transient API failure, or a miss from a Services cache
 			// that can't vouch for it - mark the backend unreadable so the verdict
 			// degrades to unknown instead of reading healthy. A confirmed NotFound
@@ -1658,12 +1665,7 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 			}
 			svcHop.Meta["endpointSource"] = "unknown"
 		}
-		// A backend explicitly weighted to 0 while a sibling carries traffic is
-		// drained by design - it serves no requests, so trace it informationally
-		// (no pod fan-out, no probes) and keep it out of the verdict/coverage
-		// failure tally. Folding a down weight-0 backend in would false-condemn a
-		// path that intentionally carries zero traffic.
-		if routeBackendDrained(route, b.Namespace, b.Name) {
+		if drained {
 			if svcHop.Meta == nil {
 				svcHop.Meta = map[string]any{}
 			}
