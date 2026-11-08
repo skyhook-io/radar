@@ -55,7 +55,8 @@ func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, re
 	// say): the action isn't known to be refused, so report it like a failed
 	// call rather than a denial.
 	if !result.Status.Allowed && result.Status.EvaluationError != "" {
-		log.Printf("Warning: SelfSubjectAccessReview for %s %s was incomplete: %s", verb, resource, result.Status.EvaluationError)
+		reason := strings.ReplaceAll(strings.ReplaceAll(result.Status.EvaluationError, "\n", " "), "\r", " ")
+		log.Printf("Warning: SelfSubjectAccessReview for %s %s was incomplete: %s", verb, resource, reason)
 		return false, true
 	}
 

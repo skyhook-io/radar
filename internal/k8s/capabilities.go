@@ -814,7 +814,7 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		return false, true
 	}
 	if reviewIncomplete(result.Status) {
-		log.Printf("Warning: SubjectAccessReview for user=%s %s %s was incomplete: %s", SanitizeForLog(username), SanitizeForLog(verb), SanitizeForLog(resource), result.Status.EvaluationError)
+		log.Printf("Warning: SubjectAccessReview for user=%s %s %s was incomplete: %s", SanitizeForLog(username), SanitizeForLog(verb), SanitizeForLog(resource), SanitizeForLog(result.Status.EvaluationError))
 		return false, true
 	}
 
