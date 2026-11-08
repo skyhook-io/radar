@@ -508,8 +508,10 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 	// when the detector emits one, already takes precedence here. For a
 	// publishNotReadyAddresses Service the same state is info-tier: endpoints
 	// publish regardless of readiness, so traffic still routes and 0 ready is
-	// often the intended shape - worth a glance, never an outage framing.
-	if len(pods) > 0 && readyCount(pods) == 0 &&
+	// often the intended shape - worth a glance, never an outage framing. An
+	// unreadable selection may be missing the ready siblings, so "none are
+	// Ready" can't be said from it.
+	if !unreadable && len(pods) > 0 && readyCount(pods) == 0 &&
 		worstSeverity(hop.Findings) != SeverityCritical && worstSeverity(hop.Findings) != SeverityWarning {
 		for _, pod := range pods {
 			if pod == nil || podIsReady(pod) {
@@ -1020,17 +1022,22 @@ func selectedPods(deps Deps, svc *corev1.Service) (pods []*corev1.Pod, unreadabl
 	}
 	// A namespace-scoped Pods informer (narrow pod RBAC) returns an EMPTY slice with
 	// no error for a namespace it doesn't watch, and one still filling its initial
-	// sync returns an empty or partial one. That empty is "unknown", not "0 pods" -
-	// reporting a confident "no backends / 0 ready" would false-condemn the
-	// Service. Trust an empty list only when the store holding this namespace
-	// covers it and had synced before the read.
+	// sync returns an empty or partial one - a NotReady pod without its ready
+	// siblings reads as "0 ready". Either way the counts are unknown, and a
+	// confident "no backends / 0 ready" would false-condemn the Service. The
+	// selection is complete only when the store holding this namespace covers it
+	// and had synced before the read; otherwise the pods found are kept for
+	// display but the hop is unreadable.
 	complete := deps.Cache.AssessKindRead("pods", []string{svc.Namespace}).Complete
 	got, err := deps.Cache.Pods().Pods(svc.Namespace).List(labels.SelectorFromSet(labels.Set(svc.Spec.Selector)))
 	if err != nil {
 		return nil, true
 	}
-	if len(got) == 0 && !complete {
-		return nil, true
+	if !complete {
+		if len(got) == 0 {
+			return nil, true
+		}
+		return got, true
 	}
 	return got, false
 }

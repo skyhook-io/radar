@@ -1502,6 +1502,46 @@ func TestTraceCacheStillSyncing(t *testing.T) {
 	}
 }
 
+// TestBuildPodsHop_PartialSelectionDoesNotClaimNoneReady: a Pods store still
+// filling its initial sync can hold a crash-looping pod before its ready
+// siblings. That selection is unreadable, and "none are Ready" can't be said
+// from it; a complete selection of the same pod still says it.
+func TestBuildPodsHop_PartialSelectionDoesNotClaimNoneReady(t *testing.T) {
+	defer k8s.ResetTestState()
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team-a"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "api"}, Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	crashing := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "team-a", Labels: map[string]string{"app": "api"}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "main", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		}}},
+	}
+	deps := Deps{Cache: k8s.GetResourceCache(), Issues: issues.NewCacheProvider()}
+	hasNoReady := func(hop Hop) bool {
+		for _, f := range hop.Findings {
+			if f.Code == "pods:no-ready-endpoints" {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasNoReady(buildPodsHop(deps, svc, []*corev1.Pod{crashing}, false)) {
+		t.Fatal("a complete selection of only a crash-looping pod must say none are ready; the check below would be vacuous")
+	}
+	partial := buildPodsHop(deps, svc, []*corev1.Pod{crashing}, true)
+	if hasNoReady(partial) {
+		t.Errorf("an unreadable selection must not claim none are ready: %+v", partial.Findings)
+	}
+	if src, _ := partial.Meta["endpointSource"].(string); src != "unknown" {
+		t.Errorf("unreadable selection: endpointSource = %q, want unknown", src)
+	}
+}
+
 // TestBuildTrace_IngressBackendServiceStillSyncing: an Ingress whose backend
 // Service can't be found because the Services informer is still loading. The
 // missing-reference check stays silent then, so the backend hop itself must
