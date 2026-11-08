@@ -1,6 +1,7 @@
 package podlogs
 
 import (
+	"reflect"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
@@ -16,6 +17,27 @@ type ContainerInfo struct {
 	Sidecar      bool  `json:"sidecar,omitempty"`
 	Ready        bool  `json:"ready"`
 	RestartCount int32 `json:"restartCount"`
+	// State is the current run's state: waiting, running or terminated.
+	State string `json:"state,omitempty"`
+	// Reason is the waiting or terminated reason, such as PodInitializing,
+	// CrashLoopBackOff, Completed or Error.
+	Reason string `json:"reason,omitempty"`
+	// Started reports a container past its startup probe; for a native
+	// sidecar it means it no longer holds up Pod initialization.
+	Started bool `json:"started,omitempty"`
+}
+
+func containerInfo(cs corev1.ContainerStatus) ContainerInfo {
+	info := ContainerInfo{Name: cs.Name, Ready: cs.Ready, RestartCount: cs.RestartCount, Started: cs.Started != nil && *cs.Started}
+	switch {
+	case cs.State.Waiting != nil:
+		info.State, info.Reason = "waiting", cs.State.Waiting.Reason
+	case cs.State.Running != nil:
+		info.State = "running"
+	case cs.State.Terminated != nil:
+		info.State, info.Reason = "terminated", cs.State.Terminated.Reason
+	}
+	return info
 }
 
 // PodInfo contains compact runtime status about a pod for workload views.
@@ -79,20 +101,12 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		}
 	}
 	for _, cs := range pod.Status.InitContainerStatuses {
-		containerStatuses = append(containerStatuses, ContainerInfo{
-			Name:         cs.Name,
-			Init:         true,
-			Sidecar:      sidecars[cs.Name],
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
+		info := containerInfo(cs)
+		info.Init, info.Sidecar = true, sidecars[cs.Name]
+		containerStatuses = append(containerStatuses, info)
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
-		containerStatuses = append(containerStatuses, ContainerInfo{
-			Name:         cs.Name,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
+		containerStatuses = append(containerStatuses, containerInfo(cs))
 	}
 	verdict := health.Pod(pod, now)
 	displayLevel := health.PodDisplayLevel(pod, now)
@@ -129,6 +143,29 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		StepName:              annotations["workflows.argoproj.io/node-name"],
 		StepPhase:             labels["workflows.argoproj.io/phase"],
 	}
+}
+
+// SentPodInfo is the Pod info a log stream last sent per Pod, so a status
+// change (an init container finishing, an app container starting) can be sent
+// as pod_updated.
+type SentPodInfo map[string]PodInfo
+
+func NewSentPodInfo(infos []PodInfo) SentPodInfo {
+	sent := make(SentPodInfo, len(infos))
+	for _, info := range infos {
+		sent[info.Name] = info
+	}
+	return sent
+}
+
+// Changed records info as sent and reports whether it differs from the last
+// info sent for that Pod.
+func (s SentPodInfo) Changed(info PodInfo) bool {
+	if previous, ok := s[info.Name]; ok && reflect.DeepEqual(previous, info) {
+		return false
+	}
+	s[info.Name] = info
+	return true
 }
 
 func BuildPodInfos(pods []*corev1.Pod) []PodInfo {

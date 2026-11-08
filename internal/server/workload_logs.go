@@ -538,6 +538,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	for _, p := range pods {
 		knownPods[p.Name] = p.UID
 	}
+	sentPodInfo := podlogs.NewSentPodInfo(podInfos)
 
 	// Main loop: forward logs and handle pod discovery
 	for {
@@ -597,9 +598,15 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 						sendSSEEvent(w, flusher, "pod_removed", map[string]string{"pod": p.Name, "reason": "replaced"})
 					}
 					knownPods[p.Name] = p.UID
+					info := podlogs.BuildPodInfo(p, time.Now())
+					sentPodInfo.Changed(info)
 					// Notify frontend about new pod
 					sendSSEEvent(w, flusher, "pod_added", map[string]any{
-						"pods": []podlogs.PodInfo{podlogs.BuildPodInfo(p, time.Now())},
+						"pods": []podlogs.PodInfo{info},
+					})
+				} else if info := podlogs.BuildPodInfo(p, time.Now()); sentPodInfo.Changed(info) {
+					sendSSEEvent(w, flusher, "pod_updated", map[string]any{
+						"pods": []podlogs.PodInfo{info},
 					})
 				}
 			}
@@ -608,6 +615,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			for podName := range knownPods {
 				if !currentPodNames[podName] {
 					delete(knownPods, podName)
+					delete(sentPodInfo, podName)
 					delete(selected, podName)
 					stopPodLogStreams(&activeStreams, cursors, podName)
 					if unavailable.RemovePod(podName) {
