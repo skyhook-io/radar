@@ -142,9 +142,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
 	// The local catalog doesn't describe a remote cluster; built-in scope
 	// holds everywhere.
-	if remote {
+	if tool == ToolFluxCD && remote {
 		alignManagedScope(managed, nil)
-	} else {
+	} else if tool == ToolFluxCD {
 		alignManagedScope(managed, b.ownership.Catalog())
 	}
 	// Without recorded Helm inventory, recover roots from topology labels.

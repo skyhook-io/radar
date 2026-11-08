@@ -155,25 +155,11 @@ func builtinKind(group, kind string) (resourceid.Builtin, bool) {
 	return b, ok && b.Group == group
 }
 
-// scopeOf says whether gk is namespaced, and whether Radar can tell: a
-// built-in kind's scope is its own unless discovery is ambiguous about the
-// kind or serves it with the other scope; any other kind's is the catalog's.
-func (s *session) scopeOf(gk resourceid.GroupKind) (namespaced, known bool) {
-	if s.catalog.Ambiguous(gk) {
-		return false, false
-	}
-	k, served := s.catalog.Kind(gk)
-	if b, builtin := builtinKind(gk.Group, gk.Kind); builtin {
-		return b.Namespaced, !served || k.Namespaced == b.Namespaced
-	}
-	return k.Namespaced, served
-}
-
 // align reads an entry as its kind's scope says, or as recorded when Radar
 // can't tell the scope.
 func (s *session) align(e gitops.Member, destination string) resourceid.Ref {
 	ref := resourceid.Ref{Group: e.Group, Kind: e.Kind, Namespace: e.Namespace, Name: e.Name}
-	if namespaced, known := s.scopeOf(ref.GroupKind()); known {
+	if namespaced, known := s.catalog.Scope(ref.GroupKind()); known {
 		ref.Namespace = gitops.MemberNamespace(namespaced, e.Namespace, destination)
 	}
 	return ref
@@ -186,7 +172,7 @@ func (s *session) placements(ref resourceid.Ref) ([]string, readreason.Code) {
 		return nil, readreason.ReadError
 	}
 	gk := ref.GroupKind()
-	namespaced, known := s.scopeOf(gk)
+	namespaced, known := s.catalog.Scope(gk)
 	_, builtin := builtinKind(ref.Group, ref.Kind)
 	switch {
 	case !known && (builtin || s.catalog.Ambiguous(gk) || !s.catalog.Complete()):
