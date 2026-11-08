@@ -101,7 +101,8 @@ type AppConfig struct {
 	Version                     string
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
-	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
+	MCPExecTools                bool // register exec_pod (--mcp-exec-tools)
+	MCPOAuthEnabled             bool
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -562,7 +563,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
-		AuthConfig: cfg.AuthConfig,
+		AuthConfig:      cfg.AuthConfig,
+		MCPOAuthEnabled: cfg.MCPOAuthEnabled,
 		CloudConnect: server.CloudConnectConfig{
 			HubAPIURL:             cfg.HubAPIURL,
 			HubAppURL:             cfg.HubAppURL,
