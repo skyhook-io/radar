@@ -5,15 +5,10 @@ export function podContainerKey(pod: string, container: string): string {
   return `${pod}/${container}`
 }
 
-/** Regular init containers, which run to completion before the app starts, keyed by Pod and container. */
-export function initContainerKeys(pods: WorkloadPodInfo[]): Set<string> {
-  const keys = new Set<string>()
-  for (const pod of pods) {
-    for (const status of pod.containerStatuses ?? []) {
-      if (status.init && !status.sidecar) keys.add(podContainerKey(pod.name, status.name))
-    }
-  }
-  return keys
+/** Whether a container of the named Pod is a regular init container. */
+export function isInitContainer(pods: WorkloadPodInfo[], pod: string, container: string): boolean {
+  const status = pods.find(p => p.name === pod)?.containerStatuses?.find(c => c.name === container)
+  return Boolean(status?.init && !status.sidecar)
 }
 
 /** Container names that are a regular init container in every Pod that reports them. */
@@ -37,7 +32,7 @@ export function initContainerNames(pods: WorkloadPodInfo[]): Set<string> {
  * container or sidecar, on screen. One app container beside a finished init
  * container reads as a single source.
  */
-export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string }>, knownInit: ReadonlySet<string> = new Set()): boolean {
+export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string; initContainer?: boolean }>): boolean {
   const apps = new Set<string>()
   const supporting = new Set<string>()
   for (const pod of pods) {
@@ -53,10 +48,7 @@ export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{
   if (apps.size > 1) return true
   let first: string | undefined
   for (const entry of entries) {
-    if (entry.pod) {
-      const key = podContainerKey(entry.pod, entry.container)
-      if (supporting.has(key) || knownInit.has(key)) return true
-    }
+    if (entry.initContainer || (entry.pod && supporting.has(podContainerKey(entry.pod, entry.container)))) return true
     if (first === undefined) first = entry.container
     else if (entry.container !== first) return true
   }

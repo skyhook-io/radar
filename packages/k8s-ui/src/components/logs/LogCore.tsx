@@ -66,8 +66,6 @@ interface LogCoreProps {
   showPodName?: boolean
   /** Name the container on each line, for views that mix several containers. */
   showContainerName?: boolean
-  /** Pod/container keys (`pod/container`) to mark as init containers when container names are shown. */
-  initContainers?: ReadonlySet<string>
   /** Width in characters that aligns the container labels of a mixed view. */
   containerLabelWidth?: number
   emptyMessage?: ReactNode
@@ -165,7 +163,6 @@ export function LogCore({
   toolbarExtra,
   showPodName = false,
   showContainerName = false,
-  initContainers,
   containerLabelWidth,
   emptyMessage = 'No logs available',
   sourceUnavailable = false,
@@ -1178,7 +1175,6 @@ export function LogCore({
                 searchIsCaseSensitive={search.isCaseSensitive}
                 showPodName={showPodName}
                 showContainerName={showContainerName}
-                initContainers={initContainers}
                 containerLabelWidth={containerLabelWidth}
                 showTimestamp={showTimestamps}
                 tsFormat={tsFormat}
@@ -1286,7 +1282,6 @@ interface LogLineProps {
   searchIsCaseSensitive: boolean
   showPodName: boolean
   showContainerName?: boolean
-  initContainers?: ReadonlySet<string>
   containerLabelWidth?: number
   showTimestamp: boolean
   tsFormat: TimestampFormat
@@ -1310,7 +1305,6 @@ function LogLine({
   searchIsCaseSensitive,
   showPodName,
   showContainerName = false,
-  initContainers,
   containerLabelWidth,
   showTimestamp,
   tsFormat,
@@ -1394,7 +1388,7 @@ function LogLine({
       {showContainerName && entry.container && (
         <ContainerLabel
           container={entry.container}
-          isInit={initContainers?.has(`${entry.pod ?? ''}/${entry.container}`) ?? false}
+          isInit={entry.initContainer ?? false}
           width={containerLabelWidth}
           palette={palette}
         />
@@ -1431,7 +1425,6 @@ interface LogGroupItemProps {
   searchIsCaseSensitive: boolean
   showPodName: boolean
   showContainerName?: boolean
-  initContainers?: ReadonlySet<string>
   containerLabelWidth?: number
   showTimestamp: boolean
   tsFormat: TimestampFormat

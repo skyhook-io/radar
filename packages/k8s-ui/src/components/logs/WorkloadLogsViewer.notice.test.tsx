@@ -202,3 +202,41 @@ it('clears the notice when the stream reports the Pod initialized, even before t
   await act(async () => source.emit('pod_updated', { pods: [{ name: 'p-0', containers: ['storage-initializer', 'kserve-container'], ready: true, containerStatuses: statuses({ state: 'terminated', reason: 'Completed' }, { state: 'running', started: true, ready: true }) }] }))
   expect(element.textContent).not.toContain("hasn't started")
 })
+
+it('marks each line by its container\'s role when it arrived, across a same-name replacement', async () => {
+  await act(async () =>
+    root.render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 20 }}>
+        <ToastProvider>
+          <WorkloadLogsViewer name="web" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+        </ToastProvider>
+      </VirtuosoMockContext.Provider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  await act(async () => source.emit('connected', { pods: [{ name: 'web-0', containers: ['setup', 'app'], ready: false, containerStatuses: [{ name: 'setup', init: true, ready: false, restartCount: 0, state: 'running' }, { name: 'app', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' }] }] }))
+  await act(async () => source.emit('log', { pod: 'web-0', container: 'setup', timestamp: '2026-11-08T00:00:00Z', content: 'old init line' }))
+  await act(async () => source.emit('pod_removed', { pod: 'web-0', reason: 'replaced' }))
+  await act(async () => source.emit('pod_added', { pods: [{ name: 'web-0', containers: ['setup', 'app'], ready: true, containerStatuses: [{ name: 'setup', ready: true, restartCount: 0, state: 'running' }, { name: 'app', ready: true, restartCount: 0, state: 'running' }] }] }))
+  await act(async () => source.emit('log', { pod: 'web-0', container: 'setup', timestamp: '2026-11-08T00:01:00Z', content: 'new app line' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  const labels = [...element.querySelectorAll('[title$="ontainer setup"]')].map(label => label.getAttribute('title'))
+  expect(labels).toEqual(['Init container setup', 'Container setup'])
+})
+
+it('drops the initializing notice when the stream ends with no Pods left', async () => {
+  await act(async () =>
+    root.render(
+      <ToastProvider>
+        <WorkloadLogsViewer name="predictor" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+      </ToastProvider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  await act(async () => source.emit('connected', { pods: [{ name: 'p-0', containers: ['init', 'app'], ready: false, containerStatuses: [{ name: 'init', init: true, ready: false, restartCount: 0, state: 'running' }, { name: 'app', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' }] }] }))
+  expect(element.textContent).toContain("app hasn't started")
+  await act(async () => source.emit('end', { reason: 'no pods found' }))
+  expect(element.textContent).not.toContain("hasn't started")
+})

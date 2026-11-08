@@ -11,7 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
-import { initContainerKeys, initContainerNames, initializingPodsNotice, podContainerKey, viewMixesContainers } from '../../utils/workload-log-sources'
+import { initContainerNames, initializingPodsNotice, isInitContainer, podContainerKey, viewMixesContainers } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -89,13 +89,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [notice, setNotice] = useState('')
   const [capturedAt, setCapturedAt] = useState('')
   const [sourceLabels, setSourceLabels] = useState<Record<string, string>>({})
-  // Containers that produced a line since their Pod's status was read, and init
-  // containers of removed Pods whose lines are still shown. Both are keyed by
-  // Pod and container and reset when the source reloads; a Pod added again
-  // starts a fresh output record but keeps its predecessor's init containers
-  // for the lines it left.
+  // Containers that produced a line since their Pod's status was read, keyed by
+  // Pod and container. Reset when the source reloads or a Pod is added again.
   const [outputKeys, setOutputKeys] = useState<ReadonlySet<string>>(() => new Set())
-  const [removedInitKeys, setRemovedInitKeys] = useState<ReadonlySet<string>>(() => new Set())
   // Follows each Pod event as it arrives, ahead of the batched pods state.
   const podsRef = useRef<WorkloadPodInfo[]>([])
   const recordOutput = useCallback((pod: string, container: string) => {
@@ -170,8 +166,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       resultPods.forEach((pod, i) => indexByPod.set(pod.name, i))
 
       setOutputKeys(new Set(resultLogs.map(log => podContainerKey(log.pod, log.container))))
-      setRemovedInitKeys(new Set())
       set(resultLogs.map(log => ({
+        initContainer: isInitContainer(resultPods, log.pod, log.container),
         timestamp: log.timestamp,
         content: log.content,
         container: log.container,
@@ -228,7 +224,6 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             podsRef.current = nextPods
             setPods(nextPods)
             setOutputKeys(new Set())
-            setRemovedInitKeys(new Set())
             setEmptyMessage(data.emptyMessage || null)
             setEmptyCommand(data.command || null)
             setSelectedPods(prev => (
@@ -240,6 +235,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           if (data?.pod && data.content !== undefined) {
             recordOutput(data.pod, data.container || '')
             append({
+              initContainer: isInitContainer(podsRef.current, data.pod, data.container || ''),
               timestamp: data.timestamp || '',
               content: data.content || '',
               container: data.container || '',
@@ -286,10 +282,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         onPodRemoved: (data: any) => {
           if (data?.pod) {
             const removedName = data.pod as string
-            const removed = podsRef.current.filter(p => p.name === removedName)
             podsRef.current = podsRef.current.filter(p => p.name !== removedName)
             setOutputKeys(prev => withoutPods(prev, new Set([removedName])))
-            setRemovedInitKeys(prev => new Set([...prev, ...initContainerKeys(removed)]))
             setPods(prev => prev.filter(p => p.name !== removedName))
             // Don't remove from selectedPods — keep old log entries visible
             // while new pod logs start flowing in
@@ -301,6 +295,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         },
         onEnd: (data: any) => {
           setNotice('')
+          // The stream ends when the workload has no Pods left.
+          podsRef.current = []
+          setPods([])
           if (data?.emptyMessage) setEmptyMessage(data.emptyMessage)
           if (data?.command) setEmptyCommand(data.command)
         },
@@ -348,18 +345,14 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
   const shownPods = useMemo(() => pods.filter(pod => selectedPods.has(pod.name)), [pods, selectedPods])
   const initContainers = useMemo(() => initContainerNames(shownPods), [shownPods])
-  const initContainerLines = useMemo(
-    () => new Set([...initContainerKeys(pods), ...removedInitKeys]),
-    [pods, removedInitKeys],
-  )
 
   const filteredEntries = useMemo(
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
     [entries, selectedPods],
   )
   const showContainerName = useMemo(
-    () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries, initContainerLines),
-    [selectedContainer, shownPods, filteredEntries, initContainerLines],
+    () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries),
+    [selectedContainer, shownPods, filteredEntries],
   )
   const initNotice = useMemo(() => initializingPodsNotice(shownPods, {
     selectedContainer,
@@ -506,7 +499,6 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       toolbarExtra={renderToolbarExtra}
       showPodName
       showContainerName={showContainerName}
-      initContainers={initContainerLines}
       containerLabelWidth={Math.min(24, Math.max(0, ...allContainers.map(c => c.length + (initContainers.has(c) ? 5 : 0))))}
       emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
