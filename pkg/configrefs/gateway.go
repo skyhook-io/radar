@@ -38,8 +38,9 @@ func GatewayRefNamespace(ref map[string]any, routeNamespace string) string {
 // widening a parentRef's scope retires the status entry recorded for the old
 // scope. routeNamespace defaults an omitted namespace on EITHER side, resolved
 // independently, so an omitted status namespace never inherits an explicit spec
-// namespace. A status entry that matches no spec parentRef is stale and the
-// caller should ignore it.
+// namespace. A status entry that matches no spec parentRef exactly is stale,
+// unless GatewayParentRefExpandsSpec accepts it as a listener-scoped report for
+// an unscoped spec parentRef.
 func GatewayParentRefInSpec(statusRef map[string]any, specParentRefs []any, routeNamespace string) bool {
 	if len(statusRef) == 0 {
 		return false
@@ -56,7 +57,40 @@ func GatewayParentRefInSpec(statusRef map[string]any, specParentRefs []any, rout
 	return false
 }
 
-func gatewayParentRefsEqual(a, b map[string]any, routeNamespace string) bool {
+// GatewayParentRefExpandsSpec reports whether a status.parents[].parentRef is a
+// listener-scoped report (sectionName or port set) for a Gateway that one of the
+// route's spec.parentRefs names without a sectionName or port. NGINX Gateway
+// Fabric writes the listener into status this way when the Gateway has a single
+// listener, so the exact match in GatewayParentRefInSpec misses its reports.
+//
+// This is identity only. Widening a scoped parentRef to an unscoped one leaves
+// the old scoped report behind in the same shape, so the caller must also
+// require the report's conditions to describe the route's current generation.
+func GatewayParentRefExpandsSpec(statusRef map[string]any, specParentRefs []any, routeNamespace string) bool {
+	if !gatewayRefScoped(statusRef) || !GatewayParentIsGateway(statusRef) {
+		return false
+	}
+	for _, sp := range specParentRefs {
+		specRef, ok := sp.(map[string]any)
+		if !ok || gatewayRefScoped(specRef) {
+			continue
+		}
+		if gatewaySameParent(statusRef, specRef, routeNamespace) {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayRefScoped(ref map[string]any) bool {
+	section, _ := ref["sectionName"].(string)
+	_, hasPort := ref["port"]
+	return section != "" || hasPort
+}
+
+// gatewaySameParent compares the parent object two parentRefs name, ignoring
+// the listener scope (sectionName and port).
+func gatewaySameParent(a, b map[string]any, routeNamespace string) bool {
 	if gatewayRefGroup(a) != gatewayRefGroup(b) {
 		return false
 	}
@@ -68,7 +102,11 @@ func gatewayParentRefsEqual(a, b map[string]any, routeNamespace string) bool {
 	}
 	an, _ := a["name"].(string)
 	bn, _ := b["name"].(string)
-	if an != bn {
+	return an == bn
+}
+
+func gatewayParentRefsEqual(a, b map[string]any, routeNamespace string) bool {
+	if !gatewaySameParent(a, b, routeNamespace) {
 		return false
 	}
 	as, _ := a["sectionName"].(string)

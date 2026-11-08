@@ -2046,18 +2046,36 @@ const GATEWAY_API_GROUP = 'gateway.networking.k8s.io'
  * gateway.networking.k8s.io, Gateway, and the route's own namespace.
  */
 function isReportForParentRef(ref: any, reported: any, routeNamespace: string): boolean {
+  return isSameParent(ref, reported, routeNamespace) &&
+    ref?.sectionName === reported?.sectionName && ref?.port === reported?.port
+}
+
+function isSameParent(a: any, b: any, routeNamespace: string): boolean {
   const norm = (r: any) => ({
     group: r?.group ?? GATEWAY_API_GROUP,
     kind: r?.kind ?? 'Gateway',
     namespace: r?.namespace ?? routeNamespace,
     name: r?.name,
-    sectionName: r?.sectionName,
-    port: r?.port,
   })
-  const a = norm(ref)
-  const b = norm(reported)
-  return a.group === b.group && a.kind === b.kind && a.namespace === b.namespace &&
-    a.name === b.name && a.sectionName === b.sectionName && a.port === b.port
+  const x = norm(a)
+  const y = norm(b)
+  return x.group === y.group && x.kind === y.kind && x.namespace === y.namespace && x.name === y.name
+}
+
+const isListenerScoped = (ref: any) => (ref?.sectionName ?? '') !== '' || ref?.port != null
+
+/**
+ * Whether a listener-scoped report belongs to a Gateway parentRef that names no
+ * listener. NGINX Gateway Fabric reports a single-listener Gateway this way.
+ * Widening a scoped parentRef to an unscoped one leaves the old report behind
+ * in the same shape, so the caller only lets such a report speak through
+ * conditions written for the route's current generation.
+ */
+function isListenerReportForUnscopedRef(ref: any, reported: any, routeNamespace: string): boolean {
+  return !isListenerScoped(ref) && isListenerScoped(reported) &&
+    (reported?.group ?? GATEWAY_API_GROUP) === GATEWAY_API_GROUP &&
+    (reported?.kind ?? 'Gateway') === 'Gateway' &&
+    isSameParent(ref, reported, routeNamespace)
 }
 
 // All Gateway API route types share the same status/parents/rules/hostnames structure
@@ -2087,8 +2105,16 @@ function routeParentEvidence(route: any) {
   // parent can carry reports from two controllers while one replaces the other.
   // All of them count: reading a single report would make the verdict depend on
   // their order in the array.
+
+  // A listener report for an unscoped parentRef has nothing else showing it
+  // describes the current spec, so only its conditions written for the current
+  // generation count, and without any it is not this parent's report at all.
+  const isProvenCurrent = (c: any) => generation !== undefined && c?.observedGeneration === generation
+  const isInferredReportFor = (ref: any, p: any) =>
+    isListenerReportForUnscopedRef(ref, p?.parentRef, routeNamespace) &&
+    (p?.conditions || []).some(isProvenCurrent)
   const reportsFor = (ref: any) =>
-    reports.filter((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace))
+    reports.filter((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace) || isInferredReportFor(ref, p))
   const perRef = refs.map(reportsFor)
 
   // A route can also attach to default Gateways without naming them, in which
@@ -2106,6 +2132,10 @@ function routeParentEvidence(route: any) {
   const isDefaultGatewayReport = (p: any) =>
     (p?.parentRef?.group ?? GATEWAY_API_GROUP) === GATEWAY_API_GROUP &&
     (p?.parentRef?.kind ?? 'Gateway') === 'Gateway'
+  // A Gateway report on a route attached by default counts in full anyway.
+  const inferred = new Set(attachedByDefault ? [] : reports.filter((p: any) =>
+    !refs.some((ref: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace)) &&
+    refs.some((ref: any) => isInferredReportFor(ref, p))))
   const considered = attachedByDefault
     ? [...perRef.flat(), ...reports.filter((p: any) => !claimed.has(p) && isDefaultGatewayReport(p))]
     : perRef.flat()
@@ -2116,7 +2146,9 @@ function routeParentEvidence(route: any) {
   const isCurrent = (c: any) =>
     c?.observedGeneration === undefined || generation === undefined || c.observedGeneration === generation
   const conditionOf = (report: any, type: string) =>
-    (report?.conditions || []).filter((c: any) => c?.type === type && isCurrent(c)).pop()
+    (report?.conditions || [])
+      .filter((c: any) => c?.type === type && (inferred.has(report) ? isProvenCurrent(c) : isCurrent(c)))
+      .pop()
   const statusOf = (report: any, type: string) => conditionOf(report, type)?.status
 
   // A report whose conditions all describe a superseded spec says nothing about

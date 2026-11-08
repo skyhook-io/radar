@@ -147,3 +147,85 @@ func TestGatewayParentRefInSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayParentRefExpandsSpec(t *testing.T) {
+	const routeNS = "app"
+	spec := func(refs ...map[string]any) []any {
+		out := make([]any, len(refs))
+		for i, r := range refs {
+			out[i] = r
+		}
+		return out
+	}
+	for _, tt := range []struct {
+		name   string
+		status map[string]any
+		spec   []any
+		want   bool
+	}{
+		{
+			name:   "listener in status for an unscoped spec ref",
+			status: map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "gw", "namespace": routeNS, "sectionName": "web"},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   true,
+		},
+		{
+			name:   "port in status for an unscoped spec ref",
+			status: map[string]any{"name": "gw", "port": int64(80)},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   true,
+		},
+		{
+			name:   "unscoped status is the exact case, not an expansion",
+			status: map[string]any{"name": "gw"},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   false,
+		},
+		{
+			name:   "spec scoped by sectionName",
+			status: map[string]any{"name": "gw", "sectionName": "http"},
+			spec:   spec(map[string]any{"name": "gw", "sectionName": "https"}),
+			want:   false,
+		},
+		{
+			name:   "spec scoped by port only",
+			status: map[string]any{"name": "gw", "sectionName": "web"},
+			spec:   spec(map[string]any{"name": "gw", "port": int64(80)}),
+			want:   false,
+		},
+		{
+			name:   "different Gateway",
+			status: map[string]any{"name": "gw-b", "sectionName": "web"},
+			spec:   spec(map[string]any{"name": "gw-a"}),
+			want:   false,
+		},
+		{
+			name:   "different namespace",
+			status: map[string]any{"name": "gw", "namespace": "infra", "sectionName": "web"},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   false,
+		},
+		{
+			name:   "mesh Service parent keeps exact matching",
+			status: map[string]any{"group": "", "kind": "Service", "name": "svc", "port": int64(80)},
+			spec:   spec(map[string]any{"group": "", "kind": "Service", "name": "svc"}),
+			want:   false,
+		},
+		{
+			name:   "matches the unscoped one of several spec refs",
+			status: map[string]any{"name": "gw-b", "sectionName": "web"},
+			spec:   spec(map[string]any{"name": "gw-a", "sectionName": "web"}, map[string]any{"name": "gw-b"}),
+			want:   true,
+		},
+		{
+			name:   "empty status",
+			status: map[string]any{},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   false,
+		},
+	} {
+		if got := GatewayParentRefExpandsSpec(tt.status, tt.spec, routeNS); got != tt.want {
+			t.Errorf("%s: GatewayParentRefExpandsSpec = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
