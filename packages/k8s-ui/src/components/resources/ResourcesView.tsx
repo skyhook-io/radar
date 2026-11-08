@@ -742,7 +742,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   jobs: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'completions', label: 'Completions', width: 'w-32' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -8907,7 +8907,7 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getJobStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge whitespace-nowrap', status.color)}>
           {status.text}
         </span>
       )

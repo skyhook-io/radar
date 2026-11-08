@@ -1383,6 +1383,15 @@ export function getSecretKeyCount(secret: any): number {
 // JOB / CRONJOB UTILITIES
 // ============================================================================
 
+// Kueue owns spec.suspend for a Job submitted to a LocalQueue: it suspends the
+// Job until admission and again on preemption, so resuming it is not the user's
+// next step. Callers that also read the Workload pass that evidence separately.
+export function isKueueQueuedJob(job: any): boolean {
+  if (job?.apiVersion && job.apiVersion !== 'batch/v1') return false
+  if (job?.kind && job.kind !== 'Job') return false
+  return Boolean(job?.metadata?.labels?.['kueue.x-k8s.io/queue-name'])
+}
+
 export function getJobStatus(job: any): StatusBadge {
   const status = job.status || {}
   const conditions = status.conditions || []
@@ -1401,6 +1410,7 @@ export function getJobStatus(job: any): StatusBadge {
   }
 
   if (job.spec?.suspend) {
+    if (isKueueQueuedJob(job)) return { text: 'Held by Kueue', color: healthColors.neutral, level: 'neutral' }
     return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
