@@ -10,7 +10,7 @@ import { clsx } from 'clsx'
 import { formatCPUMillicores, formatMemoryMiB } from '../../utils/format'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { HomeAgentBlock } from './HomeAgentBlock'
-import { assetUrl, pluralize, parseContextName } from '@skyhook-io/k8s-ui'
+import { assetUrl, pluralize, parseContextName, CertaintyGlyph } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { mcpEndpointUrl } from '../../api/config'
 import { parseMajorMinor } from '../../utils/version'
@@ -273,7 +273,7 @@ export function ClusterHealthCard({
                 />
               )}
               {radarVersion}
-              <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
+              <NamespaceCountLine count={counts.namespaces} restricted={isRestricted('namespaces')} />
             </div>
             {freshness && <div className="mt-2">{freshness}</div>}
             {nodeVersionSkew && (
@@ -563,6 +563,23 @@ function KubernetesVersionLine({
         <ArrowRight className="inline-block w-3 h-3 ml-1 align-[-2px] opacity-0 group-hover:opacity-100 transition-opacity" />
       </button>
     </Tooltip>
+  )
+}
+
+// A restricted count covers only the namespaces Radar reads, so it is a lower
+// bound, and zero means unknown rather than none.
+export function NamespaceCountLine({ count, restricted }: { count: number; restricted: boolean }) {
+  if (!restricted) {
+    return <span><span className="font-mono">{count}</span> namespaces</span>
+  }
+  if (count === 0) {
+    return <span>Namespaces restricted</span>
+  }
+  return (
+    <span className="flex items-center gap-1">
+      <CertaintyGlyph certainty="lower_bound" title="Radar can't list every namespace, so this counts only the ones it reads." />
+      <span><span className="font-mono">{count}</span> {count === 1 ? 'namespace' : 'namespaces'}</span>
+    </span>
   )
 }
 
