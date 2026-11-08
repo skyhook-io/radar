@@ -143,7 +143,7 @@ install -m 0644 "$helper_dir/injected-bundle/libwebkit2gtkinjectedbundle.so" \
 # them, so Radar can give the processes it starts (shells, auth plugins,
 # xdg-open) the environment the user launched it with (internal/desktopenv).
 # The build fails if the plugin's script assigns anything not listed.
-restore_keys="GTK_DATA_PREFIX GTK_THEME GDK_BACKEND XDG_DATA_DIRS GSETTINGS_SCHEMA_DIR GI_TYPELIB_PATH GTK_EXE_PREFIX GTK_PATH GTK_IM_MODULE_FILE GDK_PIXBUF_MODULE_FILE COLOR_SCHEME GTK_THEME_VARIANT APPIMAGE_GTK_THEME WEBKIT_INJECTED_BUNDLE_PATH"
+restore_keys="GTK_DATA_PREFIX GTK_THEME GDK_BACKEND XDG_DATA_DIRS GSETTINGS_SCHEMA_DIR GI_TYPELIB_PATH GTK_EXE_PREFIX GTK_PATH GTK_IM_MODULE_FILE GDK_PIXBUF_MODULE_FILE COLOR_SCHEME GTK_THEME_VARIANT APPIMAGE_GTK_THEME WEBKIT_INJECTED_BUNDLE_PATH GIO_MODULE_DIR"
 
 cat > "$appdir/AppRun" <<'EOF'
 #!/bin/sh
@@ -152,7 +152,7 @@ APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 export APPDIR
 # The AppImage runtime never changes directory, and sets OWD only when it
 # mounts the image, so an OWD in the environment may be inherited and stale.
-OWD="$(pwd)"
+OWD="$(pwd 2>/dev/null)" || OWD="$HOME"
 export OWD
 RADAR_APPIMAGE_KEYS="@RESTORE_KEYS@"
 export RADAR_APPIMAGE_KEYS
@@ -169,6 +169,9 @@ done
 # The library's injected-bundle path stays absolute (the build machine's), so
 # point WebKit at the bundled copy; release builds honour this variable.
 export WEBKIT_INJECTED_BUNDLE_PATH="$APPDIR/usr/lib/webkit2gtk-4.1/injected-bundle/"
+# The bundled GIO's own modules (HTTPS for the webview). Without this it looks
+# in the build machine's module directory, which other distros don't have.
+export GIO_MODULE_DIR="$APPDIR/usr/lib/gio/modules"
 # The bundled library starts its helpers from ".", the working directory.
 cd "$APPDIR/usr/lib"
 exec "$APPDIR/usr/bin/radar-desktop" "$@"
@@ -243,6 +246,21 @@ print(f"build-appimage: {', '.join(patched)} now starts its helpers from usr/lib
 EOF
 
 rm -f "$work/$output_name"
-OUTPUT="$output_name" "$LINUXDEPLOY" --appdir "$appdir" --output appimage
+# WebKit's network process makes HTTPS connections through GIO's TLS module
+# (glib-networking); the GTK plugin bundles GIO but none of its modules. Bundle
+# the module built for this GIO, plus the one that honours http_proxy/https_proxy,
+# and their libraries. glib-networking comes with libwebkit2gtk-4.1-dev (libsoup).
+gio_moduledir="$(pkg-config --variable=giomoduledir gio-2.0)"
+mkdir -p "$appdir/usr/lib/gio/modules"
+for module in libgiognutls.so libgioenvironmentproxy.so; do
+  [[ -f "$gio_moduledir/$module" ]] || {
+    echo "build-appimage: $gio_moduledir/$module not found; install glib-networking" >&2
+    exit 1
+  }
+  install -m 0644 "$gio_moduledir/$module" "$appdir/usr/lib/gio/modules/"
+done
+
+OUTPUT="$output_name" "$LINUXDEPLOY" --appdir "$appdir" \
+  --deploy-deps-only "$appdir/usr/lib/gio/modules" --output appimage
 mv "$work/$output_name" "$out_dir/$output_name"
 echo "build-appimage: $out_dir/$output_name"
