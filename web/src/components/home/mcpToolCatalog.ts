@@ -365,7 +365,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'chart', desc: 'chart name for install' },
       { arg: 'repository', desc: 'configured install source; upgrade optionally asserts the confirmed saved source and requires it to be configured' },
       { arg: 'version', desc: 'exact version for install (choices from get_helm_chart); upgrade choices come from get_helm_release include=versions; omit on upgrade only when latest and deployed charts agree' },
-      { arg: 'values', desc: 'upgrade overrides merge with stored values; no literal credentials' },
+      { arg: 'values', desc: 'upgrade overrides merge over the deployed revision\'s overrides; no literal credentials' },
       { arg: 'replace_values', desc: 'upgrade only: explicitly replace all stored overrides with values' },
       { arg: 'dry_run', desc: 'upgrade or rollback: advisory preview (upgrade: same merge rules; rollback: stored diff plus live takeover and retention checks); false executes' },
       { arg: 'expected_revision', desc: 'upgrade or rollback: refuse a changed latest revision; not an atomic lock' },

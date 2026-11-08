@@ -34,7 +34,9 @@ type MCPUpgradeRequest struct {
 type MCPUpgradeResult struct {
 	ChartVersion string
 	// Revision is the resulting revision, hypothetical during preview.
-	Revision         int
+	Revision int
+	// BaselineRevision is the revision whose values the change starts from: the
+	// deployed one for an upgrade (Helm's own choice), the latest for a rollback.
 	BaselineRevision int
 	ValuesDiff       string
 	Added            []ResourceRef

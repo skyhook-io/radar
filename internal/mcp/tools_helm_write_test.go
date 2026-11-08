@@ -64,7 +64,7 @@ func TestManageHelmRejectsAmbiguousAndRedactedInput(t *testing.T) {
 
 func TestManageHelmErrorsAreRedactedButKeepTheirType(t *testing.T) {
 	typed := readErrorf(readreason.ClusterConnecting, "Cluster is still connecting, please retry shortly")
-	err := redactedError{fmt.Errorf("render failed: password=supersecretpassword123: %w", typed)}
+	err := redactedError{err: fmt.Errorf("render failed: password=supersecretpassword123: %w", typed)}
 	if strings.Contains(err.Error(), "supersecret") {
 		t.Fatalf("credential reached the agent: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	if !strings.Contains(preview["message"].(string), "deployed") {
 		t.Fatalf("preview omitted status: %v", preview)
 	}
-	if preview["history"] != "purged once Helm has requested the resource deletions, even if a post-delete hook then fails" || preview["historyOnly"] != false || preview["resourcesCount"] != float64(0) || preview["deleteHooks"] == nil || preview["kept"] == nil {
+	if _, fixed := preview["history"]; fixed || !strings.Contains(preview["message"].(string), "history is purged") || preview["historyOnly"] != false || preview["resourcesCount"] != float64(0) || preview["deleteHooks"] == nil || preview["kept"] == nil {
 		t.Fatalf("preview must state history, hooks and kept resources: %v", preview)
 	}
 	in.Confirm = preview["confirm"].(string)
@@ -442,8 +442,9 @@ func TestManageHelmReportsLostRevisionRaceAsNoChange(t *testing.T) {
 	storage := driver.NewSecrets(secrets)
 	for version, status := range map[int]release.Status{1: release.StatusSuperseded, 2: release.StatusDeployed} {
 		rel := &release.Release{Name: "demo", Namespace: "team-a", Version: version,
-			Chart: &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}},
-			Info:  &release.Info{Status: status}}
+			Chart:  &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: "1.0.0"}},
+			Config: map[string]any{"auth": map[string]any{"password": fmt.Sprintf("Stored9Pass%d", version)}},
+			Info:   &release.Info{Status: status}}
 		if err := storage.Create(fmt.Sprintf("sh.helm.release.v1.demo.v%d", version), rel); err != nil {
 			t.Fatal(err)
 		}
@@ -472,6 +473,10 @@ func TestManageHelmReportsLostRevisionRaceAsNoChange(t *testing.T) {
 			secret.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
 			json.NewEncoder(w).Encode(secret)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/team-a/secrets":
+			// The write itself must carry the caller's identity, not Radar's.
+			if got := r.Header.Get("Impersonate-User"); got != "helm-mcp-race" {
+				t.Errorf("Helm wrote release storage as %q, want the caller helm-mcp-race", got)
+			}
 			// Another writer stored revision 3 first.
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(metav1.Status{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"}, Status: metav1.StatusFailure, Reason: metav1.StatusReasonAlreadyExists, Code: http.StatusConflict})
@@ -497,5 +502,26 @@ func TestManageHelmReportsLostRevisionRaceAsNoChange(t *testing.T) {
 	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "rollback", Namespace: "team-a", Name: "demo", Revision: 1, ExpectedRevision: 2})
 	if err == nil || !strings.Contains(err.Error(), "refused before applying changes: another operation stored the next revision") {
 		t.Fatalf("lost revision race must report no change: %v", err)
+	}
+
+	// A template's fail or an API error can echo a stored or supplied secret
+	// verbatim; pattern masking alone wouldn't catch these plain values.
+	in := manageHelmInput{Namespace: "team-a", Name: "demo", Values: map[string]any{"db": map[string]any{"password": "Supplied7Pass"}}}
+	failure := error(&knownValuesError{err: errors.New("template: fail: Stored9Pass1 / Stored9Pass2 / Supplied7Pass"), secrets: storedSensitiveValues(helm.NewStandaloneClient(cfg), in, userFromContext(ctx))})
+	masked := errorMask(in, failure)(failure.Error())
+	for _, secret := range []string{"Stored9Pass1", "Stored9Pass2", "Supplied7Pass"} {
+		if strings.Contains(masked, secret) {
+			t.Fatalf("error text keeps known secret %s: %s", secret, masked)
+		}
+	}
+}
+
+// Known values are masked in one pass, longest first, so a short value can't
+// match inside an earlier [REDACTED] and values too short to be credentials
+// don't mangle the message.
+func TestMaskKnownValuesIsSinglePass(t *testing.T) {
+	got := maskKnownValues("login admin with adminSecret failed; D", map[string]bool{"admin": true, "adminSecret": true, "D": true, "ED": true})
+	if got != "login [REDACTED] with [REDACTED] failed; D" {
+		t.Fatalf("masking: %q", got)
 	}
 }

@@ -78,8 +78,25 @@ func helmChartContext(stored *chart.Chart, pointer string) map[string]any {
 }
 
 func redactHelmNotes(notes string, values map[string]any) string {
-	redacted := redactedHelmValues(values)
 	secrets := map[string]bool{}
+	collectSensitiveValues(values, secrets)
+	ordered := make([]string, 0, len(secrets))
+	for secret := range secrets {
+		if secret != "" {
+			ordered = append(ordered, secret)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	for _, secret := range ordered {
+		notes = strings.ReplaceAll(notes, secret, "[REDACTED]")
+	}
+	return aicontext.RedactSecrets(notes)
+}
+
+// collectSensitiveValues adds to secrets the string form of every value that
+// key-aware Helm value redaction hides.
+func collectSensitiveValues(values map[string]any, secrets map[string]bool) {
+	redacted := redactedHelmValues(values)
 	var collect func(any, any)
 	collect = func(original, safe any) {
 		if marker, ok := safe.(string); ok && marker == "[REDACTED]" {
@@ -114,15 +131,4 @@ func redactHelmNotes(notes string, values map[string]any) string {
 		}
 	}
 	collect(values, redacted)
-	ordered := make([]string, 0, len(secrets))
-	for secret := range secrets {
-		if secret != "" {
-			ordered = append(ordered, secret)
-		}
-	}
-	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
-	for _, secret := range ordered {
-		notes = strings.ReplaceAll(notes, secret, "[REDACTED]")
-	}
-	return aicontext.RedactSecrets(notes)
 }

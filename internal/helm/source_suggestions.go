@@ -121,8 +121,9 @@ func (c *Client) freshReleaseVersionsWith(cfg *action.Configuration, name string
 	return c.freshSourceVersions(selected, chartName)
 }
 
-// ChartVersions lists the versions of a chart in a source the install path
-// accepts, so any listed version can be installed with the same repository.
+// ChartVersions lists the versions a source the install path accepts
+// advertises for a chart, so each can be requested with the same repository.
+// It doesn't check that a listed version downloads or installs.
 // Like the UI's chart browser, it needs no Kubernetes permission: it reads
 // only operator-configured sources.
 func (c *Client) ChartVersions(repository, chartName string) (*ReleaseVersions, error) {

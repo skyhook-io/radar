@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -95,10 +96,19 @@ func (in manageHelmInput) validate() error {
 
 // redactedError masks credential-like text in the error an agent reads (Helm
 // render and API errors can echo chart text or values) and keeps the chain so
-// typed errors still render as structured results.
-type redactedError struct{ err error }
+// typed errors still render as structured results. mask, when set, also masks
+// known values; it defaults to pattern masking.
+type redactedError struct {
+	err  error
+	mask func(string) string
+}
 
-func (e redactedError) Error() string { return aicontext.RedactSecrets(e.err.Error()) }
+func (e redactedError) Error() string {
+	if e.mask != nil {
+		return e.mask(e.err.Error())
+	}
+	return aicontext.RedactSecrets(e.err.Error())
+}
 func (e redactedError) Unwrap() error { return e.err }
 
 func handleManageHelm(ctx context.Context, req *mcp.CallToolRequest, in manageHelmInput) (*mcp.CallToolResult, any, error) {
@@ -106,17 +116,83 @@ func handleManageHelm(ctx context.Context, req *mcp.CallToolRequest, in manageHe
 	if err == nil {
 		return result, out, nil
 	}
+	mask := errorMask(in, err)
 	// readErrorResult serializes a readError's own message, so redact inside it.
 	var re *readError
 	if errors.As(err, &re) {
 		redacted := *re
-		redacted.err = errors.New(aicontext.RedactSecrets(re.err.Error()))
+		redacted.err = errors.New(mask(re.err.Error()))
 		return result, out, &redacted
 	}
-	return result, out, redactedError{err}
+	return result, out, redactedError{err: err, mask: mask}
 }
 
-func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput) (*mcp.CallToolResult, any, error) {
+// errorMask masks the caller's own sensitive values and those err carries from
+// the release's revisions, then credential patterns.
+func errorMask(in manageHelmInput, err error) func(string) string {
+	secrets := map[string]bool{}
+	collectSensitiveValues(in.Values, secrets)
+	var known *knownValuesError
+	if errors.As(err, &known) {
+		for secret := range known.secrets {
+			secrets[secret] = true
+		}
+	}
+	return func(text string) string { return aicontext.RedactSecrets(maskKnownValues(text, secrets)) }
+}
+
+// knownValuesError carries the sensitive values stored in the release's
+// revisions, so the error an agent reads can mask them: a template's fail or
+// required, or an API validation error, can echo a stored password verbatim,
+// which pattern masking misses.
+type knownValuesError struct {
+	err     error
+	secrets map[string]bool
+}
+
+func (e *knownValuesError) Error() string { return e.err.Error() }
+func (e *knownValuesError) Unwrap() error { return e.err }
+
+// storedSensitiveValues reads every stored revision's values as the caller,
+// through the client the call is pinned to, and returns their sensitive values.
+func storedSensitiveValues(client *helm.Client, in manageHelmInput, user *pkgauth.User) map[string]bool {
+	secrets := map[string]bool{}
+	if detail, readErr := client.GetReleaseAsUser(in.Namespace, in.Name, user); readErr == nil {
+		for _, revision := range detail.History {
+			if v, readErr := client.GetValuesRevisionAsUser(in.Namespace, in.Name, true, revision.Revision, user); readErr == nil {
+				collectSensitiveValues(v.UserSupplied, secrets)
+				collectSensitiveValues(v.Computed, secrets)
+			}
+		}
+	}
+	return secrets
+}
+
+// minMaskedValueLength skips values so short that masking them would mangle
+// ordinary words in the message.
+const minMaskedValueLength = 4
+
+// maskKnownValues replaces each known value in one pass, longest first, so a
+// replacement never matches inside an earlier one.
+func maskKnownValues(text string, secrets map[string]bool) string {
+	ordered := make([]string, 0, len(secrets))
+	for secret := range secrets {
+		if len(secret) >= minMaskedValueLength {
+			ordered = append(ordered, secret)
+		}
+	}
+	if len(ordered) == 0 {
+		return text
+	}
+	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	pairs := make([]string, 0, 2*len(ordered))
+	for _, secret := range ordered {
+		pairs = append(pairs, secret, "[REDACTED]")
+	}
+	return strings.NewReplacer(pairs...).Replace(text)
+}
+
+func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput) (_ *mcp.CallToolResult, _ any, err error) {
 	r := (&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
 	audit := auth.AuditActionDetails{Action: "helm_" + in.Action, Kind: "HelmRelease", Namespace: in.Namespace, Name: in.Name, Source: "mcp", Outcome: "refused"}
 	defer func() { auth.AuditLogAction(r, audit) }()
@@ -201,7 +277,23 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		return nil, nil, fmt.Errorf("cluster connection changed; retry on the intended cluster")
 	}
 	audit.Outcome = "failed_or_unconfirmed"
-	var err error
+	// Only Helm's own errors can echo stored values; Radar's refusals above
+	// can't, so they skip the extra reads. Uninstall can purge history before
+	// it fails, so its values are read first.
+	var uninstallSecrets map[string]bool
+	if in.Action == "uninstall" {
+		uninstallSecrets = storedSensitiveValues(client, in, user)
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		secrets := uninstallSecrets
+		if secrets == nil {
+			secrets = storedSensitiveValues(client, in, user)
+		}
+		err = &knownValuesError{err: err, secrets: secrets}
+	}()
 	var upgrade *helm.MCPUpgradeResult
 	var rollback *helm.MCPRollbackResult
 	switch in.Action {
@@ -322,7 +414,7 @@ func helmRollbackPreviewResult(in manageHelmInput, preview *helm.MCPRollbackResu
 	result := map[string]any{"action": "rollback", "state": "preview", "namespace": in.Namespace, "name": in.Name,
 		"targetRevision": preview.TargetRevision, "chartVersion": preview.ChartVersion, "currentRevision": preview.BaselineRevision,
 		"valuesRedacted": true, "parseErrors": preview.ParseErrors, "liveChecked": preview.Live.Checked, "rollbackHooks": preview.Hooks,
-		"message": "Advisory preview only; nothing was applied. Rollback re-applies the target revision's stored manifest and values without re-rendering; added/changed/removed compare stored manifests and exclude hooks. rollbackHooks run on execute (a failing pre-rollback hook stops the rollback); their contents aren't enumerated. takeovers exist live but aren't recorded as this release's (owner names another release; empty means no Helm owner recorded): rollback overwrites and claims them with no ownership check, so name each takeover to the user and get approval for it specifically before executing; a general go-ahead doesn't cover claiming another release's objects. kept is the part of removed that Helm leaves because the live resource-policy is keep; the rest of removed is deleted. liveUnknown could not be read as you, so their ownership and retention are unknown. To execute, set dry_run=false with the same revision and expected_revision=currentRevision. This precondition is not a lock against other writers."}
+		"message": "Advisory preview only; nothing was applied. Rollback re-applies the target revision's stored manifest and values without re-rendering; added/changed/removed compare stored manifests and exclude hooks. rollbackHooks run on execute (a failing pre-rollback hook stops the rollback); their contents aren't enumerated. takeovers exist live but aren't recorded as this release's (owner names another release; empty means no Helm owner recorded): rollback overwrites and claims them with no ownership check, so name each takeover to the user and get approval for it specifically before executing; a general go-ahead doesn't cover claiming another release's objects. kept is the part of removed that Helm leaves because the live resource-policy is keep; the rest of removed is deleted, except objects in liveUnknown, which could not be read as you, so their ownership and retention are unknown. To execute, set dry_run=false with the same revision and expected_revision=currentRevision. This precondition is not a lock against other writers."}
 	buf := &cappedBuffer{limit: 16 * 1024}
 	_, _ = buf.Write([]byte(preview.ValuesDiff))
 	addTruncation(result, "valuesDiff", buf)
@@ -347,7 +439,7 @@ func helmUninstallPreviewResult(in manageHelmInput, status, token string, previe
 		message = "The release is already uninstalled with its history kept. Uninstall only purges the stored history: no hooks run and no resources are deleted. Review, then call again with confirm."
 	}
 	result := map[string]any{"action": "uninstall", "state": "preview", "namespace": in.Namespace, "name": in.Name, "revision": preview.Revision, "confirm": token,
-		"historyOnly": preview.HistoryOnly, "history": "purged once Helm has requested the resource deletions, even if a post-delete hook then fails", "parseErrors": preview.ParseErrors, "deleteHooks": preview.Hooks, "message": message}
+		"historyOnly": preview.HistoryOnly, "parseErrors": preview.ParseErrors, "deleteHooks": preview.Hooks, "message": message}
 	addCappedList(result, "resources", preview.Delete)
 	addCappedList(result, "kept", preview.Kept)
 	return toJSONResult(result)

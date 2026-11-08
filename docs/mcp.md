@@ -245,7 +245,7 @@ external MCP clients, as the caller and behind the same Helm permission prefligh
 as the UI. It is registered only on the full `/mcp` endpoint, not on
 `/mcp-readonly` or the built-in AI apply transport, whose approval UI can't yet
 show Helm's full impact. `/api/capabilities.mcpHelmTools` reports registration,
-not the caller's permission.
+not the caller's permission; older Radar versions omit it, so treat absent as off.
 
 Every call passes `action`, `namespace` and `name`. Fields for another action are
 rejected.
@@ -276,7 +276,8 @@ release before retrying.
   anything, and the error says so.
 - `values` must never contain literal credentials or redacted output;
   `[REDACTED]` placeholders are refused. Errors are redacted, since Helm errors can
-  echo chart text or values.
+  echo chart text or values: Helm's own errors also mask the sensitive values
+  stored in the release's revisions and those in the call's `values`.
 - A failure after Helm started may have changed resources; inspect before
   retrying.
 
@@ -356,15 +357,18 @@ ownership on it without checking the current owner.
 - `added`, `changed`, `removed` and `valuesDiff`: an exact comparison of the two
   stored revisions, without hooks. `parseErrors` marks it incomplete.
 - `rollbackHooks`: the target's pre-rollback and post-rollback hooks with their
-  effective `deletePolicies` and `lastPhase`. A failing pre-rollback hook stops the
+  effective `deletePolicies` and `lastPhase` (from the hook's last run recorded in
+  that revision). A failing pre-rollback hook stops the
   rollback. Hook contents aren't listed.
-- Live reads as the caller, for at most 100 affected objects (`liveChecked`):
+- Live reads as the caller, for at most 100 affected objects; `liveChecked`
+  counts the reads that succeeded, including ones that found no object:
   - `takeovers`: live objects not recorded as this release's. `owner` is the other
     release as `namespace/name`, or empty unless the object records both the
     release name and namespace. The message tells the agent to get approval for
     each takeover specifically.
   - `kept`: the part of `removed` whose live `helm.sh/resource-policy` is exactly
-    `keep`. Helm deletes the rest.
+    `keep`. Helm deletes the rest, except that retention is unknown for removed
+    objects in `liveUnknown`.
   - `liveUnknown`: objects that couldn't be read (denied, kind not served, past the
     cap).
 
@@ -390,11 +394,13 @@ The preview follows Helm's own rules:
 - `deleteHooks`: pre-delete and post-delete hooks with events, effective
   `deletePolicies` (`before-hook-creation` when none is declared) and `lastPhase`.
   A failing pre-delete hook stops the uninstall before anything is deleted.
-- `history`: purged once Helm has requested the deletions, even if a post-delete
-  hook then fails, so rollback is impossible afterwards while deletion
-  (finalizers) may still be running. An error after that point says so.
 - `historyOnly: true`: the release is already uninstalled with history kept, so
   uninstall only purges that history.
+
+History is purged once Helm has requested the deletions, even if a post-delete
+hook then fails, so rollback is impossible afterwards while deletion (finalizers)
+may still be running; the preview's `message` says so, and an error after that
+point says the release and its history are gone.
 
 The preview isn't a data-loss analysis: controller-created objects, StatefulSet
 PVCs and external data aren't listed, and hook contents aren't enumerated.

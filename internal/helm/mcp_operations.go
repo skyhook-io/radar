@@ -53,7 +53,7 @@ func validateOverrideReplacement(stored, overrides map[string]any) error {
 				return err
 			}
 			if bytes.Contains(serialized, []byte("[REDACTED]")) {
-				return fmt.Errorf("override would replace a list or object containing hidden credentials; omit that container or use replace_values=true with a complete reviewed configuration")
+				return fmt.Errorf("override would replace a list or object containing hidden credentials; omit that container, or ask the user for the complete configuration of all overrides, hidden values included, and pass it with replace_values=true, which drops every override it omits")
 			}
 		}
 		return nil

@@ -124,10 +124,7 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 // Small toggle button rendered in a port row's action slot. The panel itself
 // renders inline within the port card (see CurlPanel), not as an overlay.
-export function CurlButton({ active, onClick }: {
-  active: boolean
-  onClick: () => void
-}) {
+export function CurlButton({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
     <Tooltip content="Curl this endpoint — GET from inside the cluster">
       <button

@@ -103,7 +103,7 @@ to false, needs in-cluster Radar with writable MCP, and is not affected by
 CLI flag overrides the config key, including `--mcp-http-tools=false`.
 Catalog-only modes omit the tool unless `--fake-in-cluster` is set.
 `/api/capabilities.mcpHttpTools` and `/api/config.effective.mcpHttpTools` report
-the effective state, and startup logs explain a suppressed opt-in.
+the effective state (older Radar versions omit them: treat absent as off), and startup logs explain a suppressed opt-in.
 
 MCP is enabled with read and write tools by default. `--no-mcp` disables all
 MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal

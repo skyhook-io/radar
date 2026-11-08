@@ -179,9 +179,9 @@ func handleGetHelmChart(ctx context.Context, req *mcp.CallToolRequest, input get
 		// The repository argument can carry credentials; don't echo it, and
 		// mask anything credential-like in the underlying error.
 		if helm.SourceTimedOut(err) {
-			return nil, nil, redactedError{fmt.Errorf("can't list versions of chart %s: %w; the source didn't respond in time: retry in a minute", input.Chart, err)}
+			return nil, nil, redactedError{err: fmt.Errorf("can't list versions of chart %s: %w; the source didn't respond in time: retry in a minute", input.Chart, err)}
 		}
-		return nil, nil, redactedError{fmt.Errorf("can't list versions of chart %s: %w", input.Chart, err)}
+		return nil, nil, redactedError{err: fmt.Errorf("can't list versions of chart %s: %w", input.Chart, err)}
 	}
 	return toJSONResult(versions)
 }
