@@ -11,7 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
-import { initContainerNames, initializingPodsNotice, viewMixesContainers } from '../../utils/workload-log-sources'
+import { initContainerKeys, initContainerNames, initializingPodsNotice, podContainerKey, viewMixesContainers } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -308,21 +308,27 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setSelectedPods(allSelected ? new Set() : new Set(pods.map(p => p.name)))
   }, [selectedPods, pods])
 
-  const initContainers = useMemo(() => initContainerNames(pods), [pods])
-  const initNotice = useMemo(
-    () => initializingPodsNotice(pods.filter(pod => selectedPods.has(pod.name)), selectedContainer),
-    [pods, selectedPods, selectedContainer],
-  )
+  const shownPods = useMemo(() => pods.filter(pod => selectedPods.has(pod.name)), [pods, selectedPods])
+  const initContainers = useMemo(() => initContainerNames(shownPods), [shownPods])
+  const initContainerLines = useMemo(() => initContainerKeys(shownPods), [shownPods])
 
   const filteredEntries = useMemo(
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
     [entries, selectedPods],
   )
-  const showContainerName = useMemo(() => {
-    if (selectedContainer !== '') return false
-    const shownPods = pods.filter(pod => selectedPods.has(pod.name))
-    return viewMixesContainers(shownPods, new Set(filteredEntries.map(entry => entry.container)))
-  }, [selectedContainer, pods, selectedPods, filteredEntries])
+  const showContainerName = useMemo(
+    () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries),
+    [selectedContainer, shownPods, filteredEntries],
+  )
+  const initNotice = useMemo(() => {
+    const containersWithOutput = new Set<string>()
+    for (const entry of filteredEntries) if (entry.pod) containersWithOutput.add(podContainerKey(entry.pod, entry.container))
+    return initializingPodsNotice(shownPods, {
+      selectedContainer,
+      containersWithOutput,
+      podLabel: pod => sourceLabels[pod.name] || pod.stepName || pod.name.split('-').slice(-2).join('-'),
+    })
+  }, [shownPods, selectedContainer, filteredEntries, sourceLabels])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
     const filename = `${name}-logs.${extension}`
@@ -463,7 +469,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       toolbarExtra={renderToolbarExtra}
       showPodName
       showContainerName={showContainerName}
-      initContainers={initContainers}
+      initContainers={initContainerLines}
       containerLabelWidth={Math.min(24, Math.max(0, ...allContainers.map(c => c.length + (initContainers.has(c) ? 5 : 0))))}
       emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}

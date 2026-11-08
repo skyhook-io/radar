@@ -66,7 +66,7 @@ interface LogCoreProps {
   showPodName?: boolean
   /** Name the container on each line, for views that mix several containers. */
   showContainerName?: boolean
-  /** Containers to mark as init containers when container names are shown. */
+  /** Pod/container keys (`pod/container`) to mark as init containers when container names are shown. */
   initContainers?: ReadonlySet<string>
   /** Width in characters that aligns the container labels of a mixed view. */
   containerLabelWidth?: number
@@ -1392,14 +1392,12 @@ function LogLine({
         </span>
       )}
       {showContainerName && entry.container && (
-        <span
-          className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap max-w-[200px] truncate`}
-          style={containerLabelWidth ? { minWidth: `calc(${containerLabelWidth}ch + 0.5rem)` } : undefined}
-          title={initContainers?.has(entry.container) ? `Init container ${entry.container}` : `Container ${entry.container}`}
-        >
-          {entry.container}
-          {initContainers?.has(entry.container) && <span className="ml-1 text-[10px] uppercase tracking-wide">init</span>}
-        </span>
+        <ContainerLabel
+          container={entry.container}
+          isInit={initContainers?.has(`${entry.pod ?? ''}/${entry.container}`) ?? false}
+          width={containerLabelWidth}
+          palette={palette}
+        />
       )}
       <span className="flex-1 min-w-0 phone:order-last phone:basis-full">{contentElement}</span>
       <button
@@ -1410,6 +1408,19 @@ function LogLine({
         <Copy className="w-3 h-3" />
       </button>
     </div>
+  )
+}
+
+function ContainerLabel({ container, isInit, width, palette }: { container: string; isInit: boolean; width?: number; palette: LogPalette }) {
+  return (
+    <span
+      className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap max-w-[200px] truncate`}
+      style={width ? { minWidth: `calc(${width}ch + 0.5rem)` } : undefined}
+      title={isInit ? `Init container ${container}` : `Container ${container}`}
+    >
+      {container}
+      {isInit && <span className="ml-1 text-[10px] uppercase tracking-wide">init</span>}
+    </span>
   )
 }
 

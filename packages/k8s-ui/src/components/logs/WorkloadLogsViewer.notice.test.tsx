@@ -95,4 +95,8 @@ it('names each line\'s container, marks init containers and says why the app has
   expect(label?.textContent).toBe('storage-initializerinit')
   const option = [...element.querySelectorAll('option')].find(o => o.value === 'storage-initializer')
   expect(option?.textContent).toBe('storage-initializer (init)')
+
+  await act(async () => source.emit('log', { pod: 'predictor-abc-xyz', container: 'kserve-container', timestamp: '2026-11-08T00:01:00Z', content: 'model server listening' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(element.textContent).not.toContain("hasn't started")
 })
