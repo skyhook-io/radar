@@ -912,7 +912,7 @@ Radar Desktop doesn't take command-line flags, so set the same list in `~/.radar
 
 Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default the UI picks up when it loads. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
 
-This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
+This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. A custom resource kind refused everywhere Radar checked stays refused for a minute before Radar checks again, so access granted to it while Radar runs can take that long to appear. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
 
 ## Audit evidence under partial access
 

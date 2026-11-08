@@ -508,8 +508,10 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 	// when the detector emits one, already takes precedence here. For a
 	// publishNotReadyAddresses Service the same state is info-tier: endpoints
 	// publish regardless of readiness, so traffic still routes and 0 ready is
-	// often the intended shape - worth a glance, never an outage framing.
-	if len(pods) > 0 && readyCount(pods) == 0 &&
+	// often the intended shape - worth a glance, never an outage framing. An
+	// unreadable selection may be missing the ready siblings, so "none are
+	// Ready" can't be said from it.
+	if !unreadable && len(pods) > 0 && readyCount(pods) == 0 &&
 		worstSeverity(hop.Findings) != SeverityCritical && worstSeverity(hop.Findings) != SeverityWarning {
 		for _, pod := range pods {
 			if pod == nil || podIsReady(pod) {
@@ -1018,19 +1020,43 @@ func selectedPods(deps Deps, svc *corev1.Service) (pods []*corev1.Pod, unreadabl
 		// rather than reporting a confident "0 ready pods".
 		return nil, true
 	}
+	// A namespace-scoped Pods informer (narrow pod RBAC) returns an EMPTY slice with
+	// no error for a namespace it doesn't watch, and one still filling its initial
+	// sync returns an empty or partial one - a NotReady pod without its ready
+	// siblings reads as "0 ready". Either way the counts are unknown, and a
+	// confident "no backends / 0 ready" would false-condemn the Service. The
+	// selection is complete only when the store holding this namespace covers it
+	// and had synced before the read; otherwise the pods found are kept for
+	// display but the hop is unreadable.
+	complete := deps.Cache.AssessKindRead("pods", []string{svc.Namespace}).Complete
 	got, err := deps.Cache.Pods().Pods(svc.Namespace).List(labels.SelectorFromSet(labels.Set(svc.Spec.Selector)))
 	if err != nil {
 		return nil, true
 	}
-	// A namespace-scoped Pods informer (narrow pod RBAC) returns an EMPTY slice with
-	// no error for a namespace it doesn't watch. That empty is "out of scope", not
-	// "0 pods" - reporting a confident "no backends / 0 ready" for a Service whose
-	// namespace falls outside pod scope would false-condemn it. Trust an empty list
-	// only when the informer actually covers this namespace.
-	if len(got) == 0 && !deps.Cache.KindCoversNamespace("pods", svc.Namespace) {
-		return nil, true
+	if !complete {
+		if len(got) == 0 {
+			return nil, true
+		}
+		return got, true
 	}
 	return got, false
+}
+
+// backendServiceUnverified reports whether a backend Service lookup failed
+// without proving the Service is gone: a non-NotFound error, or a NotFound from
+// a Services store that doesn't cover the namespace or hasn't synced. The
+// verdict layer reads a missing backend from the entry's missing-reference
+// issue, which stays silent in exactly these cases, so the hop has to carry the
+// uncertainty itself or the path reads healthy.
+func backendServiceUnverified(deps Deps, namespace, name string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if !apierrors.IsNotFound(err) {
+		return true
+	}
+	_, found, readable := deps.Cache.ReadableObject("services", namespace, name)
+	return !readable || found
 }
 
 // livePods drops pods that aren't serving - terminal (Succeeded/Failed) or being
@@ -1112,6 +1138,9 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 		// couldn't look, so absence isn't authoritative.
 		return nil, false
 	}
+	// Assessed before the read: a store that finished syncing after an
+	// incomplete read must not make that read authoritative.
+	complete := deps.Cache.AssessKindRead("ingresses", []string{svc.Namespace}).Complete
 	ingresses, err := deps.Cache.Ingresses().Ingresses(svc.Namespace).List(labels.Everything())
 	if err != nil {
 		return nil, false
@@ -1135,11 +1164,12 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 	}
 	// A non-empty read is not proof of a complete index: a warmup or
 	// namespace-scoped informer returns what it has with no error. Only a synced
-	// cache that reliably covers this Service's namespace is authoritative for
-	// "these are ALL the Ingresses"; anything less keeps the matches found but
-	// flags the enumeration as possibly incomplete.
-	authoritative := deps.Cache.IsSyncComplete() && deps.Cache.KindCoversNamespace("ingresses", svc.Namespace)
-	return out, authoritative
+	// store that covers this Service's namespace is authoritative for "these are
+	// ALL the Ingresses"; anything less keeps the matches found but flags the
+	// enumeration as possibly incomplete. That is the store's own sync, not the
+	// cache's first-paint phase: a slow Ingress informer is moved to the
+	// background and keeps loading after that phase.
+	return out, complete
 }
 
 func ingressReferencesService(ing *networkingIngress, svcName string) bool {
@@ -1361,9 +1391,10 @@ func traceIngressEntry(ctx context.Context, deps Deps, t *Trace) {
 		svc, svcErr := deps.Cache.Services().Services(ing.Namespace).Get(name)
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
-		} else if !apierrors.IsNotFound(svcErr) {
-			// RBAC denial / transient API failure - we can't read the backend, so
-			// don't let the path read healthy. Mark endpointSource=unknown (mirrors
+		} else if backendServiceUnverified(deps, ing.Namespace, name, svcErr) {
+			// RBAC denial, transient API failure, or a miss from a Services cache
+			// that can't vouch for it - we can't read the backend, so don't let
+			// the path read healthy. Mark endpointSource=unknown (mirrors
 			// buildPodsHop's lister-error handling) so the verdict degrades to
 			// unknown rather than hiding an unreadable backend. A confirmed
 			// NotFound stays a real break handled by the verdict layer.
@@ -1615,23 +1646,26 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 			Findings: hopFindings(deps, svcRef),
 		}
 		svc, svcErr := deps.Cache.Services().Services(b.Namespace).Get(b.Name)
+		// A backend explicitly weighted to 0 while a sibling carries traffic is
+		// drained by design - it serves no requests, so trace it informationally
+		// (no pod fan-out, no probes) and keep it out of the verdict/coverage
+		// failure tally. Folding a down weight-0 backend in would false-condemn a
+		// path that intentionally carries zero traffic, and an unreadable one
+		// would leave the whole trace unknown for the same zero traffic.
+		drained := routeBackendDrained(route, b.Namespace, b.Name)
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
-		} else if !apierrors.IsNotFound(svcErr) {
-			// RBAC denial / transient API failure - mark the backend unreadable so
-			// the verdict degrades to unknown instead of reading healthy. A
-			// confirmed NotFound stays a real break for the verdict layer.
+		} else if !drained && backendServiceUnverified(deps, b.Namespace, b.Name, svcErr) {
+			// RBAC denial, transient API failure, or a miss from a Services cache
+			// that can't vouch for it - mark the backend unreadable so the verdict
+			// degrades to unknown instead of reading healthy. A confirmed NotFound
+			// stays a real break for the verdict layer.
 			if svcHop.Meta == nil {
 				svcHop.Meta = map[string]any{}
 			}
 			svcHop.Meta["endpointSource"] = "unknown"
 		}
-		// A backend explicitly weighted to 0 while a sibling carries traffic is
-		// drained by design - it serves no requests, so trace it informationally
-		// (no pod fan-out, no probes) and keep it out of the verdict/coverage
-		// failure tally. Folding a down weight-0 backend in would false-condemn a
-		// path that intentionally carries zero traffic.
-		if routeBackendDrained(route, b.Namespace, b.Name) {
+		if drained {
 			if svcHop.Meta == nil {
 				svcHop.Meta = map[string]any{}
 			}
