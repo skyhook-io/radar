@@ -250,6 +250,17 @@ func TestObservedOutsideStorage(t *testing.T) {
 		t.Fatalf("a namespace filter must keep a release's cluster-scoped objects: %+v", rows)
 	}
 
+	// Two HelmReleases deploy flux-target/web, stored in denied and team-b. The
+	// row is credited to neither, and reading flux-target's storage answers
+	// for neither, so it stays.
+	two := &stampScan{stamped: scan.stamped, flux: append(slices.Clone(scan.flux), fluxEvidence{ref: "team-b/web", releaseName: "web", releaseNamespace: "flux-target", storageNamespace: "team-b"})}
+	if got := names(observedOutsideStorage(two, []string{"flux-target"}, nil, nil)); !slices.Contains(got, "flux-target/web") {
+		t.Fatalf("a release two HelmReleases store elsewhere must stay: %v", got)
+	}
+	if got := names(observedOutsideStorage(two, []string{"denied", "team-b"}, nil, nil)); slices.Contains(got, "flux-target/web") {
+		t.Fatalf("with both storage namespaces read, Helm's answer stands: %v", got)
+	}
+
 	// Helm returned this one from a namespace the scan can't connect it to, so
 	// it would otherwise appear twice.
 	got = names(observedOutsideStorage(scan, nil, nil, []HelmRelease{{Name: "api", Namespace: "denied", StorageNamespace: "flux-system"}}))

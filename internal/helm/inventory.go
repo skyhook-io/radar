@@ -257,6 +257,25 @@ func namesOrNil(namespaces []string) *resourceapi.NameSet {
 // namespace, after the scan, so a release keeps the objects it placed in other
 // namespaces and its cluster-scoped ones. A release Helm already returned is
 // left out however it was stored: without its HelmRelease, the scan can't tell.
+// storageWasRead reports whether the storage read covered everywhere the
+// release could be stored: where each readable Flux HelmRelease deploying it
+// stores it, or its own namespace when none does. Two HelmReleases can deploy
+// one release from different storage namespaces, and a row credited to
+// neither still has to be judged by both.
+func storageWasRead(key releaseKey, flux []fluxEvidence, read []string) bool {
+	stored := false
+	for _, f := range flux {
+		if f.releaseNamespace != key.namespace || f.releaseName != key.name {
+			continue
+		}
+		stored = true
+		if !slices.Contains(read, f.storageNamespace) {
+			return false
+		}
+	}
+	return stored || slices.Contains(read, key.namespace)
+}
+
 func observedOutsideStorage(scan *stampScan, read, requested []string, releases []HelmRelease) []ObservedRelease {
 	known := make(map[releaseKey]bool, len(releases))
 	for _, release := range releases {
@@ -266,11 +285,7 @@ func observedOutsideStorage(scan *stampScan, read, requested []string, releases 
 	partial := scan.coverage.Status != resourceapi.CoverageComplete
 	for key, objects := range groupStamped(scan.stamped) {
 		row := observedRow(key, objects, scan.flux)
-		storage := row.StorageNamespace
-		if storage == "" {
-			storage = row.Namespace
-		}
-		if known[key] || slices.Contains(read, storage) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
+		if known[key] || storageWasRead(key, scan.flux, read) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
 			continue
 		}
 		addObservedHealth(&row, objects, partial)
