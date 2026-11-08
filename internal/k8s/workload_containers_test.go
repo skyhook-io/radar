@@ -54,12 +54,20 @@ func TestGetContainersForPodDefaultsIncludeInitContainersOnlyWhileInitializing(t
 	}
 
 	always := corev1.ContainerRestartPolicyAlways
+	started := true
 	withSidecar := initializingPod(corev1.ConditionFalse, crashLooping)
 	withSidecar.Spec.InitContainers = append(withSidecar.Spec.InitContainers, corev1.Container{Name: "proxy", RestartPolicy: &always})
-	withSidecar.Status.InitContainerStatuses = append(withSidecar.Status.InitContainerStatuses, running)
-	withSidecar.Status.InitContainerStatuses[1].Name = "proxy"
+	startedSidecar := running
+	startedSidecar.Name, startedSidecar.Started = "proxy", &started
+	withSidecar.Status.InitContainerStatuses = append(withSidecar.Status.InitContainerStatuses, startedSidecar)
 	if got := GetContainersForPod(withSidecar, "", true); !reflect.DeepEqual(got, []string{"storage-initializer", "kserve-container"}) {
-		t.Fatalf("native sidecar during initialization=%v", got)
+		t.Fatalf("started native sidecar during initialization=%v", got)
+	}
+	failingSidecar := crashLooping
+	failingSidecar.Name = "proxy"
+	withSidecar.Status.InitContainerStatuses[1] = failingSidecar
+	if got := GetContainersForPod(withSidecar, "", true); !reflect.DeepEqual(got, []string{"storage-initializer", "proxy", "kserve-container"}) {
+		t.Fatalf("native sidecar failing to start=%v", got)
 	}
 	if got := GetContainersForPod(withSidecar, "proxy", true); !reflect.DeepEqual(got, []string{"proxy"}) {
 		t.Fatalf("explicit sidecar selection=%v", got)
