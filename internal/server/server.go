@@ -491,7 +491,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"http://localhost:*", "http://127.0.0.1:*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Content-Type", requestOriginHeader},
 		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
 		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq"},
@@ -4935,6 +4935,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+			countRefusedSwitch(err)
 			s.writeSwitchPreflightError(w, "", err)
 			return
 		}
@@ -5418,6 +5419,7 @@ func (s *Server) requireConnected(w http.ResponseWriter) bool {
 // the frontend keeps the surface in a loading state ("still loading") instead
 // of declaring a healthy, still-syncing cluster unavailable.
 func (s *Server) writeNotConnected(w http.ResponseWriter) {
+	markClusterNotConnected(w)
 	if k8s.GetConnectionStatus().State == k8s.StateConnecting {
 		s.writeErrorCode(w, http.StatusServiceUnavailable, "cluster_connecting", "Cluster is still connecting, please retry shortly")
 		return
