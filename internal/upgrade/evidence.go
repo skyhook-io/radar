@@ -63,12 +63,13 @@ func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namesp
 	return resolved, ok
 }
 
-// ResolveHelmNamespacesChecked is ResolveHelmNamespaces that also says whether
-// every Secrets check it made was answered, and which namespaces it left out
-// because the caller can't list Secrets there (or the check went unanswered).
-// When a check wasn't answered, a namespace may be missing without having been
-// denied, so a caller that treats a missing namespace as a denial must not use
-// the result.
+// ResolveHelmNamespacesChecked is ResolveHelmNamespaces that also returns
+// checked and unread. unread are the namespaces it left out because the
+// caller can't list Secrets there, or because that check went unanswered;
+// checked is false when any check that decided what to leave out went
+// unanswered, so a caller that treats a left-out namespace as a denial must
+// not do so. resolved nil means one cluster-wide read; ok false means no
+// namespace access at all, so nothing should be read.
 func ResolveHelmNamespacesChecked(ctx context.Context, authz EvidenceAuthorizer, namespaces []string) (resolved []string, ok bool, checked bool, unread []string) {
 	if readscope.NoNamespaceAccess(namespaces) {
 		return nil, false, true, nil

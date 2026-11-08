@@ -252,9 +252,12 @@ type DashboardTrafficSummary struct {
 }
 
 type DashboardHelmSummary struct {
-	Total      int                    `json:"total"`
-	Releases   []DashboardHelmRelease `json:"releases"`
-	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases (RBAC-denied)
+	Total    int                    `json:"total"`
+	Releases []DashboardHelmRelease `json:"releases"`
+	// Restricted is true when no Helm records could be read and the caller was
+	// refused. A refusal in only some namespaces leaves it false and fills
+	// UnreadNamespaces instead.
+	Restricted bool `json:"restricted,omitempty"`
 	// Error + ErrorCode are populated when the Helm read failed for a
 	// reason other than RBAC (Helm client not initialized, no resolved
 	// rest.Config, network error). Lets the dashboard widget render
@@ -264,9 +267,11 @@ type DashboardHelmSummary struct {
 	// unreachable, timed_out, unconfigured, auth_required).
 	Error     string `json:"error,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
-	// UnreadNamespaces are namespaces whose Helm records the caller can't
-	// read, so their releases are missing from Total and Releases. The Helm
-	// view still lists them from their objects.
+	// UnreadNamespaces are namespaces whose Helm records weren't read: the
+	// caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases; the Helm
+	// view may still list them from objects the caller can read. Absent when
+	// every namespace in scope was read, and on a restricted or failed answer.
 	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 

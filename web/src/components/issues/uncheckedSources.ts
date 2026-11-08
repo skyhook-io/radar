@@ -35,7 +35,7 @@ function helmLine({ reason, namespaces }: UncheckedSource): string {
     return `Helm releases ${where}couldn't be checked because Radar's service account isn't allowed to impersonate users, so ${missing}.`;
   }
   if (reason === "caller_access_denied") {
-    return `Radar can't read Helm's release Secrets ${where}here, so ${missing}.`;
+    return `Radar can't read Helm's release Secrets ${where ? where.trim() : "here"}, so ${missing}.`;
   }
   return `Helm releases ${where}couldn't be checked, so ${missing}.`;
 }

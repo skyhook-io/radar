@@ -2732,9 +2732,11 @@ type mcpHelmSummary struct {
 	// reporting Total=0.
 	Unavailable       bool   `json:"unavailable,omitempty"`
 	UnavailableReason string `json:"unavailableReason,omitempty"`
-	// UnreadNamespaces are namespaces whose Helm release Secrets the caller
-	// can't read; their releases are missing from Total and Releases.
-	// list_helm_releases still lists them from their objects.
+	// UnreadNamespaces are namespaces whose Helm release Secrets weren't read:
+	// the caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases;
+	// list_helm_releases may still find them from objects the caller can read.
+	// Absent when every namespace in scope was read, and when Unavailable.
 	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
@@ -3052,7 +3054,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user)
 			if err == nil && len(read) == 0 && len(denied) > 0 {
 				d.HelmReleases.Unavailable = true
-				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope. list_helm_releases lists releases from their objects."
+				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope. list_helm_releases may find releases from objects the caller can read."
 			} else if err != nil {
 				// Not fatal for the dashboard — a viewer with no helm access
 				// still sees everything else. Surface to LLM consumers via
