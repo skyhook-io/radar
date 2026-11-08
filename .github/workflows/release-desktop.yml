@@ -236,8 +236,15 @@ jobs:
     name: Linux (amd64)
     needs: whats-new
     runs-on: ubuntu-22.04
+    # This job runs third-party packaging tools (linuxdeploy and its GTK
+    # plugin); it uploads through the artifact service and never writes to
+    # the repository, so it gets a read-only token that is not left on disk.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v7
