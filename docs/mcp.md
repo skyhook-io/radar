@@ -114,7 +114,11 @@ effects. Local Radar can't reach in-cluster addresses; use a port-forward or
 **Permission.** The caller needs `get services/proxy` on the Service. Without
 authentication, Radar checks its own ServiceAccount, which the chart doesn't grant;
 see [the scoped grant](../deploy/helm/radar/README.md#granting-service-http-access-without-authentication).
-The no-auth UI Curl button makes no such check.
+The no-auth UI Curl button makes no such check. Radar checks the permission for
+the Service's name, like the UI does, so a grant restricted to `app` covers every
+port of `app`. This differs from the API server, which matches a restricted grant
+against the name with its port (`app:8080`); a grant naming only a port isn't
+accepted.
 
 **Targets.** Only selector-backed Services with a ClusterIP. MCP refuses
 ExternalName, headless and selector-less Services, which the UI still reaches
@@ -315,6 +319,9 @@ override can't replace a map or list that contains a hidden credential.
 `replace_values: true` replaces all overrides; with `values: {}` it resets them.
 
 - A same-version upgrade reuses the complete stored chart and needs no source.
+  Helm doesn't store subcharts that were disabled at install, so turning one on
+  this way succeeds without adding it; enabling a subchart needs a confirmed
+  source.
 - A different version, an explicit `repository`, or a stored chart missing
   subchart bodies needs a confirmed source on the release. `repository` only
   asserts the saved source; it can't select a new one.
@@ -426,8 +433,9 @@ PVCs and external data aren't listed, and hook contents aren't enumerated.
   the last 60 seconds, so concurrent calls share one download; it is never read
   from Radar's repository cache, which can be days old. OCI tags use Radar's
   registry credentials, with a timeout per registry request but no overall
-  deadline. The 50-version cap limits the output, not the fetch. `versionsError`
-  gives the reason when there is no list: no confirmed source, a failed source
+  deadline. The 50-version cap limits the output, not the fetch, and
+  versions older than the newest 50 aren't listed, even within an older line.
+  `versionsError` gives the reason when there is no list: no confirmed source, a failed source
   change, an operation in progress, an unreachable source, or a source that lists
   no versions of the chart. Versions are what the source advertises; a listed
   version can still fail to download.

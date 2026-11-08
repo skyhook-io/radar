@@ -654,6 +654,8 @@ roleRef:
   name: radar-service-http
 ```
 
+Radar checks the grant for the Service's name, so `resourceNames: ["app"]` covers
+every port of `app`; a name with a port, such as `app:8080`, isn't accepted.
 Every reachable unauthenticated MCP client shares this access; with
 authentication, each signed-in caller needs the grant instead. Prefer a namespace
 Role to `rbac.additionalRules`: those rules extend a ClusterRole, so a
