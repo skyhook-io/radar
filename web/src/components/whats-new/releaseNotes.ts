@@ -115,7 +115,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       'Limit what Radar can reach with rbac.namespaces, disableExec and --disable-auto-port-forward',
       'GitOps trees show operator-created workloads; drawers link webhooks, issuers and Secrets',
       'get_changes includes RBAC and Node edits; search finds resources by a pasted IP or ip:port',
-      'Issues link a missing Secret to its SealedSecret and report missing parent Gateways',
+      'Issues link a missing Secret to its SealedSecret',
     ],
   },
   {

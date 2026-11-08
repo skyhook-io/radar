@@ -3,7 +3,6 @@ package issues
 import (
 	"strings"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -261,13 +260,6 @@ func dedupeConditionOverMissingRef(in []Issue) []Issue {
 	structural := map[string]bool{}
 	for _, i := range in {
 		if i.Source != SourceMissingRef {
-			continue
-		}
-		// A missing PARENT Gateway is a different failure axis than the
-		// backend-resolution (ResolvedRefs) conditions this dedup suppresses, so
-		// it must not stand in for a structural backend finding and silence an
-		// unrelated backend condition on the same route.
-		if i.Reason == k8s.MissingGatewayParentReason {
 			continue
 		}
 		structural[issueResourceCategoryKey(i)] = true
