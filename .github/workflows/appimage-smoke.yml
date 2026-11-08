@@ -101,7 +101,7 @@ jobs:
             ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
             bash -c 'export DEBIAN_FRONTEND=noninteractive
               apt-get update -qq
-              apt-get install -y -qq xvfb xdotool imagemagick curl procps fonts-dejavu-core libegl1 libgl1 libgles2 libfontconfig1 >/dev/null
+              apt-get install -y -qq xvfb xdotool imagemagick curl procps fonts-dejavu-core libegl1 libgl1 libgles2 libfontconfig1 openssl python3 ca-certificates >/dev/null
               if ldconfig -p | grep -q libwebkit2gtk; then echo "WebKitGTK is installed; the test would not prove the bundle works" >&2; exit 1; fi
               scripts/appimage/smoke.sh radar-desktop_smoke_linux_amd64.AppImage smoke-out'
 
