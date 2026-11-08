@@ -153,3 +153,47 @@ func TestDashboardHelmNamesNamespacesItCouldNotRead(t *testing.T) {
 		})
 	}
 }
+
+// When no namespace's Secrets check is answered, the read falls back to one
+// cluster-wide list, which the caller may be refused even though a namespace
+// would allow it. Neither Home nor Issues may report that refusal as the
+// caller's access.
+func TestHelmUnansweredChecksAreNotReportedAsDenials(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(testNamespaces("team-a", "team-b")...))
+	useHelmStoragePerNamespace(t, "team-a")
+	env := newAuthTestServer(t)
+
+	// Only the cluster-wide answer is known; the per-namespace checks reach
+	// the test API server, which has no SubjectAccessReview route.
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "secrets", "", false)
+	env.srv.permCache.Set("unanswered", nil, perms)
+
+	resp := env.authGet(t, "/api/dashboard/helm", "unanswered", "")
+	var summary DashboardHelmSummary
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if summary.Restricted || summary.ErrorCode != ErrCodeUnreachable {
+		t.Fatalf("summary = %+v, want a retryable error, not restricted", summary)
+	}
+
+	resp = env.authGet(t, "/api/issues", "unanswered", "")
+	var body struct {
+		Unchecked []map[string]any `json:"unchecked_sources"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	var helmEntries []map[string]any
+	for _, entry := range body.Unchecked {
+		if entry["source"] == "helm" {
+			helmEntries = append(helmEntries, entry)
+		}
+	}
+	if len(helmEntries) != 1 || helmEntries[0]["reason"] != "read_failed" {
+		t.Fatalf("helm unchecked = %v, want one read_failed entry", helmEntries)
+	}
+}

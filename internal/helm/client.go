@@ -389,7 +389,8 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 // ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
 // which namespaces' storage was read and which the caller was refused, rather
 // than skipping refused namespaces silently. A refusal everywhere is a result
-// here (nothing read, something denied), not an error.
+// here (nothing read, something denied), not an error. A cluster-wide read
+// (nil namespaces) reports itself as "" in read or denied.
 func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User) (rows []HelmRelease, read, denied []string, err error) {
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil, nil, nil

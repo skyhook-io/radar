@@ -62,9 +62,12 @@ type ObservedRelease struct {
 	// objects, as written. When Chart is empty they are the candidates Radar
 	// wouldn't choose between; otherwise they are normally subcharts.
 	OtherCharts []string `json:"otherCharts,omitempty"`
-	// ChartVersions and AppVersions list the values found when the chosen
-	// chart's objects disagree, as after an interrupted upgrade. ChartVersion
-	// or AppVersion is then empty: Radar doesn't pick one.
+	// ChartVersions and AppVersions list the distinct values, sorted, found
+	// when the chosen chart's objects disagree, as after an interrupted
+	// upgrade. ChartVersion or AppVersion is then empty: Radar doesn't pick
+	// one. They come from object labels only: when a readable Flux HelmRelease
+	// names the release's chart in its history, Flux's versions are used and
+	// these are empty. Absent doesn't prove the objects agree.
 	ChartVersions []string `json:"chartVersions,omitempty"`
 	AppVersions   []string `json:"appVersions,omitempty"`
 	// ResourceCount is how many of the caller's readable objects carry the

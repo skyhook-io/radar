@@ -531,15 +531,19 @@ export interface DashboardHelmRelease {
 export interface DashboardHelmSummary {
   total: number;
   releases: DashboardHelmRelease[];
-  restricted?: boolean; // True when user lacks permissions to list Helm releases (RBAC-denied)
+  // True when no Helm records could be read and the caller was refused. A
+  // refusal in only some namespaces leaves it false and fills unreadNamespaces.
+  restricted?: boolean;
   // error + errorCode populated when the Helm read failed for a non-RBAC
   // reason (client not initialized, unconfigured, network). Surfaced
   // via the dashboard widget so empty results aren't mistaken for
   // "this cluster has zero releases."
   error?: string;
   errorCode?: string;
-  // Namespaces whose Helm records the caller can't read; their releases are
-  // missing from total and releases. Absent from an older Radar.
+  // Namespaces whose Helm records weren't read: refused, or the permission
+  // check behind that went unanswered. Their releases are missing from total
+  // and releases. Absent when everything in scope was read, on a restricted or
+  // failed answer, and from an older Radar.
   unreadNamespaces?: ReadGapSet<string>;
 }
 
@@ -806,8 +810,10 @@ export interface UncheckedSource {
   // The kinds within the source that went unchecked; absent means the whole
   // source, or that Radar couldn't tell which kinds.
   kinds?: { group?: string; kind: string }[];
-  // The namespaces whose read failed while the others were read; absent
-  // means the gap isn't limited to particular namespaces.
+  // The namespaces this entry's gap is limited to: the source was checked in
+  // the others, and these weren't (the read failed or was refused there, or
+  // Radar didn't read there because the caller can't). Absent means the gap
+  // isn't limited to particular namespaces.
   namespaces?: string[];
 }
 
