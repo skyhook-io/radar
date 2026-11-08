@@ -1367,7 +1367,8 @@ func TestClusterScopedKindDiscoveredDeprecatedVersionFirstStaysClusterScoped(t *
 
 // A namespaced version of a resource whose most stable version is
 // cluster-scoped must keep its namespace filter, and a version discovery
-// doesn't serve takes the scope of the most stable one.
+// doesn't serve reads as namespaced rather than borrowing another version's
+// scope.
 func TestGvrIsNamespacedReadsTheRequestedVersion(t *testing.T) {
 	const group = "widgets.example.io"
 	fakeDiscovery := fake.NewClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -1380,7 +1381,7 @@ func TestGvrIsNamespacedReadsTheRequestedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := &DynamicResourceCache{config: DynamicCacheConfig{Discovery: discovery}}
-	for version, want := range map[string]bool{"v1beta1": true, "v1": false, "v2": false} {
+	for version, want := range map[string]bool{"v1beta1": true, "v1": false, "v2": true} {
 		if got := d.gvrIsNamespaced(schema.GroupVersionResource{Group: group, Version: version, Resource: "widgets"}); got != want {
 			t.Errorf("%s: gvrIsNamespaced=%v, want %v", version, got, want)
 		}
