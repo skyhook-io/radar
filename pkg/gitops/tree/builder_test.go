@@ -947,3 +947,36 @@ func TestBuildNotGitOpsErrorNamesTheResource(t *testing.T) {
 		t.Fatalf("error = %v, want %q", err, want)
 	}
 }
+
+func TestFluxTreeDropsNamespaceRecordedForClusterScopedKinds(t *testing.T) {
+	hr := helmRelease("flux", "release")
+	hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{
+		map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"},
+		map[string]any{"id": "prod_global_cert-manager.io_ClusterIssuer"},
+		map[string]any{"id": "prod_local_cert-manager.io_Issuer"},
+		map[string]any{"id": "prod_unknown_example.io_Widget"},
+	}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux", Name: "release"}): hr,
+	}}
+	session := ownershipSession(t,
+		ownedObject("cert-manager.io", "ClusterIssuer", "", "global", nil, false),
+		ownedObject("cert-manager.io", "Issuer", "prod", "local", nil, false),
+	)
+	tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "HelmRelease", "flux", "release", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"ClusterRole": "", "ClusterIssuer": "", "Issuer": "prod", "Widget": "prod"}
+	for _, node := range tree.Nodes {
+		if ns, ok := want[node.Ref.Kind]; ok {
+			if node.Ref.Namespace != ns {
+				t.Errorf("%s namespace = %q, want %q", node.Ref.Kind, node.Ref.Namespace, ns)
+			}
+			delete(want, node.Ref.Kind)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing from tree: %v", want)
+	}
+}
