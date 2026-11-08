@@ -177,5 +177,10 @@ echo "smoke: a link opens with the launch environment and folder"
 window="$(DISPLAY="$display" xdotool search --onlyvisible --pid "$radar_pid" 2>/dev/null | head -n 1 || true)"
 [[ -n "$window" ]] || fail "Radar has no visible window"
 sleep 5
-DISPLAY="$display" import -window "$window" "$out/window.png" || echo "smoke: could not capture the window" >&2
+DISPLAY="$display" import -window "$window" "$out/window.png" || fail "could not capture Radar's window"
+# A painted UI has hundreds of colours (text antialiasing, icons); a blank or
+# single-colour window has a handful.
+colours="$(convert "$out/window.png" -format %k info:)"
+[[ "$colours" -ge 100 ]] || fail "Radar's window looks blank ($colours colours)"
+echo "smoke: the window is painted ($colours colours)"
 echo "smoke: PASS"
