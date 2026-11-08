@@ -113,6 +113,7 @@ describe('viewMixesPods', () => {
     expect(viewMixesPods([{ name: 'web-0' }, { name: 'web-1' }], [])).toBe(true)
     expect(viewMixesPods([{ name: 'web-1' }], [{ pod: 'web-0' }])).toBe(true)
     expect(viewMixesPods([], [{ pod: 'web-0' }, { pod: 'web-1' }])).toBe(true)
+    expect(viewMixesPods([{ name: 'db-1' }], [{ pod: 'db-1', sourceLabel: 'primary · previous run' }])).toBe(true)
   })
 })
 

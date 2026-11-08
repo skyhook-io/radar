@@ -382,8 +382,10 @@ export function LogCore({
   const gapNotice = 'Some logs between your saved view and the latest logs are no longer available.'
   const exportEntries = exportScope === 'all' ? retainedExportEntries : displayEntries
   const exportOptions = useMemo(
-    () => ({ format: exportFormat, showTimestamps, showPodName }),
-    [exportFormat, showTimestamps, showPodName],
+    // An exported line names its Pod and container whenever the screen tells
+    // sources apart, since the text format has no separate container column.
+    () => ({ format: exportFormat, showTimestamps, showPodName: showPodName || showContainerName }),
+    [exportFormat, showTimestamps, showPodName, showContainerName],
   )
   // Keyed on presence, not logical open, so the preview doesn't flip to
   // "nothing to export" while the popover is still fading out.

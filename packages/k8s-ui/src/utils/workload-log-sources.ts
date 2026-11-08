@@ -46,13 +46,15 @@ export function containerColumnWidth(pods: WorkloadPodInfo[], entries: Iterable<
 }
 
 /**
- * Whether the view holds lines from more than one Pod, so each line should
- * name its Pod: more than one Pod shown, or retained lines from another Pod.
+ * Whether each line should name its source: more than one Pod shown, retained
+ * lines from another Pod, or lines with a source label (such as a database
+ * instance's role or "previous run"), which says more than the Pod name.
  */
-export function viewMixesPods(pods: { name: string }[], entries: Iterable<{ pod?: string }>): boolean {
+export function viewMixesPods(pods: { name: string }[], entries: Iterable<{ pod?: string; sourceLabel?: string }>): boolean {
   if (pods.length > 1) return true
   let only = pods[0]?.name
   for (const entry of entries) {
+    if (entry.sourceLabel) return true
     if (!entry.pod) continue
     if (only === undefined) only = entry.pod
     else if (entry.pod !== only) return true
