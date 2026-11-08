@@ -59,6 +59,7 @@ func (d postureDeployment) server(t *testing.T) *Server {
 
 func postureRequest(host string, tunnel bool) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	r.RemoteAddr = "127.0.0.1:52100"
 	r.Host = host
 	if tunnel {
 		cloud.AuthenticatedTunnelHandler(http.HandlerFunc(func(_ http.ResponseWriter, tr *http.Request) { r = tr })).ServeHTTP(httptest.NewRecorder(), r)
@@ -77,6 +78,7 @@ type postureDecisions struct {
 	usageShared    bool
 	openWarning    bool
 	anyHostWarning bool
+	appEvidence    bool
 }
 
 func decide(s *Server, r *http.Request) postureDecisions {
@@ -92,6 +94,7 @@ func decide(s *Server, r *http.Request) postureDecisions {
 		usageShared:    s.usageShared(),
 		openWarning:    unauthenticatedListenerWarning(s.listenAddress, s.authConfig.Enabled(), cloud.Mode()),
 		anyHostWarning: allowAnyHostWarning(true, s.authConfig.Enabled(), s.listenAddress),
+		appEvidence:    s.applicationEvidenceAvailable(r),
 	}
 }
 
@@ -105,25 +108,25 @@ func TestPostureDecisions(t *testing.T) {
 		want postureDecisions
 	}{
 		{"local", postureDeployment{listen: "127.0.0.1"},
-			postureDecisions{hostCheck: hostCheckLoopbackOnly, terminal: true, pprof: true, pprofCmdline: true, cloudDriver: true, ai: true}},
+			postureDecisions{hostCheck: hostCheckLoopbackOnly, terminal: true, pprof: true, pprofCmdline: true, cloudDriver: true, ai: true, appEvidence: true}},
 		{"local, connected to Radar Hub", postureDeployment{listen: "127.0.0.1", tunnel: true},
 			postureDecisions{hostCheck: hostCheckLoopbackOnly, terminal: true, pprof: true, pprofCmdline: true, ai: true, usageShared: true}},
 		{"local on 0.0.0.0, no auth", postureDeployment{listen: "0.0.0.0"},
-			postureDecisions{hostCheck: hostCheckSharedAllowlist, pprofCmdline: true, cloudDriver: true, cloudAck: true, ai: true, usageShared: true, openWarning: true, anyHostWarning: true}},
+			postureDecisions{hostCheck: hostCheckSharedAllowlist, pprofCmdline: true, cloudDriver: true, cloudAck: true, ai: true, usageShared: true, openWarning: true, anyHostWarning: true, appEvidence: true}},
 		{"in-cluster, no auth (chart default)", postureDeployment{listen: "0.0.0.0", inCluster: true},
 			postureDecisions{hostCheck: hostCheckSharedAllowlist, pprofCmdline: true, cloudAck: true, usageShared: true, openWarning: true, anyHostWarning: true}},
 		{"in-cluster, no auth, connected to Radar Hub without Cloud mode", postureDeployment{listen: "0.0.0.0", tunnel: true, inCluster: true},
 			postureDecisions{hostCheck: hostCheckSharedAllowlist, pprofCmdline: true, cloudAck: true, ai: true, usageShared: true, openWarning: true, anyHostWarning: true}},
 		{"Pod with a supplied kubeconfig on 0.0.0.0", postureDeployment{listen: "0.0.0.0", inPod: true},
-			postureDecisions{hostCheck: hostCheckSharedAllowlist, pprofCmdline: true, cloudDriver: true, cloudAck: true, usageShared: true, openWarning: true, anyHostWarning: true}},
+			postureDecisions{hostCheck: hostCheckSharedAllowlist, pprofCmdline: true, cloudDriver: true, cloudAck: true, usageShared: true, openWarning: true, anyHostWarning: true, appEvidence: true}},
 		{"Pod with a supplied kubeconfig on loopback (dev workspace)", postureDeployment{listen: "127.0.0.1", inPod: true},
-			postureDecisions{hostCheck: hostCheckLoopbackOnly, terminal: true, pprof: true, pprofCmdline: true, cloudDriver: true, ai: true}},
+			postureDecisions{hostCheck: hostCheckLoopbackOnly, terminal: true, pprof: true, pprofCmdline: true, cloudDriver: true, ai: true, appEvidence: true}},
 		{"in-cluster with auth", postureDeployment{listen: "0.0.0.0", authMode: "proxy", inCluster: true},
 			postureDecisions{hostCheck: hostCheckNone, pprof: true, cloudAck: true, usageShared: true}},
 		{"Radar Cloud", postureDeployment{listen: "0.0.0.0", authMode: "proxy", tunnel: true, hostedCloud: true, inCluster: true},
 			postureDecisions{hostCheck: hostCheckNone, cloudAck: true, usageShared: true}},
 		{"unstarted server (tests)", postureDeployment{},
-			postureDecisions{hostCheck: hostCheckNone, pprof: true, pprofCmdline: true, cloudDriver: true, cloudAck: true, ai: true, usageShared: true, openWarning: true, anyHostWarning: true}},
+			postureDecisions{hostCheck: hostCheckNone, pprof: true, pprofCmdline: true, cloudDriver: true, cloudAck: true, ai: true, usageShared: true, openWarning: true, anyHostWarning: true, appEvidence: true}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := tt.d.server(t)
@@ -186,6 +189,34 @@ func TestPostureTwists(t *testing.T) {
 		s.mcpInvestigationHandler = nil
 		if s.aiDeploymentSupported() {
 			t.Error("AI supported without the MCP mount")
+		}
+	})
+	t.Run("application evidence needs a loopback client and Host, no user, no tunnel", func(t *testing.T) {
+		s := postureDeployment{listen: "0.0.0.0"}.server(t)
+		remote := postureRequest("localhost:9280", false)
+		remote.RemoteAddr = "192.0.2.1:52100"
+		signedIn := postureRequest("localhost:9280", false)
+		signedIn = signedIn.WithContext(auth.ContextWithUser(signedIn.Context(), &auth.User{Username: "someone"}))
+		for name, r := range map[string]*http.Request{
+			"another machine":   remote,
+			"non-loopback Host": postureRequest("192.168.1.5:9280", false),
+			"a signed-in user":  signedIn,
+			"the Hub tunnel":    postureRequest("localhost:9280", true),
+		} {
+			if s.applicationEvidenceAvailable(r) {
+				t.Errorf("application evidence available to %s", name)
+			}
+		}
+	})
+	t.Run("MCP application evidence needs the full MCP mount", func(t *testing.T) {
+		s := local.server(t)
+		r := postureRequest("localhost:9280", false)
+		if s.mcpApplicationEvidenceAvailable(r) {
+			t.Error("available on a read-only MCP server")
+		}
+		s.mcpHandler = http.NotFoundHandler()
+		if !s.mcpApplicationEvidenceAvailable(r) {
+			t.Error("unavailable with the full MCP mount")
 		}
 	})
 	t.Run("Radar Cloud's listener does not warn", func(t *testing.T) {

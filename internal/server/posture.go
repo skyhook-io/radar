@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"net/http"
 	"os"
 
@@ -79,6 +80,27 @@ const (
 	hostCheckLoopbackOnly
 	hostCheckSharedAllowlist
 )
+
+// requestFromOperator: the request comes from the person at this machine: a
+// loopback client and Host, local mode, no sign-in configured or carried, and
+// neither connected to Radar Hub nor arriving over its tunnel. It asks about
+// the client rather than the listener, so a laptop Radar on 0.0.0.0 still
+// answers its own operator, and only them.
+func (s *Server) requestFromOperator(r *http.Request) bool {
+	p := s.posture()
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	client := net.ParseIP(host)
+	return err == nil && client != nil && client.IsLoopback() && requestHostIsLoopback(r) &&
+		deploymentMode() == k8s.DeploymentModeLocal && !p.auth &&
+		!p.tunnelConfigured && !viaTunnel(r) && auth.UserFromContext(r.Context()) == nil
+}
+
+// applicationEvidenceAvailable: collection port-forwards into the
+// application's Pod with Radar's own credentials and reads its runtime
+// endpoints from this machine, so only the operator here may start it.
+func (s *Server) applicationEvidenceAvailable(r *http.Request) bool {
+	return s.requestFromOperator(r)
+}
 
 // hostCheck: an unstarted server is exempt because tests send httptest's
 // example.com Host.
