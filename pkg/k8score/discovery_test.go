@@ -411,3 +411,21 @@ func TestNewResourceDiscoveryRejectsAPlainNilClient(t *testing.T) {
 		t.Fatal("expected an error for a nil discovery client")
 	}
 }
+
+func TestGetResourceWithGroupPrefersMostStableVersionInEitherOrder(t *testing.T) {
+	for _, order := range [][]string{{"v1beta1", "v1beta2"}, {"v1beta2", "v1beta1"}} {
+		d := &ResourceDiscovery{
+			resourceMap: make(map[string]APIResource),
+			gvrMap:      make(map[string]schema.GroupVersionResource),
+		}
+		for _, version := range order {
+			d.AddAPIResource(APIResource{Group: "kueue.x-k8s.io", Version: version, Kind: "ClusterQueue", Name: "clusterqueues", IsCRD: true, Verbs: []string{"get", "list", "watch"}})
+		}
+		for _, lookup := range []string{"ClusterQueue", "clusterqueues"} {
+			res, ok := d.GetResourceWithGroup(lookup, "kueue.x-k8s.io")
+			if !ok || res.Version != "v1beta2" || res.Name != "clusterqueues" || res.Namespaced {
+				t.Fatalf("discovery order %v, lookup %q: got %+v ok=%v, want cluster-scoped v1beta2", order, lookup, res, ok)
+			}
+		}
+	}
+}

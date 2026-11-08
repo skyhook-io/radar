@@ -589,9 +589,10 @@ func (d *ResourceDiscovery) GetResource(kindOrName string) (APIResource, bool) {
 }
 
 // GetResourceWithGroup returns the APIResource for a kind in a specific
-// API group. Mirrors GetGVRWithGroup but yields the full resource (incl.
-// Namespaced) rather than just the GVR. Empty group falls back to the
-// kind-keyed lookup (first match wins, with the same caveat as GetGVR).
+// API group. Mirrors GetGVRWithGroup, including its choice of the most stable
+// served version, but yields the full resource (incl. Namespaced) rather than
+// just the GVR. Empty group falls back to the kind-keyed lookup (with the same
+// caveat as GetGVR).
 //
 // Used for authorization decisions where the caller has both kind and
 // group from a request and needs to know the resource's scope before
@@ -608,13 +609,24 @@ func (d *ResourceDiscovery) GetResourceWithGroup(kindOrName, group string) (APIR
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
+	// Server discovery lists a group's versions in an order that varies from
+	// process to process, so returning the first match would hand callers a
+	// deprecated version at random, and the GVR they build from it would name
+	// a version no informer is registered against.
 	kindLower := strings.ToLower(kindOrName)
-	for _, res := range d.resources {
+	var best *APIResource
+	for i := range d.resources {
+		res := &d.resources[i]
 		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
-			return res, true
+			if best == nil || IsMoreStableVersion(res.Version, best.Version) {
+				best = res
+			}
 		}
 	}
-	return APIResource{}, false
+	if best == nil {
+		return APIResource{}, false
+	}
+	return *best, true
 }
 
 // IsKnownResource checks if a kind or plural name is a known resource.
