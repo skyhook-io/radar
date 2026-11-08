@@ -279,3 +279,29 @@ it('shows the notice again when fresh status says the Pod is re-initializing', a
   await act(async () => source.emit('pod_updated', { pods: [pod({ state: 'waiting', reason: 'CrashLoopBackOff' }, { state: 'waiting', reason: 'PodInitializing' })] }))
   expect(element.textContent).toContain("app hasn't started: init container init is in CrashLoopBackOff.")
 })
+
+it('names each line\'s Pod only while the view holds more than one Pod', async () => {
+  await act(async () =>
+    root.render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 20 }}>
+        <ToastProvider>
+          <WorkloadLogsViewer name="web" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+        </ToastProvider>
+      </VirtuosoMockContext.Provider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  const running = (name: string) => ({ name, containers: ['app'], ready: true, containerStatuses: [{ name: 'app', ready: true, restartCount: 0, state: 'running' }] })
+  await act(async () => source.emit('connected', { pods: [running('web-0')] }))
+  await act(async () => source.emit('log', { pod: 'web-0', container: 'app', timestamp: '2026-11-08T00:00:00Z', content: 'serving' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(element.textContent).toContain('serving')
+  expect(element.querySelector('[title="web-0"]')).toBeNull()
+
+  await act(async () => source.emit('pod_added', { pods: [running('web-1')] }))
+  await act(async () => source.emit('log', { pod: 'web-1', container: 'app', timestamp: '2026-11-08T00:01:00Z', content: 'also serving' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(element.querySelector('[title="web-0"]')?.textContent).toBe('[web-0]')
+  expect(element.querySelector('[title="web-1"]')?.textContent).toBe('[web-1]')
+})

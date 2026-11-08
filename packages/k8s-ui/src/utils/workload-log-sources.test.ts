@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkloadPodContainerInfo, WorkloadPodInfo } from '../types/core'
-import { initContainerNames, initializingPodsNotice, containerRole, viewMixesContainers } from './workload-log-sources'
+import { initContainerNames, initializingPodsNotice, containerRole, viewMixesContainers, viewMixesPods, containerColumnWidth } from './workload-log-sources'
 
 const app = (state: WorkloadPodContainerInfo['state'], reason?: string): WorkloadPodContainerInfo => ({ name: 'kserve-container', ready: state === 'running', restartCount: 0, state, reason })
 const init = (state: WorkloadPodContainerInfo['state'], reason?: string, extra: Partial<WorkloadPodContainerInfo> = {}): WorkloadPodContainerInfo => ({ name: 'storage-initializer', init: true, ready: false, restartCount: 3, state, reason, ...extra })
@@ -61,6 +61,32 @@ describe('init container identity', () => {
     expect(containerRole(pods, 'gone', 'storage-initializer')).toBeUndefined()
     expect([...initContainerNames([pod('p-1', [init('waiting'), proxy, app('waiting')])])]).toEqual(['storage-initializer'])
     expect([...initContainerNames([pod('p-1', [init('waiting'), app('waiting')]), other])]).toEqual([])
+  })
+})
+
+describe('containerColumnWidth', () => {
+  const awsNode = pod('aws-node-abcde', [
+    { name: 'aws-vpc-cni-init', init: true, ready: false, restartCount: 0, state: 'terminated', reason: 'Completed' },
+    { name: 'aws-node', ready: true, restartCount: 0, state: 'running' },
+    { name: 'aws-eks-nodeagent', ready: true, restartCount: 0, state: 'running' },
+  ])
+  it('fits the app containers, leaving out an init container with no lines', () => {
+    expect(containerColumnWidth([], [])).toBe(0)
+    expect(containerColumnWidth([awsNode], [{ container: 'aws-node' }])).toBe(17)
+  })
+  it('makes room for an init container once it has lines, with its marker, capping long names', () => {
+    expect(containerColumnWidth([awsNode], [{ container: 'aws-vpc-cni-init', containerRole: 'init' }])).toBe(21)
+    expect(containerColumnWidth([pod('p-1', [running('a-very-long-sidecar-container-name')])], [])).toBe(24)
+  })
+})
+
+describe('viewMixesPods', () => {
+  it('names Pods only when the view holds more than one', () => {
+    expect(viewMixesPods([{ name: 'web-0' }], [{ pod: 'web-0' }, { pod: 'web-0' }])).toBe(false)
+    expect(viewMixesPods([], [])).toBe(false)
+    expect(viewMixesPods([{ name: 'web-0' }, { name: 'web-1' }], [])).toBe(true)
+    expect(viewMixesPods([{ name: 'web-1' }], [{ pod: 'web-0' }])).toBe(true)
+    expect(viewMixesPods([], [{ pod: 'web-0' }, { pod: 'web-1' }])).toBe(true)
   })
 })
 

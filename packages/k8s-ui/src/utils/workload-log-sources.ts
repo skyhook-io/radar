@@ -27,6 +27,40 @@ export function initContainerNames(pods: WorkloadPodInfo[]): Set<string> {
 }
 
 /**
+ * Characters the container column needs (the INIT marker takes five more). It
+ * comes from the shown Pods' app containers and sidecars, plus init containers
+ * only once they have lines, so a finished init container doesn't widen it.
+ * It never depends on which lines are scrolled into view.
+ */
+export function containerColumnWidth(pods: WorkloadPodInfo[], entries: Iterable<{ container: string; containerRole?: 'init' | 'sidecar' }>, max = 24): number {
+  let width = 0
+  for (const pod of pods) {
+    const init = new Set((pod.containerStatuses ?? []).filter(status => status.init && !status.sidecar).map(status => status.name))
+    for (const name of pod.containers) if (!init.has(name)) width = Math.max(width, name.length)
+  }
+  for (const entry of entries) {
+    if (width >= max) break
+    if (entry.containerRole === 'init') width = Math.max(width, entry.container.length + 5)
+  }
+  return Math.min(width, max)
+}
+
+/**
+ * Whether the view holds lines from more than one Pod, so each line should
+ * name its Pod: more than one Pod shown, or retained lines from another Pod.
+ */
+export function viewMixesPods(pods: { name: string }[], entries: Iterable<{ pod?: string }>): boolean {
+  if (pods.length > 1) return true
+  let only = pods[0]?.name
+  for (const entry of entries) {
+    if (!entry.pod) continue
+    if (only === undefined) only = entry.pod
+    else if (entry.pod !== only) return true
+  }
+  return false
+}
+
+/**
  * Whether "All containers" mixes output from several containers, so each line
  * should name its container: more than one app container, a shown Pod still
  * initializing, or lines from more than one container, or from an init

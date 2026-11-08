@@ -11,7 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
-import { initContainerNames, initializingPodsNotice, containerRole, podContainerKey, viewMixesContainers } from '../../utils/workload-log-sources'
+import { initContainerNames, initializingPodsNotice, containerRole, podContainerKey, viewMixesContainers, viewMixesPods, containerColumnWidth } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -354,9 +354,14 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
     [entries, selectedPods],
   )
+  const showPodName = useMemo(() => viewMixesPods(shownPods, filteredEntries), [shownPods, filteredEntries])
   const showContainerName = useMemo(
     () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries),
     [selectedContainer, shownPods, filteredEntries],
+  )
+  const containerWidth = useMemo(
+    () => showContainerName ? containerColumnWidth(shownPods, filteredEntries) : 0,
+    [showContainerName, shownPods, filteredEntries],
   )
   // Pods from a stream that is still connecting, or failed, may belong to the
   // previous stream, so their status isn't current.
@@ -503,9 +508,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onDownload={downloadLogs}
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
-      showPodName
+      showPodName={showPodName}
       showContainerName={showContainerName}
-      containerLabelWidth={Math.min(24, Math.max(0, ...allContainers.map(c => c.length + (initContainers.has(c) ? 5 : 0))))}
+      containerLabelWidth={containerWidth}
       emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
