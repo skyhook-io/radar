@@ -980,3 +980,36 @@ func TestFluxTreeDropsNamespaceRecordedForClusterScopedKinds(t *testing.T) {
 		t.Fatalf("missing from tree: %v", want)
 	}
 }
+
+func TestRemoteFluxTreeAlignsOnlyBuiltinScope(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "fleet-prod", "namespace": "flux-system"},
+		"spec":     map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}}},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"},
+			map[string]any{"id": "prod_global_cert-manager.io_ClusterIssuer"},
+		}}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "fleet-prod"}): ks,
+	}}
+	// The local catalog's scope for a custom kind says nothing about the remote cluster.
+	session := ownershipSession(t, ownedObject("cert-manager.io", "ClusterIssuer", "", "local-only", nil, false))
+	tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "Kustomization", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"ClusterRole": "", "ClusterIssuer": "prod"}
+	for _, node := range tree.Nodes {
+		if ns, ok := want[node.Ref.Kind]; ok {
+			if node.Ref.Namespace != ns {
+				t.Errorf("%s namespace = %q, want %q", node.Ref.Kind, node.Ref.Namespace, ns)
+			}
+			delete(want, node.Ref.Kind)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing from tree: %v", want)
+	}
+}

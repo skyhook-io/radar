@@ -95,7 +95,8 @@ func parseFluxManagedResources(root *unstructured.Unstructured) []managedResourc
 // cluster-scoped. Charts often stamp the release namespace on every object,
 // ClusterRoles included, and helm-controller records it; the object has none,
 // so the recorded ref would match nothing live. A kind the catalog doesn't
-// know, or serves at two scopes, keeps what was recorded.
+// know, or serves at two scopes, keeps what was recorded; with a nil catalog
+// only built-in kinds are aligned.
 func alignManagedScope(managed []managedResource, catalog *ownership.Catalog) {
 	for i := range managed {
 		ref := &managed[i].Ref
