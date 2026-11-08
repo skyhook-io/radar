@@ -343,6 +343,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `restoreLastDesktopContext` | Desktop app only: reopen on the cluster last used (default: enabled). `false` always opens on the kubeconfig's `current-context` — see [Startup Context](#startup-context) |
 | `namespace` | Initial namespace filter |
 | `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
+| `maxScopeCandidates` | Desktop app only: the Desktop equivalent of `--max-scope-candidates` (default 20). How many namespaces Radar checks its access in, the kubeconfig context namespace included; raise it when `namespaces` lists more. Takes effect on the next start. The CLI reads `--max-scope-candidates` and `RADAR_MAX_SCOPE_CANDIDATES` only |
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `noVersionCheck` | Disable automatic version checks; Desktop's manual Check for Updates remains available |
@@ -903,7 +904,7 @@ Radar Desktop doesn't take command-line flags, so set the same list in `~/.radar
 
 Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default the UI picks up when it loads. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
 
-This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. A custom resource kind refused everywhere Radar checked stays refused for a minute before Radar checks again, so access granted to it while Radar runs can take that long to appear. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
+This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. A custom resource kind refused everywhere Radar checked stays refused for a minute before Radar checks again, so access granted to it while Radar runs can take that long to appear. The list is capped by `--max-scope-candidates` (default 20), counting the kubeconfig context namespace when it isn't in the list. Rather than silently probing a subset, the CLI exits with an error, and Radar Desktop opens with the error in its window and doesn't connect; raise the cap with `maxScopeCandidates` in `~/.radar/config.json` and reopen Desktop.
 
 ## Audit evidence under partial access
 

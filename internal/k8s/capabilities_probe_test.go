@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"sync"
@@ -215,6 +216,19 @@ func TestMergeScopeCandidates_NonAuthoritativeIgnoresAccessible(t *testing.T) {
 	}
 	if dropped != 0 {
 		t.Errorf("dropped = %d, want 0 (no truncation reported on non-authoritative path)", dropped)
+	}
+}
+
+// The cap is operator-set (flag, env, Desktop config.json) and can be any
+// int; a huge one must not size an allocation.
+func TestMergeScopeCandidateLists_HugeCap(t *testing.T) {
+	prev := MaxScopeCandidates
+	MaxScopeCandidates = math.MaxInt
+	t.Cleanup(func() { MaxScopeCandidates = prev })
+
+	out, dropped := mergeScopeCandidateLists("ctx", []string{"a", "b"}, []string{"c"}, true)
+	if !reflect.DeepEqual(out, []string{"ctx", "a", "b", "c"}) || dropped != 0 {
+		t.Fatalf("out = %v, dropped = %d", out, dropped)
 	}
 }
 
