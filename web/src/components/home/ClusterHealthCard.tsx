@@ -440,9 +440,15 @@ export function ClusterHealthCard({
                   />
                 </div>
               )}
-              {!metricsServerAvailable && (
+              {!metricsServerAvailable && (isRestricted('nodes') ? (
+                // Capacity comes from Nodes, so installing metrics-server wouldn't help.
+                <span className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
+                  <Shield className="w-3 h-3 shrink-0" />
+                  <span>CPU and memory need permission to list Nodes</span>
+                </span>
+              ) : (
                 <MetricsUnavailableHint platform={cluster.platform} metricsServerAvailable={metricsServerAvailable} />
-              )}
+              ))}
             </div>
 
           </div>
@@ -577,7 +583,7 @@ export function NamespaceCountLine({ count, restricted }: { count: number; restr
   }
   return (
     <span className="flex items-center gap-1">
-      <CertaintyGlyph certainty="lower_bound" title="Radar can't list every namespace, so this counts only the ones it reads." />
+      <CertaintyGlyph certainty="lower_bound" title="Namespaces can't be listed here, so this counts only the ones in view. The cluster may have more." />
       <span><span className="font-mono">{count}</span> {count === 1 ? 'namespace' : 'namespaces'}</span>
     </span>
   )

@@ -50,6 +50,12 @@ describe("ClusterHealthCard restricted counts", () => {
     expect(html).not.toContain("0 ready");
   });
 
+  it("blames Node access, not metrics-server, for missing CPU and memory", () => {
+    expect(render(counts({ restricted: ["nodes"] }))).toContain("CPU and memory need permission to list Nodes");
+    expect(render(counts({ restricted: ["nodes"] }))).not.toContain("metrics-server");
+    expect(render(counts({}))).toContain("metrics-server");
+  });
+
   it("marks a namespace count Radar could not list as a lower bound", () => {
     const html = render(counts({ namespaces: 15, restricted: ["namespaces"] }));
     expect(html).toContain("≥");
