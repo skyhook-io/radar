@@ -113,10 +113,10 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	return cmd, cleanup, nil
 }
 
-// launchDir is the folder Radar was launched from when it differs from the
-// process working directory (inside the AppImage), else "". A variable so
-// tests can stand in for an AppImage launch.
-var launchDir = desktopenv.LaunchDir
+// launchDir is the working directory for agent processes inside the AppImage
+// (the folder Radar was launched from), else "". A variable so tests can
+// stand in for an AppImage launch.
+var launchDir = desktopenv.ChildDir
 
 // codexEnv is the minimal environment Codex needs (auth via HOME/CODEX_HOME, PATH
 // to exec, locale). Cloud-provider secrets are deliberately omitted — the shell

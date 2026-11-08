@@ -162,7 +162,7 @@ func runLoginShell(shell, script string) string {
 		"USER=" + os.Getenv("USER"),
 		"SHELL=" + shell,
 	}
-	cmd.Dir = desktopenv.LaunchDir()
+	cmd.Dir = desktopenv.ChildDir()
 	cmd.Stdin = nil
 	out, err := cmd.Output()
 	if err != nil {

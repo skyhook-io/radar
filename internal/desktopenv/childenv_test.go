@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func lookupFrom(env map[string]string) func(string) (string, bool) {
+	return func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}
+}
+
 func TestPlanChildEnv(t *testing.T) {
 	image := map[string]string{
 		// Saved by AppRun before it set up GTK.

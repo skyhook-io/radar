@@ -1,3 +1,7 @@
+//go:build !windows
+
+// AppImage launches are Linux-only; these cases use Unix paths and symlinks.
+
 package desktopenv
 
 import (
@@ -6,13 +10,6 @@ import (
 	"strings"
 	"testing"
 )
-
-func lookupFrom(env map[string]string) func(string) (string, bool) {
-	return func(k string) (string, bool) {
-		v, ok := env[k]
-		return v, ok
-	}
-}
 
 func TestDetectAppImage(t *testing.T) {
 	root := t.TempDir()
@@ -152,5 +149,19 @@ func TestResolveAgainstFollowsSymlinksLikeTheShell(t *testing.T) {
 	}
 	if _, err := os.Stat(resolveAgainst(launch, "current/../ai-runs.db")); err != nil {
 		t.Errorf("current/../ai-runs.db from the launch folder should reach data/releases/ai-runs.db: %v", err)
+	}
+}
+
+func TestChildDirFor(t *testing.T) {
+	launch := t.TempDir()
+	home := func() (string, error) { return "/home/u", nil }
+	if got := childDirFor("", home); got != "" {
+		t.Errorf("outside an AppImage: %q, want \"\" (inherit)", got)
+	}
+	if got := childDirFor(launch, home); got != launch {
+		t.Errorf("existing launch folder: %q, want %q", got, launch)
+	}
+	if got := childDirFor(filepath.Join(launch, "removed"), home); got != "/home/u" {
+		t.Errorf("removed launch folder: %q, want the home folder", got)
 	}
 }

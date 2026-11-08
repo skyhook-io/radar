@@ -151,6 +151,6 @@ func isGhReady() bool {
 // from its own working directory (inside the AppImage).
 func ghCommand(ghPath string, args ...string) *exec.Cmd {
 	cmd := exec.Command(ghPath, args...)
-	cmd.Dir = desktopenv.LaunchDir()
+	cmd.Dir = desktopenv.ChildDir()
 	return cmd
 }

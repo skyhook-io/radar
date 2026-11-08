@@ -55,7 +55,7 @@ func OpenSystemBrowser(url string) {
 		log.Printf("[desktop] Cannot open browser on %s: %s", runtime.GOOS, url)
 		return
 	}
-	cmd.Dir = desktopenv.LaunchDir()
+	cmd.Dir = desktopenv.ChildDir()
 	if err := cmd.Start(); err != nil {
 		log.Printf("[desktop] Failed to open URL: %v", err)
 	}

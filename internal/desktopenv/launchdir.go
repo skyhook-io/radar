@@ -71,6 +71,27 @@ func InAppImage() bool { return current().inImage }
 // use this directory instead.
 func LaunchDir() string { return current().launchDir }
 
+// ChildDir is the working directory for processes Radar starts: the launch
+// folder inside the AppImage, or the home folder if the launch folder has
+// since been removed or renamed (starting a process in a missing directory
+// fails). Outside the AppImage it is "", so children inherit Radar's own.
+func ChildDir() string {
+	return childDirFor(LaunchDir(), os.UserHomeDir)
+}
+
+func childDirFor(launch string, home func() (string, error)) string {
+	if launch == "" {
+		return ""
+	}
+	if info, err := os.Stat(launch); err == nil && info.IsDir() {
+		return launch
+	}
+	if h, err := home(); err == nil {
+		return h
+	}
+	return ""
+}
+
 // ResolveLaunchPath makes a relative path the user supplied absolute against
 // LaunchDir, so it means what it meant in the shell that started the AppImage.
 // Empty, absolute and "~"-prefixed paths, and every path outside an AppImage,
