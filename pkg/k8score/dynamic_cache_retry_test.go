@@ -1364,3 +1364,25 @@ func TestClusterScopedKindDiscoveredDeprecatedVersionFirstStaysClusterScoped(t *
 		})
 	}
 }
+
+// A namespaced version of a resource whose most stable version is
+// cluster-scoped must keep its namespace filter, and a version discovery
+// doesn't serve takes the scope of the most stable one.
+func TestGvrIsNamespacedReadsTheRequestedVersion(t *testing.T) {
+	const group = "widgets.example.io"
+	fakeDiscovery := fake.NewClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDiscovery.Resources = []*metav1.APIResourceList{
+		{GroupVersion: group + "/v1beta1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}},
+		{GroupVersion: group + "/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: false, Verbs: []string{"get", "list", "watch"}}}},
+	}
+	discovery, err := NewResourceDiscovery(fakeDiscovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &DynamicResourceCache{config: DynamicCacheConfig{Discovery: discovery}}
+	for version, want := range map[string]bool{"v1beta1": true, "v1": false, "v2": false} {
+		if got := d.gvrIsNamespaced(schema.GroupVersionResource{Group: group, Version: version, Resource: "widgets"}); got != want {
+			t.Errorf("%s: gvrIsNamespaced=%v, want %v", version, got, want)
+		}
+	}
+}

@@ -658,6 +658,26 @@ func (d *ResourceDiscovery) IsCRDGVR(gvr schema.GroupVersionResource) bool {
 	return false
 }
 
+// NamespacedGVR reports the scope of the exact discovered group, version and
+// resource; known is false when discovery doesn't serve that version. Scope is
+// read per version because an aggregated API registers each version on its own,
+// so one resource name can be namespaced at one version and not at another.
+func (d *ResourceDiscovery) NamespacedGVR(gvr schema.GroupVersionResource) (namespaced, known bool) {
+	if d == nil {
+		return false, false
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	for _, res := range d.resources {
+		if res.Group == gvr.Group && res.Version == gvr.Version && res.Name == gvr.Resource {
+			return res.Namespaced, true
+		}
+	}
+	return false, false
+}
+
 // SupportsWatch checks if a resource supports list and watch verbs.
 func (d *ResourceDiscovery) SupportsWatch(kindOrName string) bool {
 	res, ok := d.GetResource(kindOrName)

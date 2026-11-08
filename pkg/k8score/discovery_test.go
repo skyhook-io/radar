@@ -429,3 +429,24 @@ func TestGetResourceWithGroupPrefersMostStableVersionInEitherOrder(t *testing.T)
 		}
 	}
 }
+
+// An aggregated API registers each version on its own, so one resource can be
+// namespaced at one version and cluster-scoped at another.
+func TestNamespacedGVRReadsTheExactVersion(t *testing.T) {
+	d := &ResourceDiscovery{
+		resourceMap: make(map[string]APIResource),
+		gvrMap:      make(map[string]schema.GroupVersionResource),
+	}
+	d.AddAPIResource(APIResource{Group: "widgets.example.io", Version: "v1beta1", Kind: "Widget", Name: "widgets", Namespaced: true, Verbs: []string{"get", "list", "watch"}})
+	d.AddAPIResource(APIResource{Group: "widgets.example.io", Version: "v1", Kind: "Widget", Name: "widgets", Namespaced: false, Verbs: []string{"get", "list", "watch"}})
+
+	for version, want := range map[string]bool{"v1beta1": true, "v1": false} {
+		got, known := d.NamespacedGVR(schema.GroupVersionResource{Group: "widgets.example.io", Version: version, Resource: "widgets"})
+		if !known || got != want {
+			t.Errorf("%s: namespaced=%v known=%v, want %v", version, got, known, want)
+		}
+	}
+	if _, known := d.NamespacedGVR(schema.GroupVersionResource{Group: "widgets.example.io", Version: "v2", Resource: "widgets"}); known {
+		t.Error("a version discovery doesn't serve must be unknown")
+	}
+}

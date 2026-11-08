@@ -1296,13 +1296,16 @@ func isAuthProbeError(err error) bool {
 	return apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
 }
 
-// gvrIsNamespaced matches on group and resource only. A resource has one scope
-// at every version it serves, and GetAPIResources keeps only the most stable
-// version, so matching the version too would read a served but less stable one
-// as unknown, and unknown defaults to namespaced.
+// gvrIsNamespaced reads the scope of the exact version first: discovery lists
+// every served version, and an aggregated API can serve one resource with a
+// different scope per version. A version discovery doesn't serve falls back to
+// the same group and resource at the most stable version, then to namespaced.
 func (d *DynamicResourceCache) gvrIsNamespaced(gvr schema.GroupVersionResource) bool {
 	if d.config.Discovery == nil {
 		return true
+	}
+	if namespaced, known := d.config.Discovery.NamespacedGVR(gvr); known {
+		return namespaced
 	}
 	resources, err := d.config.Discovery.GetAPIResources()
 	if err != nil {
