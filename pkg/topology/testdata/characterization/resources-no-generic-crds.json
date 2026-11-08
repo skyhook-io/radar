@@ -4111,6 +4111,21 @@
             }
           },
           {
+            "id": "gitrepository/flux-system/repo",
+            "kind": "GitRepository",
+            "name": "repo",
+            "status": "unknown",
+            "data": {
+              "apiVersion": "source.toolkit.fluxcd.io/v1",
+              "auditKey": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
+              "branch": "",
+              "labels": null,
+              "namespace": "flux-system",
+              "ready": "Unknown",
+              "url": "https://example.com/repo.git"
+            }
+          },
+          {
             "id": "kustomization/flux-system/shop",
             "kind": "Kustomization",
             "name": "shop",
@@ -4127,6 +4142,13 @@
           }
         ],
         "edges": [
+          {
+            "id": "gitrepository/flux-system/repo-to-kustomization/flux-system/shop-configures",
+            "source": "gitrepository/flux-system/repo",
+            "target": "kustomization/flux-system/shop",
+            "type": "configures",
+            "label": "source"
+          },
           {
             "id": "kustomization/flux-system/shop-to-deployment/shop/cart",
             "source": "kustomization/flux-system/shop",
