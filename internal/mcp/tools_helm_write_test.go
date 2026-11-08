@@ -152,7 +152,7 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	if !strings.Contains(preview["message"].(string), "deployed") {
 		t.Fatalf("preview omitted status: %v", preview)
 	}
-	if preview["history"] != "purged once resources are deleted, even if a post-delete hook then fails" || preview["historyOnly"] != false || preview["resourcesCount"] != float64(0) || preview["deleteHooks"] == nil || preview["kept"] == nil {
+	if preview["history"] != "purged once Helm has requested the resource deletions, even if a post-delete hook then fails" || preview["historyOnly"] != false || preview["resourcesCount"] != float64(0) || preview["deleteHooks"] == nil || preview["kept"] == nil {
 		t.Fatalf("preview must state history, hooks and kept resources: %v", preview)
 	}
 	in.Confirm = preview["confirm"].(string)

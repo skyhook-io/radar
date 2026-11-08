@@ -1393,9 +1393,10 @@ For uninstall, `state: preview` additionally returns `revision` and the expiring
   left in place. Each list holds at most 100 items, with `Count` and `Truncated` companions.
 - `deleteHooks`: pre-delete and post-delete hooks with their events, effective `deletePolicies` (Helm applies
   `before-hook-creation` when none are declared) and `lastPhase`. A failing pre-delete hook stops the uninstall.
-- `history`: purged once resources are deleted, even if a post-delete hook then fails; the release can't be
-  rolled back afterwards. A failing pre-delete hook stops the uninstall before anything is deleted or purged. If an
-  uninstall fails after the purge, the error says the release and its history are already gone.
+- `history`: purged once Helm has requested the resource deletions, even if a post-delete hook then fails; the
+  release can't be rolled back afterwards, while deletion itself (finalizers) can still be in progress. A failing
+  pre-delete hook stops the uninstall before anything is deleted or purged. If an uninstall fails after the purge, the
+  error says the release and its history are already gone.
 - `historyOnly: true` when the release is already uninstalled with its history kept. Uninstall then only purges
   that history: no hooks run and nothing is deleted, so `resources` and `deleteHooks` are empty.
 

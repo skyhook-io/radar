@@ -247,7 +247,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			return nil, nil, fmt.Errorf("Helm %s refused before applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", in.Action, err)
 		}
 		if in.Action == "uninstall" && uninstallPurgedDespiteError(client, in, user) {
-			return nil, nil, fmt.Errorf("Helm uninstall deleted the release's resources and purged its history, then reported errors from a later step such as a post-delete hook: %w; the release can't be rolled back; check for leftover hook resources and external cleanup", err)
+			return nil, nil, fmt.Errorf("Helm uninstall removed the release and purged its history, then reported errors from a later step such as a post-delete hook: %w; the release can't be rolled back; resource deletion may still be in progress (finalizers), so check for leftover release and hook resources and external cleanup", err)
 		}
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
 	}
@@ -325,12 +325,12 @@ func uninstallPurgedDespiteError(client *helm.Client, in manageHelmInput, user *
 }
 
 func helmUninstallPreviewResult(in manageHelmInput, status, token string, preview *helm.MCPUninstallPreview) (*mcp.CallToolResult, any, error) {
-	message := fmt.Sprintf("Release status: %s. resources are deleted; kept are left in place by helm.sh/resource-policy; deleteHooks run, each removed per its deletePolicies. A failing pre-delete hook stops the uninstall before anything is deleted; a failing post-delete hook doesn't, and history is still purged. Once resources are deleted the history is purged, so the release can't be rolled back afterwards. Resources created by controllers, PVCs from StatefulSet templates and external data aren't listed; hook contents aren't enumerated. Review, then call again with confirm.", status)
+	message := fmt.Sprintf("Release status: %s. resources are deleted; kept are left in place by helm.sh/resource-policy; deleteHooks run, each removed per its deletePolicies. A failing pre-delete hook stops the uninstall before anything is deleted; a failing post-delete hook doesn't, and history is still purged. Once Helm has requested the resource deletions, the history is purged, so the release can't be rolled back afterwards; deletion itself can still be in progress. Resources created by controllers, PVCs from StatefulSet templates and external data aren't listed; hook contents aren't enumerated. Review, then call again with confirm.", status)
 	if preview.HistoryOnly {
 		message = "The release is already uninstalled with its history kept. Uninstall only purges the stored history: no hooks run and no resources are deleted. Review, then call again with confirm."
 	}
 	result := map[string]any{"action": "uninstall", "state": "preview", "namespace": in.Namespace, "name": in.Name, "revision": preview.Revision, "confirm": token,
-		"historyOnly": preview.HistoryOnly, "history": "purged once resources are deleted, even if a post-delete hook then fails", "parseErrors": preview.ParseErrors, "deleteHooks": preview.Hooks, "message": message}
+		"historyOnly": preview.HistoryOnly, "history": "purged once Helm has requested the resource deletions, even if a post-delete hook then fails", "parseErrors": preview.ParseErrors, "deleteHooks": preview.Hooks, "message": message}
 	addCappedList(result, "resources", preview.Delete)
 	addCappedList(result, "kept", preview.Kept)
 	return toJSONResult(result)
