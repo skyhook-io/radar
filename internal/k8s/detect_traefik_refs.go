@@ -364,7 +364,7 @@ func (inv *traefikInventory) serviceMissing(ref map[string]any, ns string) (stri
 	if svcLister == nil || !inv.cache.IsKindReady("services") {
 		return "", issuesapi.EvidenceRead{}, false
 	}
-	if _, err := svcLister.Services(ns).Get(name); !refKnownMissing(inv.cache, "services", ns, err) {
+	if _, err := svcLister.Services(ns).Get(name); !refKnownMissing(inv.cache, "services", ns, name, err) {
 		return "", issuesapi.EvidenceRead{}, false
 	}
 	return fmt.Sprintf("Service %q", traefikRefLabel(ns, name)), issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}, true
