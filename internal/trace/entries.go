@@ -1025,9 +1025,10 @@ func selectedPods(deps Deps, svc *corev1.Service) (pods []*corev1.Pod, unreadabl
 	// A namespace-scoped Pods informer (narrow pod RBAC) returns an EMPTY slice with
 	// no error for a namespace it doesn't watch. That empty is "out of scope", not
 	// "0 pods" - reporting a confident "no backends / 0 ready" for a Service whose
-	// namespace falls outside pod scope would false-condemn it. Trust an empty list
-	// only when the informer actually covers this namespace.
-	if len(got) == 0 && !deps.Cache.KindCoversNamespace("pods", svc.Namespace) {
+	// namespace falls outside pod scope would false-condemn it, and so would one
+	// from a Pods informer still filling its initial sync. Trust an empty list
+	// only when the informer has synced and covers this namespace.
+	if len(got) == 0 && (!deps.Cache.IsKindReady("pods") || !deps.Cache.KindCoversNamespace("pods", svc.Namespace)) {
 		return nil, true
 	}
 	return got, false
@@ -1135,10 +1136,12 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 	}
 	// A non-empty read is not proof of a complete index: a warmup or
 	// namespace-scoped informer returns what it has with no error. Only a synced
-	// cache that reliably covers this Service's namespace is authoritative for
-	// "these are ALL the Ingresses"; anything less keeps the matches found but
-	// flags the enumeration as possibly incomplete.
-	authoritative := deps.Cache.IsSyncComplete() && deps.Cache.KindCoversNamespace("ingresses", svc.Namespace)
+	// Ingress informer that reliably covers this Service's namespace is
+	// authoritative for "these are ALL the Ingresses"; anything less keeps the
+	// matches found but flags the enumeration as possibly incomplete. The
+	// informer's own sync, not the cache's first-paint phase: a slow Ingress
+	// informer is moved to the background and keeps loading after that phase.
+	authoritative := deps.Cache.IsKindReady("ingresses") && deps.Cache.KindCoversNamespace("ingresses", svc.Namespace)
 	return out, authoritative
 }
 

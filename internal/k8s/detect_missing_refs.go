@@ -53,14 +53,13 @@ import (
 // they have legitimate use cases that would generate false positives.
 //
 // Each check uses the "we know it's missing vs we can't tell" rule: when
-// the target's lister isn't available in cache (e.g., deferred informer
-// hasn't been warmed yet), OR the informer doesn't cover the target's
+// the target's lister isn't available in cache, the target's informer hasn't
+// finished its initial sync, OR the informer doesn't cover the target's
 // namespace (namespace-scoped RBAC — see refLookupResult), the check is
 // silently skipped. This is the conservative path — better to under-report
 // than to false-positive every ref during cold-cache windows or on
 // namespace-restricted installs. The trade-off: a freshly-started radar
-// may miss the SA-missing case until something else triggers the
-// ServiceAccount informer.
+// reports no missing refs of a kind until that kind's informer has synced.
 //
 // namespace="" scans all namespaces for namespaced sources. Cluster-scoped
 // sources (ClusterRoleBinding) are only scanned when namespace="" — passing
@@ -132,18 +131,20 @@ func WebhookBackendFingerprint(namespace, name string) string {
 
 // refLookupResult classifies a lister Get result into the honest tri-state
 // "exists / known missing / couldn't verify". A lister miss is only
-// authoritative when the informer for the target's kind actually covers the
-// target namespace (KindCoversNamespace): a namespace-scoped informer answers
-// NotFound for every namespace it doesn't watch — indistinguishable from true
-// absence — so a miss outside its coverage is "couldn't verify", never
-// "missing". Non-NotFound errors are likewise unverifiable. resource is the
+// authoritative when the informer for the target's kind covers the target
+// namespace (KindCoversNamespace) AND has finished its initial sync
+// (IsKindReady). Both other states answer NotFound for objects that exist: a
+// namespace-scoped informer for every namespace it doesn't watch, and a
+// still-loading informer for everything it hasn't listed yet. Several lister
+// accessors (ServiceAccounts, Services, workloads, RBAC) hand out a lister over
+// the unsynced store, so the sync check can't be left to them. resource is the
 // plural lowercase informer key ("services", "configmaps"); ns is "" for
 // cluster-scoped kinds.
 func refLookupResult(cache *ResourceCache, resource, ns string, err error) (verifiable, exists bool) {
 	if err == nil {
 		return true, true
 	}
-	if apierrors.IsNotFound(err) && cache.KindCoversNamespace(resource, ns) {
+	if apierrors.IsNotFound(err) && cache.KindCoversNamespace(resource, ns) && cache.IsKindReady(resource) {
 		return true, false
 	}
 	return false, false

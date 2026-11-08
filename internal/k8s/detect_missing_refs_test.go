@@ -1438,6 +1438,17 @@ func TestRefLookupResult(t *testing.T) {
 		map[string]k8score.ResourceScope{"services": {Enabled: true}})
 	scopedCache := scopedRefTestCache(t, fake.NewClientset(),
 		map[string]k8score.ResourceScope{"services": {Enabled: true, Namespace: "prod"}})
+	loadingCore, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:          fake.NewClientset(),
+		ResourceScopes:  map[string]k8score.ResourceScope{"services": {Enabled: true}},
+		DeferredTypes:   map[string]bool{"services": true},
+		DebugSyncDelays: map[string]time.Duration{"services": time.Hour},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(loadingCore.Stop)
+	loadingCache := &ResourceCache{ResourceCache: loadingCore}
 
 	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "web")
 	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "web", errors.New("denied"))
@@ -1455,6 +1466,7 @@ func TestRefLookupResult(t *testing.T) {
 		{"scoped NotFound in own namespace is authoritative", scopedCache, "prod", notFound, true, false},
 		{"scoped NotFound in OTHER namespace is unverifiable", scopedCache, "staging", notFound, false, false},
 		{"non-NotFound error is unverifiable even when covered", coveredCache, "prod", forbidden, false, false},
+		{"covered NotFound from an informer still syncing is unverifiable", loadingCache, "prod", notFound, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1725,4 +1737,96 @@ func TestDetectMissingGatewayRefsCrossNamespaceCoverage(t *testing.T) {
 			t.Errorf("cross-namespace backendRef into an uncovered namespace must be silent: %+v", p)
 		}
 	}
+}
+
+// TestDetectMissingRefsWaitsForTargetSync models a cold start: the Pods and
+// StatefulSets informers have synced, but the ServiceAccount, Secret and
+// Service informers are still loading. Their listers can be non-nil the whole
+// time (ServiceAccounts and Services are), and every Get answers NotFound, so a
+// lookup against them must read as "couldn't verify", never "missing". Once the
+// same targets' informers have synced, the identical fixture flags all three.
+func TestDetectMissingRefsWaitsForTargetSync(t *testing.T) {
+	now := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	replicas := int32(2)
+	objects := func() []runtime.Object {
+		return []runtime.Object{
+			&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod", CreationTimestamp: now},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "absent-sa",
+					Volumes:            []corev1.Volume{{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "absent-secret"}}}},
+				},
+				Status: corev1.PodStatus{Phase: corev1.PodRunning},
+			},
+			&appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "prod", CreationTimestamp: now},
+				Spec:       appsv1.StatefulSetSpec{ServiceName: "absent-headless", Replicas: &replicas},
+			},
+		}
+	}
+	targets := []string{"serviceaccounts", "secrets", "services"}
+	build := func(t *testing.T, cold bool) *ResourceCache {
+		t.Helper()
+		scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "statefulsets": {Enabled: true}}
+		deferred := map[string]bool{}
+		delays := map[string]time.Duration{}
+		for _, kind := range targets {
+			scopes[kind] = k8score.ResourceScope{Enabled: true}
+			deferred[kind] = true
+			if cold {
+				delays[kind] = time.Hour
+			}
+		}
+		core, err := k8score.NewResourceCache(k8score.CacheConfig{
+			Client:          fake.NewClientset(objects()...),
+			ResourceScopes:  scopes,
+			DeferredTypes:   deferred,
+			DebugSyncDelays: delays,
+		})
+		if err != nil {
+			t.Fatalf("NewResourceCache: %v", err)
+		}
+		t.Cleanup(core.Stop)
+		return &ResourceCache{ResourceCache: core}
+	}
+	want := []struct{ kind, name, reason string }{
+		{"Pod", "web", "Missing ServiceAccount"},
+		{"Pod", "web", "Missing Secret"},
+		{"StatefulSet", "db", "Missing headless Service"},
+	}
+
+	t.Run("targets still syncing", func(t *testing.T) {
+		cache := build(t, true)
+		if _, err := cache.Pods().Pods("prod").Get("web"); err != nil {
+			t.Fatalf("source Pod not listed, the absence check below would be vacuous: %v", err)
+		}
+		if _, err := cache.StatefulSets().StatefulSets("prod").Get("db"); err != nil {
+			t.Fatalf("source StatefulSet not listed, the absence check below would be vacuous: %v", err)
+		}
+		for _, kind := range targets {
+			if cache.IsKindReady(kind) {
+				t.Fatalf("%s informer reports synced; the fixture no longer models a cold start", kind)
+			}
+		}
+		if cache.ServiceAccounts() == nil || cache.Services() == nil {
+			t.Fatal("ServiceAccount/Service listers are nil while loading; the fixture no longer exercises a lister over an unsynced store")
+		}
+		for _, p := range DetectMissingRefs(cache, "") {
+			t.Errorf("finding from an informer that hasn't synced: %+v", p)
+		}
+	})
+
+	t.Run("targets synced", func(t *testing.T) {
+		cache := build(t, false)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && !(cache.IsKindReady("serviceaccounts") && cache.IsKindReady("secrets") && cache.IsKindReady("services")) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		problems := DetectMissingRefs(cache, "")
+		for _, w := range want {
+			if !findProblem(problems, w.kind, "prod", w.name, w.reason) {
+				t.Errorf("synced cache must flag %+v\ngot: %+v", w, problems)
+			}
+		}
+	})
 }

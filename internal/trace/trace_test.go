@@ -9,6 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/probe"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -1464,6 +1465,40 @@ func TestIngressUpstreamsForService_SyncedCacheAuthoritative(t *testing.T) {
 	}
 	if len(hops) != 1 || hops[0].Resource.Name != "web" {
 		t.Fatalf("want the referencing Ingress hop, got %+v", hops)
+	}
+}
+
+// TestTraceCacheStillSyncing: Pods and Ingresses are first-paint informers,
+// but a slow one is moved to the background and keeps loading after the
+// cache reports its first phase complete. Until it has synced, its empty lists
+// must read as unreadable / non-authoritative, never as "no backend pods" or
+// "no Ingress references this Service".
+func TestTraceCacheStillSyncing(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team-a"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "api"}, Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	loading := map[string]bool{"pods": true, "ingresses": true}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:          fake.NewClientset(svc),
+		ResourceScopes:  map[string]k8score.ResourceScope{"services": {Enabled: true}, "pods": {Enabled: true}, "ingresses": {Enabled: true}},
+		DeferredTypes:   loading,
+		DebugSyncDelays: map[string]time.Duration{"pods": time.Hour, "ingresses": time.Hour},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+	if !cache.IsSyncComplete() || cache.IsKindReady("pods") || cache.IsKindReady("ingresses") || cache.Pods() == nil || cache.Ingresses() == nil {
+		t.Fatal("fixture must model a completed first phase with Pods and Ingresses still loading behind non-nil listers")
+	}
+	deps := Deps{Cache: cache}
+	if pods, unreadable := selectedPods(deps, svc); !unreadable || pods != nil {
+		t.Errorf("Pods still syncing: got pods=%v unreadable=%v, want nil/true", pods, unreadable)
+	}
+	if _, authoritative := ingressUpstreamsForService(deps, svc); authoritative {
+		t.Error("Ingresses still syncing: the Ingress walk must not claim an authoritative enumeration")
 	}
 }
 
