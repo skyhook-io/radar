@@ -31,21 +31,26 @@ binary="${1:?$usage}"
 version="${2:?$usage}"
 out_dir="${3:-$PWD}"
 
-# Pinned tools. Bump the version and checksum together.
+# Pinned tools. Bump the version and checksums together. The AppImage
+# runtime is embedded in every image; without LDAI_RUNTIME_FILE linuxdeploy's
+# appimage plugin downloads whatever type2-runtime's "continuous" tag holds.
 linuxdeploy_release="1-alpha-20251107-1"
-gtk_plugin_commit="7a3fbc31a9e5075073ff8790f26effbac5f84453"
-gtk_plugin_sha256="b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171"
+runtime_release="20251108"
 
 case "$(uname -m)" in
   x86_64)
     arch=amd64
     linuxdeploy_asset="linuxdeploy-x86_64.AppImage"
     linuxdeploy_sha256="c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"
+    runtime_asset="runtime-x86_64"
+    runtime_sha256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
     ;;
   aarch64)
     arch=arm64
     linuxdeploy_asset="linuxdeploy-aarch64.AppImage"
     linuxdeploy_sha256="620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff"
+    runtime_asset="runtime-aarch64"
+    runtime_sha256="00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444"
     ;;
   *)
     echo "build-appimage: unsupported architecture $(uname -m)" >&2
@@ -58,6 +63,8 @@ binary="$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")"
 mkdir -p "$out_dir"
 out_dir="$(cd "$out_dir" && pwd)"
 work="${APPIMAGE_WORK:-$repo_root/build/appimage}"
+mkdir -p "$work"
+work="$(cd "$work" && pwd)"
 appdir="$work/AppDir"
 tools="$work/tools"
 output_name="radar-desktop_${version}_linux_${arch}.AppImage"
@@ -91,11 +98,21 @@ if [[ -z "${LINUXDEPLOY:-}" ]]; then
   LINUXDEPLOY="$tools/$linuxdeploy_asset"
   fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/$linuxdeploy_release/$linuxdeploy_asset" \
     "$linuxdeploy_sha256" "$LINUXDEPLOY"
+else
+  LINUXDEPLOY="$(cd "$(dirname "$LINUXDEPLOY")" && pwd)/$(basename "$LINUXDEPLOY")"
 fi
-# linuxdeploy finds plugins next to itself or on PATH.
-fetch "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/$gtk_plugin_commit/linuxdeploy-plugin-gtk.sh" \
-  "$gtk_plugin_sha256" "$tools/linuxdeploy-plugin-gtk.sh"
-export PATH="$tools:$PATH"
+fetch "https://github.com/AppImage/type2-runtime/releases/download/$runtime_release/$runtime_asset" \
+  "$runtime_sha256" "$tools/$runtime_asset"
+export LDAI_RUNTIME_FILE="$tools/$runtime_asset"
+# The GTK plugin is vendored in scripts/appimage. linuxdeploy looks for plugins
+# next to itself before PATH, so a copy there (older tools caches had one)
+# would silently win.
+rm -f -- "${tools:?}/linuxdeploy-plugin-gtk.sh"
+if [[ -e "$(dirname "$LINUXDEPLOY")/linuxdeploy-plugin-gtk.sh" ]]; then
+  echo "build-appimage: remove $(dirname "$LINUXDEPLOY")/linuxdeploy-plugin-gtk.sh; the vendored plugin in scripts/appimage must be the one that runs" >&2
+  exit 1
+fi
+export PATH="$repo_root/scripts/appimage:$PATH"
 
 # WebKitGTK's helper directory on this system, e.g. /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1.
 webkit_libdir="$(pkg-config --variable=libdir webkit2gtk-4.1)"
@@ -121,17 +138,33 @@ done
 install -m 0644 "$helper_dir/injected-bundle/libwebkit2gtkinjectedbundle.so" \
   "$appdir/usr/lib/webkit2gtk-4.1/injected-bundle/"
 
-# AppRun: linuxdeploy keeps an existing one. Hooks are the GTK plugin's
-# environment (GDK pixbuf loaders, GIO modules, GTK paths) for the bundled GTK.
+# Every variable the GTK plugin's environment script (gtk-env/, see below) or
+# AppRun assigns, except APPDIR. AppRun records their values before it changes
+# them, so Radar can give the processes it starts (shells, auth plugins,
+# xdg-open) the environment the user launched it with (internal/desktopenv).
+# The build fails if the plugin's script assigns anything not listed.
+restore_keys="GTK_DATA_PREFIX GTK_THEME GDK_BACKEND XDG_DATA_DIRS GSETTINGS_SCHEMA_DIR GI_TYPELIB_PATH GTK_EXE_PREFIX GTK_PATH GTK_IM_MODULE_FILE GDK_PIXBUF_MODULE_FILE COLOR_SCHEME GTK_THEME_VARIANT APPIMAGE_GTK_THEME WEBKIT_INJECTED_BUNDLE_PATH"
+
 cat > "$appdir/AppRun" <<'EOF'
 #!/bin/sh
 set -e
 APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 export APPDIR
-OWD="${OWD:-$PWD}"
+# The AppImage runtime never changes directory, and sets OWD only when it
+# mounts the image, so an OWD in the environment may be inherited and stale.
+OWD="$(pwd)"
 export OWD
-for hook in "$APPDIR"/apprun-hooks/*.sh; do
-  if [ -e "$hook" ]; then . "$hook"; fi
+RADAR_APPIMAGE_KEYS="@RESTORE_KEYS@"
+export RADAR_APPIMAGE_KEYS
+for key in $RADAR_APPIMAGE_KEYS; do
+  if eval "[ -n \"\${$key+set}\" ]"; then
+    eval "export RADAR_APPIMAGE_ORIG_$key=\"\$$key\""
+  fi
+done
+# The GTK plugin's environment (GDK pixbuf loaders, GIO modules, GTK paths)
+# for the bundled GTK.
+for script in "$APPDIR"/gtk-env/*.sh; do
+  if [ -e "$script" ]; then . "$script"; fi
 done
 # The library's injected-bundle path stays absolute (the build machine's), so
 # point WebKit at the bundled copy; release builds honour this variable.
@@ -140,6 +173,7 @@ export WEBKIT_INJECTED_BUNDLE_PATH="$APPDIR/usr/lib/webkit2gtk-4.1/injected-bund
 cd "$APPDIR/usr/lib"
 exec "$APPDIR/usr/bin/radar-desktop" "$@"
 EOF
+sed -i "s/@RESTORE_KEYS@/$restore_keys/" "$appdir/AppRun"
 chmod 0755 "$appdir/AppRun"
 
 cd "$work"
@@ -150,6 +184,33 @@ export APPIMAGE_EXTRACT_AND_RUN=1 # linuxdeploy is itself an AppImage; no FUSE n
   --desktop-file "$appdir/usr/share/applications/radar-desktop.desktop" \
   --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/radar-desktop.png" \
   --plugin gtk
+
+# linuxdeploy moved our AppRun to AppRun.wrapped and put a generated launcher
+# in front that sources apprun-hooks/ and then runs ours. That would set up
+# GTK before AppRun records the original environment. Keep ours as the only
+# launcher: it sources the plugin's script itself, from a directory linuxdeploy
+# does not look at, so the --output run below generates no wrapper.
+[[ -f "$appdir/AppRun.wrapped" && -d "$appdir/apprun-hooks" ]] || {
+  echo "build-appimage: linuxdeploy did not install the GTK environment script as expected" >&2
+  exit 1
+}
+mv -f "$appdir/AppRun.wrapped" "$appdir/AppRun"
+rm -rf -- "${appdir:?}/gtk-env"
+mv "$appdir/apprun-hooks" "$appdir/gtk-env"
+python3 - "$appdir/gtk-env" "$restore_keys" <<'EOF'
+import glob, os, re, sys
+
+env_dir, keys = sys.argv[1], set(sys.argv[2].split())
+assigned = set()
+for script in glob.glob(os.path.join(env_dir, "*.sh")):
+    with open(script) as f:
+        for line in f:
+            for m in re.finditer(r"(?:^|[\s;)])(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=", line):
+                assigned.add(m.group(1))
+missing = sorted(assigned - keys - {"APPDIR"})
+if missing:
+    sys.exit("build-appimage: add to restore_keys (the GTK environment script now also sets): " + " ".join(missing))
+EOF
 
 # Point the bundled library at the bundled helpers: the compiled-in helper
 # directory becomes ".", NUL-padded to the same length, which AppRun's working
