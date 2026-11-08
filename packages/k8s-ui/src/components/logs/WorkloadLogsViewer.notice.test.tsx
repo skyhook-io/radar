@@ -163,3 +163,25 @@ it('treats a replaced Pod with the same name as a new incarnation', async () => 
   await act(async () => source.emit('pod_added', { pods: [initializing] }))
   expect(element.textContent).toContain("app hasn't started: init container migrate is in CrashLoopBackOff.")
 })
+
+it('keeps the init marker when a Pod is added, logs and is removed in one batch', async () => {
+  await act(async () =>
+    root.render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 20 }}>
+        <ToastProvider>
+          <WorkloadLogsViewer name="web" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+        </ToastProvider>
+      </VirtuosoMockContext.Provider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  await act(async () => source.emit('connected', { pods: [] }))
+  await act(async () => {
+    source.emit('pod_added', { pods: [{ name: 'web-1', containers: ['migrate', 'app'], ready: false, containerStatuses: [{ name: 'migrate', init: true, ready: false, restartCount: 0, state: 'running' }, { name: 'app', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' }] }] })
+    source.emit('log', { pod: 'web-1', container: 'migrate', timestamp: '2026-11-08T00:00:00Z', content: 'migrating' })
+    source.emit('pod_removed', { pod: 'web-1', reason: 'terminated' })
+  })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(element.querySelector('[title="Init container migrate"]')).not.toBeNull()
+})
