@@ -32,7 +32,7 @@ type listHelmReleasesInput struct {
 type getHelmReleaseInput struct {
 	Namespace string `json:"namespace" jsonschema:"Helm release storage namespace; use storageNamespace from list_helm_releases when present, otherwise namespace"`
 	Name      string `json:"name" jsonschema:"release name"`
-	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras: chart (stored defaults/schema; start with valuePaths), notes, values (redacted user overrides), history, operations, diff, values_diff, notes_diff, resource_diff. Chart/notes are bounded and redacted; no repository fetch. Example: chart,values"`
+	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras: chart (stored defaults/schema; start with valuePaths), notes, versions (newest first, fetched from the confirmed source), values (redacted user overrides), history, operations, diff, values_diff, notes_diff, resource_diff. Chart/notes are bounded, redacted and read from release storage. Example: chart,values"`
 	ChartPath string `json:"chart_path,omitempty" jsonschema:"with include=chart: JSON pointer into stored default values, e.g. /resources/requests; omit to list top-level valuePaths; use ~1 for slash and ~0 for tilde in keys"`
 	DiffRev1  int    `json:"diff_revision_1,omitempty" jsonschema:"first revision for revision diffs; used when include contains diff, values_diff, notes_diff, or resource_diff"`
 	DiffRev2  int    `json:"diff_revision_2,omitempty" jsonschema:"second revision for revision diffs; used when include contains diff, values_diff, notes_diff, or resource_diff; defaults to current"`
@@ -163,6 +163,15 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 			result["chartError"] = err.Error()
 		} else {
 			result["chartContext"] = helmChartContext(stored, input.ChartPath)
+		}
+	}
+	if includes["versions"] {
+		versions, err := helmClient.FreshReleaseVersionsAsUser(input.Namespace, input.Name, user)
+		if err != nil {
+			log.Printf("[mcp] Failed to list chart versions for %s/%s: %v", input.Namespace, input.Name, err)
+			result["versionsError"] = err.Error() + "; versions come only from the release's confirmed source; a same-version values change can still use a complete stored chart"
+		} else {
+			result["availableVersions"] = versions
 		}
 	}
 	if includes["notes"] {

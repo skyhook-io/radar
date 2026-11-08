@@ -120,13 +120,18 @@ func (t repositoryOriginTransport) RoundTrip(req *http.Request) (*http.Response,
 }
 
 func (c *Client) repositoryGettersWithTimeout(entry *repo.Entry, timeout time.Duration) getter.Providers {
+	return c.repositoryGettersWithLimits(entry, timeout, 0)
+}
+
+// repositoryGettersWithLimits also refuses responses over maxBytes (0: no cap).
+func (c *Client) repositoryGettersWithLimits(entry *repo.Entry, timeout time.Duration, maxBytes int64) getter.Providers {
 	providers := getter.All(c.settings)
 	for i := range providers {
 		for _, scheme := range providers[i].Schemes {
 			if scheme == "http" || scheme == "https" {
 				snapshot := *entry
 				providers[i].New = func(_ ...getter.Option) (getter.Getter, error) {
-					return repositoryHTTPGetter{entry: snapshot, timeout: timeout}, nil
+					return repositoryHTTPGetter{entry: snapshot, timeout: timeout, maxBytes: maxBytes}, nil
 				}
 				// Helm lists its built-in HTTP provider before downloader plugins.
 				return providers

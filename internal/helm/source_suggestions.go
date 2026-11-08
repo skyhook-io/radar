@@ -3,11 +3,14 @@ package helm
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/repo"
 )
@@ -47,6 +50,16 @@ func (c *Client) sourceVersionsWithIndexes(source ChartSourceCandidate, chartNam
 		}
 		return capVersions(sortVersionsDesc(versions)), nil
 	}
+	tags, err := c.ociSourceTags(selected)
+	if err != nil {
+		return nil, err
+	}
+	return capVersions(sortVersionsDesc(tags)), nil
+}
+
+// ociSourceTags lists the registry's tags live; OCI has no index to cache.
+// The registry client bounds every request with ociProbeTimeout.
+func (c *Client) ociSourceTags(selected ChartSourceCandidate) ([]string, error) {
 	lister := c.newRegistryClient()
 	if lister == nil {
 		return nil, fmt.Errorf("%w: selected OCI registry could not be reached", errSourceUnavailable)
@@ -55,7 +68,64 @@ func (c *Client) sourceVersionsWithIndexes(source ChartSourceCandidate, chartNam
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not read versions from the selected OCI source", errSourceUnavailable)
 	}
-	return capVersions(sortVersionsDesc(tags)), nil
+	return tags, nil
+}
+
+// ReleaseVersions lists chart versions offered by a release's confirmed source.
+type ReleaseVersions struct {
+	Source    ChartSourceCandidate `json:"source"`
+	Versions  []string             `json:"versions"` // newest first
+	Truncated bool                 `json:"truncated"`
+}
+
+const freshVersionsTimeout = 15 * time.Second
+
+// FreshReleaseVersionsAsUser reads the release as the caller, then lists its
+// chart's versions from the source an upgrade would use: a freshly downloaded
+// classic index (never the local cache, which can be cold or stale) or the
+// registry's OCI tags. Unlike AvailableVersionsAsUser, which returns an empty
+// list when no source is usable, it returns an error saying why.
+func (c *Client) FreshReleaseVersionsAsUser(namespace, name string, user *pkgauth.User) (*ReleaseVersions, error) {
+	cfg, err := c.getActionConfigForUser(namespace, user)
+	if err != nil {
+		return nil, err
+	}
+	return c.freshReleaseVersionsWith(cfg, name)
+}
+
+func (c *Client) freshReleaseVersionsWith(cfg *action.Configuration, name string) (*ReleaseVersions, error) {
+	op, err := releaseReadContext(cfg, name)
+	if err != nil {
+		return nil, err
+	}
+	source, issue, message := upgradeSourceState(op)
+	if issue != "" {
+		return nil, fmt.Errorf("no usable chart source for this release: %s", message)
+	}
+	chartName := op.Latest.Chart.Metadata.Name
+	selected, err := c.exactConfiguredSource(*source, chartName)
+	if err != nil {
+		return nil, err
+	}
+	var versions []string
+	if selected.Type == "repository" {
+		dir, err := os.MkdirTemp("", "radar-versions-")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(dir)
+		_, index, err := c.fetchSelectedRepositoryIndex(selected, dir, freshVersionsTimeout, maxPreparedIndexBytes)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errSourceUnavailable, err)
+		}
+		for _, entry := range index.Entries[chartName] {
+			versions = append(versions, entry.Version)
+		}
+	} else if versions, err = c.ociSourceTags(selected); err != nil {
+		return nil, err
+	}
+	sorted := sortVersionsDesc(versions)
+	return &ReleaseVersions{Source: selected, Versions: capVersions(sorted), Truncated: len(sorted) > maxAvailableVersions}, nil
 }
 
 func (c *Client) sourceSuggestions(chartName, version string, recorded *ChartSourceCandidate) []ChartSourceSuggestion {

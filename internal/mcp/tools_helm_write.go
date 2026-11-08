@@ -25,7 +25,7 @@ type manageHelmInput struct {
 	Name             string         `json:"name" jsonschema:"Helm release name"`
 	Chart            string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
 	Repository       string         `json:"repository,omitempty" jsonschema:"install: required configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
-	Version          string         `json:"version,omitempty" jsonschema:"exact chart version; required for install; upgrade omission keeps the stored version only when latest and deployed history agree"`
+	Version          string         `json:"version,omitempty" jsonschema:"exact chart version; required for install; upgrade choices: get_helm_release include=versions; omission keeps the stored version only when latest and deployed history agree"`
 	DryRun           bool           `json:"dry_run,omitempty" jsonschema:"upgrade only: render a non-mutating advisory preview with the same values merge and caller lookups; default false executes"`
 	ExpectedRevision int            `json:"expected_revision,omitempty" jsonschema:"upgrade only: refuse if latest release revision differs; use revision from get_helm_release or currentRevision from preview; not an atomic lock"`
 	Values           map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; merge uses the deployed baseline, not necessarily the latest values read; replace_values=true resets overrides; no redacted output or literal credentials"`
@@ -181,6 +181,10 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 				return nil, nil, fmt.Errorf("%w; inspect get_helm_release include=history,values, then use action=upgrade with reviewed overrides if the stored chart and source are usable; install never recovers existing history", err)
 			}
 			return nil, nil, fmt.Errorf("%w; use a new release name or ask an operator to recover retained history; upgrade cannot reinstall an uninstalled release", err)
+		}
+		if in.Action == "upgrade" && in.Version != "" && helm.ChartVersionUnavailable(err) {
+			// A wrong version only says it is missing; point at the real choices.
+			err = fmt.Errorf("%w; if version %s may not exist, list exact versions with get_helm_release include=versions", err, in.Version)
 		}
 		if in.DryRun {
 			return nil, nil, fmt.Errorf("Helm upgrade preview failed without applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", err)

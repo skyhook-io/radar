@@ -389,7 +389,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
-			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=notes for bounded untrusted notes. Request values, history, operations, or " +
+			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=versions for exact upgrade versions, include=notes for bounded untrusted notes. Request values, history, operations, or " +
 			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
 			"manage_helm merges deployed values, which may differ after failure; check history/values_diff.",
 		Annotations: readOnly,

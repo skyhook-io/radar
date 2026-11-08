@@ -2,6 +2,7 @@ package helm
 
 import (
 	"bytes"
+	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +21,20 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/repo"
 )
+
+var (
+	// errChartVersionMissing marks a classic index without the requested version.
+	errChartVersionMissing = errors.New("selected repository has no chart version")
+	// errChartDownload marks a failed chart download from the selected source;
+	// for OCI that is how a missing version surfaces.
+	errChartDownload = errors.New("download selected chart")
+)
+
+// ChartVersionUnavailable reports whether err came from the selected source
+// lacking the requested chart version or failing to download it.
+func ChartVersionUnavailable(err error) bool {
+	return errors.Is(err, errChartVersionMissing) || errors.Is(err, errChartDownload)
+}
 
 type SourceUpgradeSelection struct {
 	Source           ChartSourceCandidate  `json:"source"`
@@ -78,29 +93,14 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 			dl.RegistryClient = rc
 			dl.Options = append(dl.Options, getter.WithRegistryClient(rc))
 		} else {
-			configured := c.configuredRepositoryForSource(selected)
-			if configured == nil {
-				return nil, "", errSourceConflict
-			}
-			snapshot := *configured
-			snapshot.Name = "selected"
-			snapshot.URL = selected.URL
-			repository, err := repo.NewChartRepository(&snapshot, c.repositoryGettersWithTimeout(&snapshot, 30*time.Second))
+			snapshot, index, err := c.fetchSelectedRepositoryIndex(selected, dir, 30*time.Second, 0)
 			if err != nil {
 				return nil, "", err
 			}
 			dl.Getters = c.repositoryGettersWithTimeout(&snapshot, 30*time.Second)
-			repository.CachePath = dir
-			if _, err := repository.DownloadIndexFile(); err != nil {
-				return nil, "", fmt.Errorf("could not refresh the selected repository: %w", err)
-			}
-			index, err := repo.LoadIndexFile(filepath.Join(dir, "selected-index.yaml"))
-			if err != nil {
-				return nil, "", fmt.Errorf("read selected repository index: %w", err)
-			}
 			entry, err := index.Get(name, version)
 			if err != nil {
-				return nil, "", fmt.Errorf("selected repository has no chart %s version %s: %w", name, version, err)
+				return nil, "", fmt.Errorf("%w %s for chart %s: %v", errChartVersionMissing, version, name, err)
 			}
 			indexDigest = entry.Digest
 			config := &repo.File{Repositories: []*repo.Entry{&snapshot}}
@@ -113,7 +113,7 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		}
 		path, _, err := dl.DownloadTo(ref, version, dir)
 		if err != nil {
-			return nil, "", fmt.Errorf("download selected chart: %w", err)
+			return nil, "", fmt.Errorf("%w: %w", errChartDownload, err)
 		}
 		data, err = os.ReadFile(path)
 		if err != nil {
@@ -135,6 +135,33 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		return nil, "", err
 	}
 	return ch, hex.EncodeToString(sum[:]), nil
+}
+
+// fetchSelectedRepositoryIndex downloads the selected classic repository's
+// current index into dir instead of trusting the local cache, so a read sees
+// the same entries a following download would. maxBytes caps the index
+// (0: no cap).
+func (c *Client) fetchSelectedRepositoryIndex(selected ChartSourceCandidate, dir string, timeout time.Duration, maxBytes int64) (repo.Entry, *repo.IndexFile, error) {
+	configured := c.configuredRepositoryForSource(selected)
+	if configured == nil {
+		return repo.Entry{}, nil, errSourceConflict
+	}
+	snapshot := *configured
+	snapshot.Name = "selected"
+	snapshot.URL = selected.URL
+	repository, err := repo.NewChartRepository(&snapshot, c.repositoryGettersWithLimits(&snapshot, timeout, maxBytes))
+	if err != nil {
+		return repo.Entry{}, nil, err
+	}
+	repository.CachePath = dir
+	if _, err := repository.DownloadIndexFile(); err != nil {
+		return repo.Entry{}, nil, fmt.Errorf("could not refresh the selected repository: %w", err)
+	}
+	index, err := repo.LoadIndexFile(filepath.Join(dir, "selected-index.yaml"))
+	if err != nil {
+		return repo.Entry{}, nil, fmt.Errorf("read selected repository index: %w", err)
+	}
+	return snapshot, index, nil
 }
 
 func sourceSelectionMatches(selection SourceUpgradeSelection, latest *release.Release) bool {
