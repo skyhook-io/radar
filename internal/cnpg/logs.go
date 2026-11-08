@@ -487,8 +487,9 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 	namespace, name, cluster, pods, cache, client := target.namespace, target.name, target.cluster, target.pods, target.cache, target.reader.Clients.Typed
 	clusterDone := target.reader.Clients.ClusterDone
 	uid := cluster.GetUID()
+	connectedPods := podlogs.BuildPodInfos(pods)
 	send("connected", map[string]any{
-		"cluster": name, "namespace": namespace, "uid": uid, "pods": podlogs.BuildPodInfos(pods),
+		"cluster": name, "namespace": namespace, "uid": uid, "pods": connectedPods,
 	})
 
 	ctx, cancel := context.WithCancel(parent)
@@ -596,6 +597,7 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 	for _, p := range pods {
 		known[p.Name] = p.UID
 	}
+	sentPodInfo := podlogs.NewSentPodInfo(connectedPods)
 	ticker := time.NewTicker(logDiscoveryInterval)
 	defer ticker.Stop()
 	for {
@@ -665,7 +667,11 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 						send("pod_removed", map[string]string{"pod": p.Name, "reason": "replaced"})
 					}
 					known[p.Name] = p.UID
-					send("pod_added", map[string]any{"pods": []podlogs.PodInfo{podlogs.BuildPodInfo(p, time.Now())}})
+					info := podlogs.BuildPodInfo(p, time.Now())
+					sentPodInfo.Changed(info)
+					send("pod_added", map[string]any{"pods": []podlogs.PodInfo{info}})
+				} else if info := podlogs.BuildPodInfo(p, time.Now()); sentPodInfo.Changed(info) {
+					send("pod_updated", map[string]any{"pods": []podlogs.PodInfo{info}})
 				}
 			}
 			for podName := range known {
@@ -673,6 +679,7 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 					continue
 				}
 				delete(known, podName)
+				delete(sentPodInfo, podName)
 				stopPod(podName)
 				if unavailable.RemovePod(podName) {
 					sendUnavailable()

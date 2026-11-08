@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkloadPodContainerInfo, WorkloadPodInfo } from '../types/core'
-import { initContainerNames, initializingPodsNotice, isInitContainer, viewMixesContainers } from './workload-log-sources'
+import { initContainerNames, initializingPodsNotice, containerRole, viewMixesContainers } from './workload-log-sources'
 
 const app = (state: WorkloadPodContainerInfo['state'], reason?: string): WorkloadPodContainerInfo => ({ name: 'kserve-container', ready: state === 'running', restartCount: 0, state, reason })
 const init = (state: WorkloadPodContainerInfo['state'], reason?: string, extra: Partial<WorkloadPodContainerInfo> = {}): WorkloadPodContainerInfo => ({ name: 'storage-initializer', init: true, ready: false, restartCount: 3, state, reason, ...extra })
@@ -55,18 +55,19 @@ describe('init container identity', () => {
     const proxy = { ...init('running', undefined, { sidecar: true }), name: 'istio-proxy' }
     const other = pod('p-2', [running('storage-initializer')])
     const pods = [pod('p-1', [init('waiting'), proxy, app('waiting')]), other]
-    expect(isInitContainer(pods, 'p-1', 'storage-initializer')).toBe(true)
-    expect(isInitContainer(pods, 'p-2', 'storage-initializer')).toBe(false)
-    expect(isInitContainer(pods, 'p-1', 'istio-proxy')).toBe(false)
-    expect(isInitContainer(pods, 'gone', 'storage-initializer')).toBe(false)
+    expect(containerRole(pods, 'p-1', 'storage-initializer')).toBe('init')
+    expect(containerRole(pods, 'p-2', 'storage-initializer')).toBeUndefined()
+    expect(containerRole(pods, 'p-1', 'istio-proxy')).toBe('sidecar')
+    expect(containerRole(pods, 'gone', 'storage-initializer')).toBeUndefined()
     expect([...initContainerNames([pod('p-1', [init('waiting'), proxy, app('waiting')])])]).toEqual(['storage-initializer'])
     expect([...initContainerNames([pod('p-1', [init('waiting'), app('waiting')]), other])]).toEqual([])
   })
 })
 
 describe('viewMixesContainers', () => {
-  it('mixes when a retained line came from an init container', () => {
-    expect(viewMixesContainers([], [{ pod: 'gone-1', container: 'migrate', initContainer: true }])).toBe(true)
+  it('mixes when a retained line came from an init container or sidecar', () => {
+    expect(viewMixesContainers([], [{ pod: 'gone-1', container: 'migrate', containerRole: 'init' }])).toBe(true)
+    expect(viewMixesContainers([], [{ pod: 'gone-1', container: 'istio-proxy', containerRole: 'sidecar' }])).toBe(true)
   })
 
   const completed = { ...init('terminated', 'Completed'), name: 'copyutil' }

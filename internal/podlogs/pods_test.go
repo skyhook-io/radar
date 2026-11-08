@@ -76,3 +76,18 @@ func TestBuildPodInfoReportsContainerStates(t *testing.T) {
 		t.Fatalf("initialized statuses=%+v", got)
 	}
 }
+
+func TestSentPodInfoReportsOnlyChanges(t *testing.T) {
+	waiting := PodInfo{Name: "p-0", ContainerStatuses: []ContainerInfo{{Name: "app", State: "waiting", Reason: "PodInitializing"}}}
+	sent := NewSentPodInfo([]PodInfo{waiting})
+	if sent.Changed(waiting) {
+		t.Fatal("unchanged info reported as changed")
+	}
+	running := PodInfo{Name: "p-0", ContainerStatuses: []ContainerInfo{{Name: "app", State: "running", Started: true}}}
+	if !sent.Changed(running) || sent.Changed(running) {
+		t.Fatal("a status change must be reported once")
+	}
+	if !sent.Changed(PodInfo{Name: "p-1"}) {
+		t.Fatal("a Pod not sent before must be reported")
+	}
+}

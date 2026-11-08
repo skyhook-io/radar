@@ -5,10 +5,11 @@ export function podContainerKey(pod: string, container: string): string {
   return `${pod}/${container}`
 }
 
-/** Whether a container of the named Pod is a regular init container. */
-export function isInitContainer(pods: WorkloadPodInfo[], pod: string, container: string): boolean {
+/** Whether a container of the named Pod is a regular init container or a native sidecar. */
+export function containerRole(pods: WorkloadPodInfo[], pod: string, container: string): 'init' | 'sidecar' | undefined {
   const status = pods.find(p => p.name === pod)?.containerStatuses?.find(c => c.name === container)
-  return Boolean(status?.init && !status.sidecar)
+  if (status?.sidecar) return 'sidecar'
+  return status?.init ? 'init' : undefined
 }
 
 /** Container names that are a regular init container in every Pod that reports them. */
@@ -32,7 +33,7 @@ export function initContainerNames(pods: WorkloadPodInfo[]): Set<string> {
  * container or sidecar, on screen. One app container beside a finished init
  * container reads as a single source.
  */
-export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string; initContainer?: boolean }>): boolean {
+export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string; containerRole?: 'init' | 'sidecar' }>): boolean {
   const apps = new Set<string>()
   const supporting = new Set<string>()
   for (const pod of pods) {
@@ -48,7 +49,7 @@ export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{
   if (apps.size > 1) return true
   let first: string | undefined
   for (const entry of entries) {
-    if (entry.initContainer || (entry.pod && supporting.has(podContainerKey(entry.pod, entry.container)))) return true
+    if (entry.containerRole || (entry.pod && supporting.has(podContainerKey(entry.pod, entry.container)))) return true
     if (first === undefined) first = entry.container
     else if (entry.container !== first) return true
   }

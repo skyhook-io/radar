@@ -1,6 +1,7 @@
 package podlogs
 
 import (
+	"reflect"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
@@ -142,6 +143,29 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		StepName:              annotations["workflows.argoproj.io/node-name"],
 		StepPhase:             labels["workflows.argoproj.io/phase"],
 	}
+}
+
+// SentPodInfo is the Pod info a log stream last sent per Pod, so a status
+// change (an init container finishing, an app container starting) can be sent
+// as pod_updated.
+type SentPodInfo map[string]PodInfo
+
+func NewSentPodInfo(infos []PodInfo) SentPodInfo {
+	sent := make(SentPodInfo, len(infos))
+	for _, info := range infos {
+		sent[info.Name] = info
+	}
+	return sent
+}
+
+// Changed records info as sent and reports whether it differs from the last
+// info sent for that Pod.
+func (s SentPodInfo) Changed(info PodInfo) bool {
+	if previous, ok := s[info.Name]; ok && reflect.DeepEqual(previous, info) {
+		return false
+	}
+	s[info.Name] = info
+	return true
 }
 
 func BuildPodInfos(pods []*corev1.Pod) []PodInfo {

@@ -11,7 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
-import { initContainerNames, initializingPodsNotice, isInitContainer, podContainerKey, viewMixesContainers } from '../../utils/workload-log-sources'
+import { initContainerNames, initializingPodsNotice, containerRole, podContainerKey, viewMixesContainers } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -167,7 +167,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
       setOutputKeys(new Set(resultLogs.map(log => podContainerKey(log.pod, log.container))))
       set(resultLogs.map(log => ({
-        initContainer: isInitContainer(resultPods, log.pod, log.container),
+        containerRole: containerRole(resultPods, log.pod, log.container),
         timestamp: log.timestamp,
         content: log.content,
         container: log.container,
@@ -235,7 +235,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           if (data?.pod && data.content !== undefined) {
             recordOutput(data.pod, data.container || '')
             append({
-              initContainer: isInitContainer(podsRef.current, data.pod, data.container || ''),
+              containerRole: containerRole(podsRef.current, data.pod, data.container || ''),
               timestamp: data.timestamp || '',
               content: data.content || '',
               container: data.container || '',

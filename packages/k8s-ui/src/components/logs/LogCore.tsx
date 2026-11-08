@@ -1388,7 +1388,7 @@ function LogLine({
       {showContainerName && entry.container && (
         <ContainerLabel
           container={entry.container}
-          isInit={entry.initContainer ?? false}
+          isInit={entry.containerRole === 'init'}
           width={containerLabelWidth}
           palette={palette}
         />
