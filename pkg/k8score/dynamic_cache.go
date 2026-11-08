@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -31,6 +32,13 @@ var ErrCollectionNotSupported = errors.New("collection is not supported")
 const directCountProbeLimit int64 = 2
 
 var scopeProbeBaseBudget = 5 * time.Second
+
+// deniedScopeTTL is how long a complete refusal answers later reads of the same
+// scope. Without it every read of a refused kind repeats the walk, one
+// cluster-wide check plus one per candidate namespace, and a page reading a
+// dozen such kinds pays that dozen times on every poll. It is also how long a
+// new grant can go unnoticed.
+const deniedScopeTTL = 60 * time.Second
 
 // informerKey identifies one informer. ns == "" means a cluster-wide watch;
 // a non-empty ns is a namespace-scoped watch. A GVR can have one cluster-wide
@@ -58,6 +66,13 @@ type retainedObservation struct {
 	truncated  bool
 }
 
+// scopeDenial is a complete refusal: every check of the walk was answered and
+// every answer was Forbidden.
+type scopeDenial struct {
+	at  time.Time
+	err error
+}
+
 // DynamicResourceCache provides on-demand caching for CRDs and other dynamic
 // resources. It is safe for concurrent use. Application-specific callbacks
 // (timeline, metrics) are injected via DynamicCacheConfig.
@@ -74,6 +89,11 @@ type DynamicResourceCache struct {
 	// observations retain watch decisions and probe outcomes for installed GVRs
 	// that do not currently have an informer. Active informers take precedence.
 	observations map[schema.GroupVersionResource]retainedObservation
+	// deniedScopes holds recent complete refusals by (gvr, preferred namespace),
+	// which is the scope a walk answered for: a walk for all namespaces says
+	// nothing about a namespace outside its candidates. The cache belongs to
+	// one identity, so an entry never outlives it. Guarded by mu.
+	deniedScopes map[informerKey]scopeDenial
 	// fanoutIncomplete records that a namespace fallback walk ended before all
 	// configured candidates were classified. Guarded by mu.
 	fanoutIncomplete map[schema.GroupVersionResource]bool
@@ -147,6 +167,7 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 		nsFactories:      make(map[string]dynamicinformer.DynamicSharedInformerFactory),
 		fallbackResolved: make(map[schema.GroupVersionResource]bool),
 		observations:     make(map[schema.GroupVersionResource]retainedObservation),
+		deniedScopes:     make(map[informerKey]scopeDenial),
 		fanoutIncomplete: make(map[schema.GroupVersionResource]bool),
 		probeRetries:     make(map[schema.GroupVersionResource]*probeRetry),
 		probeCtx:         probeCtx,
@@ -169,6 +190,7 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 func (d *DynamicResourceCache) retainObservation(gvr schema.GroupVersionResource, state DynamicObservationState, reasonCode string, truncated bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	delete(d.deniedScopes, informerKey{gvr: gvr})
 	d.observations[gvr] = retainedObservation{state: state, reasonCode: reasonCode, truncated: truncated, observedAt: time.Now().UTC()}
 }
 
@@ -181,17 +203,20 @@ func (d *DynamicResourceCache) retainAuthProbeFailure(gvr schema.GroupVersionRes
 	case apierrors.IsUnauthorized(err):
 		d.retainObservation(gvr, DynamicObservationDenied, "credentials_rejected", false)
 	case isAuthProbeError(err):
-		d.retainDeniedObservation(gvr, preferredNS, complete)
+		d.retainDeniedObservation(gvr, preferredNS, complete, err)
 	default:
 		return false
 	}
 	return true
 }
 
-func (d *DynamicResourceCache) retainDeniedObservation(gvr schema.GroupVersionResource, preferredNS string, complete bool) {
+func (d *DynamicResourceCache) retainDeniedObservation(gvr schema.GroupVersionResource, preferredNS string, complete bool, err error) {
 	// A preferred-namespace denial proves only that request scope; it cannot
 	// replace the observation retained for the GVR as a whole.
 	if preferredNS != "" {
+		if complete {
+			d.rememberDenial(gvr, preferredNS, err)
+		}
 		return
 	}
 	if !complete {
@@ -204,6 +229,33 @@ func (d *DynamicResourceCache) retainDeniedObservation(gvr schema.GroupVersionRe
 		reasonCode = "access_denied_partial_probe"
 	}
 	d.retainObservation(gvr, DynamicObservationDenied, reasonCode, truncated)
+	d.rememberDenial(gvr, "", err)
+}
+
+func (d *DynamicResourceCache) rememberDenial(gvr schema.GroupVersionResource, preferredNS string, err error) {
+	now := time.Now()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	maps.DeleteFunc(d.deniedScopes, func(_ informerKey, denial scopeDenial) bool {
+		return now.Sub(denial.at) >= deniedScopeTTL
+	})
+	d.deniedScopes[informerKey{gvr: gvr, ns: preferredNS}] = scopeDenial{at: now, err: err}
+}
+
+// recentDenial returns the Forbidden a walk of this scope ended with, if it
+// did within deniedScopeTTL.
+func (d *DynamicResourceCache) recentDenial(gvr schema.GroupVersionResource, preferredNS string) error {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	denial, ok := d.deniedScopes[informerKey{gvr: gvr, ns: preferredNS}]
+	if !ok || d.stopped || time.Since(denial.at) >= deniedScopeTTL {
+		return nil
+	}
+	return noAccessError(gvr, denial.err)
+}
+
+func noAccessError(gvr schema.GroupVersionResource, err error) error {
+	return fmt.Errorf("no access to %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
 }
 
 // Observation returns the current observation contract for one exact GVR.
@@ -416,6 +468,9 @@ func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr sc
 	if d.hasCoveringInformer(gvr, preferredNS) {
 		return nil
 	}
+	if err := d.recentDenial(gvr, preferredNS); err != nil {
+		return err
+	}
 
 	// If CRD discovery is in progress, wait for it to finish
 	if d.GetDiscoveryStatus() == CRDDiscoveryInProgress {
@@ -428,6 +483,9 @@ func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr sc
 		}
 		if d.hasCoveringInformer(gvr, preferredNS) {
 			return nil
+		}
+		if err := d.recentDenial(gvr, preferredNS); err != nil {
+			return err
 		}
 	}
 
@@ -466,7 +524,7 @@ func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr sc
 			if !d.retainAuthProbeFailure(gvr, preferredNS, complete, err) && errors.Is(err, errScopeProbeIncomplete) && preferredNS == "" {
 				d.retainObservation(gvr, DynamicObservationDeferred, "scope_probe_incomplete", true)
 			}
-			return nil, fmt.Errorf("no access to %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
+			return nil, noAccessError(gvr, err)
 		}
 		for _, scopeNS := range scopes {
 			if err := d.startWatching(gvr, scopeNS); err != nil {
@@ -866,6 +924,8 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 	complete := true
 	var unanswered error
 	var unauthorized error
+	// mu guards the walk's results while candidates are checked at once.
+	var mu sync.Mutex
 	// probe lists one candidate under its own deadline and records the
 	// answer. It reports whether the walk can go on, and the probe's error.
 	probe := func(ns string, deadline time.Duration) (bool, error) {
@@ -876,6 +936,8 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 		nsCtx, nsCancel := context.WithTimeout(ctx, deadline)
 		probeErr := d.listProbe(nsCtx, gvr, ns)
 		nsCancel()
+		mu.Lock()
+		defer mu.Unlock()
 		switch {
 		case apierrors.IsUnauthorized(probeErr):
 			unauthorized = probeErr
@@ -901,19 +963,48 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 	// refused are retried after the others, each with an equal share of what
 	// is left of the budget, so none can starve the rest.
 	var throttled []string
-	for _, ns := range fallbacks {
-		if ctx.Err() != nil {
-			complete = false
-			break
-		}
+	var stopped atomic.Bool
+	check := func(ns string) {
 		ok, probeErr := probe(ns, 2*time.Second)
 		if !ok {
-			break
-		}
-		if IsClientRateLimited(probeErr) {
+			stopped.Store(true)
+		} else if IsClientRateLimited(probeErr) {
+			mu.Lock()
 			throttled = append(throttled, ns)
+			mu.Unlock()
 		}
 	}
+	// One at a time, a kind refused everywhere costs a round trip per
+	// candidate, which adds up to minutes on a page reading many such kinds.
+	// Candidates share only the slots no other walk holds, so the checks
+	// running at once stay capped and a busy startup walks as it always did.
+	var candidates sync.WaitGroup
+	for _, ns := range fallbacks {
+		if ctx.Err() != nil {
+			mu.Lock()
+			complete = false
+			mu.Unlock()
+			break
+		}
+		if stopped.Load() {
+			break
+		}
+		select {
+		case d.probeSlots <- struct{}{}:
+			candidates.Go(func() {
+				defer func() { <-d.probeSlots }()
+				check(ns)
+			})
+		default:
+			check(ns)
+		}
+	}
+	candidates.Wait()
+	byCandidateOrder := func(a, b string) int {
+		return slices.Index(fallbacks, a) - slices.Index(fallbacks, b)
+	}
+	slices.SortFunc(granted, byCandidateOrder)
+	slices.SortFunc(throttled, byCandidateOrder)
 	deadline, _ := ctx.Deadline()
 	for i, ns := range throttled {
 		if ctx.Err() != nil {
