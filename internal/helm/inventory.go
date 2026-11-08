@@ -214,6 +214,19 @@ func unreadStorage(req InventoryRequest, read, denied []string) *resourceapi.Nam
 	return namesOrNil(unread)
 }
 
+// UnreadStorageNamespaces joins namespaces a storage scope left out with ones
+// whose read was refused, ignoring the cluster-wide scope (""), sorted.
+func UnreadStorageNamespaces(left, refused []string) []string {
+	out := slices.Clone(left)
+	for _, ns := range refused {
+		if ns != "" {
+			out = append(out, ns)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 func namesOrNil(namespaces []string) *resourceapi.NameSet {
 	if len(namespaces) == 0 {
 		return nil

@@ -2,6 +2,7 @@ import { useRadarFeature, type DashboardHelmSummary } from '../../api/client'
 import { Package, ArrowRight, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from '../ui/Tooltip'
+import { SEVERITY_TEXT } from '../../utils/badge-colors'
 
 interface HelmSummaryProps {
   data?: DashboardHelmSummary
@@ -40,8 +41,18 @@ function getHealthDot(health?: string): string {
   }
 }
 
+// What the card is missing when Helm's records couldn't be read in some
+// namespaces. The Helm view still lists those releases from their objects.
+export function unreadHelmNamespacesLine(unread: DashboardHelmSummary['unreadNamespaces']): string | null {
+  if (!unread) return null
+  if (unread.extent) return 'Helm’s records weren’t read in some namespaces. Open Helm for releases there.'
+  const where = unread.names?.length === 1 ? unread.names[0] : `${unread.count} namespaces`
+  return `Helm’s records weren’t read in ${where}. Open Helm for releases there.`
+}
+
 export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
   const observedView = useRadarFeature('helmInventory').support === 'supported'
+  const unreadLine = unreadHelmNamespacesLine(data?.unreadNamespaces)
   return (
     <button
       onClick={onNavigate}
@@ -99,7 +110,7 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
           </div>
         ) : !data.releases || data.releases.length === 0 ? (
           <div className="flex items-center justify-center h-full py-4 text-xs text-theme-text-tertiary">
-            No Helm releases found
+            {unreadLine ? 'No Helm releases where Radar could read Helm’s records' : 'No Helm releases found'}
           </div>
         ) : (
           <div className="divide-y divide-theme-border">
@@ -129,6 +140,11 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
         )}
       </div>
 
+      {unreadLine && data && !data.restricted && !data.error && (
+        <div className={clsx('px-4 py-1.5 border-t border-theme-border/50 text-[11px] truncate', SEVERITY_TEXT.warning)} title={unreadLine}>
+          {unreadLine}
+        </div>
+      )}
       <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-between">
         <span className="text-[10px] text-theme-text-tertiary">
           {data && data.releases && data.total > data.releases.length ? `+${data.total - data.releases.length} more` : ''}

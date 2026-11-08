@@ -386,6 +386,21 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true)
 }
 
+// ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
+// which namespaces' storage was read and which the caller was refused, rather
+// than skipping refused namespaces silently. A refusal everywhere is a result
+// here (nothing read, something denied), not an error.
+func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User) (rows []HelmRelease, read, denied []string, err error) {
+	if namespaces != nil && len(namespaces) == 0 {
+		return []HelmRelease{}, nil, nil, nil
+	}
+	client, err := c.storageClient(user)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), namespaces)
+}
+
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
 func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {

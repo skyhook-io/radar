@@ -119,3 +119,37 @@ func TestIssuesSayWhichNamespacesHelmWasNotCheckedIn(t *testing.T) {
 		})
 	}
 }
+
+// Home's Helm card for the same caller: Helm's records from team-a, and team-b
+// named as unread rather than left out of the count without a word.
+func TestDashboardHelmNamesNamespacesItCouldNotRead(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(testNamespaces("team-a", "team-b")...))
+	useHelmStoragePerNamespace(t, "team-a")
+	env := newAuthTestServer(t)
+
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "secrets", "", false)
+	perms.SetCanI("list", "", "secrets", "team-a", true)
+	perms.SetCanI("list", "", "secrets", "team-b", false)
+	env.srv.permCache.Set("mixed", nil, perms)
+
+	for _, path := range []string{"/api/dashboard/helm", "/api/dashboard/helm?namespaces=team-a,team-b"} {
+		t.Run(path, func(t *testing.T) {
+			resp := env.authGet(t, path, "mixed", "")
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d", resp.StatusCode)
+			}
+			var summary DashboardHelmSummary
+			if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+				t.Fatal(err)
+			}
+			if summary.Restricted || summary.Error != "" {
+				t.Fatalf("summary = %+v, want a partial answer", summary)
+			}
+			if summary.UnreadNamespaces == nil || summary.UnreadNamespaces.Count != 1 || !reflect.DeepEqual(summary.UnreadNamespaces.Names, []string{"team-b"}) {
+				t.Fatalf("unread = %+v, want team-b", summary.UnreadNamespaces)
+			}
+		})
+	}
+}

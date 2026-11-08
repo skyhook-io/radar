@@ -2732,6 +2732,10 @@ type mcpHelmSummary struct {
 	// reporting Total=0.
 	Unavailable       bool   `json:"unavailable,omitempty"`
 	UnavailableReason string `json:"unavailableReason,omitempty"`
+	// UnreadNamespaces are namespaces whose Helm release Secrets the caller
+	// can't read; their releases are missing from Total and Releases.
+	// list_helm_releases still lists them from their objects.
+	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
 type mcpHelmRelease struct {
@@ -3041,12 +3045,15 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		d.HelmReleases.UnavailableReason = "Helm client not initialized."
 	} else {
 		user := userFromContext(ctx)
-		namespaces := resolveHelmListNamespaces(ctx, namespace)
+		namespaces, _, unread := resolveHelmStorageScope(ctx, namespace)
 		if namespaces != nil && len(namespaces) == 0 {
 			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, user)
-			if err != nil {
+			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user)
+			if err == nil && len(read) == 0 && len(denied) > 0 {
+				d.HelmReleases.Unavailable = true
+				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope. list_helm_releases lists releases from their objects."
+			} else if err != nil {
 				// Not fatal for the dashboard — a viewer with no helm access
 				// still sees everything else. Surface to LLM consumers via
 				// Unavailable so they don't confidently report "Total=0
@@ -3062,6 +3069,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				}
 			} else {
 				d.HelmReleases.Total = len(releases)
+				if missing := helm.UnreadStorageNamespaces(unread, denied); len(missing) > 0 {
+					d.HelmReleases.UnreadNamespaces = resourceapi.Names(missing, resourceapi.MCPSetLimit)
+				}
 
 				// Sort: failed/pending first, then operation-signaled Helm rollbacks,
 				// then unhealthy/degraded owned resources.

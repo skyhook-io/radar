@@ -2,7 +2,7 @@ import { createListRefetchInterval, normalizeResourceList, type ResourceListBody
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
-import type { ReadGap } from '@skyhook-io/k8s-ui/types/read-coverage'
+import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
@@ -538,6 +538,9 @@ export interface DashboardHelmSummary {
   // "this cluster has zero releases."
   error?: string;
   errorCode?: string;
+  // Namespaces whose Helm records the caller can't read; their releases are
+  // missing from total and releases. Absent from an older Radar.
+  unreadNamespaces?: ReadGapSet<string>;
 }
 
 export interface DashboardCRDCount {

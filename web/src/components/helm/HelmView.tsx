@@ -640,9 +640,16 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
         )}
       </td>
       <td className="px-4 py-3 w-40 phone:w-[6.5rem] phone:px-3">
-        <Tooltip content={UNREAD_FROM_HELM}>
-          <span className={clsx('badge', SEVERITY_BADGE.neutral)}>Unknown</span>
-        </Tooltip>
+        <div className="flex flex-wrap items-center gap-1">
+          <Tooltip content={UNREAD_FROM_HELM}>
+            <span className={clsx('badge', SEVERITY_BADGE.neutral)}>Unknown</span>
+          </Tooltip>
+          {(release.chartVersions?.length || release.appVersions?.length) ? (
+            <Tooltip content={`Its objects carry different versions (${[...(release.chartVersions ?? []), ...(release.appVersions ?? [])].join(', ')}), as an interrupted upgrade can leave them. Helm’s own status can’t be read here.`}>
+              <span className={clsx('badge-sm', SEVERITY_BADGE.warning)}>versions differ</span>
+            </Tooltip>
+          ) : null}
+        </div>
       </td>
       {showHelmColumns && (
         <>

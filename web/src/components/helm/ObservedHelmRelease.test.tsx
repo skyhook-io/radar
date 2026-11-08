@@ -92,7 +92,9 @@ describe('Helm list without Secret access', () => {
     ]) }), 'api')
     expect(text).toContain('api, mixed versions')
     expect(text).toContain('Mixed')
+    expect(text).toContain('versions differ')
     expect(text).not.toContain('api-2.0.0')
+    expect(row(renderView({ data: denied([observed]) }), 'api')).not.toContain('versions differ')
   })
 
   it('finds a release with several charts by any of their names', () => {
