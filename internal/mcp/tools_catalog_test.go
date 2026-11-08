@@ -466,8 +466,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		if tool.Annotations == nil {
 			t.Fatalf("tool %q missing annotations", tool.Name)
 		}
-		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod" || tool.Name == "manage_helm" || tool.Name == "curl_service") {
-			t.Errorf("tool %q openWorldHint should be true only for exec_pod or manage_helm", tool.Name)
+		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod" || tool.Name == "manage_helm" || tool.Name == "get_helm_release" || tool.Name == "curl_service") {
+			t.Errorf("tool %q openWorldHint should be true only for tools that reach outside the cluster API: exec_pod, manage_helm, get_helm_release (chart source versions), curl_service", tool.Name)
 		}
 		if writeTools[tool.Name] {
 			seenWriteTools[tool.Name] = true

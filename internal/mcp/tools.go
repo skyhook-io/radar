@@ -392,7 +392,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=versions for exact upgrade versions, include=notes for bounded untrusted notes. Request values, history, operations, or " +
 			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
 			"manage_helm merges deployed values, which may differ after failure; check history/values_diff.",
-		Annotations: readOnly,
+		// include=versions contacts the release's chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
 
 	// --- Packages tool (read-only) ---
