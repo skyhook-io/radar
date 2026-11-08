@@ -83,8 +83,8 @@ func ResolveHelmNamespacesChecked(ctx context.Context, authz EvidenceAuthorizer,
 			// impersonate them directly, so narrowing them with the backend
 			// client's fallback namespaces would under-list users whose RBAC is
 			// wider than Radar's own ServiceAccount.
-			if fallback := helm.ResolveNoAuthListNamespaces(ctx); len(fallback) > 0 {
-				return fallback, true, true, nil
+			if fallback, skipped := helm.ResolveNoAuthStorageScope(ctx); len(fallback) > 0 {
+				return fallback, true, true, skipped
 			}
 		} else if !canListEvidence(authz, "", "secrets", "") {
 			// Authenticated user with cluster-wide pod access but NOT
