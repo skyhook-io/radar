@@ -1365,25 +1365,59 @@ func TestClusterScopedKindDiscoveredDeprecatedVersionFirstStaysClusterScoped(t *
 	}
 }
 
-// A namespaced version of a resource whose most stable version is
-// cluster-scoped must keep its namespace filter, and a version discovery
-// doesn't serve reads as namespaced rather than borrowing another version's
-// scope.
+// Each served version reads its own scope, whichever is the most stable, and a
+// version discovery doesn't serve reads as namespaced rather than borrowing
+// another version's scope.
 func TestGvrIsNamespacedReadsTheRequestedVersion(t *testing.T) {
-	const group = "widgets.example.io"
+	verbs := []string{"get", "list", "watch"}
 	fakeDiscovery := fake.NewClientset().Discovery().(*fakediscovery.FakeDiscovery)
 	fakeDiscovery.Resources = []*metav1.APIResourceList{
-		{GroupVersion: group + "/v1beta1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}},
-		{GroupVersion: group + "/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: false, Verbs: []string{"get", "list", "watch"}}}},
+		{GroupVersion: "widgets.example.io/v1beta1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: verbs}}},
+		{GroupVersion: "widgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: false, Verbs: verbs}}},
+		{GroupVersion: "gadgets.example.io/v1beta1", APIResources: []metav1.APIResource{{Name: "gadgets", Kind: "Gadget", Namespaced: false, Verbs: verbs}}},
+		{GroupVersion: "gadgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "gadgets", Kind: "Gadget", Namespaced: true, Verbs: verbs}}},
 	}
 	discovery, err := NewResourceDiscovery(fakeDiscovery)
 	if err != nil {
 		t.Fatal(err)
 	}
 	d := &DynamicResourceCache{config: DynamicCacheConfig{Discovery: discovery}}
-	for version, want := range map[string]bool{"v1beta1": true, "v1": false, "v2": true} {
-		if got := d.gvrIsNamespaced(schema.GroupVersionResource{Group: group, Version: version, Resource: "widgets"}); got != want {
-			t.Errorf("%s: gvrIsNamespaced=%v, want %v", version, got, want)
+	for gvr, want := range map[schema.GroupVersionResource]bool{
+		{Group: "widgets.example.io", Version: "v1beta1", Resource: "widgets"}: true,
+		{Group: "widgets.example.io", Version: "v1", Resource: "widgets"}:      false,
+		{Group: "widgets.example.io", Version: "v2", Resource: "widgets"}:      true,
+		{Group: "gadgets.example.io", Version: "v1beta1", Resource: "gadgets"}: false,
+		{Group: "gadgets.example.io", Version: "v1", Resource: "gadgets"}:      true,
+	} {
+		if got := d.gvrIsNamespaced(gvr); got != want {
+			t.Errorf("%s: gvrIsNamespaced=%v, want %v", gvr, got, want)
 		}
+	}
+}
+
+// A resource replaced under the same name with a different scope reads at its
+// new scope once discovery is stale, so a cluster-scoped answer can't outlive
+// the API and drop a namespace filter.
+func TestGvrIsNamespacedRefreshesStaleDiscovery(t *testing.T) {
+	verbs := []string{"get", "list", "watch"}
+	gvr := schema.GroupVersionResource{Group: "widgets.example.io", Version: "v1", Resource: "widgets"}
+	fakeDiscovery := fake.NewClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDiscovery.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "widgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: false, Verbs: verbs}}},
+	}
+	discovery, err := NewResourceDiscovery(fakeDiscovery, WithDiscoveryCacheTTL(time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &DynamicResourceCache{config: DynamicCacheConfig{Discovery: discovery}}
+	if d.gvrIsNamespaced(gvr) {
+		t.Fatal("cluster-scoped widgets read as namespaced")
+	}
+	fakeDiscovery.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "widgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: verbs}}},
+	}
+	time.Sleep(time.Millisecond)
+	if !d.gvrIsNamespaced(gvr) {
+		t.Fatal("widgets replaced as namespaced still read as cluster-scoped after discovery went stale")
 	}
 }
