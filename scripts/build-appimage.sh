@@ -248,13 +248,15 @@ EOF
 rm -f "$work/$output_name"
 # WebKit's network process makes HTTPS connections through GIO's TLS module
 # (glib-networking); the GTK plugin bundles GIO but none of its modules. Bundle
-# the module built for this GIO, plus the one that honours http_proxy/https_proxy,
-# and their libraries. glib-networking comes with libwebkit2gtk-4.1-dev (libsoup).
+# the modules built for this GIO, with their libraries: TLS, the proxy
+# resolvers for http_proxy/https_proxy and for GNOME's proxy settings, and dconf,
+# through which GIO reads those settings (and GTK the desktop's). glib-networking
+# and dconf come with libwebkit2gtk-4.1-dev and libgtk-3-dev.
 gio_moduledir="$(pkg-config --variable=giomoduledir gio-2.0)"
 mkdir -p "$appdir/usr/lib/gio/modules"
-for module in libgiognutls.so libgioenvironmentproxy.so; do
+for module in libgiognutls.so libgioenvironmentproxy.so libgiognomeproxy.so libdconfsettings.so; do
   [[ -f "$gio_moduledir/$module" ]] || {
-    echo "build-appimage: $gio_moduledir/$module not found; install glib-networking" >&2
+    echo "build-appimage: $gio_moduledir/$module not found; install glib-networking and dconf-gsettings-backend" >&2
     exit 1
   }
   install -m 0644 "$gio_moduledir/$module" "$appdir/usr/lib/gio/modules/"
