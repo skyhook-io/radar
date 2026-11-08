@@ -37,9 +37,9 @@ export function initContainerNames(pods: WorkloadPodInfo[]): Set<string> {
  * container or sidecar, on screen. One app container beside a finished init
  * container reads as a single source.
  */
-export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string }>): boolean {
+export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string }>, knownInit: ReadonlySet<string> = new Set()): boolean {
   const apps = new Set<string>()
-  const supporting = new Set<string>()
+  const supporting = new Set<string>(knownInit)
   for (const pod of pods) {
     const statuses = pod.containerStatuses ?? []
     const roles = new Map(statuses.map(status => [status.name, status]))
@@ -111,5 +111,5 @@ export function initializingPodsNotice(pods: WorkloadPodInfo[], options: Initial
   if (pods.length === 1) return stuck[0].message
   if (stuck.length === 1) return `Pod ${podLabel(stuck[0].pod)}: ${stuck[0].message}`
   if (distinct.size === 1) return `${stuck.length} of ${pods.length} Pods: ${stuck[0].message}`
-  return `${stuck.length} of ${pods.length} Pods are still initializing, so their app containers have no output yet.`
+  return `${stuck.length} of ${pods.length} Pods have app containers waiting on init containers.`
 }

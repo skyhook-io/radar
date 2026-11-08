@@ -310,25 +310,32 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
   const shownPods = useMemo(() => pods.filter(pod => selectedPods.has(pod.name)), [pods, selectedPods])
   const initContainers = useMemo(() => initContainerNames(shownPods), [shownPods])
-  const initContainerLines = useMemo(() => initContainerKeys(shownPods), [shownPods])
+  // Remembered for the session: a removed Pod's retained lines keep their init
+  // marker, and a container that produced output stays known to have started
+  // after Clear or buffer eviction. Keys are per Pod, so they never collide.
+  const knownInitKeys = useRef(new Set<string>())
+  const knownOutputKeys = useRef(new Set<string>())
+  const initContainerLines = useMemo(() => {
+    for (const key of initContainerKeys(pods)) knownInitKeys.current.add(key)
+    return new Set(knownInitKeys.current)
+  }, [pods])
 
   const filteredEntries = useMemo(
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
     [entries, selectedPods],
   )
   const showContainerName = useMemo(
-    () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries),
-    [selectedContainer, shownPods, filteredEntries],
+    () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries, initContainerLines),
+    [selectedContainer, shownPods, filteredEntries, initContainerLines],
   )
   const initNotice = useMemo(() => {
-    const containersWithOutput = new Set<string>()
-    for (const entry of filteredEntries) if (entry.pod) containersWithOutput.add(podContainerKey(entry.pod, entry.container))
+    for (const entry of entries) if (entry.pod) knownOutputKeys.current.add(podContainerKey(entry.pod, entry.container))
     return initializingPodsNotice(shownPods, {
       selectedContainer,
-      containersWithOutput,
+      containersWithOutput: knownOutputKeys.current,
       podLabel: pod => sourceLabels[pod.name] || pod.stepName || pod.name.split('-').slice(-2).join('-'),
     })
-  }, [shownPods, selectedContainer, filteredEntries, sourceLabels])
+  }, [shownPods, selectedContainer, entries, sourceLabels])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
     const filename = `${name}-logs.${extension}`

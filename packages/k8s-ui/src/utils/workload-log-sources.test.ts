@@ -34,7 +34,7 @@ describe('initializingPodsNotice', () => {
     expect(initializingPodsNotice([stuck('p-1'), stuck('p-3'), healthy]))
       .toBe("2 of 3 Pods: kserve-container hasn't started: init container storage-initializer is in CrashLoopBackOff.")
     expect(initializingPodsNotice([stuck('p-1'), pod('p-3', [init('running'), app('waiting', 'PodInitializing')])]))
-      .toBe('2 of 2 Pods are still initializing, so their app containers have no output yet.')
+      .toBe('2 of 2 Pods have app containers waiting on init containers.')
   })
 
   it('stops once the app container has produced lines', () => {

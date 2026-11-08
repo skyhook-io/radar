@@ -99,4 +99,38 @@ it('names each line\'s container, marks init containers and says why the app has
   await act(async () => source.emit('log', { pod: 'predictor-abc-xyz', container: 'kserve-container', timestamp: '2026-11-08T00:01:00Z', content: 'model server listening' }))
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
   expect(element.textContent).not.toContain("hasn't started")
+
+  await act(async () => source.emit('pod_removed', { pod: 'predictor-abc-xyz', reason: 'terminated' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(element.querySelector('[title="Init container storage-initializer"]')).not.toBeNull()
+})
+
+it('keeps a started container out of the notice after the buffer is cleared', async () => {
+  await act(async () =>
+    root.render(
+      <ToastProvider>
+        <WorkloadLogsViewer name="predictor" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+      </ToastProvider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  await act(async () => source.emit('connected', {
+    pods: [{
+      name: 'predictor-abc-xyz',
+      containers: ['storage-initializer', 'kserve-container'],
+      ready: false,
+      containerStatuses: [
+        { name: 'storage-initializer', init: true, ready: false, restartCount: 4, state: 'waiting', reason: 'CrashLoopBackOff' },
+        { name: 'kserve-container', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' },
+      ],
+    }],
+  }))
+  expect(element.textContent).toContain("hasn't started")
+  await act(async () => source.emit('log', { pod: 'predictor-abc-xyz', container: 'kserve-container', timestamp: '2026-11-08T00:01:00Z', content: 'model server listening' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  const clear = element.querySelector('button[aria-label="Clear logs"]') as HTMLButtonElement | null
+  if (!clear) throw new Error('clear button not found')
+  await act(async () => clear.click())
+  expect(element.textContent).not.toContain("hasn't started")
 })
