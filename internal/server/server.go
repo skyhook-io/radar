@@ -821,6 +821,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
 			helmHandlers.ConfigWriteAllowed = s.requireHelmSourceConfigWrite
+			helmHandlers.ObjectScope = s.helmObjectScope
+			helmHandlers.ResolveStorageNamespaces = s.resolveHelmNamespacesChecked
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -1470,6 +1472,40 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, info)
 }
 
+// advertisedFeatures lists what this binary serves. Every flag is true here;
+// an older binary simply lacks it.
+func advertisedFeatures() k8s.FeatureCapabilities {
+	return k8s.FeatureCapabilities{
+		ApplicationEvidence:      true,
+		ResourceReadCoverage:     true,
+		SearchCoverage:           true,
+		YAMLReview:               true,
+		YAMLSchemas:              true,
+		WorkloadImages:           true,
+		ResourceIssues:           true,
+		ResourceIssueCoverage:    true,
+		PodEnvironment:           true,
+		PolicyResource:           true,
+		WorkloadHistory:          true,
+		CNPGWorkspace:            true,
+		CNPGProtectionSetup:      true,
+		ServiceEndpointSlices:    true,
+		TrafficRecords:           true,
+		GitOpsWriteEvidence:      true,
+		ArgoRollbackSync:         true,
+		ArgoSyncInheritance:      true,
+		ArgoEnableSelfHealOff:    true,
+		AgentSigninCheck:         true,
+		HelmSourceIdentity:       true,
+		HelmInventory:            true,
+		ClusterScopedPlaceholder: true,
+		KueuePendingPosition:     true,
+		RayClusterPods:           true,
+		PodSidecarMarks:          true,
+		KueueQueueWorkloads:      true,
+	}
+}
+
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	var caps *k8s.Capabilities
 	var err error
@@ -1493,34 +1529,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
-	caps.Features = k8s.FeatureCapabilities{
-		ApplicationEvidence:      true,
-		ResourceReadCoverage:     true,
-		SearchCoverage:           true,
-		YAMLReview:               true,
-		YAMLSchemas:              true,
-		WorkloadImages:           true,
-		ResourceIssues:           true,
-		ResourceIssueCoverage:    true,
-		PodEnvironment:           true,
-		PolicyResource:           true,
-		WorkloadHistory:          true,
-		CNPGWorkspace:            true,
-		CNPGProtectionSetup:      true,
-		ServiceEndpointSlices:    true,
-		TrafficRecords:           true,
-		GitOpsWriteEvidence:      true,
-		ArgoRollbackSync:         true,
-		ArgoSyncInheritance:      true,
-		ArgoEnableSelfHealOff:    true,
-		AgentSigninCheck:         true,
-		HelmSourceIdentity:       true,
-		ClusterScopedPlaceholder: true,
-		KueuePendingPosition:     true,
-		RayClusterPods:           true,
-		PodSidecarMarks:          true,
-		KueueQueueWorkloads:      true,
-	}
+	caps.Features = advertisedFeatures()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
@@ -1680,6 +1689,21 @@ func (s *Server) parseNamespacesForUserWithStatus(r *http.Request) ([]string, bo
 //   - (namespaces, true) list each and merge
 //   - (nil, false)       no namespace access — caller returns an empty result
 func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
+	namespaces, ok, _ := s.resolveHelmNamespacesChecked(r)
+	return namespaces, ok
+}
+
+// resolveHelmNamespacesChecked is resolveHelmNamespaces that also says whether
+// every Secrets check behind the answer was answered.
+func (s *Server) resolveHelmNamespacesChecked(r *http.Request) ([]string, bool, bool) {
+	namespaces, ok, checked, _ := s.resolveHelmStorageScope(r)
+	return namespaces, ok, checked
+}
+
+// resolveHelmStorageScope is resolveHelmNamespacesChecked that also returns
+// the namespaces it left out because the caller can't list Secrets there, so
+// a read over the result can say what it didn't check.
+func (s *Server) resolveHelmStorageScope(r *http.Request) ([]string, bool, bool, []string) {
 	// An explicit ?namespace=/?namespaces= request is honored as-is. Helm reads
 	// run as the caller (user impersonation, or the SA when auth is off), so the
 	// apiserver authorizes the secrets read directly — routing this through
@@ -1694,15 +1718,15 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 		// instead of reading releases the cache doesn't cover.
 		if k8s.ForceNamespaceScope {
 			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
-				return []string{target}, true
+				return []string{target}, true, true, nil
 			}
-			return []string{}, true
+			return []string{}, true, true, nil
 		}
-		return explicit, true
+		return explicit, true, true, nil
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	return s.resolveHelmNamespacesForScope(r, namespaces)
+	return upgrade.ResolveHelmNamespacesChecked(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, namespaces)
 }
 
 // resolveHelmNamespacesForScope applies Helm's Secret-specific RBAC and

@@ -821,7 +821,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     navigate({ pathname: `/resources/${pluralKind}`, search: newParams.toString() })
   }, [searchParams, navigate])
 
-  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null) => {
+  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null, observed?: boolean) => {
     const newParams = new URLSearchParams()
     const globalNamespaces = searchParams.get('namespaces')
     if (globalNamespaces) {
@@ -832,7 +832,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       newParams.set('releaseStorage', storageNamespace)
     }
     if (investigationRunID) newParams.set('ai-run', investigationRunID)
-    setSelectedHelmRelease({ namespace, name, storageNamespace })
+    setSelectedHelmRelease({ namespace, name, storageNamespace, observed })
     if (mainView === 'helm') {
       setSearchParams(newParams, { replace: true })
       return
@@ -1642,7 +1642,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (slashIdx > 0) {
         const ns = releaseParam.slice(0, slashIdx)
         const name = releaseParam.slice(slashIdx + 1)
-        setSelectedHelmRelease({ namespace: ns, name, storageNamespace: searchParams.get('releaseStorage') || undefined })
+        const storageNamespace = searchParams.get('releaseStorage') || undefined
+        // Keep what a row click knows about the release; the URL doesn't carry it.
+        setSelectedHelmRelease(prev => (prev?.namespace === ns && prev.name === name && prev.storageNamespace === storageNamespace ? prev : { namespace: ns, name, storageNamespace }))
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- run only when searchParams change; namespacesKey/namespaceScope are read for that transition
@@ -2349,7 +2351,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <HelmView
             namespaces={namespaces}
             selectedRelease={selectedHelmRelease}
-            onReleaseClick={navigateToHelmRelease}
+            onReleaseClick={(namespace, name, storageNamespace, observed) => navigateToHelmRelease(namespace, name, storageNamespace, undefined, observed)}
           />
         )}
 

@@ -621,8 +621,10 @@ Owners included. It passes `--disable-exec` and removes the `pods/exec` rule fro
 Radar's ServiceAccount, even if `rbac.podExec` is `true`. With authentication off and
 Cloud off, `rbac.helm: true` separately gives the ServiceAccount write access to all
 resources, including exec. Setting `rbac.helm: false` removes that grant, but Radar can
-then no longer install, upgrade, roll back or uninstall Helm releases, and the Helm view
-needs `rbac.secrets: true` to read releases. Set `disableExec` per
+then no longer install, upgrade, roll back or uninstall Helm releases. Without
+`rbac.secrets: true` the Helm view also can't read Helm's own records, so it lists
+releases from the Helm labels and annotations on deployed objects, with no status or
+history. Set `disableExec` per
 cluster, for example in production values only. To keep exec for some people, leave it off and
 control exec with Kubernetes RBAC instead.
 

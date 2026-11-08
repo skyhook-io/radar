@@ -66,6 +66,8 @@ export const RADAR_FEATURES = {
   // turns it on.
   argoEnableSelfHealOff: { label: 'Auto-sync that starts without self-heal', flag: 'argoEnableSelfHealOff', flagShippedWithEndpoint: true },
   helmSourceIdentity: { label: 'Helm source selection', flag: 'helmSourceIdentity', flagShippedWithEndpoint: true },
+  // Never blocks a control: on an older Radar the Helm view reads /helm/releases.
+  helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 

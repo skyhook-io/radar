@@ -386,6 +386,21 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true)
 }
 
+// ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
+// which namespaces' storage was read and which the caller was refused, rather
+// than skipping refused namespaces silently. A refusal everywhere is a result
+// here (nothing read, something denied), not an error.
+func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User) (rows []HelmRelease, read, denied []string, err error) {
+	if namespaces != nil && len(namespaces) == 0 {
+		return []HelmRelease{}, nil, nil, nil
+	}
+	client, err := c.storageClient(user)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), namespaces)
+}
+
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
 func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
@@ -429,8 +444,8 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 	fluxMap := fluxHelmReleaseMap(ctx)
 	all := make([]HelmRelease, 0)
 	var lastForbidden, firstFailure error
-	var failed []string
-	var failures []error
+	var failed, deniedScopes []string
+	var failures, denials []error
 	authorized := false
 	for index, ns := range scopes {
 		if err := ctx.Err(); err != nil {
@@ -456,6 +471,8 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		}
 		if denied(err) {
 			lastForbidden = err
+			deniedScopes = append(deniedScopes, ns)
+			denials = append(denials, err)
 			continue
 		}
 		if !keepGoing {
@@ -465,6 +482,16 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		failures = append(failures, err)
 		if firstFailure == nil {
 			firstFailure = err
+		}
+	}
+	// With keepGoing, a namespace the caller was denied is part of the answer
+	// once another was read: those releases weren't checked, and a caller that
+	// sees them elsewhere must be told.
+	if keepGoing && authorized && len(deniedScopes) > 0 {
+		failed = append(failed, deniedScopes...)
+		failures = append(failures, denials...)
+		if firstFailure == nil {
+			firstFailure = denials[0]
 		}
 	}
 	if firstFailure != nil {

@@ -12,16 +12,20 @@ func TestSplitChart(t *testing.T) {
 		{"cert-manager-1.14.0", "cert-manager", "1.14.0"},
 		{"cert-manager-v1.14.0", "cert-manager", "v1.14.0"},
 		{"kube-prometheus-stack-45.27.2", "kube-prometheus-stack", "45.27.2"},
-		// scans backwards for first hyphen-followed-by-digit; finds 0.32.0-dev.
+		// A whole dotted version anchors the split, pre-release included.
 		{"karpenter-0.32.0-dev", "karpenter", "0.32.0-dev"},
 		{"foo", "foo", ""},
 		{"", "", ""},
 		{"-1.0.0", "", "1.0.0"},
+		{"foo-1.2.3-1", "foo", "1.2.3-1"},
+		{"foo-2-bar-1.2.3", "foo-2-bar", "1.2.3"},
+		{"foo-1", "foo", "1"},
+		{"tool-1.2.3_build.4", "tool", "1.2.3_build.4"},
 	}
 	for _, c := range cases {
-		gotName, gotV := splitChart(c.in)
+		gotName, gotV := SplitChart(c.in)
 		if gotName != c.wantName || gotV != c.wantV {
-			t.Errorf("splitChart(%q) = (%q, %q), want (%q, %q)", c.in, gotName, gotV, c.wantName, c.wantV)
+			t.Errorf("SplitChart(%q) = (%q, %q), want (%q, %q)", c.in, gotName, gotV, c.wantName, c.wantV)
 		}
 	}
 }

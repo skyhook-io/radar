@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -233,15 +234,22 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 		username, groups = user.Username, user.Groups
 	}
 	helmNamespaces := namespaces
+	checked := true
+	var unread []string
 	if helmNamespaces == nil {
 		var ok bool
-		helmNamespaces, ok = s.resolveHelmNamespaces(r)
+		helmNamespaces, ok, checked, unread = s.resolveHelmStorageScope(r)
 		if !ok {
 			return nil, unchecked, false
 		}
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	// Namespaces left out because the caller can't read Helm's storage there
+	// were never read, and the Helm view still lists their releases.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
+	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 
