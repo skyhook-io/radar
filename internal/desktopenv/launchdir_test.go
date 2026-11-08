@@ -1,59 +1,131 @@
 package desktopenv
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestLaunchDir(t *testing.T) {
-	launch := filepath.Join(t.TempDir(), "work")
+func lookupFrom(env map[string]string) func(string) (string, bool) {
+	return func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	}
+}
+
+func TestDetectAppImage(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "image")
+	exe := filepath.Join(appDir, "usr", "bin", "radar-desktop")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling whose name starts with the image directory's name.
+	otherExe := filepath.Join(root, "image-other", "radar-desktop")
+	if err := os.MkdirAll(filepath.Dir(otherExe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherExe, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkedAppDir := filepath.Join(root, "link")
+	if err := os.Symlink(appDir, linkedAppDir); err != nil {
+		t.Fatal(err)
+	}
+	launch := filepath.Join(root, "work")
 
 	tests := []struct {
-		name     string
-		appImage string
-		owd      string
-		want     string
+		name string
+		env  map[string]string
+		exe  string
+		want appImage
 	}{
-		{name: "outside an AppImage", appImage: "", owd: launch, want: ""},
-		{name: "inside an AppImage", appImage: "/opt/Radar.AppImage", owd: launch, want: launch},
-		{name: "OWD missing", appImage: "/opt/Radar.AppImage", owd: "", want: ""},
-		{name: "OWD relative", appImage: "/opt/Radar.AppImage", owd: "work", want: ""},
+		{name: "running from the image", env: map[string]string{"APPDIR": appDir, "OWD": launch}, exe: exe,
+			want: appImage{inImage: true, launchDir: launch}},
+		{name: "image reached through a symlink", env: map[string]string{"APPDIR": linkedAppDir, "OWD": launch}, exe: exe,
+			want: appImage{inImage: true, launchDir: launch}},
+		{name: "variables inherited from another AppImage", env: map[string]string{"APPIMAGE": "/opt/Other.AppImage", "APPDIR": appDir, "OWD": launch}, exe: otherExe,
+			want: appImage{}},
+		{name: "no APPDIR", env: map[string]string{"APPIMAGE": "/opt/Radar.AppImage", "OWD": launch}, exe: exe,
+			want: appImage{}},
+		{name: "APPDIR that does not exist", env: map[string]string{"APPDIR": filepath.Join(root, "gone"), "OWD": launch}, exe: exe,
+			want: appImage{}},
+		{name: "in the image without OWD", env: map[string]string{"APPDIR": appDir}, exe: exe,
+			want: appImage{inImage: true}},
+		{name: "in the image with a relative OWD", env: map[string]string{"APPDIR": appDir, "OWD": "work"}, exe: exe,
+			want: appImage{inImage: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("APPIMAGE", tt.appImage)
-			t.Setenv("OWD", tt.owd)
-			if got := LaunchDir(); got != tt.want {
-				t.Errorf("LaunchDir() = %q, want %q", got, tt.want)
+			if got := detectAppImage(lookupFrom(tt.env), tt.exe); got != tt.want {
+				t.Errorf("detectAppImage() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestResolveLaunchPath(t *testing.T) {
+func TestResolveAgainst(t *testing.T) {
 	launch := filepath.Join(t.TempDir(), "work")
 	abs := filepath.Join(t.TempDir(), "kubeconfig")
 
 	tests := []struct {
-		name     string
-		appImage string
-		path     string
-		want     string
+		name string
+		dir  string
+		path string
+		want string
 	}{
-		{name: "relative path in an AppImage", appImage: "/opt/Radar.AppImage", path: "kube/config", want: filepath.Join(launch, "kube", "config")},
-		{name: "dot path in an AppImage", appImage: "/opt/Radar.AppImage", path: "./config", want: filepath.Join(launch, "config")},
-		{name: "absolute path in an AppImage", appImage: "/opt/Radar.AppImage", path: abs, want: abs},
-		{name: "home path in an AppImage", appImage: "/opt/Radar.AppImage", path: "~/.kube/config", want: "~/.kube/config"},
-		{name: "empty path in an AppImage", appImage: "/opt/Radar.AppImage", path: "", want: ""},
-		{name: "relative path outside an AppImage", appImage: "", path: "kube/config", want: "kube/config"},
+		{name: "relative path", dir: launch, path: "kube/config", want: filepath.Join(launch, "kube", "config")},
+		{name: "dot path", dir: launch, path: "./config", want: filepath.Join(launch, "config")},
+		{name: "absolute path", dir: launch, path: abs, want: abs},
+		{name: "home path", dir: launch, path: "~/.kube/config", want: "~/.kube/config"},
+		{name: "empty path", dir: launch, path: "", want: ""},
+		{name: "outside an AppImage", dir: "", path: "kube/config", want: "kube/config"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("APPIMAGE", tt.appImage)
-			t.Setenv("OWD", launch)
-			if got := ResolveLaunchPath(tt.path); got != tt.want {
-				t.Errorf("ResolveLaunchPath(%q) = %q, want %q", tt.path, got, tt.want)
+			if got := resolveAgainst(tt.dir, tt.path); got != tt.want {
+				t.Errorf("resolveAgainst(%q, %q) = %q, want %q", tt.dir, tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolvedLaunchEnv(t *testing.T) {
+	launch := "/home/u/work"
+	sep := string(os.PathListSeparator)
+	env := map[string]string{
+		"KUBECONFIG":       strings.Join([]string{"kc.yaml", "/etc/kube/admin", "~/.kube/config", "", "../shared/kc"}, sep),
+		"RADAR_AI_CLI_BIN": "codex",
+		"HELM_PLUGINS":     strings.Join([]string{"plugins", "/opt/helm/plugins"}, sep),
+		"SSL_CERT_FILE":    "certs/ca.pem",
+		"AWS_CONFIG_FILE":  "/home/u/.aws/config",
+		"TMPDIR":           "",
+		"UNRELATED_PATH":   "relative/file",
+	}
+	got := resolvedLaunchEnv(launch, lookupFrom(env))
+	want := map[string]string{
+		"KUBECONFIG":    strings.Join([]string{"/home/u/work/kc.yaml", "/etc/kube/admin", "~/.kube/config", "", "/home/u/shared/kc"}, sep),
+		"HELM_PLUGINS":  strings.Join([]string{"/home/u/work/plugins", "/opt/helm/plugins"}, sep),
+		"SSL_CERT_FILE": "/home/u/work/certs/ca.pem",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("resolvedLaunchEnv() = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+
+	env["RADAR_AI_CLI_BIN"] = "bin/codex"
+	if got := resolvedLaunchEnv(launch, lookupFrom(env))["RADAR_AI_CLI_BIN"]; got != "/home/u/work/bin/codex" {
+		t.Errorf("RADAR_AI_CLI_BIN with a directory = %q, want it resolved", got)
+	}
+	if got := resolvedLaunchEnv("", lookupFrom(env)); len(got) != 0 {
+		t.Errorf("outside an AppImage nothing changes, got %v", got)
 	}
 }

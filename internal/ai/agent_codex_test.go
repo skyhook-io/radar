@@ -193,8 +193,8 @@ func TestCodexExecutionProfiles(t *testing.T) {
 
 func TestCodexFullLocalUsesAppImageLaunchDir(t *testing.T) {
 	launch := t.TempDir()
-	t.Setenv("APPIMAGE", "/opt/Radar.AppImage")
-	t.Setenv("OWD", launch)
+	defer func(orig func() string) { launchDir = orig }(launchDir)
+	launchDir = func() string { return launch }
 	a := &codexAgent{bin: "codex"}
 	ctx := context.Background()
 

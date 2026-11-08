@@ -120,6 +120,13 @@ func main() {
 	// set GTK_THEME so WebKitGTK's prefers-color-scheme media query works.
 	applySystemTheme()
 
+	// Inside the AppImage the process runs in the image's library directory
+	// (see scripts/build-appimage.sh). Relative paths in the environment are
+	// resolved against the folder it was launched from, then processes Radar
+	// starts get the environment it was launched with.
+	desktopenv.ResolveLaunchEnv()
+	separateChildEnv()
+
 	kubeconfigFlagSet := false
 	kubeconfigDirsFlagSet := false
 	namespaceFlagSet := false
@@ -234,7 +241,7 @@ func main() {
 		MCPExecTools:              mcpFlags.ExecToolsEnabled(),
 		MCPHTTPTools:              mcpFlags.HTTPToolsEnabled(),
 		AIHistory:                 fileCfg.AIHistoryOr(true),
-		AIHistoryDBPath:           fileCfg.AIHistoryDBPath,
+		AIHistoryDBPath:           desktopenv.ResolveLaunchPath(fileCfg.AIHistoryDBPath),
 	}
 
 	if !cfg.RestoreLastDesktopContext {

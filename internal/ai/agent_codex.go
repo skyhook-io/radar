@@ -104,7 +104,7 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 		cleanup = func() { _ = os.RemoveAll(dir) }
 		cmd.Dir = dir
 		cmd.Env = codexEnv()
-	} else if dir := desktopenv.LaunchDir(); dir != "" {
+	} else if dir := launchDir(); dir != "" {
 		// Inside an AppImage Radar's own cwd is the read-only image.
 		cmd.Dir = dir
 	}
@@ -112,6 +112,11 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 
 	return cmd, cleanup, nil
 }
+
+// launchDir is the folder Radar was launched from when it differs from the
+// process working directory (inside the AppImage), else "". A variable so
+// tests can stand in for an AppImage launch.
+var launchDir = desktopenv.LaunchDir
 
 // codexEnv is the minimal environment Codex needs (auth via HOME/CODEX_HOME, PATH
 // to exec, locale). Cloud-provider secrets are deliberately omitted — the shell
