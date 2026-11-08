@@ -476,6 +476,11 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	startPodStreams := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
 			containers := k8s.GetContainersForPod(pod, container, true)
+			for _, key := range stopDeselectedLogStreams(&activeStreams, pod, containers) {
+				if unavailable.Drop(key) {
+					sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
+				}
+			}
 			for _, c := range containers {
 				key := pod.Name + "/" + c
 				if value, exists := activeStreams.Load(key); exists {

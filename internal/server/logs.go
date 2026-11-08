@@ -39,6 +39,29 @@ type podLogSourceResult struct {
 	err    error
 }
 
+// stopDeselectedLogStreams stops following the Pod's containers that the
+// current selection no longer includes while they keep running: the default
+// selection drops a native sidecar once it has started. A container whose run
+// ended is left to finish its own follow. It returns the stopped keys.
+func stopDeselectedLogStreams(active *sync.Map, pod *corev1.Pod, selected []string) []string {
+	keep := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		keep[name] = true
+	}
+	stopped := []string{}
+	active.Range(func(key, value any) bool {
+		podName, container, _ := strings.Cut(key.(string), "/")
+		handle := value.(*podLogStreamHandle)
+		if podName == pod.Name && handle.uid == pod.UID && !keep[container] && !podlogs.ContainerTerminated(pod, container) {
+			handle.cancel()
+			active.CompareAndDelete(key, value)
+			stopped = append(stopped, key.(string))
+		}
+		return true
+	})
+	return stopped
+}
+
 func stopPodLogStreams(active *sync.Map, cursors map[string]*podlogs.StreamCursor, podName string) {
 	active.Range(func(key, value any) bool {
 		if strings.HasPrefix(key.(string), podName+"/") {
