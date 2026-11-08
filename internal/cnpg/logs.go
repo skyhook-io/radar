@@ -152,7 +152,10 @@ func cnpgLogContainers(pod *corev1.Pod, selected string) []string {
 		}
 		return nil
 	}
-	containers := k8s.GetContainersForPod(pod, "", true)
+	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers)+len(pod.Spec.EphemeralContainers))
+	for _, c := range pod.Spec.Containers {
+		containers = append(containers, c.Name)
+	}
 	for _, c := range pod.Spec.InitContainers {
 		containers = append(containers, c.Name)
 	}

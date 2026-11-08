@@ -170,9 +170,11 @@ func rolloutPodSelector(selector *metav1.LabelSelector) *metav1.LabelSelector {
 }
 
 // GetContainersForPod returns container names to target for log collection.
-// If selectedContainer is non-empty, validates it against containers.
-// If includeInit is true, also checks init containers.
-// If selectedContainer is empty, returns all main container names.
+// A non-empty selectedContainer is validated against the Pod's containers, and
+// against its init containers when includeInit is set. An empty one means every
+// main container and, with includeInit, each init container that has run while
+// the Pod is still initializing: until then the main containers have no output,
+// and the init container is usually the reason the Pod is stuck.
 func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit bool) []string {
 	if selectedContainer != "" {
 		for _, c := range pod.Spec.Containers {
@@ -190,8 +192,24 @@ func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit 
 		return nil
 	}
 	containers := make([]string, 0, len(pod.Spec.Containers))
+	if includeInit && !podInitialized(pod) {
+		for _, status := range pod.Status.InitContainerStatuses {
+			if status.State.Running != nil || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil {
+				containers = append(containers, status.Name)
+			}
+		}
+	}
 	for _, c := range pod.Spec.Containers {
 		containers = append(containers, c.Name)
 	}
 	return containers
+}
+
+func podInitialized(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodInitialized {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return len(pod.Spec.InitContainers) == 0
 }
