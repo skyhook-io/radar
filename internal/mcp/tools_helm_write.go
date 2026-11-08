@@ -206,6 +206,14 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		err = client.UninstallAsUser(in.Namespace, in.Name, user)
 	}
 	if err != nil {
+		var preflight *helm.OperationPreflightError
+		refused := errors.As(err, &preflight)
+		switch {
+		case refused:
+			audit.Outcome = "refused"
+		case in.DryRun:
+			audit.Outcome = "failed" // a preview changes nothing
+		}
 		var history *helm.ReleaseHistoryError
 		if errors.As(err, &history) {
 			if history.Status == string(release.StatusFailed) || history.Status == string(release.StatusSuperseded) {
@@ -216,14 +224,6 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if in.Action == "upgrade" && in.Version != "" && helm.ChartVersionUnavailable(err) {
 			// A wrong version only says it is missing; point at the real choices.
 			err = fmt.Errorf("%w; if version %s may not exist, list exact versions with get_helm_release include=versions", err, in.Version)
-		}
-		var preflight *helm.OperationPreflightError
-		refused := errors.As(err, &preflight)
-		switch {
-		case refused:
-			audit.Outcome = "refused"
-		case in.DryRun:
-			audit.Outcome = "failed" // a preview changes nothing
 		}
 		if in.DryRun && in.Action == "rollback" {
 			return nil, nil, fmt.Errorf("Helm rollback preview failed without applying changes: %w; inspect get_helm_release include=history", err)
