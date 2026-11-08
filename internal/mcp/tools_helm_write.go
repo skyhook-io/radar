@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -175,11 +176,23 @@ const minMaskedValueLength = 4
 // maskKnownValues replaces each known value in one pass, longest first, so a
 // replacement never matches inside an earlier one.
 func maskKnownValues(text string, secrets map[string]bool) string {
-	ordered := make([]string, 0, len(secrets))
+	forms := map[string]bool{}
 	for secret := range secrets {
-		if len(secret) >= minMaskedValueLength {
-			ordered = append(ordered, secret)
+		if len(secret) < minMaskedValueLength {
+			continue
 		}
+		forms[secret] = true
+		// Kubernetes validation errors quote values with %q, and JSON bodies
+		// escape them, so a value with quotes, backslashes or newlines appears
+		// escaped in the message.
+		forms[strings.Trim(strconv.Quote(secret), `"`)] = true
+		if encoded, err := json.Marshal(secret); err == nil {
+			forms[strings.Trim(string(encoded), `"`)] = true
+		}
+	}
+	ordered := make([]string, 0, len(forms))
+	for form := range forms {
+		ordered = append(ordered, form)
 	}
 	if len(ordered) == 0 {
 		return text

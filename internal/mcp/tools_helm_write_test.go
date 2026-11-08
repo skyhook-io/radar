@@ -22,6 +22,7 @@ import (
 	"helm.sh/helm/v3/pkg/storage/driver"
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
@@ -523,5 +524,15 @@ func TestMaskKnownValuesIsSinglePass(t *testing.T) {
 	got := maskKnownValues("login admin with adminSecret failed; D", map[string]bool{"admin": true, "adminSecret": true, "D": true, "ED": true})
 	if got != "login [REDACTED] with [REDACTED] failed; D" {
 		t.Fatalf("masking: %q", got)
+	}
+}
+
+// Kubernetes validation errors quote values (%q), so a credential with a
+// quote, backslash or newline appears escaped and must still be masked.
+func TestMaskKnownValuesCoversEscapedForms(t *testing.T) {
+	err := field.Invalid(field.NewPath("spec", "auth", "password"), "Stored\"Pass9\\x\nend", "must match pattern")
+	got := maskKnownValues(err.Error(), map[string]bool{"Stored\"Pass9\\x\nend": true})
+	if strings.Contains(got, "Pass9") {
+		t.Fatalf("escaped credential survives masking: %s", got)
 	}
 }
