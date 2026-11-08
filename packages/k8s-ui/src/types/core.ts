@@ -1875,6 +1875,7 @@ export type WorkloadLogEventType =
   | 'log'
   | 'pod_added'
   | 'pod_removed'
+  | 'pod_updated'
   | 'end'
   | 'error'
 

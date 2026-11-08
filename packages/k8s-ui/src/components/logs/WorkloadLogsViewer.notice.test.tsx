@@ -185,3 +185,20 @@ it('keeps the init marker when a Pod is added, logs and is removed in one batch'
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
   expect(element.querySelector('[title="Init container migrate"]')).not.toBeNull()
 })
+
+it('clears the notice when the stream reports the Pod initialized, even before the app logs', async () => {
+  await act(async () =>
+    root.render(
+      <ToastProvider>
+        <WorkloadLogsViewer name="predictor" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+      </ToastProvider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  const statuses = (initState: object, appState: object) => [{ name: 'storage-initializer', init: true, ready: false, restartCount: 0, ...initState }, { name: 'kserve-container', ready: false, restartCount: 0, ...appState }]
+  await act(async () => source.emit('connected', { pods: [{ name: 'p-0', containers: ['storage-initializer', 'kserve-container'], ready: false, containerStatuses: statuses({ state: 'running' }, { state: 'waiting', reason: 'PodInitializing' }) }] }))
+  expect(element.textContent).toContain("kserve-container hasn't started: init container storage-initializer is still running.")
+  await act(async () => source.emit('pod_updated', { pods: [{ name: 'p-0', containers: ['storage-initializer', 'kserve-container'], ready: true, containerStatuses: statuses({ state: 'terminated', reason: 'Completed' }, { state: 'running', started: true, ready: true }) }] }))
+  expect(element.textContent).not.toContain("hasn't started")
+})

@@ -91,7 +91,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [sourceLabels, setSourceLabels] = useState<Record<string, string>>({})
   // Containers that produced a line since their Pod's status was read, and init
   // containers of removed Pods whose lines are still shown. Both are keyed by
-  // Pod and container and reset when a Pod is replaced or the source reloads.
+  // Pod and container and reset when the source reloads; a Pod added again
+  // starts a fresh output record but keeps its predecessor's init containers
+  // for the lines it left.
   const [outputKeys, setOutputKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [removedInitKeys, setRemovedInitKeys] = useState<ReadonlySet<string>>(() => new Set())
   // Follows each Pod event as it arrives, ahead of the batched pods state.
@@ -252,7 +254,6 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             const newPods = data.pods as WorkloadPodInfo[]
             const added = new Set(newPods.map(p => p.name))
             setOutputKeys(prev => withoutPods(prev, added))
-            setRemovedInitKeys(prev => withoutPods(prev, added))
             const known = new Set(podsRef.current.map(p => p.name))
             podsRef.current = [...podsRef.current, ...newPods.filter(p => !known.has(p.name))]
             setPods(prev => {
@@ -269,6 +270,16 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
               const next = new Set(prev)
               newPods.forEach(p => next.add(p.name))
               return next
+            })
+          }
+        },
+        onPodUpdated: (data: any) => {
+          if (data?.pods) {
+            const updated = new Map((data.pods as WorkloadPodInfo[]).map(p => [p.name, p]))
+            podsRef.current = podsRef.current.map(p => updated.get(p.name) ?? p)
+            setPods(prev => {
+              if (!prev.some(p => updated.has(p.name))) return prev
+              return prev.map(p => updated.get(p.name) ?? p)
             })
           }
         },
