@@ -250,6 +250,9 @@ func main() {
 
 	app.SetGlobals(cfg)
 	versionpkg.SetDesktop(true)
+	// An AppImage is a read-only image and cannot replace itself: no in-app
+	// updater (below), and the UI links to the release instead.
+	versionpkg.SetUpdateByDownload(desktopenv.InAppImage())
 	desktopenv.SetGPUPolicy(gpuPolicyName(linuxGPUPolicy))
 
 	// Clean up leftover files from previous update
@@ -276,8 +279,9 @@ func main() {
 
 	// Create server and attach desktop updater
 	srv := app.CreateServer(cfg)
-	desktopUpdater := updater.New()
-	srv.SetUpdater(desktopUpdater)
+	if !desktopenv.InAppImage() {
+		srv.SetUpdater(updater.New())
+	}
 
 	// Start server and wait until it's accepting connections
 	ready := make(chan struct{})

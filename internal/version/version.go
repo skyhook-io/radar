@@ -31,6 +31,8 @@ var (
 	// isDesktop is set to true when running as a desktop app (Wails).
 	// Controls install method detection and enables in-app update flow.
 	isDesktop bool
+	// updateByDownload is set when the desktop app cannot update itself.
+	updateByDownload bool
 
 	mu               sync.Mutex
 	updateCache      = map[string]updateCacheEntry{}
@@ -67,7 +69,10 @@ type UpdateInfo struct {
 	ReleaseNotes   string        `json:"releaseNotes,omitempty"`
 	InstallMethod  InstallMethod `json:"installMethod"`
 	UpdateCommand  string        `json:"updateCommand,omitempty"`
-	Error          string        `json:"error,omitempty"`
+	// UpdateByDownload is true for a desktop install that cannot update in
+	// place (the Linux AppImage): the user downloads the new version instead.
+	UpdateByDownload bool   `json:"updateByDownload,omitempty"`
+	Error            string `json:"error,omitempty"`
 	// Added by WithProductHuntLaunch, not by the lookup.
 	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
@@ -106,6 +111,12 @@ func SetCurrent(v string) {
 // which triggers the in-app update flow instead of showing CLI commands.
 func SetDesktop(v bool) {
 	isDesktop = v
+}
+
+// SetUpdateByDownload marks this desktop install as unable to update itself.
+// Must be called before any version checks.
+func SetUpdateByDownload(v bool) {
+	updateByDownload = v
 }
 
 // IsDesktop returns whether the current instance is running as a desktop app.
@@ -170,11 +181,12 @@ func disabledUpdateInfo() *UpdateInfo {
 	mu.Unlock()
 	method := detectInstallMethod()
 	return &UpdateInfo{
-		CurrentVersion: Current,
-		BuildChannel:   BuildChannelName(),
-		InstallMethod:  method,
-		UpdateCommand:  getUpdateCommand(method),
-		ReleaseURL:     defaultReleasesURL,
+		CurrentVersion:   Current,
+		BuildChannel:     BuildChannelName(),
+		InstallMethod:    method,
+		UpdateCommand:    getUpdateCommand(method),
+		UpdateByDownload: updateByDownload,
+		ReleaseURL:       defaultReleasesURL,
 	}
 }
 
@@ -304,10 +316,11 @@ func checkForUpdateCached(options checkOptions) *UpdateInfo {
 func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 	method := detectInstallMethod()
 	result := &UpdateInfo{
-		CurrentVersion: Current,
-		BuildChannel:   BuildChannelName(),
-		InstallMethod:  method,
-		UpdateCommand:  getUpdateCommand(method),
+		CurrentVersion:   Current,
+		BuildChannel:     BuildChannelName(),
+		InstallMethod:    method,
+		UpdateCommand:    getUpdateCommand(method),
+		UpdateByDownload: updateByDownload,
 	}
 
 	if !options.manual && (IsDisabled() || Current == "dev") {

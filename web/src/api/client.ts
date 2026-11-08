@@ -1872,6 +1872,8 @@ export interface VersionInfo {
   releaseNotes?: string;
   installMethod: InstallMethod;
   updateCommand?: string;
+  /** Desktop install that cannot update itself (the Linux AppImage): offer a download instead of Update Now. */
+  updateByDownload?: boolean;
   error?: string;
   productHuntLaunch?: { enabled: boolean; url: string; start: string; end: string };
 }
