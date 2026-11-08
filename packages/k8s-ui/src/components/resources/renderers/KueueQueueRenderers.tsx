@@ -369,9 +369,9 @@ export function ClusterQueueRenderer({ data, onNavigate, reads, workloads }: Que
         </ReportedActive>}
         configured={<ConfiguredStop data={data} />}
       />
-      <RelatedObjects data={data} reads={reads} onNavigate={onNavigate} />
       <QuotaAccounting data={data} clusterQueue onNavigate={onNavigate} />
       {workloads}
+      <RelatedObjects data={data} reads={reads} onNavigate={onNavigate} />
       <AdmissionPolicy data={data} />
       <QueueConditions data={data} clusterQueue />
     </div>
