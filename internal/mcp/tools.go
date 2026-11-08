@@ -381,7 +381,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"value as namespace to get_helm_release. Follow with get_helm_release include=history,operations " +
 			"for the full revision trail. When you can't read Helm's release Secrets, the result is an object: " +
 			"its summary says what's unknown, and observed rows come from labels and annotations on " +
-			"objects, with no status, may miss releases, and can't use get_helm_release.",
+			"objects, with no status, and may miss releases.",
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
@@ -392,7 +392,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
 			"Request values, history, operations, or " +
-			"revision comparisons with `include`; returned values are key-aware redacted.",
+			"revision comparisons with `include`; returned values are key-aware redacted. " +
+			"Without Helm's Secrets it returns {summary, observed}, built from the release's objects.",
 		Annotations: readOnly,
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
 

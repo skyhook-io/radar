@@ -273,7 +273,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
 		// Includes batch diagnosis routing and log-argument boundaries.
-		maxCatalogBytes = 68861
+		// get_helm_release names the shape it returns without Helm's Secrets.
+		maxCatalogBytes = 68921
 
 		maxToolDescriptionBytes = 3200
 	)

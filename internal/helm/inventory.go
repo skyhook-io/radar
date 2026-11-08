@@ -125,23 +125,34 @@ func (i *ReleaseInventory) Summary() string {
 	} else if i.StorageDenied != nil && i.StorageDenied.Extent == resourceapi.ExtentUnknown {
 		where = "in some namespaces"
 	}
-	summary := fmt.Sprintf("Partial: %d releases read from Helm and %d observed. Helm's release Secrets can't be read %s, so observed rows come from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on objects you can read. Their status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume they are deployed or healthy, and get_helm_release is denied for them; inspect their objects with list_resources or search. Absence proves nothing: a release that failed before creating any object, or whose objects you can't read, isn't listed, and objects kept after an uninstall can still appear. Anyone who can edit an object can set these annotations, so a row is a claim, not proof that a release exists. Helm's records need get and list on Secrets for the identity Radar reads as here, which also exposes every Secret in those namespaces.", len(i.Releases), len(i.Observed), where)
-	return summary + i.objectGaps()
+	summary := fmt.Sprintf("Partial: %d releases read from Helm and %d observed. Helm's release Secrets can't be read %s, so observed rows come from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on objects you can read. Their status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume they are deployed or healthy. get_helm_release returns one of them, built the same way, with its objects; inspect those with list_resources or search. Absence proves nothing: a release that failed before creating any object, or whose objects you can't read, isn't listed, and objects kept after an uninstall can still appear. Anyone who can edit an object can set these annotations, so a row is a claim, not proof that a release exists. Helm's records need get and list on Secrets for the identity Radar reads as here, which also exposes every Secret in those namespaces.", len(i.Releases), len(i.Observed), where)
+	return summary + objectGaps(i.ObjectCoverage, "list_helm_releases")
 }
 
-// objectGaps says in words what the object read didn't reach.
-func (i *ReleaseInventory) objectGaps() string {
-	if i.ObjectCoverage == nil || len(i.ObjectCoverage.Gaps) == 0 {
+// Summary says in words what an observed release is and isn't, for
+// get_helm_release, whose readers get no callout.
+func (d *ObservedReleaseDetail) Summary() string {
+	summary := fmt.Sprintf("Observed: Helm's release Secrets can't be read here, so this release comes from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on the %d objects you can read that carry them, which can be fewer than it has. Its status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume it is deployed or healthy. Anyone who can edit an object can set these annotations, so this is a claim, not proof that the release exists.", d.ResourceCount)
+	if len(d.FluxHistory) > 0 {
+		summary += " fluxHistory is the Flux HelmRelease's record of what it installed, not Helm's revisions."
+	}
+	return summary + objectGaps(&d.ObjectCoverage, "get_helm_release")
+}
+
+// objectGaps says in words what the object read didn't reach, naming the tool
+// to call again when the read may settle.
+func objectGaps(coverage *resourceapi.SearchCoverage, tool string) string {
+	if coverage == nil || len(coverage.Gaps) == 0 {
 		return ""
 	}
 	var codes []string
-	for _, gap := range i.ObjectCoverage.Gaps {
+	for _, gap := range coverage.Gaps {
 		codes = append(codes, string(gap.Code))
 	}
 	slices.Sort(codes)
 	gaps := fmt.Sprintf(" Some objects weren't read (%s), so more may be missing.", strings.Join(slices.Compact(codes), ", "))
-	if coverageMaySettle(i.ObjectCoverage.Gaps) {
-		gaps += " Call list_helm_releases again shortly."
+	if coverageMaySettle(coverage.Gaps) {
+		gaps += " Call " + tool + " again shortly."
 	}
 	return gaps
 }
@@ -246,6 +257,25 @@ func namesOrNil(namespaces []string) *resourceapi.NameSet {
 // namespace, after the scan, so a release keeps the objects it placed in other
 // namespaces and its cluster-scoped ones. A release Helm already returned is
 // left out however it was stored: without its HelmRelease, the scan can't tell.
+// storageWasRead reports whether the storage read covered everywhere the
+// release could be stored: where each readable Flux HelmRelease deploying it
+// stores it, or its own namespace when none does. Two HelmReleases can deploy
+// one release from different storage namespaces, and a row credited to
+// neither still has to be judged by both.
+func storageWasRead(key releaseKey, flux []fluxEvidence, read []string) bool {
+	stored := false
+	for _, f := range flux {
+		if f.releaseNamespace != key.namespace || f.releaseName != key.name {
+			continue
+		}
+		stored = true
+		if !slices.Contains(read, f.storageNamespace) {
+			return false
+		}
+	}
+	return stored || slices.Contains(read, key.namespace)
+}
+
 func observedOutsideStorage(scan *stampScan, read, requested []string, releases []HelmRelease) []ObservedRelease {
 	known := make(map[releaseKey]bool, len(releases))
 	for _, release := range releases {
@@ -255,11 +285,7 @@ func observedOutsideStorage(scan *stampScan, read, requested []string, releases 
 	partial := scan.coverage.Status != resourceapi.CoverageComplete
 	for key, objects := range groupStamped(scan.stamped) {
 		row := observedRow(key, objects, scan.flux)
-		storage := row.StorageNamespace
-		if storage == "" {
-			storage = row.Namespace
-		}
-		if known[key] || slices.Contains(read, storage) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
+		if known[key] || storageWasRead(key, scan.flux, read) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
 			continue
 		}
 		addObservedHealth(&row, objects, partial)

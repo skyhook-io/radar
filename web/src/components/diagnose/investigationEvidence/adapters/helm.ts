@@ -15,6 +15,7 @@ import {
   InvestigationHelmRevision,
   InvestigationHelmHook,
 } from "../types";
+import { adaptListHelmReleases } from "./listings";
 
 function helmOwnedResource(
   value: unknown,
@@ -124,12 +125,61 @@ function helmOperation(value: unknown): InvestigationHelmOperation | undefined {
     return undefined;
   return candidate as unknown as InvestigationHelmOperation;
 }
+// The release manages the target when the target is among the resources
+// Helm rendered for it; a release is never the investigated object itself.
+// Without an API version the owned row cannot tell colliding kinds apart
+// (CNPG vs CAPI Cluster), so it establishes nothing.
+function releaseRelevance(
+  builder: ProjectionBuilder,
+  resources: readonly InvestigationHelmOwnedResource[],
+): InvestigationEvidenceRelevance {
+  return resources.some(
+    (owned) =>
+      owned.apiVersion !== undefined &&
+      resourceMatchesTarget(builder.target, {
+        kind: owned.kind,
+        group: apiVersionToGroup(owned.apiVersion),
+        namespace: owned.namespace || undefined,
+        name: owned.name,
+      }),
+  )
+    ? "producer-related"
+    : "broader";
+}
+
 export function adaptHelmRelease(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   payload: unknown,
 ): void {
   const value = record(payload);
+  // Without Helm's Secrets the release comes from its objects, with no status
+  // or history: it reads as list_helm_releases' observed rows do. The call's
+  // namespace is where Helm stores the release, which a Flux HelmRelease can
+  // set apart from the release's own, so the card is scoped to the release.
+  const observed = record(value?.observed);
+  if (value && observed && nonEmptyString(value.summary)) {
+    adaptListHelmReleases(
+      builder,
+      {
+        ...source,
+        args: JSON.stringify({
+          namespace: observed.namespace,
+          name: observed.name,
+        }),
+      },
+      { summary: value.summary, releases: [], observed: [observed] },
+      releaseRelevance(
+        builder,
+        (Array.isArray(observed.resources) ? observed.resources : [])
+          .map(helmOwnedResource)
+          .filter((item): item is InvestigationHelmOwnedResource =>
+            Boolean(item),
+          ),
+      ),
+    );
+    return;
+  }
   if (
     !value ||
     !nonEmptyString(value.name) ||
@@ -207,22 +257,7 @@ export function adaptHelmRelease(
     ...(hooks ? { hooks } : {}),
     ...(values ? { values } : {}),
   };
-  // The release manages the target when the target is among the resources
-  // Helm rendered for it; a release is never the investigated object itself.
-  // Without an API version the owned row cannot tell colliding kinds apart
-  // (CNPG vs CAPI Cluster), so it establishes nothing.
-  const relevance: InvestigationEvidenceRelevance = resources.some(
-    (owned) =>
-      owned.apiVersion !== undefined &&
-      resourceMatchesTarget(builder.target, {
-        kind: owned.kind,
-        group: apiVersionToGroup(owned.apiVersion),
-        namespace: owned.namespace || undefined,
-        name: owned.name,
-      }),
-  )
-    ? "producer-related"
-    : "broader";
+  const relevance = releaseRelevance(builder, resources);
   const status = release.status.toLowerCase();
   const operationFailed =
     lastOperation?.status === "failed" ||

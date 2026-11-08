@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -62,7 +63,11 @@ func TestListHelmReleasesObservedRowsFollowEachCallersAccess(t *testing.T) {
 
 	storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if !strings.HasSuffix(r.URL.Path, "/secrets") || !strings.Contains(r.URL.RawQuery, "owner") {
+		if r.URL.Path == "/version" {
+			_, _ = io.WriteString(w, `{"major":"1","minor":"33","gitVersion":"v1.33.0"}`)
+			return
+		}
+		if !strings.Contains(r.URL.Path, "/secrets") {
 			http.NotFound(w, r)
 			return
 		}
@@ -118,4 +123,61 @@ func TestListHelmReleasesObservedRowsFollowEachCallersAccess(t *testing.T) {
 	if got, want := read("bob"), map[string]int{"team-b/app-b": 1}; !maps.Equal(got, want) {
 		t.Fatalf("bob = %v, want %v", got, want)
 	}
+
+	get := func(user, namespace, name, include string) (map[string]any, error) {
+		t.Helper()
+		ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: user})
+		result, _, err := handleGetHelmRelease(ctx, nil, getHelmReleaseInput{Namespace: namespace, Name: name, Include: include})
+		if err != nil {
+			return nil, err
+		}
+		var wire map[string]any
+		if err := json.Unmarshal([]byte(extractText(t, result)), &wire); err != nil {
+			t.Fatalf("%s: decode: %v", user, err)
+		}
+		return wire, nil
+	}
+	resourceCount := func(t *testing.T, wire map[string]any) float64 {
+		t.Helper()
+		observed, ok := wire["observed"].(map[string]any)
+		if !ok {
+			t.Fatalf("no observed release in %v", wire)
+		}
+		if _, ok := wire["status"]; ok {
+			t.Fatalf("an observed release must not carry a status: %v", wire)
+		}
+		if summary, _ := wire["summary"].(string); !strings.Contains(summary, "don't assume it is deployed or healthy") {
+			t.Fatalf("summary = %q", summary)
+		}
+		return observed["resourceCount"].(float64)
+	}
+
+	t.Run("get_helm_release falls back to each caller's observed release", func(t *testing.T) {
+		wire, err := get("alice", "team-b", "app-b", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resourceCount(t, wire); got != 2 {
+			t.Fatalf("alice sees %v objects of app-b, want 2", got)
+		}
+		wire, err = get("bob", "team-b", "app-b", "values,history,resource_diff")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resourceCount(t, wire); got != 1 {
+			t.Fatalf("bob sees %v objects of app-b, want 1 (his Role read is denied)", got)
+		}
+		if got := fmt.Sprint(wire["unavailable"]); got != "[values history resource_diff]" {
+			t.Fatalf("unavailable = %s", got)
+		}
+	})
+
+	// The fixture's cache never finishes syncing every kind, so the reason here
+	// is "try again"; the settled "none belong to it" case is a helm unit test.
+	t.Run("get_helm_release stays a denial when the caller can read none of the release", func(t *testing.T) {
+		_, err := get("bob", "team-b", "roles-only", "")
+		if err == nil || !strings.Contains(err.Error(), "access to its Secrets is denied, which doesn't mean it's missing") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }

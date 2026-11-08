@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -168,7 +169,11 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	user := userFromContext(ctx)
 	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user)
 	if helm.ReleaseReadDeniedForCaller(err) {
-		return nil, nil, fmt.Errorf("can't read Helm's records for release %s/%s: access to its Secrets is denied, which doesn't mean it's missing. list_helm_releases shows what its objects say; inspect them with list_resources or search: %w", input.Namespace, input.Name, err)
+		observed, why := observedHelmReleaseResult(ctx, input)
+		if observed != nil {
+			return toJSONResult(observed)
+		}
+		return nil, nil, fmt.Errorf("can't read Helm's records for release %s/%s: access to its Secrets is denied, which doesn't mean it's missing, and %s. Inspect objects with list_resources or search: %w", input.Namespace, input.Name, why, err)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("release %s/%s not found: %w", input.Namespace, input.Name, err)
@@ -304,6 +309,37 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 
 	return toJSONResult(result)
+}
+
+// observedHelmReleaseResult answers get_helm_release from the release's
+// stamps, for a caller denied Helm's storage: what the objects they can read
+// say, reading no Secret. When it can't, it returns nil and why, for the error.
+func observedHelmReleaseResult(ctx context.Context, input getHelmReleaseInput) (map[string]any, string) {
+	scope := mcpHelmObjectScope(ctx, "")
+	if scope == nil {
+		return nil, "the resource cache isn't ready to read its objects instead"
+	}
+	detail, err := helm.GetObservedReleaseInStorage(ctx, scope, input.Namespace, input.Name)
+	switch {
+	case errors.Is(err, helm.ErrStoredElsewhere), errors.Is(err, helm.ErrAmbiguousStorage):
+		return nil, err.Error()
+	case err != nil:
+		return nil, "its objects couldn't be read instead: " + err.Error()
+	case detail == nil:
+		return nil, "none of the objects you can read belong to it"
+	}
+	result := map[string]any{"summary": detail.Summary(), "observed": detail}
+	// Every include reads Helm's records, so none of them can be answered here.
+	var unavailable []string
+	for _, part := range strings.Split(input.Include, ",") {
+		if part = strings.TrimSpace(part); part != "" && !slices.Contains(unavailable, part) {
+			unavailable = append(unavailable, part)
+		}
+	}
+	if len(unavailable) > 0 {
+		result["unavailable"] = unavailable
+	}
+	return result, ""
 }
 
 func diffRevisionError(input getHelmReleaseInput, currentRevision int, include string) string {
