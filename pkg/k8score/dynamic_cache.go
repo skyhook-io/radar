@@ -1387,18 +1387,21 @@ func isAuthProbeError(err error) bool {
 	return apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
 }
 
+// gvrIsNamespaced reads the scope of the exact version asked for: discovery
+// lists every served version, and an aggregated API can serve one resource
+// with a different scope per version, so another version's scope can't stand
+// in. Stale discovery is refreshed first, since an API replaced under the same
+// name can change scope. A version discovery doesn't list reads as namespaced,
+// which keeps namespace filters and the --namespace-scope pin in place.
 func (d *DynamicResourceCache) gvrIsNamespaced(gvr schema.GroupVersionResource) bool {
 	if d.config.Discovery == nil {
 		return true
 	}
-	resources, err := d.config.Discovery.GetAPIResources()
-	if err != nil {
-		return true
+	if err := d.config.Discovery.RefreshIfStale(); err != nil {
+		log.Printf("Warning: failed to refresh API resources: %v", err)
 	}
-	for _, res := range resources {
-		if res.Group == gvr.Group && res.Version == gvr.Version && res.Name == gvr.Resource {
-			return res.Namespaced
-		}
+	if namespaced, known := d.config.Discovery.NamespacedGVR(gvr); known {
+		return namespaced
 	}
 	return true
 }

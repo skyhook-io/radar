@@ -13,9 +13,11 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
@@ -1313,5 +1315,109 @@ func TestPinnedNamespaceUnansweredIsIncomplete(t *testing.T) {
 	o := d.Observation(gvr)
 	if o.ReasonCode != "scope_probe_incomplete" || !slices.Equal(o.UnansweredNamespaces, []string{"team"}) {
 		t.Fatalf("observation = %+v, want scope_probe_incomplete with team unanswered", o)
+	}
+}
+
+// Server discovery can list a cluster-scoped kind's deprecated version first.
+// Neither the version a caller resolves nor the scope the access walk decides
+// may depend on that order: a namespace probe of a cluster-scoped kind gets a
+// 404, which the walk would read as access.
+func TestClusterScopedKindDiscoveredDeprecatedVersionFirstStaysClusterScoped(t *testing.T) {
+	const group = "kueue.x-k8s.io"
+	fakeDiscovery := fake.NewClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDiscovery.Resources = []*metav1.APIResourceList{
+		{GroupVersion: group + "/v1beta1", APIResources: []metav1.APIResource{{Name: "clusterqueues", Kind: "ClusterQueue", Namespaced: false, Verbs: []string{"get", "list", "watch"}}}},
+		{GroupVersion: group + "/v1beta2", APIResources: []metav1.APIResource{{Name: "clusterqueues", Kind: "ClusterQueue", Namespaced: false, Verbs: []string{"get", "list", "watch"}}}},
+	}
+	discovery, err := NewResourceDiscovery(fakeDiscovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, ok := discovery.GetResourceWithGroup("ClusterQueue", group); !ok || res.Version != "v1beta2" || res.Namespaced {
+		t.Fatalf("resolved %+v ok=%v, want cluster-scoped v1beta2", res, ok)
+	}
+
+	for _, version := range []string{"v1beta1", "v1beta2"} {
+		t.Run(version, func(t *testing.T) {
+			gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: "clusterqueues"}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ClusterQueueList"})
+			dyn.PrependReactor("list", "clusterqueues", func(action ktesting.Action) (bool, runtime.Object, error) {
+				if action.GetNamespace() == "" {
+					return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("cluster-wide list refused"))
+				}
+				return true, nil, apierrors.NewNotFound(gvr.GroupResource(), "")
+			})
+			d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, Discovery: discovery, NamespaceFallbacks: []string{"team-a"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(d.Stop)
+			if err := d.EnsureWatching(gvr); err == nil {
+				t.Fatal("EnsureWatching succeeded for a cluster-scoped kind refused cluster-wide")
+			}
+			if d.HasCoveringInformer(gvr, "team-a") {
+				t.Fatal("started a namespaced informer for a cluster-scoped kind")
+			}
+			if got := d.Observation(gvr); got.State != DynamicObservationDenied || got.Scope == DynamicObservationScopeExplicitNamespaces {
+				t.Fatalf("observation %+v, want a kind-level denial", got)
+			}
+		})
+	}
+}
+
+// Each served version reads its own scope, whichever is the most stable, and a
+// version discovery doesn't serve reads as namespaced rather than borrowing
+// another version's scope.
+func TestGvrIsNamespacedReadsTheRequestedVersion(t *testing.T) {
+	verbs := []string{"get", "list", "watch"}
+	fakeDiscovery := fake.NewClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDiscovery.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "widgets.example.io/v1beta1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: verbs}}},
+		{GroupVersion: "widgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: false, Verbs: verbs}}},
+		{GroupVersion: "gadgets.example.io/v1beta1", APIResources: []metav1.APIResource{{Name: "gadgets", Kind: "Gadget", Namespaced: false, Verbs: verbs}}},
+		{GroupVersion: "gadgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "gadgets", Kind: "Gadget", Namespaced: true, Verbs: verbs}}},
+	}
+	discovery, err := NewResourceDiscovery(fakeDiscovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &DynamicResourceCache{config: DynamicCacheConfig{Discovery: discovery}}
+	for gvr, want := range map[schema.GroupVersionResource]bool{
+		{Group: "widgets.example.io", Version: "v1beta1", Resource: "widgets"}: true,
+		{Group: "widgets.example.io", Version: "v1", Resource: "widgets"}:      false,
+		{Group: "widgets.example.io", Version: "v2", Resource: "widgets"}:      true,
+		{Group: "gadgets.example.io", Version: "v1beta1", Resource: "gadgets"}: false,
+		{Group: "gadgets.example.io", Version: "v1", Resource: "gadgets"}:      true,
+	} {
+		if got := d.gvrIsNamespaced(gvr); got != want {
+			t.Errorf("%s: gvrIsNamespaced=%v, want %v", gvr, got, want)
+		}
+	}
+}
+
+// A resource replaced under the same name with a different scope reads at its
+// new scope once discovery is stale, so a cluster-scoped answer can't outlive
+// the API and drop a namespace filter.
+func TestGvrIsNamespacedRefreshesStaleDiscovery(t *testing.T) {
+	verbs := []string{"get", "list", "watch"}
+	gvr := schema.GroupVersionResource{Group: "widgets.example.io", Version: "v1", Resource: "widgets"}
+	fakeDiscovery := fake.NewClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDiscovery.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "widgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: false, Verbs: verbs}}},
+	}
+	discovery, err := NewResourceDiscovery(fakeDiscovery, WithDiscoveryCacheTTL(time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &DynamicResourceCache{config: DynamicCacheConfig{Discovery: discovery}}
+	if d.gvrIsNamespaced(gvr) {
+		t.Fatal("cluster-scoped widgets read as namespaced")
+	}
+	fakeDiscovery.Resources = []*metav1.APIResourceList{
+		{GroupVersion: "widgets.example.io/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: verbs}}},
+	}
+	time.Sleep(time.Millisecond)
+	if !d.gvrIsNamespaced(gvr) {
+		t.Fatal("widgets replaced as namespaced still read as cluster-scoped after discovery went stale")
 	}
 }
