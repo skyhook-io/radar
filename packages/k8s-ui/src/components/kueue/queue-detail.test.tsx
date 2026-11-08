@@ -301,6 +301,15 @@ describe('reasons reported per flavor', () => {
   })
 })
 
+it('puts ClusterQueue quota and Workloads before the related-object reference lists', () => {
+  const data: any = clusterQueue('parent', active('True', 'Ready'))
+  data.status = { ...data.status, flavorsReservation: [{ name: 'default', resources: [{ name: 'cpu', total: '1' }] }] }
+  const html = renderToStaticMarkup(<ClusterQueueRenderer data={data} workloads={<section>Host Workloads</section>} />)
+  const order = ['Reported by controller', 'Quota by Flavor', 'Host Workloads', 'Related Objects', 'Admission Policy'].map(text => html.indexOf(text))
+  expect(order.every(index => index >= 0)).toBe(true)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+})
+
 for (const [kind, Renderer, after] of [
   ['LocalQueue', LocalQueueRenderer, 'Conditions'],
   ['ClusterQueue', ClusterQueueRenderer, 'Admission Policy'],
