@@ -142,7 +142,8 @@ func uncheckedReason(err error) issuesapi.UncheckedReason {
 // AddUnreadNamespaces adds to an Issues read's unchecked entry the namespaces
 // the read never tried: the storage scope left them out because the caller
 // can't list Secrets there (checked) or because that check went unanswered
-// (not checked). A read that already left everything unchecked stays so.
+// (not checked). A read that already left everything unchecked stays so, with
+// the generic reason if the two reasons differ.
 func AddUnreadNamespaces(unchecked issuesapi.UncheckedSource, incomplete bool, unread []string, checked bool) (issuesapi.UncheckedSource, bool) {
 	if len(unread) == 0 {
 		return unchecked, incomplete
@@ -156,11 +157,12 @@ func AddUnreadNamespaces(unchecked issuesapi.UncheckedSource, incomplete bool, u
 		slices.Sort(namespaces)
 		return issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: reason, Namespaces: namespaces}, true
 	}
-	if len(unchecked.Namespaces) == 0 {
-		return unchecked, true
-	}
+	// One entry covers both, so a specific reason holds only when they share it.
 	if unchecked.Reason != reason {
 		unchecked.Reason = issuesapi.UncheckedReasonReadFailed
+	}
+	if len(unchecked.Namespaces) == 0 {
+		return unchecked, true
 	}
 	unchecked.Namespaces = append(slices.Clone(unchecked.Namespaces), unread...)
 	slices.Sort(unchecked.Namespaces)

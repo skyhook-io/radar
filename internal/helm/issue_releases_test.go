@@ -567,6 +567,8 @@ func TestAddUnreadNamespaces(t *testing.T) {
 		{name: "joins a partial read with the same reason", unchecked: helmSource(denied, "team-a"), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(denied, "team-a", "team-b"), wantIncomplete: true},
 		{name: "different reasons fall back to the generic one", unchecked: helmSource(failed, "team-a"), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(failed, "team-a", "team-b"), wantIncomplete: true},
 		{name: "a read that checked nothing stays whole", unchecked: helmSource(failed), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(failed), wantIncomplete: true},
+		{name: "a whole denial stays a denial when the namespaces left out were denied too", unchecked: helmSource(denied), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(denied), wantIncomplete: true},
+		{name: "a whole denial isn't kept when a check behind the namespaces left out went unanswered", unchecked: helmSource(denied), incomplete: true, unread: []string{"team-b"}, want: helmSource(failed), wantIncomplete: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, incomplete := AddUnreadNamespaces(tc.unchecked, tc.incomplete, tc.unread, tc.checked)
