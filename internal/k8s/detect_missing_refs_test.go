@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestMissingRefProblemUsesInjectedClockForResourceAge(t *testing.T) {
@@ -1449,6 +1450,10 @@ func TestRefLookupResult(t *testing.T) {
 	}
 	t.Cleanup(loadingCore.Stop)
 	loadingCache := &ResourceCache{ResourceCache: loadingCore}
+	// The miss came from a read the synced store has since overtaken: the
+	// re-read finds the Service, so it exists.
+	presentCache := scopedRefTestCache(t, fake.NewClientset(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"}}),
+		map[string]k8score.ResourceScope{"services": {Enabled: true}})
 
 	notFound := apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "web")
 	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "web", errors.New("denied"))
@@ -1467,14 +1472,15 @@ func TestRefLookupResult(t *testing.T) {
 		{"scoped NotFound in OTHER namespace is unverifiable", scopedCache, "staging", notFound, false, false},
 		{"non-NotFound error is unverifiable even when covered", coveredCache, "prod", forbidden, false, false},
 		{"covered NotFound from an informer still syncing is unverifiable", loadingCache, "prod", notFound, false, false},
+		{"stale NotFound for an object the synced store holds is exists", presentCache, "prod", notFound, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			verifiable, exists := refLookupResult(tc.cache, "services", tc.ns, tc.err)
+			verifiable, exists := refLookupResult(tc.cache, "services", tc.ns, "web", tc.err)
 			if verifiable != tc.wantVerifiable || exists != tc.wantExists {
 				t.Errorf("refLookupResult = (%v, %v), want (%v, %v)", verifiable, exists, tc.wantVerifiable, tc.wantExists)
 			}
-			knownMissing := refKnownMissing(tc.cache, "services", tc.ns, tc.err)
+			knownMissing := refKnownMissing(tc.cache, "services", tc.ns, "web", tc.err)
 			if knownMissing != (tc.wantVerifiable && !tc.wantExists) {
 				t.Errorf("refKnownMissing = %v, inconsistent with lookup (%v, %v)", knownMissing, tc.wantVerifiable, tc.wantExists)
 			}
@@ -1829,4 +1835,56 @@ func TestDetectMissingRefsWaitsForTargetSync(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestDetectMissingRefsPerNamespaceSync: ServiceAccounts collected per
+// namespace, where one namespace's informer never finishes loading. A missing
+// account in the namespace that has loaded is still reported; one in the
+// namespace still loading is not.
+func TestDetectMissingRefsPerNamespaceSync(t *testing.T) {
+	now := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	pod := func(ns string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: ns, CreationTimestamp: now},
+			Spec:       corev1.PodSpec{ServiceAccountName: "absent-sa"},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+	}
+	client := fake.NewClientset(pod("prod"), pod("stuck"))
+	client.PrependReactor("list", "serviceaccounts", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "stuck" {
+			return true, nil, errors.New("stuck does not answer")
+		}
+		return false, nil, nil
+	})
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client: client,
+		ResourceScopes: map[string]k8score.ResourceScope{
+			"pods":            {Enabled: true},
+			"serviceaccounts": {Enabled: true, Namespace: "prod"},
+		},
+		ResourceScopeNamespaces: map[string][]string{"serviceaccounts": {"prod", "stuck"}},
+		DeferredTypes:           map[string]bool{"serviceaccounts": true},
+		DeferredSyncTimeout:     time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &ResourceCache{ResourceCache: core}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !cache.AssessKindRead("serviceaccounts", []string{"prod"}).Complete {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if cache.IsKindReady("serviceaccounts") {
+		t.Fatal("the fixture must leave ServiceAccounts loading as a whole")
+	}
+	problems := DetectMissingRefs(cache, "")
+	if !findProblem(problems, "Pod", "prod", "web", "Missing ServiceAccount") {
+		t.Errorf("a namespace whose own informer has synced must still report: %+v", problems)
+	}
+	if findProblem(problems, "Pod", "stuck", "web", "Missing ServiceAccount") {
+		t.Errorf("a namespace still loading must not report: %+v", problems)
+	}
 }

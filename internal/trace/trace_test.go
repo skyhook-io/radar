@@ -1502,6 +1502,64 @@ func TestTraceCacheStillSyncing(t *testing.T) {
 	}
 }
 
+// TestBuildTrace_IngressBackendServiceStillSyncing: an Ingress whose backend
+// Service can't be found because the Services informer is still loading. The
+// missing-reference check stays silent then, so the backend hop itself must
+// say it couldn't be read; otherwise nothing marks the path and it reads
+// healthy. Once Services has synced, the same miss is a confirmed absence and
+// carries no such marker.
+func TestBuildTrace_IngressBackendServiceStillSyncing(t *testing.T) {
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team-a"},
+		Spec: networkingv1.IngressSpec{
+			DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "api", Port: networkingv1.ServiceBackendPort{Number: 80}}},
+		},
+	}
+	backendSource := func(t *testing.T, loading bool) (string, bool) {
+		t.Helper()
+		defer k8s.ResetTestState()
+		delays := map[string]time.Duration{}
+		if loading {
+			delays["services"] = time.Hour
+		}
+		if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+			Client:          fake.NewClientset(ing),
+			ResourceScopes:  map[string]k8score.ResourceScope{"ingresses": {Enabled: true}, "services": {Enabled: true}, "pods": {Enabled: true}},
+			DeferredTypes:   map[string]bool{"services": true},
+			DebugSyncDelays: delays,
+		}); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		cache := k8s.GetResourceCache()
+		if !loading {
+			waitFor(t, func() bool { return cache.IsKindReady("services") })
+		}
+		deps := Deps{Cache: cache, Issues: issues.NewCacheProvider()}
+		tr, err := BuildTraceWithOptions(context.Background(), deps, "Ingress", "team-a", "web", Options{})
+		if err != nil {
+			t.Fatalf("BuildTrace: %v", err)
+		}
+		for _, hop := range tr.Downstream {
+			if hop.Resource.Kind == "Service" && hop.Resource.Name == "api" {
+				src, _ := hop.Meta["endpointSource"].(string)
+				return src, true
+			}
+		}
+		return "", false
+	}
+
+	src, found := backendSource(t, true)
+	if !found {
+		t.Fatal("no backend Service hop; the assertion below would be vacuous")
+	}
+	if src != "unknown" {
+		t.Errorf("backend Service unreadable while Services loads: endpointSource = %q, want unknown", src)
+	}
+	if src, found := backendSource(t, false); !found || src == "unknown" {
+		t.Errorf("synced Services, Service absent: hop found=%v endpointSource=%q, want a hop without the unknown marker", found, src)
+	}
+}
+
 // TestBuildTrace_GatewaySubjectNilDiscoveryDegrades (nil-Discovery): a Gateway
 // trace when Discovery failed to init must degrade honestly to Unknown, never
 // nil-deref panic on deps.Discovery.GetGVRWithGroup.
