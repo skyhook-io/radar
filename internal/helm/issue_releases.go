@@ -102,30 +102,71 @@ func isImpersonationDenied(err error) bool {
 }
 
 // IssueReadUnchecked reports what a failed ListIssueReleasesAcrossNamespaces
-// leaves unchecked, if anything. A denial leaves nothing unchecked: the caller
-// may not read release Secrets, so it sees no Helm issues, like any other kind
-// it can't list. Neither does a caller that left, since nobody gets the
-// answer. Radar's own request deadline does: the caller is still waiting. A
-// *PartialReadError names the namespaces that failed; the releases returned
-// with it are still valid.
+// leaves unchecked, if anything. A caller denied all of it gets no Helm issues,
+// and is told, because the Helm view still lists releases for them and "no
+// issues" would otherwise read as those releases being fine. A caller that left
+// leaves nothing unchecked, since nobody gets the answer. Radar's own request
+// deadline does: the caller is still waiting. A *PartialReadError names the
+// namespaces that failed; the releases returned with it are still valid.
 func IssueReadUnchecked(ctx context.Context, err error) (issuesapi.UncheckedSource, bool) {
-	if err == nil || ReleaseReadDeniedForCaller(err) || errors.Is(ctx.Err(), context.Canceled) {
+	if err == nil || errors.Is(ctx.Err(), context.Canceled) {
 		return issuesapi.UncheckedSource{}, false
 	}
-	unchecked := issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: issueReadReason(err)}
+	// A partial read comes first: it wraps the first namespace's error, which
+	// can itself be a denial, and it names only the namespaces that failed.
 	var partial *PartialReadError
 	if errors.As(err, &partial) {
+		unchecked := issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: uncheckedReason(partial.Err)}
 		unchecked.Namespaces = slices.Clone(partial.Namespaces)
 		slices.Sort(unchecked.Namespaces)
 		// The namespaces share one entry, so a specific reason is only
 		// honest when every one of them failed for it.
 		for _, e := range partial.Errs {
-			if issueReadReason(e) != unchecked.Reason {
+			if uncheckedReason(e) != unchecked.Reason {
 				unchecked.Reason = issuesapi.UncheckedReasonReadFailed
 				break
 			}
 		}
+		return unchecked, true
 	}
+	return issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: uncheckedReason(err)}, true
+}
+
+func uncheckedReason(err error) issuesapi.UncheckedReason {
+	if ReleaseReadDeniedForCaller(err) {
+		return issuesapi.UncheckedReasonCallerAccessDenied
+	}
+	return issueReadReason(err)
+}
+
+// AddUnreadNamespaces adds to an Issues read's unchecked entry the namespaces
+// the read never tried: the storage scope left them out because the caller
+// can't list Secrets there (checked) or because that check went unanswered
+// (not checked). A read that already left everything unchecked stays so, with
+// the generic reason if the two reasons differ.
+func AddUnreadNamespaces(unchecked issuesapi.UncheckedSource, incomplete bool, unread []string, checked bool) (issuesapi.UncheckedSource, bool) {
+	if len(unread) == 0 {
+		return unchecked, incomplete
+	}
+	reason := issuesapi.UncheckedReasonCallerAccessDenied
+	if !checked {
+		reason = issuesapi.UncheckedReasonReadFailed
+	}
+	if !incomplete {
+		namespaces := slices.Clone(unread)
+		slices.Sort(namespaces)
+		return issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: reason, Namespaces: namespaces}, true
+	}
+	// One entry covers both, so a specific reason holds only when they share it.
+	if unchecked.Reason != reason {
+		unchecked.Reason = issuesapi.UncheckedReasonReadFailed
+	}
+	if len(unchecked.Namespaces) == 0 {
+		return unchecked, true
+	}
+	unchecked.Namespaces = append(slices.Clone(unchecked.Namespaces), unread...)
+	slices.Sort(unchecked.Namespaces)
+	unchecked.Namespaces = slices.Compact(unchecked.Namespaces)
 	return unchecked, true
 }
 
@@ -159,7 +200,7 @@ func ReportIssueRead(ctx context.Context, err error, username string, groups []s
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
 		// The caller went away; nobody is left to tell.
-	case ReleaseReadDeniedForCaller(err):
+	case unchecked.Reason == issuesapi.UncheckedReasonCallerAccessDenied:
 		if _, seen := issueReadDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
 			// Without this a cluster with no Secret-read binding would drop
 			// Helm alerts with no trace anywhere.

@@ -273,13 +273,13 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Includes controller-first navigation and the separate GitOps edit boundary.
 		// issues states what it covers and what it doesn't (expiring
 		// certificates, other posture), so an empty result isn't read as healthy.
-		// Includes batch diagnosis routing, log boundaries and native Helm source/merge/confirmation contracts.
+		// Includes batch diagnosis routing, log-argument boundaries and native Helm source/merge/confirmation contracts.
 		// Stored-chart navigation, advisory dry_run and stale-revision semantics add
 		// 992 bytes without new tool names; release version listing adds 155 more,
 		// and rollback preview plus workload-to-release rollback routing 291 more.
-		// Measured 72,628; retain 33 bytes headroom.
+		// Measured 72,872 after merging main; retain 33 bytes headroom.
 		// Opt-in Service curl and exec remain a separate allowance below.
-		maxCatalogBytes         = 72661
+		maxCatalogBytes         = 72905
 		maxToolDescriptionBytes = 3200
 	)
 

@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
@@ -263,6 +264,10 @@ type DashboardHelmSummary struct {
 	// unreachable, timed_out, unconfigured, auth_required).
 	Error     string `json:"error,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
+	// UnreadNamespaces are namespaces whose Helm records the caller can't
+	// read, so their releases are missing from Total and Releases. The Helm
+	// view still lists them from their objects.
+	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
 type DashboardHelmRelease struct {
@@ -451,13 +456,13 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces, ok := s.resolveHelmNamespaces(r)
+	namespaces, ok, _, unread := s.resolveHelmStorageScope(r)
 	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
 		return
 	}
 
-	summary := s.getDashboardHelmSummary(r, namespaces)
+	summary := s.getDashboardHelmSummary(r, namespaces, unread...)
 	s.writeJSON(w, summary)
 }
 
@@ -1200,7 +1205,9 @@ func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 	return &DashboardTrafficSummary{Source: sourceName}
 }
 
-func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {
+// unread are namespaces the storage scope already left out because the caller
+// can't list Secrets there.
+func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, unread ...string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
 		return DashboardHelmSummary{
@@ -1210,7 +1217,10 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 		}
 	}
 
-	releases, err := helmClient.ListReleasesAcrossNamespaces(r.Context(), namespaces, auth.UserFromContext(r.Context()))
+	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()))
+	if err == nil && len(read) == 0 && len(denied) > 0 {
+		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
+	}
 	if err != nil {
 		if helm.ReleaseReadDeniedForCaller(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
@@ -1225,7 +1235,11 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 		}
 	}
 
-	return dashboardHelmSummaryFromReleases(releases)
+	summary := dashboardHelmSummaryFromReleases(releases)
+	if missing := helm.UnreadStorageNamespaces(unread, denied); len(missing) > 0 {
+		summary.UnreadNamespaces = resourceapi.Names(missing, resourceapi.RESTSetLimit)
+	}
+	return summary
 }
 
 func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelmSummary {

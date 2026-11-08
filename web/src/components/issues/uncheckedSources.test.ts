@@ -28,6 +28,8 @@ describe('uncheckedSourceLines', () => {
   })
 
   it("says when Radar's own service account is the problem", () => {
+    expect(uncheckedSourceLines([{ source: 'helm', reason: 'caller_access_denied' }]))
+      .toEqual(['Radar can\'t read Helm\'s release Secrets here, so failed or stuck releases may be missing.'])
     expect(uncheckedSourceLines([{ source: 'helm', reason: 'collector_access_denied' }]))
       .toEqual(["Helm releases couldn't be checked because Radar's service account isn't allowed to impersonate users, so failed or stuck releases may be missing."])
   })

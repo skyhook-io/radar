@@ -170,7 +170,10 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
-	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
+	HelmSourceIdentity bool `json:"helmSourceIdentity"`
+	// GET /api/helm/inventory and /api/helm/inventory/{namespace}/{name}, and
+	// error_code release_read_denied on a Helm release read.
+	HelmInventory         bool `json:"helmInventory"`
 	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
 	SearchCoverage        bool `json:"searchCoverage"`
 	ApplicationEvidence   bool `json:"applicationEvidence"`

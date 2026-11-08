@@ -1,6 +1,8 @@
 package gitops
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -294,4 +296,38 @@ func ToolOf(obj *unstructured.Unstructured) string {
 		return ""
 	}
 	return ToolFor(resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), obj.GetKind())
+}
+
+// FluxHelmTarget names the Helm release a Flux HelmRelease's spec implies: the
+// release name helm-controller defaults to, the namespace it deploys into, and
+// the namespace Helm stores it in. status.history and status.storageNamespace
+// record the actual values once a release has been installed.
+func FluxHelmTarget(obj *unstructured.Unstructured) (releaseName, targetNamespace, storageNamespace string) {
+	spec, _ := obj.Object["spec"].(map[string]any)
+	targetNamespace, _ = spec["targetNamespace"].(string)
+	if targetNamespace == "" {
+		targetNamespace = obj.GetNamespace()
+	}
+	releaseName, _ = spec["releaseName"].(string)
+	if releaseName == "" {
+		if configuredTarget, _ := spec["targetNamespace"].(string); configuredTarget != "" {
+			releaseName = configuredTarget + "-" + obj.GetName()
+		} else {
+			releaseName = obj.GetName()
+		}
+		releaseName = shortenFluxReleaseName(releaseName)
+	}
+	storageNamespace, _ = spec["storageNamespace"].(string)
+	if storageNamespace == "" {
+		storageNamespace = obj.GetNamespace()
+	}
+	return releaseName, targetNamespace, storageNamespace
+}
+
+func shortenFluxReleaseName(name string) string {
+	if len(name) <= 53 {
+		return name
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+	return name[:40] + "-" + sum[:12]
 }

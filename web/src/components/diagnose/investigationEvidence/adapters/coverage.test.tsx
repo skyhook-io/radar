@@ -457,6 +457,22 @@ describe("listing cards (helm releases, packages, search)", () => {
     ]);
   });
 
+  it.each([[[]], [[{ name: "shop", namespace: "shop", chart: "shop" }]]])(
+    "keeps a partial Helm read's limits with its rows: %j",
+    (observed) => {
+      const summary = "Partial: 0 releases read from Helm and 1 observed.";
+      const projection = project([
+        tool("helm", "list_helm_releases", { summary, releases: [], observed }),
+      ]);
+      expect(projection.limitations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ source: "Helm releases", kind: "unknown" }),
+        ]),
+      );
+      expect(JSON.stringify(projection.limitations)).toContain(summary);
+    },
+  );
+
   it("lists Helm releases with their status and chart", () => {
     const projection = project([
       tool(
@@ -495,6 +511,25 @@ describe("listing cards (helm releases, packages, search)", () => {
       "failed · redis 19.0.1",
     ]);
     expect(data.resources[1].issue).toBe("0/1 pods ready");
+  });
+
+  it("lists observed Helm releases without a status of their own", () => {
+    const projection = project([
+      tool("helm", "list_helm_releases", {
+        summary: "Partial: 1 releases read from Helm and 1 observed.",
+        releases: [{ name: "podinfo", namespace: "shop", chart: "podinfo", chartVersion: "6.15.0", status: "failed", revision: 3 }],
+        observed: [{ name: "redis", namespace: "team-b", chart: "redis", chartVersion: "19.0.1", resourceCount: 2, healthIssue: "ImagePullBackOff" }],
+        storageDenied: { count: 1, names: ["team-b"] },
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "inventory");
+    const data = group.latest.data;
+    if (data.type !== "inventory") throw new Error("expected inventory");
+    expect(data.resources.map((row) => row.status)).toEqual([
+      "failed · podinfo 6.15.0",
+      "status unknown · redis 19.0.1",
+    ]);
+    expect(data.resources[1].issue).toBe("ImagePullBackOff");
   });
 
   it("lists packages with their version and sources", () => {
