@@ -354,11 +354,13 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries),
     [selectedContainer, shownPods, filteredEntries],
   )
-  const initNotice = useMemo(() => initializingPodsNotice(shownPods, {
+  // Pods from a stream that is still connecting, or failed, may belong to the
+  // previous stream, so their status isn't current.
+  const initNotice = useMemo(() => (connecting || streamError) ? '' : initializingPodsNotice(shownPods, {
     selectedContainer,
     containersWithOutput: outputKeys,
     podLabel: pod => sourceLabels[pod.name] || pod.stepName || pod.name.split('-').slice(-2).join('-'),
-  }), [shownPods, selectedContainer, outputKeys, sourceLabels])
+  }), [connecting, streamError, shownPods, selectedContainer, outputKeys, sourceLabels])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
     const filename = `${name}-logs.${extension}`

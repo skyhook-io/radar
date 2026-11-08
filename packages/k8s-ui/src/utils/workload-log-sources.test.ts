@@ -83,6 +83,11 @@ describe('viewMixesContainers', () => {
     expect(viewMixesContainers([pod('api-2', [running('app')])], [{ pod: 'api-1', container: 'metrics' }, { pod: 'api-2', container: 'app' }])).toBe(true)
   })
 
+  it('ignores a Pod that has not reported container statuses yet', () => {
+    const pending: WorkloadPodInfo = { name: 'repo-2', containers: ['copyutil', 'repo-server'], ready: false }
+    expect(viewMixesContainers([pod('repo-1', [completed, running('repo-server')]), pending], [{ pod: 'repo-1', container: 'repo-server' }])).toBe(false)
+  })
+
   it('does not count a native sidecar as a second app container', () => {
     const proxy = { ...init('running', undefined, { sidecar: true, started: true }), name: 'istio-proxy' }
     expect(viewMixesContainers([pod('api-1', [proxy, running('api')])], [{ pod: 'api-1', container: 'api' }])).toBe(false)

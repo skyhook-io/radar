@@ -38,6 +38,9 @@ export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{
   const supporting = new Set<string>()
   for (const pod of pods) {
     const statuses = pod.containerStatuses ?? []
+    // A Pod that hasn't reported container statuses (not yet scheduled) can't
+    // tell init containers from app containers, so it doesn't count either way.
+    if (statuses.length === 0) continue
     const roles = new Map(statuses.map(status => [status.name, status]))
     for (const name of pod.containers) {
       const status = roles.get(name)

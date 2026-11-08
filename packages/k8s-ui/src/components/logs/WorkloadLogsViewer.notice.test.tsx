@@ -240,3 +240,24 @@ it('drops the initializing notice when the stream ends with no Pods left', async
   await act(async () => source.emit('end', { reason: 'no pods found' }))
   expect(element.textContent).not.toContain("hasn't started")
 })
+
+it('hides the previous stream\'s initializing notice while a new stream connects', async () => {
+  await act(async () =>
+    root.render(
+      <ToastProvider>
+        <WorkloadLogsViewer name="predictor" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+      </ToastProvider>,
+    ),
+  )
+  const first = FakeEventSource.last
+  if (!first) throw new Error('stream was not opened')
+  await act(async () => first.emit('connected', { pods: [{ name: 'p-0', containers: ['init', 'app'], ready: false, containerStatuses: [{ name: 'init', init: true, ready: false, restartCount: 0, state: 'running' }, { name: 'app', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' }] }] }))
+  expect(element.textContent).toContain("app hasn't started")
+  const select = element.querySelector('select') as HTMLSelectElement
+  await act(async () => {
+    select.value = 'app'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  expect(FakeEventSource.last).not.toBe(first)
+  expect(element.textContent).not.toContain("hasn't started")
+})
