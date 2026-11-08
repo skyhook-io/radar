@@ -57,9 +57,10 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 	// The scope comes first, as in the REST handler: its namespace check caches
 	// the answer the resolver then reads.
 	scope := mcpHelmObjectScope(ctx, input.Namespace)
-	storage, checked := resolveHelmListNamespacesChecked(ctx, input.Namespace)
+	storage, checked, skipped := resolveHelmStorageScope(ctx, input.Namespace)
 	inventory, err := helmClient.ReadInventory(ctx, helm.InventoryRequest{
 		StorageNamespaces:  storage,
+		StorageSkipped:     skipped,
 		StorageCheckFailed: !checked,
 		User:               userFromContext(ctx),
 		Scope:              scope,
@@ -117,20 +118,14 @@ func mcpHelmObjectScope(ctx context.Context, namespace string) *helm.ObjectScope
 }
 
 func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
-	namespaces, _ := resolveHelmListNamespacesChecked(ctx, namespace)
+	namespaces, _, _ := resolveHelmStorageScope(ctx, namespace)
 	return namespaces
 }
 
-// resolveHelmListNamespacesChecked is resolveHelmListNamespaces that also says
-// whether every Secrets check behind the answer was answered. When one wasn't,
-// a namespace can be missing without being denied.
-func resolveHelmListNamespacesChecked(ctx context.Context, namespace string) ([]string, bool) {
-	namespaces, checked, _ := resolveHelmStorageScope(ctx, namespace)
-	return namespaces, checked
-}
-
-// resolveHelmStorageScope is resolveHelmListNamespacesChecked that also returns
-// the namespaces it left out because the caller can't list Secrets there.
+// resolveHelmStorageScope is resolveHelmListNamespaces that also says whether
+// every Secrets check behind the answer was answered (when one wasn't, a
+// namespace can be missing without being denied), and returns the namespaces it
+// left out because the reading identity can't list Secrets there.
 func resolveHelmStorageScope(ctx context.Context, namespace string) (namespaces []string, checked bool, unread []string) {
 	if namespace != "" {
 		return []string{namespace}, true, nil
@@ -155,7 +150,8 @@ func resolveHelmStorageScope(ctx context.Context, namespace string) (namespaces 
 		}
 		return nil, complete, nil
 	}
-	return helm.ResolveNoAuthListNamespaces(ctx), true, nil
+	namespaces, skipped := helm.ResolveNoAuthStorageScope(ctx)
+	return namespaces, true, skipped
 }
 
 func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input getHelmReleaseInput) (*mcp.CallToolResult, any, error) {
