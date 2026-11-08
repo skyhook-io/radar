@@ -1239,8 +1239,9 @@ export interface ObservedHelmRelease {
   otherCharts?: string[]
   // The distinct versions, sorted, found when the chart's objects disagree, as
   // after an interrupted upgrade; chartVersion or appVersion is then absent.
-  // From object labels only: a Flux record's versions replace them. Absent
-  // doesn't prove the objects agree.
+  // From object labels only: when a readable Flux HelmRelease names the chart
+  // in its history, its versions replace them. Absent doesn't prove the
+  // objects agree.
   chartVersions?: string[]
   appVersions?: string[]
   // Objects the caller can read, which can be fewer than the release has.

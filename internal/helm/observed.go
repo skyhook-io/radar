@@ -66,8 +66,8 @@ type ObservedRelease struct {
 	// when the chosen chart's objects disagree, as after an interrupted
 	// upgrade. ChartVersion or AppVersion is then empty: Radar doesn't pick
 	// one. They come from object labels only: when a readable Flux HelmRelease
-	// records the release, its versions are used and these are empty. Absent
-	// doesn't prove the objects agree.
+	// names the release's chart in its history, Flux's versions are used and
+	// these are empty. Absent doesn't prove the objects agree.
 	ChartVersions []string `json:"chartVersions,omitempty"`
 	AppVersions   []string `json:"appVersions,omitempty"`
 	// ResourceCount is how many of the caller's readable objects carry the
