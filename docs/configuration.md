@@ -96,13 +96,14 @@ ignored with `--disable-exec`, `--mcp-read-only`, or disabled MCP. The CLI
 flag overrides the config key, including `--mcp-exec-tools=false`. Helm
 operators use `mcp.execTools: true`. See [exec_pod](mcp.md#exec_pod).
 
-`--mcp-http-tools`, `"mcpHttpTools": true`, or Helm `mcp.httpTools: true` independently
-opts in to [curl_service](mcp.md#curl_service). Default false; requires in-cluster
-Radar with writable MCP and `get services/proxy` permission. `--disable-exec` does
-not disable HTTP. The explicit CLI flag (including `=false`) overrides persisted
-config. Catalog-only modes omit it unless `--fake-in-cluster` is explicitly set.
-`/api/config.effective.mcpHttpTools` and `/api/capabilities.mcpHttpTools` report the
-effective state; suppressed opt-ins are logged at startup.
+`--mcp-http-tools`, `"mcpHttpTools": true`, or Helm `mcp.httpTools: true` opts in
+to [curl_service](mcp.md#curl_service), independently of `exec_pod`. It defaults
+to false, needs in-cluster Radar with writable MCP, and is not affected by
+`--disable-exec`. Each call needs `get services/proxy` on the target Service, as the caller or, without auth, as Radar's ServiceAccount. The
+CLI flag overrides the config key, including `--mcp-http-tools=false`.
+Catalog-only modes omit the tool unless `--fake-in-cluster` is set.
+`/api/capabilities.mcpHttpTools` and `/api/config.effective.mcpHttpTools` report
+the effective state, and startup logs explain a suppressed opt-in.
 
 MCP is enabled with read and write tools by default. `--no-mcp` disables all
 MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal

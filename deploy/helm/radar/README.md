@@ -597,7 +597,13 @@ Disabled by default for security:
 
 ### MCP container commands
 
-`mcp.execTools` registers `exec_pod`. `mcp.httpTools` independently registers `curl_service`; both default off. `rbac.podExec` grants Radar's ServiceAccount exec permission; it does not grant `get services/proxy`. Service GETs require that separate permission on the target Service, as the signed-in caller or Radar's ServiceAccount without auth. The chart does not add it to the ServiceAccount; see [the scoped Service HTTP grant](#granting-service-http-access-without-authentication). The table below describes only exec access:
+`mcp.execTools` registers `exec_pod`, and `mcp.httpTools` independently registers
+`curl_service`; both default off. `rbac.podExec` grants Radar's ServiceAccount exec
+permission, but not the `get services/proxy` that Service GETs need on the target
+Service (as the signed-in caller, or as Radar's ServiceAccount without auth). The
+chart doesn't grant that by default; see
+[the scoped Service HTTP grant](#granting-service-http-access-without-authentication).
+The table below covers exec only:
 
 | `mcp.execTools` | `rbac.podExec` | Result |
 |---|---|---|
@@ -648,13 +654,13 @@ roleRef:
   name: radar-service-http
 ```
 
-Every reachable unauthenticated MCP client shares this access. With authentication,
-the signed-in caller needs the grant instead. Prefer a namespace Role to adding
-`services/proxy` through `rbac.additionalRules`: those rules extend a ClusterRole,
-so a resource-name restriction there applies to that name across namespaces.
-This grant delegates Radar-to-Service network access; it does not isolate where a
-Service routes. Constrain EndpointSlice/GitOps-controller changes and network
-policy for a shared cluster. The chart does not apply this grant automatically.
+Every reachable unauthenticated MCP client shares this access; with
+authentication, each signed-in caller needs the grant instead. Prefer a namespace
+Role to `rbac.additionalRules`: those rules extend a ClusterRole, so a
+`resourceNames` restriction there matches that name in every namespace. The grant
+delegates Radar-to-Service network access; it doesn't control where a Service
+routes. On a shared cluster, constrain who can change EndpointSlices, directly or
+through GitOps controllers, and use network policy.
 
 ### Turning exec off
 
