@@ -178,7 +178,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_helm_release',
-    desc: 'Detailed Helm release info with owned resources, health, Flux ownership, current lastOperation, operationInsight, hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when available.',
+    desc: 'Detailed Helm release info with owned resources, health, Flux ownership, current lastOperation, operationInsight, hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when available. Without access to Helm’s Secrets, the release as its objects describe it, with no status or history.',
     params: [
       { arg: 'namespace', required: true, desc: 'Helm storage namespace; use storageNamespace from list_helm_releases when present' },
       { arg: 'name', required: true, desc: 'release name' },

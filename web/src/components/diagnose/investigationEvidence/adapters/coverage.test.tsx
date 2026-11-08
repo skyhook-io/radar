@@ -532,6 +532,22 @@ describe("listing cards (helm releases, packages, search)", () => {
     expect(data.resources[1].issue).toBe("ImagePullBackOff");
   });
 
+  it("shows an observed get_helm_release as an observed row with its limits", () => {
+    const summary = "Observed: Helm's release Secrets can't be read here.";
+    const projection = project([
+      tool("helm", "get_helm_release", {
+        summary,
+        observed: { name: "redis", namespace: "team-b", chart: "redis", chartVersion: "19.0.1", resourceCount: 2, resources: [] },
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "inventory");
+    const data = group.latest.data;
+    if (data.type !== "inventory") throw new Error("expected inventory");
+    expect(data.resources.map((row) => row.status)).toEqual(["status unknown · redis 19.0.1"]);
+    expect(JSON.stringify(projection.limitations)).toContain(summary);
+    expect(JSON.stringify(projection.limitations)).not.toContain("couldn't summarize");
+  });
+
   it("lists packages with their version and sources", () => {
     const projection = project([
       tool(

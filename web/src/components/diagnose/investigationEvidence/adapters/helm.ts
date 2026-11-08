@@ -15,6 +15,7 @@ import {
   InvestigationHelmRevision,
   InvestigationHelmHook,
 } from "../types";
+import { adaptListHelmReleases } from "./listings";
 
 function helmOwnedResource(
   value: unknown,
@@ -130,6 +131,17 @@ export function adaptHelmRelease(
   payload: unknown,
 ): void {
   const value = record(payload);
+  // Without Helm's Secrets the release comes from its objects, with no status
+  // or history: it reads as list_helm_releases' observed rows do.
+  const observed = record(value?.observed);
+  if (value && observed && nonEmptyString(value.summary)) {
+    adaptListHelmReleases(builder, source, {
+      summary: value.summary,
+      releases: [],
+      observed: [observed],
+    });
+    return;
+  }
   if (
     !value ||
     !nonEmptyString(value.name) ||

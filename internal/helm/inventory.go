@@ -125,23 +125,34 @@ func (i *ReleaseInventory) Summary() string {
 	} else if i.StorageDenied != nil && i.StorageDenied.Extent == resourceapi.ExtentUnknown {
 		where = "in some namespaces"
 	}
-	summary := fmt.Sprintf("Partial: %d releases read from Helm and %d observed. Helm's release Secrets can't be read %s, so observed rows come from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on objects you can read. Their status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume they are deployed or healthy, and get_helm_release is denied for them; inspect their objects with list_resources or search. Absence proves nothing: a release that failed before creating any object, or whose objects you can't read, isn't listed, and objects kept after an uninstall can still appear. Anyone who can edit an object can set these annotations, so a row is a claim, not proof that a release exists. Helm's records need get and list on Secrets for the identity Radar reads as here, which also exposes every Secret in those namespaces.", len(i.Releases), len(i.Observed), where)
-	return summary + i.objectGaps()
+	summary := fmt.Sprintf("Partial: %d releases read from Helm and %d observed. Helm's release Secrets can't be read %s, so observed rows come from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on objects you can read. Their status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume they are deployed or healthy. get_helm_release returns one of them, built the same way, with its objects; inspect those with list_resources or search. Absence proves nothing: a release that failed before creating any object, or whose objects you can't read, isn't listed, and objects kept after an uninstall can still appear. Anyone who can edit an object can set these annotations, so a row is a claim, not proof that a release exists. Helm's records need get and list on Secrets for the identity Radar reads as here, which also exposes every Secret in those namespaces.", len(i.Releases), len(i.Observed), where)
+	return summary + objectGaps(i.ObjectCoverage, "list_helm_releases")
 }
 
-// objectGaps says in words what the object read didn't reach.
-func (i *ReleaseInventory) objectGaps() string {
-	if i.ObjectCoverage == nil || len(i.ObjectCoverage.Gaps) == 0 {
+// Summary says in words what an observed release is and isn't, for
+// get_helm_release, whose readers get no callout.
+func (d *ObservedReleaseDetail) Summary() string {
+	summary := fmt.Sprintf("Observed: Helm's release Secrets can't be read here, so this release comes from the meta.helm.sh/release-name and meta.helm.sh/release-namespace annotations and the helm.sh/chart and app.kubernetes.io/version labels on the %d objects you can read that carry them, which can be fewer than it has. Its status, revision, last update, history, values, manifest, notes and hooks are unknown, so don't assume it is deployed or healthy. Anyone who can edit an object can set these annotations, so this is a claim, not proof that the release exists.", d.ResourceCount)
+	if len(d.FluxHistory) > 0 {
+		summary += " fluxHistory is the Flux HelmRelease's record of what it installed, not Helm's revisions."
+	}
+	return summary + objectGaps(&d.ObjectCoverage, "get_helm_release")
+}
+
+// objectGaps says in words what the object read didn't reach, naming the tool
+// to call again when the read may settle.
+func objectGaps(coverage *resourceapi.SearchCoverage, tool string) string {
+	if coverage == nil || len(coverage.Gaps) == 0 {
 		return ""
 	}
 	var codes []string
-	for _, gap := range i.ObjectCoverage.Gaps {
+	for _, gap := range coverage.Gaps {
 		codes = append(codes, string(gap.Code))
 	}
 	slices.Sort(codes)
 	gaps := fmt.Sprintf(" Some objects weren't read (%s), so more may be missing.", strings.Join(slices.Compact(codes), ", "))
-	if coverageMaySettle(i.ObjectCoverage.Gaps) {
-		gaps += " Call list_helm_releases again shortly."
+	if coverageMaySettle(coverage.Gaps) {
+		gaps += " Call " + tool + " again shortly."
 	}
 	return gaps
 }

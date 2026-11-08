@@ -309,7 +309,7 @@ func TestAddObservedHealthDoesNotClaimHealthyOverAGap(t *testing.T) {
 
 func TestInventorySummarySaysWhatIsUnknown(t *testing.T) {
 	summary := (&ReleaseInventory{Releases: []HelmRelease{{Name: "a"}}, Observed: []ObservedRelease{{Name: "b"}}, StorageDenied: resourceapi.Names([]string{"team-b"}, resourceapi.MCPSetLimit)}).Summary()
-	for _, want := range []string{"Partial:", "1 releases read from Helm and 1 observed", "in team-b", "status, revision", "Absence proves nothing", "get_helm_release is denied", "not proof that a release exists", "exposes every Secret"} {
+	for _, want := range []string{"Partial:", "1 releases read from Helm and 1 observed", "in team-b", "status, revision", "Absence proves nothing", "get_helm_release returns one of them", "not proof that a release exists", "exposes every Secret"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary lacks %q: %s", want, summary)
 		}
