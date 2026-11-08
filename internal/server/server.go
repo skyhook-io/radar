@@ -822,6 +822,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
 			helmHandlers.ConfigWriteAllowed = s.requireHelmSourceConfigWrite
 			helmHandlers.ObjectScope = s.helmObjectScope
+			helmHandlers.ResolveStorageNamespaces = s.resolveHelmNamespacesChecked
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -1688,6 +1689,13 @@ func (s *Server) parseNamespacesForUserWithStatus(r *http.Request) ([]string, bo
 //   - (namespaces, true) list each and merge
 //   - (nil, false)       no namespace access — caller returns an empty result
 func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
+	namespaces, ok, _ := s.resolveHelmNamespacesChecked(r)
+	return namespaces, ok
+}
+
+// resolveHelmNamespacesChecked is resolveHelmNamespaces that also says whether
+// every Secrets check behind the answer was answered.
+func (s *Server) resolveHelmNamespacesChecked(r *http.Request) ([]string, bool, bool) {
 	// An explicit ?namespace=/?namespaces= request is honored as-is. Helm reads
 	// run as the caller (user impersonation, or the SA when auth is off), so the
 	// apiserver authorizes the secrets read directly — routing this through
@@ -1702,15 +1710,15 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 		// instead of reading releases the cache doesn't cover.
 		if k8s.ForceNamespaceScope {
 			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
-				return []string{target}, true
+				return []string{target}, true, true
 			}
-			return []string{}, true
+			return []string{}, true, true
 		}
-		return explicit, true
+		return explicit, true, true
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	return s.resolveHelmNamespacesForScope(r, namespaces)
+	return upgrade.ResolveHelmNamespacesChecked(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, namespaces)
 }
 
 // resolveHelmNamespacesForScope applies Helm's Secret-specific RBAC and

@@ -74,10 +74,11 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
     const term = searchTerm.trim().toLowerCase()
     const filtered = term
       ? rows.filter(
-          ({ release: r }) =>
-            r.name.toLowerCase().includes(term) ||
-            r.namespace.toLowerCase().includes(term) ||
-            r.chart?.toLowerCase().includes(term)
+          (row) =>
+            row.release.name.toLowerCase().includes(term) ||
+            row.release.namespace.toLowerCase().includes(term) ||
+            row.release.chart?.toLowerCase().includes(term) ||
+            (row.observed && row.release.otherCharts?.some((label) => label.toLowerCase().includes(term)))
         )
       : rows
 
@@ -577,6 +578,9 @@ const UNREAD_FROM_HELM = 'Helm records this in its release Secret, which Radar c
 
 function observedChartLabel(release: ObservedHelmRelease): { text: string; tooltip: string; known: boolean } {
   if (release.chart) {
+    if (release.chartVersions?.length) {
+      return { text: `${release.chart}, mixed versions`, tooltip: `Its objects carry different versions of ${release.chart}: ${release.chartVersions.join(', ')}.`, known: true }
+    }
     const text = release.chartVersion ? `${release.chart}-${release.chartVersion}` : release.chart
     return { text, tooltip: release.chartVersion ? text : `${text}. Its version couldn’t be read from its objects.`, known: true }
   }
@@ -625,8 +629,12 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
       <td className="px-4 py-3 w-24 hidden xl:table-cell">
         {release.appVersion ? (
           <span className="text-sm text-theme-text-secondary">{release.appVersion}</span>
+        ) : release.appVersions?.length ? (
+          <Tooltip content={`Its objects carry different app versions: ${release.appVersions.join(', ')}.`}>
+            <span className="text-sm text-theme-text-secondary cursor-help">Mixed</span>
+          </Tooltip>
         ) : (
-          <Tooltip content="No single app version could be read from its objects.">
+          <Tooltip content="No app version could be read from its objects.">
             <span className="text-sm text-theme-text-disabled cursor-help">—</span>
           </Tooltip>
         )}

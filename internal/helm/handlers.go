@@ -107,6 +107,11 @@ type Handlers struct {
 	// don't touch Helm's storage. Nil, or a nil result, means the cache isn't
 	// available. Injected for the same reason as resolveNamespaces.
 	ObjectScope func(r *http.Request) *ObjectScope
+	// ResolveStorageNamespaces is resolveNamespaces that also reports whether
+	// every Secrets check behind it was answered. The inventory treats a
+	// namespace missing from the result as denied, so it needs to know. Nil
+	// falls back to resolveNamespaces with every check answered.
+	ResolveStorageNamespaces func(r *http.Request) (namespaces []string, ok bool, checked bool)
 }
 
 // ReleaseReadDeniedCode tags a 403 that is Kubernetes refusing the caller's own
@@ -127,6 +132,14 @@ func (h *Handlers) listNamespaces(r *http.Request) ([]string, bool) {
 		return nil, true
 	}
 	return h.resolveNamespaces(r)
+}
+
+func (h *Handlers) storageNamespaces(r *http.Request) ([]string, bool, bool) {
+	if h.ResolveStorageNamespaces != nil {
+		return h.ResolveStorageNamespaces(r)
+	}
+	namespaces, ok := h.listNamespaces(r)
+	return namespaces, ok, true
 }
 
 // RegisterRoutes registers Helm routes on the given router
@@ -286,11 +299,11 @@ func (h *Handlers) handleInventory(w http.ResponseWriter, r *http.Request) {
 	// the resolver can't get a different one and pass off a failed check as no
 	// access.
 	scope := h.objectScope(r)
-	namespaces, ok := h.listNamespaces(r)
+	namespaces, ok, checked := h.storageNamespaces(r)
 	if !ok {
 		namespaces = []string{}
 	}
-	inventory, err := client.ReadInventory(r.Context(), InventoryRequest{StorageNamespaces: namespaces, User: userCreds(r), Scope: scope})
+	inventory, err := client.ReadInventory(r.Context(), InventoryRequest{StorageNamespaces: namespaces, StorageCheckFailed: !checked, User: userCreds(r), Scope: scope})
 	if err != nil {
 		writeInventoryError(w, r, err)
 		return

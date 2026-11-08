@@ -33,8 +33,9 @@ const (
 	fluxHelmReleaseKind  = "HelmRelease"
 	fluxHelmReleaseGroup = "helm.toolkit.fluxcd.io"
 
-	// A chart that follows `helm create` truncates this label to 63
-	// characters, so a label of that length may have lost part of its version.
+	// A chart that follows `helm create` truncates this label to 63 characters
+	// and then trims a trailing "-", so a label of 62 or 63 characters may have
+	// lost part of its version.
 	maxChartLabelLength = 63
 )
 
@@ -61,6 +62,11 @@ type ObservedRelease struct {
 	// objects, as written. When Chart is empty they are the candidates Radar
 	// wouldn't choose between; otherwise they are normally subcharts.
 	OtherCharts []string `json:"otherCharts,omitempty"`
+	// ChartVersions and AppVersions list the values found when the chosen
+	// chart's objects disagree, as after an interrupted upgrade. ChartVersion
+	// or AppVersion is then empty: Radar doesn't pick one.
+	ChartVersions []string `json:"chartVersions,omitempty"`
+	AppVersions   []string `json:"appVersions,omitempty"`
 	// ResourceCount is how many of the caller's readable objects carry the
 	// release's stamps, which can be fewer than the release has.
 	ResourceCount int `json:"resourceCount"`
@@ -288,7 +294,9 @@ func groupStamped(stamped []stampedObject) map[releaseKey][]stampedObject {
 // about its chart, because Flux recorded it from the release itself.
 func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) ObservedRelease {
 	row := ObservedRelease{Name: key.name, Namespace: key.namespace, ResourceCount: len(objects)}
-	row.Chart, row.ChartVersion, row.AppVersion, row.OtherCharts = chooseChart(key.name, objects)
+	choice := chooseChart(key.name, objects)
+	row.Chart, row.ChartVersion, row.AppVersion, row.OtherCharts = choice.chart, choice.version, choice.appVersion, choice.others
+	row.ChartVersions, row.AppVersions = choice.versions, choice.appVersions
 	for _, f := range flux {
 		if f.releaseNamespace != key.namespace || f.releaseName != key.name {
 			continue
@@ -299,6 +307,7 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) O
 		}
 		if f.historyChart != "" {
 			row.Chart, row.ChartVersion, row.AppVersion = f.historyChart, f.historyVersion, f.historyAppVersion
+			row.ChartVersions, row.AppVersions = nil, nil
 			row.OtherCharts = slices.DeleteFunc(allChartLabels(objects), func(label string) bool {
 				name, _ := parseChartLabel(label)
 				return name == f.historyChart
@@ -309,13 +318,27 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) O
 	return row
 }
 
+// chartChoice is what a release's object labels say about its chart.
+type chartChoice struct {
+	chart, version, appVersion string
+	// versions and appVersions are set only when the chosen chart's objects
+	// disagree; version or appVersion is then empty.
+	versions, appVersions []string
+	others                []string
+}
+
 // chooseChart names the release's chart from its objects' labels. Subcharts
 // label their own objects, and they often outnumber the parent's (21 clickhouse
 // objects to 8 signoz in one real release), so a count can't identify the
 // parent. With several chart names, only one named exactly like the release is
 // chosen; otherwise none is, and all are returned for the reader to see. A name
 // match is a convention, not proof: a release can be named after a subchart.
-func chooseChart(release string, objects []stampedObject) (chart, version, appVersion string, others []string) {
+//
+// A version is reported only when every object of the chosen chart that has
+// one agrees. Objects that disagree are what an interrupted upgrade leaves, and
+// a majority would hide the minority exactly when it matters; voting on chart
+// and app version separately could also pair two values no object carries.
+func chooseChart(release string, objects []stampedObject) chartChoice {
 	names := map[string]bool{}
 	for _, o := range objects {
 		if o.chartLabel != "" {
@@ -323,36 +346,40 @@ func chooseChart(release string, objects []stampedObject) (chart, version, appVe
 			names[name] = true
 		}
 	}
+	var choice chartChoice
 	switch {
 	case len(names) == 1:
 		for name := range names {
-			chart = name
+			choice.chart = name
 		}
 	case names[release]:
-		chart = release
+		choice.chart = release
 	default:
-		return "", "", "", allChartLabels(objects)
+		choice.others = allChartLabels(objects)
+		return choice
 	}
-	versions := map[string]int{}
-	appVersions := map[string]int{}
+	var versions, appVersions []string
 	for _, o := range objects {
 		if o.chartLabel == "" {
 			continue
 		}
 		name, v := parseChartLabel(o.chartLabel)
-		if name != chart {
-			others = append(others, o.chartLabel)
+		if name != choice.chart {
+			choice.others = append(choice.others, o.chartLabel)
 			continue
 		}
 		if v != "" {
-			versions[v]++
+			versions = append(versions, v)
 		}
 		if o.appVersion != "" {
-			appVersions[o.appVersion]++
+			appVersions = append(appVersions, o.appVersion)
 		}
 	}
-	slices.Sort(others)
-	return chart, mostCommon(versions), mostCommon(appVersions), slices.Compact(others)
+	slices.Sort(choice.others)
+	choice.others = slices.Compact(choice.others)
+	choice.version, choice.versions = agreed(versions)
+	choice.appVersion, choice.appVersions = agreed(appVersions)
+	return choice
 }
 
 func allChartLabels(objects []stampedObject) []string {
@@ -368,31 +395,28 @@ func allChartLabels(objects []stampedObject) []string {
 
 // parseChartLabel splits a helm.sh/chart label. Charts replace a version's "+"
 // with "_", which semver doesn't allow, because labels can't hold "+". A label
-// at the length limit may be cut off, so its version isn't trusted.
+// at or one short of the length limit may be cut off, so its version isn't
+// trusted.
 func parseChartLabel(label string) (name, version string) {
 	name, version = packages.SplitChart(label)
-	if len(label) >= maxChartLabelLength {
+	if len(label) >= maxChartLabelLength-1 {
 		return name, ""
 	}
 	return name, strings.ReplaceAll(version, "_", "+")
 }
 
-// mostCommon returns the value seen most, or "" on a tie: a tie is two
-// answers, and picking one would be a guess.
-func mostCommon(counts map[string]int) string {
-	best, bestCount, tied := "", 0, false
-	for value, count := range counts {
-		switch {
-		case count > bestCount:
-			best, bestCount, tied = value, count, false
-		case count == bestCount:
-			tied = true
-		}
+// agreed returns the one value seen, or, when values differ, no value and
+// every distinct one, sorted.
+func agreed(values []string) (string, []string) {
+	slices.Sort(values)
+	values = slices.Compact(values)
+	switch len(values) {
+	case 0:
+		return "", nil
+	case 1:
+		return values[0], nil
 	}
-	if tied {
-		return ""
-	}
-	return best
+	return "", values
 }
 
 // addObservedHealth summarises health from the objects the caller read. Only a

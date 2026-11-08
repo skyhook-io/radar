@@ -47,7 +47,12 @@ type InventoryRequest struct {
 	// nowhere. It can be narrower than what the caller can see, since it's
 	// narrowed to where they may list Secrets.
 	StorageNamespaces []string
-	User              *pkgauth.User
+	// StorageCheckFailed means a Secrets permission check behind
+	// StorageNamespaces went unanswered, so a namespace missing from it may not
+	// be denied. The read then fails as retryable rather than reporting a
+	// denial.
+	StorageCheckFailed bool
+	User               *pkgauth.User
 	// Scope is the caller's view of cached objects. Nil means the cache isn't
 	// available.
 	Scope *ObjectScope
@@ -65,6 +70,9 @@ func (c *Client) ReadInventory(ctx context.Context, req InventoryRequest) (*Rele
 	}
 	var read, denied []string
 	if req.StorageNamespaces != nil && len(req.StorageNamespaces) == 0 && req.Scope != nil && req.Scope.Access.NamespaceCheckFailed {
+		return nil, ErrAccessCheckFailed
+	}
+	if req.StorageCheckFailed {
 		return nil, ErrAccessCheckFailed
 	}
 	if req.StorageNamespaces == nil || len(req.StorageNamespaces) > 0 {

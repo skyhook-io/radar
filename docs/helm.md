@@ -24,8 +24,8 @@ Helm stamps what it deploys with the `meta.helm.sh/release-name` and `meta.helm.
 | Field | Without Secret access |
 |---|---|
 | Name, namespace | From the annotations |
-| Chart, chart version | From `helm.sh/chart`. Unknown if no object has the label, and the version is unknown if the label is at Kubernetes' 63-character limit, since it may be cut off |
-| App version | The most common `app.kubernetes.io/version` among objects of the chosen chart. Unknown if none has it, or on a tie |
+| Chart, chart version | From `helm.sh/chart`. Unknown if no object has the label. The version is unknown if the label is at or one short of Kubernetes' 63-character limit, since the `helm create` helper truncates to 63 and then trims a trailing `-`. When the chosen chart's objects carry different versions, as after an interrupted upgrade, the version is unknown and `chartVersions` lists them |
+| App version | The `app.kubernetes.io/version` on objects of the chosen chart. Unknown if none has it. When they disagree it is unknown and `appVersions` lists the values: a majority would hide the object still on another version, and voting on the two labels separately could pair values no object carries |
 | Resources, object health | Live objects the caller can read, which can be fewer than the release has. Secrets are never read, and only kinds Radar is already watching are included. With gaps in the read, health is `unknown` rather than `healthy`, and `healthSummary` still counts what was read. The list shows healthy objects in a neutral label, since they say nothing about Helm's status |
 | Flux ownership, history | From a Flux `HelmRelease` the caller can read: its `status.history` supplies the chart, the versions and the history shown in the drawer. Flux's recorded status is shown as Flux's, in the drawer, and never as the release's status |
 | Status, revision, last updated | Unknown. Observed rows have no such fields, so nothing can default to "deployed" |

@@ -15,6 +15,9 @@ type fakeUpgradeAuthorizer struct {
 	nodeProxyDecision *EvidenceAuthorizationDecision
 	filterCalls       []string
 	filtered          []string
+	// filterUnchecked makes the per-namespace filter report a check it
+	// couldn't answer.
+	filterUnchecked bool
 }
 
 func (f *fakeUpgradeAuthorizer) Namespaces() []string { return f.namespaces }
@@ -31,9 +34,9 @@ func (f *fakeUpgradeAuthorizer) CanGetSubresource(group, resource, subresource s
 	}
 	return EvidenceAuthorizationDecision{Authoritative: true}
 }
-func (f *fakeUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) []string {
+func (f *fakeUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) ([]string, bool) {
 	f.filterCalls = append(f.filterCalls, group+"/"+resource)
-	return f.filtered
+	return f.filtered, !f.filterUnchecked
 }
 
 func TestResolveHelmNamespacesForAuthorizerDecisions(t *testing.T) {
@@ -66,6 +69,20 @@ func TestResolveHelmNamespacesForAuthorizerDecisions(t *testing.T) {
 		}
 		if !slices.Contains(authz.filterCalls, "/secrets") {
 			t.Fatalf("filter calls = %v, want a per-namespace secrets filter", authz.filterCalls)
+		}
+	})
+
+	t.Run("an unanswered secrets check is reported, not passed off as a denial", func(t *testing.T) {
+		ctxUser := auth.ContextWithUser(ctx, &auth.User{Username: "alice"})
+		for _, filtered := range [][]string{{"team-a"}, nil} {
+			authz := &fakeUpgradeAuthorizer{canList: map[string]bool{"/secrets/": false}, filtered: filtered, filterUnchecked: true}
+			if _, ok, checked := ResolveHelmNamespacesChecked(ctxUser, authz, nil); !ok || checked {
+				t.Fatalf("filtered %v: ok=%v checked=%v, want ok and unchecked", filtered, ok, checked)
+			}
+		}
+		authz := &fakeUpgradeAuthorizer{canList: map[string]bool{"/secrets/": false}, filtered: []string{"team-a"}}
+		if _, _, checked := ResolveHelmNamespacesChecked(ctxUser, authz, nil); !checked {
+			t.Fatal("every check answered, want checked")
 		}
 	})
 

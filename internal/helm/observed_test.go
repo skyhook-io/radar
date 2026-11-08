@@ -60,6 +60,9 @@ func TestChooseChart(t *testing.T) {
 		wantVersion string
 		wantApp     string
 		wantOthers  []string
+		// Set only when the chosen chart's objects disagree.
+		wantVersions    []string
+		wantAppVersions []string
 	}{
 		{
 			name:        "one chart",
@@ -117,32 +120,53 @@ func TestChooseChart(t *testing.T) {
 			wantOthers:  []string{"grafana-6.48.0"},
 		},
 		{
-			name:    "a stray object doesn't outvote the rest",
+			// A majority would hide the one object still on another version.
+			name:    "a minority version is reported, not outvoted",
 			release: "metrics",
 			objects: []stampedObject{
 				{chartLabel: "metrics-server-3.13.0", appVersion: "0.8.0"},
 				{chartLabel: "metrics-server-3.13.0", appVersion: "0.8.0"},
 				{chartLabel: "metrics-server-3.13.0", appVersion: "0.7.2"},
 			},
-			wantChart:   "metrics-server",
-			wantVersion: "3.13.0",
-			wantApp:     "0.8.0",
+			wantChart:       "metrics-server",
+			wantVersion:     "3.13.0",
+			wantAppVersions: []string{"0.7.2", "0.8.0"},
 		},
 		{
-			name:      "tied versions stay unknown",
-			release:   "mid-upgrade",
-			objects:   []stampedObject{{chartLabel: "app-1.0.0", appVersion: "1"}, {chartLabel: "app-1.1.0", appVersion: "2"}},
-			wantChart: "app",
+			name:            "versions that disagree stay unknown",
+			release:         "mid-upgrade",
+			objects:         []stampedObject{{chartLabel: "app-1.0.0", appVersion: "1"}, {chartLabel: "app-1.1.0", appVersion: "2"}},
+			wantChart:       "app",
+			wantVersions:    []string{"1.0.0", "1.1.0"},
+			wantAppVersions: []string{"1", "2"},
+		},
+		{
+			// Voting on each label separately would show 2.0.0 with app 1.0, a
+			// pair no object carries.
+			name:    "chart and app version aren't paired from different objects",
+			release: "api",
+			objects: []stampedObject{
+				{chartLabel: "api-2.0.0"}, {chartLabel: "api-2.0.0"}, {chartLabel: "api-2.0.0"},
+				{chartLabel: "api-1.0.0", appVersion: "1.0"},
+			},
+			wantChart:    "api",
+			wantApp:      "1.0",
+			wantVersions: []string{"1.0.0", "2.0.0"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			chart, version, app, others := chooseChart(tc.release, tc.objects)
-			if chart != tc.wantChart || version != tc.wantVersion || app != tc.wantApp {
-				t.Errorf("chart %q version %q app %q, want %q %q %q", chart, version, app, tc.wantChart, tc.wantVersion, tc.wantApp)
+			got := chooseChart(tc.release, tc.objects)
+			if got.chart != tc.wantChart || got.version != tc.wantVersion || got.appVersion != tc.wantApp {
+				t.Errorf("chart %q version %q app %q, want %q %q %q", got.chart, got.version, got.appVersion, tc.wantChart, tc.wantVersion, tc.wantApp)
 			}
-			if len(others) != len(tc.wantOthers) || (len(others) > 0 && !reflect.DeepEqual(others, tc.wantOthers)) {
-				t.Errorf("others = %v, want %v", others, tc.wantOthers)
+			sameList := func(name string, got, want []string) {
+				if len(got) != len(want) || (len(got) > 0 && !reflect.DeepEqual(got, want)) {
+					t.Errorf("%s = %v, want %v", name, got, want)
+				}
 			}
+			sameList("others", got.others, tc.wantOthers)
+			sameList("versions", got.versions, tc.wantVersions)
+			sameList("app versions", got.appVersions, tc.wantAppVersions)
 		})
 	}
 }
@@ -152,8 +176,15 @@ func TestParseChartLabel(t *testing.T) {
 	if len(cut) != maxChartLabelLength {
 		t.Fatalf("fixture is %d characters", len(cut))
 	}
+	// The `helm create` helper truncates to 63 and then trims a trailing "-",
+	// which turns name-1.2.3-rc.1 into a 62-character label ending in 1.2.3.
+	trimmed := strings.TrimSuffix((strings.Repeat("a", 56) + "-1.2.3-rc.1")[:maxChartLabelLength], "-")
+	if len(trimmed) != maxChartLabelLength-1 {
+		t.Fatalf("trimmed fixture is %d characters", len(trimmed))
+	}
 	for _, tc := range []struct{ label, name, version string }{
 		{"kube-prometheus-stack-45.27.2", "kube-prometheus-stack", "45.27.2"},
+		{trimmed, strings.Repeat("a", 56), ""},
 		{"app-1.2.3_build.4", "app", "1.2.3+build.4"},
 		{"app-1.2.3-1", "app", "1.2.3-1"},
 		{cut, "a-very-long-chart-name-that-runs-right-up-to-the-limit", ""},

@@ -150,8 +150,8 @@ function OverviewTab({ release }: { release: ObservedHelmReleaseDetail }) {
       <div className="bg-theme-elevated/30 rounded-lg p-4">
         <FactGrid>
           <FactRow label="Chart"><FactValue fact={fact(release.chart, 'helm.sh/chart', chartWhenMissing)} /></FactRow>
-          <FactRow label="Chart version"><FactValue fact={fact(release.chartVersion, 'helm.sh/chart', 'No single version could be read from its objects.')} /></FactRow>
-          <FactRow label="App version"><FactValue fact={fact(release.appVersion, 'app.kubernetes.io/version', 'No single app version could be read from its objects.')} /></FactRow>
+          <FactRow label="Chart version"><FactValue fact={fact(release.chartVersion, 'helm.sh/chart', release.chartVersions?.length ? `Its objects carry different versions: ${release.chartVersions.join(', ')}.` : 'No version could be read from its objects.')} /></FactRow>
+          <FactRow label="App version"><FactValue fact={fact(release.appVersion, 'app.kubernetes.io/version', release.appVersions?.length ? `Its objects carry different app versions: ${release.appVersions.join(', ')}.` : 'No app version could be read from its objects.')} /></FactRow>
           {release.otherCharts && release.otherCharts.length > 0 && (
             <FactRow label={release.chart ? 'Other charts' : 'Charts found'}>
               <span className="text-theme-text-secondary">{release.otherCharts.join(', ')}</span>

@@ -6127,7 +6127,7 @@ function helmNamespaceParams(namespaces: string[] = []) {
 // repeating a full object read every few seconds.
 const HELM_INVENTORY_FAST_POLLS = 24;
 
-export function helmInventoryRefetchInterval(inventory: HelmInventory | undefined, updates: number): number | false {
+export function helmInventoryRefetchInterval(inventory: Pick<HelmInventory, "objectCoverage"> | undefined, updates: number): number | false {
   const settling = inventory?.objectCoverage?.gaps.some((gap) => gap.action === "retry" || gap.action === "wait");
   if (!settling) return false;
   return updates < HELM_INVENTORY_FAST_POLLS ? 5000 : 60000;
@@ -6158,6 +6158,14 @@ export function isHelmReleaseReadDenied(error: unknown): boolean {
   return isForbiddenError(error) && (error as ApiError).data?.error_code === "release_read_denied";
 }
 
+// Each observed read walks every object the caller can see, so an open drawer
+// follows the list's schedule while objects settle and otherwise refreshes
+// once a minute. A retryable error retries sooner.
+export function observedHelmReleaseRefetchInterval(detail: ObservedHelmReleaseDetail | undefined, updates: number, error: unknown): number | false {
+  if (error) return isStableClientError(error) ? false : 15000
+  return helmInventoryRefetchInterval(detail, updates) || 60000
+}
+
 // One release built from the stamps on its objects, for a caller who can't read
 // Helm's storage.
 export function useObservedHelmRelease(namespace: string, name: string) {
@@ -6165,7 +6173,7 @@ export function useObservedHelmRelease(namespace: string, name: string) {
     queryKey: ["helm-observed-release", namespace, name],
     queryFn: () => fetchJSON(`/helm/inventory/${namespace}/${name}`),
     staleTime: 5000,
-    refetchInterval: (query) => (isStableClientError(query.state.error) ? false : 15000),
+    refetchInterval: (query) => observedHelmReleaseRefetchInterval(query.state.data, query.state.dataUpdateCount, query.state.error),
   });
 }
 

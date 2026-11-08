@@ -86,6 +86,31 @@ describe('Helm list without Secret access', () => {
     expect(row(container, 'plain').match(/Unknown/g)).toHaveLength(2)
   })
 
+  it('says versions are mixed rather than picking one', () => {
+    const text = row(renderView({ data: denied([
+      { name: 'api', namespace: 'team-b', chart: 'api', chartVersions: ['1.0.0', '2.0.0'], appVersions: ['1', '2'], resourceCount: 4 },
+    ]) }), 'api')
+    expect(text).toContain('api, mixed versions')
+    expect(text).toContain('Mixed')
+    expect(text).not.toContain('api-2.0.0')
+  })
+
+  it('finds a release with several charts by any of their names', () => {
+    const container = renderView({ data: denied([
+      { name: 'umbrella', namespace: 'team-b', otherCharts: ['parent-2.0.0', 'sub-0.5.0'], resourceCount: 4 },
+      observed,
+    ]) })
+    const search = container.querySelector<HTMLInputElement>('input[placeholder="Search releases..."]')!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    act(() => {
+      setValue.call(search, 'parent')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const names = [...container.querySelectorAll('tbody tr')].map((tr) => tr.textContent ?? '')
+    expect(names.some((text) => text.startsWith('umbrella'))).toBe(true)
+    expect(names.some((text) => text.startsWith('api'))).toBe(false)
+  })
+
   it('does not let an empty list read as no releases', () => {
     const text = renderView({ data: denied([]) }).textContent
     expect(text).toContain('No releases found on the objects you can read')

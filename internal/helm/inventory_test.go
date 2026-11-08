@@ -155,6 +155,18 @@ func TestReadInventoryDoesNotCallAnUnansweredReadADenial(t *testing.T) {
 	if !errors.Is(err, ErrAccessCheckFailed) {
 		t.Fatalf("err = %v, want a retryable failure, not a denial", err)
 	}
+
+	// The caller's workload namespaces were checked, but a Secrets check behind
+	// the storage scope wasn't, so a namespace left out of it isn't a denial.
+	_, err = (&Client{}).ReadInventory(context.Background(), InventoryRequest{
+		StorageNamespaces:  []string{"team-a"},
+		StorageCheckFailed: true,
+		User:               &pkgauth.User{Username: "dev"},
+		Scope:              &ObjectScope{},
+	})
+	if !errors.Is(err, ErrAccessCheckFailed) {
+		t.Fatalf("unanswered Secrets check: err = %v, want a retryable failure", err)
+	}
 }
 
 func TestReadInventoryOutsideThePinIsEmptyNotDenied(t *testing.T) {

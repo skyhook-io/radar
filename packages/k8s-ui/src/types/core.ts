@@ -1237,6 +1237,10 @@ export interface ObservedHelmRelease {
   // Other helm.sh/chart labels on its objects. With no chart, these are the
   // candidates Radar wouldn't choose between.
   otherCharts?: string[]
+  // The versions found when the chart's objects disagree, as after an
+  // interrupted upgrade. chartVersion or appVersion is then absent.
+  chartVersions?: string[]
+  appVersions?: string[]
   // Objects the caller can read, which can be fewer than the release has.
   resourceCount: number
   // 'unknown' when the object read had gaps, even beside a summary of what was read.

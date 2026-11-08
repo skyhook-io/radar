@@ -56,10 +56,12 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 	// The scope comes first, as in the REST handler: its namespace check caches
 	// the answer the resolver then reads.
 	scope := mcpHelmObjectScope(ctx, input.Namespace)
+	storage, checked := resolveHelmListNamespacesChecked(ctx, input.Namespace)
 	inventory, err := helmClient.ReadInventory(ctx, helm.InventoryRequest{
-		StorageNamespaces: resolveHelmListNamespaces(ctx, input.Namespace),
-		User:              userFromContext(ctx),
-		Scope:             scope,
+		StorageNamespaces:  storage,
+		StorageCheckFailed: !checked,
+		User:               userFromContext(ctx),
+		Scope:              scope,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list helm releases: %w", err)
@@ -114,23 +116,32 @@ func mcpHelmObjectScope(ctx context.Context, namespace string) *helm.ObjectScope
 }
 
 func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
+	namespaces, _ := resolveHelmListNamespacesChecked(ctx, namespace)
+	return namespaces
+}
+
+// resolveHelmListNamespacesChecked is resolveHelmListNamespaces that also says
+// whether every Secrets check behind the answer was answered. When one wasn't,
+// a namespace can be missing without being denied.
+func resolveHelmListNamespacesChecked(ctx context.Context, namespace string) ([]string, bool) {
 	if namespace != "" {
-		return []string{namespace}
+		return []string{namespace}, true
 	}
 	if pkgauth.UserFromContext(ctx) != nil {
 		allowed := filterNamespacesForUser(ctx, nil)
 		if allowed != nil {
-			return allowed
+			return allowed, true
 		}
-		if canReadInNamespace(ctx, "", "secrets", "", "list") {
-			return nil
+		if clusterWide, _ := canReadInNamespaceDecision(ctx, "", "secrets", "", "list"); clusterWide {
+			return nil, true
 		}
-		if scoped := filterNamespacesByCanRead(ctx, "", "secrets", "list", mcpAllNamespaceNames(ctx)); len(scoped) > 0 {
-			return scoped
+		scoped, complete := filterNamespacesByCanReadDecision(ctx, "", "secrets", "list", mcpAllNamespaceNames(ctx))
+		if len(scoped) > 0 {
+			return scoped, complete
 		}
-		return nil
+		return nil, complete
 	}
-	return helm.ResolveNoAuthListNamespaces(ctx)
+	return helm.ResolveNoAuthListNamespaces(ctx), true
 }
 
 func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input getHelmReleaseInput) (*mcp.CallToolResult, any, error) {

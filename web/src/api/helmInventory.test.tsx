@@ -3,8 +3,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { helmInventoryRefetchInterval, useHelmInventory } from './client'
-import type { HelmInventory } from '../types'
+import { ApiError, helmInventoryRefetchInterval, observedHelmReleaseRefetchInterval, useHelmInventory } from './client'
+import type { HelmInventory, ObservedHelmReleaseDetail } from '../types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -74,7 +74,7 @@ describe('helmInventoryRefetchInterval', () => {
 
   it('leaves a settled list alone', () => {
     expect(helmInventoryRefetchInterval(undefined, 0)).toBe(false)
-    expect(helmInventoryRefetchInterval({ releases: [], observed: [] }, 0)).toBe(false)
+    expect(helmInventoryRefetchInterval({}, 0)).toBe(false)
     expect(helmInventoryRefetchInterval(withGap('grant_access'), 0)).toBe(false)
   })
 
@@ -86,5 +86,23 @@ describe('helmInventoryRefetchInterval', () => {
   it('slows down, without stopping, once a gap outlasts the quick retries', () => {
     expect(helmInventoryRefetchInterval(withGap('retry'), 24)).toBe(60000)
     expect(helmInventoryRefetchInterval(withGap('wait'), 500)).toBe(60000)
+  })
+})
+
+describe('observedHelmReleaseRefetchInterval', () => {
+  const detail = (action?: string) =>
+    ({ name: 'web', namespace: 'apps', resourceCount: 1, objectCoverage: { gaps: action ? [{ code: 'x', action }] : [] } }) as unknown as ObservedHelmReleaseDetail
+
+  it('rereads a settled drawer only once a minute, since each read walks every object', () => {
+    expect(observedHelmReleaseRefetchInterval(detail(), 3, null)).toBe(60000)
+  })
+
+  it('follows the list while objects settle', () => {
+    expect(observedHelmReleaseRefetchInterval(detail('retry'), 0, null)).toBe(5000)
+  })
+
+  it('retries a retryable error and stops on a stable one', () => {
+    expect(observedHelmReleaseRefetchInterval(undefined, 0, new ApiError('busy', 503))).toBe(15000)
+    expect(observedHelmReleaseRefetchInterval(undefined, 0, new ApiError('gone', 404))).toBe(false)
   })
 })
