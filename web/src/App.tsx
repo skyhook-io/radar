@@ -46,7 +46,7 @@ import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
-import { ConnectionErrorView } from './components/ConnectionErrorView'
+import { DisconnectedView, FailedSwitchView } from './components/SwitchAwareConnectionError'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
@@ -57,6 +57,8 @@ import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
 import { useUsageData, useUsageRecording } from './api/usage-data'
 import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
+import { ProductHuntNotice } from './components/product-hunt/ProductHuntNotice'
+import { useProductHuntRailEntry } from './components/product-hunt/useProductHuntRailEntry'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
@@ -87,7 +89,7 @@ import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 const ALL_NODE_KINDS: NodeKind[] = [
   'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute', 'UDPRoute',
   'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
-  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'PersistentVolumeClaim', 'Namespace',
+  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'JobSet', 'PersistentVolumeClaim', 'Namespace',
   'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
   'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
   'Broker', 'Trigger', 'PingSource', 'ApiServerSource', 'ContainerSource', 'SinkBinding', 'Channel',
@@ -135,7 +137,7 @@ type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'w
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
 // the PR that gives it a phone layout.
-const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology'])
+const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology', 'capacity'])
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -553,6 +555,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }, [location.search, navigate, takeover, goHost, viewMemory, kindFilterStore])
 
   const whatsNewStatus = useWhatsNewStatus()
+  const productHuntRailEntry = useProductHuntRailEntry()
 
   const navigateToPath = useCallback((path: string) => {
     navigate(withCrossViewParams(path, location.search))
@@ -1039,7 +1042,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
   const { connection, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
@@ -1052,7 +1055,26 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // empty drawer over a not-yet-loaded view. Gating both on the SAME readiness so
   // a drawer only ever sits over a real content surface.
   const contentReady = !isSwitching && !authMePending &&
-    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
+    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && !failedSwitch
+
+  // The last context that was connected, so a screen about a cluster that
+  // won't connect can offer a way back to it.
+  const [lastConnectedContext, setLastConnectedContext] = useState<string | null>(null)
+  useEffect(() => {
+    if (connection.state === 'connected' && connection.context) setLastConnectedContext(connection.context)
+  }, [connection.state, connection.context])
+  // A refused switch is about the cluster that was still connected. Once that
+  // connection changes in any way (dropped, reconnecting, or switched from
+  // another tab), the screen is stale.
+  const failedSwitchFrom = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!failedSwitch) {
+      failedSwitchFrom.current = undefined
+      return
+    }
+    failedSwitchFrom.current ??= connection.context
+    if (connection.state !== 'connected' || connection.context !== failedSwitchFrom.current) setFailedSwitch(null)
+  }, [failedSwitch, connection.state, connection.context, setFailedSwitch])
 
   // Progressive shell during the initial informer sync: once the server
   // publishes per-kind sync progress, render the app instead of the splash.
@@ -1831,6 +1853,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onOpenSettings={() => openSettings()}
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
           whatsNew={whatsNewStatus.available ? { unread: whatsNewStatus.unread, onOpen: openWhatsNew } : undefined}
+          productHunt={productHuntRailEntry}
         />
       )}
       {/* `relative` makes this column the containing block for the absolute
@@ -2005,11 +2028,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Connection error view - show when disconnected */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'disconnected' && (
-        <ConnectionErrorView
+        <DisconnectedView
           connection={connection}
           onRetry={retryConnection}
           isRetrying={isRetrying}
+          lastConnectedContext={lastConnectedContext}
         />
+      )}
+
+      {/* A switch refused before leaving the current cluster: the error screen
+          for the cluster that didn't answer, over the still-connected app. */}
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && failedSwitch && (
+        <FailedSwitchView currentContext={connection.context} />
       )}
 
       {/* Connecting view — shown during initial connection or retry.
@@ -2105,7 +2135,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onNavigateToView={setMainView}
             onNavigateToHelmRelease={navCustomization.embedded ? undefined : navigateToHelmRelease}
             onNavigateToManagerPath={navCustomization.embedded || takeover.gitops ? undefined : navigateToPath}
-            onShowWhatsNew={!navCustomization.embedded && whatsNewStatus.available ? openWhatsNew : undefined}
             // Upgrade impact lives under /checks, which a Cloud host takes
             // over wholesale — its fleet pages have no upgrade sub-route, so
             // the version line stays plain text there.
@@ -2578,6 +2607,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {!navCustomization.embedded && <UpdateNotification />}
       {!navCustomization.embedded && <WhatsNew onNavigate={navigateToPath} usageData={usageData.data} />}
       {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
+      {!navCustomization.embedded && <ProductHuntNotice usageData={usageData.data} usageDataPending={usageData.isPending} />}
 
       {/* Bottom Dock for Terminal/Logs */}
       <BottomDock viewNamespaces={namespaces} />

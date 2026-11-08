@@ -9,10 +9,13 @@ import (
 
 // ContainerInfo contains compact per-container runtime status for the UI.
 type ContainerInfo struct {
-	Name         string `json:"name"`
-	Init         bool   `json:"init,omitempty"`
-	Ready        bool   `json:"ready"`
-	RestartCount int32  `json:"restartCount"`
+	Name string `json:"name"`
+	Init bool   `json:"init,omitempty"`
+	// A native sidecar: an init container with restartPolicy Always, which
+	// keeps running beside the application instead of finishing first.
+	Sidecar      bool  `json:"sidecar,omitempty"`
+	Ready        bool  `json:"ready"`
+	RestartCount int32 `json:"restartCount"`
 }
 
 // PodInfo contains compact runtime status about a pod for workload views.
@@ -69,10 +72,17 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 	for _, c := range pod.Spec.Containers {
 		containers = append(containers, c.Name)
 	}
+	sidecars := map[string]bool{}
+	for _, c := range pod.Spec.InitContainers {
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			sidecars[c.Name] = true
+		}
+	}
 	for _, cs := range pod.Status.InitContainerStatuses {
 		containerStatuses = append(containerStatuses, ContainerInfo{
 			Name:         cs.Name,
 			Init:         true,
+			Sidecar:      sidecars[cs.Name],
 			Ready:        cs.Ready,
 			RestartCount: cs.RestartCount,
 		})
@@ -87,13 +97,13 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 	verdict := health.Pod(pod, now)
 	displayLevel := health.PodDisplayLevel(pod, now)
 	if displayLevel != verdict.Level {
+		// The display floor escalated the pod (unschedulable / stuck-terminating),
+		// so its explanation must describe that cause, not a lower-severity base
+		// reason. A deliberately held pod carries a benign "SchedulingGated" reason;
+		// overwrite it here so an escalated pod isn't mislabelled as merely held.
 		verdict.Level = displayLevel
-		if verdict.Reason == "" {
-			verdict.Reason = health.PodProblemReason(pod, now)
-		}
-		if verdict.Message == "" {
-			verdict.Message = health.PodProblemMessage(pod)
-		}
+		verdict.Reason = health.PodProblemReason(pod, now)
+		verdict.Message = health.PodProblemMessage(pod)
 	}
 	restartCount, lastTerminationReason := health.PodRestartContext(pod)
 	createdAt := ""

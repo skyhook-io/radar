@@ -1,7 +1,7 @@
 import { AlertBanner } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io/k8s-ui'
+import { FetchResult, useDockReservedHeight, compareVersions, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
@@ -167,6 +167,10 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [selectedSourceUpgrade, setSelectedSourceUpgrade] = useState<SourceUpgradeSelection | null>(null)
   const selectedSourceRef = useRef<SourceUpgradeSelection | null>(null)
   const [adjustValues, setAdjustValues] = useState(false)
+  // Phones upgrade with the existing values. An adjustment already open when
+  // a phone rotates to portrait stays visible, since its edits would
+  // otherwise apply unseen.
+  const isPhone = usePhoneLayout()
   const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
   const [upgradeYamlError, setUpgradeYamlError] = useState<string | null>(null)
   const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
@@ -1006,7 +1010,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             )}
           </div>
         )}
-        {upgradeProgress.length === 0 && canHelmWrite && (
+        {upgradeProgress.length === 0 && canHelmWrite && (!isPhone || adjustValues) && (
           <div className="mt-3 border-t border-theme-border pt-3">
             <Tooltip content="Edit the user-supplied Helm values that Radar will pass to this upgrade.">
               <button

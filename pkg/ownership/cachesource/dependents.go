@@ -44,10 +44,27 @@ func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope
 		}
 	}
 	searches := scope.Searches(true) || scope.Searches(false)
+	if searches {
+		s.prepareDependentKinds(scope)
+	}
 	if !s.catalog.Complete() && searches {
 		q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.ReadError})
 	}
-	for _, kind := range s.catalog.DependentKinds() {
+	var stable []ownership.Gap
+	var gapMode uint8
+	namespaced := scope.AllNamespaces || len(q.namespaces) > 0
+	switch {
+	case namespaced && scope.IncludeClusterScoped:
+		stable = s.unwatchedAll
+		gapMode = 3
+	case namespaced:
+		stable = s.unwatchedNamespaced
+		gapMode = 1
+	case scope.IncludeClusterScoped:
+		stable = s.unwatchedCluster
+		gapMode = 2
+	}
+	for _, kind := range s.dependentKinds {
 		if !scope.Searches(kind.Namespaced) {
 			continue
 		}
@@ -71,9 +88,68 @@ func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope
 			r.Gaps = append(r.Gaps, read.Gap)
 		}
 	}
-	slices.SortFunc(r.Gaps, compareGaps)
-	r.Gaps = slices.Compact(r.Gaps)
+	// Reuse representation only after live gaps were read and compared; never
+	// let later searches change a gap slice an earlier answer retained.
+	if len(r.Gaps) == 0 {
+		r.Gaps = stable[:len(stable):len(stable)]
+	} else {
+		slices.SortFunc(r.Gaps, compareGaps)
+		r.Gaps = slices.Compact(r.Gaps)
+		if s.lastGapMode != gapMode || !slices.Equal(s.lastExtraGaps, r.Gaps) {
+			s.lastGapMode = gapMode
+			s.lastExtraGaps = r.Gaps
+			s.lastCombinedGaps = append(slices.Clone(stable), r.Gaps...)
+			slices.SortFunc(s.lastCombinedGaps, compareGaps)
+			s.lastCombinedGaps = slices.Compact(s.lastCombinedGaps)
+		}
+		r.Gaps = s.lastCombinedGaps[:len(s.lastCombinedGaps):len(s.lastCombinedGaps)]
+	}
 	return r
+}
+
+// Unwatched kinds have no UID-specific work. Prepare only searched scopes so
+// a typed-only search does not prematurely capture dynamic watches.
+func (s *session) prepareDependentKinds(scope ownership.SearchScope) {
+	namespaced := scope.Searches(true) && !s.preparedNamespaced
+	cluster := scope.Searches(false) && !s.preparedCluster
+	if !namespaced && !cluster {
+		return
+	}
+	s.preparedNamespaced = s.preparedNamespaced || namespaced
+	s.preparedCluster = s.preparedCluster || cluster
+	for _, kind := range s.catalog.DependentKinds() {
+		if kind.Namespaced && !namespaced || !kind.Namespaced && !cluster {
+			continue
+		}
+		var reason readreason.Code
+		if _, typed := typedKinds[kind.GroupKind]; !typed {
+			if s.caches.Dynamic == nil {
+				reason = readreason.RadarKindNotCollected
+			} else {
+				reason, _ = s.unwatchedReason(kind, s.servingVersions(kind))
+			}
+		}
+		if reason == "" {
+			s.dependentKinds = append(s.dependentKinds, kind)
+			continue
+		}
+		gap := ownership.Gap{Kind: kind.GroupKind, Reason: reason}
+		if kind.Namespaced {
+			s.unwatchedNamespaced = append(s.unwatchedNamespaced, gap)
+		} else {
+			s.unwatchedCluster = append(s.unwatchedCluster, gap)
+		}
+	}
+	if namespaced {
+		slices.SortFunc(s.unwatchedNamespaced, compareGaps)
+	}
+	if cluster {
+		slices.SortFunc(s.unwatchedCluster, compareGaps)
+	}
+	s.unwatchedAll = append(slices.Clone(s.unwatchedNamespaced), s.unwatchedCluster...)
+	slices.SortFunc(s.unwatchedAll, compareGaps)
+	s.lastExtraGaps = nil
+	s.lastCombinedGaps = nil
 }
 
 // gap records that kind in namespace went unread; "" stands for the kind
@@ -222,10 +298,16 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 		slices.Sort(watchedByNamespace)
 		namespaces = slices.Compact(watchedByNamespace)
 	}
-	// Explaining an unread namespace needs the version's collection scope,
-	// which the cache would otherwise rebuild from every informer for each
-	// namespace.
-	obs := s.caches.Dynamic.NewObservationView(versions)
+	// Reuse scope bookkeeping across searches. The view refreshes when
+	// informers change and still reads readiness live.
+	obs := s.observationViews[gk]
+	if obs == nil {
+		obs = s.caches.Dynamic.NewObservationView(versions)
+		if s.observationViews == nil {
+			s.observationViews = map[resourceid.GroupKind]*k8score.DynamicObservationView{}
+		}
+		s.observationViews[gk] = obs
+	}
 	for _, ns := range namespaces {
 		s.readNamespace(q, gk, versions, ns, index, keys, obs, found)
 	}

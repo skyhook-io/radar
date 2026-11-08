@@ -2,23 +2,181 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	authv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
+
+func TestAgentListAndSearchBoundSlowOwnershipAuthorization(t *testing.T) {
+	t.Cleanup(summarycontext.SetTestEnrichmentBudget(time.Second))
+
+	withOwnershipDiscovery(t)
+	objects := []runtime.Object{}
+	for i := range 80 {
+		ns := fmt.Sprintf("ownership-budget-%03d", i)
+		objects = append(objects, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}},
+			&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "budget-pod", UID: types.UID(ns)}, Status: corev1.PodStatus{Phase: corev1.PodFailed}})
+	}
+	useTestResourceCache(t, fake.NewClientset(objects...))
+	var gets atomic.Int32
+	fakeSARServer(t, func(a authv1.ResourceAttributes) bool {
+		if a.Verb == "get" && a.Resource == "pods" {
+			gets.Add(1)
+			time.Sleep(100 * time.Millisecond)
+		}
+		return true
+	})
+	for _, path := range []string{"/api/ai/resources/pods", "/api/search?q=budget-pod&limit=100&globalNs=1"} {
+		env := newAuthTestServer(t)
+		env.srv.permCache.Set("budget-reader", nil, &auth.UserPermissions{})
+		gets.Store(0)
+		start := time.Now()
+		resp := env.authGet(t, path, "budget-reader", "")
+		var body json.RawMessage
+		err := json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("%s: status=%d error=%v", path, resp.StatusCode, err)
+		}
+		if time.Since(start) > 6*time.Second || gets.Load() >= 60 {
+			t.Fatalf("unbounded ownership work: elapsed=%s gets=%d", time.Since(start), gets.Load())
+		}
+		var rows []struct {
+			Summary *resourcecontext.ResourceSummaryContext `json:"summaryContext"`
+		}
+		if path == "/api/ai/resources/pods" {
+			err = json.Unmarshal(body, &rows)
+		} else {
+			var result struct {
+				Hits json.RawMessage `json:"hits"`
+			}
+			err = json.Unmarshal(body, &result)
+			if err == nil {
+				err = json.Unmarshal(result.Hits, &rows)
+			}
+		}
+		if err != nil || len(rows) != 80 {
+			t.Fatalf("%s: rows=%d err=%v body=%s", path, len(rows), err, body)
+		}
+		budgetNotes := 0
+		for _, row := range rows {
+			if row.Summary == nil || row.Summary.Health == "" {
+				t.Fatalf("lost cheap health: %+v", row)
+			}
+			for _, o := range row.Summary.Omitted {
+				if o.Field == "managedBy" && o.Reason == resourcecontext.OmittedBudgetExceeded {
+					budgetNotes++
+				}
+			}
+		}
+		if budgetNotes == 0 {
+			t.Fatal("no row reports the expired ownership budget")
+		}
+	}
+}
+
+func TestAgentOwnershipSummaryAndDetailStopAtDeniedAncestor(t *testing.T) {
+	withOwnershipDiscovery(t)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+	perms.SetCanI("get", "", "pods", "default", true)
+	perms.SetCanI("get", "apps", "replicasets", "default", true)
+	perms.SetCanI("get", "apps", "deployments", "default", false)
+	env.srv.permCache.Set("limited-agent", nil, perms)
+	resp := env.authGet(t, "/api/ai/resources/pods?namespace=default", "limited-agent", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list status %d", resp.StatusCode)
+	}
+	var rows []struct {
+		Name    string                                  `json:"name"`
+		Summary *resourcecontext.ResourceSummaryContext `json:"summaryContext"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range rows {
+		if row.Name != "nginx-abc-xyz" {
+			continue
+		}
+		found = true
+		if row.Summary == nil || row.Summary.ManagedBy == nil || row.Summary.ManagedBy.Kind != "ReplicaSet" {
+			t.Fatalf("summary %+v, want readable ReplicaSet", row.Summary)
+		}
+		if len(row.Summary.Omitted) != 1 || row.Summary.Omitted[0].Reason != resourcecontext.OmittedRBACDenied {
+			t.Fatalf("summary coverage %+v", row.Summary.Omitted)
+		}
+	}
+	if !found {
+		t.Fatal("missing Pod row")
+	}
+	resp = env.authGet(t, "/api/ai/resources/pods/default/nginx-abc-xyz", "limited-agent", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get status %d", resp.StatusCode)
+	}
+	var detail struct {
+		Context *resourcecontext.ResourceContext `json:"resourceContext"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Context == nil || len(detail.Context.ManagedBy) != 1 || detail.Context.ManagedBy[0].Kind != "ReplicaSet" {
+		t.Fatalf("detail %+v", detail.Context)
+	}
+}
+
+func TestAgentOwnershipNamespaceGetWithoutList(t *testing.T) {
+	withOwnershipDiscovery(t)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+	perms.SetCanI("get", "", "secrets", "default", true)
+	perms.SetCanI("list", "", "secrets", "default", false)
+	env.srv.permCache.Set("secret-reader", nil, perms)
+	resp := env.authGet(t, "/api/ai/resources/secrets/default/nginx-tls", "secret-reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var body struct {
+		Context *resourcecontext.ResourceContext `json:"resourceContext"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Context == nil {
+		t.Fatal("missing context")
+	}
+	for _, note := range body.Context.Omitted {
+		if note.Field == "managedBy" && note.Reason == resourcecontext.OmittedRBACDenied {
+			t.Fatal("namespace-wide get was refused by a list gate")
+		}
+	}
+}
 
 // withOwnershipDiscovery serves the fixture's kinds as Kubernetes does, with
 // delete, so the garbage collector's kinds are the ones searched for
@@ -303,11 +461,11 @@ func TestDirectLookupsWithholdWhatTheUserMayNotList(t *testing.T) {
 		pods, volumes []string
 	}{
 		{"alice", []string{"Pod alpha/a"}, []string{"PersistentVolumeClaim alpha/claim"}},
-		{"bob", []string{"Pod alpha/a", "Pod beta/b"}, []string{"PersistentVolume /pv-1", "PersistentVolumeClaim alpha/claim"}},
+		{"bob", []string{"Pod alpha/a", "Pod beta/b"}, []string{"PersistentVolume /pv-1", "PersistentVolumeClaim alpha/claim", "PersistentVolumeClaim beta/other"}},
 	} {
 		rel := &topology.Relationships{
 			Pods:      []topology.ResourceRef{{Kind: "Pod", Namespace: "alpha", Name: "a"}, {Kind: "Pod", Namespace: "beta", Name: "b"}},
-			Consumers: []topology.ResourceRef{{Kind: "PersistentVolume", Name: "pv-1"}, {Kind: "PersistentVolumeClaim", Namespace: "alpha", Name: "claim"}},
+			Consumers: []topology.ResourceRef{{Kind: "PersistentVolume", Name: "pv-1"}, {Kind: "PersistentVolumeClaim", Namespace: "alpha", Name: "claim"}, {Kind: "PersistentVolumeClaim", Namespace: "beta", Name: "other"}},
 		}
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
 		env.srv.withholdDirectLookups(r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: tc.user})), rel)
@@ -316,6 +474,36 @@ func TestDirectLookupsWithholdWhatTheUserMayNotList(t *testing.T) {
 		}
 		if got := ownershipRefNames(rel.Consumers); !slices.Equal(got, tc.volumes) {
 			t.Errorf("%s: consumers = %v, want %v", tc.user, got, tc.volumes)
+		}
+	}
+}
+
+func TestDirectLookupsWithholdClusterScopedStorageTheUserMayNotList(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("dev", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	env.srv.permCache.Get("dev", nil).SetCanI("list", "", "persistentvolumes", "", false)
+	env.srv.permCache.Get("dev", nil).SetCanI("list", "storage.k8s.io", "storageclasses", "", false)
+	env.srv.permCache.Set("admin", nil, &auth.UserPermissions{})
+	env.srv.permCache.Get("admin", nil).SetCanI("list", "", "persistentvolumes", "", true)
+	env.srv.permCache.Get("admin", nil).SetCanI("list", "storage.k8s.io", "storageclasses", "", true)
+	for _, tc := range []struct {
+		user           string
+		volumes, class []string
+	}{
+		{"dev", nil, nil},
+		{"admin", []string{"PersistentVolume /disk"}, []string{"StorageClass /fast"}},
+	} {
+		rel := &topology.Relationships{
+			StorageRefs: []topology.ResourceRef{{Kind: "PersistentVolume", Name: "disk"}},
+			ConfigRefs:  []topology.ResourceRef{{Kind: "StorageClass", Group: "storage.k8s.io", Name: "fast"}},
+		}
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		env.srv.withholdDirectLookups(r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: tc.user})), rel)
+		if got := ownershipRefNames(rel.StorageRefs); !slices.Equal(got, tc.volumes) {
+			t.Errorf("%s: storageRefs = %v, want %v", tc.user, got, tc.volumes)
+		}
+		if got := ownershipRefNames(rel.ConfigRefs); !slices.Equal(got, tc.class) {
+			t.Errorf("%s: configRefs = %v, want %v", tc.user, got, tc.class)
 		}
 	}
 }

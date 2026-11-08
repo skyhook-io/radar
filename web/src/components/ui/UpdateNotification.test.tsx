@@ -13,6 +13,8 @@ vi.mock('../../api/client', () => ({
       updateAvailable: true,
       installMethod: 'direct',
       releaseUrl: 'https://github.com/skyhook-io/radar/releases/tag/v1.3.0',
+      // Off, so the Product Hunt launch day doesn't take the corner whatever today is.
+      productHuntLaunch: { enabled: false, url: '', start: '0001-01-01T00:00:00Z', end: '0001-01-01T00:00:00Z' },
     },
   }),
   useStartDesktopUpdate: () => ({ mutate: vi.fn(), isPending: false }),

@@ -279,6 +279,7 @@ describe("strict evidence adapters", () => {
       expect.objectContaining({
         source: "Issue-related changes",
         kind: "unknown",
+        presentation: "history",
         message: expect.stringContaining("incomplete for part of the window"),
       }),
     ]);
@@ -1856,7 +1857,8 @@ describe("strict evidence adapters", () => {
       ),
     ]);
     expect(result.groups).toHaveLength(0);
-    expect(result.limitations[0]).toMatchObject({ kind: "truncated" });
+    expect(result.limitations[0]).toMatchObject({ kind: "unknown" });
+    expect(result.limitations[0].presentation).toBeUndefined();
     expect(result.limitations[0].source).toBe("Issue scan");
     expect(result.limitations[0].message).toContain(
       "Only part of this investigation result was saved",
@@ -2094,6 +2096,56 @@ describe("honest zero and partial-result states", () => {
         }),
       ]),
     );
+  });
+
+  it("tells admission history bounds apart from failed or unchecked admission reads", () => {
+    const started =
+      "Radar has recorded changes only since 2026-10-27T23:42:31Z; earlier changes in the window are unknown.";
+    const watched =
+      "Radar has watched MutatingWebhookConfigurations only since 2026-10-27T23:42:37Z; earlier changes in the window are unknown.";
+    const evicted =
+      "Radar has evicted older change history; earlier changes in the window are unknown.";
+    const denied =
+      "ValidatingWebhookConfiguration changes are not readable by the caller.";
+    const failed =
+      "Radar failed to record a MutatingWebhookConfiguration change at 2026-10-28T00:00:00Z; changes in the window may be missing.";
+    const admission = (incomplete: string) =>
+      project([
+        tool("changes", "get_changes", {
+          changes: [],
+          clusterScopedChanges: { changes: [], incomplete },
+        }),
+      ]).limitations.filter(
+        (entry) => entry.source === "Cluster-scoped admission changes",
+      );
+
+    expect(admission(`${started} ${watched} ${evicted}`)).toEqual([
+      expect.objectContaining({
+        kind: "unknown",
+        presentation: "history",
+        message: `${started} ${watched} ${evicted}`,
+      }),
+    ]);
+    // The producer keeps the startup notes beside another gap; the gap stays
+    // an open question and only the bounds become history.
+    const mixed = admission(`${denied} ${failed} ${started}`);
+    expect(mixed).toEqual([
+      expect.objectContaining({
+        kind: "unknown",
+        message: `${denied} ${failed}`,
+      }),
+      expect.objectContaining({
+        kind: "unknown",
+        presentation: "history",
+        message: started,
+      }),
+    ]);
+    expect(mixed[0].presentation).toBeUndefined();
+    const uncached = admission(
+      "Current ValidatingWebhookConfigurations are not cached, so their scope could not be checked; their changes are listed as may_apply.",
+    );
+    expect(uncached).toHaveLength(1);
+    expect(uncached[0].presentation).toBeUndefined();
   });
 
   it("creates receipts only for confirmed complete zero-result reads", () => {
@@ -2337,13 +2389,15 @@ describe("honest zero and partial-result states", () => {
     });
     expect(result.limitations).toEqual(
       expect.arrayContaining([
+        // The graph was never built, so these are unknowns, not caps on a
+        // graph that is shown.
         expect.objectContaining({
           source: "Topology coverage",
-          kind: "truncated",
+          kind: "unknown",
         }),
         expect.objectContaining({
           source: "Topology scale",
-          kind: "truncated",
+          kind: "unknown",
           message: expect.stringContaining("namespace-scoped topology search"),
         }),
       ]),
@@ -2872,11 +2926,93 @@ describe("failedStepMessage", () => {
     );
   });
   it("keeps any other failure text as it came", () => {
-    expect(failedStepMessage("user_forbidden: your role cannot list pods")).toBe(
-      "user_forbidden: your role cannot list pods",
-    );
+    expect(
+      failedStepMessage("user_forbidden: your role cannot list pods"),
+    ).toBe("user_forbidden: your role cannot list pods");
     expect(failedStepMessage('{"error":"no code"}')).toBe(
       '{"error":"no code"}',
     );
   });
+});
+
+describe("Kueue diagnosis evidence boundaries", () => {
+  it.each(["get_resource", "diagnose"])(
+    "preserves unchecked Issues in %s",
+    (name) => {
+      const resource = {
+        apiVersion: "kueue.x-k8s.io/v1beta2",
+        kind: "Workload",
+        metadata: { namespace: "shop", name: "run" },
+      };
+      const result = project([
+        tool("batch", name, {
+          resource,
+          resourceContext: {
+            tier: "diagnostic",
+            issueSummary: {
+              count: 0,
+              unchecked: [
+                {
+                  source: "kueue",
+                  reason: "caller_access_denied",
+                  kinds: [{ group: "kueue.x-k8s.io", kind: "ClusterQueue" }],
+                },
+              ],
+            },
+          },
+          relatedIssues: [],
+          ...(name === "diagnose"
+            ? {
+                coverage:
+                  "Cached resource only. Pods, runtime logs and metrics were not collected.",
+              }
+            : {}),
+        }),
+      ]);
+      expect(
+        result.limitations.some(
+          (limit) =>
+            limit.source === "Issue scan" &&
+            limit.message.includes("can't read ClusterQueues"),
+        ),
+      ).toBe(true);
+      if (name === "diagnose") {
+        expect(
+          result.limitations.some(
+            (limit) =>
+              limit.source === "Diagnosis coverage" &&
+              limit.message.includes(
+                "runtime logs and metrics were not collected",
+              ),
+          ),
+        ).toBe(true);
+        expect(
+          groupsOf(result.groups, "receipt").some(
+            (group) => group.latest.title === "No warning events",
+          ),
+        ).toBe(false);
+      }
+    },
+  );
+});
+
+it("does not turn unchecked Kueue scans into no-issue receipts", () => {
+  const result = project([
+    tool("partial", "issues", {
+      issues: [],
+      total: 0,
+      total_matched: 0,
+      unchecked_sources: [
+        {
+          source: "kueue",
+          reason: "kind_sync_pending",
+          kinds: [{ kind: "Workload", group: "kueue.x-k8s.io" }],
+        },
+      ],
+    }),
+  ]);
+  expect(
+    result.limitations.some((limit) => limit.source === "Issue scan"),
+  ).toBe(true);
+  expect(groupsOf(result.groups, "receipt")).toHaveLength(0);
 });

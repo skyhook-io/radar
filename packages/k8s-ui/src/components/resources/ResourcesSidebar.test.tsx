@@ -264,3 +264,11 @@ it('bounds a category total over kinds Radar collects in only some namespaces', 
   // Each kind is exact where Radar collects it; their sum is exact for no scope.
   expect(html.slice(start, html.indexOf('</button>', start))).toContain('≥5')
 })
+
+it('matches CRD aliases only for the definition API identity', () => {
+  const crd = { group: 'apiextensions.k8s.io', kind: 'CustomResourceDefinition', name: 'customresourcedefinitions' }
+  expect(resourceMatchesSidebarFilter(crd, 'crd')).toBe(true)
+  expect(resourceMatchesSidebarFilter(crd, 'CRDS')).toBe(true)
+  expect(resourceMatchesSidebarFilter(horizontalPodAutoscaler, 'crd')).toBe(false)
+  expect(resourceMatchesSidebarFilter({ ...crd, group: 'other.io' }, 'crd')).toBe(false)
+})

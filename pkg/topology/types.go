@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -58,6 +59,7 @@ const (
 	KindNodeClass                      NodeKind = "NodeClass"            // Karpenter NodeClass (EC2NodeClass, AKSNodeClass, etc.)
 	KindScaledObject                   NodeKind = "ScaledObject"         // KEDA ScaledObject
 	KindScaledJob                      NodeKind = "ScaledJob"            // KEDA ScaledJob
+	KindJobSet                         NodeKind = "JobSet"               // jobset.x-k8s.io JobSet
 	KindGatewayClass                   NodeKind = "GatewayClass"         // Gateway API GatewayClass
 	KindVirtualService                 NodeKind = "VirtualService"       // Istio VirtualService
 	KindDestinationRule                NodeKind = "DestinationRule"      // Istio DestinationRule
@@ -480,11 +482,19 @@ type Relationships struct {
 	OlderRevisions []ResourceRef `json:"olderRevisions,omitempty"`
 	// Managers and Manages are management without an owner reference: GitOps
 	// member lists, class bindings, spec and status references. They never
-	// mean garbage collection. Set only with Ownership.
+	// mean garbage collection. Set only with Ownership. ApplyOwner instead
+	// fills Managers with residual spec controllers and leaves Manages empty.
 	Managers []ResourceRef `json:"managers,omitempty"`
 	Manages  []ResourceRef `json:"manages,omitempty"`
 	// Ownership says how complete the owner-reference answers are.
 	Ownership *OwnershipCoverage `json:"ownership,omitempty"`
+	// ControllerChain is the resource's controller chain as the caller
+	// reads it, for the resource contexts' top owner. Set only with
+	// Ownership; not on the wire.
+	ControllerChain *ControllerChain `json:"-"`
+	// OtherManagersIncomplete records unavailable spec-management sources;
+	// denied sources are hidden without disclosing that they exist.
+	OtherManagersIncomplete bool `json:"-"`
 	// manageSources and manageTargets are the resources this one's manages
 	// edges come from and go to, which ApplyOwnership sorts into ownership,
 	// management and display shortcuts.
@@ -783,6 +793,8 @@ type ResourceWithRelationships struct {
 	Relationships   *Relationships         `json:"relationships,omitempty"`
 	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
 	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
+	// RelatedFindings does not affect parent health; absence is not an all-clear.
+	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.

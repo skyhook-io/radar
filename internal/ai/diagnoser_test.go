@@ -169,10 +169,10 @@ func TestDiagnoseStreamUsesListenerAddress(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := "http://" + address + "/radar/mcp"
-				if !apply {
-					want += "-investigation?scope=" + scope
-				} else {
+				if apply {
 					want += "-apply"
+				} else {
+					want += "-investigation?scope=" + scope
 				}
 				if agent.spec.mcpURL != want {
 					t.Fatalf("agent MCP URL = %q, want %q", agent.spec.mcpURL, want)
@@ -210,13 +210,15 @@ func (*captureTurnAgent) parseStream(reader io.Reader, onEvent func(StreamEvent)
 }
 
 type adapterAuthoredEvidenceAgent struct {
+	spec  turnSpec
 	event StreamEvent
 }
 
 func (*adapterAuthoredEvidenceAgent) Name() string      { return "claude" }
 func (*adapterAuthoredEvidenceAgent) Path() string      { return "printf" }
 func (*adapterAuthoredEvidenceAgent) SigninCmd() string { return "claude auth login" }
-func (*adapterAuthoredEvidenceAgent) command(ctx context.Context, _ turnSpec) (*exec.Cmd, func(), error) {
+func (agent *adapterAuthoredEvidenceAgent) command(ctx context.Context, spec turnSpec) (*exec.Cmd, func(), error) {
+	agent.spec = spec
 	return exec.CommandContext(ctx, "printf", ""), func() {}, nil
 }
 func (agent *adapterAuthoredEvidenceAgent) parseStream(_ io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -247,6 +249,18 @@ func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
 	}
 	if delivered == nil || delivered.RadarEvidence {
 		t.Fatalf("apply event retained adapter-authored provenance: %+v", delivered)
+	}
+}
+
+func TestDiagnoseStreamUsesRestrictedApplyMount(t *testing.T) {
+	agent := &adapterAuthoredEvidenceAgent{event: StreamEvent{Type: "step"}}
+	diagnoser := &Diagnoser{agents: map[string]Agent{"claude": agent}, defName: "claude"}
+	_, err := diagnoser.DiagnoseStream(context.Background(), Request{Kind: "Pod", Namespace: "lab", Name: "test", MCPAddress: "localhost:9280", MCPBasePath: "/radar", Apply: true}, func(StreamEvent) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := agent.spec.mcpURL, "http://localhost:9280/radar/mcp-apply"; got != want {
+		t.Fatalf("URL %q, want %q", got, want)
 	}
 }
 
@@ -602,6 +616,7 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 // JSON block) — free-text alone means the process died mid-stream and must
 // surface as an error, never as a calm "done".
 func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
+	isolateHome(t)
 	mkCLI := func(t *testing.T, resultLine, exitCode string) string {
 		t.Helper()
 		dir := t.TempDir()
@@ -719,6 +734,7 @@ func TestParseStream_InitReportsAgentReady(t *testing.T) {
 // phase: the private mount's handshake produces exactly one event per turn, no
 // matter how many times the scope is marked, and it lands before the stream ends.
 func TestDiagnoseStreamReportsHandshakeOnce(t *testing.T) {
+	isolateHome(t)
 	dir := t.TempDir()
 	flag := filepath.Join(dir, "handshake-observed")
 	bin := filepath.Join(dir, "claude")

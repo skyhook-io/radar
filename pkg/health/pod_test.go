@@ -627,3 +627,74 @@ func TestPodProblemReasonPrefersAFailedContainerOverThePodReason(t *testing.T) {
 		t.Errorf("PodProblemMessage = %q, want the container's message", got)
 	}
 }
+
+// TestPodSchedulingGated covers pods deliberately held by a scheduling gate: they
+// must read Neutral (not an age-based Pending problem) and carry an explanation,
+// while a real container fault on a gated pod still wins, and a released pod ages
+// normally again.
+func TestPodSchedulingGated(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	old := metav1.NewTime(now.Add(-30 * time.Minute))
+
+	gatedPod := func(gates ...string) *corev1.Pod {
+		sg := make([]corev1.PodSchedulingGate, 0, len(gates))
+		for _, g := range gates {
+			sg = append(sg, corev1.PodSchedulingGate{Name: g})
+		}
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: old},
+			Spec:       corev1.PodSpec{SchedulingGates: sg},
+			Status:     corev1.PodStatus{Phase: corev1.PodPending},
+		}
+	}
+
+	t.Run("gated pending past threshold is neutral and explained", func(t *testing.T) {
+		v := Pod(gatedPod("kueue.x-k8s.io/admission"), now)
+		if v.Level != LevelNeutral {
+			t.Fatalf("level = %v, want neutral", v.Level)
+		}
+		if v.Reason != corev1.PodReasonSchedulingGated {
+			t.Errorf("reason = %q, want %q", v.Reason, corev1.PodReasonSchedulingGated)
+		}
+		if !strings.Contains(v.Message, "kueue.x-k8s.io/admission") {
+			t.Errorf("message = %q, want it to name the gate", v.Message)
+		}
+	})
+
+	t.Run("gated with no PodScheduled condition is still neutral", func(t *testing.T) {
+		// The spec field is authoritative before the scheduler writes any condition.
+		if got := Pod(gatedPod("custom-gate"), now).Level; got != LevelNeutral {
+			t.Errorf("level = %v, want neutral", got)
+		}
+	})
+
+	t.Run("one of several gates removed is still gated", func(t *testing.T) {
+		if got := Pod(gatedPod("gate-b"), now).Level; got != LevelNeutral {
+			t.Errorf("level = %v, want neutral (pod stays held until all gates clear)", got)
+		}
+	})
+
+	t.Run("gate does not mask a real container fault", func(t *testing.T) {
+		pod := gatedPod("kueue.x-k8s.io/admission")
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+			Name: "app",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+				Reason:  "ImagePullBackOff",
+				Message: "Back-off pulling image \"nope:latest\"",
+			}},
+		}}
+		if got := Pod(pod, now).Level; got != LevelUnhealthy {
+			t.Errorf("level = %v, want unhealthy (container fault must still surface)", got)
+		}
+	})
+
+	t.Run("all gates removed ages normally", func(t *testing.T) {
+		released := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: old},
+			Status:     corev1.PodStatus{Phase: corev1.PodPending},
+		}
+		if got := Pod(released, now).Level; got != LevelDegraded {
+			t.Errorf("level = %v, want degraded (released pod past 5m ages normally)", got)
+		}
+	})
+}

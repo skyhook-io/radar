@@ -77,6 +77,8 @@ type mockResourceProvider struct {
 	jobs         []*batchv1.Job
 	cronJobs     []*batchv1.CronJob
 	hpas         []*autoscalingv2.HorizontalPodAutoscaler
+	pvcs         []*corev1.PersistentVolumeClaim
+	pvs          []*corev1.PersistentVolume
 }
 
 func (m mockResourceProvider) Pods() ([]*corev1.Pod, error)               { return m.pods, nil }
@@ -93,10 +95,10 @@ func (m mockResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) { ret
 func (m mockResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error)    { return nil, nil }
 func (m mockResourceProvider) Secrets() ([]*corev1.Secret, error)          { return nil, nil }
 func (m mockResourceProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
-	return nil, nil
+	return m.pvcs, nil
 }
 func (m mockResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
-	return nil, nil
+	return m.pvs, nil
 }
 func (m mockResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
 	return m.hpas, nil
@@ -209,13 +211,8 @@ func TestBuild_Pod_FullEnrichment(t *testing.T) {
 		t.Fatal("Build returned nil")
 	}
 
-	// ManagedBy: argo tracking-id annotation wins over owner reference.
-	if got, want := len(rc.ManagedBy), 1; got != want {
-		t.Fatalf("ManagedBy len: got %d want %d (%+v)", got, want, rc.ManagedBy)
-	}
-	mb := rc.ManagedBy[0]
-	if mb.Kind != "Application" || mb.Name != "storefront" || mb.Namespace != "argocd" {
-		t.Errorf("ManagedBy[0]: got %+v, want Application argocd/storefront", mb)
+	if len(rc.ManagedBy) != 0 {
+		t.Fatalf("metadata without ownership produced managedBy: %+v", rc.ManagedBy)
 	}
 
 	// Exposes: the Service routes to the pod.
@@ -298,16 +295,10 @@ func TestBuild_Deployment_OwnerRefHelmRelease(t *testing.T) {
 	if rc == nil {
 		t.Fatal("Build returned nil")
 	}
-	if got, want := len(rc.ManagedBy), 1; got != want {
-		t.Fatalf("ManagedBy len: got %d want %d", got, want)
+	if len(rc.ManagedBy) != 0 {
+		t.Fatalf("metadata without ownership produced managedBy: %+v", rc.ManagedBy)
 	}
-	mb := rc.ManagedBy[0]
-	if mb.Kind != "HelmRelease" || mb.Name != "web" || mb.Namespace != "flux-system" {
-		t.Errorf("ManagedBy[0]: got %+v want HelmRelease/flux-system/web", mb)
-	}
-	if mb.Group != "helm.toolkit.fluxcd.io" {
-		t.Errorf("ManagedBy[0].Group: got %q", mb.Group)
-	}
+
 }
 
 func TestBuild_Deployment_WorkloadSummaryAndTemplateUses(t *testing.T) {
@@ -809,13 +800,10 @@ func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
 	})
-	if got, want := len(rc.ManagedBy), 1; got != want {
-		t.Fatalf("ManagedBy len: got %d want %d", got, want)
+	if len(rc.ManagedBy) != 0 {
+		t.Fatalf("graph without ownership produced managedBy: %+v", rc.ManagedBy)
 	}
-	mb := rc.ManagedBy[0]
-	if mb.Kind != "Deployment" || mb.Name != "web" || mb.Namespace != "prod" {
-		t.Errorf("ManagedBy[0]: got %+v", mb)
-	}
+
 }
 
 func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
@@ -1098,7 +1086,7 @@ func TestBuild_PDB_OutputJSONShape(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	// Spot-check: tier basic, owner ref managedBy, runsOn node.
-	want := `"managedBy"`
+	want := `"owner"`
 	if !contains(string(b), want) {
 		t.Errorf("JSON missing %s\n%s", want, b)
 	}
@@ -1691,6 +1679,12 @@ func TestBuild_SchedulingSummaryDeepCopiesNestedData(t *testing.T) {
 			ConcurrentAdmission: &KueueConcurrentAdmission{ParentName: "parent", ParentRef: &ContextRef{
 				Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "parent",
 			}},
+			Admission: &KueueAdmissionState{
+				State:      KueueAdmissionRequeueBackoff,
+				Inactive:   &KueueAdmissionFact{Code: KueueAdmissionDeactivationPending, Source: KueueFactSourceCondition, Name: "DeactivationTarget"},
+				Blocker:    &KueueAdmissionFact{Code: KueueAdmissionRequeueBackoff, Source: KueueFactSourceCondition, Name: "Requeued", Reason: "PodsReadyTimeout"},
+				Disruption: &KueueAdmissionFact{Code: KueueAdmissionPodsReadyTimeout, Source: KueueFactSourceCondition, Name: "Evicted", Reason: "PodsReadyTimeout"},
+			},
 		},
 	}}}
 
@@ -1715,6 +1709,10 @@ func TestBuild_SchedulingSummaryDeepCopiesNestedData(t *testing.T) {
 	observation.Kueue.PodSetAssignments[0].Resources[0].FlavorRef.Name = "changed"
 	*observation.Kueue.RequeueState.Count = 99
 	observation.Kueue.ConcurrentAdmission.ParentRef.Name = "changed"
+	observation.Kueue.Admission.State = "changed"
+	observation.Kueue.Admission.Inactive.Reason = "changed"
+	observation.Kueue.Admission.Blocker.Reason = "changed"
+	observation.Kueue.Admission.Disruption.Reason = "changed"
 
 	want := summary.Observations[0]
 	if want.Subject.Name != "trainer" || want.PrimaryCondition.Reason != "Waiting" || want.PrimaryCondition.ObservedGeneration != 7 ||
@@ -1725,7 +1723,9 @@ func TestBuild_SchedulingSummaryDeepCopiesNestedData(t *testing.T) {
 		*want.Kueue.PodSetAssignments[0].Count != 2 ||
 		want.Kueue.PodSetAssignments[0].Resources[0].Name != "nvidia.com/gpu" ||
 		want.Kueue.PodSetAssignments[0].Resources[0].FlavorRef.Name != "a10" ||
-		*want.Kueue.RequeueState.Count != 4 || want.Kueue.ConcurrentAdmission.ParentRef.Name != "parent" {
+		*want.Kueue.RequeueState.Count != 4 || want.Kueue.ConcurrentAdmission.ParentRef.Name != "parent" ||
+		want.Kueue.Admission.State != KueueAdmissionRequeueBackoff || want.Kueue.Admission.Inactive.Reason != "" ||
+		want.Kueue.Admission.Blocker.Reason != "PodsReadyTimeout" || want.Kueue.Admission.Disruption.Reason != "PodsReadyTimeout" {
 		t.Fatalf("filtered copy aliases caller-owned scheduling data: %+v", summary)
 	}
 }

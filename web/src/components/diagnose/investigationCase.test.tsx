@@ -2223,7 +2223,15 @@ describe("agent case robustness", () => {
     expect(html).toContain('data-testid="investigation-ruled-out"');
     expect(html).toContain("Kept");
     expect(html).not.toContain("Points at a source-placed item");
-    expect(html).toContain("See CrashLoopBackOff");
+    expect(html).toContain("See CrashLoopBackOff issue on api");
+    // A ruled-out hypothesis is labelled as such and carries the claim of the
+    // evidence that contradicts it, so it never reads as a finding.
+    const ruledOutStart = html.indexOf('data-testid="investigation-ruled-out"');
+    const ruledOut = html.slice(ruledOutStart, html.indexOf("</section>", ruledOutStart));
+    expect(ruledOut).toMatch(/>Ruled out<span[^>]*>Agent<\/span><\/h3>/);
+    expect(ruledOut).toContain("Ruled out: </span>Kept");
+    expect(ruledOut).toContain("Valid, on the issue.");
+    expect(html).not.toContain("Also checked");
   });
 
   it("shows a source-placed claim in Assessment details with its role", () => {

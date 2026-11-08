@@ -20,6 +20,13 @@
       "./src/components/resources/*.tsx"
     ],
     "./components/resources/KueueAdmissionSection": "./src/components/resources/KueueAdmissionSection.tsx",
+    "./components/kueue/AdmissionPath": "./src/components/kueue/AdmissionPath.tsx",
+    "./components/kueue/QueueEvidence": "./src/components/kueue/QueueEvidence.tsx",
+    "./components/kueue/*": [
+      "./src/components/kueue/*.ts",
+      "./src/components/kueue/*.tsx"
+    ],
+    "./components/resources/KueuePendingPosition": "./src/components/resources/KueuePendingPosition.tsx",
     "./components/resources/renderers/*": [
       "./src/components/resources/renderers/*.tsx",
       "./src/components/resources/renderers/*.ts"
@@ -89,7 +96,7 @@
     "yaml": ">=2.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@xterm/addon-fit": "^0.11.0",

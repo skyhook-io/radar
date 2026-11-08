@@ -11,6 +11,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/skyhook-io/radar/internal/launchday"
 )
 
 func TestIsNewerVersion(t *testing.T) {
@@ -852,5 +855,28 @@ func TestAutomaticCheckOffersNoUpdateToDevelopmentBuilds(t *testing.T) {
 	resetUpdateCache()
 	if info := CheckForUpdate(context.Background()); !info.UpdateAvail {
 		t.Errorf("a release behind the latest got no update: %+v", info)
+	}
+}
+
+func TestUpdateCheckCarriesTheProductHuntLaunch(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.3.0","productHuntLaunch":{"enabled":false,"url":"","start":"0001-01-01T00:00:00Z","end":"0001-01-01T00:00:00Z"}}`))
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion, previousLaunch := releasesURL, Current, launchday.Current()
+	releasesURL = proxy.URL
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+		_ = launchday.Set(previousLaunch)
+	})
+
+	SetCurrent("1.2.0")
+	resetUpdateCache()
+	CheckForUpdate(context.Background())
+	if launchday.ProductHunt(time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)) {
+		t.Error("a launch the update check turned off should not apply")
 	}
 }

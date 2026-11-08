@@ -1,3 +1,7 @@
+import { getCRDColumnValue } from './resource-utils-crd'
+import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
+import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getFlaggerColumnValue } from './resource-utils-flagger'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -203,6 +207,22 @@ function podUnschedulable(pod: any): boolean {
   return conds.some(
     (c: any) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'Unschedulable'
   )
+}
+
+// A non-empty spec.schedulingGates means a controller is deliberately holding the
+// pod in Pending (Kueue admission, topology assignment, a custom gate). Mirrors the
+// backend health.PodHasSchedulingGates — keep the two in lockstep (the cross-language
+// golden fixture pins it). The spec field is authoritative and is kept in the summary
+// list payload, so this reads it directly rather than racing the scheduler's
+// PodScheduled=SchedulingGated condition (which lags gate changes in both directions).
+function podSchedulingGated(pod: any): boolean {
+  return (pod?.spec?.schedulingGates || []).length > 0
+}
+
+function schedulingGateNames(pod: any): string[] {
+  return (pod?.spec?.schedulingGates || [])
+    .map((g: any) => g?.name)
+    .filter((n: any): n is string => typeof n === 'string' && n.length > 0)
 }
 
 // A container that has terminated successfully (exit 0) is done, not "not ready".
@@ -425,6 +445,12 @@ export function getPodStatus(pod: any): StatusBadge {
     case 'Succeeded':
       return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
     case 'Pending':
+      // A scheduling gate deliberately holds the pod in Pending; it's an
+      // intentional state, not an age-based problem, so it reads neutral and never
+      // ages into a warning. Checked before the unschedulable/age branches.
+      if (podSchedulingGated(pod)) {
+        return { text: 'Scheduling gated', color: healthColors.neutral, level: 'neutral' }
+      }
       // Unschedulable = the scheduler tried and failed to place this pod; the
       // backend flags it immediately (severity ramps with duration), so the badge
       // does too. Plain Pending (not yet placed) keeps the young-grace window.
@@ -575,7 +601,22 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     }
     case 'Succeeded':
       return { phase, text: 'Completed', level: 'neutral' }
-    case 'Pending':
+    case 'Pending': {
+      // A scheduling gate deliberately holds the pod in Pending; surface it as a
+      // calm, explained state (with the gate name) rather than a bare Pending or an
+      // age-based warning. Checked before the unschedulable/age branches.
+      if (podSchedulingGated(pod)) {
+        const gates = schedulingGateNames(pod)
+        return {
+          phase,
+          text: `${phase} — Scheduling gated`,
+          level: 'neutral',
+          hint:
+            gates.length > 0
+              ? `Held by scheduling gate(s): ${gates.join(', ')}. A controller is intentionally blocking scheduling until a condition is met.`
+              : 'A controller is intentionally blocking scheduling until a condition is met.',
+        }
+      }
       // Unschedulable = the scheduler tried and failed; surface it immediately
       // (the backend does, with severity ramping by duration). Plain Pending
       // (not yet placed) keeps the young-grace window.
@@ -596,6 +637,7 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
         }
       }
       return { phase, text: 'Pending', level: 'neutral' }
+    }
     case 'Failed':
       return { phase, text: 'Failed', level: 'unhealthy' }
     default:
@@ -2462,6 +2504,14 @@ function parseColumnFilterPair(
 
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
   try {
+  const connectorValue = getStrimziConnectorColumnValue(resource, column)
+  if (connectorValue !== undefined) return connectorValue
+  const otelValue = getOpenTelemetryColumnValue(resource, column)
+  if (otelValue !== undefined) return otelValue
+  const flaggerValue = getFlaggerColumnValue(resource, column)
+  if (flaggerValue !== undefined) return flaggerValue
+  const crdValue = getCRDColumnValue(resource, column)
+  if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()
 
   switch (column) {

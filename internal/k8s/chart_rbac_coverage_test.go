@@ -63,8 +63,10 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 // can grant. It walks the raw template rather than rendering it (the file is Helm,
 // not valid YAML), skipping comments and {{ }} directives so groups named in prose
 // don't count, and reading both inline (apiGroups: ["a","b"]) and block-style
-// (apiGroups:\n  - "a") rules. Conditional per-group rules are counted as granted
-// because their toggles default to true; the wildcard "*" is excluded on purpose.
+// (apiGroups:\n  - "a") rules. Conditional per-group rules are counted as available
+// collection grants; most default to true. Flagger is an explicitly documented
+// opt-in, with default-off/opt-in chart regression tests. This guard checks that
+// each catalog group has a focused grant path, not that every path is enabled; the wildcard "*" is excluded on purpose.
 func chartGrantedAPIGroups(t *testing.T) map[string]bool {
 	t.Helper()
 	path := filepath.Join("..", "..", "deploy", "helm", "radar", "templates", "clusterrole.yaml")

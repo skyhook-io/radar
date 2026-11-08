@@ -54,6 +54,10 @@ func TestManualUpdateCheckBridgeCoalescesClicksAndEncodesResult(t *testing.T) {
 	if got.ReleaseNotes != want.ReleaseNotes || got.LatestVersion != want.LatestVersion {
 		t.Fatalf("result changed in transit: %+v", got)
 	}
+	// The UI replaces its version-check data with this result, launch included.
+	if got.ProductHuntLaunch == nil {
+		t.Fatal("result dropped the Product Hunt launch")
+	}
 }
 
 func TestManualUpdateCheckDoesNotDispatchAfterCancellation(t *testing.T) {

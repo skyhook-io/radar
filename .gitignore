@@ -10,6 +10,7 @@ vendor/
 
 # Node
 node_modules/
+.vitest-cache/
 web/node_modules/
 web/dist/
 packages/*/node_modules/

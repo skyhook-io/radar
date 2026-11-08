@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // trivyScanTarget resolves the object a Trivy Operator report scanned and,
@@ -41,7 +42,7 @@ func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured, can
 	scanned := &resourcecontext.ScannedRef{Kind: kind, Name: name, Container: labels["trivy-operator.container.name"]}
 	var self *resourcecontext.ManagedByRef
 	if workloadKinds[kind] {
-		self = resourcecontext.ManagedByFromOwner(kind, group, ns, name)
+		self = resourcecontext.ControllerSummary(topology.ResourceRef{Kind: kind, Group: group, Namespace: ns, Name: name})
 	}
 	may := func(group, kind string) bool {
 		if group == "" {
@@ -73,7 +74,7 @@ func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured, can
 		scanned.Replicas = &replicas
 		if parent := controllerRef(rs.OwnerReferences); parent != nil {
 			if g := schema.FromAPIVersionAndKind(parent.APIVersion, parent.Kind).Group; may(g, parent.Kind) {
-				return resourcecontext.ManagedByFromOwner(parent.Kind, g, ns, parent.Name), scanned
+				return resourcecontext.ControllerSummary(topology.ResourceRef{Kind: parent.Kind, Group: g, Namespace: ns, Name: parent.Name}), scanned
 			}
 		}
 		return self, scanned
@@ -92,7 +93,7 @@ func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured, can
 			return nil, scanned
 		}
 		if w, ok := k8s.PodWorkload(cache, pod); ok && may(w.Group, w.Kind) {
-			return resourcecontext.ManagedByFromOwner(w.Kind, w.Group, ns, w.Name), scanned
+			return resourcecontext.ControllerSummary(topology.ResourceRef{Kind: w.Kind, Group: w.Group, Namespace: ns, Name: w.Name}), scanned
 		}
 		return nil, scanned
 	}

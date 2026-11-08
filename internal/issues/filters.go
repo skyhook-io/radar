@@ -19,12 +19,25 @@ func applyFilters(in []Issue, f Filters) []Issue {
 		if len(wantSev) > 0 && !wantSev[i.Severity] {
 			continue
 		}
-		if len(wantKind) > 0 && !wantKind[strings.ToLower(i.Kind)] {
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(i.Kind)] && !affectsKind(i, wantKind) {
 			continue
 		}
 		out = append(out, i)
 	}
 	return out
+}
+
+// affectsKind reports whether the issue affects a resource of a wanted kind:
+// an expired TLS Secret matches kind=Ingress through the Ingresses using it,
+// as related-issue lookups and issue counts already do. AffectedRefs are
+// redacted to the caller's readable resources before filters run.
+func affectsKind(i Issue, wantKind map[string]bool) bool {
+	for _, ref := range i.AffectedRefs {
+		if wantKind[strings.ToLower(ref.Kind)] {
+			return true
+		}
+	}
+	return false
 }
 
 func applyClusterScopedAccess(in []Issue, f Filters) []Issue {

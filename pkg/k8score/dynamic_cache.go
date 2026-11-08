@@ -30,6 +30,8 @@ var ErrCollectionNotSupported = errors.New("collection is not supported")
 
 const directCountProbeLimit int64 = 2
 
+var scopeProbeBaseBudget = 5 * time.Second
+
 // informerKey identifies one informer. ns == "" means a cluster-wide watch;
 // a non-empty ns is a namespace-scoped watch. A GVR can have one cluster-wide
 // informer OR several namespace-scoped ones (for users denied cluster-wide
@@ -595,6 +597,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 		maps.Copy(indexers, ownerUIDIndexers)
 	}
 	maps.Copy(indexers, gitopsMembersIndexers[gvr.GroupResource()])
+	maps.Copy(indexers, kueueQueueIndexers[gvr.GroupResource()])
 	for name := range informer.GetIndexer().GetIndexers() {
 		delete(indexers, name)
 	}
@@ -795,9 +798,9 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 		}
 		d.mu.RUnlock()
 	}
-	budget := 5 * time.Second
+	budget := scopeProbeBaseBudget
 	if n := len(fallbacks); n > 1 {
-		budget = min(5*time.Second+time.Duration(n)*500*time.Millisecond, 15*time.Second)
+		budget = min(scopeProbeBaseBudget+time.Duration(n)*500*time.Millisecond, 15*time.Second)
 	}
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
@@ -2094,6 +2097,39 @@ func (d *DynamicResourceCache) ListWatchedReadOnly(gvr schema.GroupVersionResour
 	return result, nil
 }
 
+// ListWatchedNamespaceReadOnly reads an already-watched namespace when it fits
+// within the candidate budget. Larger namespaces return no rows and truncated
+// coverage rather than an unstable sample. The client-go namespace index allocates its namespace-sized
+// result first; this avoids materializing other namespaces and bounds subsequent
+// object inspection, not the index lookup allocation. Returned objects must not
+// be mutated or retained beyond the synchronous read.
+func (d *DynamicResourceCache) ListWatchedNamespaceReadOnly(gvr schema.GroupVersionResource, namespace string, limit int) ([]*unstructured.Unstructured, bool, error) {
+	if d == nil {
+		return nil, false, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	if namespace == "" || limit <= 0 {
+		return nil, false, fmt.Errorf("namespace and positive candidate limit are required")
+	}
+	entries, readable := d.servedEntries(gvr, namespace)
+	if !readable {
+		return nil, false, fmt.Errorf("namespace cache is not synchronized")
+	}
+	items, err := indexerItems(entries, namespace)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(items) > limit {
+		return nil, true, nil
+	}
+	result := make([]*unstructured.Unstructured, 0, len(items))
+	for _, item := range items {
+		if u, ok := item.(*unstructured.Unstructured); ok {
+			result = append(result, u)
+		}
+	}
+	return result, false, nil
+}
+
 // GetWatched reads one object only from already-watched informer stores. It
 // never probes RBAC, starts an informer, or waits for a cache sync.
 func (d *DynamicResourceCache) GetWatched(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
@@ -2929,7 +2965,20 @@ func (d *DynamicResourceCache) IsSynced(gvr schema.GroupVersionResource) bool {
 // among its informers, so every change after it was delivered. ok is false
 // when gvr isn't watched or an informer hasn't synced yet.
 func (d *DynamicResourceCache) WatchedSince(gvr schema.GroupVersionResource) (since time.Time, ok bool) {
-	entries := d.entriesForGVR(gvr)
+	return d.watchedSince(d.entriesForGVR(gvr))
+}
+
+// NamespaceWatchedSince is WatchedSince for only the informers serving namespace.
+// An empty namespace checks every informer. An unwatched or unsynced scope
+// returns ok=false; that is unknown coverage, never a zero-time boundary.
+func (d *DynamicResourceCache) NamespaceWatchedSince(gvr schema.GroupVersionResource, namespace string) (time.Time, bool) {
+	if namespace == "" {
+		return d.WatchedSince(gvr)
+	}
+	return d.watchedSince(d.readEntries(gvr, namespace))
+}
+
+func (d *DynamicResourceCache) watchedSince(entries []*informerEntry) (since time.Time, ok bool) {
 	if !d.servedSynced(entries) {
 		return time.Time{}, false
 	}

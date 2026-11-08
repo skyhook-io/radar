@@ -1,4 +1,6 @@
+import type { Issue, IssueResourceRef } from '../components/issues/types'
 import type { CapacityIntegrationState } from './capacity'
+import type { ReadGap, ReadKindRef } from './read-coverage'
 
 // Topology types matching the Go backend
 
@@ -119,6 +121,8 @@ export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
+  /** Shell family where a hand-off command runs; absent from older Radars. */
+  localShell?: 'powershell' | 'posix'
   logs: boolean           // Log viewer (pods/log)
   portForward: boolean    // Port forwarding (pods/portforward)
   secrets: boolean        // List secrets
@@ -129,6 +133,7 @@ export interface Capabilities {
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
   mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
+  mcpApplicationEvidence?: boolean
   // Karpenter discovery and NodePool read state. Optional on the wire for the
   // same newer-frontend/older-backend reason as `deployment` below — consumers
   // must treat absence as "unknown" and fall back to discovery signals.
@@ -165,6 +170,7 @@ export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
+ applicationEvidence?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
@@ -176,9 +182,20 @@ export interface FeatureCapabilities {
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
   gitopsWriteEvidence?: boolean
+  agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
+  argoRollbackSync?: boolean
+  argoSyncInheritance?: boolean
+  argoEnableSelfHealOff?: boolean
   clusterScopedPlaceholder?: boolean
+  kueuePendingPosition?: boolean
+  // GET /api/workloads/rayclusters/{namespace}/{name}/pods. Older Radars that
+  // serve the route omit the flag; radarFeatures falls back to v1.15.0.
+  rayClusterPods?: boolean
+  // Workload Pod info marks native sidecars (containerStatuses[].sidecar).
+  podSidecarMarks?: boolean
+  kueueQueueWorkloads?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -233,6 +250,7 @@ export type CoreNodeKind =
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'JobSet' // jobset.x-k8s.io JobSet
   | 'Workflow'
   | 'CronWorkflow'
   | 'WorkflowTemplate'
@@ -875,8 +893,29 @@ export interface HPAMetricSummary {
   status: string
 }
 
+/** Current findings from one bounded local inventory, independent of parent health.
+ * No groups or no findings never establishes absence of associations or recovery. */
+export interface RelatedFindingsGroup {
+  /** Association anchor; each finding identifies its own subject. */
+  associatedVia: IssueResourceRef
+  /** Nonempty finite set of resource kinds selected for assessment; names, when present, lists all. */
+  kinds: { count: number; names?: ReadKindRef[] }
+  /** Authorized candidate resource snapshots, not findings or API calls. */
+  checked: number
+  /** Checked snapshots the producer could not assess, not known inactive states.
+   * checked - unknown is not a healthy count. */
+  unknown: number
+  findings?: Issue[]
+  /** Inventory-read limitations; always an array, including when empty. */
+  gaps: ReadGap[]
+  /** Findings were omitted from output; inventory read failures use gaps. */
+  truncated?: boolean
+}
+
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
+  /** Optional association bundle; absence is not an all-clear. */
+  relatedFindings?: RelatedFindingsGroup[]
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
@@ -1737,6 +1776,8 @@ export interface ImageMetadata {
 export interface WorkloadPodContainerInfo {
   name: string
   init?: boolean
+  /** An init container with restartPolicy Always. Absent from older Radars. */
+  sidecar?: boolean
   ready: boolean
   restartCount: number
 }

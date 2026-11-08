@@ -461,10 +461,40 @@ func TestManagerChecksAClaimWithoutReadingItsManagersMembers(t *testing.T) {
 
 type objectCounter struct {
 	ownership.ReadSession
-	objects int
+	objects     int
+	memberships int
 }
 
 func (s *objectCounter) Object(ref resourceid.Ref) ownership.ObjectRead {
 	s.objects++
 	return s.ReadSession.Object(ref)
+}
+
+func (s *objectCounter) Membership(ref resourceid.Ref) ownership.MembersRead {
+	s.memberships++
+	return s.ReadSession.Membership(ref)
+}
+
+func TestManagerSharesClaimMembershipWithinAView(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	a := b.Meta(b.Add("", "ConfigMap", "shop", "a"), nil, map[string]string{trackingID: "argocd_shop:/ConfigMap:shop/a"})
+	bb := b.Meta(b.Add("", "ConfigMap", "shop", "b"), nil, map[string]string{trackingID: "argocd_shop:/ConfigMap:shop/b"})
+	b.Manager(ownership.ArgoApplication, "argocd", "shop", ownership.MembersRecorded, "shop")
+	s, err := ownershiptest.Scan(b.World()).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := &objectCounter{ReadSession: s}
+	for request := range 2 {
+		v := ownership.NewView(counted, ownership.Unrestricted())
+		for _, row := range []resourceid.Ref{a.Ref, bb.Ref} {
+			answer := v.Manager(row)
+			if answer.State != ownership.ManagerClaimed || checkOf(answer.Direct, app("shop")) != ownership.ClaimOmitted {
+				t.Fatalf("answer %+v; want a checked omitted claim", answer)
+			}
+		}
+		if counted.memberships != request+1 {
+			t.Fatalf("membership reads %d; want one per request", counted.memberships)
+		}
+	}
 }

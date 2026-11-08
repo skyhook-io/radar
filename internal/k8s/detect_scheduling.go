@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/gkedisk"
@@ -1239,6 +1240,10 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 		return "WebhookUnavailable", true
 	}
 	switch {
+	case admissionCreateTimeoutPattern.MatchString(msg):
+		// The API server gave up on the create before answering. Admission
+		// webhooks are the usual cause, but the message names none.
+		return "CreateTimeout", true
 	case admissionWebhookDenialPattern.MatchString(msg):
 		return "WebhookDenied", true
 	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
@@ -1279,6 +1284,10 @@ var (
 	admissionNoEndpointsNamePattern    = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
 	admissionServiceNotFoundPattern    = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
 )
+
+// apierrors.NewTimeoutError from the create handler: "Timeout: request did
+// not complete within requested timeout - context deadline exceeded".
+var admissionCreateTimeoutPattern = regexp.MustCompile(`(?i)^(?:(?:error creating(?: job)?:|create pod \S+ in statefulset \S+ failed error:)\s*)?timeout: request did not complete within`)
 
 func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBackendFailure, bool) {
 	lower := strings.ToLower(message)
@@ -1442,6 +1451,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 	// an older one. Backoff is tracked per disk, so an echo for one volume says
 	// nothing about another's error.
 	informativeAttach := map[string]*corev1.Event{}
+	// The newest Multi-Attach event per pod, also kept across the window: the
+	// attach-detach controller reports it once per volume, after which the
+	// kubelet's FailedMount timeouts become the latest event while the
+	// conflict persists.
+	multiAttach := map[string]*corev1.Event{}
 	var order []string
 	for _, e := range events {
 		if e.InvolvedObject.Kind != "Pod" {
@@ -1467,6 +1481,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				if cur := informativeAttach[volKey]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
 					informativeAttach[volKey] = e
 				}
+			}
+		}
+		if reason == "VolumeMultiAttach" {
+			if cur := multiAttach[key]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
+				multiAttach[key] = e
 			}
 		}
 		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
@@ -1502,6 +1521,10 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				}
 			}
 			cause, action = attachFailureDiagnosis(cache, pod, eventMessage)
+		} else if ma := multiAttach[key]; ma != nil && (c.reason == "VolumeMultiAttach" || c.reason == "VolumeMount") && ownerKind == "Deployment" {
+			// The diagnosis rechecks the holder in the cache, so an old event
+			// only explains the mount timeout while that replica still exists.
+			cause, action = multiAttachSharedVolumeDiagnosis(cache, pod, ownerName, ma.Message)
 		}
 		detection := Detection{
 			Kind:              "Pod",
@@ -1644,6 +1667,149 @@ func attachEventVolume(message string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// The attach-detach controller's Multi-Attach event ("Waiting for detach" since
+// Kubernetes 1.37): the volume (PV name) and the pods in the pod's namespace
+// already using it, minus any count of pods in other namespaces.
+var multiAttachEventRE = regexp.MustCompile(`(?:Multi-Attach error|Waiting for detach) for volume "([^"]+)" Volume is already used by pod\(s\) (.+?)(?: and \d+ pod\(s\) in different namespaces)?$`)
+
+// multiAttachSharedVolumeDiagnosis names the root cause of a Multi-Attach
+// failure on a Deployment pod whose volume is a ReadWriteOnce claim the
+// Deployment mounts, when the pod holding it is another pod of the same
+// Deployment on a different node. With one replica, a holder from an older
+// revision means a RollingUpdate surge started the new pod before the old one
+// let go (see rolloutMultiAttachCause); with more, the replicas share the claim
+// across nodes. Returns "" otherwise: a holder from another workload is not
+// this cause.
+func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (cause, action string) {
+	d, claim, holders := multiAttachDeploymentHolders(cache, pod, deployment, eventMessage)
+	if len(holders) == 0 {
+		return "", ""
+	}
+	replicas := schedDesiredReplicas(d.Spec.Replicas)
+	if replicas == 1 {
+		for _, holder := range holders {
+			if cause := rollingUpdateMultiAttachCause(cache, d, claim, pod, holder); cause != "" {
+				return cause, rollingUpdateRWOFix
+			}
+		}
+		return "", ""
+	}
+	if replicas < 2 {
+		return "", ""
+	}
+	// Pod and node names stay in the message: the cause must read the same
+	// for every blocked replica so grouping keeps it.
+	return fmt.Sprintf("Deployment %s runs %d replicas that share ReadWriteOnce PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
+			d.Name, replicas, claim.Name),
+		sharedRWOVolumeFix
+}
+
+// multiAttachDeploymentHolders resolves a Multi-Attach event on a pod of the
+// named Deployment: the Deployment, the ReadWriteOnce claim it mounts that the
+// event names, and the event's holder pods that belong to the same Deployment
+// and are still running on another node. Holders are nil when any of that doesn't hold.
+func multiAttachDeploymentHolders(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (*appsv1.Deployment, *corev1.PersistentVolumeClaim, []*corev1.Pod) {
+	m := multiAttachEventRE.FindStringSubmatch(eventMessage)
+	if m == nil || cache == nil || cache.Deployments() == nil || cache.Pods() == nil {
+		return nil, nil, nil
+	}
+	d, err := cache.Deployments().Deployments(pod.Namespace).Get(deployment)
+	if err != nil || d == nil {
+		return nil, nil, nil
+	}
+	var claim *corev1.PersistentVolumeClaim
+	for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
+		// ReadWriteOncePod is one pod, not one node; its Deployment row covers it.
+		if pvc.Spec.VolumeName == m[1] && singleNodeAccessMode(pvc) == corev1.ReadWriteOnce {
+			claim = pvc
+			break
+		}
+	}
+	if claim == nil {
+		return nil, nil, nil
+	}
+	var holders []*corev1.Pod
+	for _, name := range strings.Split(m[2], ",") {
+		holder, err := cache.Pods().Pods(pod.Namespace).Get(strings.TrimSpace(name))
+		// A finished pod no longer holds the volume, though an old event names it.
+		if err != nil || holder == nil || holder.Spec.NodeName == "" || holder.Spec.NodeName == pod.Spec.NodeName ||
+			holder.Status.Phase == corev1.PodSucceeded || holder.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		if _, kind, owner := podOwnerKindName(cache, holder); kind != "Deployment" || owner != d.Name {
+			continue
+		}
+		holders = append(holders, holder)
+	}
+	return d, claim, holders
+}
+
+// rolloutMultiAttachCause returns the RollingUpdate cause for a stuck
+// Deployment rollout: one of its pending pods has a Multi-Attach event that the
+// pod's own row explains with rollingUpdateMultiAttachCause. Both rows run the
+// same check, so they can't disagree.
+func rolloutMultiAttachCause(cache *ResourceCache, d *appsv1.Deployment) string {
+	if schedDesiredReplicas(d.Spec.Replicas) != 1 || cache == nil || cache.Events() == nil || cache.Pods() == nil {
+		return ""
+	}
+	events, _ := cache.Events().Events(d.Namespace).List(labels.Everything())
+	for _, e := range events {
+		if e.InvolvedObject.Kind != "Pod" {
+			continue
+		}
+		if reason, ok := classifyPostBindFailure(e.Reason, e.Message); !ok || reason != "VolumeMultiAttach" {
+			continue
+		}
+		pod, err := cache.Pods().Pods(d.Namespace).Get(e.InvolvedObject.Name)
+		if err != nil || pod == nil || pod.Status.Phase != corev1.PodPending || (e.InvolvedObject.UID != "" && e.InvolvedObject.UID != pod.UID) {
+			continue
+		}
+		if _, kind, owner := podOwnerKindName(cache, pod); kind != "Deployment" || owner != d.Name {
+			continue
+		}
+		dep, claim, holders := multiAttachDeploymentHolders(cache, pod, d.Name, e.Message)
+		for _, holder := range holders {
+			if cause := rollingUpdateMultiAttachCause(cache, dep, claim, pod, holder); cause != "" {
+				return cause
+			}
+		}
+	}
+	return ""
+}
+
+const rollingUpdateRWOFix = "Set strategy: Recreate, or maxSurge: 0 with maxUnavailable: 1, so the rollout removes the old pod first."
+
+// rollingUpdateMultiAttachCause explains a one-replica Deployment's new pod
+// blocked by its old pod: the blocked pod is from the current revision, the
+// holder from an older one, and the RollingUpdate surges, so both run at once
+// on different nodes. With maxUnavailable at 0 a live old pod waits for the
+// new one to be ready, so the rollout can't finish on its own.
+func rollingUpdateMultiAttachCause(cache *ResourceCache, d *appsv1.Deployment, claim *corev1.PersistentVolumeClaim, pod, holder *corev1.Pod) string {
+	strategy := d.Spec.Strategy
+	if strategy.Type != appsv1.RollingUpdateDeploymentStrategyType || strategy.RollingUpdate == nil || strategy.RollingUpdate.MaxSurge == nil {
+		return ""
+	}
+	if cache.ReplicaSets() == nil {
+		return ""
+	}
+	replicaSets, _ := cache.ReplicaSets().ReplicaSets(d.Namespace).List(labels.Everything())
+	current := k8score.CurrentDeploymentRevisionPodHashes(replicaSets)[d.UID]
+	if current == "" || pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey] != current || holder.Labels[appsv1.DefaultDeploymentUniqueLabelKey] == current {
+		return ""
+	}
+	replicas := int(schedDesiredReplicas(d.Spec.Replicas))
+	surge, err := intstr.GetScaledValueFromIntOrPercent(strategy.RollingUpdate.MaxSurge, replicas, true)
+	if err != nil || surge == 0 {
+		return ""
+	}
+	cause := fmt.Sprintf("Deployment %s uses RollingUpdate with maxSurge %s, so it starts the new pod before the old one stops. The old pod holds ReadWriteOnce PVC %s on another node, and only one node can mount it.",
+		d.Name, strategy.RollingUpdate.MaxSurge.String(), claim.Name)
+	if unavailable, err := intstr.GetScaledValueFromIntOrPercent(strategy.RollingUpdate.MaxUnavailable, replicas, false); err == nil && unavailable == 0 && holder.DeletionTimestamp == nil {
+		cause += " The old pod stays until the new one is ready, so the rollout is stuck."
+	}
+	return cause
 }
 
 // attachFailureDiagnosis explains an attach failure the cloud rejected
@@ -1852,7 +2018,9 @@ func classifyPostBindFailure(reason, msg string) (string, bool) {
 		}
 		return "SandboxCreationFailed", true
 	case reason == "FailedAttachVolume":
-		if strings.Contains(lower, "multi-attach") {
+		// Kubernetes 1.37 renamed the attach-detach controller's "Multi-Attach
+		// error" prefix to "Waiting for detach".
+		if strings.Contains(lower, "multi-attach") || strings.HasPrefix(lower, "waiting for detach") {
 			return "VolumeMultiAttach", true
 		}
 		return "VolumeAttach", true

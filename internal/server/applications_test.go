@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
@@ -1050,6 +1052,46 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 	}
 }
 
+// A JobSet's member Jobs resolve to the JobSet as their structural root, as an
+// operator CR's workloads do, so they group as one application rather than one
+// per Job.
+func TestStructuralRoot_JobSetMembersShareTheJobSetRoot(t *testing.T) {
+	jobSetID := "jobset/ml/train/jobset.x-k8s.io"
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: jobSetID, Kind: topology.KindJobSet, Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "jobset.x-k8s.io/v1alpha2"}},
+			{ID: "job/ml/train-driver-0", Kind: topology.KindJob, Name: "train-driver-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/train-workers-0", Kind: topology.KindJob, Name: "train-workers-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/standalone", Kind: topology.KindJob, Name: "standalone", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+		},
+		Edges: []topology.Edge{
+			{Source: jobSetID, Target: "job/ml/train-driver-0", Type: topology.EdgeManages},
+			{Source: jobSetID, Target: "job/ml/train-workers-0", Type: topology.EdgeManages},
+		},
+	}
+	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+	for _, node := range topo.Nodes {
+		g.byID[node.ID] = node
+		kind := topology.KubernetesKindForNode(&node)
+		ns, _ := node.Data["namespace"].(string)
+		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
+	}
+
+	want := resourceid.ResourceKey("jobset.x-k8s.io", "JobSet", "ml", "train")
+	if root, kind, group, identity := g.rootOf("jobset.x-k8s.io", "JobSet", "ml", "train"); root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+		t.Fatalf("JobSet workload root = %q %q %q %q", root, kind, group, identity)
+	}
+	for _, name := range []string{"train-driver-0", "train-workers-0"} {
+		root, kind, group, identity := g.rootOf("batch", "Job", "ml", name)
+		if root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+			t.Fatalf("%s root = %q %q %q %q, want the JobSet", name, root, kind, group, identity)
+		}
+	}
+	if root, _, _, _ := g.rootOf("batch", "Job", "ml", "standalone"); root != "ml/Job/standalone" {
+		t.Fatalf("a Job outside the JobSet resolved to %q", root)
+	}
+}
+
 func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
@@ -1561,5 +1603,53 @@ func TestManagedSourceRefs_IgnoreRemoteArgoDestinations(t *testing.T) {
 	ref := commonManagedSourceRef([]appWorkload{{Group: "apps", Kind: "Deployment", Namespace: "sealed-secrets", Name: "controller"}}, sources)
 	if ref == nil || ref.Name != "sealed-secrets-hub" {
 		t.Fatalf("source ref = %+v, want the in-cluster Application only", ref)
+	}
+}
+
+func TestApplicationsViewRestricted(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		requested  []string
+		effective  []string
+		unreadable string
+		want       bool
+	}{
+		{name: "all namespaces, all visible", unreadable: "none", want: false},
+		{name: "all namespaces, user narrowed", effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "all namespaces, no access", effective: []string{}, unreadable: "none", want: true},
+		{name: "all namespaces, Radar can't read them all", unreadable: "", want: true},
+		{name: "explicit filter fully granted", requested: []string{"a", "b"}, effective: []string{"a", "b"}, unreadable: "none", want: false},
+		{name: "explicit filter partly granted", requested: []string{"a", "b"}, effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "explicit filter inside what Radar reads", requested: []string{"a"}, effective: []string{"a"}, unreadable: "b", want: false},
+		{name: "explicit filter outside what Radar reads", requested: []string{"b"}, effective: []string{"b"}, unreadable: "b", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readable := func(namespaces []string) bool { return !slices.Contains(namespaces, tc.unreadable) }
+			if got := applicationsViewRestricted(tc.requested, tc.effective, readable); got != tc.want {
+				t.Fatalf("applicationsViewRestricted() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewestRevisionByOwner(t *testing.T) {
+	older := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	newer := metav1.NewTime(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
+	revision := func(owner types.UID, at metav1.Time) metav1.Object {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: at,
+			OwnerReferences:   []metav1.OwnerReference{{UID: owner}},
+		}}
+	}
+
+	// A rollback bumps the revision number on an old object, so creation time
+	// has to win over listing order.
+	got := newestRevisionByOwner([]metav1.Object{
+		revision("api", newer),
+		revision("api", older),
+		revision("worker", older),
+	})
+	if !got["api"].Equal(newer.Time) || !got["worker"].Equal(older.Time) || len(got) != 2 {
+		t.Fatalf("newestRevisionByOwner() = %v", got)
 	}
 }

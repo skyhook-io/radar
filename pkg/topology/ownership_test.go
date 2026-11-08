@@ -518,6 +518,49 @@ func (d denyKind) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision 
 }
 func (denyKind) Namespaces() ([]string, bool) { return nil, true }
 
+type undecidedKind struct{ kind resourceid.GroupKind }
+
+func (d undecidedKind) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if gk == d.kind {
+		return ownership.Undecided
+	}
+	return ownership.Allowed
+}
+func (undecidedKind) Namespaces() ([]string, bool) { return nil, true }
+
+func TestOtherManagingControllersDistinguishesUnavailableFromHidden(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	secret := b.Add("", "ConfigMap", "shop", "config")
+	cert := b.Add("example.io", "Widget", "shop", "controller")
+	for _, tc := range []struct {
+		name       string
+		access     ownership.Access
+		collection ownershiptest.CollectionState
+		absent     bool
+		want       int
+		incomplete bool
+	}{
+		{"readable", ownership.Unrestricted(), ownershiptest.Collected, false, 1, false},
+		{"denied", denyKind{cert.Ref.GroupKind()}, ownershiptest.Collected, false, 0, false},
+		{"undecided", undecidedKind{cert.Ref.GroupKind()}, ownershiptest.Collected, false, 0, true},
+		{"cold", ownership.Unrestricted(), ownershiptest.Loading, false, 0, true},
+		{"gone", ownership.Unrestricted(), ownershiptest.Collected, true, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := b.World()
+			w.Collection = map[resourceid.GroupKind]ownershiptest.Collection{cert.Ref.GroupKind(): {State: tc.collection}}
+			if tc.absent {
+				w.Objects = []ownershiptest.Object{secret}
+			}
+			rel := &Relationships{manageSources: []ResourceRef{refOf(cert.Ref)}}
+			ApplyOwner(rel, ownershipView(t, w, tc.access), fetched(t, w, secret.Ref))
+			if len(rel.Managers) != tc.want || rel.OtherManagersIncomplete != tc.incomplete {
+				t.Fatalf("managers=%+v incomplete=%v", rel.Managers, rel.OtherManagersIncomplete)
+			}
+		})
+	}
+}
+
 // A Pod's Deployment is the one its ReplicaSet's controller reference names,
 // reached through the Pod's own controller reference.
 func TestApplyOwnershipNamesTheDeploymentOnlyThroughControllers(t *testing.T) {
@@ -730,5 +773,95 @@ func TestApplyOwnershipKeepsTheEdgeOfAManagerBehindAHiddenGap(t *testing.T) {
 	ApplyOwnership(rel, v, fetched(t, w, cfg.Ref))
 	if got := refsText(rel.Managers); !slices.Equal(got, []string{app.Ref.String()}) {
 		t.Errorf("managers %v, want %v from its edge", got, app.Ref)
+	}
+}
+
+// A resource context's top owner is the last object up the controller chain
+// the caller reads, and says why the walk stopped short of the top when it
+// may have.
+func TestApplyOwnerReadsTheControllerChainToItsTop(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	cluster := b.Add("example.io", "Widget", "db", "basic")
+	sts := b.Add("apps", "Deployment", "db", "basic-tidb", cluster.OwnerRef(true))
+	pod := b.Add("", "Pod", "db", "basic-tidb-0", sts.OwnerRef(true))
+	loose := b.Add("", "Pod", "db", "loose")
+	w := b.World()
+	unserved := b.World()
+	unserved.Partial = true
+	unserved.Resources = slices.DeleteFunc(slices.Clone(unserved.Resources), func(r ownership.ServedResource) bool { return r.Group == "example.io" })
+
+	for name, tc := range map[string]struct {
+		w        ownershiptest.World
+		access   ownership.Access
+		subject  resourceid.Ref
+		wantTop  *resourceid.Ref
+		wantStop string
+	}{
+		"to the custom resource":           {w, ownership.Unrestricted(), pod.Ref, &cluster.Ref, ""},
+		"the workload's own":               {w, ownership.Unrestricted(), sts.Ref, &cluster.Ref, ""},
+		"no controller":                    {w, ownership.Unrestricted(), loose.Ref, nil, ""},
+		"an owner Radar can't check":       {unserved, ownership.Unrestricted(), pod.Ref, &sts.Ref, "unknown"},
+		"an owner the caller may not read": {w, denyKind{resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, pod.Ref, &sts.Ref, "withheld"},
+	} {
+		rel := &Relationships{}
+		ApplyOwner(rel, ownershipView(t, tc.w, tc.access), fetched(t, tc.w, tc.subject))
+		c := rel.ControllerChain
+		if c == nil {
+			t.Fatalf("%s: no chain", name)
+		}
+		top := c.Top()
+		switch {
+		case (top == nil) != (tc.wantTop == nil), top != nil && refIdentity(*top) != *tc.wantTop:
+			t.Errorf("%s: top %v, want %v", name, top, tc.wantTop)
+		case c.Stop != tc.wantStop:
+			t.Errorf("%s: stop %q, want %q", name, c.Stop, tc.wantStop)
+		}
+	}
+}
+
+// A host whose reference checks are stricter than the walk's access cuts the
+// chain below the first object it may not show.
+func TestControllerChainReadable(t *testing.T) {
+	pod := ResourceRef{Kind: "Pod", Namespace: "db", Name: "p"}
+	sts := ResourceRef{Group: "apps", Kind: "StatefulSet", Namespace: "db", Name: "s"}
+	cr := ResourceRef{Group: "example.io", Kind: "Widget", Namespace: "db", Name: "w"}
+	c := &ControllerChain{Refs: []ResourceRef{pod, sts, cr}}
+	cut := c.Readable(func(r ResourceRef) bool { return r.Kind != "Widget" })
+	if top := cut.Top(); top == nil || *top != sts || cut.Stop != "withheld" {
+		t.Errorf("cut %+v, want the StatefulSet, withheld", cut)
+	}
+	if got := c.Readable(func(ResourceRef) bool { return true }); got != c {
+		t.Errorf("all readable: %+v, want the chain itself", got)
+	}
+	if got := (*ControllerChain)(nil).Readable(func(ResourceRef) bool { return false }); got != nil {
+		t.Errorf("nil chain: %+v", got)
+	}
+}
+
+// A walk that loops ends short of a top Radar could establish.
+func TestChainOfALoop(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	a := b.Add("example.io", "Widget", "db", "a")
+	bb := b.Add("example.io", "Gadget", "db", "b", a.OwnerRef(true))
+	w := b.World()
+	for i, o := range w.Objects {
+		if o.Ref == a.Ref {
+			w.Objects[i].OwnerReferences = []metav1.OwnerReference{bb.OwnerRef(true)}
+		}
+	}
+	c := ChainOf(ownershipView(t, w, ownership.Unrestricted()).ControllerChain(bb.Ref))
+	if c == nil || c.Stop != "unknown" {
+		t.Errorf("loop: %+v, want stop unknown", c)
+	}
+}
+
+func TestAgentControllersDoNotTreatGatewayClassAsGenerator(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	subject := b.Add("", "ConfigMap", "shop", "subject")
+	w := b.World()
+	rel := &Relationships{manageSources: []ResourceRef{{Group: "gateway.networking.k8s.io", Kind: "GatewayClass", Name: "implementation"}}}
+	managers, incomplete := OtherManagingControllers(rel, ownershipView(t, w, ownership.Unrestricted()), subject.Ref)
+	if len(managers) != 0 || incomplete {
+		t.Fatalf("managers=%v incomplete=%v", managers, incomplete)
 	}
 }

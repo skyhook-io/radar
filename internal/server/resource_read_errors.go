@@ -112,6 +112,19 @@ func collectionFailure(resource string, err error) *resourceReadFailure {
 // target, when the read has one, gives the failure its coverage: the scope
 // and every gap, with no read scope because Radar read nothing.
 func (s *Server) writeReadFailure(w http.ResponseWriter, resource string, err error, target *listTarget) {
+	body, failure := readErrorBody(resource, err, target)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(readStatusFor(failure.code))
+	s.writeJSON(w, struct {
+		resourceapi.ReadError
+		Count int `json:"count,omitempty"`
+		Limit int `json:"limit,omitempty"`
+	}{ReadError: body, Count: failure.count, Limit: failure.limit})
+}
+
+// readErrorBody is the {error, error_code, coverage?} body of a failed read,
+// for a response that carries it as one part among others.
+func readErrorBody(resource string, err error, target *listTarget) (resourceapi.ReadError, *resourceReadFailure) {
 	var failure *resourceReadFailure
 	if !errors.As(err, &failure) {
 		failure = collectionFailure(resource, err)
@@ -127,13 +140,7 @@ func (s *Server) writeReadFailure(w http.ResponseWriter, resource string, err er
 		}
 		body.Coverage = &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: target.placeGaps(gaps, nil)}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(readStatusFor(failure.code))
-	s.writeJSON(w, struct {
-		resourceapi.ReadError
-		Count int `json:"count,omitempty"`
-		Limit int `json:"limit,omitempty"`
-	}{ReadError: body, Count: failure.count, Limit: failure.limit})
+	return body, failure
 }
 
 // writeCollectionFailure answers a failed read that has no list target.

@@ -460,7 +460,11 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	log.Printf("[hubble] Direct connection to %s failed (%v); falling back to port-forward", directAddr, directErr)
+	if portforward.AutoDisabled() {
+		log.Printf("[hubble] Direct connection to %s failed (%v); automatic port-forwarding is turned off", directAddr, directErr)
+	} else {
+		log.Printf("[hubble] Direct connection to %s failed (%v); falling back to port-forward", directAddr, directErr)
+	}
 
 	// The cached verdict that skipped the direct lane may itself be stale (a
 	// probe that raced relay startup); once the fallback is dead too, paying
@@ -480,8 +484,14 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	}
 
 	// Fallback lane: managed port-forward, which needs pods/portforward RBAC.
-	log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
-	connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+	var connInfo *portforward.ConnectionInfo
+	var err error
+	if portforward.AutoDisabled() {
+		err = portforward.ErrAutoDisabled
+	} else {
+		log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
+		connInfo, err = portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+	}
 	if err != nil {
 		if info := retryDirectAfterSkip(); info != nil {
 			return info, nil
@@ -594,7 +604,11 @@ func (h *HubbleSource) probeDirectAsync(addr string) {
 	reachable := tcpReachable(addr, directDialTimeout)
 
 	if h.applyProbeResult(gen, addr, reachable) && !reachable {
-		log.Printf("[hubble] Direct address %s unreachable (background probe); connects will use port-forward", addr)
+		if portforward.AutoDisabled() {
+			log.Printf("[hubble] Direct address %s unreachable (background probe); automatic port-forwarding is turned off", addr)
+		} else {
+			log.Printf("[hubble] Direct address %s unreachable (background probe); connects will use port-forward", addr)
+		}
 	}
 }
 
@@ -629,6 +643,13 @@ var errDirectUnreachable = errors.New("tcp dial failed (unreachable or blocked)"
 // composeConnectError reports both failed lanes so the user sees the whole
 // picture; an RBAC-denied port-forward additionally names the real fixes.
 func composeConnectError(directAddr string, directErr, pfErr error) string {
+	if errors.Is(pfErr, portforward.ErrAutoDisabled) {
+		if errors.Is(directErr, errDirectUnreachable) {
+			return "Radar can't reach hubble-relay directly from this machine, and automatic port-forwarding is turned off. Live traffic needs a network route to the hubble-relay Service."
+		}
+		// The route works; the connection itself failed, so that is what to fix.
+		return fmt.Sprintf("Radar reached hubble-relay directly, but the connection failed: %v. Automatic port-forwarding is turned off, so there is no other way to connect.", directErr)
+	}
 	msg := fmt.Sprintf("direct connection to %s (%s) failed (%v); port-forward fallback failed: %v", hubbleRelayService, directAddr, directErr, pfErr)
 	if isForbiddenPortForward(pfErr) {
 		msg += " — grant Radar port-forward permission (Helm: rbac.portForward=true)"

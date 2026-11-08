@@ -178,3 +178,67 @@ func BenchmarkRecordersOfManyUnreadableManagers(b *testing.B) {
 		})
 	}
 }
+
+type changingManagers struct {
+	ownership.ReadSession
+	answer ownership.RecordingManagersRead
+}
+
+func (s *changingManagers) RecordingManagers(resourceid.Ref) ownership.RecordingManagersRead {
+	return s.answer
+}
+
+func TestUnreadableManagersShareWithoutFreezingReadsOrMutatingAnswers(t *testing.T) {
+	scan, err := ownershiptest.Scan(ownershiptest.Fixture()).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &changingManagers{ReadSession: scan}
+	caller := &access{}
+	v := ownership.NewView(s, caller)
+	a := at(ownership.ArgoApplication.Group, "Application", "ops", "a")
+	b := at(ownership.ArgoApplication.Group, "Application", "ops", "b")
+	c := at(ownership.ArgoApplication.Group, "Application", "ops", "c")
+	var previous []ownership.RecordingManagersAnswer
+	var expected [][]resourceid.Ref
+	for i, step := range []struct {
+		refs     []resourceid.Ref
+		decision ownership.Decision
+	}{
+		{[]resourceid.Ref{a, b}, ownership.Allowed},
+		{[]resourceid.Ref{a, b}, ownership.Allowed},
+		{[]resourceid.Ref{a, c}, ownership.Allowed},
+		{[]resourceid.Ref{a}, ownership.Allowed},
+		{[]resourceid.Ref{a, b, c}, ownership.Allowed},
+		{[]resourceid.Ref{a, b, c}, ownership.Denied},
+		{[]resourceid.Ref{a, b, c}, ownership.Undecided},
+		{[]resourceid.Ref{b}, ownership.Allowed},
+	} {
+		caller.denied, caller.undecided = nil, nil
+		if step.decision == ownership.Denied {
+			caller.denied = []resourceid.GroupKind{ownership.ArgoApplication}
+		}
+		if step.decision == ownership.Undecided {
+			caller.undecided = []resourceid.GroupKind{ownership.ArgoApplication}
+		}
+		s.answer.Unreadable = step.refs
+		got := v.RecordingManagers(at("", "ConfigMap", "alpha", fmt.Sprint(i)))
+		var want []resourceid.Ref
+		if step.decision == ownership.Allowed {
+			want = step.refs
+		}
+		if !slices.Equal(got.Unreadable, want) || got.Undecided != (step.decision == ownership.Undecided) {
+			t.Fatalf("step %d = %+v, want %v", i, got, want)
+		}
+		if i == 1 && &got.Unreadable[0] != &previous[0].Unreadable[0] {
+			t.Fatal("identical references were copied")
+		}
+		previous = append(previous, got)
+		expected = append(expected, slices.Clone(want))
+		for j, old := range previous {
+			if !slices.Equal(old.Unreadable, expected[j]) {
+				t.Fatalf("step %d mutated answer %d", i, j)
+			}
+		}
+	}
+}

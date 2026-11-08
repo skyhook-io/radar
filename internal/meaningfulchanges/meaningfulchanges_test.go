@@ -245,8 +245,26 @@ func TestRecentSurfacesNetworkPolicyChanges(t *testing.T) {
 		if got["deny-all"] != issuesapi.ChangeCategoryLifecycle || got["allow-web"] != issuesapi.ChangeCategorySpecConfig {
 			t.Errorf("Recent(kinds=%v) = %+v, want deny-all lifecycle and allow-web spec_config", q.Kinds, result.Changes)
 		}
-		if _, ok := got["calico-policy"]; ok {
-			t.Errorf("Recent(kinds=%v) included a Calico policy as a core NetworkPolicy change", q.Kinds)
+		wantCount := 2
+		if len(q.Kinds) > 0 {
+			wantCount = 3
+			if got["calico-policy"] != issuesapi.ChangeCategoryLifecycle {
+				t.Errorf("Recent(kinds=%v) = %+v, want Calico lifecycle in explicit query", q.Kinds, result.Changes)
+			}
+		} else if _, ok := got["calico-policy"]; ok {
+			t.Errorf("default feed included a Calico policy: %+v", result.Changes)
+		}
+		if len(result.Changes) != wantCount {
+			t.Errorf("Recent(kinds=%v) = %+v, want %d changes", q.Kinds, result.Changes, wantCount)
+		}
+		for _, c := range result.Changes {
+			wantVersion := "networking.k8s.io/v1"
+			if c.Name == "calico-policy" {
+				wantVersion = "projectcalico.org/v3"
+			}
+			if c.APIVersion != wantVersion {
+				t.Errorf("%s API version = %s, want %s", c.Name, c.APIVersion, wantVersion)
+			}
 		}
 	}
 }

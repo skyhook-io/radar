@@ -56,7 +56,8 @@ func IsRadarVocabularyGroup(group string) bool {
 // enforces:
 //
 //   - reserved-principal rejection (every mode): username and every group must
-//     be outside the reserved K8s namespaces (blocks system:masters etc.);
+//     be outside the reserved K8s namespaces (blocks system:masters etc.),
+//     except the group system:authenticated;
 //   - vocabulary allowlist (Cloud only): username must be a Cloud identity and
 //     every group must be radar:*/cloud:*.
 //
@@ -67,7 +68,10 @@ func ForwardedIdentityAllowed(username string, groups []string, cloudMode bool) 
 		return false
 	}
 	for _, g := range groups {
-		if IsReservedPrincipal(g) {
+		// system:authenticated is the one reserved group a proxy may assert:
+		// every signed-in user has it, and the API server adds it to every
+		// impersonated user anyway.
+		if IsReservedPrincipal(g) && g != "system:authenticated" {
 			return false
 		}
 	}

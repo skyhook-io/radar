@@ -707,7 +707,7 @@ export function LogCore({
           })}
         </div>
 
-        <div role="group" aria-label="Log display and utilities" className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
+        <div role="group" aria-label="Log display and utilities" className="ml-auto flex shrink-0 flex-nowrap items-center gap-2 phone:gap-1">
 
         {/* Structured-log display mode: icon cycles compact→expanded→raw, chevron picks explicitly. */}
         {hasStructuredEntries && (
@@ -715,7 +715,7 @@ export function LogCore({
             <Tooltip content={`Structured: ${STRUCTURED_MODE_LABELS[structuredMode]} — click to cycle`} delay={TIP_DELAY} position="bottom">
               <button
                 onClick={cycleStructuredMode}
-                className={`p-1.5 rounded-l transition-colors ${
+                className={`p-1.5 rounded-l phone:rounded transition-colors ${
                   structuredMode === 'compact' ? iconBtnInactive : palette.toolbarActive
                 }`}
                 aria-label={`Structured log display mode: ${STRUCTURED_MODE_LABELS[structuredMode]}`}
@@ -723,7 +723,8 @@ export function LogCore({
                 <Braces className="w-4 h-4" />
               </button>
             </Tooltip>
-            <div className="relative" ref={structuredMenuRef}>
+            {/* Phones keep the icon (it cycles the modes) and drop the picker to fit one row. */}
+            <div className="relative phone:hidden" ref={structuredMenuRef}>
               <Tooltip content="Pick structured display mode" delay={TIP_DELAY} position="bottom">
                 <button
                   onClick={() => setShowStructuredMenu(prev => !prev)}
@@ -874,7 +875,7 @@ export function LogCore({
         </Tooltip>
 
         {!themeLocked && (
-          <Tooltip content={isDark ? 'Switch to light mode' : 'Switch to dark mode'} delay={TIP_DELAY} position="bottom">
+          <Tooltip content={isDark ? 'Switch to light mode' : 'Switch to dark mode'} delay={TIP_DELAY} position="bottom" wrapperClassName="phone:hidden">
             <button
               onClick={toggleDark}
               className={iconBtnInactive}
@@ -987,8 +988,9 @@ export function LogCore({
       </div>
 
       {/* Search bar */}
+      {/* Phones: the query takes the first line and the search options wrap under it. */}
       {search.isOpen && (
-        <div className={`@container/logsearch flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBgMuted}`}>
+        <div className={`@container/logsearch flex items-center gap-2 phone:flex-wrap phone:gap-y-1.5 px-3 py-2 border-b ${palette.border} ${palette.toolbarBgMuted}`}>
           <Search className={`w-4 h-4 ${palette.textSecondary} shrink-0`} />
           <Input
             value={search.query}
@@ -1005,7 +1007,7 @@ export function LogCore({
               }
             }}
             placeholder="Search logs..."
-            className={`flex-1 bg-transparent ${palette.textPrimary} text-sm ${palette.placeholder} focus:outline-none min-w-0`}
+            className={`flex-1 phone:basis-[calc(100%-1.5rem)] bg-transparent ${palette.textPrimary} text-sm ${palette.placeholder} focus:outline-none min-w-0`}
             autoFocus
           />
 
@@ -1187,8 +1189,8 @@ export function LogCore({
         </div>
       )}
 
-      {/* Keyboard shortcut hints */}
-      <div className={`flex items-center gap-4 px-3 py-1 border-t ${palette.border} ${palette.toolbarBg} text-[10px] ${palette.textDisabled}`}>
+      {/* Keyboard shortcut hints (a phone has no keyboard to use them) */}
+      <div className={`flex items-center gap-4 px-3 py-1 border-t phone:hidden ${palette.border} ${palette.toolbarBg} text-[10px] ${palette.textDisabled}`}>
         {onStartStream && (!sourceUnavailable || isStreaming) && <Shortcut keys="S" label={isStreaming ? 'Stop stream' : 'Stream'} palette={palette} />}
         <Shortcut keys="Ctrl+F" label="Search" palette={palette} />
         {search.mode !== 'hide' && (
@@ -1353,7 +1355,7 @@ function LogLine({
   }
 
   return (
-    <div className={`flex ${palette.hoverSurface} group leading-5 px-2 ${isCurrentMatch ? palette.currentMatchBg : ''}`}>
+    <div className={`flex phone:flex-wrap ${palette.hoverSurface} group leading-5 px-2 ${isCurrentMatch ? palette.currentMatchBg : ''}`}>
       {leadSlot}
       {showTimestamp && entry.timestamp && (
         <span
@@ -1371,10 +1373,10 @@ function LogLine({
           [{entry.sourceLabel || entry.pod.split('-').slice(-2).join('-')}]
         </span>
       )}
-      <span className="flex-1 min-w-0">{contentElement}</span>
+      <span className="flex-1 min-w-0 phone:order-last phone:basis-full">{contentElement}</span>
       <button
         onClick={handleCopy}
-        className={`opacity-0 group-hover:opacity-100 focus-visible:opacity-100 ml-1 p-0.5 rounded ${palette.textTertiary} ${palette.hoverText} shrink-0 transition-opacity`}
+        className={`opacity-0 group-hover:opacity-100 focus-visible:opacity-100 ml-1 p-0.5 rounded ${palette.textTertiary} ${palette.hoverText} shrink-0 transition-opacity phone:ml-auto phone:opacity-100`}
         title="Copy line"
       >
         <Copy className="w-3 h-3" />

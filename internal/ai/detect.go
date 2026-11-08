@@ -28,6 +28,10 @@ type AgentInfo struct {
 	// them is read-only.
 	Apply        bool `json:"apply,omitempty"`
 	Verification bool `json:"verification,omitempty"`
+	// Questions declares that the backend opens a run from the engineer's
+	// question, with or without a resource. A backend that omits it accepts
+	// only a resource.
+	Questions bool `json:"questions,omitempty"`
 }
 
 // knownAgents are the CLI names we probe for - a FIXED list. We never exec a

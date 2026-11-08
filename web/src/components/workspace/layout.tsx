@@ -30,7 +30,8 @@ export function ScreenEmptyState({
 }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center bg-theme-base p-6">
-      <div className="max-w-md text-center">
+      {/* Phones: shrink to the screen so wide content (YAML) scrolls inside itself. */}
+      <div className="max-w-md text-center phone:w-full phone:min-w-0">
         <Icon className="mx-auto h-9 w-9 text-theme-text-tertiary/50" />
         <h2 className="mt-3 text-lg font-medium text-theme-text-primary">
           {title}

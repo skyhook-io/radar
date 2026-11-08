@@ -18,6 +18,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/launchday"
 )
 
 var (
@@ -67,6 +68,8 @@ type UpdateInfo struct {
 	InstallMethod  InstallMethod `json:"installMethod"`
 	UpdateCommand  string        `json:"updateCommand,omitempty"`
 	Error          string        `json:"error,omitempty"`
+	// Added by WithProductHuntLaunch, not by the lookup.
+	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
 
 // githubRelease represents a GitHub release response
@@ -74,11 +77,23 @@ type githubRelease struct {
 	TagName string `json:"tag_name"`
 	HTMLURL string `json:"html_url"`
 	Body    string `json:"body"`
+	// Added by releases.skyhook.io; absent from GitHub's own response.
+	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
 
 type checkOptions struct {
 	source string
 	manual bool
+}
+
+// WithProductHuntLaunch returns a copy of info carrying the effective Product
+// Hunt launch, for any update result the UI reads. A copy, because a lookup can
+// hand back the cached result itself.
+func WithProductHuntLaunch(info *UpdateInfo) *UpdateInfo {
+	out := *info
+	launch := launchday.Current()
+	out.ProductHuntLaunch = &launch
+	return &out
 }
 
 // SetCurrent sets the current version (called from main)
@@ -363,6 +378,12 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		result.Error = fmt.Sprintf("failed to parse response: %v", err)
 		log.Printf("[version] %s", result.Error)
 		return result
+	}
+
+	if release.ProductHuntLaunch != nil {
+		if err := launchday.Set(*release.ProductHuntLaunch); err != nil {
+			log.Printf("[version] Ignoring Product Hunt launch: %v", err)
+		}
 	}
 
 	result.LatestVersion = strings.TrimPrefix(release.TagName, "v")

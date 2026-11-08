@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
@@ -121,6 +123,9 @@ type Detection struct {
 	// RestartLoop is set on a Pod crashloop row emitted because a container is
 	// in an active restart loop (see activeRestartLoop). Nil otherwise.
 	RestartLoop *issuesapi.RestartLoop
+	// EvictedFromNode is spec.nodeName of an Evicted pod: the node whose
+	// kubelet evicted it. The pod's own field, so it needs no node read.
+	EvictedFromNode string `json:"-"`
 	// AffectedRefs names resources a detection on another subject affects
 	// (the Services, workloads and Pods a NetworkPolicy isolates), so the issue
 	// also shows up on those resources. Ordered most to least important; the
@@ -166,11 +171,15 @@ type Detection struct {
 	// names a structured one-click fix (e.g. "create-namespace") and
 	// RemediationTarget the resource it acts on.
 	// Cross-resource diagnosis must be withheld when its source is unreadable.
-	DiagnosisSource   *corev1.ObjectReference `json:"-"`
-	Cause             string
-	Action            string
-	RemediationKind   string
-	RemediationTarget string
+	DiagnosisSource      *corev1.ObjectReference `json:"-"`
+	Cause                string
+	Action               string
+	Hazard               string
+	ActionPrimary        string
+	ActionSecondaryTitle string
+	ActionSecondary      []string
+	RemediationKind      string
+	RemediationTarget    string
 	// OperationRetryCount / Stuck describe a controller operation that keeps
 	// failing: the retry count parsed from a GitOps controller's message and
 	// whether it has crossed the "no longer transient" threshold. Named
@@ -222,6 +231,15 @@ func podOwnerKindName(cache *ResourceCache, pod *corev1.Pod) (group, kind, name 
 // Does NOT include pods (consumers handle pod problems differently).
 // namespace="" scans all namespaces.
 func DetectProblems(cache *ResourceCache, namespace string) []Detection {
+	return DetectProblemsInScope(cache, namespace, nil)
+}
+
+// DetectProblemsInScope is DetectProblems sharing cluster-wide lookups with
+// the other runs of one compose through scope.
+func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *DetectScope) []Detection {
+	if scope == nil {
+		scope = NewDetectScope()
+	}
 	var problems []Detection
 	now := time.Now()
 	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
@@ -311,7 +329,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, detection)
 			}
 
-			if d.Status.UnavailableReplicas > 0 && stuck == nil && replicaFailure == nil {
+			if deploymentBelowDesiredAvailable(d) && !deploymentRolloutDipWithinBudget(d, now) && stuck == nil && replicaFailure == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				var availCondLTT time.Time
 				for _, cond := range d.Status.Conditions {
@@ -345,7 +363,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 
 			if stuck != nil && replicaFailure == nil {
 				message := stuck.Message
-				if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
+				action := "Inspect the new pods (image, readiness probe, resources) — the rollout is waiting on them to become ready."
+				// The pod row's RollingUpdate Multi-Attach cause, when it holds,
+				// replaces the generic advice so both rows say the same thing.
+				cause := rolloutMultiAttachCause(cache, d)
+				if cause != "" {
+					action = rollingUpdateRWOFix
+				} else if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
 					if message != "" {
 						message += " " + detail
 					} else {
@@ -379,7 +403,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Group:             "apps",
 					Severity:          "critical",
 					Reason:            "Rollout stuck",
-					Action:            "Inspect the new pods (image, readiness probe, resources) — the rollout is waiting on them to become ready.",
+					Cause:             cause,
+					Action:            action,
 					Message:           message,
 					Age:               timeutil.FormatAgeShort(now.Sub(d.CreationTimestamp.Time)),
 					AgeSeconds:        int64(now.Sub(d.CreationTimestamp.Time).Seconds()),
@@ -416,12 +441,16 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			if ss.Status.ReadyReplicas < desired {
 				ageDur := now.Sub(ss.CreationTimestamp.Time)
+				severity := "critical"
+				if statefulSetRolloutWithinBudget(ss, desired) {
+					severity = "warning"
+				}
 				problems = append(problems, Detection{
 					Kind:              "StatefulSet",
 					Namespace:         ss.Namespace,
 					Name:              ss.Name,
 					Group:             "apps",
-					Severity:          "critical",
+					Severity:          severity,
 					Reason:            fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, desired),
 					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
@@ -464,12 +493,17 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			if ds.Status.NumberMisscheduled > 0 {
 				appendDSProblem(fmt.Sprintf("%d misscheduled", ds.Status.NumberMisscheduled), "high", "daemonset:misscheduled")
 			}
+			// "not scheduled" stays critical even mid-rollout: status cannot tell
+			// the moment between deleting a node's old pod and creating its
+			// replacement from a replacement that can never be created.
 			if ds.Status.DesiredNumberScheduled > ds.Status.CurrentNumberScheduled {
 				appendDSProblem(fmt.Sprintf("%d not scheduled", ds.Status.DesiredNumberScheduled-ds.Status.CurrentNumberScheduled), "critical", "daemonset:not-scheduled")
 			} else if ds.Status.NumberUnavailable > 0 {
 				severity := "critical"
 				if daemonSetUnavailableIsByDesignUnschedulable(cache, ds, podsByNamespace) {
 					severity = "high"
+				} else if daemonSetRolloutWithinBudget(ds) {
+					severity = "warning"
 				}
 				appendDSProblem(fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable), severity, "daemonset:unavailable")
 			}
@@ -594,6 +628,15 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					cause, action = imagePullDiagnosis(reason, message)
 				}
 			}
+			var evictedFrom, messageSource string
+			var evictedAt time.Time
+			if reason == health.PodEvictedReason && health.IsEvictedPod(pod) {
+				ev := evictedPodProblem(pod, ownerKind)
+				severity, message, rawMessage, fingerprint = ev.severity, ev.message, ev.raw, ev.fingerprint
+				cause, action, evictedAt = ev.cause, ev.action, ev.onset
+				messageSource = issuesapi.MessageSourceRadar
+				evictedFrom = pod.Spec.NodeName
+			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
 			// healthy operation (started_after_resource_was_healthy).
@@ -692,6 +735,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Reason:               reason,
 				Message:              message,
 				RawMessage:           rawMessage,
+				MessageSource:        messageSource,
+				EvictedFromNode:      evictedFrom,
 				Fingerprint:          fingerprint,
 				Age:                  timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
@@ -713,6 +758,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			var onset time.Time
 			if reason == readinessGatesNotReadyReason {
 				onset, _ = health.PodReadinessGateFailure(pod, now)
+			}
+			if !evictedAt.IsZero() {
+				onset = evictedAt
 			}
 			setDetectionOnset(&detection, now, onset)
 			if pinLoopSeverity {
@@ -761,6 +809,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 	problems = append(problems, detectNetworkPolicyDenyAllIngress(cache, namespace, podsByNamespace, now)...)
+	problems = append(problems, detectLiveTLSCertificates(cache, namespace, scope, now)...)
 
 	// HPA problems
 	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {
@@ -1148,7 +1197,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 
-	// Job problems: stuck active (running > 1h with no completions)
+	// Job problems: a terminal failure condition, or a Job being deleted. Age
+	// alone is not failure — a long-running active Job (training, migration, big
+	// batch) with no failure evidence is in progress, not failed.
 	if cache.Jobs() != nil {
 		for _, job := range jobs {
 			if det, ok := terminatingProblem("Job", "batch", job, now); ok {
@@ -1184,34 +1235,18 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, detection)
 				continue
 			}
-			if stuckActiveJob(job, now) {
-				onsetAt := job.CreationTimestamp.Time
-				if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-					onsetAt = job.Status.StartTime.Time
-				}
-				detection := Detection{
-					Kind:              "Job",
-					Namespace:         job.Namespace,
-					Name:              job.Name,
-					Group:             "batch",
-					Severity:          "high",
-					Reason:            fmt.Sprintf("Running for %s with no completions", timeutil.FormatAgeShort(ageDur)),
-					Age:               timeutil.FormatAgeShort(ageDur),
-					AgeSeconds:        int64(ageDur.Seconds()),
-					ResourceCreatedAt: job.CreationTimestamp.Time,
-				}
-				setDetectionOnset(&detection, now, onsetAt)
-				problems = append(problems, detection)
-			}
 		}
 	}
 
-	// Multi-replica Deployment sharing a ReadWriteOnce volume: only one node can
-	// attach an RWO PVC, so a Deployment wanting >1 replica can never bring up
-	// the surplus — they sit unschedulable / multi-attach-failed. A config-level
-	// root cause we can name from spec, independent of whether the symptom has
-	// fired yet. StatefulSets are exempt (volumeClaimTemplates give each replica
-	// its own PVC); DaemonSets are one-per-node by design.
+	// Multi-replica Deployment sharing a single-node volume. ReadWriteOncePod
+	// admits one pod, so the surplus replicas can't run: an active problem named
+	// from spec. ReadWriteOnce limits the volume to one NODE, not one pod —
+	// replicas on that node share it fine, and only a replica placed on another
+	// node fails (Multi-Attach). From spec alone that is a risk, not a failure,
+	// so it is info (posture, kept off the issues stream); the failure itself is
+	// the pod's VolumeMultiAttach row, whose cause names this sharing.
+	// StatefulSets are exempt (volumeClaimTemplates give each replica its own
+	// PVC); DaemonSets are one-per-node by design.
 	if depLister := cache.Deployments(); depLister != nil {
 		var deps []*appsv1.Deployment
 		if namespace != "" {
@@ -1224,19 +1259,19 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				continue
 			}
 			ageDur := now.Sub(d.CreationTimestamp.Time)
-			for _, pvcName := range sharedRWOVolumeConflicts(cache, d) {
+			for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
+				severity, reason, message := sharedRWOVolumeProblem(d, pvc)
 				problems = append(problems, Detection{
 					Kind:      "Deployment",
 					Namespace: d.Namespace,
 					Name:      d.Name,
 					Group:     "apps",
-					Severity:  "high",
-					Reason:    "ReadWriteOnce volume shared across replicas",
-					Message: fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOnce PVC %q — only one node can attach it, so the other replicas can't start. Use a ReadWriteMany volume, switch to a StatefulSet with volumeClaimTemplates (a volume per replica), or reduce to 1 replica.",
-						schedDesiredReplicas(d.Spec.Replicas), pvcName),
+					Severity:  severity,
+					Reason:    reason,
+					Message:   message,
 					// One Deployment can share multiple distinct RWO PVCs; fingerprint
 					// per PVC so each is its own row rather than collapsing into one.
-					Fingerprint:       "pvc-rwo-multireplica:" + pvcName,
+					Fingerprint:       "pvc-rwo-multireplica:" + pvc.Name,
 					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
@@ -1275,6 +1310,8 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 				message += "; couldn't verify the backing workload yet (cache still syncing) - re-check shortly"
 			case rolloutLookupScopeUnverifiable:
 				message += "; the backing workload is outside this session's cache scope, so a scale-to-zero couldn't be confirmed - check the workload directly"
+			case rolloutLookupRefUnresolved:
+				message += "; a backing Argo Rollout delegates its pod template to a workload Radar couldn't resolve, so a scale-to-zero couldn't be confirmed - check the Rollout directly"
 			}
 		}
 		return []Detection{serviceBackendDetection(svc, ageDur, "warning", reason, message, fingerprint)}
@@ -1338,6 +1375,13 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 		)
 		if rolloutLookup == rolloutLookupForbidden {
 			det.Message = "no ready endpoints; couldn't check Argo Rollouts (no RBAC to list rollouts.argoproj.io) - if this workload is a Rollout intentionally scaled to zero, ignore this"
+		}
+		// An unresolvable Rollout workloadRef can't confirm an intentional
+		// scale-to-zero, but it must NOT soften a real zero-ready-pods outage: an
+		// unrelated broken reference in the namespace would otherwise downgrade this
+		// Service. Keep it critical and caveat it, as with a Rollout we can't list.
+		if rolloutLookup == rolloutLookupRefUnresolved {
+			det.Message = "no ready endpoints; couldn't check an Argo Rollout that delegates its pod template to a workload Radar couldn't resolve - if this workload is a Rollout intentionally scaled to zero, ignore this"
 		}
 		problems = append(problems, det)
 	}
@@ -1870,19 +1914,41 @@ func pdbBlocksEvictionsMessage(pdb *policyv1.PodDisruptionBudget) string {
 		pdb.Status.ExpectedPods)
 }
 
-// sharedRWOVolumeConflicts returns the names of PVCs the Deployment's pod
-// template MOUNTS whose bound access modes permit only single-node attach
-// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany). Pending PVCs are skipped
-// here because the binding/provisioning failure is the actionable blocker until a
-// real volume can attach.
-func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []string {
+const sharedRWOVolumeFix = "Use a ReadWriteMany volume, switch to a StatefulSet with volumeClaimTemplates (a volume per replica), or reduce to 1 replica."
+
+// Stable reason literals for the multi-replica single-node-volume row; the
+// issues category mapping keys on them.
+const (
+	SharedRWOVolumeReason  = "ReadWriteOnce volume shared across replicas"
+	SharedRWOPVolumeReason = "ReadWriteOncePod volume shared across replicas"
+)
+
+// sharedRWOVolumeProblem words the multi-replica single-node-volume row:
+// high for ReadWriteOncePod (one pod only), info for ReadWriteOnce (one node
+// only, so it fails only when replicas land on different nodes).
+func sharedRWOVolumeProblem(d *appsv1.Deployment, pvc *corev1.PersistentVolumeClaim) (severity, reason, message string) {
+	replicas := schedDesiredReplicas(d.Spec.Replicas)
+	if singleNodeAccessMode(pvc) == corev1.ReadWriteOncePod {
+		return "high", SharedRWOPVolumeReason, fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOncePod PVC %q, which only one pod at a time can use, so only one replica can run. %s",
+			replicas, pvc.Name, sharedRWOVolumeFix)
+	}
+	return "info", SharedRWOVolumeReason, fmt.Sprintf("Deployment wants %d replicas that share ReadWriteOnce PVC %q. ReadWriteOnce lets only one node mount the volume: replicas on that node can share it, but a replica scheduled onto another node fails to attach (Multi-Attach). To spread replicas across nodes, use a ReadWriteMany volume or a StatefulSet with volumeClaimTemplates (a volume per replica).",
+		replicas, pvc.Name)
+}
+
+// sharedRWOVolumeConflicts returns the PVCs the Deployment's pod template
+// MOUNTS whose bound access modes permit only single-node attach
+// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany), sorted by name. Pending
+// PVCs are skipped here because the binding/provisioning failure is the
+// actionable blocker until a real volume can attach.
+func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []*corev1.PersistentVolumeClaim {
 	pvcl := cache.PersistentVolumeClaims()
 	if pvcl == nil {
 		return nil
 	}
 	spec := d.Spec.Template.Spec
 	mounted := mountedVolumeNames(spec)
-	var out []string
+	var out []*corev1.PersistentVolumeClaim
 	for _, v := range spec.Volumes {
 		if v.PersistentVolumeClaim == nil || !mounted[v.Name] {
 			continue
@@ -1892,10 +1958,10 @@ func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []stri
 			continue
 		}
 		if pvc.Status.Phase == corev1.ClaimBound && pvcSingleNodeAccessOnly(pvc) {
-			out = append(out, pvc.Name)
+			out = append(out, pvc)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -1908,7 +1974,7 @@ func rolloutRWOVolumeDetail(cache *ResourceCache, d *appsv1.Deployment) string {
 		return ""
 	}
 	return fmt.Sprintf("This Deployment mounts ReadWriteOnce PVC %q and uses RollingUpdate; a surge pod can be blocked while the old pod still holds the volume. Use strategy: Recreate, a ReadWriteMany volume, or per-replica volumes.",
-		pvcs[0])
+		pvcs[0].Name)
 }
 
 // mountedVolumeNames is the set of pod-template volume names actually mounted by
@@ -2031,6 +2097,59 @@ func daemonSetUnavailableIsByDesignUnschedulable(cache *ResourceCache, ds *appsv
 		byDesignTargets[targetNode] = true
 	}
 	return int32(len(byDesignTargets)) >= ds.Status.NumberUnavailable
+}
+
+// statefulSetRolloutWithinBudget reports whether a StatefulSet's shortfall is a
+// RollingUpdate replacing one pod at a time. Unlike a Deployment there is no
+// progress deadline to end a stuck rollout, so the caller lowers the row's
+// severity rather than hiding it. The controller takes a pod down only when
+// every other is available, and only allows more than one at a time behind a
+// feature gate Radar cannot see, so the budget is one available replica short.
+// Revisions also differ after a partitioned rollout finishes, so partitioned
+// sets keep the critical row.
+func statefulSetRolloutWithinBudget(ss *appsv1.StatefulSet, desired int32) bool {
+	strategy := ss.Spec.UpdateStrategy
+	if strategy.Type != "" && strategy.Type != appsv1.RollingUpdateStatefulSetStrategyType {
+		return false
+	}
+	if strategy.RollingUpdate != nil && strategy.RollingUpdate.Partition != nil && *strategy.RollingUpdate.Partition > 0 {
+		return false
+	}
+	return ss.Status.ObservedGeneration >= ss.Generation &&
+		ss.Status.UpdateRevision != "" && ss.Status.CurrentRevision != ss.Status.UpdateRevision &&
+		ss.Status.AvailableReplicas > 0 && desired-ss.Status.AvailableReplicas <= 1
+}
+
+// daemonSetRolloutWithinBudget reports whether a DaemonSet's unavailable nodes
+// are a RollingUpdate within its maxUnavailable budget, resolved as the
+// controller does: rounded up against the scheduled count, and 1 when neither
+// surge nor unavailability is allowed. No progress deadline ends a stuck
+// DaemonSet rollout, so the caller lowers the row's severity rather than hiding
+// it. updatedNumberScheduled counts pods before they are available, so the last
+// node's replacement turns the row critical again until it is up.
+func daemonSetRolloutWithinBudget(ds *appsv1.DaemonSet) bool {
+	if ds.Spec.UpdateStrategy.Type != appsv1.RollingUpdateDaemonSetStrategyType || ds.Spec.UpdateStrategy.RollingUpdate == nil {
+		return false
+	}
+	desired := ds.Status.DesiredNumberScheduled
+	if ds.Status.ObservedGeneration < ds.Generation || ds.Status.UpdatedNumberScheduled >= desired || ds.Status.NumberAvailable == 0 {
+		return false
+	}
+	rolling := ds.Spec.UpdateStrategy.RollingUpdate
+	maxUnavailable, err := intstr.GetScaledValueFromIntOrPercent(rolling.MaxUnavailable, int(desired), true)
+	if err != nil {
+		return false
+	}
+	maxSurge := 0
+	if rolling.MaxSurge != nil {
+		if maxSurge, err = intstr.GetScaledValueFromIntOrPercent(rolling.MaxSurge, int(desired), true); err != nil {
+			return false
+		}
+	}
+	if maxUnavailable == 0 && maxSurge == 0 {
+		maxUnavailable = 1
+	}
+	return int(ds.Status.NumberUnavailable) <= maxUnavailable
 }
 
 func daemonSetPodIsAssignedButUnavailable(pod *corev1.Pod) bool {
@@ -2156,9 +2275,11 @@ func selectorMatchesSucceededPod(svc *corev1.Service, pods []*corev1.Pod) bool {
 type rolloutLookupOutcome int
 
 const (
-	// rolloutLookupConclusive: the check ran to completion — CRD absent, or
-	// present and readable with no matching scaled-to-zero Rollout — and the
-	// typed workload informers authoritatively cover the namespace.
+	// rolloutLookupConclusive: the answer is certain. Either a matching workload
+	// is active (replicas>0), which disproves intentional dormancy outright; or
+	// the full scan ran to completion — every matching workload parked at 0, or
+	// no matching workload at all (CRD absent, or present and readable) — with the
+	// typed workload informers authoritatively covering the namespace.
 	rolloutLookupConclusive rolloutLookupOutcome = iota
 	// rolloutLookupTransient: the Rollout cache hasn't synced yet, or the
 	// list failed for a non-RBAC reason. Self-heals by the next poll.
@@ -2173,6 +2294,13 @@ const (
 	// start watching the namespace on a later poll — so a confident outage
 	// critical here would be a scope artifact, not a verified break.
 	rolloutLookupScopeUnverifiable
+	// rolloutLookupRefUnresolved: a matching (or possibly-matching) Argo Rollout
+	// delegates its pod template to a spec.workloadRef target Radar can't resolve
+	// (an unsupported ref kind, a malformed ref, or a referenced workload it can't
+	// read), so whether that Rollout is intentionally scaled to 0 is unknown.
+	// Treated like scope-unverifiable: keep the non-downgraded row rather than
+	// claim a confident outage.
+	rolloutLookupRefUnresolved
 )
 
 // scaledToZeroBackingWorkload reports whether the Service's selector matches a
@@ -2222,90 +2350,235 @@ func scaledToZeroBackingWorkload(cache *ResourceCache, svc *corev1.Service) (sca
 	if cache == nil || len(svc.Spec.Selector) == 0 {
 		return false, rolloutLookupConclusive
 	}
-	// The typed Deployment/StatefulSet Lists below only RULE OUT a scaled-to-zero
-	// backing workload when the informers authoritatively cover this namespace.
-	// Under namespace-scoped RBAC an empty List is indistinguishable from "not
-	// watched", so a negative there must not harden into a confident outage — a
-	// positive (a match we actually found) is always trustworthy. nonMatch
-	// downgrades every "found nothing" verdict to scope-unverifiable when either
-	// typed workload informer can't observe the namespace.
+	// Scan EVERY matching workload, not just the first one parked at 0: a paused
+	// workload must not mask an active sibling failing behind the same Service.
+	// A workload we positively observe is trustworthy; an EMPTY typed List is only
+	// authoritative when the informers cover this namespace (under namespace-scoped
+	// RBAC it is indistinguishable from "not watched"), which gates the dormant and
+	// no-match conclusions below.
 	typedCovered := cache.KindCoversNamespace("deployments", svc.Namespace) &&
 		cache.KindCoversNamespace("statefulsets", svc.Namespace)
-	nonMatch := func(outcome rolloutLookupOutcome) rolloutLookupOutcome {
-		if !typedCovered {
-			return rolloutLookupScopeUnverifiable
-		}
-		return outcome
-	}
 	sel := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
+
+	// Typed dormancy is tracked apart from Rollout dormancy: a found-dormant typed
+	// workload is trusted as benign even when Rollouts can't be listed/synced
+	// (preserving today's default-install reading), whereas a dormant verdict that
+	// rests ONLY on the Rollout cache needs that cache to have finished syncing -
+	// an incomplete Rollout scan could still be hiding an active sibling.
+	var sawActive, sawDormantTyped, sawDormantRollout, sawUnknownMatching bool
+
 	if dl := cache.Deployments(); dl != nil {
 		deps, _ := dl.Deployments(svc.Namespace).List(labels.Everything())
 		for _, d := range deps {
-			if d.Spec.Replicas != nil && *d.Spec.Replicas == 0 && sel.Matches(labels.Set(d.Spec.Template.Labels)) {
-				return true, rolloutLookupConclusive
+			if !sel.Matches(labels.Set(d.Spec.Template.Labels)) {
+				continue
+			}
+			if typedReplicasZero(d.Spec.Replicas) {
+				sawDormantTyped = true
+			} else {
+				sawActive = true
 			}
 		}
 	}
 	if sl := cache.StatefulSets(); sl != nil {
 		stss, _ := sl.StatefulSets(svc.Namespace).List(labels.Everything())
 		for _, s := range stss {
-			if s.Spec.Replicas != nil && *s.Spec.Replicas == 0 && sel.Matches(labels.Set(s.Spec.Template.Labels)) {
-				return true, rolloutLookupConclusive
+			if !sel.Matches(labels.Set(s.Spec.Template.Labels)) {
+				continue
+			}
+			if typedReplicasZero(s.Spec.Replicas) {
+				sawDormantTyped = true
+			} else {
+				sawActive = true
 			}
 		}
 	}
-	// Argo Rollouts are a Deployment-shaped CRD with their own spec.replicas.
-	// Best-effort via the dynamic cache: an absent CRD comes back as
-	// ErrUnknownDynamicKind and is correctly read as no-match. Other errors
-	// are NOT a definitive "not scaled to zero" - classify them so the caller
-	// can pick the honest framing. The dynamic List is a cache read, so a
-	// background context is sufficient.
-	rollouts, err := cache.ListDynamicWithGroup(context.Background(), "Rollout", svc.Namespace, "argoproj.io")
-	if err != nil {
+
+	// Argo Rollouts are a Deployment-shaped CRD with their own spec.replicas, read
+	// best-effort via the dynamic cache. A matching Rollout can be active (vetoes
+	// dormancy), dormant, or unresolvable (a spec.workloadRef we can't follow -
+	// unknown). The dynamic List is a cache read, so a background context suffices.
+	rolloutListOutcome := rolloutLookupConclusive
+	rolloutList, err := cache.ListDynamicWithGroup(context.Background(), "Rollout", svc.Namespace, "argoproj.io")
+	switch {
+	case err == nil:
+		for _, r := range rolloutList {
+			switch rolloutWorkloadMatch(cache, sel, r) {
+			case rolloutMatchActive:
+				sawActive = true
+			case rolloutMatchDormant:
+				sawDormantRollout = true
+			case rolloutMatchUnknown:
+				sawUnknownMatching = true
+			}
+		}
+	case errors.Is(err, ErrUnknownDynamicKind) || errors.Is(err, ErrDynamicNotReady):
 		// Absent CRD or dynamic support not wired = a clean no-match (Rollouts
 		// genuinely aren't in play).
-		if errors.Is(err, ErrUnknownDynamicKind) || errors.Is(err, ErrDynamicNotReady) {
-			return false, nonMatch(rolloutLookupConclusive)
-		}
-		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
 		// RBAC denial is persistent - the SA lacks `list rollouts.argoproj.io`
 		// (helm gates CRD groups behind rbac.crdGroups), so every future poll
-		// fails identically. Everything else is transient.
-		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-			return false, nonMatch(rolloutLookupForbidden)
-		}
-		return false, nonMatch(rolloutLookupTransient)
+		// fails identically.
+		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+		rolloutListOutcome = rolloutLookupForbidden
+	default:
+		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+		rolloutListOutcome = rolloutLookupTransient
 	}
-	for _, r := range rollouts {
-		// spec.replicas can arrive as int64 (k8s typed decode) OR float64 (plain
-		// JSON decode) depending on how the object entered the cache, so read it
-		// tolerantly - unstructured.NestedInt64 alone would miss the float64 shape
-		// and never recognize a scaled-to-zero Rollout, condemning dormancy as an
-		// outage.
-		replicas, found := nestedNumberInt64(r.Object, "spec", "replicas")
-		if !found || replicas != 0 {
-			continue
-		}
-		tmpl, _, _ := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "labels")
-		if len(tmpl) > 0 && sel.Matches(labels.Set(tmpl)) {
+
+	// Ordered evidence: an active workload we actually observed
+	// disproves dormancy outright (a positive read is trustworthy regardless of
+	// scope); otherwise an unresolvable matching Rollout keeps today's
+	// non-downgraded row; otherwise an empty typed List is only authoritative when
+	// the informers cover this namespace. A found-dormant typed workload is then
+	// benign even if Rollouts are unreadable, but a Rollout-only dormant verdict
+	// is trusted only from a complete (synced) Rollout scan.
+	switch {
+	case sawActive:
+		return false, rolloutLookupConclusive
+	case sawUnknownMatching:
+		return false, rolloutLookupRefUnresolved
+	case !typedCovered:
+		return false, rolloutLookupScopeUnverifiable
+	case sawDormantTyped:
+		return true, rolloutLookupConclusive
+	case sawDormantRollout:
+		if rolloutListOutcome == rolloutLookupConclusive && rolloutNamespaceSynced(svc.Namespace) {
 			return true, rolloutLookupConclusive
 		}
-	}
-	// An empty Rollout list with no error is ambiguous: DynamicResourceCache.List
-	// doesn't gate on HasSynced, so the first read of a not-yet-watched Rollout GVR
-	// returns ([], nil) even when a scaled-to-zero Rollout exists. Verify the cache
-	// actually synced before concluding no-match - otherwise stay transient so the
-	// caller keeps the warning framing until the next poll.
-	if len(rollouts) == 0 {
-		if disc := GetResourceDiscovery(); disc != nil {
-			if gvr, ok := disc.GetGVRWithGroup("Rollout", "argoproj.io"); ok {
-				if dc := GetDynamicResourceCache(); dc != nil && !dc.IsSynced(gvr) {
-					return false, nonMatch(rolloutLookupTransient)
-				}
-			}
+		// An incomplete Rollout scan could be hiding an active sibling, so don't
+		// harden into benign; stay transient (self-heals next poll).
+		return false, rolloutLookupTransient
+	default:
+		// No matching workload anywhere. A Rollout read we couldn't trust keeps its
+		// outcome; an untrustworthy (not-yet-synced) empty read stays transient so
+		// the caller keeps the warning framing until the next poll.
+		if rolloutListOutcome != rolloutLookupConclusive {
+			return false, rolloutListOutcome
 		}
+		if !rolloutNamespaceSynced(svc.Namespace) {
+			return false, rolloutLookupTransient
+		}
+		return false, rolloutLookupConclusive
 	}
-	return false, nonMatch(rolloutLookupConclusive)
+}
+
+// typedReplicasZero reports whether a typed workload is parked at 0. A nil
+// Replicas pointer is Kubernetes' "unset", which defaults to 1 - an active
+// workload, not a dormant one.
+func typedReplicasZero(replicas *int32) bool {
+	return replicas != nil && *replicas == 0
+}
+
+type rolloutMatch int
+
+const (
+	rolloutMatchNone rolloutMatch = iota
+	rolloutMatchDormant
+	rolloutMatchActive
+	rolloutMatchUnknown
+)
+
+// rolloutWorkloadMatch classifies one Rollout against the Service selector. A
+// spec.workloadRef Rollout carries no inline pod template, so its selector labels
+// come from the referenced Deployment (resolved through the same resolver
+// /api/workloads uses). A Rollout whose template or desired scale can't be read -
+// an unsupported/malformed ref, or a referenced workload we can't observe -
+// classifies as unknown, never as a confident dormant/active.
+func rolloutWorkloadMatch(cache *ResourceCache, sel labels.Selector, r *unstructured.Unstructured) rolloutMatch {
+	tmplLabels, ok := rolloutTemplateLabels(cache, r)
+	if !ok {
+		return rolloutMatchUnknown
+	}
+	if len(tmplLabels) == 0 || !sel.Matches(labels.Set(tmplLabels)) {
+		return rolloutMatchNone
+	}
+	// Only now that the Rollout matches does its scale matter: a non-matching
+	// workload with unreadable replicas is irrelevant, not uncertain.
+	replicas, ok := rolloutDesiredReplicas(r)
+	if !ok {
+		return rolloutMatchUnknown
+	}
+	if replicas == 0 {
+		return rolloutMatchDormant
+	}
+	return rolloutMatchActive
+}
+
+// rolloutTemplateLabels returns the pod-template labels that a Rollout's pods
+// carry - inline, or from the Deployment named by spec.workloadRef. The second
+// bool is false when the reference can't be resolved (unsupported/malformed ref,
+// a non-Deployment target, or a referenced Deployment the cache can't read),
+// which the caller treats as unknown. The referenced Deployment is read from the
+// already-loaded typed cache, so this adds no API call or RBAC surface.
+func rolloutTemplateLabels(cache *ResourceCache, r *unstructured.Unstructured) (map[string]string, bool) {
+	// A present spec.workloadRef - even empty or partially populated - means the
+	// Rollout delegates its pod template. It must resolve fully, or the Rollout is
+	// unknown; never fall back to the (absent) inline template, which would make an
+	// unresolved reference look like a non-match.
+	if ref, hasRefField, _ := unstructured.NestedFieldNoCopy(r.Object, "spec", "workloadRef"); hasRefField && ref != nil {
+		if _, _, ok := rollouts.WorkloadRef(r); !ok {
+			return nil, false
+		}
+		target, err := rollouts.ResolveTemplateTarget(r)
+		if err != nil {
+			return nil, false
+		}
+		// Resolve only Deployment refs, cheaply, from the typed cache.
+		if target.GVR.Group != "apps" || target.GVR.Resource != "deployments" {
+			return nil, false
+		}
+		dl := cache.Deployments()
+		if dl == nil {
+			return nil, false
+		}
+		dep, err := dl.Deployments(r.GetNamespace()).Get(target.Name)
+		if err != nil {
+			return nil, false
+		}
+		return dep.Spec.Template.Labels, true
+	}
+	tmpl, _, _ := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "labels")
+	return tmpl, true
+}
+
+// rolloutDesiredReplicas reads a Rollout's desired replica count. An absent
+// spec.replicas defaults to 1 (Argo's default), so a matching Rollout with no
+// replicas field is active, not dormant. A present-but-unreadable value (a
+// fractional or non-numeric shape) reports not-ok, which the caller treats as
+// unknown.
+func rolloutDesiredReplicas(r *unstructured.Unstructured) (int64, bool) {
+	_, found, err := unstructured.NestedFieldNoCopy(r.Object, "spec", "replicas")
+	if err != nil {
+		return 0, false
+	}
+	if !found {
+		return 1, true
+	}
+	// spec.replicas can arrive as int64 (k8s typed decode) OR float64 (plain JSON
+	// decode) depending on how the object entered the cache, so read it tolerantly.
+	return nestedNumberInt64(r.Object, "spec", "replicas")
+}
+
+// rolloutNamespaceSynced reports whether an empty/negative Rollout read for the
+// namespace can be trusted. Only a cache we can positively see is NOT yet synced
+// forces the caller to stay transient; when sync state is indeterminate (no
+// discovery or dynamic cache wired) we trust the read rather than flap every
+// no-match into "re-check shortly".
+func rolloutNamespaceSynced(namespace string) bool {
+	disc := GetResourceDiscovery()
+	if disc == nil {
+		return true
+	}
+	gvr, ok := disc.GetGVRWithGroup("Rollout", "argoproj.io")
+	if !ok {
+		return true
+	}
+	dc := GetDynamicResourceCache()
+	if dc == nil {
+		return true
+	}
+	return dc.IsNamespaceSynced(gvr, namespace)
 }
 
 func isPodReadyForProblem(pod *corev1.Pod) bool {
@@ -2380,6 +2653,54 @@ func failedJobCondition(job *batchv1.Job) *batchv1.JobCondition {
 		}
 	}
 	return nil
+}
+
+// deploymentBelowDesiredAvailable reports whether fewer pods are available than
+// spec.replicas asks for. status.unavailableReplicas alone is not that signal:
+// the controller computes it as the sum of every ReplicaSet's spec.replicas
+// minus available, so a RollingUpdate's surge pod counts as unavailable while
+// it starts even though every desired replica is still serving. A surge pod
+// that never comes up surfaces on its own pod row and, past
+// progressDeadlineSeconds, as a stuck rollout. Requiring both keeps a scale-up
+// the controller has not yet observed (spec raised, status still from the
+// previous generation) quiet until the controller reports the shortfall.
+func deploymentBelowDesiredAvailable(dep *appsv1.Deployment) bool {
+	return dep.Status.UnavailableReplicas > 0 && dep.Status.AvailableReplicas < schedDesiredReplicas(dep.Spec.Replicas)
+}
+
+// deploymentRolloutDipWithinBudget reports whether a shortfall below
+// spec.replicas is a RollingUpdate taking pods down within its maxUnavailable
+// budget. The controller sets Available=True exactly when available >=
+// replicas - maxUnavailable, and keeps Progressing at ReplicaSetUpdated or
+// NewReplicaSetCreated until the rollout completes; a pod lost after completion
+// leaves the reason at NewReplicaSetAvailable, so steady-state capacity loss
+// still reports. (FoundNewReplicaSet is only written when a progress deadline is
+// first enabled, not by a rollout.) The guards keep a stale condition from
+// vouching for the dip: a paused Deployment or one with no progress deadline
+// never times out, a status older than the spec judged a different target, and
+// progress last recorded longer ago than the deadline should already have timed
+// out (a timestamp further ahead of this clock than ordinary skew can't vouch
+// for anything either). Zero available is an outage even when the budget
+// allows it.
+func deploymentRolloutDipWithinBudget(dep *appsv1.Deployment, now time.Time) bool {
+	deadline := dep.Spec.ProgressDeadlineSeconds
+	if dep.Spec.Paused || deadline == nil || *deadline == math.MaxInt32 ||
+		dep.Status.ObservedGeneration < dep.Generation || dep.Status.AvailableReplicas == 0 {
+		return false
+	}
+	var available, progressing bool
+	for _, cond := range dep.Status.Conditions {
+		switch cond.Type {
+		case appsv1.DeploymentAvailable:
+			available = cond.Status == corev1.ConditionTrue
+		case appsv1.DeploymentProgressing:
+			sinceProgress := now.Sub(cond.LastUpdateTime.Time)
+			progressing = cond.Status == corev1.ConditionTrue &&
+				(cond.Reason == "ReplicaSetUpdated" || cond.Reason == "NewReplicaSetCreated") &&
+				sinceProgress >= -onsetObservationMargin && sinceProgress <= time.Duration(*deadline)*time.Second
+		}
+	}
+	return available && progressing
 }
 
 func deploymentReplicaFailure(dep *appsv1.Deployment) *appsv1.DeploymentCondition {

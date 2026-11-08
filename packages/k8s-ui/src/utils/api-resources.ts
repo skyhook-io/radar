@@ -12,7 +12,7 @@ const NETWORKING_KINDS = ['Service', 'Ingress', 'IngressClass', 'NetworkPolicy',
 const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration']
 const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClass', 'VolumeAttachment']
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
-const CLUSTER_KINDS = ['Node', 'Namespace', 'Event']
+const CLUSTER_KINDS = ['Node', 'Namespace', 'Event', 'CustomResourceDefinition']
 const CORE_CATEGORY_NAMES = new Set(['Workloads', 'Networking', 'Configuration', 'Storage', 'Access Control', 'Cluster'])
 // Core resources that must always be present (fallback if API discovery misses them)
 export const CORE_RESOURCES: APIResource[] = [
@@ -216,6 +216,7 @@ export function formatGroupName(group: string): string {
     'logstash.k8s.elastic.co': 'Elastic',
     'jaegertracing.io': 'Jaeger',
     'opentelemetry.io': 'OpenTelemetry',
+    'flagger.app': 'Flagger',
     'projectcalico.org': 'Calico',
     'crd.projectcalico.org': 'Calico',
     'projectcontour.io': 'Contour',
@@ -344,4 +345,8 @@ export function getKindLabel(kind: string): string {
 
 export function getKindPlural(resource: APIResource): string {
   return resource.name
+}
+
+export function resourceSearchAliases(resource: Pick<APIResource, 'group' | 'kind'>): string[] {
+  return resource.group === 'apiextensions.k8s.io' && resource.kind === 'CustomResourceDefinition' ? ['crd', 'crds'] : []
 }

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Copy, Check, Settings, Pencil, X, Eye, Play, Loader2 } from 'lucide-react'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { PaneLoader, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import type { HelmValues, ValuesPreviewResponse } from '../../types'
@@ -60,7 +60,9 @@ export function ValuesViewer({
   const overridesData = overridesQuery.data
   const overridesBaseline = useMemo(() => (overridesData ? (overridesData.userSupplied ?? {}) : undefined), [overridesData])
   const overridesReady = overridesBaseline !== undefined && !overridesQuery.error && !overridesQuery.isFetching
-  const canOfferEdit = Boolean(namespace && name) && canHelmWrite && !isHistoricalRevision
+  // Phones read values but don't edit them: authoring YAML by touch is error-prone.
+  const isPhone = usePhoneLayout()
+  const canOfferEdit = Boolean(namespace && name) && canHelmWrite && !isHistoricalRevision && !isPhone
   const canEdit = canOfferEdit && overridesReady
 
   const displayValues = showEffectiveValues ? values?.computed : overridesBaseline

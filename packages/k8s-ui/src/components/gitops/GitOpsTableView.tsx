@@ -34,13 +34,16 @@ import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { getGitOpsResourceStatus } from './detail-helpers'
-import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
+import { isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
+import { FilterRailPanel } from '../shared/FilterRailPanel'
 
 // =============================================================================
 // GitOpsTableView — the canonical GitOps fleet list (Argo + Flux).
@@ -287,6 +290,10 @@ export interface GitOpsTableViewProps {
   // In-flight action state, keyed by `row.id`. Drives the per-item
   // spinner so the user can tell which Sync/Refresh is still running.
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
+  // Set when the connected Radar is too old to turn auto-sync back on for an
+  // Application with automated.enabled: false; its Resume renders disabled.
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 }
 
 // ----- Main component --------------------------------------------------------
@@ -329,6 +336,8 @@ export function GitOpsTableView({
   onClearNamespaces,
   onRowAction,
   pendingRowActions,
+  argoResumeUpgrade,
+  argoResumeBlockedReason,
   filtersSide = 'left',
 }: GitOpsTableViewProps) {
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -857,6 +866,8 @@ export function GitOpsTableView({
               destinationHrefFor={destinationHrefFor}
               onRowAction={onRowAction}
               pendingRowActions={pendingRowActions}
+              argoResumeUpgrade={argoResumeUpgrade}
+              argoResumeBlockedReason={argoResumeBlockedReason}
             />
           )}
         </div>
@@ -937,13 +948,17 @@ function GitOpsFilterSidebar({
         side === 'right' ? 'border-l max-[899px]:border-l-0' : 'border-r max-[899px]:border-r-0'
       }`}
     >
-      <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
-        <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
-        <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
-          Clear
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto">
+      <FilterRailPanel
+        activeCount={
+          syncFilters.size + healthFilters.size + automationFilters.size + kindFilters.size +
+          projectFilters.size + namespaceFilters.size + (lifecycleFilter === 'all' ? 0 : 1)
+        }
+        clear={
+          <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
+            Clear
+          </button>
+        }
+      >
         {loading ? (
           <BoardRailSkeleton
             sections={[
@@ -1062,7 +1077,7 @@ function GitOpsFilterSidebar({
         </GitOpsFilterSection>
           </>
         )}
-      </div>
+      </FilterRailPanel>
     </aside>
   )
 }
@@ -1287,6 +1302,8 @@ function GitOpsTable({
   destinationHrefFor,
   onRowAction,
   pendingRowActions,
+  argoResumeUpgrade,
+  argoResumeBlockedReason,
 }: {
   rows: GitOpsRow[]
   sort: { key: SortKey; dir: SortDir } | null
@@ -1298,6 +1315,8 @@ function GitOpsTable({
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 }) {
   const showActions = !!onRowAction
   return (
@@ -1404,7 +1423,7 @@ function GitOpsTable({
                   className="overflow-visible border-b border-theme-border px-2 py-2 text-right align-middle"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions)} />
+                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)} />
                 </td>
               )}
             </tr>
@@ -1419,10 +1438,12 @@ function GitOpsTable({
 // the row's tool (Argo vs Flux), current suspend state, terminating state,
 // and Argo's operationState.phase (used to gate the Terminate entry — only
 // shown while a sync is mid-flight, mirroring the detail-page condition).
-function buildRowActionItems(
+export function buildRowActionItems(
   row: GitOpsRow,
   onAction: (row: GitOpsRow, action: GitOpsRowAction) => void,
   pending?: Map<string, Set<GitOpsRowAction>>,
+  argoResumeUpgrade?: RadarUpgradeRequirement | null,
+  argoResumeBlockedReason?: string,
 ): RowActionItem[] {
   const inFlight = pending?.get(row.id)
   const isPending = (action: GitOpsRowAction) => inFlight?.has(action) ?? false
@@ -1475,13 +1496,16 @@ function buildRowActionItems(
       pending: isPending('hard-refresh'),
     })
     if (suspended) {
+      const resumeBlockedReason = isArgoAutoSyncSwitchedOff(row.raw)
+        ? argoResumeBlockedReason || (argoResumeUpgrade ? radarUpgradeNoteText(argoResumeUpgrade) : undefined)
+        : undefined
       items.push({
         key: 'resume',
         label: 'Resume',
         icon: Play,
-        onClick: () => onAction(row, 'resume'),
-        disabled: terminating,
-        disabledReason: terminating ? terminatingReason : undefined,
+        onClick: () => !resumeBlockedReason && onAction(row, 'resume'),
+        disabled: terminating || !!resumeBlockedReason,
+        disabledReason: terminating ? terminatingReason : resumeBlockedReason,
         pending: isPending('resume'),
         divider: true,
       })
@@ -2002,7 +2026,7 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
     destinationNamespace: resource.spec?.destination?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: argoLastSync ?? '',
-    autoSync: Boolean(resource.spec?.syncPolicy?.automated),
+    autoSync: isArgoAutoSyncEnabled(resource),
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
     raw: resource,

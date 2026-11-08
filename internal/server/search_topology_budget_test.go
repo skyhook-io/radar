@@ -36,12 +36,14 @@ func TestSearchDoesNotWaitOnAColdTopologyBuild(t *testing.T) {
 		<-release
 		return false, nil, nil
 	})
-	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: apps.Group, Version: apps.Version, Name: apps.Resource, Kind: "Application", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: apps.Group, Version: apps.Version, Name: apps.Resource, Kind: "Application", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("search-cold", nil, &auth.UserPermissions{})
+	perms := &auth.UserPermissions{}
+	perms.SetCanI("get", "", "configmaps", "default", true)
+	env.srv.permCache.Set("search-cold", nil, perms)
 	env.srv.broadcaster.markCachedTopologyDirty()
 	time.AfterFunc(20*time.Second, unblock)
 

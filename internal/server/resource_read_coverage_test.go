@@ -582,6 +582,10 @@ func TestResourceDynamicNamespaceCoverageDoesNotBorrowAnotherInformer(t *testing
 }
 
 func TestResourceDynamicPendingEmptyDoesNotBecomeAbsence(t *testing.T) {
+	previousWait := resourceListDynamicSyncWait
+	resourceListDynamicSyncWait = 200 * time.Millisecond
+	t.Cleanup(func() { resourceListDynamicSyncWait = previousWait })
+
 	addPackageNamespaces(t, "alpha", "beta")
 	release := make(chan struct{})
 	var releaseOnce sync.Once

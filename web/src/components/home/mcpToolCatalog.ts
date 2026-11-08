@@ -20,6 +20,7 @@ export interface MCPToolParam {
 export interface MCPToolInfo {
   name: string
   write?: boolean
+  localOnly?: boolean
   desc: string
   params: MCPToolParam[]
 }
@@ -67,7 +68,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     desc: 'Topology graph of relationships between resources — Services, workloads, Pods, Ingresses, owners. Use traffic view for network flow or resources view for ownership hierarchy.',
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
-      { arg: 'view', desc: 'traffic or resources' },
+      { arg: 'view', desc: 'resources (default) or traffic' },
       { arg: 'format', desc: 'graph (default) or summary (text)' },
     ],
   },
@@ -109,17 +110,17 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'diagnose',
-    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. For workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
+    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. Batch targets return cached context, Issues and events without runtime logs or metrics. For pod-backed workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
     params: [
-      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
+      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, Job, JobSet, RayJob, Kueue Workload, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
       { arg: 'group', desc: 'API group for CRDs or kind collisions (for example argoproj.io for Rollout); built-ins are inferred' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'probe', desc: 'network kinds only: add active DNS/TCP/TLS/HTTP probes against the declared path (0-3s wall time)' },
       { arg: 'in_cluster', desc: 'network kinds: run the probe from inside the cluster via short-lived self-destructing pods (real dataplane) - confirms a route the apiserver proxy could only reach indirectly. Creates up to 5 short-lived probe pods (one per dialed target) under your RBAC' },
-      { arg: 'container', desc: 'workload kinds: specific container (defaults to all)' },
-      { arg: 'tail_lines', desc: 'workload kinds: lines per pod/stream (default 100)' },
-      { arg: 'since', desc: 'workload kinds: only logs newer than this duration' },
+      { arg: 'container', desc: 'log-collecting targets only: specific container (defaults to all)' },
+      { arg: 'tail_lines', desc: 'log-collecting targets only: lines per pod/stream (default 100)' },
+      { arg: 'since', desc: 'log-collecting targets only: only logs newer than this duration' },
     ],
   },
   {
@@ -140,7 +141,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_cluster_audit',
-    desc: 'Best-practice and security posture findings — Security, Reliability, Efficiency — each with remediation guidance. Static config posture, independent of live operational health.',
+    desc: 'Best-practice and security posture findings — Security, Reliability, Efficiency — each with remediation guidance. Static config posture: mostly latent risk, though some findings (expired certificates, dangling references) can be live failures.',
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
       { arg: 'category', desc: 'Security, Reliability, or Efficiency' },
@@ -197,7 +198,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'issues',
-    desc: 'Ranked list of what is broken right now — failing workloads, active native Helm release failures or stuck pending operations, dangling references, scheduling blockers, and false CRD conditions. Native Helm rows use group=helm.sh.',
+    desc: 'Ranked list of what is broken right now — failing workloads, active native Helm release failures or stuck pending operations, dangling references, scheduling blockers, false CRD conditions, and expired or soon-expiring TLS certificates on live Ingresses or Gateways. Native Helm rows use group=helm.sh.',
     params: [
       { arg: 'namespace', desc: 'filter to one namespace' },
       { arg: 'severity', desc: 'comma-separated: critical, warning' },
@@ -208,7 +209,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'search',
-    desc: 'Find resources by content/term match — config keys, env refs, images, label values, ConfigMap data, CRD fields, status messages. Secret values are never indexed.',
+    desc: 'Find resources by content/term match — config keys, env refs, images, label values, ConfigMap data, CRD fields, status messages, or an IP/ip:port to find the Pod, Service or Node holding it. Secret values are never indexed.',
     params: [
       { arg: 'query', required: true, desc: 'tokens AND\'d; modifiers kind:, ns:, label:, image:' },
       { arg: 'limit', desc: 'max hits (default 50, max 500)' },
@@ -297,7 +298,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     name: 'get_workload_logs',
     desc: 'Aggregated logs across all pods of a workload. Without grep, filters for diagnostic relevance; grep returns only matching timestamp-prefixed lines instead.',
     params: [
-      { arg: 'kind', desc: 'deployment (default), statefulset, daemonset, job, or workflow' },
+      { arg: 'kind', desc: 'deployment (default), statefulset, daemonset, rollout, job, or workflow' },
       { arg: 'namespace', required: true, desc: 'workload namespace' },
       { arg: 'name', required: true, desc: 'workload name' },
       { arg: 'container', desc: 'specific container (defaults to all)' },
@@ -318,6 +319,18 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'kind', desc: 'pod (default), Deployment, StatefulSet, DaemonSet, Job, ReplicaSet or Rollout; workload targets require a Running, Ready pod of the desired revision' },
       { arg: 'container', desc: 'default-container annotation, then first non-mesh app container' },
       { arg: 'timeout_seconds', desc: 'one deadline for resolution and execution; default 30, max 45 seconds; 64 KiB per output stream' },
+    ],
+  },
+  {
+    name: 'collect_application_evidence',
+    localOnly: true,
+    desc: 'Read one Pod’s RabbitMQ alarms/resource values, NATS JetStream observations or Vault node state. Local only, with operator approval and Pod-read/port-forward permissions. Unavailable evidence is not a health verdict.',
+    params: [
+      { arg: 'application', required: true, desc: 'rabbitmq, nats, or vault' },
+      { arg: 'namespace', required: true, desc: 'Pod namespace' },
+      { arg: 'pod', required: true, desc: 'one explicitly selected Pod' },
+      { arg: 'pod_uid', desc: 'expected Pod UID from a diagnosis suggestion' },
+      { arg: 'confirm_network_access', required: true, desc: 'true after operator authorization to collect endpoint evidence' },
     ],
   },
   {
@@ -356,13 +369,13 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'manage_gitops',
     write: true,
-    desc: 'Operate on GitOps resources. ArgoCD: sync, refresh, terminate, rollback, suspend, resume. FluxCD: reconcile, sync-with-source, suspend, resume.',
+    desc: 'Operate on GitOps resources. Argo CD: sync, refresh, terminate, rollback, suspend, resume. Flux: reconcile, sync-with-source, suspend, resume.',
     params: [
       { arg: 'action', required: true, desc: 'sync/reconcile, refresh, terminate, rollback, suspend, or resume' },
       { arg: 'tool', required: true, desc: 'argocd or fluxcd' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
-      { arg: 'kind', desc: 'FluxCD resource kind (e.g. kustomization, helmrelease)' },
+      { arg: 'kind', desc: 'Flux resource kind (e.g. kustomization, helmrelease)' },
     ],
   },
   {

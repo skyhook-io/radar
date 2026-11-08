@@ -137,6 +137,9 @@ func TestUnansweredWalkIsNotADenial(t *testing.T) {
 // even if it comes back Forbidden: with another candidate unanswered, the walk
 // is incomplete, not a denial.
 func TestWalkOutOfTimeIsNotADenial(t *testing.T) {
+	previousBudget := scopeProbeBaseBudget
+	scopeProbeBaseBudget = 200 * time.Millisecond
+	t.Cleanup(func() { scopeProbeBaseBudget = previousBudget })
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
 	dyn.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -144,7 +147,7 @@ func TestWalkOutOfTimeIsNotADenial(t *testing.T) {
 		case "team-a":
 			return true, nil, errClientRateLimited
 		case "team-slow":
-			time.Sleep(7 * time.Second) // past the two-candidate walk budget
+			time.Sleep(scopeProbeBaseBudget + 2*500*time.Millisecond + time.Second) // past the two-candidate walk budget
 		}
 		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("denied"))
 	})

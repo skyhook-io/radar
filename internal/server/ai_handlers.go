@@ -49,11 +49,13 @@ import (
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/kueuevisibility"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/executioninsight"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/policyreports"
@@ -288,12 +290,12 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	// so we pass nil here to compose cluster-wide.
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newResourceSummaryContextBuilder(r, idxNamespaces); builder != nil {
-			// Typed list resolves group from each object's TypeMeta —
-			// MinifyList sets it via SetTypeMeta before producing rows,
-			// so we can trust apiVersion on the typed source.
-			summarycontext.AttachToTypedList(results, objs, builder)
-		}
+		builder, cancel := summarycontext.WithBudget(r.Context(), func(ctx context.Context) summarycontext.Builder {
+			return s.newResourceSummaryContextBuilder(r.WithContext(ctx), idxNamespaces)
+		})
+		defer cancel()
+		// MinifyList sets TypeMeta, so attachment can resolve each row's group.
+		summarycontext.AttachToTypedList(results, objs, builder)
 	}
 	if readCache() != cache {
 		s.writeReadFailure(w, kind, errReadHandlesChanged, &target)
@@ -347,9 +349,15 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newResourceSummaryContextBuilder(r, idxNamespaces); builder != nil {
-			summarycontext.AttachToUnstructuredList(results, allItems, builder)
-		}
+		builder, cancel := summarycontext.WithBudget(r.Context(), func(ctx context.Context) summarycontext.Builder {
+			return s.newResourceSummaryContextBuilder(r.WithContext(ctx), idxNamespaces)
+		})
+		defer cancel()
+		summarycontext.AttachToUnstructuredList(results, allItems, builder)
+	}
+	if readCache() != cache {
+		s.writeReadFailure(w, kind, errReadHandlesChanged, &target)
+		return
 	}
 
 	s.writeJSON(w, results)
@@ -571,15 +579,19 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueSubjectAccess(r), s.issueEvidenceAccess(r), canonicalGroup, canonicalKind, namespace, name)
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
+	scheduling := schedulinginsight.ForResource(obj, resourcecontext.TierBasic)
+	kueuevisibility.Attach(r.Context(), scheduling, obj)
+
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            resourcecontext.TierBasic,
+		AccessChecker:   s.newRequestScopedChecker(r),
+		IssueSummary:    issueSum,
+		AuditSummary:    auditSum,
+		Scheduling:      scheduling,
+		Execution:       executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -621,8 +633,15 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		// `rel == nil && opts.Topology != nil` fallback re-ran the identical
 		// scan. Leaving opts.Relationships unset is the canonical path.
 	}
+	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
+		return (namespace == "" || len(s.getUserNamespaces(r, []string{namespace})) > 0) && s.canRead(r, group, resource, namespace, verb)
+	})
+	if children := k8s.OperatorChildrenForObject(obj, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }); children != nil {
+		opts.Children = children.Context
+		opts.ChildrenUnavailable = children.Unavailable != ""
+	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
-		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) })
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)
@@ -705,7 +724,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 	// surfaces the grouped issues its pods are evidence for, and on a pod beyond
 	// the inline-Members cap too. The old flat-by-exact-resource match missed
 	// both (a Deployment matched no Kind=Pod evidence rows → empty summary).
+	var unchecked []issuesapi.UncheckedSource
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked:            func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		SkipPodTemplateContext: !includeFacts,
 		Namespaces:             namespaces,
 		CanReadClusterScoped:   canReadClusterScoped,
@@ -714,6 +735,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		CanReadEvidence:        canReadEvidence,
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
+		if len(unchecked) > 0 {
+			return &resourcecontext.IssueSummary{Unchecked: unchecked}, nil
+		}
 		return nil, nil
 	}
 	bySource := make(map[string]int, len(matched))
@@ -739,6 +763,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		TopReason:       topReason,
 		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
+		Unchecked:       unchecked,
 	}, matched
 }
 

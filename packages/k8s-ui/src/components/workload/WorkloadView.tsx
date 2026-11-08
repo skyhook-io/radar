@@ -1,4 +1,5 @@
 import { dedupeResourceRefs } from '../../utils/resource-refs'
+import { isKubeRayClusterIdentity } from '../resources/resource-utils-ray'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
 import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
@@ -38,10 +39,12 @@ import {
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
+import type { ReadGap } from '../../types/read-coverage'
+import { workloadHistoryNotes, type WorkloadHistoryCoverage } from '../../utils/workload-history-notes'
 import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
-import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
+import { jobSetMemberRunKey, neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, managerChipCoversGroup, managerChipPresentation, managerListing, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
@@ -125,8 +128,8 @@ interface WorkloadViewProps {
   onCollapseToDrawer?: () => void
   /** false = collapsed drawer mode, true (default) = full expanded mode */
   expanded?: boolean
-  /** false on the outgoing layer during an expand/collapse crossfade — suspend
-   *  keyboard shortcuts so the invisible layer doesn't capture them (default true) */
+  /** false on the outgoing layer during an expand/collapse crossfade: suspend
+   *  keyboard shortcuts and let hosted renderers pause their reads (default true). */
   active?: boolean
   /** Close the drawer (collapsed mode) */
   onClose?: () => void
@@ -230,8 +233,12 @@ interface WorkloadViewProps {
   /** allEvents holds only this workload's own history (what it runs and the
    *  resources attached to it), not its whole namespace. */
   historyScoped?: boolean
-  /** Some related resources' history isn't included: there were more than the host follows. */
+  /** Scope bounds or expired ownership records may leave related history out. */
   historyIncomplete?: boolean
+  /** Radar may not hold every change since the workload existed. */
+  historyCoverage?: WorkloadHistoryCoverage | null
+  /** Related kinds the history can't include for this viewer. */
+  historyGaps?: ReadGap[] | null
   historyError?: Error | null
   onRetryHistory?: () => void
   /** Persisted lifecycle events reconstructed for resources related to this workload. */
@@ -360,6 +367,12 @@ interface WorkloadViewProps {
     /** Place resource notices within the replacement layout's content area. */
     leadContent?: ReactNode
   }) => ReactNode
+  /** Called instead of navigating when a Topology-tab click lands on a member
+   *  Job of the JobSet this view shows, so the host can open the member in
+   *  place. `memberKey` is the member list's run key, `jobs/<namespace>/<name>`
+   *  (see `jobSetMemberRunKey`), not a node ID or UID. Omit to navigate as for
+   *  any node. */
+  onSelectTopologyMember?: (memberKey: string) => void
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render the Diagnose tab content - a path-shaped trace for network
@@ -480,6 +493,8 @@ export function WorkloadView({
   olderHistoryError = null,
   historyScoped = false,
   historyIncomplete = false,
+  historyCoverage,
+  historyGaps,
   historyError = null,
   onRetryHistory,
   relatedTimelineEvents = [],
@@ -509,6 +524,7 @@ export function WorkloadView({
   renderDiagnoseTab,
   reachableVia,
   renderExpandedOverview,
+  onSelectTopologyMember,
   renderSummary,
   extraTabs,
   tabOrder,
@@ -579,6 +595,21 @@ export function WorkloadView({
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [initialContainer, setInitialContainer] = useState<string | null>(null)
+  // Hosts reuse this view across resources, and a resource can be recreated
+  // under the same name: a Pod picked for one must not reach the next, not
+  // even for one render. A UID arriving with the first load is not a change.
+  const selectionIdentity = `${kind}\u0000${namespace}\u0000${name}`
+  // A host can briefly pass the previous resource with the new name.
+  const selectionUID = resource?.metadata?.name === name && (resource?.metadata?.namespace ?? '') === (namespace ?? '') ? resource?.metadata?.uid as string | undefined : undefined
+  const [selectionScope, setSelectionScope] = useState({ identity: selectionIdentity, uid: selectionUID })
+  if (selectionScope.identity !== selectionIdentity || (selectionUID && selectionScope.uid !== selectionUID)) {
+    const recreated = selectionScope.identity === selectionIdentity && selectionScope.uid !== undefined
+    setSelectionScope({ identity: selectionIdentity, uid: selectionUID })
+    if (selectionScope.identity !== selectionIdentity || recreated) {
+      setSelectedPod(null)
+      setInitialContainer(null)
+    }
+  }
   const [copied, setCopied] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [recentImageSave, setRecentImageSave] = useState(false)
@@ -613,6 +644,7 @@ export function WorkloadView({
       groupByApp: true,
     })
   }, [allEvents, topology, kind, group, namespace, name, historyScoped])
+  const historyNotes = useMemo(() => workloadHistoryNotes(historyCoverage, historyGaps), [historyCoverage, historyGaps])
 
   // Topology tab — the seeded neighborhood around this one workload (its
   // ownership core + attached Services/config/policies), not the whole namespace.
@@ -667,6 +699,13 @@ export function WorkloadView({
   const yamlObject = yamlObjectId ? yamlObjects.find((o) => o.id === yamlObjectId) : undefined
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
+      const memberKey = onSelectTopologyMember && topology && neighborhoodFocusId
+        ? jobSetMemberRunKey(topology, neighborhoodFocusId, node)
+        : undefined
+      if (memberKey) {
+        onSelectTopologyMember?.(memberKey)
+        return
+      }
       const resourceKind = topologyNodeResourceKind(node)
       if (!onNavigateToResource || !resourceKind || !node.name) return
       const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
@@ -677,7 +716,7 @@ export function WorkloadView({
         group,
       })
     },
-    [onNavigateToResource],
+    [onNavigateToResource, onSelectTopologyMember, topology, neighborhoodFocusId],
   )
 
   // Flatten events from hierarchy
@@ -896,7 +935,7 @@ export function WorkloadView({
   // prominent "Diagnose" on a problem, a quiet icon when fine. Rendered via the host
   // slot (DiagnoseCustomization); standalone Radar injects it, Hub overrides it.
   const renderDiagnose = actionsBarProps?.renderDiagnose as
-    | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
+    | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint; createdAt?: string }) => ReactNode)
     | undefined
   const headerActions = resource && !resourceGone && renderHeaderActions?.({ resource, context: expanded ? 'expanded' : 'drawer', onNavigate: onNavigateToResource })
   const diagnoseAction = resourceGone ? null : renderDiagnose?.({
@@ -905,6 +944,7 @@ export function WorkloadView({
     namespace,
     name,
     health: diagnoseHealthHint(apiKind, resource),
+    createdAt: resource?.metadata?.creationTimestamp,
   })
 
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
@@ -930,7 +970,7 @@ export function WorkloadView({
       icon: <Activity className="w-4 h-4" />,
       badge: resourceEvents.length > 0 ? <span className="ml-1 badge-sm bg-theme-elevated">{resourceEvents.length}</span> : undefined,
     },
-    { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" />, hidden: !logsTabVisible },
+    { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" />, hidden: !logsTabVisible, phoneCompactHeader: true },
     { id: 'metrics', label: 'Metrics', icon: <BarChart3 className="w-4 h-4" />, hidden: !metricsTabVisible },
     {
       id: 'reachability',
@@ -1131,6 +1171,7 @@ export function WorkloadView({
               )}
               {overviewIntro && <div className="px-4 pt-4">{overviewIntro}</div>}
               <ResourceRendererDispatch
+                active={active}
                 resource={selectedResource}
                 data={resource}
                 relationships={rendererRelationships}
@@ -1164,10 +1205,35 @@ export function WorkloadView({
   }
 
   // ── Expanded (full) mode ─────────────────────────────────────────────────
+    const nameAndCopy = (
+      <>
+        <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+        <Tooltip content="Copy name" delay={150}>
+          <button
+            onClick={() => copyToClipboard(name, 'name')}
+            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
+            aria-label="Copy name"
+          >
+            {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+        </Tooltip>
+      </>
+    )
   return (
     <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
     <DetailShell
       breadcrumb={breadcrumb}
+      compactIdentity={
+        // The namespace stays: Restart and the other actions sit right below.
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          {titlePrefix}
+          <div className="flex min-w-0 max-w-full items-center gap-2">{nameAndCopy}</div>
+          {namespace && namespace !== '_' && (
+            <span className="whitespace-nowrap text-sm text-theme-text-secondary">Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+          )}
+          {namespace && namespace !== '_' && namespaceNote}
+        </div>
+      }
       wrapHeader={inlineBadges}
       subheader={resourceGone ? undefined : subheader}
       nav={
@@ -1184,20 +1250,6 @@ export function WorkloadView({
         )
       }
       identity={(() => {
-        const nameAndCopy = (
-          <>
-            <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
-            <Tooltip content="Copy name" delay={150}>
-              <button
-                onClick={() => copyToClipboard(name, 'name')}
-                className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-                aria-label="Copy name"
-              >
-                {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </Tooltip>
-          </>
-        )
         const kindAndStatus = (
           <>
             {!hideKindBadge && (
@@ -1346,6 +1398,7 @@ export function WorkloadView({
           <div className="h-full min-h-0 overflow-y-auto">{specTab.render()}</div>
         ) : (effectiveTab === 'overview' || effectiveTab === 'spec') && (
             <InfoTab
+              active={active}
               resource={resource}
               selectedResource={selectedResource}
               relationships={rendererRelationships}
@@ -1419,6 +1472,7 @@ export function WorkloadView({
             olderError={olderHistoryError}
             scoped={historyScoped}
             incomplete={historyIncomplete}
+            notes={historyNotes}
             error={historyError}
             onRetry={onRetryHistory}
             selectedEventId={selectedEventId}
@@ -1457,10 +1511,12 @@ export function WorkloadView({
           </div>
         )}
         {effectiveTab === 'yaml' && (
-          <div className="flex h-full min-h-0">
+          // Phones put the objects in a scrolling row above the YAML, which
+          // gets the full width.
+          <div className="flex h-full min-h-0 phone:flex-col">
             {renderRelatedYaml && yamlObjects.length > 1 && (
-              <div className="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-theme-border bg-theme-base px-2 py-2">
-                <div className="px-1.5 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">Objects</div>
+              <div className="flex w-56 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-theme-border bg-theme-base px-2 py-2 phone:w-full phone:flex-row phone:gap-1 phone:overflow-x-auto phone:overflow-y-hidden phone:border-b phone:border-r-0">
+                <div className="px-1.5 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary phone:hidden">Objects</div>
                 {yamlObjects.map((o) => {
                   const active = o.primary ? yamlObjectId === null : yamlObjectId === o.id
                   return (
@@ -1469,7 +1525,7 @@ export function WorkloadView({
                       type="button"
                       onClick={() => setYamlObjectId(o.primary ? null : o.id)}
                       className={clsx(
-                        'flex w-full flex-col rounded-md px-1.5 py-1.5 text-left transition-colors',
+                        'flex w-full flex-col rounded-md px-1.5 py-1.5 text-left transition-colors phone:w-auto phone:max-w-[11rem] phone:shrink-0',
                         active ? 'selection selection-ring' : 'hover:bg-theme-hover',
                       )}
                     >
@@ -1725,6 +1781,7 @@ function EventsTab({
   olderError,
   scoped,
   incomplete,
+  notes = [],
   error,
   onRetry,
   selectedEventId,
@@ -1741,6 +1798,8 @@ function EventsTab({
   olderError?: Error | null
   scoped?: boolean
   incomplete?: boolean
+  /** Coverage and access sentences from workloadHistoryNotes. */
+  notes?: string[]
   error?: Error | null
   onRetry?: () => void
   selectedEventId: string | null
@@ -1898,14 +1957,15 @@ function EventsTab({
           )}
         </div>
       )}
-      {(scoped || truncated || incomplete) && (
+      {(scoped || truncated || incomplete || notes.length > 0) && (
         <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
           {scoped && (
             <span className="text-theme-text-tertiary">
               This workload, what it runs, and the Services, Ingresses, config and scalers attached to it.
             </span>
           )}
-          {incomplete && <span>This workload has more past runs and related resources than Radar follows, so some are left out.</span>}
+          {incomplete && <span>Some past runs or related resources may be outside the history Radar can follow.</span>}
+          {notes.map((note) => <span key={note}>{note}</span>)}
           {truncated && <span>Showing the most recent events. Older history exists.</span>}
           {truncated && olderError && (
             <span className="text-[var(--color-error)]" title={olderError.message}>Couldn't load older events.</span>
@@ -1984,6 +2044,7 @@ function EventsTab({
 // ============================================================================
 
 function InfoTab({
+  active,
   resource,
   selectedResource,
   relationships,
@@ -2021,6 +2082,7 @@ function InfoTab({
   onEvaluateCapacity,
   recentImageSave,
 }: {
+  active: boolean
   resource: any
   selectedResource: SelectedResource
   relationships?: Relationships
@@ -2076,6 +2138,7 @@ function InfoTab({
           </div>
         )}
         <ResourceRendererDispatch
+          active={active}
           resource={selectedResource}
           data={resource}
           relationships={relationships}
@@ -2163,6 +2226,7 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'clusterworkflowtemplates',
   'scaledjobs',
   'jobsets',
+  'rayclusters',
   'clusters',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
@@ -2180,6 +2244,8 @@ export function supportsLogsWithoutPods(
   if (normalizedKind === 'jobsets') {
     return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
   }
+  // A KubeRay RayCluster's tab reads the Pods it owns now, not recorded ones.
+  if (normalizedKind === 'rayclusters') return isKubeRayClusterIdentity(group, apiVersion)
   // A CloudNativePG Cluster's instance Pods are its children, not related
   // Pods, and its logs are resolved server-side from the Cluster itself.
   if (normalizedKind === 'clusters') {
