@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 
@@ -124,24 +125,37 @@ func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
 // whether every Secrets check behind the answer was answered. When one wasn't,
 // a namespace can be missing without being denied.
 func resolveHelmListNamespacesChecked(ctx context.Context, namespace string) ([]string, bool) {
+	namespaces, checked, _ := resolveHelmStorageScope(ctx, namespace)
+	return namespaces, checked
+}
+
+// resolveHelmStorageScope is resolveHelmListNamespacesChecked that also returns
+// the namespaces it left out because the caller can't list Secrets there.
+func resolveHelmStorageScope(ctx context.Context, namespace string) (namespaces []string, checked bool, unread []string) {
 	if namespace != "" {
-		return []string{namespace}, true
+		return []string{namespace}, true, nil
 	}
 	if pkgauth.UserFromContext(ctx) != nil {
 		allowed := filterNamespacesForUser(ctx, nil)
 		if allowed != nil {
-			return allowed, true
+			return allowed, true, nil
 		}
 		if clusterWide, _ := canReadInNamespaceDecision(ctx, "", "secrets", "", "list"); clusterWide {
-			return nil, true
+			return nil, true, nil
 		}
-		scoped, complete := filterNamespacesByCanReadDecision(ctx, "", "secrets", "list", mcpAllNamespaceNames(ctx))
+		all := mcpAllNamespaceNames(ctx)
+		scoped, complete := filterNamespacesByCanReadDecision(ctx, "", "secrets", "list", all)
 		if len(scoped) > 0 {
-			return scoped, complete
+			for _, ns := range all {
+				if !slices.Contains(scoped, ns) {
+					unread = append(unread, ns)
+				}
+			}
+			return scoped, complete, unread
 		}
-		return nil, complete
+		return nil, complete, nil
 	}
-	return helm.ResolveNoAuthListNamespaces(ctx), true
+	return helm.ResolveNoAuthListNamespaces(ctx), true, nil
 }
 
 func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input getHelmReleaseInput) (*mcp.CallToolResult, any, error) {

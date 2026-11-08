@@ -353,7 +353,9 @@ func TestIssueReleasesSkipOnlyDeniedNamespaces(t *testing.T) {
 		reason     issuesapi.UncheckedReason
 		wantFailed []string
 	}{
-		{name: "forbidden", err: apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", fmt.Errorf("denied"))},
+		// The Helm view lists the denied namespace's releases from their
+		// objects, so Issues must say it didn't check them.
+		{name: "forbidden", err: apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", fmt.Errorf("denied")), unchecked: true, reason: issuesapi.UncheckedReasonCallerAccessDenied, wantFailed: []string{"blocked"}},
 		{name: "unauthorized", err: apierrors.NewUnauthorized("Unauthorized"), unchecked: true, reason: issuesapi.UncheckedReasonReadFailed, wantFailed: []string{"blocked"}},
 		{name: "server error", err: apierrors.NewInternalError(fmt.Errorf("etcdserver: request timed out")), unchecked: true, reason: issuesapi.UncheckedReasonReadFailed, wantFailed: []string{"blocked"}},
 		{name: "Radar may not impersonate", err: impersonation, unchecked: true, reason: issuesapi.UncheckedReasonCollectorAccessDenied, wantFailed: []string{"blocked"}},
@@ -541,5 +543,36 @@ func TestIssueReadUncheckedMixedPartialFailuresUseTheGenericReason(t *testing.T)
 	mixed, _ := IssueReadUnchecked(ctx, &PartialReadError{Namespaces: []string{"a", "b"}, Err: impersonation, Errs: []error{impersonation, timeout}})
 	if mixed.Reason != issuesapi.UncheckedReasonReadFailed {
 		t.Fatalf("mixed causes = %+v, want the generic read_failed", mixed)
+	}
+}
+
+func TestAddUnreadNamespaces(t *testing.T) {
+	denied := issuesapi.UncheckedReasonCallerAccessDenied
+	failed := issuesapi.UncheckedReasonReadFailed
+	helmSource := func(reason issuesapi.UncheckedReason, namespaces ...string) issuesapi.UncheckedSource {
+		return issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: reason, Namespaces: namespaces}
+	}
+	for _, tc := range []struct {
+		name           string
+		unchecked      issuesapi.UncheckedSource
+		incomplete     bool
+		unread         []string
+		checked        bool
+		want           issuesapi.UncheckedSource
+		wantIncomplete bool
+	}{
+		{name: "nothing left out", checked: true},
+		{name: "a complete read that skipped denied namespaces", unread: []string{"team-c", "team-b"}, checked: true, want: helmSource(denied, "team-b", "team-c"), wantIncomplete: true},
+		{name: "an unanswered check isn't called a denial", unread: []string{"team-b"}, want: helmSource(failed, "team-b"), wantIncomplete: true},
+		{name: "joins a partial read with the same reason", unchecked: helmSource(denied, "team-a"), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(denied, "team-a", "team-b"), wantIncomplete: true},
+		{name: "different reasons fall back to the generic one", unchecked: helmSource(failed, "team-a"), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(failed, "team-a", "team-b"), wantIncomplete: true},
+		{name: "a read that checked nothing stays whole", unchecked: helmSource(failed), incomplete: true, unread: []string{"team-b"}, checked: true, want: helmSource(failed), wantIncomplete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, incomplete := AddUnreadNamespaces(tc.unchecked, tc.incomplete, tc.unread, tc.checked)
+			if incomplete != tc.wantIncomplete || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %+v %v, want %+v %v", got, incomplete, tc.want, tc.wantIncomplete)
+			}
+		})
 	}
 }

@@ -76,14 +76,15 @@ func TestResolveHelmNamespacesForAuthorizerDecisions(t *testing.T) {
 		ctxUser := auth.ContextWithUser(ctx, &auth.User{Username: "alice"})
 		for _, filtered := range [][]string{{"team-a"}, nil} {
 			authz := &fakeUpgradeAuthorizer{canList: map[string]bool{"/secrets/": false}, filtered: filtered, filterUnchecked: true}
-			if _, ok, checked := ResolveHelmNamespacesChecked(ctxUser, authz, nil); !ok || checked {
+			if _, ok, checked, _ := ResolveHelmNamespacesChecked(ctxUser, authz, nil); !ok || checked {
 				t.Fatalf("filtered %v: ok=%v checked=%v, want ok and unchecked", filtered, ok, checked)
 			}
 		}
 		authz := &fakeUpgradeAuthorizer{canList: map[string]bool{"/secrets/": false}, filtered: []string{"team-a"}}
-		if _, _, checked := ResolveHelmNamespacesChecked(ctxUser, authz, nil); !checked {
+		if _, _, checked, _ := ResolveHelmNamespacesChecked(ctxUser, authz, nil); !checked {
 			t.Fatal("every check answered, want checked")
 		}
+
 	})
 
 	t.Run("authenticated cluster-wide with secrets stays cluster-wide", func(t *testing.T) {

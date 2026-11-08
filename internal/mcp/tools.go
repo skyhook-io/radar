@@ -3429,8 +3429,10 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 	}
 	user := userFromContext(ctx)
 	helmNamespaces := namespaces
+	checked := true
+	var unread []string
 	if helmNamespaces == nil {
-		helmNamespaces = resolveHelmListNamespaces(ctx, "")
+		helmNamespaces, checked, unread = resolveHelmStorageScope(ctx, "")
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
 	username, groups := "", []string(nil)
@@ -3438,6 +3440,11 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 		username, groups = user.Username, user.Groups
 	}
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	// Namespaces left out because the caller can't read Helm's storage there
+	// were never read, and list_helm_releases still lists their releases.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
+	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 

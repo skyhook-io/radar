@@ -1696,6 +1696,14 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 // resolveHelmNamespacesChecked is resolveHelmNamespaces that also says whether
 // every Secrets check behind the answer was answered.
 func (s *Server) resolveHelmNamespacesChecked(r *http.Request) ([]string, bool, bool) {
+	namespaces, ok, checked, _ := s.resolveHelmStorageScope(r)
+	return namespaces, ok, checked
+}
+
+// resolveHelmStorageScope is resolveHelmNamespacesChecked that also returns
+// the namespaces it left out because the caller can't list Secrets there, so
+// a read over the result can say what it didn't check.
+func (s *Server) resolveHelmStorageScope(r *http.Request) ([]string, bool, bool, []string) {
 	// An explicit ?namespace=/?namespaces= request is honored as-is. Helm reads
 	// run as the caller (user impersonation, or the SA when auth is off), so the
 	// apiserver authorizes the secrets read directly — routing this through
@@ -1710,11 +1718,11 @@ func (s *Server) resolveHelmNamespacesChecked(r *http.Request) ([]string, bool, 
 		// instead of reading releases the cache doesn't cover.
 		if k8s.ForceNamespaceScope {
 			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
-				return []string{target}, true, true
+				return []string{target}, true, true, nil
 			}
-			return []string{}, true, true
+			return []string{}, true, true, nil
 		}
-		return explicit, true, true
+		return explicit, true, true, nil
 	}
 
 	namespaces := s.parseNamespacesForUser(r)

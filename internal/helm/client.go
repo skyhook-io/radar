@@ -429,8 +429,8 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 	fluxMap := fluxHelmReleaseMap(ctx)
 	all := make([]HelmRelease, 0)
 	var lastForbidden, firstFailure error
-	var failed []string
-	var failures []error
+	var failed, deniedScopes []string
+	var failures, denials []error
 	authorized := false
 	for index, ns := range scopes {
 		if err := ctx.Err(); err != nil {
@@ -456,6 +456,8 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		}
 		if denied(err) {
 			lastForbidden = err
+			deniedScopes = append(deniedScopes, ns)
+			denials = append(denials, err)
 			continue
 		}
 		if !keepGoing {
@@ -465,6 +467,16 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		failures = append(failures, err)
 		if firstFailure == nil {
 			firstFailure = err
+		}
+	}
+	// With keepGoing, a namespace the caller was denied is part of the answer
+	// once another was read: those releases weren't checked, and a caller that
+	// sees them elsewhere must be told.
+	if keepGoing && authorized && len(deniedScopes) > 0 {
+		failed = append(failed, deniedScopes...)
+		failures = append(failures, denials...)
+		if firstFailure == nil {
+			firstFailure = denials[0]
 		}
 	}
 	if firstFailure != nil {
