@@ -107,6 +107,31 @@ func TestDashboardAuthUserNamespaceCountWithoutRadarNamespaceLister(t *testing.T
 	}
 }
 
+func TestDashboardNamespaceCountWithoutAnyPodCollection(t *testing.T) {
+	client := fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}})
+	t.Cleanup(func() {
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	k8s.ResetResourceCache()
+	if err := k8s.InitScopedTestResourceCache(client, map[string]k8score.ResourceScope{k8score.Services: {Enabled: true, Namespace: "alpha"}}); err != nil {
+		t.Fatal(err)
+	}
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("ns-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}})
+
+	// The user's allowance says nothing about what Radar collects.
+	counts := decodeDashboard(t, env.authGet(t, "/api/dashboard", "ns-reader", "")).ResourceCounts
+	if counts.Namespaces != 0 {
+		t.Errorf("namespaces = %d, want 0 when Radar collects Pods nowhere", counts.Namespaces)
+	}
+	if !slices.Contains(counts.Restricted, "namespaces") {
+		t.Errorf("restricted = %v, want it to include namespaces", counts.Restricted)
+	}
+}
+
 func TestDashboardAuthUserWhoCanListSeesExactCounts(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}

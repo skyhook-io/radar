@@ -442,8 +442,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		// Count the namespaces the caller can see that Radar collects Pods in,
 		// whatever the picker narrowed this request to, as the listed count
 		// would be. It is a lower bound: the cluster may hold more.
+		// KindNamespaces is nil both for cluster-wide Pods and for no Pods at
+		// all; only the first may stand in for every namespace.
+		collected := cache.KindNamespaces(k8score.Pods)
+		if cache.KindReadinessFor(k8score.Pods) == k8s.KindUnavailable {
+			collected = []string{}
+		}
 		if visible := s.getUserNamespaces(r, nil); !readscope.NoNamespaceAccess(visible) {
-			resp.ResourceCounts.Namespaces = len(readscope.SelectNamespaces(cache.KindNamespaces(k8score.Pods), visible))
+			resp.ResourceCounts.Namespaces = len(readscope.SelectNamespaces(collected, visible))
 		}
 		resp.ResourceCounts.Restricted = append(resp.ResourceCounts.Restricted, "namespaces")
 	}
