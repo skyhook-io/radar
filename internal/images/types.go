@@ -44,6 +44,9 @@ type InspectRequest struct {
 	// guarded sends every registry request through the network guard; set
 	// for authenticated callers.
 	guarded bool
+	// nodeOnly: the Pod's node holds this image without having pulled it
+	// from a registry.
+	nodeOnly bool
 }
 
 // ImageMetadata contains lightweight metadata about an image (without downloading layers)

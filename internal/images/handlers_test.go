@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -63,7 +65,7 @@ func imageTestCache(t *testing.T, objects ...runtime.Object) {
 	k8s.ResetTestState()
 	t.Cleanup(k8s.ResetTestState)
 	err := k8s.InitScopedTestResourceCache(fake.NewClientset(objects...), map[string]k8score.ResourceScope{
-		"pods": {Enabled: true}, "secrets": {Enabled: true}, "serviceaccounts": {Enabled: true},
+		"pods": {Enabled: true}, "secrets": {Enabled: true}, "serviceaccounts": {Enabled: true}, "nodes": {Enabled: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -847,5 +849,163 @@ func TestImageCacheDoesNotOutliveRegistryAccess(t *testing.T) {
 	}
 	if _, _, err := inspector.GetFileContent(ctx, InspectRequest{Image: image, keychain: alice}, file); err != nil {
 		t.Fatalf("alice still reads her file: %v", err)
+	}
+}
+
+func TestImageRoutesAuthOffPinsPulledDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	pinned := "gcr.io/project/app@" + digest
+	for _, tc := range []struct {
+		name, imageID, image, pod, want string
+		secrets                         []string
+	}{
+		{name: "tag pinned to the pulled digest", imageID: "docker-pullable://gcr.io/project/app@" + digest, image: "gcr.io/project/app:v1", pod: "app", want: pinned, secrets: []string{"pod-secret"}},
+		{name: "short Docker Hub name", imageID: "docker.io/library/nginx@" + digest, image: "nginx:1.27", pod: "app", want: "docker.io/library/nginx@" + digest, secrets: []string{"pod-secret"}},
+		{name: "runtime names another registry", imageID: "mirror.example:5000/project/app@" + digest, image: "gcr.io/project/app:v1", pod: "app", want: "gcr.io/project/app:v1", secrets: []string{"pod-secret"}},
+		{name: "pinned reference sent back", imageID: "gcr.io/project/app@" + digest, image: pinned, pod: "app", want: pinned, secrets: []string{"pod-secret"}},
+		{name: "not pulled yet", imageID: "", image: "gcr.io/project/app:v1", pod: "app", want: "gcr.io/project/app:v1", secrets: []string{"pod-secret"}},
+		{name: "bare image ID", imageID: "sha256:" + strings.Repeat("c", 64), image: "gcr.io/project/app:v1", pod: "app", want: "gcr.io/project/app:v1", secrets: []string{"pod-secret"}},
+		{name: "image the Pod doesn't run", imageID: "gcr.io/project/app@" + digest, image: "gcr.io/project/other:v1", pod: "app", want: "gcr.io/project/other:v1", secrets: []string{"pod-secret"}},
+		{name: "Pod not in cache", imageID: "gcr.io/project/app@" + digest, image: "gcr.io/project/app:v1", pod: "gone", want: "gcr.io/project/app:v1"},
+	} {
+		for _, route := range []string{"metadata", "inspect", "file"} {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				pod := imageTestPod()
+				if strings.HasPrefix(tc.image, "nginx") {
+					pod.Spec.Containers[0].Image = tc.image
+				}
+				pod.Status.ContainerStatuses[0].ImageID = tc.imageID
+				imageTestCache(t, pod)
+				f := &fakeImageInspector{check: func(req InspectRequest) {
+					if req.Image != tc.want || !slices.Equal(req.PullSecretNames, tc.secrets) || req.keychain != nil {
+						t.Fatalf("image=%q secrets=%v; want %q %v", req.Image, req.PullSecretNames, tc.want, tc.secrets)
+					}
+				}}
+				w := serveImageTest(&Handlers{inspector: f}, route, url.Values{"image": {tc.image}, "namespace": {"team"}, "pod": {tc.pod}, "path": {"/file.txt"}}, false)
+				if w.Code != 200 || f.calls != 1 {
+					t.Fatalf("got %d %s, calls=%d", w.Code, w.Body.String(), f.calls)
+				}
+			})
+		}
+	}
+}
+
+// An init container and the app container can pull the same tag at
+// different times; the request names only the image, so neither digest wins.
+func TestImageRoutesSameTagDifferentDigests(t *testing.T) {
+	for _, tc := range []struct {
+		name, initDigest, want string
+	}{
+		{"different digests", "sha256:" + strings.Repeat("b", 64), "gcr.io/project/app:v1"},
+		{"same digest", "sha256:" + strings.Repeat("a", 64), "gcr.io/project/app@sha256:" + strings.Repeat("a", 64)},
+		{"other container not pulled yet", "", "gcr.io/project/app@sha256:" + strings.Repeat("a", 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := imageTestPod()
+			pod.Spec.InitContainers[0].Image = "gcr.io/project/app:v1"
+			pod.Status.InitContainerStatuses[0].ImageID = ""
+			if tc.initDigest != "" {
+				pod.Status.InitContainerStatuses[0].ImageID = "gcr.io/project/app@" + tc.initDigest
+			}
+			imageTestCache(t, pod)
+			f := &fakeImageInspector{check: func(req InspectRequest) {
+				if req.Image != tc.want {
+					t.Fatalf("image = %q; want %q", req.Image, tc.want)
+				}
+			}}
+			w := serveImageTest(&Handlers{inspector: f}, "metadata", url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {"team"}, "pod": {"app"}}, false)
+			if w.Code != 200 || f.calls != 1 {
+				t.Fatalf("got %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func imageTestNode(runtime string) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+		Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{ContainerRuntimeVersion: runtime}},
+	}
+}
+
+func TestImageRoutesNodeOnlyImage(t *testing.T) {
+	unauthorized := &registryFetchError{err: errors.New("UNAUTHORIZED: authentication required")}
+	for _, tc := range []struct {
+		name, imageID, runtime string
+		initImageID            string
+		err                    error
+		authenticated          bool
+		want                   int
+		reason                 string
+	}{
+		{name: "containerd import, auth off", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "containerd://2.1.3", err: unauthorized, want: 404, reason: "node_only"},
+		{name: "containerd import, auth on", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "containerd://2.1.3", err: unauthorized, authenticated: true, want: 404, reason: "node_only"},
+		{name: "docker local image", imageID: "docker://sha256:" + strings.Repeat("c", 64), runtime: "docker://24.0.7", err: &registryFetchError{err: errors.New("MANIFEST_UNKNOWN: manifest unknown")}, want: 404, reason: "node_only"},
+		{name: "CRI-O reports bare IDs for pulled images", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "cri-o://1.30.0", err: unauthorized, want: 401},
+		{name: "runtime unknown", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "", err: unauthorized, want: 401},
+		{name: "Node not readable", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "none", err: unauthorized, want: 401},
+		{name: "registry unreachable wins", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "containerd://2.1.3", err: &registryFetchError{err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}, want: 502, reason: "registry_unreachable"},
+		{name: "layer download can't connect", imageID: "gcr.io/project/app@sha256:" + strings.Repeat("a", 64), runtime: "containerd://2.1.3", err: fmt.Errorf("failed to cache layers: %w", &net.OpError{Op: "dial", Err: errors.New("connection refused")}), want: 502, reason: "registry_unreachable"},
+		{name: "pulled from a registry", imageID: "gcr.io/project/app@sha256:" + strings.Repeat("a", 64), runtime: "containerd://2.1.3", err: unauthorized, want: 401},
+		{name: "refused by the network guard", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "containerd://2.1.3", err: &registryFetchError{err: errBlockedAddress}, want: 403},
+		{name: "another container pulled the same image", imageID: "sha256:" + strings.Repeat("c", 64), initImageID: "gcr.io/project/app@sha256:" + strings.Repeat("a", 64), runtime: "containerd://2.1.3", err: unauthorized, want: 401},
+		{name: "failure after the fetch", imageID: "sha256:" + strings.Repeat("c", 64), runtime: "containerd://2.1.3", err: errors.New("failed to cache layers: no space left on device"), want: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := imageTestPod()
+			pod.Spec.NodeName = "node-1"
+			pod.Status.ContainerStatuses[0].ImageID = tc.imageID
+			if tc.initImageID != "" {
+				pod.Spec.InitContainers[0].Image = "gcr.io/project/app:v1"
+				pod.Status.InitContainerStatuses[0].ImageID = tc.initImageID
+			}
+			objects := []runtime.Object{pod}
+			if tc.runtime != "none" {
+				objects = append(objects, imageTestNode(tc.runtime))
+			}
+			imageTestCache(t, objects...)
+			f := &fakeImageInspector{check: func(InspectRequest) {}, err: tc.err}
+			h := &Handlers{
+				inspector:       f,
+				authorize:       func(*http.Request, string) (bool, bool) { return true, true },
+				authorizeExec:   func(*http.Request, string) (bool, bool) { return false, true },
+				authorizeSecret: func(*http.Request, string, string) (bool, bool) { return false, true },
+			}
+			w := serveImageTest(h, "metadata", url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {"team"}, "pod": {"app"}}, tc.authenticated)
+			if w.Code != tc.want || (tc.reason != "" && !strings.Contains(w.Body.String(), `"reason":"`+tc.reason+`"`)) {
+				t.Fatalf("got %d %s; want %d %s", w.Code, w.Body.String(), tc.want, tc.reason)
+			}
+		})
+	}
+}
+
+// The connection failures come from real registry requests, so the test
+// covers how go-containerregistry wraps them, not a constructed error.
+func TestImageRoutesRegistryUnreachable(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	teapot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
+	defer teapot.Close()
+	for _, tc := range []struct {
+		name, image string
+		want        int
+		reason      string
+	}{
+		{"connection refused", "localhost:" + strconv.Itoa(closedPort) + "/app:v1", 502, "registry_unreachable"},
+		{"host doesn't resolve", "registry.radar-test.invalid/app:v1", 502, "registry_unreachable"},
+		{"registry answered with an error", strings.TrimPrefix(teapot.URL, "http://") + "/app:v1", 500, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &Handlers{inspector: &Inspector{cacheDir: t.TempDir()}}
+			w := serveImageTest(h, "metadata", url.Values{"image": {tc.image}}, false)
+			if w.Code != tc.want || (tc.reason != "" && !strings.Contains(w.Body.String(), `"reason":"`+tc.reason+`"`)) {
+				t.Fatalf("got %d %s; want %d %s", w.Code, w.Body.String(), tc.want, tc.reason)
+			}
+		})
 	}
 }

@@ -396,6 +396,16 @@ func (i *Inspector) GetMetadata(ctx context.Context, req InspectRequest) (*Image
 	}, nil
 }
 
+// registryFetchError is a failure to read the image's manifest from its
+// registry, as opposed to a later failure caching or reading its layers.
+type registryFetchError struct {
+	err error
+}
+
+func (e *registryFetchError) Error() string { return "failed to fetch image: " + e.err.Error() }
+
+func (e *registryFetchError) Unwrap() error { return e.err }
+
 // fetchImageBruteForce tries to fetch an image using anonymous auth first,
 // then falls back to authenticated access if anonymous fails. release closes
 // the connections the returned image reads its layers through.
@@ -430,7 +440,7 @@ func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest
 		remote.WithAuthFromKeychain(keychain),
 	)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err}
 	}
 
 	registryType := DetectRegistryType(req.Image)
@@ -466,14 +476,14 @@ func (i *Inspector) fetchGuarded(ctx context.Context, ref name.Reference, req In
 	}
 	release()
 	if isRefused(err) || req.keychain == nil {
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err}
 	}
 	auth, kerr := req.keychain.Resolve(ref.Context())
 	if kerr != nil {
 		return nil, "", nil, fmt.Errorf("failed to resolve registry credentials: %w", kerr)
 	}
 	if auth == authn.Anonymous {
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err}
 	}
 	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
 	credentialed, release := i.guardFor()
@@ -484,7 +494,7 @@ func (i *Inspector) fetchGuarded(ctx context.Context, ref name.Reference, req In
 	)
 	if err != nil {
 		release()
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err}
 	}
 	return img, string(DetectRegistryType(req.Image)), release, nil
 }
