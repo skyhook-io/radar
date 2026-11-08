@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -320,6 +321,8 @@ func observedHelmReleaseResult(ctx context.Context, input getHelmReleaseInput) (
 	}
 	detail, err := helm.GetObservedReleaseInStorage(ctx, scope, input.Namespace, input.Name)
 	switch {
+	case errors.Is(err, helm.ErrStoredElsewhere), errors.Is(err, helm.ErrAmbiguousStorage):
+		return nil, err.Error()
 	case err != nil:
 		return nil, "its objects couldn't be read instead: " + err.Error()
 	case detail == nil:

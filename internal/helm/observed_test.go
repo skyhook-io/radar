@@ -286,6 +286,20 @@ func TestObservedRowUsesFluxRecordOverLabels(t *testing.T) {
 	}
 }
 
+// Two HelmReleases deploying the same release can't be told apart by its
+// objects, so the row takes neither's name, storage namespace or chart.
+func TestObservedRowCreditsNeitherOfTwoHelmReleases(t *testing.T) {
+	key := releaseKey{"apps", "web"}
+	objects := []stampedObject{{chartLabel: "web-1.0.0", appVersion: "1"}}
+	row := observedRow(key, objects, []fluxEvidence{
+		{ref: "team-a/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "team-a", historyChart: "web", historyVersion: "1.0.0"},
+		{ref: "team-b/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "team-b", historyChart: "web", historyVersion: "2.0.0"},
+	})
+	if row.ManagedByFluxHelmRelease != "" || row.StorageNamespace != "" || row.ChartVersion != "1.0.0" {
+		t.Fatalf("row = %+v, want labels only", row)
+	}
+}
+
 func TestObservedReleaseHasNoFieldToGuessFrom(t *testing.T) {
 	fields := reflect.TypeOf(ObservedRelease{})
 	for i := range fields.NumField() {
