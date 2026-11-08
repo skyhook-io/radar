@@ -172,9 +172,11 @@ func rolloutPodSelector(selector *metav1.LabelSelector) *metav1.LabelSelector {
 // GetContainersForPod returns container names to target for log collection.
 // A non-empty selectedContainer is validated against the Pod's containers, and
 // against its init containers when includeInit is set. An empty one means every
-// main container and, with includeInit, each init container that has run while
-// the Pod is still initializing: until then the main containers have no output,
-// and the init container is usually the reason the Pod is stuck.
+// main container and, with includeInit, each regular init container that has
+// run while the Pod is still initializing: until then the main containers have
+// no output, and the init container is usually the reason the Pod is stuck.
+// Native sidecars are left out because they keep running after initialization,
+// where the default selection no longer includes them.
 func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit bool) []string {
 	if selectedContainer != "" {
 		for _, c := range pod.Spec.Containers {
@@ -193,7 +195,16 @@ func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit 
 	}
 	containers := make([]string, 0, len(pod.Spec.Containers))
 	if includeInit && !podInitialized(pod) {
+		sidecars := map[string]bool{}
+		for _, c := range pod.Spec.InitContainers {
+			if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+				sidecars[c.Name] = true
+			}
+		}
 		for _, status := range pod.Status.InitContainerStatuses {
+			if sidecars[status.Name] {
+				continue
+			}
 			if status.State.Running != nil || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil {
 				containers = append(containers, status.Name)
 			}
