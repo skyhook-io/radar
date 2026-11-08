@@ -47,6 +47,9 @@ type InspectRequest struct {
 	// nodeOnly: the Pod's node holds this image without having pulled it
 	// from a registry.
 	nodeOnly bool
+	// tagFallback is the request for the tag the caller named, used when the
+	// registry no longer has the digest Image was pinned to.
+	tagFallback *InspectRequest
 }
 
 // ImageMetadata contains lightweight metadata about an image (without downloading layers)

@@ -26,6 +26,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -39,25 +40,33 @@ import (
 type fakeImageInspector struct {
 	check func(InspectRequest)
 	err   error
-	calls int
+	// errFor, when set, answers each request instead of err.
+	errFor func(InspectRequest) error
+	calls  int
+}
+
+func (f *fakeImageInspector) result(req InspectRequest) error {
+	f.calls++
+	f.check(req)
+	if f.errFor != nil {
+		return f.errFor(req)
+	}
+	return f.err
 }
 
 func (f *fakeImageInspector) GetMetadata(_ context.Context, req InspectRequest) (*ImageMetadata, error) {
-	f.calls++
-	f.check(req)
-	return &ImageMetadata{Image: req.Image}, f.err
+	err := f.result(req)
+	return &ImageMetadata{Image: req.Image}, err
 }
 
 func (f *fakeImageInspector) Inspect(_ context.Context, req InspectRequest) (*ImageFilesystem, error) {
-	f.calls++
-	f.check(req)
-	return &ImageFilesystem{Image: req.Image}, f.err
+	err := f.result(req)
+	return &ImageFilesystem{Image: req.Image}, err
 }
 
 func (f *fakeImageInspector) GetFileContent(_ context.Context, req InspectRequest, _ string) ([]byte, string, error) {
-	f.calls++
-	f.check(req)
-	return []byte("test content"), "file.txt", f.err
+	err := f.result(req)
+	return []byte("test content"), "file.txt", err
 }
 
 func imageTestCache(t *testing.T, objects ...runtime.Object) {
@@ -1007,5 +1016,297 @@ func TestImageRoutesRegistryUnreachable(t *testing.T) {
 				t.Fatalf("got %d %s; want %d %s", w.Code, w.Body.String(), tc.want, tc.reason)
 			}
 		})
+	}
+}
+
+// A tag can move and the registry's retention policy can then delete the
+// digest a Pod pulled. The tag still resolves, so the viewer shows the tag's
+// current image instead of saying the image doesn't exist.
+func TestImageRoutesPulledDigestGone(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	previousGoogle := google.Keychain
+	google.Keychain = imageAnonymousKeychain{resolve: func() {}}
+	t.Cleanup(func() { google.Keychain = previousGoogle })
+	img, err := random.Image(1024, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goneDigest := "sha256:" + strings.Repeat("d", 64)
+	for _, tc := range []struct {
+		name          string
+		authenticated bool
+		digestStatus  int // 0: "manifest unknown"
+		tagMissing    bool
+		want          int
+	}{
+		{name: "auth off", want: 200},
+		{name: "auth on, exec holder", authenticated: true, want: 200},
+		{name: "tag gone too", tagMissing: true, want: 404},
+		{name: "digest request fails otherwise", digestStatus: http.StatusBadRequest, want: 500},
+	} {
+		for _, route := range []string{"metadata", "inspect", "file"} {
+			if tc.tagMissing && route == "file" {
+				// The viewer only asks for a file from an image it listed.
+				continue
+			}
+			t.Run(tc.name+"/"+route, func(t *testing.T) {
+				var digestHits, tagHits atomic.Int32
+				reg := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+				// Distribution's wording, which Docker Hub and most registries use.
+				manifestUnknown := func(w http.ResponseWriter) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = io.WriteString(w, `{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}`)
+				}
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.Contains(r.URL.Path, "/manifests/"+goneDigest) {
+						digestHits.Add(1)
+						if tc.digestStatus != 0 {
+							w.WriteHeader(tc.digestStatus)
+						} else {
+							manifestUnknown(w)
+						}
+						return
+					}
+					if r.Method != http.MethodPut && strings.HasSuffix(r.URL.Path, "/manifests/v1") {
+						tagHits.Add(1)
+						if tc.tagMissing {
+							manifestUnknown(w)
+							return
+						}
+					}
+					reg.ServeHTTP(w, r)
+				}))
+				t.Cleanup(srv.Close)
+				host := strings.TrimPrefix(srv.URL, "http://")
+				tag := host + "/team/app:v1"
+				ref, err := name.ParseReference(tag, name.Insecure)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := remote.Write(ref, img); err != nil {
+					t.Fatal(err)
+				}
+				file := "/missing"
+				if route == "file" {
+					fs, err := (&Inspector{cacheDir: t.TempDir()}).Inspect(context.Background(), InspectRequest{Image: tag})
+					if err != nil {
+						t.Fatal(err)
+					}
+					file = firstImageFile(fs.Root)
+				}
+				tagHits.Store(0)
+
+				pod := imageTestPod()
+				pod.Spec.ImagePullSecrets = nil
+				pod.Spec.Containers[0].Image = tag
+				pod.Status.ContainerStatuses[0].ImageID = host + "/team/app@" + goneDigest
+				imageTestCache(t, pod)
+				h := &Handlers{
+					inspector:       &Inspector{cacheDir: t.TempDir(), newGuard: func() *guardedTransport { return newLayerTransport(false) }},
+					authorize:       func(*http.Request, string) (bool, bool) { return true, true },
+					authorizeExec:   func(*http.Request, string) (bool, bool) { return true, true },
+					authorizeSecret: func(*http.Request, string, string) (bool, bool) { return false, true },
+				}
+				w := serveImageTest(h, route, url.Values{"image": {tag}, "namespace": {"team"}, "pod": {"app"}, "path": {file}}, tc.authenticated)
+				if w.Code != tc.want || digestHits.Load() == 0 {
+					t.Fatalf("got %d %s, digest requests=%d", w.Code, w.Body.String(), digestHits.Load())
+				}
+				if fellBack := tagHits.Load() != 0; fellBack != (tc.digestStatus == 0) {
+					t.Fatalf("tag requests=%d after the digest answered %d", tagHits.Load(), tc.digestStatus)
+				}
+				if tc.want == 404 && !strings.Contains(w.Body.String(), "Image not found: "+tag) {
+					t.Fatalf("got %s; want the tag named as missing", w.Body.String())
+				}
+				if w.Code == 200 && route != "file" && !strings.Contains(w.Body.String(), `"image":"`+tag+`"`) {
+					t.Fatalf("got %s; want the tag's image, not the pulled digest", w.Body.String())
+				}
+			})
+		}
+	}
+}
+
+// Radar's own credentials are for the digest the Pod pulled. When that digest
+// is gone, the tag is read with the credentials every other caller gets.
+func TestImageRoutesTagFallbackDropsAmbientCredentials(t *testing.T) {
+	pulledDigest := "gcr.io/project/app@sha256:" + strings.Repeat("a", 64)
+	dockerDir := t.TempDir()
+	t.Setenv("DOCKER_CONFIG", dockerDir)
+	if err := os.WriteFile(filepath.Join(dockerDir, "config.json"), []byte(`{"auths":{"gcr.io":{"auth":"YW1iaWVudDpzZWNyZXQ="}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previousGoogle := google.Keychain
+	google.Keychain = imageAnonymousKeychain{resolve: func() {}}
+	t.Cleanup(func() { google.Keychain = previousGoogle })
+	pod := imageTestPod()
+	pod.Spec.ImagePullSecrets = nil
+	imageTestCache(t, pod)
+	var images []string
+	f := &fakeImageInspector{
+		check: func(req InspectRequest) {
+			images = append(images, req.Image)
+			want := ""
+			if req.Image == pulledDigest {
+				want = "ambient"
+			}
+			assertImageCredentials(t, req.keychain, req.Image, want)
+		},
+		errFor: func(req InspectRequest) error {
+			if req.Image == pulledDigest {
+				return &registryFetchError{err: &transport.Error{StatusCode: http.StatusNotFound, Errors: []transport.Diagnostic{{Code: transport.ManifestUnknownErrorCode}}}}
+			}
+			return nil
+		},
+	}
+	h := &Handlers{
+		inspector:       f,
+		authorize:       func(*http.Request, string) (bool, bool) { return true, true },
+		authorizeExec:   func(*http.Request, string) (bool, bool) { return true, true },
+		authorizeSecret: func(*http.Request, string, string) (bool, bool) { return false, true },
+	}
+	w := serveImageTest(h, "metadata", url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {"team"}, "pod": {"app"}}, true)
+	if w.Code != 200 || !slices.Equal(images, []string{pulledDigest, "gcr.io/project/app:v1"}) {
+		t.Fatalf("got %d %s, requests %v", w.Code, w.Body.String(), images)
+	}
+}
+
+// Radar retries a failed anonymous read with any credentials it has for the
+// registry. Credentials the registry rejects must not hide that the anonymous
+// read found no such digest, or a public tag that still resolves reads as an
+// authentication failure.
+func TestImageRoutesPulledDigestGoneStaleCredentials(t *testing.T) {
+	img, err := random.Image(1024, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goneDigest := "sha256:" + strings.Repeat("d", 64)
+	reg := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	var armed atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if armed.Load() {
+			if r.URL.Path == "/v2/" {
+				w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if r.Header.Get("Authorization") != "" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	tag := host + "/team/app:v1"
+	ref, err := name.ParseReference(tag, name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(ref, img); err != nil {
+		t.Fatal(err)
+	}
+	armed.Store(true)
+	dockerDir := t.TempDir()
+	t.Setenv("DOCKER_CONFIG", dockerDir)
+	if err := os.WriteFile(filepath.Join(dockerDir, "config.json"), []byte(`{"auths":{"`+host+`":{"auth":"c3RhbGU6c3RhbGU="}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previousGoogle := google.Keychain
+	google.Keychain = imageAnonymousKeychain{resolve: func() {}}
+	t.Cleanup(func() { google.Keychain = previousGoogle })
+
+	pod := imageTestPod()
+	pod.Spec.ImagePullSecrets = nil
+	pod.Spec.Containers[0].Image = tag
+	pod.Status.ContainerStatuses[0].ImageID = host + "/team/app@" + goneDigest
+	imageTestCache(t, pod)
+	h := &Handlers{inspector: &Inspector{cacheDir: t.TempDir()}}
+	w := serveImageTest(h, "metadata", url.Values{"image": {tag}, "namespace": {"team"}, "pod": {"app"}}, false)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"image":"`+tag+`"`) {
+		t.Fatalf("got %d %s; want the tag's image", w.Code, w.Body.String())
+	}
+}
+
+// Which error stands when the tag fails too depends on what the digest read
+// established. A registry that hides private images answers an anonymous read
+// with 404, as for a deleted digest, so only a credentialed 404 proves the
+// digest is gone; then the tag's own failure is the one to explain.
+func TestImageRoutesTagFallbackError(t *testing.T) {
+	pulledDigest := "gcr.io/project/app@sha256:" + strings.Repeat("a", 64)
+	notFound := &transport.Error{StatusCode: http.StatusNotFound, Errors: []transport.Diagnostic{{Code: transport.ManifestUnknownErrorCode, Message: "manifest unknown"}}}
+	unauthorized := &transport.Error{StatusCode: http.StatusUnauthorized, Errors: []transport.Diagnostic{{Code: transport.UnauthorizedErrorCode, Message: "authentication required"}}}
+	for _, tc := range []struct {
+		name          string
+		digest, tag   error
+		want          int
+		authenticated bool
+	}{
+		{name: "anonymous 404, credentials rejected, tag hidden too", digest: &registryFetchError{err: unauthorized, anonymous: notFound}, tag: &registryFetchError{err: notFound}, want: 401},
+		{name: "same, auth on", digest: &registryFetchError{err: unauthorized, anonymous: notFound}, tag: &registryFetchError{err: notFound}, want: 401, authenticated: true},
+		{name: "digest gone, tag needs credentials the fallback lacks", digest: &registryFetchError{err: notFound, anonymous: unauthorized}, tag: &registryFetchError{err: unauthorized}, want: 401, authenticated: true},
+		{name: "digest gone, tag registry unreachable", digest: &registryFetchError{err: notFound}, tag: &registryFetchError{err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}, want: 502},
+		{name: "anonymous 404, credentials rejected, tag resolves but its layers can't be fetched", digest: &registryFetchError{err: unauthorized, anonymous: notFound}, tag: fmt.Errorf("failed to cache layers: %w", &net.OpError{Op: "dial", Err: errors.New("connection refused")}), want: 502},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := imageTestPod()
+			pod.Spec.ImagePullSecrets = nil
+			imageTestCache(t, pod)
+			var images []string
+			f := &fakeImageInspector{
+				check: func(req InspectRequest) { images = append(images, req.Image) },
+				errFor: func(req InspectRequest) error {
+					if req.Image == pulledDigest {
+						return tc.digest
+					}
+					return tc.tag
+				},
+			}
+			h := &Handlers{
+				inspector:       f,
+				authorize:       func(*http.Request, string) (bool, bool) { return true, true },
+				authorizeExec:   func(*http.Request, string) (bool, bool) { return true, true },
+				authorizeSecret: func(*http.Request, string, string) (bool, bool) { return false, true },
+			}
+			w := serveImageTest(h, "metadata", url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {"team"}, "pod": {"app"}}, tc.authenticated)
+			if w.Code != tc.want || !slices.Equal(images, []string{pulledDigest, "gcr.io/project/app:v1"}) {
+				t.Fatalf("got %d %s, requests %v", w.Code, w.Body.String(), images)
+			}
+		})
+	}
+}
+
+type failingImageKeychain struct{}
+
+func (failingImageKeychain) Resolve(authn.Resource) (authn.Authenticator, error) {
+	return nil, errors.New("credential helper failed")
+}
+
+// Credentials that can't be resolved don't hide that the anonymous read found
+// no such digest.
+func TestImageTagFallbackAfterCredentialResolveFailure(t *testing.T) {
+	img, err := random.Image(1024, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(reg)
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	tag := host + "/team/app:v1"
+	ref, err := name.ParseReference(tag, name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(ref, img); err != nil {
+		t.Fatal(err)
+	}
+	inspector := &Inspector{cacheDir: t.TempDir(), newGuard: func() *guardedTransport { return newLayerTransport(false) }}
+	req := pinToPulledDigest(InspectRequest{Image: tag, guarded: true, keychain: failingImageKeychain{}}, host+"/team/app@sha256:"+strings.Repeat("d", 64))
+	result, used, err := withTagFallback(req, func(req InspectRequest) (*ImageMetadata, error) {
+		return inspector.GetMetadata(context.Background(), req)
+	})
+	if err != nil || result.Image != tag || used.Image != tag {
+		t.Fatalf("got %+v via %q, err %v; want the tag's image", result, used.Image, err)
 	}
 }

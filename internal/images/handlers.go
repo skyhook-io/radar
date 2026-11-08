@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
@@ -63,7 +64,9 @@ func (h *Handlers) handleMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.inspector.GetMetadata(r.Context(), req)
+	result, req, err := withTagFallback(req, func(req InspectRequest) (*ImageMetadata, error) {
+		return h.inspector.GetMetadata(r.Context(), req)
+	})
 	if err != nil {
 		if isRefused(err) {
 			writeBlockedError(w, err)
@@ -102,7 +105,9 @@ func (h *Handlers) handleInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.inspector.Inspect(r.Context(), req)
+	result, req, err := withTagFallback(req, func(req InspectRequest) (*ImageFilesystem, error) {
+		return h.inspector.Inspect(r.Context(), req)
+	})
 	if err != nil {
 		// Check for common errors
 		if isRefused(err) {
@@ -148,7 +153,15 @@ func (h *Handlers) handleGetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content, filename, err := h.inspector.GetFileContent(r.Context(), req, filePath)
+	type file struct {
+		content  []byte
+		filename string
+	}
+	got, req, err := withTagFallback(req, func(req InspectRequest) (file, error) {
+		content, filename, err := h.inspector.GetFileContent(r.Context(), req, filePath)
+		return file{content, filename}, err
+	})
+	content, filename := got.content, got.filename
 	if err != nil {
 		if isRefused(err) {
 			writeBlockedError(w, err)
@@ -197,10 +210,8 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 				req.PullSecretNames = podPullSecrets(pod)
 			}
 			if c, ok := findContainerImage(pod, image); ok {
-				if c.pinned != "" {
-					req.Image = c.pinned
-				}
 				req.nodeOnly = c.nodeOnly
+				req = pinToPulledDigest(req, c.pinned)
 			}
 		}
 		return req, true
@@ -257,24 +268,82 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		return req, false
 	}
 	req.nodeOnly = c.nodeOnly
-	// Exec holders may also use Radar's own registry credentials, but only for
-	// the digest the kubelet already pulled for this container: a tag can move,
-	// and a Pod that never pulled its image proves nothing.
-	useAmbient := false
-	if c.pinned != "" && h.authorizeExec != nil {
-		if allowed, authoritative := h.authorizeExec(r, req.Namespace); allowed && authoritative {
-			req.Image, useAmbient = c.pinned, true
-		}
-	}
 	req.guarded = true
-	req.keychain = getPodKeychain(req.Namespace, pod, useAmbient, func(secretName string) bool {
+	canUseSecret := func(secretName string) bool {
 		if h.authorizeSecret == nil {
 			return false
 		}
 		allowed, authoritative := h.authorizeSecret(r, req.Namespace, secretName)
 		return allowed && authoritative
-	})
+	}
+	req.keychain = getPodKeychain(req.Namespace, pod, false, canUseSecret)
+	// Exec holders may also use Radar's own registry credentials, but only for
+	// the digest the kubelet already pulled for this container: a tag can move,
+	// and a Pod that never pulled its image proves nothing. The tag fallback
+	// keeps the credentials every other caller gets.
+	if c.pinned != "" && h.authorizeExec != nil {
+		if allowed, authoritative := h.authorizeExec(r, req.Namespace); allowed && authoritative {
+			req = pinToPulledDigest(req, c.pinned)
+			req.keychain = getPodKeychain(req.Namespace, pod, true, canUseSecret)
+		}
+	}
 	return req, true
+}
+
+// pinToPulledDigest points req at the digest the kubelet pulled, keeping the
+// tag request as its fallback.
+func pinToPulledDigest(req InspectRequest, pinned string) InspectRequest {
+	if pinned == "" || pinned == req.Image {
+		return req
+	}
+	tag := req
+	req.Image = pinned
+	req.tagFallback = &tag
+	return req
+}
+
+// withTagFallback runs fetch on req and, when the registry no longer has the
+// digest req was pinned to, on the tag the caller named. A tag that moved can
+// lose its old manifest to the registry's retention policy while the tag
+// itself still resolves; the tag's current image beats an "Image not found"
+// for a tag that exists. It returns the request that produced the result.
+func withTagFallback[T any](req InspectRequest, fetch func(InspectRequest) (T, error)) (T, InspectRequest, error) {
+	result, err := fetch(req)
+	var fetchErr *registryFetchError
+	if err == nil || req.tagFallback == nil || !errors.As(err, &fetchErr) ||
+		!(isManifestUnknown(fetchErr.err) || isManifestUnknown(fetchErr.anonymous)) {
+		return result, req, err
+	}
+	log.Printf("[images] Pulled digest %s is no longer in its registry; inspecting %s instead", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(req.tagFallback.Image))
+	fallback := *req.tagFallback
+	fallbackResult, fallbackErr := fetch(fallback)
+	var tagFetchErr *registryFetchError
+	if fallbackErr == nil || isManifestUnknown(fetchErr.err) || !errors.As(fallbackErr, &tagFetchErr) || isRefused(fallbackErr) {
+		return fallbackResult, fallback, fallbackErr
+	}
+	// Neither manifest could be read, and only the anonymous read said the
+	// digest is missing. A registry that hides private images answers it that
+	// way too, so the credentialed answer for the digest is the one to explain.
+	log.Printf("[images] Tag %s failed too: %v", k8s.SanitizeForLog(fallback.Image), k8s.SanitizeForLog(fallbackErr.Error()))
+	return result, req, err
+}
+
+// isManifestUnknown reports a registry that answered a manifest request with
+// "no such manifest".
+func isManifestUnknown(err error) bool {
+	var terr *transport.Error
+	if !errors.As(err, &terr) {
+		return false
+	}
+	if terr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	for _, diag := range terr.Errors {
+		if diag.Code == transport.ManifestUnknownErrorCode {
+			return true
+		}
+	}
+	return false
 }
 
 // containerImage is what one of a Pod's containers runs.
@@ -388,8 +457,7 @@ func writeFetchError(w http.ResponseWriter, req InspectRequest, err error) bool 
 	}
 	registry := registryHost(req.Image)
 	if isConnectFailure(err) {
-		writeJSONStatus(w, http.StatusBadGateway, map[string]string{
-			"error":    "Radar couldn't connect while fetching this image from " + registry + ".",
+		writeErrorFields(w, http.StatusBadGateway, "Radar couldn't connect while fetching this image from "+registry+".", map[string]string{
 			"reason":   "registry_unreachable",
 			"registry": registry,
 		})
@@ -397,8 +465,7 @@ func writeFetchError(w http.ResponseWriter, req InspectRequest, err error) bool 
 	}
 	var fetchErr *registryFetchError
 	if req.nodeOnly && errors.As(err, &fetchErr) {
-		writeJSONStatus(w, http.StatusNotFound, map[string]string{
-			"error":    "The node didn't pull this image from a registry, and Radar couldn't get it from " + registry + ".",
+		writeErrorFields(w, http.StatusNotFound, "The node didn't pull this image from a registry, and Radar couldn't get it from "+registry+".", map[string]string{
 			"reason":   "node_only",
 			"registry": registry,
 		})
@@ -438,14 +505,9 @@ func writeJSON(w http.ResponseWriter, data any) {
 }
 
 func writeAuthError(w http.ResponseWriter, image string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"error":        "Authentication required for this image",
+	writeErrorFields(w, http.StatusUnauthorized, "Authentication required for this image", map[string]string{
 		"registryType": string(DetectRegistryType(image)),
-	}); err != nil {
-		log.Printf("[images] Failed to encode auth error response: %v", err)
-	}
+	})
 }
 
 func writeBlockedError(w http.ResponseWriter, err error) {
@@ -456,11 +518,21 @@ func writeBlockedError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusForbidden, "Radar doesn't connect to this registry address (loopback, link-local, or an internal IP the registry pointed it to), so it can't open this image.")
 }
 
+// writeError answers {"error": message}.
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSONStatus(w, status, map[string]string{"error": message})
+	writeErrorFields(w, status, message, nil)
 }
 
-func writeJSONStatus(w http.ResponseWriter, status int, body map[string]string) {
+// writeErrorFields answers {"error": message} plus fields the UI reads to
+// explain the failure, such as "reason". Every error response in this package
+// goes through it.
+func writeErrorFields(w http.ResponseWriter, status int, message string, fields map[string]string) {
+	body := map[string]string{"error": message}
+	for k, v := range fields {
+		if k != "error" {
+			body[k] = v
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
