@@ -68,6 +68,8 @@ interface LogCoreProps {
   showContainerName?: boolean
   /** Containers to mark as init containers when container names are shown. */
   initContainers?: ReadonlySet<string>
+  /** Width in characters that aligns the container labels of a mixed view. */
+  containerLabelWidth?: number
   emptyMessage?: ReactNode
   sourceUnavailable?: boolean
   emptyCommand?: string | null
@@ -164,6 +166,7 @@ export function LogCore({
   showPodName = false,
   showContainerName = false,
   initContainers,
+  containerLabelWidth,
   emptyMessage = 'No logs available',
   sourceUnavailable = false,
   emptyCommand,
@@ -1176,6 +1179,7 @@ export function LogCore({
                 showPodName={showPodName}
                 showContainerName={showContainerName}
                 initContainers={initContainers}
+                containerLabelWidth={containerLabelWidth}
                 showTimestamp={showTimestamps}
                 tsFormat={tsFormat}
                 ansiEnabled={ansiEnabled}
@@ -1283,6 +1287,7 @@ interface LogLineProps {
   showPodName: boolean
   showContainerName?: boolean
   initContainers?: ReadonlySet<string>
+  containerLabelWidth?: number
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean
@@ -1306,6 +1311,7 @@ function LogLine({
   showPodName,
   showContainerName = false,
   initContainers,
+  containerLabelWidth,
   showTimestamp,
   tsFormat,
   ansiEnabled,
@@ -1388,6 +1394,7 @@ function LogLine({
       {showContainerName && entry.container && (
         <span
           className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap max-w-[200px] truncate`}
+          style={containerLabelWidth ? { minWidth: `calc(${containerLabelWidth}ch + 0.5rem)` } : undefined}
           title={initContainers?.has(entry.container) ? `Init container ${entry.container}` : `Container ${entry.container}`}
         >
           {entry.container}
@@ -1414,6 +1421,7 @@ interface LogGroupItemProps {
   showPodName: boolean
   showContainerName?: boolean
   initContainers?: ReadonlySet<string>
+  containerLabelWidth?: number
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean

@@ -464,6 +464,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       showPodName
       showContainerName={showContainerName}
       initContainers={initContainers}
+      containerLabelWidth={Math.min(24, Math.max(0, ...allContainers.map(c => c.length + (initContainers.has(c) ? 5 : 0))))}
       emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
