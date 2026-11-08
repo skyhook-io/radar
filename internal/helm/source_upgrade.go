@@ -2,10 +2,10 @@ package helm
 
 import (
 	"bytes"
-	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"

@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"helm.sh/helm/v3/pkg/release"
 )
 
@@ -26,8 +27,8 @@ type manageHelmInput struct {
 	Chart            string         `json:"chart,omitempty" jsonschema:"chart name; required for install"`
 	Repository       string         `json:"repository,omitempty" jsonschema:"install: required configured repository name, URL or OCI prefix. upgrade: optional configured repository name; must match the release's confirmed saved source"`
 	Version          string         `json:"version,omitempty" jsonschema:"exact chart version; required for install; upgrade choices: get_helm_release include=versions; omission keeps the stored version only when latest and deployed history agree"`
-	DryRun           bool           `json:"dry_run,omitempty" jsonschema:"upgrade only: render a non-mutating advisory preview with the same values merge and caller lookups; default false executes"`
-	ExpectedRevision int            `json:"expected_revision,omitempty" jsonschema:"upgrade only: refuse if latest release revision differs; use revision from get_helm_release or currentRevision from preview; not an atomic lock"`
+	DryRun           bool           `json:"dry_run,omitempty" jsonschema:"upgrade or rollback: non-mutating advisory preview (upgrade: same merge and caller lookups; rollback: stored diff, live takeover/retention); default false executes"`
+	ExpectedRevision int            `json:"expected_revision,omitempty" jsonschema:"upgrade or rollback: refuse if latest release revision differs; use revision from get_helm_release or currentRevision from preview; not an atomic lock"`
 	Values           map[string]any `json:"values,omitempty" jsonschema:"install values or upgrade overrides; merge uses the deployed baseline, not necessarily the latest values read; replace_values=true resets overrides; no redacted output or literal credentials"`
 	ReplaceValues    bool           `json:"replace_values,omitempty" jsonschema:"upgrade only: explicitly replace ALL stored overrides with values, including an empty object to reset; default false merges maps and refuses hidden-credential container replacement; true drops omitted overrides, including hidden credentials"`
 	Revision         int            `json:"revision,omitempty" jsonschema:"positive target revision; required for rollback; inspect get_helm_release include=history first"`
@@ -67,8 +68,8 @@ func (in manageHelmInput) validate() error {
 	if in.Action != "uninstall" && in.Confirm != "" {
 		return fmt.Errorf("confirm is only valid for uninstall")
 	}
-	if in.ExpectedRevision < 0 || (in.Action != "upgrade" && (in.DryRun || in.ExpectedRevision != 0)) {
-		return fmt.Errorf("dry_run and a positive expected_revision are only valid for upgrade")
+	if in.ExpectedRevision < 0 || (in.Action != "upgrade" && in.Action != "rollback" && (in.DryRun || in.ExpectedRevision != 0)) {
+		return fmt.Errorf("dry_run and a positive expected_revision are only valid for upgrade or rollback")
 	}
 	if in.Version != "" {
 		if _, err := semver.StrictNewVersion(strings.TrimPrefix(in.Version, "v")); err != nil {
@@ -90,7 +91,30 @@ func (in manageHelmInput) validate() error {
 	return nil
 }
 
-func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput) (*mcp.CallToolResult, any, error) {
+// redactedError masks credential-like text in the error an agent reads (Helm
+// render and API errors can echo chart text or values) and keeps the chain so
+// typed errors still render as structured results.
+type redactedError struct{ err error }
+
+func (e redactedError) Error() string { return aicontext.RedactSecrets(e.err.Error()) }
+func (e redactedError) Unwrap() error { return e.err }
+
+func handleManageHelm(ctx context.Context, req *mcp.CallToolRequest, in manageHelmInput) (*mcp.CallToolResult, any, error) {
+	result, out, err := manageHelm(ctx, req, in)
+	if err == nil {
+		return result, out, nil
+	}
+	// readErrorResult serializes a readError's own message, so redact inside it.
+	var re *readError
+	if errors.As(err, &re) {
+		redacted := *re
+		redacted.err = errors.New(aicontext.RedactSecrets(re.err.Error()))
+		return result, out, &redacted
+	}
+	return result, out, redactedError{err}
+}
+
+func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput) (*mcp.CallToolResult, any, error) {
 	r := (&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
 	audit := auth.AuditActionDetails{Action: "helm_" + in.Action, Kind: "HelmRelease", Namespace: in.Namespace, Name: in.Name, Source: "mcp", Outcome: "refused"}
 	defer func() { auth.AuditLogAction(r, audit) }()
@@ -148,13 +172,19 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 					return nil, nil, fmt.Errorf("release changed since the preview; omit confirm and review a new preview")
 				}
 			} else {
+				preview, err := client.UninstallPreviewAsUser(in.Namespace, in.Name, user)
+				if err != nil {
+					return nil, nil, fmt.Errorf("read release for the uninstall preview: %w", err)
+				}
+				if preview.Revision != detail.Revision {
+					return nil, nil, fmt.Errorf("release changed while preparing the preview; preview again")
+				}
 				token, err := issueMutationConfirmation(ctx, "uninstall_helm", binding)
 				if err != nil {
 					return nil, nil, err
 				}
-
 				audit.Outcome = "preview"
-				return toJSONResult(map[string]any{"action": "uninstall", "state": "preview", "namespace": in.Namespace, "name": in.Name, "revision": detail.Revision, "confirm": token, "resources": detail.Resources, "message": fmt.Sprintf("Release status: %s. Review the resources and retained data before calling again with confirm. Helm hooks and resource policies can affect deletion; this is not a complete cascade preview.", detail.Status)})
+				return helmUninstallPreviewResult(in, detail.Status, token, preview)
 			}
 		}
 	}
@@ -164,13 +194,14 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 	audit.Outcome = "failed_or_unconfirmed"
 	var err error
 	var upgrade *helm.MCPUpgradeResult
+	var rollback *helm.MCPRollbackResult
 	switch in.Action {
 	case "install":
 		_, err = client.InstallFreshAsUser(&helm.InstallRequest{ReleaseName: in.Name, Namespace: in.Namespace, ChartName: in.Chart, Repository: in.Repository, Version: in.Version, Values: in.Values}, user)
 	case "upgrade":
 		upgrade, err = client.UpgradeForMCPAsUser(helm.MCPUpgradeRequest{Namespace: in.Namespace, Name: in.Name, Version: in.Version, Repository: in.Repository, Values: in.Values, ReplaceValues: in.ReplaceValues, DryRun: in.DryRun, ExpectedRevision: in.ExpectedRevision}, user)
 	case "rollback":
-		err = client.RollbackAsUser(in.Namespace, in.Name, in.Revision, user)
+		rollback, err = client.RollbackForMCPAsUser(helm.MCPRollbackRequest{Namespace: in.Namespace, Name: in.Name, Revision: in.Revision, ExpectedRevision: in.ExpectedRevision, DryRun: in.DryRun}, user)
 	case "uninstall":
 		err = client.UninstallAsUser(in.Namespace, in.Name, user)
 	}
@@ -186,14 +217,31 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 			// A wrong version only says it is missing; point at the real choices.
 			err = fmt.Errorf("%w; if version %s may not exist, list exact versions with get_helm_release include=versions", err, in.Version)
 		}
+		var preflight *helm.OperationPreflightError
+		refused := errors.As(err, &preflight)
+		switch {
+		case refused:
+			audit.Outcome = "refused"
+		case in.DryRun:
+			audit.Outcome = "failed" // a preview changes nothing
+		}
+		if in.DryRun && in.Action == "rollback" {
+			return nil, nil, fmt.Errorf("Helm rollback preview failed without applying changes: %w; inspect get_helm_release include=history", err)
+		}
 		if in.DryRun {
 			return nil, nil, fmt.Errorf("Helm upgrade preview failed without applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", err)
 		}
-		var preflight *helm.OperationPreflightError
-		if errors.As(err, &preflight) {
+		if refused && in.Action == "rollback" {
+			return nil, nil, fmt.Errorf("Helm rollback refused before applying changes: %w; inspect get_helm_release include=history", err)
+		}
+		if refused {
 			return nil, nil, fmt.Errorf("Helm %s refused before applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", in.Action, err)
 		}
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
+	}
+	if in.DryRun && rollback != nil {
+		audit.Outcome = "preview"
+		return helmRollbackPreviewResult(in, rollback)
 	}
 	if in.DryRun {
 		audit.Outcome = "preview"
@@ -208,6 +256,9 @@ func handleManageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelm
 	if upgrade != nil {
 		result["chartVersion"], result["revision"], result["baselineRevision"] = upgrade.ChartVersion, upgrade.Revision, upgrade.BaselineRevision
 	}
+	if rollback != nil {
+		result["chartVersion"], result["revision"], result["targetRevision"] = rollback.ChartVersion, rollback.Revision, rollback.TargetRevision
+	}
 	return toJSONResult(result)
 }
 
@@ -220,15 +271,47 @@ func helmUpgradePreviewResult(in manageHelmInput, preview *helm.MCPUpgradeResult
 	_, _ = buf.Write([]byte(preview.ValuesDiff))
 	addTruncation(result, "valuesDiff", buf)
 	for key, refs := range map[string][]helm.ResourceRef{"added": preview.Added, "changed": preview.Changed, "removed": preview.Removed} {
-		result[key+"Count"] = len(refs)
-		result[key+"Truncated"] = len(refs) > 100
-		if len(refs) > 100 {
-			refs = refs[:100]
-		}
-		if refs == nil {
-			refs = []helm.ResourceRef{}
-		}
-		result[key] = refs
+		addCappedList(result, key, refs)
 	}
+	return toJSONResult(result)
+}
+
+// addCappedList sets key to at most 100 items with keyCount and keyTruncated.
+func addCappedList[T any](result map[string]any, key string, items []T) {
+	result[key+"Count"] = len(items)
+	result[key+"Truncated"] = len(items) > 100
+	if len(items) > 100 {
+		items = items[:100]
+	}
+	if items == nil {
+		items = []T{}
+	}
+	result[key] = items
+}
+
+func helmRollbackPreviewResult(in manageHelmInput, preview *helm.MCPRollbackResult) (*mcp.CallToolResult, any, error) {
+	result := map[string]any{"action": "rollback", "state": "preview", "namespace": in.Namespace, "name": in.Name,
+		"targetRevision": preview.TargetRevision, "chartVersion": preview.ChartVersion, "currentRevision": preview.BaselineRevision,
+		"valuesRedacted": true, "parseErrors": preview.ParseErrors, "liveChecked": preview.Live.Checked, "rollbackHooks": preview.Hooks,
+		"message": "Advisory preview only; nothing was applied. Rollback re-applies the target revision's stored manifest and values without re-rendering; added/changed/removed compare stored manifests and exclude hooks. rollbackHooks run on execute (a failing pre-rollback hook stops the rollback); their contents aren't enumerated. takeovers exist live but aren't recorded as this release's (owner names another release; empty means no Helm owner recorded): rollback overwrites and claims them with no ownership check, so name each takeover to the user and get approval for it specifically before executing; a general go-ahead doesn't cover claiming another release's objects. kept is the part of removed that Helm leaves because the live resource-policy is keep; the rest of removed is deleted. liveUnknown could not be read as you, so their ownership and retention are unknown. To execute, set dry_run=false with the same revision and expected_revision=currentRevision. This precondition is not a lock against other writers."}
+	buf := &cappedBuffer{limit: 16 * 1024}
+	_, _ = buf.Write([]byte(preview.ValuesDiff))
+	addTruncation(result, "valuesDiff", buf)
+	for key, refs := range map[string][]helm.ResourceRef{"added": preview.Added, "changed": preview.Changed, "removed": preview.Removed, "kept": preview.Live.Kept, "liveUnknown": preview.Live.Unknown} {
+		addCappedList(result, key, refs)
+	}
+	addCappedList(result, "takeovers", preview.Live.Takeovers)
+	return toJSONResult(result)
+}
+
+func helmUninstallPreviewResult(in manageHelmInput, status, token string, preview *helm.MCPUninstallPreview) (*mcp.CallToolResult, any, error) {
+	message := fmt.Sprintf("Release status: %s. resources are deleted; kept are left in place by helm.sh/resource-policy; deleteHooks run (failed hooks can stop the uninstall), each removed per its deletePolicies. History is purged on successful uninstall, so the release can't be rolled back afterwards. Resources created by controllers, PVCs from StatefulSet templates and external data aren't listed; hook contents aren't enumerated. Review, then call again with confirm.", status)
+	if preview.HistoryOnly {
+		message = "The release is already uninstalled with its history kept. Uninstall only purges the stored history: no hooks run and no resources are deleted. Review, then call again with confirm."
+	}
+	result := map[string]any{"action": "uninstall", "state": "preview", "namespace": in.Namespace, "name": in.Name, "revision": preview.Revision, "confirm": token,
+		"historyOnly": preview.HistoryOnly, "history": "purged on successful uninstall", "parseErrors": preview.ParseErrors, "deleteHooks": preview.Hooks, "message": message}
+	addCappedList(result, "resources", preview.Delete)
+	addCappedList(result, "kept", preview.Kept)
 	return toJSONResult(result)
 }

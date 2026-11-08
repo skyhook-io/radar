@@ -67,23 +67,28 @@ func TestHelmUpgradePreviewUsesExplicitStateAndBounds(t *testing.T) {
 	}
 }
 
+// Only upgrade and rollback have a preview; dry_run on another action must be
+// refused rather than executed. That rollback previews never write history is
+// covered in internal/helm (TestMCPRollbackPreviewComparesStoredRevisionsAndReadsLiveState).
 func TestHelmDryRunNeverFallsThroughToAnotherAction(t *testing.T) {
-	for _, action := range []string{"install", "rollback", "uninstall"} {
+	for _, action := range []string{"install", "uninstall"} {
 		in := manageHelmInput{Action: action, Namespace: "ns", Name: "app", DryRun: true}
 		if action == "install" {
 			in.Chart = "app"
 			in.Repository = "repo"
 			in.Version = "1.0.0"
 		}
-		if action == "rollback" {
-			in.Revision = 1
-		}
 		if err := in.validate(); err == nil {
 			t.Fatalf("dry_run accepted for %s", action)
 		}
 	}
-	if err := (manageHelmInput{Action: "upgrade", Namespace: "ns", Name: "app", DryRun: true}).validate(); err != nil {
-		t.Fatal(err)
+	for _, in := range []manageHelmInput{
+		{Action: "upgrade", Namespace: "ns", Name: "app", DryRun: true},
+		{Action: "rollback", Namespace: "ns", Name: "app", Revision: 1, DryRun: true},
+	} {
+		if err := in.validate(); err != nil {
+			t.Fatalf("%s preview refused: %v", in.Action, err)
+		}
 	}
 }
 

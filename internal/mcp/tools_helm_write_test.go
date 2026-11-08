@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
@@ -38,12 +41,35 @@ func TestManageHelmRejectsAmbiguousAndRedactedInput(t *testing.T) {
 		func(x *manageHelmInput) { x.Confirm = "true" },
 		func(x *manageHelmInput) { x.Values = map[string]any{"auth": map[string]any{"password": "[REDACTED]"}} },
 		func(x *manageHelmInput) { x.Action = "rollback"; x.Revision = 0 },
+		func(x *manageHelmInput) { x.DryRun = true },
+		func(x *manageHelmInput) {
+			*x = manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "cache", DryRun: true}
+		},
+		func(x *manageHelmInput) {
+			*x = manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "cache", ExpectedRevision: 2}
+		},
 	} {
 		in := base
 		mutate(&in)
 		if err := in.validate(); err == nil {
 			t.Fatalf("accepted invalid input: %#v", in)
 		}
+	}
+	rollbackPreview := manageHelmInput{Action: "rollback", Namespace: "team-a", Name: "cache", Revision: 1, DryRun: true, ExpectedRevision: 2}
+	if err := rollbackPreview.validate(); err != nil {
+		t.Fatalf("rollback must accept dry_run and expected_revision: %v", err)
+	}
+}
+
+func TestManageHelmErrorsAreRedactedButKeepTheirType(t *testing.T) {
+	typed := readErrorf(readreason.ClusterConnecting, "Cluster is still connecting, please retry shortly")
+	err := redactedError{fmt.Errorf("render failed: password=supersecretpassword123: %w", typed)}
+	if strings.Contains(err.Error(), "supersecret") {
+		t.Fatalf("credential reached the agent: %v", err)
+	}
+	var re *readError
+	if !errors.As(err, &re) {
+		t.Fatal("redaction must keep the chain so typed errors still render as structured results")
 	}
 }
 
@@ -124,6 +150,9 @@ func TestManageHelmRefusesBusyReleaseAndChangedPreviewStatus(t *testing.T) {
 	}
 	if !strings.Contains(preview["message"].(string), "deployed") {
 		t.Fatalf("preview omitted status: %v", preview)
+	}
+	if preview["history"] != "purged on successful uninstall" || preview["historyOnly"] != false || preview["resourcesCount"] != float64(0) || preview["deleteHooks"] == nil || preview["kept"] == nil {
+		t.Fatalf("preview must state history, hooks and kept resources: %v", preview)
 	}
 	in.Confirm = preview["confirm"].(string)
 	// Helm can change status without changing revision or LastDeployed.
@@ -229,5 +258,143 @@ func TestManageHelmDisabledCatalogAndDispatch(t *testing.T) {
 	_, _, err := handleManageHelm(t.Context(), nil, manageHelmInput{Action: "install", Namespace: "team-a", Name: "cache", Chart: "redis", Repository: "https://charts.example", Version: "1.2.3"})
 	if err == nil || !strings.Contains(err.Error(), "--disable-helm-write") {
 		t.Fatalf("want operator-disabled refusal, got %v", err)
+	}
+}
+
+// The rollback preview's live reads go through Helm's real kube client: they
+// must carry the caller's identity, read the release's namespace, treat a
+// denial as unknown rather than absent, and never write.
+func TestManageHelmRollbackPreviewReadsLiveObjectsAsCaller(t *testing.T) {
+	secrets := fake.NewClientset().CoreV1().Secrets("team-a")
+	storage := driver.NewSecrets(secrets)
+	cm := func(name string) string {
+		return "---\n# Source: fixture/templates/" + name + ".yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: " + name + "\n"
+	}
+	for version, manifest := range map[int]string{1: cm("a") + cm("b"), 2: cm("a") + cm("c")} {
+		status := release.StatusSuperseded
+		if version == 2 {
+			status = release.StatusDeployed
+		}
+		rel := &release.Release{Name: "demo", Namespace: "team-a", Version: version, Manifest: manifest,
+			Chart: &chart.Chart{Metadata: &chart.Metadata{Name: "fixture", Version: fmt.Sprintf("%d.0.0", version)}},
+			Info:  &release.Info{Status: status}}
+		if err := storage.Create(fmt.Sprintf("sh.helm.release.v1.demo.v%d", version), rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var liveReads []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/version":
+			json.NewEncoder(w).Encode(map[string]string{"gitVersion": "v1.34.0"})
+		case r.Method == http.MethodPost && r.URL.Path == "/apis/authorization.k8s.io/v1/subjectaccessreviews":
+			json.NewEncoder(w).Encode(authv1.SubjectAccessReview{TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"}, Status: authv1.SubjectAccessReviewStatus{Allowed: true}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/team-a/secrets":
+			list, err := secrets.List(r.Context(), metav1.ListOptions{LabelSelector: r.URL.Query().Get("labelSelector")})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			list.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "SecretList"}
+			json.NewEncoder(w).Encode(list)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/team-a/secrets/"):
+			secret, err := secrets.Get(r.Context(), strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/team-a/secrets/"), metav1.GetOptions{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			secret.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}
+			json.NewEncoder(w).Encode(secret)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/team-a":
+			json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": "team-a"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api":
+			json.NewEncoder(w).Encode(metav1.APIVersions{TypeMeta: metav1.TypeMeta{Kind: "APIVersions"}, Versions: []string{"v1"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/apis":
+			json.NewEncoder(w).Encode(metav1.APIGroupList{TypeMeta: metav1.TypeMeta{Kind: "APIGroupList", APIVersion: "v1"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1":
+			json.NewEncoder(w).Encode(metav1.APIResourceList{TypeMeta: metav1.TypeMeta{Kind: "APIResourceList"}, GroupVersion: "v1",
+				APIResources: []metav1.APIResource{{Name: "configmaps", Namespaced: true, Kind: "ConfigMap", Verbs: metav1.Verbs{"get"}}}})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/team-a/configmaps/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/team-a/configmaps/")
+			liveReads = append(liveReads, name+"@"+r.Header.Get("Impersonate-User"))
+			switch name {
+			case "a": // ours
+				json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "a", "namespace": "team-a",
+					"annotations": map[string]string{"meta.helm.sh/release-name": "demo", "meta.helm.sh/release-namespace": "team-a"}}})
+			case "b": // the caller may not read it
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(metav1.Status{TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}, Status: "Failure", Reason: metav1.StatusReasonForbidden, Code: http.StatusForbidden})
+			default: // c is already gone
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(metav1.Status{TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}, Status: "Failure", Reason: metav1.StatusReasonNotFound, Code: http.StatusNotFound})
+			}
+		default:
+			t.Errorf("unexpected request (a preview must only read): %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	cfg := &rest.Config{Host: api.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}}
+	client, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldClient, oldConfig, oldStatus := k8s.SetTestClient(client), k8s.SetTestConfig(cfg), k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	defer func() {
+		k8s.SetTestClient(oldClient)
+		k8s.SetTestConfig(oldConfig)
+		k8s.SetConnectionStatus(oldStatus)
+	}()
+	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "rollback-previewer"})
+
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "rollback", Namespace: "team-a", Name: "demo", Revision: 1, DryRun: true, ExpectedRevision: 1})
+	log.SetOutput(previous)
+	if err == nil || !strings.Contains(err.Error(), "expected 1") || !strings.Contains(logs.String(), `outcome="refused"`) {
+		t.Fatalf("stale expected_revision must be refused and audited as refused: %v\n%s", err, logs.String())
+	}
+
+	output, _, err := handleManageHelm(ctx, nil, manageHelmInput{Action: "rollback", Namespace: "team-a", Name: "demo", Revision: 1, DryRun: true, ExpectedRevision: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var preview map[string]any
+	if err := json.Unmarshal([]byte(output.Content[0].(*mcp.TextContent).Text), &preview); err != nil {
+		t.Fatal(err)
+	}
+	names := func(key string) string {
+		var out []string
+		for _, item := range preview[key].([]any) {
+			out = append(out, item.(map[string]any)["name"].(string))
+		}
+		return strings.Join(out, ",")
+	}
+	if preview["state"] != "preview" || preview["currentRevision"] != float64(2) || preview["targetRevision"] != float64(1) || names("added") != "b" || names("removed") != "c" {
+		t.Fatalf("stored comparison: %v", preview)
+	}
+	if names("liveUnknown") != "b" || names("takeovers") != "" || names("kept") != "" || preview["liveChecked"] != float64(2) {
+		t.Fatalf("a denied read must be unknown, ours is no takeover, an absent object is checked: %v", preview)
+	}
+	if strings.Join(liveReads, ",") != "a@rollback-previewer,b@rollback-previewer,c@rollback-previewer" {
+		t.Fatalf("live reads must target the release namespace as the caller: %v", liveReads)
+	}
+}
+
+func TestManageHelmRedactsStructuredErrors(t *testing.T) {
+	old := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "dial https://api: password=supersecretpassword123"})
+	defer k8s.SetConnectionStatus(old)
+	_, _, err := handleManageHelm(t.Context(), nil, manageHelmInput{Action: "uninstall", Namespace: "team-a", Name: "demo"})
+	result, ok := readErrorResult(err)
+	if !ok {
+		t.Fatalf("a typed read error must still render as a structured result: %v", err)
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	if strings.Contains(text, "supersecret") || strings.Contains(err.Error(), "supersecret") || !strings.Contains(text, "not connected") {
+		t.Fatalf("credential reached the agent: %s", text)
 	}
 }

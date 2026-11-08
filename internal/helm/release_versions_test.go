@@ -72,7 +72,8 @@ func TestFreshReleaseVersionsReadsCurrentIndexNotCache(t *testing.T) {
 	}
 	if got.Source.Type != "repository" || got.Source.Reference != "probe" {
 		t.Fatalf("source must be the release's confirmed source: %+v", got.Source)
-	}	// Agents read the JSON; a complete list must still say it is complete.
+	}
+	// Agents read the JSON; a complete list must still say it is complete.
 	wire, err := json.Marshal(got)
 	if err != nil || !strings.Contains(string(wire), `"truncated":false`) {
 		t.Fatalf("truncated must always be serialized: %s %v", wire, err)

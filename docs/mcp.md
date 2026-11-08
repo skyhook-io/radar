@@ -1378,18 +1378,52 @@ it implicitly. Inspect history
 with `get_helm_release include=history` before rollback. MCP refuses upgrade, rollback and uninstall while the latest release is pending or uninstalling. Wait for the operation to finish; an operator must recover a stranded release through the existing UI or Helm CLI. This preflight is not a lock against other release writers. Uninstall first returns a
 resource preview; pass its returned token as `confirm` to execute it. The token rejects
 revision, timestamp or status changes observed before dispatch; Helm does not provide an atomic revision-conditioned
-uninstall, so coordinate with other release writers during deletion. This is a Helm resource list, not a
-complete cascade or data-loss analysis. Detected Flux-owned releases are refused; this cache-based ownership check is
+uninstall, so coordinate with other release writers during deletion. The preview follows Helm's own uninstall rules,
+not a complete cascade or data-loss analysis: objects created by controllers, PVCs from StatefulSet templates and
+external data aren't listed, and hook contents aren't enumerated. Detected Flux-owned releases are refused; this cache-based ownership check is
 best-effort when Flux visibility is restricted; update
 GitOps-owned dependencies in their source repo.
 
 A successful call returns `action`, `namespace`, `name`, `state` and `message`.
-For uninstall, `state: preview` additionally returns `revision`, `resources` and the expiring `confirm`
-token. The preview's `message` includes the observed release status. The token is not
+For uninstall, `state: preview` additionally returns `revision` and the expiring `confirm` token, plus:
+
+- `resources`: the stored objects Helm deletes, and `kept`: those it leaves because the manifest document
+  carries `helm.sh/resource-policy`. Helm reads the policy per manifest document before expanding Lists, so a
+  List child's own annotation doesn't keep it, and a document whose policy is present but isn't `keep` is also
+  left in place. Each list holds at most 100 items, with `Count` and `Truncated` companions.
+- `deleteHooks`: pre-delete and post-delete hooks with their events, effective `deletePolicies` (Helm applies
+  `before-hook-creation` when none are declared) and `lastPhase`. A failing pre-delete hook stops the uninstall.
+- `history`: `purged on successful uninstall`; the release can't be rolled back afterwards.
+- `historyOnly: true` when the release is already uninstalled with its history kept. Uninstall then only purges
+  that history: no hooks run and nothing is deleted, so `resources` and `deleteHooks` are empty.
+
+The preview's `message` includes the observed release status. The token is not
 single-use: it remains valid for five minutes while its bound caller, cluster and
 release state match. `state: completed` means the Helm action returned, not that workloads are healthy.
 Read `get_helm_release` for the resulting revision and readiness. Failures are MCP tool
 errors; an operation may have changed resources, so inspect before retrying.
+
+For rollback, `dry_run: true` returns an advisory preview and writes nothing. Rollback re-applies the target
+revision's stored manifest and values without re-rendering, so `added`, `changed`, `removed` and the redacted
+`valuesDiff` compare the two stored revisions exactly. Those lists exclude hooks; `rollbackHooks` lists the target
+revision's pre-rollback and post-rollback hooks, which run on execute, with their effective `deletePolicies` and
+`lastPhase` (a failing pre-rollback hook stops the rollback; hook contents aren't enumerated). Unlike upgrade, Helm's rollback overwrites any live object the target revision
+declares and stamps this release's ownership on it without checking who owns it, and decides whether to delete a
+removed object from the live object's resource policy. So the preview also reads each affected object as the
+caller (at most 100):
+
+- `takeovers`: objects that exist live but aren't recorded as this release's. `owner` names the other release as
+  `namespace/name`, or is empty when the live object records no Helm owner. The preview's message asks the agent to name each
+  takeover to the user and get approval for it specifically before executing.
+- `kept`: the part of `removed` whose live `helm.sh/resource-policy` is exactly `keep`, so Helm leaves it; the
+  rest of `removed` is deleted.
+- `liveUnknown`: objects that couldn't be read (denied, kind not served, or past the cap), so their ownership and
+  retention are unknown. `liveChecked` counts the objects read.
+
+It returns `targetRevision`, `currentRevision` and the target's `chartVersion`. Execute with the same `revision`,
+`dry_run: false` and `expected_revision` set to `currentRevision`; that refuses a stale latest revision but is not
+a lock. Rollback without `dry_run` still executes directly. A completed rollback returns `revision` and
+`targetRevision`.
 
 For upgrades, `dry_run: true` renders an advisory preview using the same chart selection,
 values merge and caller-authorized Helm lookups as execution. It writes no release or
@@ -1453,11 +1487,11 @@ show Helm's full impact; external MCP clients can use it on the full write endpo
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `manage_helm` | Native Helm install, upgrade (optional advisory preview), rollback or preview/confirm uninstall; same-version edits can reuse a complete stored chart. | `action`, `namespace`, `name`; action-specific `chart`, `repository`, `version`, `values`, `replace_values`, `dry_run`, `expected_revision`, `revision`, `confirm` (see lifecycle above) |
+| `manage_helm` | Native Helm install, upgrade and rollback (upgrade and rollback with an optional advisory preview), or preview/confirm uninstall; same-version edits can reuse a complete stored chart. | `action`, `namespace`, `name`; action-specific `chart`, `repository`, `version`, `values`, `replace_values`, `dry_run`, `expected_revision`, `revision`, `confirm` (see lifecycle above) |
 | `curl_service` | Opt-in credential-free in-cluster Service GET with bounded response and partial-body errors. | `namespace`, `name`, numeric `port`; optional `scheme`, `path` (see Service HTTP above) |
 | `apply_resource` | Create or update a Kubernetes resource from YAML. Supports multi-document YAML, per-document partial-failure results, server-side dry-run preview, and SSA ownership-conflict reporting. | `yaml` (required), `mode` (optional: `apply` or `create`, default `apply`), `dry_run` (optional, default false), `namespace` (optional, override), `verify` (optional, default true: real mutations return post-mutation state, submitted-vs-live diff, workload rollout/pods, and related issues; dry runs return a preview diff), `force` (optional, default false: take SSA field ownership from other managers) |
 | `patch_resource` | Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. Use for precise field/list edits when you know the exact path and do not want to rewrite the full manifest or take broad server-side-apply ownership. Strategic patch is for built-in Kubernetes kinds and name-keyed list edits, such as changing one container. | `kind` (required), `name` (required), `namespace` (required for namespaced resources), `group` (optional), `patch_type` (optional: `json` default, `merge`, or `strategic`), `patch` (required JSON string), `dry_run` (optional), `verify` (optional, default true: real mutations return compact post-patch state and JSON Patch field checks; dry runs return a preview diff) |
-| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
+| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. Roll back a native Helm release's workload as the release with `manage_helm` rollback where it's available: rolling back the workload alone leaves Helm's record stale, and the next upgrade reapplies the old template. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
 | `manage_rollout` | Drive an Argo Rollout's progressive delivery — the verbs with no Deployment equivalent. `abort` reverts traffic to the last stable version at once without touching spec and stays aborted until retried (the incident-response verb); `retry` clears an abort; `promote` clears the current pause to advance one step; `promote-full` skips all remaining steps, pauses, and analysis (emergency hotfix) — it waits for the controller to observe the current pod template first, so straight after a rollback it may report that the controller has not caught up, which is safe to retry; `skip-step` advances exactly one canary step (canary only). Rollback / restart / scale go through `manage_workload` with `kind=rollout`. | `action` (required: `abort`, `retry`, `promote`, `promote-full`, `skip-step`), `namespace` (required), `name` (required) |
 | `manage_cronjob` | Trigger, suspend, or resume a CronJob | `action` (required: `trigger`, `suspend`, `resume`), `namespace` (required), `name` (required) |
 | `manage_gitops` | Manage Argo CD and Flux resources — sync, refresh, terminate, suspend, resume, rollback (Argo), reconcile (Flux), reconcile-with-source (Flux) | `action` (required), `tool` (required: `argocd` or `fluxcd`), `namespace` (required), `name` (required), `kind` (FluxCD only). For `sync`: `revision` (single-source; omit to deploy the last-compared revision; a different revision is refused while auto-sync is on unless `dry_run`), `prune` (default false), `dry_run`, `force`, `apply_only`, `sync_options` (omit to use the Application's own; a list replaces them). For `rollback` (Argo only): `history_id` (required; the first history entry is 0), `prune`, `dry_run`; refused while the Application has auto-sync enabled; before Argo CD 2.12, rollback across a single-source/multi-source change or of a multi-source entry can deploy the wrong revisions or render nothing; with prune, it can delete resources. This warning applies when the current Application uses `spec.sources` too; Radar does not refuse on controller-version grounds. Per-action input validation rejects flags that don't apply to the action (e.g. `force` on `suspend`) so callers fail loudly instead of silently. |
