@@ -14,7 +14,8 @@ import (
 // SelfSubjectAccessReview. The group parameter specifies the API group
 // (empty string for core resources like pods, secrets).
 // Returns (allowed, apiErr) where apiErr=true means the API call itself failed
-// (distinct from RBAC denial where allowed=false, apiErr=false).
+// or an authorizer couldn't answer (distinct from RBAC denial where
+// allowed=false, apiErr=false).
 func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
 	if ctx.Err() != nil {
 		return false, true
@@ -48,6 +49,13 @@ func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, re
 		if ctx.Err() == nil {
 			log.Printf("Warning: SelfSubjectAccessReview failed for %s %s: %v", verb, resource, err)
 		}
+		return false, true
+	}
+	// No authorizer allowed it and one failed to answer (a webhook timing out,
+	// say): the action isn't known to be refused, so report it like a failed
+	// call rather than a denial.
+	if !result.Status.Allowed && result.Status.EvaluationError != "" {
+		log.Printf("Warning: SelfSubjectAccessReview for %s %s was incomplete: %s", verb, resource, result.Status.EvaluationError)
 		return false, true
 	}
 

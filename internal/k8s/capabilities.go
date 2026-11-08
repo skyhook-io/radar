@@ -597,7 +597,8 @@ func userNamespaceCapabilitiesCacheKey(username string, groups []string, namespa
 
 // CheckCapabilitiesForUser runs SubjectAccessReview as the given user
 // to determine what the user can do (exec, logs, delete, helm, etc.)
-// Results are cached per identity (username + groups) with 60s TTL.
+// Results are cached per identity (username + groups) for 60s, or 5s when a
+// check that came back false had failed rather than been denied.
 func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
 	identityKey := pkgauth.IdentityCacheKey(username, groups)
 	if entry, ok := userCapabilitiesCache.Load(identityKey); ok {
@@ -643,23 +644,29 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 	}
 
+	var hadErrors atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(checks))
 
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
+			allowed, apiErr := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
 			// Try namespace-scoped fallback
 			if fallbackNs := capabilityProbeNamespace(); fallbackNs != "" && c.namespaceFallback {
-				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
+				allowed, nsErr := canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
+					return
 				}
+				apiErr = apiErr || nsErr
+			}
+			if apiErr {
+				hadErrors.Store(true)
 			}
 		}(check)
 	}
@@ -673,10 +680,14 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		caps.Exec = false
 	}
 
-	// Cache result
+	ttl := userCapabilitiesTTL
+	if hadErrors.Load() {
+		ttl = capabilitiesErrorTTL
+		log.Printf("Warning: capability checks for user %s had API errors, using short cache TTL (%v)", SanitizeForLog(username), ttl)
+	}
 	userCapabilitiesCache.Store(identityKey, &userCapEntry{
 		caps:      caps,
-		expiresAt: time.Now().Add(userCapabilitiesTTL),
+		expiresAt: time.Now().Add(ttl),
 	})
 
 	return caps, nil
@@ -802,8 +813,20 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		}
 		return false, true
 	}
+	if reviewIncomplete(result.Status) {
+		log.Printf("Warning: SubjectAccessReview for user=%s %s %s was incomplete: %s", SanitizeForLog(username), SanitizeForLog(verb), SanitizeForLog(resource), result.Status.EvaluationError)
+		return false, true
+	}
 
 	return result.Status.Allowed, false
+}
+
+// reviewIncomplete reports an access review that no authorizer allowed while
+// one of them failed to answer (a webhook timing out, say). The request isn't
+// known to be refused, so it is handled like a failed review: cached only
+// briefly, never as a settled no.
+func reviewIncomplete(status authv1.SubjectAccessReviewStatus) bool {
+	return !status.Allowed && status.EvaluationError != ""
 }
 
 // InvalidateUserCapabilitiesCache clears all per-user capability caches

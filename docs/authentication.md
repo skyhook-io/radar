@@ -13,7 +13,7 @@ User → [Auth Layer] → Radar Backend → K8s API (as user, via impersonation)
 1. **Authentication** identifies the user (proxy headers or OIDC login)
 2. **Reads** are filtered by namespace — Radar discovers which namespaces the user can access via `SubjectAccessReview` and only returns resources from those namespaces. Cluster-scoped resources (Nodes, PersistentVolumes, StorageClasses, ClusterRoles when `rbac.viewRBAC` is on, cluster-scoped CRDs, etc.) have no namespace to filter on, so they are gated per-kind via `SubjectAccessReview`: a user sees them only if their own RBAC permits listing that kind. Cluster-wide pod visibility does **not** imply Node/PV visibility — each cluster-scoped read goes through its own check.
 3. **Writes** use K8s impersonation — Radar makes the K8s API call as the authenticated user, so K8s RBAC decides whether it's allowed
-4. **UI adapts** — capability checks run per-user, so buttons (exec, restart, scale, Helm) only appear if the user has permission
+4. **UI adapts** — capability checks run per-user, so buttons (exec, restart, scale, Helm) only appear if the user has permission. Answers are cached for a minute; a check Kubernetes couldn't answer (a failed API call, or an authorization webhook that didn't respond) is cached for only a few seconds
 
 Radar doesn't have its own role/permission system. It delegates everything to K8s RBAC, which means permissions are managed with standard K8s tooling (`kubectl`, Terraform, GitOps, etc.).
 
