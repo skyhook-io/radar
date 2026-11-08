@@ -89,8 +89,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [notice, setNotice] = useState('')
   const [capturedAt, setCapturedAt] = useState('')
   const [sourceLabels, setSourceLabels] = useState<Record<string, string>>({})
-  // Containers that produced a line since their Pod's status was read, keyed by
-  // Pod and container. Reset when the source reloads or a Pod is added again.
+  // Containers that produced a line since their Pod's status was last read,
+  // keyed by Pod and container. Reset when the source reloads or a Pod is added
+  // again or reports new status.
   const [outputKeys, setOutputKeys] = useState<ReadonlySet<string>>(() => new Set())
   // Follows each Pod event as it arrives, ahead of the batched pods state.
   const podsRef = useRef<WorkloadPodInfo[]>([])
@@ -273,6 +274,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           if (data?.pods) {
             const updated = new Map((data.pods as WorkloadPodInfo[]).map(p => [p.name, p]))
             podsRef.current = podsRef.current.map(p => updated.get(p.name) ?? p)
+            // Fresh status supersedes output seen before it: a Pod can re-run
+            // initialization after a sandbox restart.
+            setOutputKeys(prev => withoutPods(prev, new Set(updated.keys())))
             setPods(prev => {
               if (!prev.some(p => updated.has(p.name))) return prev
               return prev.map(p => updated.get(p.name) ?? p)

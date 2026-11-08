@@ -261,3 +261,21 @@ it('hides the previous stream\'s initializing notice while a new stream connects
   expect(FakeEventSource.last).not.toBe(first)
   expect(element.textContent).not.toContain("hasn't started")
 })
+
+it('shows the notice again when fresh status says the Pod is re-initializing', async () => {
+  await act(async () =>
+    root.render(
+      <ToastProvider>
+        <WorkloadLogsViewer name="predictor" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+      </ToastProvider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  const pod = (initState: object, appState: object) => ({ name: 'p-0', containers: ['init', 'app'], ready: false, containerStatuses: [{ name: 'init', init: true, ready: false, restartCount: 0, ...initState }, { name: 'app', ready: false, restartCount: 0, ...appState }] })
+  await act(async () => source.emit('connected', { pods: [pod({ state: 'terminated', reason: 'Completed' }, { state: 'running', started: true })] }))
+  await act(async () => source.emit('log', { pod: 'p-0', container: 'app', timestamp: '2026-11-08T00:00:00Z', content: 'serving' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  await act(async () => source.emit('pod_updated', { pods: [pod({ state: 'waiting', reason: 'CrashLoopBackOff' }, { state: 'waiting', reason: 'PodInitializing' })] }))
+  expect(element.textContent).toContain("app hasn't started: init container init is in CrashLoopBackOff.")
+})
