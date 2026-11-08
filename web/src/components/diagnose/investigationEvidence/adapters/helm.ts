@@ -132,14 +132,22 @@ export function adaptHelmRelease(
 ): void {
   const value = record(payload);
   // Without Helm's Secrets the release comes from its objects, with no status
-  // or history: it reads as list_helm_releases' observed rows do.
+  // or history: it reads as list_helm_releases' observed rows do. The call's
+  // namespace is where Helm stores the release, which a Flux HelmRelease can
+  // set apart from the release's own, so the card is scoped to the release.
   const observed = record(value?.observed);
   if (value && observed && nonEmptyString(value.summary)) {
-    adaptListHelmReleases(builder, source, {
-      summary: value.summary,
-      releases: [],
-      observed: [observed],
-    });
+    adaptListHelmReleases(
+      builder,
+      {
+        ...source,
+        args: JSON.stringify({
+          namespace: observed.namespace,
+          name: observed.name,
+        }),
+      },
+      { summary: value.summary, releases: [], observed: [observed] },
+    );
     return;
   }
   if (

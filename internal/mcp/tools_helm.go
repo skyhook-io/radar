@@ -310,9 +310,6 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	return toJSONResult(result)
 }
 
-// helmReleaseExtras are the include values that read Helm's records.
-var helmReleaseExtras = []string{"values", "history", "operations", "diff", "values_diff", "notes_diff", "resource_diff"}
-
 // observedHelmReleaseResult answers get_helm_release from the release's
 // stamps, for a caller denied Helm's storage: what the objects they can read
 // say, reading no Secret. When it can't, it returns nil and why, for the error.
@@ -329,11 +326,11 @@ func observedHelmReleaseResult(ctx context.Context, input getHelmReleaseInput) (
 		return nil, "none of the objects you can read belong to it"
 	}
 	result := map[string]any{"summary": detail.Summary(), "observed": detail}
-	includes := parseIncludes(input.Include)
+	// Every include reads Helm's records, so none of them can be answered here.
 	var unavailable []string
-	for _, extra := range helmReleaseExtras {
-		if includes[extra] {
-			unavailable = append(unavailable, extra)
+	for _, part := range strings.Split(input.Include, ",") {
+		if part = strings.TrimSpace(part); part != "" && !slices.Contains(unavailable, part) {
+			unavailable = append(unavailable, part)
 		}
 	}
 	if len(unavailable) > 0 {
