@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Clock } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
-import { formatDuration } from '../resource-utils'
+import { formatDuration, isKueueQueuedJob } from '../resource-utils'
 
 interface JobRendererProps {
   data: any
@@ -67,7 +67,7 @@ export function JobRenderer({ data, admissionContent, kueueManaged = false }: Jo
   // Check if job completed successfully
   const isComplete = conditions.some((c: any) => c.type === 'Complete' && c.status === 'True')
   const isSuspended = spec.suspend === true
-  const heldByKueue = kueueManaged || (data.apiVersion === 'batch/v1' && data.kind === 'Job' && Boolean(data.metadata?.labels?.['kueue.x-k8s.io/queue-name']))
+  const heldByKueue = kueueManaged || isKueueQueuedJob(data)
 
   return (
     <>
