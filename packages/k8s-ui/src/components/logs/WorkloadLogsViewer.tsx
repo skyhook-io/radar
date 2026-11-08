@@ -11,6 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
+import { initContainerNames, initializingPodsNotice } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -307,6 +308,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setSelectedPods(allSelected ? new Set() : new Set(pods.map(p => p.name)))
   }, [selectedPods, pods])
 
+  const initContainers = useMemo(() => initContainerNames(pods), [pods])
+  const initNotice = useMemo(
+    () => initializingPodsNotice(pods.filter(pod => selectedPods.has(pod.name)), selectedContainer),
+    [pods, selectedPods, selectedContainer],
+  )
+
   const filteredEntries = useMemo(
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
     [entries, selectedPods],
@@ -389,6 +396,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         onChange={setSelectedContainer}
         includeAll={allowAllContainers}
         isDark={isDark}
+        initContainers={initContainers}
       />
 
       <LogRangeSelect
@@ -412,19 +420,21 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     <div className="flex h-full min-h-0 flex-col">
     {/* One status line. A notice says what the snapshot could not show, so it
         stays marked; the capture time alone is quiet. */}
-    {(notice || capturedAt) && (
+    {(notice || initNotice || capturedAt) && (
       <div
         role="status"
-        className={`flex shrink-0 flex-wrap items-baseline gap-x-2 border-b border-theme-border px-3 py-1 text-xs ${notice ? 'bg-theme-elevated text-theme-text-secondary' : 'text-theme-text-tertiary'}`}
+        className={`flex shrink-0 flex-wrap items-baseline gap-x-2 border-b border-theme-border px-3 py-1 text-xs ${notice || initNotice ? 'bg-theme-elevated text-theme-text-secondary' : 'text-theme-text-tertiary'}`}
       >
         {capturedAt && <span className="whitespace-nowrap">Snapshot {new Date(capturedAt).toLocaleTimeString()}</span>}
-        {capturedAt && notice && <span aria-hidden>·</span>}
-        {notice && (
-          <span className="inline-flex min-w-0 items-baseline gap-1.5">
-            <AlertTriangle className={`h-3 w-3 shrink-0 self-center ${toneTextClass('degraded')}`} aria-hidden />
-            <span>{notice}</span>
+        {[initNotice, notice].filter(Boolean).map((text, index) => (
+          <span key={text} className="inline-flex min-w-0 items-baseline gap-2">
+            {(capturedAt || index > 0) && <span aria-hidden>·</span>}
+            <span className="inline-flex min-w-0 items-baseline gap-1.5">
+              <AlertTriangle className={`h-3 w-3 shrink-0 self-center ${toneTextClass('degraded')}`} aria-hidden />
+              <span>{text}</span>
+            </span>
           </span>
-        )}
+        ))}
       </div>
     )}
     {(fetchError || streamError) && entries.length > 0 && <div role="alert" className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-secondary">{fetchError || streamError} · Previously loaded logs remain below.</div>}
@@ -447,6 +457,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       showPodName
+      showContainerName={selectedContainer === '' && allContainers.length > 1}
+      initContainers={initContainers}
       emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}

@@ -16,6 +16,27 @@ type ContainerInfo struct {
 	Sidecar      bool  `json:"sidecar,omitempty"`
 	Ready        bool  `json:"ready"`
 	RestartCount int32 `json:"restartCount"`
+	// State is the current run's state: waiting, running or terminated.
+	State string `json:"state,omitempty"`
+	// Reason is the waiting or terminated reason, such as PodInitializing,
+	// CrashLoopBackOff, Completed or Error.
+	Reason string `json:"reason,omitempty"`
+	// Started reports a container past its startup probe; for a native
+	// sidecar it means it no longer holds up Pod initialization.
+	Started bool `json:"started,omitempty"`
+}
+
+func containerInfo(cs corev1.ContainerStatus) ContainerInfo {
+	info := ContainerInfo{Name: cs.Name, Ready: cs.Ready, RestartCount: cs.RestartCount, Started: cs.Started != nil && *cs.Started}
+	switch {
+	case cs.State.Waiting != nil:
+		info.State, info.Reason = "waiting", cs.State.Waiting.Reason
+	case cs.State.Running != nil:
+		info.State = "running"
+	case cs.State.Terminated != nil:
+		info.State, info.Reason = "terminated", cs.State.Terminated.Reason
+	}
+	return info
 }
 
 // PodInfo contains compact runtime status about a pod for workload views.
@@ -79,20 +100,12 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		}
 	}
 	for _, cs := range pod.Status.InitContainerStatuses {
-		containerStatuses = append(containerStatuses, ContainerInfo{
-			Name:         cs.Name,
-			Init:         true,
-			Sidecar:      sidecars[cs.Name],
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
+		info := containerInfo(cs)
+		info.Init, info.Sidecar = true, sidecars[cs.Name]
+		containerStatuses = append(containerStatuses, info)
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
-		containerStatuses = append(containerStatuses, ContainerInfo{
-			Name:         cs.Name,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
+		containerStatuses = append(containerStatuses, containerInfo(cs))
 	}
 	verdict := health.Pod(pod, now)
 	displayLevel := health.PodDisplayLevel(pod, now)

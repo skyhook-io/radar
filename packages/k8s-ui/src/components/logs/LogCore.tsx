@@ -64,6 +64,10 @@ interface LogCoreProps {
   onClear?: () => void
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
+  /** Name the container on each line, for views that mix several containers. */
+  showContainerName?: boolean
+  /** Containers to mark as init containers when container names are shown. */
+  initContainers?: ReadonlySet<string>
   emptyMessage?: ReactNode
   sourceUnavailable?: boolean
   emptyCommand?: string | null
@@ -158,6 +162,8 @@ export function LogCore({
   onClear,
   toolbarExtra,
   showPodName = false,
+  showContainerName = false,
+  initContainers,
   emptyMessage = 'No logs available',
   sourceUnavailable = false,
   emptyCommand,
@@ -1168,6 +1174,8 @@ export function LogCore({
                 searchIsRegex={search.isRegex}
                 searchIsCaseSensitive={search.isCaseSensitive}
                 showPodName={showPodName}
+                showContainerName={showContainerName}
+                initContainers={initContainers}
                 showTimestamp={showTimestamps}
                 tsFormat={tsFormat}
                 ansiEnabled={ansiEnabled}
@@ -1273,6 +1281,8 @@ interface LogLineProps {
   searchIsRegex: boolean
   searchIsCaseSensitive: boolean
   showPodName: boolean
+  showContainerName?: boolean
+  initContainers?: ReadonlySet<string>
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean
@@ -1294,6 +1304,8 @@ function LogLine({
   searchIsRegex,
   searchIsCaseSensitive,
   showPodName,
+  showContainerName = false,
+  initContainers,
   showTimestamp,
   tsFormat,
   ansiEnabled,
@@ -1373,6 +1385,15 @@ function LogLine({
           [{entry.sourceLabel || entry.pod.split('-').slice(-2).join('-')}]
         </span>
       )}
+      {showContainerName && entry.container && (
+        <span
+          className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap max-w-[200px] truncate`}
+          title={initContainers?.has(entry.container) ? `Init container ${entry.container}` : `Container ${entry.container}`}
+        >
+          {entry.container}
+          {initContainers?.has(entry.container) && <span className="ml-1 text-[10px] uppercase tracking-wide">init</span>}
+        </span>
+      )}
       <span className="flex-1 min-w-0 phone:order-last phone:basis-full">{contentElement}</span>
       <button
         onClick={handleCopy}
@@ -1391,6 +1412,8 @@ interface LogGroupItemProps {
   searchIsRegex: boolean
   searchIsCaseSensitive: boolean
   showPodName: boolean
+  showContainerName?: boolean
+  initContainers?: ReadonlySet<string>
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean

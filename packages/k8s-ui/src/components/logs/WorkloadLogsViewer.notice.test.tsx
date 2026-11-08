@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { VirtuosoMockContext } from 'react-virtuoso'
 import { ToastProvider } from '../ui/Toast'
 import { WorkloadLogsViewer } from './WorkloadLogsViewer'
 
@@ -56,4 +57,42 @@ it('clears the unreadable-sources notice when the stream ends', async () => {
 
   await act(async () => source.emit('end', { reason: 'no pods found' }))
   expect(element.textContent).not.toContain(notice)
+})
+
+it('names each line\'s container, marks init containers and says why the app has no output', async () => {
+  await act(async () =>
+    root.render(
+      <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 20 }}>
+        <ToastProvider>
+          <WorkloadLogsViewer
+            name="predictor"
+            fetchAll={async () => ({ pods: [], logs: [] })}
+            createStream={() => new EventSource('/stream')}
+            autoStream
+          />
+        </ToastProvider>
+      </VirtuosoMockContext.Provider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  await act(async () => source.emit('connected', {
+    pods: [{
+      name: 'predictor-abc-xyz',
+      containers: ['storage-initializer', 'kserve-container'],
+      ready: false,
+      containerStatuses: [
+        { name: 'storage-initializer', init: true, ready: false, restartCount: 4, state: 'waiting', reason: 'CrashLoopBackOff' },
+        { name: 'kserve-container', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' },
+      ],
+    }],
+  }))
+  await act(async () => source.emit('log', { pod: 'predictor-abc-xyz', container: 'storage-initializer', timestamp: '2026-11-08T00:00:00Z', content: 'Storage initialization failed' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+
+  expect(element.textContent).toContain("kserve-container hasn't started: init container storage-initializer is in CrashLoopBackOff.")
+  const label = element.querySelector('[title="Init container storage-initializer"]')
+  expect(label?.textContent).toBe('storage-initializerinit')
+  const option = [...element.querySelectorAll('option')].find(o => o.value === 'storage-initializer')
+  expect(option?.textContent).toBe('storage-initializer (init)')
 })

@@ -34,3 +34,45 @@ func TestBuildPodInfoMarksNativeSidecars(t *testing.T) {
 		t.Fatalf("ray-worker = %+v, want an application container", got["ray-worker"])
 	}
 }
+
+func TestBuildPodInfoReportsContainerStates(t *testing.T) {
+	started := true
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "storage-initializer"}},
+			Containers:     []corev1.Container{{Name: "kserve-container"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{{
+				Name:                 "storage-initializer",
+				State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}},
+			}},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  "kserve-container",
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}},
+			}},
+		},
+	}
+	got := BuildPodInfo(pod, time.Now()).ContainerStatuses
+	want := []ContainerInfo{
+		{Name: "storage-initializer", Init: true, State: "waiting", Reason: "CrashLoopBackOff"},
+		{Name: "kserve-container", State: "waiting", Reason: "PodInitializing"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("statuses=%+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("status %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	pod.Status.InitContainerStatuses[0] = corev1.ContainerStatus{Name: "storage-initializer", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Completed"}}}
+	pod.Status.ContainerStatuses[0] = corev1.ContainerStatus{Name: "kserve-container", Ready: true, Started: &started, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
+	got = BuildPodInfo(pod, time.Now()).ContainerStatuses
+	if got[0].State != "terminated" || got[0].Reason != "Completed" || got[1].State != "running" || !got[1].Started {
+		t.Fatalf("initialized statuses=%+v", got)
+	}
+}
