@@ -39,7 +39,7 @@ export function initContainerNames(pods: WorkloadPodInfo[]): Set<string> {
  */
 export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string }>, knownInit: ReadonlySet<string> = new Set()): boolean {
   const apps = new Set<string>()
-  const supporting = new Set<string>(knownInit)
+  const supporting = new Set<string>()
   for (const pod of pods) {
     const statuses = pod.containerStatuses ?? []
     const roles = new Map(statuses.map(status => [status.name, status]))
@@ -53,7 +53,10 @@ export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{
   if (apps.size > 1) return true
   let first: string | undefined
   for (const entry of entries) {
-    if (entry.pod && supporting.has(podContainerKey(entry.pod, entry.container))) return true
+    if (entry.pod) {
+      const key = podContainerKey(entry.pod, entry.container)
+      if (supporting.has(key) || knownInit.has(key)) return true
+    }
     if (first === undefined) first = entry.container
     else if (entry.container !== first) return true
   }

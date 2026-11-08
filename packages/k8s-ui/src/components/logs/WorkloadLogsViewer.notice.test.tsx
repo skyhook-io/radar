@@ -134,3 +134,32 @@ it('keeps a started container out of the notice after the buffer is cleared', as
   await act(async () => clear.click())
   expect(element.textContent).not.toContain("hasn't started")
 })
+
+it('treats a replaced Pod with the same name as a new incarnation', async () => {
+  const initializing = {
+    name: 'web-0',
+    containers: ['migrate', 'app'],
+    ready: false,
+    containerStatuses: [
+      { name: 'migrate', init: true, ready: false, restartCount: 1, state: 'waiting', reason: 'CrashLoopBackOff' },
+      { name: 'app', ready: false, restartCount: 0, state: 'waiting', reason: 'PodInitializing' },
+    ],
+  }
+  await act(async () =>
+    root.render(
+      <ToastProvider>
+        <WorkloadLogsViewer name="web" fetchAll={async () => ({ pods: [], logs: [] })} createStream={() => new EventSource('/stream')} autoStream />
+      </ToastProvider>,
+    ),
+  )
+  const source = FakeEventSource.last
+  if (!source) throw new Error('stream was not opened')
+  await act(async () => source.emit('connected', { pods: [{ ...initializing, containerStatuses: [{ ...initializing.containerStatuses[0], state: 'terminated', reason: 'Completed' }, { name: 'app', ready: true, restartCount: 0, state: 'running' }] }] }))
+  await act(async () => source.emit('log', { pod: 'web-0', container: 'app', timestamp: '2026-11-08T00:00:00Z', content: 'serving' }))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(element.textContent).not.toContain("hasn't started")
+
+  await act(async () => source.emit('pod_removed', { pod: 'web-0', reason: 'replaced' }))
+  await act(async () => source.emit('pod_added', { pods: [initializing] }))
+  expect(element.textContent).toContain("app hasn't started: init container migrate is in CrashLoopBackOff.")
+})
