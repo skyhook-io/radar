@@ -387,7 +387,7 @@ items: [42]`} {
 }
 
 func TestManifestCommentDocumentsAndTypedListIdentity(t *testing.T) {
-	for _, manifest := range []string{"# Source: fixture/templates/disabled.yaml\n# Copyright fixture", "null", "~"} {
+	for _, manifest := range []string{"# Source: fixture/templates/disabled.yaml\n# Copyright fixture", "null", "~", "apiVersion: v1\nkind: List\nitems:\n", "apiVersion: v1\nkind: ConfigMapList\nitems: null\n"} {
 		objects, failures := parseManifestResourceObjects(manifest, "default")
 		if len(objects) != 0 || failures != 0 {
 			t.Fatalf("empty document counted incomplete: %q: %v %d", manifest, objects, failures)

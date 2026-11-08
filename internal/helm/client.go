@@ -1836,6 +1836,11 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 	parseErrorCount := 0
 	var appendObject func(*unstructured.Unstructured)
 	appendObject = func(obj *unstructured.Unstructured) {
+		// Kubernetes' decoder treats any present items key as a list, so an empty
+		// rendered loop (items: null) is an empty List, not an unidentified object.
+		if items, ok := obj.Object["items"]; ok && items == nil {
+			return
+		}
 		// Helm's resource builder flattens List and typed-list documents recursively.
 		// Do not silently report their children as absent from a preview.
 		if obj.IsList() {
