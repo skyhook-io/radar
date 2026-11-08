@@ -33,6 +33,8 @@ fi
 home="$("${run_as[@]}" mktemp -d)"
 runtime_dir="$("${run_as[@]}" mktemp -d)"
 launch_dir="$("${run_as[@]}" mktemp -d)"
+# Values the AppImage's GTK setup overrides; started processes must get these back.
+user_data_dirs="/usr/local/share:/usr/share:/opt/radar-smoke/share"
 display=":99"
 
 # Stand-in xdg-open: records the environment and folder it was started with.
@@ -116,6 +118,7 @@ fi
 # A test run sends no version check or usage report.
 (cd "$launch_dir" && exec "${run_as[@]}" env -i HOME="$home" PATH="$tools:/usr/local/bin:/usr/bin:/bin" \
   XDG_RUNTIME_DIR="$runtime_dir" DISPLAY="$display" XDG_SESSION_TYPE=x11 LANG=C.UTF-8 APPIMAGE_EXTRACT_AND_RUN=1 \
+  XDG_DATA_DIRS="$user_data_dirs" GTK_THEME= \
   RADAR_DISABLE_VERSION_CHECK=1 RADAR_USAGE_REPORTING=off \
   "$appimage" >"$out/radar.log" 2>&1) &
 launcher_pid=$!
@@ -172,6 +175,10 @@ for _ in $(seq 1 20); do [[ -s "$out/xdg-open-env.txt" ]] && break; sleep 0.5; d
 grep -qx "cwd=$launch_dir" "$out/xdg-open-env.txt" || fail "xdg-open did not start in the launch folder: $(grep '^cwd=' "$out/xdg-open-env.txt")"
 leaked="$(grep -E '^(GTK_PATH|GTK_EXE_PREFIX|GTK_DATA_PREFIX|GDK_PIXBUF_MODULE_FILE|GSETTINGS_SCHEMA_DIR|GIO_MODULE_DIR|WEBKIT_INJECTED_BUNDLE_PATH|APPDIR|APPIMAGE|OWD|RADAR_APPIMAGE_[A-Z_]*)=' "$out/xdg-open-env.txt" || true)"
 [[ -z "$leaked" ]] || fail "xdg-open inherited the AppImage's environment: $leaked"
+grep -qx "XDG_DATA_DIRS=$user_data_dirs" "$out/xdg-open-env.txt" ||
+  fail "xdg-open did not get the launch XDG_DATA_DIRS back: $(grep '^XDG_DATA_DIRS=' "$out/xdg-open-env.txt")"
+grep -qx "GTK_THEME=" "$out/xdg-open-env.txt" ||
+  fail "xdg-open did not get the launch GTK_THEME (set, empty) back: $(grep '^GTK_THEME' "$out/xdg-open-env.txt" || echo unset)"
 echo "smoke: a link opens with the launch environment and folder"
 
 window="$(DISPLAY="$display" xdotool search --onlyvisible --pid "$radar_pid" 2>/dev/null | head -n 1 || true)"

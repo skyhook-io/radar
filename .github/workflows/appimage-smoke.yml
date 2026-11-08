@@ -13,6 +13,7 @@ on:
       - .github/workflows/appimage-smoke.yml
       - cmd/desktop/**
       - internal/desktopenv/**
+      - internal/server/desktop_open_url.go
       - deploy/linux/**
       - build/appicon.png
       - go.mod
