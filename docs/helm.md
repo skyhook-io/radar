@@ -28,7 +28,7 @@ Helm stamps what it deploys with the `meta.helm.sh/release-name` and `meta.helm.
 | App version | The `app.kubernetes.io/version` on objects of the chosen chart. Unknown if none has it. When they disagree it is unknown and `appVersions` lists the values: a majority would hide the object still on another version, and voting on the two labels separately could pair values no object carries |
 | Resources, object health | Live objects the caller can read, which can be fewer than the release has. Secrets are never read, and only kinds Radar is already watching are included. With gaps in the read, health is `unknown` rather than `healthy`, and `healthSummary` still counts what was read. The list shows healthy objects in a neutral label, since they say nothing about Helm's status |
 | Flux ownership, history | From a Flux `HelmRelease` the caller can read: its `status.history` supplies the chart, the versions and the history shown in the drawer. Flux's recorded status is shown as Flux's, in the drawer, and never as the release's status |
-| Status, revision, last updated | Unknown. Observed rows have no such fields, so nothing can default to "deployed" |
+| Status, revision, last updated | Unknown. Observed rows have no such fields, so nothing can default to "deployed". When the chart or app versions disagree, the list adds a "versions differ" marker beside the status, with the versions in its tooltip |
 | Helm history, compare, values, manifest, notes, hooks | Not available: these routes stay denied, and the drawer has no tabs for them. It shows History only where Flux recorded one |
 | Install, upgrade, rollback, uninstall | Not available |
 
@@ -38,7 +38,7 @@ What this can miss, by design:
 
 - A release that failed before creating any object doesn't appear.
 - A release doesn't appear if the caller can read none of its objects, or if it deploys only CRDs from a chart's `crds/` directory, which Helm doesn't stamp. Scanning CRDs wouldn't help: `karpenter-crd`'s CRDs, for example, carry no stamps at all.
-- A release doesn't appear if a controller owns all its objects, as the Helm operator's post-renderer arranges, because owned objects aren't counted.
+- A release doesn't appear if a controller owns all its objects, because owned objects aren't counted. Helm-based operators built with Operator SDK do this: they add an owner reference to everything they render.
 - A failed release with objects looks like any other: its objects don't record the failure.
 - Objects kept after an uninstall, for example with `helm.sh/resource-policy: keep`, can show up as a release. So can objects that carry the metadata with no release behind them, such as a chart that templates it itself and was applied with `kubectl`.
 - Two Flux releases that share a name and target namespace but store in different namespaces show as one row, because the stamps can't tell them apart.
@@ -51,6 +51,8 @@ The list comes from `GET /api/helm/inventory`, which returns `{releases, observe
 `GET /api/helm/inventory/{namespace}/{name}` returns one observed release with its resources and Flux history. The namespace is the release's, and a 404 means no object the caller can read counts toward the release, not that the release doesn't exist. A 503 means the read may still settle, so it's safe to retry, and a 409 with `error_code: connection_changed` means Radar's cluster connection changed during the read, so confirm the cluster first. `fluxHistory` is newest first, and its `digest` is Flux's checksum of the stored Helm release. `GET /api/helm/releases/{namespace}/{name}` returns 403 with `error_code: release_read_denied` when the caller's own read of Helm's storage was refused, which is what sends a shared link to the observed drawer. Any other 403, such as Radar's ServiceAccount being refused impersonation, isn't one and shows as an error.
 
 Objects are read through the same walk and per-user gates as search (`internal/search.Scan`): the namespaces the caller can see, exact-kind checks for Roles and RoleBindings, and per-kind checks for cluster-scoped kinds. The namespace picker filters rows by the release's namespace after that read, so a release keeps its cluster-scoped objects and those in other namespaces. Nothing is cached across callers. Without authentication the caller is Radar's own identity, so a default chart install with `rbac.secrets=false` gets this view too, and it shows nothing `/api/resources` doesn't.
+
+Home's Helm card (`GET /api/dashboard/helm`) and the MCP `get_dashboard` tool still read Helm's storage only. When some namespaces couldn't be read they return `unreadNamespaces`, in the same shape as `storageDenied`, and the card says where Helm's records weren't read, so a partial count doesn't pass for the whole. When none could be read, the card says Helm's records are restricted and points to the Helm view.
 
 A Radar too old to serve the inventory doesn't advertise `helmInventory`, so the UI reads `/api/helm/releases` and keeps its "Access Restricted" state.
 
