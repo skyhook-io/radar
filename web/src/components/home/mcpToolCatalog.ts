@@ -368,7 +368,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'manage_workload',
     write: true,
-    desc: 'Operate on a workload: restart triggers a rolling restart, scale changes the replica count, rollback reverts to a previous revision. Roll back a native Helm release\'s workload as the release with manage_helm. Rollout rollback re-runs every canary step — pair it with manage_rollout promote-full, or abort instead.',
+    desc: 'Operate on a workload: restart triggers a rolling restart, scale changes the replica count, rollback reverts to a previous revision. Roll back a native Helm release\'s workload as the Helm release, not the workload alone. Rollout rollback re-runs every canary step — pair it with manage_rollout promote-full, or abort instead.',
     params: [
       { arg: 'action', required: true, desc: 'restart, scale, or rollback' },
       { arg: 'kind', required: true, desc: 'deployment, statefulset, daemonset, or rollout' },
