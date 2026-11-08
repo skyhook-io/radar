@@ -304,7 +304,7 @@ func TestDashboardHelmSummarySeparatesDeniedFromFailed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			useHelmStorageAnswering(t, tc.status, tc.body)
-			got := testServerSrv.getDashboardHelmSummary(httptest.NewRequest(http.MethodGet, "/api/dashboard/helm", nil), []string{"shop"})
+			got := testServerSrv.getDashboardHelmSummary(httptest.NewRequest(http.MethodGet, "/api/dashboard/helm", nil), []string{"shop"}, true)
 			if got.Restricted != tc.wantRestricted {
 				t.Fatalf("restricted = %v, want %v (summary: %+v)", got.Restricted, tc.wantRestricted, got)
 			}
