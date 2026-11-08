@@ -69,3 +69,12 @@ describe('tabs on an observed release', () => {
     expect(mount(<ObservedHelmReleaseDrawer release={release} onClose={vi.fn()} />).textContent).toContain('so this release may be missing more than usual')
   })
 })
+
+describe('versions on an observed release', () => {
+  it('shows versions that disagree rather than calling them unknown', () => {
+    detail.current = { data: { ...seen, chartVersions: ['1.0.0', '2.0.0'], appVersions: ['1.0', '2.0'] } }
+    const text = mount(<ObservedHelmReleaseDrawer release={release} onClose={vi.fn()} />).textContent
+    expect(text).toContain('Mixed: 1.0.0, 2.0.0')
+    expect(text).toContain('Mixed: 1.0, 2.0')
+  })
+})

@@ -25,8 +25,15 @@ const TABS: { id: TabId; label: string; icon: ComponentType<{ className?: string
 
 const UNREAD = 'Helm keeps this in its release Secret, which Radar can’t read here.'
 const unknownFact = (source: string): Fact => ({ text: 'Unknown', tone: 'unknown', detail: source })
-const stampedFact = (value: string | undefined, label: string, whenMissing: string): Fact =>
-  value ? { text: value, tone: 'neutral', source: `From ${label}` } : unknownFact(whenMissing)
+// found lists the values when objects disagree, as an interrupted upgrade
+// leaves them; showing them is more use than "Unknown".
+const stampedFact = (value: string | undefined, label: string, whenMissing: string, found?: string[]): Fact => {
+  if (value) return { text: value, tone: 'neutral', source: `From ${label}` }
+  if (found?.length) {
+    return { text: `Mixed: ${found.join(', ')}`, tone: 'neutral', source: `From ${label}`, detail: 'Its objects carry different values, as an interrupted upgrade can leave them.' }
+  }
+  return unknownFact(whenMissing)
+}
 
 interface ObservedHelmReleaseDrawerProps {
   release: SelectedHelmRelease
@@ -143,15 +150,15 @@ function OverviewTab({ release }: { release: ObservedHelmReleaseDetail }) {
     ? `Its objects name several charts, and none matches the release name: ${release.otherCharts.join(', ')}.`
     : 'Its objects have no helm.sh/chart label.'
   // When Flux recorded the release, these three values are Flux's, not labels.
-  const fact = (value: string | undefined, label: string, whenMissing: string): Fact =>
-    lastRecord?.chartName ? (value ? { text: value, tone: 'neutral', source: 'Recorded by Flux' } : unknownFact('Flux didn’t record this.')) : stampedFact(value, label, whenMissing)
+  const fact = (value: string | undefined, label: string, whenMissing: string, found?: string[]): Fact =>
+    lastRecord?.chartName ? (value ? { text: value, tone: 'neutral', source: 'Recorded by Flux' } : unknownFact('Flux didn’t record this.')) : stampedFact(value, label, whenMissing, found)
   return (
     <div className="p-4 space-y-4">
       <div className="bg-theme-elevated/30 rounded-lg p-4">
         <FactGrid>
           <FactRow label="Chart"><FactValue fact={fact(release.chart, 'helm.sh/chart', chartWhenMissing)} /></FactRow>
-          <FactRow label="Chart version"><FactValue fact={fact(release.chartVersion, 'helm.sh/chart', release.chartVersions?.length ? `Its objects carry different versions: ${release.chartVersions.join(', ')}.` : 'No version could be read from its objects.')} /></FactRow>
-          <FactRow label="App version"><FactValue fact={fact(release.appVersion, 'app.kubernetes.io/version', release.appVersions?.length ? `Its objects carry different app versions: ${release.appVersions.join(', ')}.` : 'No app version could be read from its objects.')} /></FactRow>
+          <FactRow label="Chart version"><FactValue fact={fact(release.chartVersion, 'helm.sh/chart', 'No version could be read from its objects.', release.chartVersions)} /></FactRow>
+          <FactRow label="App version"><FactValue fact={fact(release.appVersion, 'app.kubernetes.io/version', 'No app version could be read from its objects.', release.appVersions)} /></FactRow>
           {release.otherCharts && release.otherCharts.length > 0 && (
             <FactRow label={release.chart ? 'Other charts' : 'Charts found'}>
               <span className="text-theme-text-secondary">{release.otherCharts.join(', ')}</span>
