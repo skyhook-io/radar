@@ -788,7 +788,6 @@ func noBackendWarning(noData, unreachable []string) string {
 	}
 }
 
-// queryPrometheusForFlows queries Prometheus for caretta_links_observed metrics
 // carettaLinksQuery selects Caretta's links, in namespace when set (as either
 // client or server), within the cluster scope.
 func carettaLinksQuery(namespace string, sc clusterScope) string {
@@ -805,9 +804,9 @@ func carettaLinksQuery(namespace string, sc clusterScope) string {
 		sc.with(fmt.Sprintf(`server_namespace="%s"`, safeNS)))
 }
 
-// resolveClusterScope decides the cluster scope of Caretta's queries. Only a store the
-// operator configured can hold several clusters; Caretta's own caretta-vm and
-// any store found in the cluster hold this one.
+// resolveClusterScope decides the cluster scope of Caretta's queries. Only a
+// store the operator configured can hold several clusters; Caretta's own
+// caretta-vm and any store found in the cluster hold this one.
 func (c *CarettaSource) resolveClusterScope(ctx context.Context) (clusterScope, error) {
 	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "")
 }
@@ -824,6 +823,7 @@ func (c *CarettaSource) identityRows(ctx context.Context, query string) ([]map[s
 	return rows, nil
 }
 
+// queryPrometheusForFlows queries Prometheus for caretta_links_observed metrics
 func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr string, basePath string, opts FlowOptions, sc clusterScope) ([]Flow, error) {
 	query := carettaLinksQuery(opts.Namespace, sc)
 
