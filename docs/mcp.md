@@ -472,7 +472,7 @@ http://localhost:9280/mcp
 
 The port matches your `--port` flag (default 9280). The MCP server uses the stateless Streamable HTTP transport with JSON-RPC and accepts MCP protocol versions 2024-11-05 through 2026-07-28.
 
-When a client on protocol 2026-07-28 stops waiting for a `list_resources` call, for example on a tool timeout, Radar stops working on it too. This matters when the kind is still loading: the call otherwise waits up to 3 seconds for it. Every other tool, and every call from a client on an older protocol version, runs to completion after the client leaves. Write tools always do, so a change is never left half applied because the caller stopped waiting.
+Over HTTP, when a client on protocol 2026-07-28 stops waiting for a `list_resources` call, for example on a tool timeout, Radar stops working on it too. This matters when the kind is not loaded yet: the call otherwise keeps waiting for Radar to start watching it, up to 3 seconds once the watch has started. Every other tool, and every call from a client on an older protocol version, runs to completion after the client leaves. Write tools always do, so a change is never left half applied because the caller stopped waiting.
 
 ## Server instructions
 

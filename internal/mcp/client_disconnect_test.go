@@ -73,8 +73,12 @@ func awaitDuration(t *testing.T, took <-chan time.Duration) time.Duration {
 
 // installColdWidgets serves a custom kind whose informer starts but can't
 // sync: its list in namespace "cold" is held until the test ends, so list_resources
-// waits out its full sync budget unless its context ends first.
-func installColdWidgets(t *testing.T) {
+// waits out its full sync budget unless its context ends first. With
+// holdProbe, Radar's first access probe of the kind is held too, so the read
+// never gets as far as starting the informer.
+// It returns a func that releases the held lists; call it before closing a
+// server whose handler may still be waiting on them.
+func installColdWidgets(t *testing.T, holdProbe bool) (releaseLists func()) {
 	t.Helper()
 	if err := k8s.InitTestResourceCache(fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cold"}},
@@ -94,12 +98,18 @@ func installColdWidgets(t *testing.T) {
 		{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}: "EndpointSliceList",
 	}, widget)
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	var releaseOnce sync.Once
+	releaseLists = func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseLists)
 	var mu sync.Mutex
 	nsLists := 0
 	// The first list in "cold" is the access probe and answers at once; the
 	// informer's own list after it is held.
 	dyn.PrependReactor("list", "widgets", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if holdProbe {
+			<-release
+			return false, nil, nil
+		}
 		if a.GetNamespace() == "" {
 			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("radar may not list widgets cluster-wide"))
 		}
@@ -123,6 +133,7 @@ func installColdWidgets(t *testing.T) {
 	previousWait := dynamicSyncWait
 	dynamicSyncWait = 1500 * time.Millisecond
 	t.Cleanup(func() { dynamicSyncWait = previousWait })
+	return releaseLists
 }
 
 // A client on protocol 2026-07-28 cancels a call by closing its POST. When it
@@ -138,7 +149,7 @@ func TestListResourcesStopsWhenANewProtocolClientLeaves(t *testing.T) {
 		{version: "2025-11-25", stopsEarly: false},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
-			installColdWidgets(t)
+			installColdWidgets(t, false)
 			server := newServer(false, false, "")
 			took := timeToolCalls(server)
 			httpServer := httptest.NewServer(handlerForServer(server))
@@ -153,6 +164,35 @@ func TestListResourcesStopsWhenANewProtocolClientLeaves(t *testing.T) {
 			}
 			if !tc.stopsEarly && ran < dynamicSyncWait-100*time.Millisecond {
 				t.Fatalf("list_resources ran %v for a %s client; disconnecting must not cancel on that protocol", ran, tc.version)
+			}
+		})
+	}
+}
+
+// Before a cold kind's informer exists, Radar first probes whether it may
+// list the kind at all. A client that leaves while that probe is still out
+// ends the call too, whether it named a namespace or not.
+func TestListResourcesStopsDuringTheFirstProbeWhenANewProtocolClientLeaves(t *testing.T) {
+	for name, args := range map[string]map[string]any{
+		"one namespace":  {"kind": "widgets", "group": "example.test", "namespace": "cold"},
+		"all namespaces": {"kind": "widgets", "group": "example.test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			releaseLists := installColdWidgets(t, true)
+			server := newServer(false, false, "")
+			took := timeToolCalls(server)
+			httpServer := httptest.NewServer(handlerForServer(server))
+			defer httpServer.Close()
+			defer releaseLists()
+
+			callAndGiveUp(t, httpServer.URL, discoverProtocolVersion, "list_resources", args)
+			select {
+			case ran := <-took:
+				if ran > 800*time.Millisecond {
+					t.Fatalf("list_resources ran %v after a %v client left; it should stop with the client", ran, clientGivesUpAfter)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatalf("list_resources still waiting on the access probe 3s after a %v client left", clientGivesUpAfter)
 			}
 		})
 	}
