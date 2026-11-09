@@ -368,7 +368,7 @@ export function expandPodGroup(
         restarts: pod.restarts,
         containers: pod.containers,
         trafficRole: pod.trafficRole,
-        ...(podGroupNode.data.earlierJobRun ? { terminating: pod.terminating ? 1 : 0 } : {}),
+        terminating: pod.terminating ? 1 : 0,
         expandedFromGroup: podGroupId, // Track which group this came from
       },
     })

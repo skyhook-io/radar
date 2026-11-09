@@ -21,6 +21,12 @@ describe('expandPodGroup', () => {
     ])
     expect(out.edges.every(e => e.type === 'uses' && e.label === edge.label)).toBe(true)
   })
+  it('keeps each Pod termination state when an ordinary group is expanded', () => {
+    const node = group([pod('draining', { status: 'healthy', terminating: true }), pod('serving', { status: 'healthy' })])
+    const out = expandPodGroup([node], [jobEdge], node.id)
+    expect(out.nodes.map(n => [n.name, n.data.terminating])).toEqual([['draining', 1], ['serving', 0]])
+  })
+
   it('connects a pod without ownerIds to every owner of the group', () => {
     const out = expandPodGroup([group([pod('a')])], [jobEdge], 'podgroup/ml/train-workers-0')
     expect(out.edges.map((e) => [e.source, e.target])).toEqual([['job/ml/train-workers-0', 'pod/ml/a']])
