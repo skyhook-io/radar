@@ -185,17 +185,27 @@ function listenerAdmitsRoute(listener: ListenerSpec, gatewayNamespace: string, r
   return 'maybe'
 }
 
-function listenerRejected(gateway: GatewayObject, name: string | undefined): boolean {
+const FAILED_LISTENER_CONDITIONS = new Set(['Accepted', 'Programmed', 'ResolvedRefs'])
+
+/** A listener the Gateway reports as not accepted, not programmed or with
+ * unresolved references (a missing certificate) doesn't serve traffic. */
+function listenerFailed(gateway: GatewayObject, name: string | undefined): boolean {
   const status = (gateway.status?.listeners ?? []).find(l => l.name === name)
-  return (status?.conditions ?? []).some(c => c.type === 'Accepted' && c.status === 'False')
+  return (status?.conditions ?? []).some(c => FAILED_LISTENER_CONDITIONS.has(c.type ?? '') && c.status === 'False')
 }
 
-function routeRejectedBy(route: any, ref: ParentRef, routeNamespace: string): boolean {
-  const key = refKey(ref, routeNamespace)
-  return (route?.status?.parents ?? []).some((p: any) =>
-    isGatewayParent(p?.parentRef)
-    && refKey(p.parentRef, routeNamespace) === key
-    && (p.conditions ?? []).some((c: any) => c.type === 'Accepted' && c.status === 'False'))
+/** Where a Gateway rejected the route: the whole Gateway, or named listeners.
+ * Some controllers report a listener name the route's parentRef didn't give. */
+function routeRejections(route: any, gatewayNamespace: string, gatewayName: string, routeNamespace: string): { all: boolean; sections: Set<string> } {
+  const out = { all: false, sections: new Set<string>() }
+  for (const p of route?.status?.parents ?? []) {
+    const ref = p?.parentRef
+    if (!isGatewayParent(ref) || ref.name !== gatewayName || (ref.namespace ?? routeNamespace) !== gatewayNamespace) continue
+    if (!(p.conditions ?? []).some((c: any) => c.type === 'Accepted' && c.status === 'False')) continue
+    if (ref.sectionName) out.sections.add(ref.sectionName)
+    else out.all = true
+  }
+  return out
 }
 
 // Gateway API Exact and PathPrefix values are literal paths, never patterns.
@@ -254,24 +264,23 @@ export function routeHostTarget(hostname: string | undefined | null, route: any,
       unread = true
       continue
     }
-    if (routeRejectedBy(route, ref, routeNamespace)) continue
+    const rejected = routeRejections(route, namespace, ref.name!, routeNamespace)
+    if (rejected.all) continue
     const gateway = lookup.gateway
-    const listeners = (gateway.spec?.listeners ?? []).filter(l => !listenerRejected(gateway, l.name))
-    const attached = listeners.filter(l =>
-      (!ref.sectionName || l.name === ref.sectionName)
-      && (ref.port === undefined || Number(l.port) === Number(ref.port))
-      && (l.protocol === 'HTTP' || l.protocol === 'HTTPS')
-      && listenerAdmitsRoute(l, namespace, routeNamespace) !== 'no'
+    const serving = (gateway.spec?.listeners ?? []).filter(l =>
+      (l.protocol === 'HTTP' || l.protocol === 'HTTPS')
+      && !listenerFailed(gateway, l.name)
       && listenerHostSpecificity(l.hostname, host) >= 0)
-    // A request goes to the most specific listener on its port; a route on a
-    // less specific one never sees this host there.
-    for (const l of attached) {
+    // A request goes to the most specific listener on its port, whether or not
+    // that listener takes this route.
+    for (const l of serving) {
       const mine = listenerHostSpecificity(l.hostname, host)
-      const shadowed = listeners.some(other =>
-        !attached.includes(other)
-        && Number(other.port) === Number(l.port)
-        && listenerHostSpecificity(other.hostname, host) > mine)
-      if (!shadowed) candidates.push({ ...l, admission: listenerAdmitsRoute(l, namespace, routeNamespace) })
+      if (serving.some(o => Number(o.port) === Number(l.port) && listenerHostSpecificity(o.hostname, host) > mine)) continue
+      if (ref.sectionName && l.name !== ref.sectionName) continue
+      if (ref.port !== undefined && Number(l.port) !== Number(ref.port)) continue
+      if (l.name && rejected.sections.has(l.name)) continue
+      const admission = listenerAdmitsRoute(l, namespace, routeNamespace)
+      if (admission !== 'no') candidates.push({ ...l, admission })
     }
   }
 
@@ -290,5 +299,8 @@ export function routeHostTarget(hostname: string | undefined | null, route: any,
     return { kind: 'hostname', hostname: host }
   }
   const { literals, servesRoot } = routeBrowserPaths(route)
+  // Every rule needs another method, a header or a query parameter: a plain
+  // visit reaches nothing, so there's nothing to open.
+  if (!servesRoot && literals.length === 0 && (route?.spec?.rules ?? []).length > 0) return { kind: 'hostname', hostname: host }
   return { kind: 'url', url: `${origin}${choosePath(literals, servesRoot)}` }
 }

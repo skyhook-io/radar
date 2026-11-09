@@ -158,6 +158,38 @@ describe('routeHostTarget', () => {
     expect(routeHostTarget('store.example.com', header, [bothListeners])).toEqual({ kind: 'url', url: 'https://store.example.com/shop' })
   })
 
+  it('ignores a listener that is not programmed or has a broken certificate reference', () => {
+    const g = gw('shop', 'main', [listener('http', 'HTTP', 80), listener('https', 'HTTPS', 443)])
+    g.gateway!.status = { listeners: [{ name: 'https', conditions: [
+      { type: 'Accepted', status: 'True' }, { type: 'ResolvedRefs', status: 'False' }, { type: 'Programmed', status: 'False' },
+    ] }] }
+    expect(routeHostTarget('store.example.com', route([{ name: 'main' }]), [g])).toEqual({ kind: 'url', url: 'http://store.example.com' })
+  })
+
+  it('lets a more specific listener shadow a wildcard one even when it only maybe admits the route', () => {
+    const g = gw('shop', 'main', [
+      listener('wild', 'HTTPS', 443, { hostname: '*.example.com' }),
+      listener('exact', 'HTTPS', 443, { hostname: 'store.example.com', allowedRoutes: { namespaces: { from: 'Selector' } } }),
+    ])
+    expect(routeHostTarget('store.example.com', route([{ name: 'main' }]), [g])).toEqual({ kind: 'hostname', hostname: 'store.example.com' })
+  })
+
+  it('applies a rejection the controller reports for a listener the parentRef did not name', () => {
+    const r = route([{ name: 'main' }], {
+      status: { parents: [{ parentRef: { name: 'main', sectionName: 'web' }, conditions: [{ type: 'Accepted', status: 'False' }] }] },
+    })
+    const g = gw('shop', 'main', [listener('web', 'HTTP', 80)])
+    expect(routeHostTarget('store.example.com', r, [g])).toEqual({ kind: 'hostname', hostname: 'store.example.com' })
+  })
+
+  it('offers only the hostname when no rule matches a plain browser visit', () => {
+    const r = route([{ name: 'main' }], { rules: [
+      { matches: [{ headers: [{ name: 'x-canary', value: '1' }] }] },
+      { matches: [{ path: { type: 'PathPrefix', value: '/' }, method: 'POST' }] },
+    ] })
+    expect(routeHostTarget('store.example.com', r, [bothListeners])).toEqual({ kind: 'hostname', hostname: 'store.example.com' })
+  })
+
   it('waits while a parent Gateway is loading', () => {
     expect(routeHostTarget('store.example.com', route([{ name: 'main' }]), [{ namespace: 'shop', name: 'main', status: 'loading' }])).toEqual({ kind: 'loading' })
   })
@@ -171,7 +203,7 @@ describe('routeHostTarget', () => {
     const r = route([{ name: 'main' }], { rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/admin' } }] }] })
     expect(routeHostTarget('store.example.com', r, [bothListeners])).toEqual({ kind: 'url', url: 'https://store.example.com/admin' })
     const regex = route([{ name: 'main' }], { rules: [{ matches: [{ path: { type: 'RegularExpression', value: '/a.*' } }] }] })
-    expect(routeHostTarget('store.example.com', regex, [bothListeners])).toEqual({ kind: 'url', url: 'https://store.example.com' })
+    expect(routeHostTarget('store.example.com', regex, [bothListeners])).toEqual({ kind: 'hostname', hostname: 'store.example.com' })
     const matchAll = route([{ name: 'main' }], { rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/admin' } }] }, { backendRefs: [] }] })
     expect(routeHostTarget('store.example.com', matchAll, [bothListeners])).toEqual({ kind: 'url', url: 'https://store.example.com' })
   })
