@@ -312,6 +312,18 @@ describe('terminal search', () => {
     expect(addon.instances[1].findPrevious).toHaveBeenCalledWith('HIT', expect.anything())
   })
 
+  it('keeps the user\'s selection when the bar closes without a search, and drops the match selection after one', async () => {
+    const xterm = makeXterm()
+    await render(xterm)
+    await act(async () => search.open())
+    await act(async () => search.close())
+    expect(xterm.clearSelection).not.toHaveBeenCalled()
+    await act(async () => search.open())
+    await type('HIT')
+    await act(async () => search.close())
+    expect(xterm.clearSelection).toHaveBeenCalled()
+  })
+
   it('closes when the terminal it searches is replaced', async () => {
     const xterm = makeXterm()
     await render(xterm)

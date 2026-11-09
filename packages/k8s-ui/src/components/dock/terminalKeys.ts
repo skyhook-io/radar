@@ -7,8 +7,7 @@ type KeyLike = Pick<KeyboardEvent, 'type' | 'key' | 'metaKey' | 'ctrlKey' | 'alt
 /**
  * The terminal's find shortcut: ⌘F on macOS, Ctrl+Shift+F elsewhere. Plain
  * Ctrl+F is left to the shell (readline forward-char, page-forward in less and
- * vim), the same reason Reload moved off Ctrl+R in the desktop app. Shift turns
- * the key into "F", so the comparison is case-insensitive.
+ * vim). Shift turns the key into "F", so the comparison is case-insensitive.
  */
 export function isTerminalFindShortcut(e: KeyLike, mac: boolean = isMac()): boolean {
   if (e.type !== 'keydown' || e.key.toLowerCase() !== 'f' || e.altKey) return false

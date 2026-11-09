@@ -169,8 +169,10 @@ export function useTerminalSearch(isActive: boolean): TerminalSearch {
   }, [])
 
   const clearHighlights = useCallback(() => {
+    // The addon marks the current match by selecting it. Without a search
+    // the selection is the user's own, and Copy still needs it.
+    if (addonRef.current) xtermRef.current?.clearSelection()
     disposeAddon()
-    xtermRef.current?.clearSelection()
     setResults(null)
     markStale(false)
   }, [disposeAddon, markStale])
