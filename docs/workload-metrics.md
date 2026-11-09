@@ -314,9 +314,11 @@ radar --prometheus-url https://metrics.example.com \
   --prometheus-cluster-label cluster=production
 ```
 
-The same labels scope the Caretta and Beyla traffic map, so each Radar draws only
-its own cluster's flows from a shared backend. `--prometheus-single-cluster` needs
-no traffic scoping and adds none.
+The same labels scope the Caretta and Beyla traffic map when it reads a store you
+configured, so each Radar draws only its own cluster's flows from a shared backend.
+Without them the map uses the labels automatic matching proves for this cluster.
+`--prometheus-single-cluster` adds no traffic filtering. See
+[Workload metrics overrides by run mode](configuration.md#workload-metrics-overrides-by-run-mode).
 
 Labels must exist on each affected metric source. An empty value is rejected
 because it would also match series without that label. A tenant header alone

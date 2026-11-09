@@ -38,7 +38,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
 | `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery). In local CLI/Desktop mode, applies only to the launch's initial context and never inherits saved headers. |
 | `--prometheus-single-cluster` | `false` | Declare the backend dedicated to this cluster for workload metrics and PVC usage, replacing automatic identity matching. Other metrics do not use this override. [Scope and lifetime](workload-metrics.md#optional-operator-override). |
-| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
+| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics and Caretta/Beyla traffic map override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
 | `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](workload-metrics.md#request-sources). |
@@ -803,6 +803,17 @@ They do not scope rightsizing, node/HPA or the workload network/filesystem chart
 Leave both unset for automatic matching. Configured labels must exist on each
 affected metric source, including kubelet volume stats. See
 [scope and remedies](workload-metrics.md#pvc-usage-scope).
+
+The Caretta and Beyla traffic map keeps to this cluster the same way when it
+reads a metrics store you configured (`--prometheus-url`, Helm
+`traffic.prometheusUrl`, or a URL saved in Settings): it uses the
+`--prometheus-cluster-label` labels when set, otherwise the labels automatic
+matching proves for this cluster, checked separately for Caretta, Beyla network
+flows and Beyla HTTP metrics. Caretta's own store and stores Radar discovers in
+the cluster are read unfiltered. When the store has traffic but none of it
+carries this cluster's labels, the map says so rather than showing "no traffic
+yet". When Radar can't work out which cluster the traffic comes from, the map
+shows it with a note that it may include other clusters' traffic.
 
 | Run mode | How to configure an explicit override |
 |---|---|
