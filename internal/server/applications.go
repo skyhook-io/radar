@@ -148,7 +148,9 @@ type appRow struct {
 	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
 
 	sourceStrict bool
-	jobSetRoots  []appWorkload
+	// sourceWithheld: this caller's copy dropped a source they can't read.
+	sourceWithheld bool
+	jobSetRoots    []appWorkload
 }
 
 type appSourceStatus struct {
@@ -386,6 +388,8 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		anchors, partial := s.historyAnchorsForSource(r, app.SourceRef)
 		history.Anchors = anchors
 		history.PartialSources = append(history.PartialSources, partial...)
+	} else if app.sourceWithheld {
+		history.PartialSources = append(history.PartialSources, "Deployment-source history is unavailable because you don't have access to this app's deployment source.")
 	} else if message := unavailableSourceHistoryMessage(app); message != "" {
 		history.PartialSources = append(history.PartialSources, message)
 	}
@@ -2937,38 +2941,51 @@ func (s *Server) filterApplicationsForUser(r *http.Request, shared *applications
 	return s.filterApplicationSources(r, s.filterApplicationAuthenticationRefs(r, shared))
 }
 
-// filterApplicationSources withholds a row's GitOps source, and the delivery
-// state read from it, from a caller who can't get that Application,
-// Kustomization or HelmRelease. Rows name sources found with Radar's own
-// access, often in a namespace the caller can't read. A native Helm source is
-// named by the workloads' own annotations, so it stays.
+// filterApplicationSources withholds what names a GitOps manager the caller
+// can't get: a row's source and the delivery state read from it, and an Argo
+// CD claim. Rows and claims are found with Radar's own access, often in a
+// namespace the caller can't read. A native Helm source is named by the
+// workloads' own annotations, so it stays.
 func (s *Server) filterApplicationSources(r *http.Request, shared *applicationsResponse) *applicationsResponse {
 	if auth.UserFromContext(r.Context()) == nil {
 		return shared
 	}
-	var out *applicationsResponse
+	out := *shared
+	changed := false
 	for i := range shared.Applications {
 		ref := shared.Applications[i].SourceRef
-		if ref == nil || ref.Type != "gitops" {
+		if ref == nil || ref.Type != "gitops" || s.canReadAppSource(r, ref.Group, ref.Kind, ref.Namespace) {
 			continue
 		}
-		if resource := gitOpsPluralKind(ref.Kind); ref.Group != "" && resource != "" && s.canRead(r, ref.Group, resource, ref.Namespace, "get") {
-			continue
-		}
-		if out == nil {
-			cp := *shared
-			cp.Applications = append([]appRow(nil), shared.Applications...)
-			out = &cp
+		if !changed {
+			out.Applications = append([]appRow(nil), shared.Applications...)
+			changed = true
 		}
 		row := &out.Applications[i]
 		row.SourceRef = nil
 		row.SourceStatus = nil
 		row.Health = row.RuntimeHealth
+		row.sourceWithheld = true
 	}
-	if out == nil {
+	claims := make([]argoClaim, 0, len(shared.ArgoClaims))
+	for _, claim := range shared.ArgoClaims {
+		if s.canReadAppSource(r, "argoproj.io", "Application", claim.AppNamespace) {
+			claims = append(claims, claim)
+		}
+	}
+	if len(claims) != len(shared.ArgoClaims) {
+		out.ArgoClaims = claims
+		changed = true
+	}
+	if !changed {
 		return shared
 	}
-	return out
+	return &out
+}
+
+func (s *Server) canReadAppSource(r *http.Request, group, kind, namespace string) bool {
+	resource := gitOpsPluralKind(kind)
+	return group != "" && resource != "" && namespace != "" && s.canRead(r, group, resource, namespace, "get")
 }
 
 // Applications rows are shared across callers, so authentication references are authorized on a copy after the cache.
