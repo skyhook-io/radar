@@ -1,7 +1,9 @@
 package topology
 
 import (
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -222,5 +224,39 @@ func TestBuildLinksHelmReleasesByInventoryElseOriginLabels(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("HelmRelease edges = %v, want %v", got, want)
+	}
+}
+
+// A HelmRelease's auto neighborhood reaches what its inventory records, in
+// another namespace too, as well as its chart source.
+func TestHelmReleaseNeighborhoodReachesRecordedWorkloads(t *testing.T) {
+	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
+	release := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"namespace": "flux-system", "name": "podinfo"},
+		"spec":     map[string]any{"targetNamespace": "apps"},
+		"status":   map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "apps_podinfo_apps_Deployment", "v": "v1"}}}},
+	}}
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{hrGVR},
+		kinds:     map[schema.GroupVersionResource]string{hrGVR: "HelmRelease"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{hrGVR: {release}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	provider := &mockProvider{deployments: []*appsv1.Deployment{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "podinfo"}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "unrelated", Labels: map[string]string{"app.kubernetes.io/instance": "podinfo"}}},
+	}}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	sub := BuildNeighborhood(topo, ResourceRef{Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo", Group: "helm.toolkit.fluxcd.io"}, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1})
+	got := map[string]bool{}
+	for _, n := range sub.Nodes {
+		got[n.ID] = true
+	}
+	if !got["deployment/apps/podinfo"] || got["deployment/apps/unrelated"] {
+		t.Fatalf("HelmRelease neighborhood = %v, want its recorded Deployment and not the instance-label match", slices.Sorted(maps.Keys(got)))
 	}
 }
