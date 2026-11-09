@@ -3,8 +3,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
-import { useSetActiveNamespace } from "./client";
-import { readTabPick } from "../utils/namespacePick";
+import { useNamespaceScope, useSetActiveNamespace } from "./client";
+import { readTabPick, writeTabPick } from "../utils/namespacePick";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -140,5 +140,84 @@ it("drops a requested namespace the answer shows is gone", async () => {
   await done;
   expect(client.getQueryData<{ actives: string[] }>(["namespace-scope"])?.actives).toEqual(["team-a"]);
   expect(readTabPick("/api", "ctx-a")).toEqual(["team-a"]);
+  unmount();
+});
+
+// A tab with the scope query mounted, as App has it, so an error refetches.
+function mountTab(client: QueryClient) {
+  let mutate!: ReturnType<typeof useSetActiveNamespace>["mutateAsync"];
+  function Probe() {
+    useNamespaceScope();
+    mutate = useSetActiveNamespace().mutateAsync;
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  act(() => root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>));
+  return { mutate: (namespaces: string[]) => mutate({ namespaces }), unmount: () => act(() => root.unmount()) };
+}
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+it("keeps an accepted clear when a newer pick is refused", async () => {
+  sessionStorage.clear();
+  writeTabPick("/api", "ctx-a", ["team-a"]);
+  let server = ["team-a"];
+  let releaseClear!: () => void;
+  vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
+    if (init?.method !== "POST") return Promise.resolve(json({ ...tabScope, actives: server }));
+    const { namespaces } = JSON.parse(String(init.body)) as { namespaces: string[] };
+    if (namespaces.includes("secret-ns")) return Promise.resolve(json({ error: "no access to namespace secret-ns" }, 403));
+    return new Promise<Response>(resolve => { releaseClear = () => { server = namespaces; resolve(json({ ...tabScope, actives: server })); }; });
+  }));
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const { mutate, unmount } = mountTab(client);
+  await vi.waitFor(() => expect(client.getQueryData<{ actives: string[] }>(["namespace-scope"])?.actives).toEqual(["team-a"]));
+  const clear = mutate([]);
+  await vi.waitFor(() => expect(releaseClear).toBeDefined());
+  await mutate(["secret-ns"]).catch(() => undefined);
+  releaseClear();
+  await clear;
+  await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+  expect(client.getQueryData<{ actives: string[] }>(["namespace-scope"])?.actives).toEqual([]);
+  expect(readTabPick("/api", "ctx-a")).toEqual([]);
+  unmount();
+});
+
+it("keeps a switch the server applied when its answer is lost", async () => {
+  sessionStorage.clear();
+  writeTabPick("/api", "ctx-a", ["team-a"]);
+  let server = ["team-a"];
+  vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
+    if (init?.method !== "POST") return Promise.resolve(json({ ...tabScope, actives: server }));
+    server = (JSON.parse(String(init.body)) as { namespaces: string[] }).namespaces;
+    return Promise.reject(new TypeError("Failed to fetch"));
+  }));
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const { mutate, unmount } = mountTab(client);
+  await vi.waitFor(() => expect(client.getQueryData<{ actives: string[] }>(["namespace-scope"])?.actives).toEqual(["team-a"]));
+  await mutate(["team-b"]).catch(() => undefined);
+  await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+  expect(client.getQueryData<{ actives: string[] }>(["namespace-scope"])?.actives).toEqual(["team-b"]);
+  expect(readTabPick("/api", "ctx-a")).toEqual(["team-b"]);
+  unmount();
+});
+
+it("keeps a switch the server applied when its answer's body is lost", async () => {
+  sessionStorage.clear();
+  writeTabPick("/api", "ctx-a", ["team-a"]);
+  let server = ["team-a"];
+  vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => {
+    if (init?.method !== "POST") return Promise.resolve(json({ ...tabScope, actives: server }));
+    server = (JSON.parse(String(init.body)) as { namespaces: string[] }).namespaces;
+    const body = new ReadableStream({ start(controller) { controller.error(new TypeError("network error")); } });
+    return Promise.resolve(new Response(body, { status: 200, headers: { "Content-Type": "application/json" } }));
+  }));
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const { mutate, unmount } = mountTab(client);
+  await vi.waitFor(() => expect(client.getQueryData<{ actives: string[] }>(["namespace-scope"])?.actives).toEqual(["team-a"]));
+  await mutate(["team-b"]).catch(() => undefined);
+  await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+  expect(client.getQueryData<{ actives: string[] }>(["namespace-scope"])?.actives).toEqual(["team-b"]);
+  expect(readTabPick("/api", "ctx-a")).toEqual(["team-b"]);
   unmount();
 });

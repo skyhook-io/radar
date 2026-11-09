@@ -8,7 +8,7 @@ import { createTabStorage } from './tabStorage'
 //
 // The tab keeps one pick per Radar address, tagged with the kubeconfig context
 // it was made in. After a context switch the tab starts again from the
-// server's pick for the new context, as it did before picks were per tab.
+// server's pick for the new context.
 //
 // Under --namespace-scope the pick is the process-wide cache scope and stays
 // server-owned. A server that doesn't report its context predates per-tab
