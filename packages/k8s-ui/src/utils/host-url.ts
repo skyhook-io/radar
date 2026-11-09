@@ -194,15 +194,16 @@ function listenerFailed(gateway: GatewayObject, name: string | undefined): boole
   return (status?.conditions ?? []).some(c => FAILED_LISTENER_CONDITIONS.has(c.type ?? '') && c.status === 'False')
 }
 
-/** Where a Gateway rejected the route: the whole Gateway, or named listeners.
- * Some controllers report a listener name the route's parentRef didn't give. */
-function routeRejections(route: any, gatewayNamespace: string, gatewayName: string, routeNamespace: string): { all: boolean; sections: Set<string> } {
-  const out = { all: false, sections: new Set<string>() }
+/** Where a Gateway rejected the route: the whole Gateway, named listeners, or
+ * ports. Some controllers report a listener name the parentRef didn't give. */
+function routeRejections(route: any, gatewayNamespace: string, gatewayName: string, routeNamespace: string): { all: boolean; sections: Set<string>; ports: Set<number> } {
+  const out = { all: false, sections: new Set<string>(), ports: new Set<number>() }
   for (const p of route?.status?.parents ?? []) {
     const ref = p?.parentRef
     if (!isGatewayParent(ref) || ref.name !== gatewayName || (ref.namespace ?? routeNamespace) !== gatewayNamespace) continue
     if (!(p.conditions ?? []).some((c: any) => c.type === 'Accepted' && c.status === 'False')) continue
     if (ref.sectionName) out.sections.add(ref.sectionName)
+    else if (ref.port !== undefined) out.ports.add(Number(ref.port))
     else out.all = true
   }
   return out
@@ -278,7 +279,7 @@ export function routeHostTarget(hostname: string | undefined | null, route: any,
       if (serving.some(o => Number(o.port) === Number(l.port) && listenerHostSpecificity(o.hostname, host) > mine)) continue
       if (ref.sectionName && l.name !== ref.sectionName) continue
       if (ref.port !== undefined && Number(l.port) !== Number(ref.port)) continue
-      if (l.name && rejected.sections.has(l.name)) continue
+      if ((l.name && rejected.sections.has(l.name)) || rejected.ports.has(Number(l.port))) continue
       const admission = listenerAdmitsRoute(l, namespace, routeNamespace)
       if (admission !== 'no') candidates.push({ ...l, admission })
     }

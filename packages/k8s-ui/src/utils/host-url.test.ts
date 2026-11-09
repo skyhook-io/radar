@@ -190,6 +190,17 @@ describe('routeHostTarget', () => {
     expect(routeHostTarget('store.example.com', r, [bothListeners])).toEqual({ kind: 'hostname', hostname: 'store.example.com' })
   })
 
+  it('scopes a rejection reported for one port to that port', () => {
+    const r = route([{ name: 'edge', namespace: 'infra', port: 80 }, { name: 'edge', namespace: 'infra', port: 443 }], {
+      status: { parents: [
+        { parentRef: { name: 'edge', namespace: 'infra', port: 80 }, conditions: [{ type: 'Accepted', status: 'False' }] },
+        { parentRef: { name: 'edge', namespace: 'infra', port: 443 }, conditions: [{ type: 'Accepted', status: 'True' }] },
+      ] },
+    })
+    const g = gw('infra', 'edge', [listener('http', 'HTTP', 80), listener('https', 'HTTPS', 443, { allowedRoutes: { namespaces: { from: 'All' } } })])
+    expect(routeHostTarget('store.example.com', r, [g])).toEqual({ kind: 'url', url: 'https://store.example.com' })
+  })
+
   it('waits while a parent Gateway is loading', () => {
     expect(routeHostTarget('store.example.com', route([{ name: 'main' }]), [{ namespace: 'shop', name: 'main', status: 'loading' }])).toEqual({ kind: 'loading' })
   })
