@@ -495,6 +495,13 @@ func TestUnschedulableAction(t *testing.T) {
 			{Class: SchedOther, NodeCount: 9},
 			{Class: SchedVolumeBinding, NodeCount: 1},
 		}, "StorageClass/provisioner"},
+		{"selector-only still says relax it", []SchedulingReason{
+			{Class: SchedNodeAffinitySelector, NodeCount: 30},
+		}, "relax it"},
+		{"untolerated taint doesn't prove the selector matched", []SchedulingReason{
+			{Class: SchedNodeAffinitySelector, NodeCount: 30},
+			{Class: SchedUntoleratedTaint, TaintKey: "dedicated", NodeCount: 3},
+		}, "relax it"},
 	}
 	for _, c := range cases {
 		got := unschedulableAction(c.reasons)
@@ -507,6 +514,37 @@ func TestUnschedulableAction(t *testing.T) {
 		if !hasSubstr(got, c.want) {
 			t.Errorf("%s: action %q missing %q", c.name, got, c.want)
 		}
+	}
+}
+
+// Nodes the selector excluded aren't the pod's targets: when the ones it does
+// target are full, the advice is about their capacity, not the selector.
+func TestUnschedulableActionSelectorScopesLaterFilters(t *testing.T) {
+	msg := "0/34 nodes are available: 2 Insufficient nvidia.com/gpu, 32 node(s) didn't match Pod's node affinity/selector. preemption: 0/34 nodes are available: 2 No preemption victims found for incoming pod, 32 Preemption is not helpful for scheduling."
+	_, reasons := parseSchedulerMessage(msg)
+	got := unschedulableAction(reasons)
+	for _, want := range []string{"match the pod's nodeSelector/affinity can't take it", "enough nvidia.com/gpu"} {
+		if !hasSubstr(got, want) {
+			t.Errorf("action %q missing %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{"relax it", "More than one constraint"} {
+		if hasSubstr(got, unwanted) {
+			t.Errorf("action %q should not say %q", got, unwanted)
+		}
+	}
+
+	reversed := []SchedulingReason{
+		{Class: SchedInsufficientResource, Resource: "nvidia.com/gpu", NodeCount: 2},
+		{Class: SchedNodeAffinitySelector, NodeCount: 32},
+	}
+	if got := unschedulableAction(reversed); !hasSubstr(got, "enough nvidia.com/gpu") || hasSubstr(got, "relax it") {
+		t.Errorf("reason order changed the advice: %q", got)
+	}
+
+	mixed := append(reversed, SchedulingReason{Class: SchedPodAntiAffinity, NodeCount: 1})
+	if got := unschedulableAction(mixed); !hasSubstr(got, "enough nvidia.com/gpu") || !hasSubstr(got, "More than one constraint") {
+		t.Errorf("two blockers on the matching nodes should both be acknowledged: %q", got)
 	}
 }
 

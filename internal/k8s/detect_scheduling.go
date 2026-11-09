@@ -516,24 +516,61 @@ func isIgnoredSchedulerClause(clause string) bool {
 // than implying the single fix is sufficient. Returns "" when nothing is
 // confidently actionable so the caller can fall back to the generic action.
 func unschedulableAction(reasons []SchedulingReason) string {
-	// Lead with the dominant reason that is ALSO actionable — picking the
-	// highest-NodeCount overall would fall back to generic when an unparsed
-	// (SchedOther) clause happens to reject the most nodes, even though a
-	// smaller, actionable clause (e.g. VolumeBinding) is present.
-	base := ""
-	bestCount := -1
 	distinct := map[SchedReasonClass]bool{}
 	for _, r := range reasons {
 		distinct[r.Class] = true
-		if a := actionForSchedClass(r); a != "" && r.NodeCount > bestCount {
-			base, bestCount = a, r.NodeCount
+	}
+	// When the selector excluded some nodes and the rest failed a later filter,
+	// the later filter is the blocker on the nodes the pod actually targets.
+	if distinct[SchedNodeAffinitySelector] {
+		if base := dominantAction(reasons, func(r SchedulingReason) bool { return schedAfterNodeAffinity[r.Class] }); base != "" {
+			base = "The nodes that match the pod's nodeSelector/affinity can't take it. " + base
+			if len(distinct) > 2 {
+				base += " More than one constraint blocks scheduling — the message lists them all."
+			}
+			return base
 		}
 	}
+	base := dominantAction(reasons, func(SchedulingReason) bool { return true })
 	if base == "" {
 		return ""
 	}
 	if len(distinct) > 1 {
 		base += " More than one constraint blocks scheduling — the message lists them all."
+	}
+	return base
+}
+
+// schedAfterNodeAffinity holds the classes whose kube-scheduler filters run
+// after NodeAffinity in the default plugin order. A node is counted under the
+// first filter it fails, so a node counted under one of these passed the pod's
+// nodeSelector/affinity. Taint and unschedulable checks run before NodeAffinity,
+// so their nodes may not match the selector at all.
+var schedAfterNodeAffinity = map[SchedReasonClass]bool{
+	SchedNoPorts:              true,
+	SchedInsufficientResource: true,
+	SchedVolumeCount:          true,
+	SchedVolumeBinding:        true,
+	SchedVolumeNodeAffinity:   true,
+	SchedTopologySpread:       true,
+	SchedPodAffinity:          true,
+	SchedPodAntiAffinity:      true,
+}
+
+// dominantAction returns the action of the eligible reason that rejected the
+// most nodes and is actionable. Picking the highest NodeCount overall would fall
+// back to generic when an unparsed (SchedOther) clause rejects the most nodes,
+// even though a smaller, actionable clause (e.g. VolumeBinding) is present.
+func dominantAction(reasons []SchedulingReason, eligible func(SchedulingReason) bool) string {
+	base := ""
+	bestCount := -1
+	for _, r := range reasons {
+		if !eligible(r) {
+			continue
+		}
+		if a := actionForSchedClass(r); a != "" && r.NodeCount > bestCount {
+			base, bestCount = a, r.NodeCount
+		}
 	}
 	return base
 }
