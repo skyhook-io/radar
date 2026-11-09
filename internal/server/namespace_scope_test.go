@@ -484,6 +484,10 @@ func TestNamespaceScope_PrunesStalePickThatDataReadsLeaveAlone(t *testing.T) {
 			if !slices.Equal(scope.Actives, tt.wantActives) {
 				t.Errorf("actives = %v, want %v", scope.Actives, tt.wantActives)
 			}
+			// The UI keys each tab's own pick by this context.
+			if scope.Context != "test-ctx" {
+				t.Errorf("context = %q, want %q", scope.Context, "test-ctx")
+			}
 			if picks := srv.getActiveNamespaceForUser(reqAs("")); !slices.Equal(picks, tt.wantSaved) {
 				t.Errorf("in-memory pick = %v, want %v", picks, tt.wantSaved)
 			}

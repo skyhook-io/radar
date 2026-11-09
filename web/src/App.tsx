@@ -62,7 +62,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isLatestNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -1036,9 +1036,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Fetch available namespaces
   const { data: availableNamespaces } = useNamespaces()
 
-  // Per-user view filter served by the backend. Loaded eagerly so the
-  // picker can render its current state without showing the multi-select
-  // fallback during the initial scope fetch.
+  // This tab's namespace pick plus the picker's source list (see
+  // utils/namespacePick). Loaded eagerly so the picker can render its current
+  // state without showing the multi-select fallback during the initial fetch.
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
@@ -1451,7 +1451,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Serialize namespaces for stable dependency tracking
   const namespacesKey = namespaces.join(',')
 
-  // The server is canonical for the per-user namespace pick. Mirror its
+  // The scope query holds this tab's namespace pick. Mirror its
   // `actives` into App.tsx state so consumer hooks (SSE, dashboard, resource
   // lists) stay in lockstep with the picker. The dedicated URL-write effect
   // below propagates the mirrored state to `?namespaces=`.
@@ -1475,7 +1475,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (namespaces.length === 0) return
     setActiveNamespace.mutate(
       { namespaces: [] },
-      { onSuccess: () => setNamespaces([]) },
+      // A clear answered after a newer switch must not override it.
+      { onSuccess: (_scope, _vars, start) => { if (isLatestNamespaceSwitch(start)) setNamespaces([]) } },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
   // Same write as the header picker, which then mirrors it into `namespaces`.

@@ -27,13 +27,22 @@ const (
 
 // NamespaceScopeResponse describes this user's namespace-pick state.
 //
-// The pick is a per-user UI preference that the server remembers and echoes
-// back here; the UI narrows a view by sending the pick as namespaces on each
-// read. Data reads never inherit it, and it does NOT mutate the shared cache
-// (except under --namespace-scope, where it selects the cache scope).
+// The pick is view state: each browser tab owns its own and narrows its views
+// by sending it as namespaces on each read. The server remembers the user's
+// last pick only to seed a tab that has none yet for Context. Data reads never
+// inherit it, and it does NOT mutate the shared cache (except under
+// --namespace-scope, where it selects the cache scope and every tab follows
+// it).
 //
-//   - Actives is the user's current pick set (empty = "All namespaces", no
+//   - Actives is the user's last pick (empty = "All namespaces", no
 //     narrowing).
+//   - Context is the kubeconfig context the response was read under; the UI
+//     keys a tab's pick by it.
+//   - AccessChecked is true when the server drops its own pick to
+//     AccessibleNamespaces on this read, treating anything outside it as no
+//     longer readable; the UI drops a tab's pick under the same rule. False
+//     after a failed namespace LIST or access check, or with no list at all,
+//     when the list says nothing about a pick.
 //   - Mode is "cluster-wide" when no pick is set and the user can list
 //     namespaces, "namespace" when one or more picks are in effect, or
 //     "restricted" when the user has no cluster-wide list access and hasn't
@@ -43,6 +52,8 @@ const (
 //     user lacks list-namespace RBAC; other namespaces may exist).
 type NamespaceScopeResponse struct {
 	Actives              []string           `json:"actives"`
+	Context              string             `json:"context,omitempty"`
+	AccessChecked        bool               `json:"accessChecked"`
 	KubeconfigNamespace  string             `json:"kubeconfigNamespace"`
 	Mode                 NamespaceScopeMode `json:"mode"`
 	AccessibleNamespaces []string           `json:"accessibleNamespaces"`
@@ -199,10 +210,10 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 //     narrower choice survives restarts, and a persisted empty entry is the
 //     user's explicit "All namespaces" choice, which suppresses every seed
 //     below;
-//   - the --namespaces startup list (any user, auth included) — each user's
-//     session starts on the configured view. Seeded at most once per
+//   - the --namespaces startup list (any user, auth included) — a user's
+//     first tab starts on the configured view. Seeded at most once per
 //     (user, context) key, so clearing back to "All namespaces" sticks for
-//     the rest of the session instead of being re-applied on the next read;
+//     later new tabs instead of being re-applied on the next read;
 //   - the singular --namespace flag, then the kubeconfig context's namespace
 //     (kubectl parity; no-auth only — the kubeconfig identity belongs to the
 //     server operator, not to authenticated users). In-memory only: until
@@ -488,7 +499,10 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// re-trim on every read — through the guarded mutation so a stale trim
 	// can't revert a concurrent POST or cross a context switch. A failed LIST
 	// or access check says nothing about the picks, so it must not erase them.
-	if len(actives) > 0 && !discoveryFailed && source != k8s.NamespaceListFailed {
+	// A nil list means no namespace could be enumerated at all (LIST denied
+	// with no fallback); like a failed lookup, it says nothing about a pick.
+	accessChecked := !discoveryFailed && source != k8s.NamespaceListFailed && namespaces != nil
+	if len(actives) > 0 && accessChecked {
 		survivors := intersectPicksWithAllowed(actives, namespaces)
 		if len(survivors) != len(actives) {
 			s.commitPickMutation(r, pickCtx, actives, survivors, false)
@@ -546,6 +560,8 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 
 	s.writeJSON(w, NamespaceScopeResponse{
 		Actives:              actives,
+		Context:              pickCtx,
+		AccessChecked:        accessChecked,
 		KubeconfigNamespace:  kubeNs,
 		Mode:                 mode,
 		AccessibleNamespaces: namespaces,

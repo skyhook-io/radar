@@ -128,13 +128,14 @@ type Server struct {
 	cloudConnectCfg     CloudConnectConfig
 	cloudInstall        *cloudInstallManager
 	applicationEvidence *applicationEvidenceAPI
-	// nsPreferences holds each user's active-namespace pick from the in-app
-	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
-	// "\x00<contextName>" when auth is disabled. Cleared on context switch
-	// (new cluster ⇒ old picks meaningless). The pick is a remembered per-user
-	// UI preference: the namespace-scope GET echoes it and the UI sends it on
-	// its reads, but data reads never inherit it. Picking does NOT narrow the
-	// shared informer cache (would corrupt other users' views).
+	// nsPreferences holds each user's last active-namespace pick from the
+	// in-app switcher. Key shape: "<username>\x00<contextName>" when auth is
+	// enabled, "\x00<contextName>" when auth is disabled. Cleared on context
+	// switch (new cluster ⇒ old picks meaningless). Each browser tab owns its
+	// own pick; this one only seeds a tab that has none yet, so it is shared by
+	// everyone mapped to the same Kubernetes username. Data reads never
+	// inherit it. Picking does NOT narrow the shared informer cache (would
+	// corrupt other users' views).
 	nsPreferences sync.Map
 
 	// scopeMutationMu serializes a forced (--namespace-scope) namespace change so
