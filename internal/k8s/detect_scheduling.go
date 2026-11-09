@@ -516,29 +516,50 @@ func isIgnoredSchedulerClause(clause string) bool {
 // than implying the single fix is sufficient. Returns "" when nothing is
 // confidently actionable so the caller can fall back to the generic action.
 func unschedulableAction(reasons []SchedulingReason) string {
-	distinct := map[SchedReasonClass]bool{}
-	for _, r := range reasons {
-		distinct[r.Class] = true
+	// One constraint per class and resource: "Insufficient cpu" and
+	// "Insufficient memory" are two things to fix.
+	type constraint struct {
+		class    SchedReasonClass
+		resource string
 	}
-	// When the selector excluded some nodes and the rest failed a later filter,
-	// the later filter is the blocker on the nodes the pod actually targets.
-	if distinct[SchedNodeAffinitySelector] {
+	distinct := map[constraint]bool{}
+	selector := false
+	for _, r := range reasons {
+		distinct[constraint{r.Class, r.Resource}] = true
+		selector = selector || r.Class == SchedNodeAffinitySelector
+	}
+	moreThan := func(n int, base string) string {
+		if len(distinct) > n {
+			base += " More than one constraint blocks scheduling — the message lists them all."
+		}
+		return base
+	}
+	if selector {
+		// The selector excluded some nodes and the rest failed a later filter:
+		// that filter is the blocker on the nodes the pod actually targets.
 		if base := dominantAction(reasons, func(r SchedulingReason) bool { return schedAfterNodeAffinity[r.Class] }); base != "" {
-			base = "The nodes that match the pod's nodeSelector/affinity can't take it. " + base
-			if len(distinct) > 2 {
-				base += " More than one constraint blocks scheduling — the message lists them all."
-			}
-			return base
+			return moreThan(2, "The nodes that match the pod's nodeSelector/affinity can't take it. "+base)
+		}
+		// Nodes rejected before the selector check (a taint, a cordon) were
+		// never matched against it, so they may be the pod's targets.
+		if base := dominantAction(reasons, func(r SchedulingReason) bool {
+			return !schedAfterNodeAffinity[r.Class] && r.Class != SchedNodeAffinitySelector
+		}); base != "" {
+			return moreThan(2, "Some nodes were rejected before the nodeSelector/affinity check. If they're the pod's target nodes, "+lowerFirst(base)+" Otherwise, "+lowerFirst(actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector})))
 		}
 	}
 	base := dominantAction(reasons, func(SchedulingReason) bool { return true })
 	if base == "" {
 		return ""
 	}
-	if len(distinct) > 1 {
-		base += " More than one constraint blocks scheduling — the message lists them all."
+	return moreThan(1, base)
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
 	}
-	return base
+	return strings.ToLower(s[:1]) + s[1:]
 }
 
 // schedAfterNodeAffinity holds the classes whose kube-scheduler filters run

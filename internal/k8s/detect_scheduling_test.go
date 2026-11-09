@@ -498,10 +498,15 @@ func TestUnschedulableAction(t *testing.T) {
 		{"selector-only still says relax it", []SchedulingReason{
 			{Class: SchedNodeAffinitySelector, NodeCount: 30},
 		}, "relax it"},
-		{"untolerated taint doesn't prove the selector matched", []SchedulingReason{
+		{"a taint rejected the nodes before the selector check", []SchedulingReason{
 			{Class: SchedNodeAffinitySelector, NodeCount: 30},
-			{Class: SchedUntoleratedTaint, TaintKey: "dedicated", NodeCount: 3},
-		}, "relax it"},
+			{Class: SchedUntoleratedTaint, TaintKey: "nvidia.com/gpu", NodeCount: 3},
+		}, `If they're the pod's target nodes, add a toleration for taint "nvidia.com/gpu"`},
+		{"two shortages are two constraints", []SchedulingReason{
+			{Class: SchedInsufficientResource, Resource: "cpu", NodeCount: 1},
+			{Class: SchedInsufficientResource, Resource: "memory", NodeCount: 1},
+			{Class: SchedNodeAffinitySelector, NodeCount: 32},
+		}, "More than one constraint"},
 	}
 	for _, c := range cases {
 		got := unschedulableAction(c.reasons)
