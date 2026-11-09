@@ -140,8 +140,14 @@ func activeRestartLoop(pod *corev1.Pod, probes map[string]probeFailure, now time
 	if !found {
 		return restartLoop{}, false
 	}
-	best.memoryLimit = containerHasMemoryLimit(pod, best.container)
 	best.podMemoryLimit = podHasMemoryLimit(pod)
+	best.memoryLimit = containerHasMemoryLimit(pod, best.container)
+	if best.podMemoryLimit && !containerDeclaresMemoryLimit(pod, best.container) {
+		// The kubelet applies the pod limit to a container that sets none and
+		// reports it in the container's status, so status can't tell an
+		// inherited limit from the container's own here; the spec can.
+		best.memoryLimit = false
+	}
 	return withProbeEvidence(best, pod, probes), true
 }
 
@@ -162,6 +168,18 @@ func containerHasMemoryLimit(pod *corev1.Pod, name string) bool {
 			if list[i].Name == name {
 				_, ok := list[i].Resources.Limits[corev1.ResourceMemory]
 				return ok
+			}
+		}
+	}
+	return false
+}
+
+func containerDeclaresMemoryLimit(pod *corev1.Pod, name string) bool {
+	for _, list := range [][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
+		for i := range list {
+			if list[i].Name == name {
+				_, positive := explicitMemoryLimit(list[i].Resources.Limits)
+				return positive
 			}
 		}
 	}

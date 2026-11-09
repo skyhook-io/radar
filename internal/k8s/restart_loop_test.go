@@ -552,6 +552,20 @@ func TestRestartLoopDiagnosis_PodLevelMemoryLimit(t *testing.T) {
 			wantNotInText: []string{"spec.resources"},
 		},
 		{
+			name: "a memory limit inherited from the pod in container status is not the container's own",
+			pod: func() *corev1.Pod {
+				status := oomLoop
+				status.Resources = &corev1.ResourceRequirements{Limits: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("64Mi")}}
+				pod := restartLoopPod(now, status)
+				pod.Spec.Resources = podLimit
+				pod.Spec.Containers[0].Resources = corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}}
+				return pod
+			},
+			wantCause:     []string{"no memory limit of its own", "pod's memory limit"},
+			wantNotInText: []string{"either limit"},
+		},
+		{
 			name: "container and pod both set a memory limit",
 			pod: func() *corev1.Pod {
 				pod := restartLoopPod(now, oomLoop)
