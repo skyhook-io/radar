@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,8 +23,24 @@ func TestGetClusterPlatform(t *testing.T) {
 		pods          corev1.PodList
 		denyNodes     bool
 		serverVersion string
+		nkp           bool
 		want          string
 	}{
+		{
+			name: "NKP on AWS infrastructure",
+			nodes: corev1.NodeList{Items: []corev1.Node{{
+				Spec: corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0123"},
+			}}},
+			nkp:  true,
+			want: "nkp",
+		},
+		{
+			name: "Nutanix infrastructure without NKP",
+			nodes: corev1.NodeList{Items: []corev1.Node{{
+				Spec: corev1.NodeSpec{ProviderID: "nutanix://99d71c41-e100-4474-601b-5dd604becea6"},
+			}}},
+			want: "nutanix",
+		},
 		{
 			name: "RKE2",
 			nodes: corev1.NodeList{Items: []corev1.Node{{
@@ -61,7 +79,7 @@ func TestGetClusterPlatform(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			setClusterDetectionClient(t, tt.nodes, tt.pods, tt.denyNodes, tt.serverVersion)
+			setClusterDetectionClient(t, tt.nodes, tt.pods, tt.denyNodes, tt.serverVersion, tt.nkp)
 
 			got, err := GetClusterPlatform(context.Background())
 			if err != nil {
@@ -74,7 +92,7 @@ func TestGetClusterPlatform(t *testing.T) {
 	}
 }
 
-func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.PodList, denyNodes bool, serverVersion string) {
+func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.PodList, denyNodes bool, serverVersion string, nkp bool) {
 	t.Helper()
 
 	nodes.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "NodeList"}
@@ -98,6 +116,15 @@ func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.
 			_ = json.NewEncoder(w).Encode(nodes)
 		case "/api/v1/namespaces/kube-system/pods":
 			_ = json.NewEncoder(w).Encode(pods)
+		case "/api/v1/namespaces/kommander-flux":
+			if !nkp {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(corev1.Namespace{
+				TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+				ObjectMeta: metav1.ObjectMeta{Name: "kommander-flux"},
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -110,10 +137,102 @@ func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.
 	}
 	ResetResourceCache()
 	InvalidateServerVersionCache()
+	InvalidatePlatformCache()
 	previous := SetTestClient(client)
 	t.Cleanup(func() {
 		SetTestClient(previous)
 		ResetResourceCache()
 		InvalidateServerVersionCache()
+		InvalidatePlatformCache()
 	})
+}
+
+// setNKPLookupClient serves one Nutanix node and answers the NKP namespace
+// read through namespaceGet, counting the reads.
+func setNKPLookupClient(t *testing.T, namespaceGet func(w http.ResponseWriter, r *http.Request)) *atomic.Int32 {
+	t.Helper()
+	var reads atomic.Int32
+	nodes := corev1.NodeList{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "NodeList"},
+		Items:    []corev1.Node{{Spec: corev1.NodeSpec{ProviderID: "nutanix://uuid"}}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/nodes":
+			_ = json.NewEncoder(w).Encode(nodes)
+		case "/api/v1/namespaces/kommander-flux":
+			reads.Add(1)
+			namespaceGet(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatalf("create Kubernetes client: %v", err)
+	}
+	ResetResourceCache()
+	InvalidatePlatformCache()
+	previous := SetTestClient(client)
+	t.Cleanup(func() {
+		SetTestClient(previous)
+		ResetResourceCache()
+		InvalidatePlatformCache()
+	})
+	return &reads
+}
+
+func TestGetClusterPlatformAsksForNKPOncePerCluster(t *testing.T) {
+	reads := setNKPLookupClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(corev1.Namespace{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "kommander-flux"},
+		})
+	})
+	for range 3 {
+		if got, _ := GetClusterPlatform(context.Background()); got != "nkp" {
+			t.Fatalf("GetClusterPlatform() = %q, want nkp", got)
+		}
+	}
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("namespace reads = %d, want 1", n)
+	}
+
+	InvalidatePlatformCache()
+	if got, _ := GetClusterPlatform(context.Background()); got != "nkp" {
+		t.Fatalf("after invalidation GetClusterPlatform() = %q, want nkp", got)
+	}
+	if n := reads.Load(); n != 2 {
+		t.Fatalf("namespace reads after invalidation = %d, want 2", n)
+	}
+}
+
+func TestGetClusterPlatformDoesNotWaitOnSlowNKPLookup(t *testing.T) {
+	previousTimeout := nkpLookupTimeout
+	nkpLookupTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { nkpLookupTimeout = previousTimeout })
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	reads := setNKPLookupClient(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+
+	start := time.Now()
+	got, _ := GetClusterPlatform(context.Background())
+	if got != "nutanix" {
+		t.Fatalf("GetClusterPlatform() = %q, want nutanix from the node", got)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("GetClusterPlatform() took %s, want it bounded by the lookup limit", elapsed)
+	}
+	_, _ = GetClusterPlatform(context.Background())
+	if n := reads.Load(); n != 2 {
+		t.Fatalf("namespace reads = %d, want 2: a timed-out lookup is not remembered", n)
+	}
 }

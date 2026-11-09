@@ -13,6 +13,7 @@ import (
 	localconfig "github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -332,6 +333,14 @@ func resolvedCurrency(resolve func() string) string {
 }
 
 func ConnectionFailureReason(err error) string {
+	// First: a Prometheus error carrying this is also IsUnreachable, and the
+	// remedy is a URL for the integration that needed the forward.
+	if errors.Is(err, portforward.ErrAutoDisabled) {
+		if errors.Is(err, ErrKubecostUnavailable) {
+			return pkgopencost.ReasonKubecostPortForwardDisabled
+		}
+		return pkgopencost.ReasonMetricsPortForwardDisabled
+	}
 	if prometheuspkg.IsUnreachable(err) {
 		return pkgopencost.ReasonQueryError
 	}

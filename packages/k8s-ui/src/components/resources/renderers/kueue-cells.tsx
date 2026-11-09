@@ -6,6 +6,7 @@ import {
   getClusterQueueCohort,
   getClusterQueuePendingWorkloads,
   getClusterQueueAdmittedWorkloads,
+  getKueueQueueReservingWorkloads,
   getClusterQueueFlavors,
   getLocalQueueStatus,
   getLocalQueueClusterQueue,
@@ -42,6 +43,8 @@ export function ClusterQueueCell({ resource, column }: { resource: any; column: 
       const pending = getClusterQueuePendingWorkloads(resource)
       return <span className="text-sm text-theme-text-secondary">{pending}</span>
     }
+    case 'reservingWorkloads':
+      return <span className="text-sm text-theme-text-secondary">{getKueueQueueReservingWorkloads(resource)}</span>
     case 'admittedWorkloads': {
       const admitted = getClusterQueueAdmittedWorkloads(resource)
       return <span className="text-sm text-theme-text-secondary">{admitted}</span>
@@ -73,6 +76,8 @@ export function LocalQueueCell({ resource, column }: { resource: any; column: st
       const pending = getLocalQueuePendingWorkloads(resource)
       return <span className="text-sm text-theme-text-secondary">{pending}</span>
     }
+    case 'reservingWorkloads':
+      return <span className="text-sm text-theme-text-secondary">{getKueueQueueReservingWorkloads(resource)}</span>
     case 'admittedWorkloads': {
       const admitted = getLocalQueueAdmittedWorkloads(resource)
       return <span className="text-sm text-theme-text-secondary">{admitted}</span>

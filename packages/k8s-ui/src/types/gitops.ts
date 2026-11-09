@@ -446,9 +446,7 @@ export function argoApplicationSetConditionsToGitOpsStatus(
 export function parseFluxInventory(entries: Array<{ id: string; v?: string }>): ManagedResource[] {
   return entries
     .map(entry => {
-      // Format: namespace_name_group_kind
-      // The challenge is that namespace, name, and group can all contain underscores
-      // But the format is always: ns_name_group_kind where kind is the last part
+      // Format: namespace_name_group_kind; only the name can hold an underscore.
       const id = entry.id || ''
       const parts = id.split('_')
 
@@ -460,9 +458,11 @@ export function parseFluxInventory(entries: Array<{ id: string; v?: string }>): 
       // Kind is always last, group is second-to-last
       const kind = parts[parts.length - 1]
       const group = parts[parts.length - 2]
-      // Namespace is first, name is everything in between
+      // Namespace is first, name is everything in between. Flux writes a colon
+      // in an RBAC object's name as a double underscore (system:metrics-server
+      // is system__metrics-server) and reads every "__" back as a colon.
       const namespace = parts[0]
-      const name = parts.slice(1, -2).join('_')
+      const name = parts.slice(1, -2).join('_').replaceAll('__', ':')
 
       // Validate required fields
       if (!kind || !name) {

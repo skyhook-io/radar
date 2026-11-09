@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
+import { Terminal } from 'lucide-react'
 import { Collapse } from '../ui/Collapse'
 import type { WorkloadPodInfo } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -12,6 +13,8 @@ export function PodRow({
   healthLevel,
   detail,
   onNavigate,
+  onOpenLogs,
+  logsUnavailable,
 }: {
   name: string
   namespace: string
@@ -19,6 +22,10 @@ export function PodRow({
   healthLevel?: WorkloadPodInfo['healthLevel']
   detail: string
   onNavigate?: NavigateToResource
+  /** Adds a Logs button beside the row. */
+  onOpenLogs?: () => void
+  /** With `onOpenLogs`, shows this reason in place of the Logs button. */
+  logsUnavailable?: string
 }) {
   const statusLabel = podStatusLabel(healthLevel, ready)
   const statusClass = podStatusClass(healthLevel, ready)
@@ -35,15 +42,11 @@ export function PodRow({
     </>
   )
 
-  if (!onNavigate) {
-    return (
-      <div className="flex w-full min-w-0 items-center gap-3 rounded-md border border-theme-border bg-theme-base px-3 py-2 text-left">
-        {content}
-      </div>
-    )
-  }
-
-  return (
+  const row = !onNavigate ? (
+    <div className="flex w-full min-w-0 items-center gap-3 rounded-md border border-theme-border bg-theme-base px-3 py-2 text-left">
+      {content}
+    </div>
+  ) : (
     <button
       type="button"
       onClick={() => onNavigate({ kind: 'pods', namespace, name })}
@@ -51,6 +54,29 @@ export function PodRow({
     >
       {content}
     </button>
+  )
+  if (!onOpenLogs) return row
+
+  return (
+    <div className="flex min-w-0 items-stretch gap-2">
+      <div className="min-w-0 flex-1">{row}</div>
+      {logsUnavailable ? (
+        <span className="flex w-24 shrink-0 items-center justify-center px-2 text-center text-xs text-theme-text-tertiary">
+          <span className="sr-only">Logs for {name}: </span>
+          {logsUnavailable}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onOpenLogs}
+          aria-label={`Open logs for ${name}`}
+          className="btn-secondary inline-flex min-w-24 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium"
+        >
+          <Terminal className="h-3.5 w-3.5" />
+          Logs
+        </button>
+      )}
+    </div>
   )
 }
 

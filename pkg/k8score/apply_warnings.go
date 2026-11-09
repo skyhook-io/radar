@@ -12,36 +12,59 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// detectExternalManager inspects labels and annotations for evidence that the
-// resource is reconciled by Helm, Argo CD, Flux, or another controller. Returns
+// detectExternalManager inspects labels and annotations for evidence that
+// Helm, Argo CD, Flux, or another controller manages the resource. Returns
 // the manager display name and a best-effort instance identifier; both empty
 // when nothing was detected. Detection is deliberately conservative — radar and
 // kubectl are not considered "external".
 func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
+	if c := externalManagers(obj); len(c) > 0 {
+		return c[0].name, c[0].instance
+	}
+	return "", ""
+}
+
+// externalManager is one manager an object's metadata names. claim: the
+// metadata is a claim the GitOps manager answer weighs (gitops.Claims), so a
+// caller reporting that answer needn't repeat it.
+type externalManager struct {
+	name, instance string
+	claim          bool
+}
+
+// externalManagers returns every manager the metadata names, most specific
+// first.
+func externalManagers(obj *unstructured.Unstructured) []externalManager {
 	if obj == nil {
-		return "", ""
+		return nil
 	}
 	labels := obj.GetLabels()
 	annotations := obj.GetAnnotations()
+	var out []externalManager
 
-	if v := annotations["argocd.argoproj.io/instance"]; v != "" {
-		return "Argo CD", v
+	if v := labels["argocd.argoproj.io/instance"]; v != "" {
+		out = append(out, externalManager{"Argo CD", v, true})
 	}
-	if v := annotations["argocd.argoproj.io/tracking-id"]; v != "" {
-		return "Argo CD", v
+	// A tracking ID copied from another object names that object's manager.
+	if v := annotations["argocd.argoproj.io/tracking-id"]; v != "" && !copiedTrackingID(obj, v) {
+		out = append(out, externalManager{"Argo CD", v, true})
 	}
 
-	if v := annotations["kustomize.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := annotations["kustomize.toolkit.fluxcd.io/namespace"]; ns != "" {
-			return "Flux (Kustomization)", ns + "/" + v
+	if v := labels["kustomize.toolkit.fluxcd.io/name"]; v != "" {
+		ns := labels["kustomize.toolkit.fluxcd.io/namespace"]
+		instance := v
+		if ns != "" {
+			instance = ns + "/" + v
 		}
-		return "Flux (Kustomization)", v
+		out = append(out, externalManager{"Flux (Kustomization)", instance, ns != ""})
 	}
-	if v := annotations["helm.toolkit.fluxcd.io/name"]; v != "" {
-		if ns := annotations["helm.toolkit.fluxcd.io/namespace"]; ns != "" {
-			return "Flux (HelmRelease)", ns + "/" + v
+	if v := labels["helm.toolkit.fluxcd.io/name"]; v != "" {
+		ns := labels["helm.toolkit.fluxcd.io/namespace"]
+		instance := v
+		if ns != "" {
+			instance = ns + "/" + v
 		}
-		return "Flux (HelmRelease)", v
+		out = append(out, externalManager{"Flux (HelmRelease)", instance, ns != ""})
 	}
 
 	helmRelease := annotations["meta.helm.sh/release-name"]
@@ -51,18 +74,22 @@ func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
 		if instance == "" {
 			instance = labels["app.kubernetes.io/instance"]
 		}
-		return "Helm", instance
+		out = append(out, externalManager{"Helm", instance, helmRelease != ""})
 	}
 
-	if mb := labels["app.kubernetes.io/managed-by"]; mb != "" {
+	if mb := labels["app.kubernetes.io/managed-by"]; mb != "" && !strings.EqualFold(mb, "Helm") {
 		low := strings.ToLower(mb)
 		if low != "kubectl" && low != "radar" {
-			return mb, labels["app.kubernetes.io/instance"]
+			out = append(out, externalManager{mb, labels["app.kubernetes.io/instance"], false})
 		}
 	}
-	return "", ""
+	return out
 }
 
+// formatExternalManagerWarning words the warning as what the metadata says, not
+// as a verdict: tracking metadata can be copied from another object or name a
+// manager that no longer lists this one, and native Helm reconciles nothing
+// between upgrades.
 func formatExternalManagerWarning(manager, instance string) string {
 	if manager == "" {
 		return ""
@@ -71,7 +98,10 @@ func formatExternalManagerWarning(manager, instance string) string {
 	if instance != "" {
 		frag = fmt.Sprintf(" (instance: %s)", instance)
 	}
-	return fmt.Sprintf("Resource is reconciled by %s%s. Direct edits may be reverted by the next reconciliation; prefer changing the source of truth (chart values / Application spec / operator CR).", manager, frag)
+	if manager == "Helm" {
+		return fmt.Sprintf("Its metadata says Helm installed it%s. The next helm upgrade or rollback of that release may overwrite direct edits; prefer changing the chart values.", frag)
+	}
+	return fmt.Sprintf("Its tracking metadata names %s%s. If that manager still tracks it, its next sync may revert direct edits; prefer changing the source of truth (Application spec / Git / operator CR).", manager, frag)
 }
 
 // podSpecPath returns the field path that contains the PodSpec for the given

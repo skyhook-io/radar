@@ -235,6 +235,35 @@ func (rc *ResourceCache) ReadableCount(resource string, namespaces []string) (in
 	return n, true
 }
 
+// CachedObject looks up a collected object even before its informer syncs.
+// A hit proves existence; a miss does not prove absence. The returned object
+// is a copy. Nil or disabled caches return no hit.
+func (rc *ResourceCache) CachedObject(resource, namespace, name string) (apiruntime.Object, bool) {
+	if rc == nil || !rc.isEnabled(resource) {
+		return nil, false
+	}
+	if covered := rc.KindNamespaces(resource); covered != nil && !slices.Contains(covered, namespace) {
+		return nil, false
+	}
+	st, ok := rc.storeFor(resource, namespace)
+	if !ok {
+		return nil, false
+	}
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
+	}
+	item, found, err := st.indexer.GetByKey(key)
+	if err != nil || !found {
+		return nil, false
+	}
+	obj, ok := item.(apiruntime.Object)
+	if !ok {
+		return nil, false
+	}
+	return obj.DeepCopyObject(), true
+}
+
 // ReadableObject gets one object under ReadableObjects' rules. found reports
 // whether it exists; ok is false when its namespace is not readable now, in
 // which case a miss proves nothing. namespace is "" for a cluster-scoped kind.

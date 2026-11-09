@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
+var historicalPartitionProbeBudget = 8 * time.Second
+
 const historyScopeRemedy = "Historical cluster scope could not be verified. An operator can configure a verified scope override; see Troubleshooting identity matching in About these metrics."
 
 type workloadPartitionMemo struct {
@@ -93,8 +95,9 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 	}
 	c.mu.RUnlock()
 	// Missing evidence depends on the exact Pods checked, even in one namespace.
+	probeBudget := historicalPartitionProbeBudget
 	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d#%s#%s", generation, epoch, scope.Namespace, identities), func() (any, error) {
-		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout+8*time.Second)
+		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout+probeBudget)
 		defer cancel()
 		if _, _, err := c.EnsureConnected(flightCtx); err != nil {
 			return nil, err
@@ -107,7 +110,7 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 		tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
 		tr.Headers, tr.MaxResponseBytes = copyHeaders(c.headers), 4<<20
 		c.mu.RUnlock()
-		probeCtx, probeCancel := context.WithTimeout(flightCtx, 8*time.Second)
+		probeCtx, probeCancel := context.WithTimeout(flightCtx, probeBudget)
 		defer probeCancel()
 		proof, err := probeHistoricalPartition(probeCtx, prom.NewClient(tr), scope.Namespace, anchors)
 		if err != nil {

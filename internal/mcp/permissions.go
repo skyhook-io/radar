@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -146,32 +147,42 @@ func getPermCache() *pkgauth.PermissionCache {
 // struct with a non-nil but empty AllowedNamespaces on discovery failure
 // (fail-closed: treat the user as having no access rather than leaking).
 func resolveUserPerms(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions) {
+	user, perms, _ := resolveUserPermsDecision(ctx)
+	return user, perms
+}
+
+func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions, bool) {
 	user := pkgauth.UserFromContext(ctx)
 	if user == nil {
-		return nil, nil
+		return nil, nil, true
 	}
 	cache := getPermCache()
 	if perms := cache.Get(user.Username, user.Groups); perms != nil {
-		return user, perms
+		return user, perms, true
 	}
 
 	client := k8s.GetClient()
 	if client == nil {
 		log.Printf("[mcp] K8s client unavailable for namespace discovery (user=%s) — denying access", user.Username)
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}
+		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
 
 	allNamespaces := mcpAllNamespaceNames(ctx)
 	allowed, err := pkgauth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
 	if err != nil {
 		log.Printf("[mcp] DiscoverNamespaces failed for %s: %v — denying access (fail-closed)", user.Username, err)
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}
+		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
 
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: allowed}
 	cache.Set(user.Username, user.Groups, perms)
-	return user, perms
+	return user, perms, true
+}
+
+func resolveUserPermsWithStatus(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions, bool) {
+	user, perms, checked := resolveUserPermsDecision(ctx)
+	return user, perms, !checked
 }
 
 func mcpAllNamespaceNames(ctx context.Context) []string {
@@ -202,11 +213,18 @@ func mcpAllNamespaceNames(ctx context.Context) []string {
 // requested may be nil ("all namespaces"). Pass a single-element slice to
 // check a specific namespace.
 func filterNamespacesForUser(ctx context.Context, requested []string) []string {
-	user, perms := resolveUserPerms(ctx)
+	namespaces, _ := filterNamespacesForUserWithStatus(ctx, requested)
+	return namespaces
+}
+
+// filterNamespacesForUserWithStatus is filterNamespacesForUser plus whether
+// the result is fail-closed because namespace discovery failed.
+func filterNamespacesForUserWithStatus(ctx context.Context, requested []string) ([]string, bool) {
+	user, perms, failed := resolveUserPermsWithStatus(ctx)
 	if user == nil {
-		return requested
+		return requested, false
 	}
-	return pkgauth.FilterNamespacesForUser(requested, user, perms)
+	return pkgauth.FilterNamespacesForUser(requested, user, perms), failed
 }
 
 // scopedNamespacesForUser applies the --namespace pin before the RBAC filter,
@@ -232,17 +250,35 @@ func namespaceWithinPin(namespace string) bool {
 // deniedScopeReason names why a namespace request resolved to nothing. The pin
 // and an RBAC denial are indistinguishable in the resulting namespace list, so
 // the cause has to be re-derived from configuration: "you cannot read this"
-// and "radar was started with --namespace-scope" need different answers.
-func deniedScopeReason(requested []string) string {
-	if _, ok := clampToNamespacePin(requested); !ok {
-		return ReasonOutsideNamespaceScope
+// and "radar was started with --namespace-scope" need different answers. The
+// pin is the answer only for namespaces the caller can see: one they can't is
+// an access denial either way, so guessing names can't find the pin.
+func deniedScopeReason(ctx context.Context, requested []string) string {
+	if pinExcludesVisible(ctx, requested) {
+		return ReasonOutsideNamespacePin
 	}
 	return pkgopencost.ReasonAccessDenied
 }
 
-// ReasonOutsideNamespaceScope marks a request the --namespace pin excluded,
+// pinExcludesVisible reports whether the --namespace pin excludes a request
+// once it is limited to the namespaces the caller can see.
+func pinExcludesVisible(ctx context.Context, requested []string) bool {
+	if requested == nil {
+		return false
+	}
+	if visible := filterNamespacesForUser(ctx, requested); visible != nil {
+		if len(visible) == 0 {
+			return false
+		}
+		requested = visible
+	}
+	_, ok := clampToNamespacePin(requested)
+	return !ok
+}
+
+// ReasonOutsideNamespacePin marks a request the --namespace pin excluded,
 // rather than one this identity lacks permission for.
-const ReasonOutsideNamespaceScope = "outside_namespace_scope"
+const ReasonOutsideNamespacePin = "outside_namespace_pin"
 
 // NamespacePinned reports whether informer caches are pinned to one namespace,
 // and which. Callers use it to attribute a narrowed scope: a pin and an RBAC
@@ -306,37 +342,16 @@ var subjectCanI = pkgauth.SubjectCanI
 // Returns true (passthrough) when the kind is namespaced/unknown — the
 // caller's namespace check is the gate in that case.
 func canReadClusterScopedKind(ctx context.Context, kind, group, verb string) bool {
-	user, perms := resolveUserPerms(ctx)
-	if user == nil {
-		return true
-	}
+	allowed, _ := canReadClusterScopedKindDecision(ctx, kind, group, verb)
+	return allowed
+}
 
+func canReadClusterScopedKindDecision(ctx context.Context, kind, group, verb string) (bool, bool) {
 	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
 	if !clusterScoped {
-		return true // namespaced or unknown — gate via namespace check elsewhere
+		return true, true
 	}
-
-	if perms != nil {
-		if v, ok := perms.CanI(verb, gvrGroup, gvrResource, ""); ok {
-			return v
-		}
-	}
-	client := k8s.GetClient()
-	if client == nil {
-		// Fail-closed: no apiserver to ask, refuse the read rather than
-		// quietly serving the user something they may not be entitled to.
-		log.Printf("[mcp] canReadClusterScopedKind: no K8s client, denying %s on %s/%s for %s", verb, gvrGroup, gvrResource, user.Username)
-		return false
-	}
-	allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, "", gvrGroup, gvrResource, verb)
-	if err != nil {
-		log.Printf("[mcp] canReadClusterScopedKind SAR failed for %s on %s/%s: %v", user.Username, gvrGroup, gvrResource, err)
-		return false
-	}
-	if perms != nil {
-		perms.SetCanI(verb, gvrGroup, gvrResource, "", allowed)
-	}
-	return allowed
+	return canReadInNamespaceDecision(ctx, gvrGroup, gvrResource, "", verb)
 }
 
 // canReadInNamespace authorizes a single (verb, group, resource, namespace)
@@ -393,30 +408,25 @@ func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace,
 //
 // nil or empty input is returned unchanged.
 func filterNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) []string {
+	namespaces, _ = filterNamespacesByCanReadDecision(ctx, group, resource, verb, namespaces)
+	return namespaces
+}
+
+func filterNamespacesByCanReadDecision(ctx context.Context, group, resource, verb string, namespaces []string) ([]string, bool) {
 	if len(namespaces) == 0 {
-		return namespaces
+		return namespaces, true
 	}
-	const maxConcurrent = 16
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	out := make([]string, 0, len(namespaces))
-	for _, ns := range namespaces {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(ns string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if canReadInNamespace(ctx, group, resource, ns, verb) {
-				mu.Lock()
-				out = append(out, ns)
-				mu.Unlock()
-			}
-		}(ns)
-	}
-	wg.Wait()
-	slices.Sort(out)
-	return out
+	allowed, _, unchecked := partitionNamespacesByCanRead(ctx, group, resource, verb, namespaces)
+	return allowed, len(unchecked) == 0
+}
+
+// partitionNamespacesByCanRead splits namespaces by the caller's per-namespace
+// SAR: allowed, denied, and unchecked (the check itself failed). Each part is
+// sorted and non-nil.
+func partitionNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) (allowed, denied, unchecked []string) {
+	return readscope.PartitionAccess(namespaces, func(ns string) (bool, bool) {
+		return canReadInNamespaceDecision(ctx, group, resource, ns, verb)
+	})
 }
 
 // retainAllowedObjects post-filters cache results for namespace-restricted users.

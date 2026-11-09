@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"fmt"
+	"maps"
 	"sort"
 	"testing"
 
@@ -148,6 +150,12 @@ func TestEdgeTypesForAutoIncludesWorkflowDefinitionEdges(t *testing.T) {
 		if !edgeTypesForAuto(kind)[EdgeConfigures] {
 			t.Fatalf("auto profile for %s must include definition edges", kind)
 		}
+	}
+}
+
+func TestEdgeTypesForAutoTreatsJobSetAsWorkload(t *testing.T) {
+	if got, want := edgeTypesForAuto(KindJobSet), edgeTypesForAuto(KindCronJob); !maps.Equal(got, want) {
+		t.Fatalf("auto profile for JobSet = %v, want the CronJob workload profile %v", got, want)
 	}
 }
 
@@ -1015,4 +1023,62 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestGitOpsNeighborhoodRetainsSourceDependency(t *testing.T) {
+	ks := makeNode(KindKustomization, "flux", "apps")
+	repo := makeNode(KindGitRepository, "flux", "source")
+	topo := &Topology{Nodes: []Node{ks, repo}, Edges: []Edge{makeEdge(EdgeConfigures, repo.ID, ks.ID)}}
+	for _, ref := range []ResourceRef{{Kind: "Kustomization", Namespace: "flux", Name: "apps"}, {Kind: "GitRepository", Namespace: "flux", Name: "source"}} {
+		sub := BuildNeighborhood(topo, ref, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1})
+		if len(sub.Nodes) != 2 || len(sub.Edges) != 1 || sub.Edges[0].Type != EdgeConfigures {
+			t.Fatalf("from %s: source neighborhood = %+v", ref.Kind, sub)
+		}
+	}
+}
+
+func TestGitOpsNeighborhoodTreatsSourcesAsContext(t *testing.T) {
+	ks := makeNode(KindKustomization, "flux", "apps")
+	repo := makeNode(KindGitRepository, "flux", "shared")
+	dep := makeNode(KindDeployment, "apps", "web")
+	pod := makeNode(KindPod, "apps", "web-1")
+	cm := makeNode(KindConfigMap, "apps", "web-config")
+	nodes := []Node{ks, repo, dep, pod, cm}
+	edges := []Edge{
+		makeEdge(EdgeConfigures, repo.ID, ks.ID),
+		makeEdge(EdgeManages, ks.ID, dep.ID),
+		makeEdge(EdgeManages, dep.ID, pod.ID),
+		makeEdge(EdgeConfigures, cm.ID, dep.ID),
+	}
+	for i := 0; i < 30; i++ {
+		sibling := makeNode(KindKustomization, "flux", fmt.Sprintf("other-%d", i))
+		nodes = append(nodes, sibling)
+		edges = append(edges, makeEdge(EdgeConfigures, repo.ID, sibling.ID))
+	}
+	topo := &Topology{Nodes: nodes, Edges: edges}
+	ids := func(sub *Subgraph) []string {
+		out := make([]string, 0, len(sub.Nodes))
+		for _, n := range sub.Nodes {
+			out = append(out, n.ID)
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	sub := BuildNeighborhood(topo, ResourceRef{Kind: "Kustomization", Namespace: "flux", Name: "apps"}, NeighborhoodOptions{Profile: ProfileAuto, Hops: 2})
+	want := []string{dep.ID, ks.ID, pod.ID, repo.ID}
+	sort.Strings(want)
+	if got := ids(sub); !equalStrings(got, want) || sub.Truncated {
+		t.Fatalf("Kustomization at 2 hops = %v (truncated=%v), want %v", got, sub.Truncated, want)
+	}
+
+	sub = BuildNeighborhood(topo, ResourceRef{Kind: "GitRepository", Namespace: "flux", Name: "shared"}, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1, MaxNodes: 50})
+	if len(sub.Nodes) != 32 {
+		t.Fatalf("GitRepository at 1 hop has %d nodes, want itself and its 31 consumers", len(sub.Nodes))
+	}
+
+	sub = BuildNeighborhood(topo, ResourceRef{Kind: "Kustomization", Namespace: "flux", Name: "apps"}, NeighborhoodOptions{Profile: ProfileAll, Hops: 2, MaxNodes: 50})
+	if len(sub.Nodes) != len(nodes) {
+		t.Fatalf("profile all at 2 hops has %d nodes, want all %d", len(sub.Nodes), len(nodes))
+	}
 }

@@ -1,0 +1,652 @@
+[
+  {
+    "name": "Initializing, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Initializing",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Initializing"
+  },
+  {
+    "name": "Initializing, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Initializing",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Initializing"
+  },
+  {
+    "name": "Initialized, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Initialized",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Initialized"
+  },
+  {
+    "name": "Initialized, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Initialized",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Initialized"
+  },
+  {
+    "name": "Waiting, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Waiting",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Waiting"
+  },
+  {
+    "name": "Waiting, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Waiting",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Waiting"
+  },
+  {
+    "name": "Progressing, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Progressing",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Progressing"
+  },
+  {
+    "name": "Progressing, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Progressing",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Progressing"
+  },
+  {
+    "name": "WaitingPromotion, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "WaitingPromotion",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "WaitingPromotion"
+  },
+  {
+    "name": "WaitingPromotion, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "WaitingPromotion",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "WaitingPromotion"
+  },
+  {
+    "name": "Promoting, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Promoting",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Promoting"
+  },
+  {
+    "name": "Promoting, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Promoting",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Promoting"
+  },
+  {
+    "name": "Finalising, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Finalising",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Finalising"
+  },
+  {
+    "name": "Finalising, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Finalising",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Finalising"
+  },
+  {
+    "name": "Succeeded, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Succeeded",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "healthy",
+    "text": "Succeeded"
+  },
+  {
+    "name": "Succeeded, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Succeeded",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Succeeded"
+  },
+  {
+    "name": "Failed, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Failed",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "text": "Failed"
+  },
+  {
+    "name": "Failed, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Failed",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "text": "Failed"
+  },
+  {
+    "name": "Terminating, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Terminating",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Terminating"
+  },
+  {
+    "name": "Terminating, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Terminating",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Terminating"
+  },
+  {
+    "name": "Terminated, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "Terminated",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Terminated"
+  },
+  {
+    "name": "Terminated, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "Terminated",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Terminated"
+  },
+  {
+    "name": "FuturePhase, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "FuturePhase",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "unknown",
+    "text": "FuturePhase"
+  },
+  {
+    "name": "FuturePhase, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "FuturePhase",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "unknown",
+    "text": "FuturePhase"
+  },
+  {
+    "name": "unreported, suspend=False",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": false
+      },
+      "status": {
+        "phase": "",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "unknown",
+    "text": "Not reported"
+  },
+  {
+    "name": "unreported, suspend=True",
+    "object": {
+      "apiVersion": "flagger.app/v1beta1",
+      "kind": "Canary",
+      "metadata": {
+        "name": "web",
+        "namespace": "test"
+      },
+      "spec": {
+        "suspend": true
+      },
+      "status": {
+        "phase": "",
+        "conditions": [
+          {
+            "type": "Promoted",
+            "status": "False"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "text": "Suspend requested"
+  }
+]

@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"helm.sh/helm/v3/pkg/storage/driver"
 )
 
@@ -102,7 +103,21 @@ type Handlers struct {
 	// depend on its per-user RBAC plumbing. May be nil in tests that don't
 	// exercise the list endpoints.
 	resolveNamespaces func(r *http.Request) ([]string, bool)
+	// ObjectScope builds the caller's view of cached objects for reads that
+	// don't touch Helm's storage. Nil, or a nil result, means the cache isn't
+	// available. Injected for the same reason as resolveNamespaces.
+	ObjectScope func(r *http.Request) *ObjectScope
+	// ResolveStorageNamespaces is resolveNamespaces that also reports whether
+	// every Secrets check behind it was answered, and the namespaces it left
+	// out because the identity can't list Secrets there. The inventory treats
+	// a namespace missing from the result as denied, so it needs to know. Nil
+	// falls back to resolveNamespaces with every check answered.
+	ResolveStorageNamespaces func(r *http.Request) (namespaces []string, ok bool, checked bool, skipped []string)
 }
+
+// ReleaseReadDeniedCode tags a 403 that is Kubernetes refusing the caller's own
+// read of Helm's storage, not any other refusal on the same route.
+const ReleaseReadDeniedCode = "release_read_denied"
 
 // NewHandlers creates a new Handlers instance. resolveNamespaces lets the list
 // endpoints degrade gracefully for namespace-restricted identities (see
@@ -120,11 +135,21 @@ func (h *Handlers) listNamespaces(r *http.Request) ([]string, bool) {
 	return h.resolveNamespaces(r)
 }
 
+func (h *Handlers) storageNamespaces(r *http.Request) ([]string, bool, bool, []string) {
+	if h.ResolveStorageNamespaces != nil {
+		return h.ResolveStorageNamespaces(r)
+	}
+	namespaces, ok := h.listNamespaces(r)
+	return namespaces, ok, true, nil
+}
+
 // RegisterRoutes registers Helm routes on the given router
 func (h *Handlers) RegisterRoutes(r chi.Router) {
 	r.Route("/helm", func(r chi.Router) {
 		// Release management
 		r.Get("/releases", h.handleListReleases)
+		r.Get("/inventory", h.handleInventory)
+		r.Get("/inventory/{namespace}/{name}", h.handleObservedRelease)
 		r.Post("/releases", h.handleInstall)
 		r.Post("/releases/install-stream", h.handleInstallStream)
 		r.Get("/releases/{namespace}/{name}", h.handleGetRelease)
@@ -259,6 +284,77 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, releases)
 }
 
+// handleInventory returns the Helm list as far as the caller's access reaches.
+// Helm's storage is read as the caller, and that is the only Secret read here.
+// Where it is denied, rows come from the stamps on objects the caller can
+// already read, through the same per-user gates as search, so nothing in them
+// exceeds the caller's access. Without authentication the caller is Radar's
+// own identity, and the route shows no more than /api/resources does.
+func (h *Handlers) handleInventory(w http.ResponseWriter, r *http.Request) {
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	// The scope comes first: its namespace check caches the caller's answer, so
+	// the resolver can't get a different one and pass off a failed check as no
+	// access.
+	scope := h.objectScope(r)
+	namespaces, ok, checked, skipped := h.storageNamespaces(r)
+	if !ok {
+		namespaces = []string{}
+	}
+	inventory, err := client.ReadInventory(r.Context(), InventoryRequest{StorageNamespaces: namespaces, StorageSkipped: skipped, StorageCheckFailed: !checked, User: userCreds(r), Scope: scope})
+	if err != nil {
+		writeInventoryError(w, r, err)
+		return
+	}
+	writeJSON(w, inventory)
+}
+
+// handleObservedRelease returns one release built from its stamps, for a caller
+// whose read of Helm's storage was denied. It reads no Secret.
+func (h *Handlers) handleObservedRelease(w http.ResponseWriter, r *http.Request) {
+	scope := h.objectScope(r)
+	if scope == nil {
+		writeInventoryError(w, r, ErrObjectsUnavailable)
+		return
+	}
+	detail, err := GetObservedRelease(r.Context(), scope, chi.URLParam(r, "namespace"), chi.URLParam(r, "name"))
+	if err != nil {
+		writeInventoryError(w, r, err)
+		return
+	}
+	if detail == nil {
+		writeError(w, http.StatusNotFound, "no release found on the objects you can read")
+		return
+	}
+	writeJSON(w, detail)
+}
+
+func (h *Handlers) objectScope(r *http.Request) *ObjectScope {
+	if h.ObjectScope == nil {
+		return nil
+	}
+	return h.ObjectScope(r)
+}
+
+func writeInventoryError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(r.Context().Err(), context.Canceled):
+		// The caller left; this is not a Helm failure.
+	case errors.Is(err, ErrObjectsUnavailable):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, ErrAccessCheckFailed):
+		writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.UserPermissionCheckFailed), err.Error())
+	case errors.Is(err, ErrConnectionChanged):
+		writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
+	default:
+		log.Printf("[helm] Failed to read Helm inventory %s: %v", r.URL.Path, err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
 // handleGetRelease returns details for a specific release
 func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
@@ -273,16 +369,27 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	user := userCreds(r)
 	release, err := client.GetReleaseAsUser(namespace, name, user)
 	if err != nil {
-		if IsForbiddenError(err) {
-			writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeGetReleaseError(w, err)
 		return
 	}
 	EnrichHookDiagnosticsWithClusterEvidence(r.Context(), release, k8s.ClientFromContext(r.Context()))
 
 	writeJSON(w, release)
+}
+
+// writeGetReleaseError tags only the caller's own denial, which is what tells
+// the UI to show the release from its objects instead. Any other 403 is Radar's
+// access failing, and the same fallback would hide that behind a permissions
+// note.
+func writeGetReleaseError(w http.ResponseWriter, err error) {
+	switch {
+	case ReleaseReadDeniedForCaller(err):
+		writeErrorCode(w, http.StatusForbidden, ReleaseReadDeniedCode, "insufficient permissions to get Helm release")
+	case IsForbiddenError(err):
+		writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 // handleGetManifest returns the rendered manifest for a release. Read as
@@ -1043,6 +1150,8 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 
 func chartSourceErrorStatus(err error) int {
 	switch {
+	case errors.Is(err, errChartDigest):
+		return http.StatusBadGateway
 	case errors.Is(err, errSourceUnavailable):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, driver.ErrReleaseNotFound):
@@ -1185,7 +1294,7 @@ func (h *Handlers) handleGetChartDetail(w http.ResponseWriter, r *http.Request) 
 
 	detail, err := client.GetChartDetail(repoName, chartName, "")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChartSourceOperationError(w, err, "read-chart-detail", repoName, chartName)
 		return
 	}
 
@@ -1206,7 +1315,7 @@ func (h *Handlers) handleGetChartDetailVersion(w http.ResponseWriter, r *http.Re
 
 	detail, err := client.GetChartDetail(repoName, chartName, version)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChartSourceOperationError(w, err, "read-chart-detail", repoName, chartName)
 		return
 	}
 
@@ -1387,42 +1496,17 @@ type installResult struct {
 // its namespace, so secrets/create there is the check. It runs before any chart
 // is fetched, so a caller who could never install can't make Radar reach out to
 // an arbitrary repository URL either. An empty namespace is a pod-local change
-// (the chart cache, OCI sources) and needs no cluster permission.
+// (the chart cache, repository/OCI sources): signed-in callers skip this gate,
+// while existing configuration ownership/mode checks still apply where required.
 //
-// Without auth Helm runs as the service account, which needs rbac.helm=true;
-// secrets/create is the sentinel for that grant.
+// Without auth Helm runs with Radar's Kubernetes credentials. Release operations
+// check secrets/create in their target namespace; global source/cache operations
+// retain the current-scope capability check. The disable flag refuses both.
 func requireHelmWrite(w http.ResponseWriter, r *http.Request, namespace string) bool {
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		if namespace == "" {
-			return true
-		}
-		caps, err := k8s.CheckNamespaceCapabilitiesForUser(r.Context(), user.Username, user.Groups, namespace)
-		if err != nil {
-			log.Printf("[helm] Failed to check Helm permissions for %s in %q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(namespace), err)
-			writeError(w, http.StatusInternalServerError, "failed to check permissions: "+err.Error())
-			return false
-		}
-		if caps == nil || caps.Errors.HelmWrite {
-			writeError(w, http.StatusServiceUnavailable, "couldn't verify your Kubernetes permissions for Helm; try again")
-			return false
-		}
-		if !caps.HelmWrite {
-			log.Printf("[helm] Denied %s %s for %s: cannot create secrets in %q", r.Method, r.URL.Path, k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(namespace))
-			writeError(w, http.StatusForbidden, fmt.Sprintf("You don't have permission to manage Helm releases in namespace %q. Helm stores each release as a Secret there, and your Kubernetes RBAC doesn't allow creating Secrets in it.", namespace))
-			return false
-		}
-		return true
-	}
-
-	caps, err := k8s.CheckCapabilities(r.Context())
+	status, err := CheckWritePermission(r.Context(), namespace)
 	if err != nil {
-		log.Printf("[helm] Failed to check capabilities for %s %s: %v", r.Method, r.URL.Path, err)
-		writeError(w, http.StatusInternalServerError, "failed to check capabilities: "+err.Error())
-		return false
-	}
-	if !caps.HelmWrite {
-		log.Printf("[helm] Denied %s %s: helmWrite capability not available", r.Method, r.URL.Path)
-		writeError(w, http.StatusForbidden, "Helm write operations require additional RBAC permissions. Set rbac.helm=true in the Radar Helm chart values.")
+		log.Printf("[helm] Failed to authorize write %q/%q: %v", namespace, r.PathValue("name"), err)
+		writeError(w, status, err.Error())
 		return false
 	}
 	return true

@@ -1,0 +1,28 @@
+{
+  "resource": {
+    "apiVersion": "s3.example.crossplane.io/v1",
+    "kind": "Bucket",
+    "metadata": {
+      "name": "archive",
+      "namespace": "shop",
+      "annotations": { "crossplane.io/paused": "true" }
+    },
+    "spec": { "providerConfigRef": { "name": "fixture" } },
+    "status": {
+      "conditions": [
+        { "type": "Ready", "status": "True", "reason": "Available" },
+        { "type": "Synced", "status": "False", "reason": "ReconcilePaused", "message": "Fixture controller pause observation" }
+      ]
+    }
+  },
+  "resourceContext": {
+    "tier": "basic",
+    "statusSummary": {
+      "conditions": [
+        { "type": "Ready", "status": "True", "reason": "Available" },
+        { "type": "Synced", "status": "False", "reason": "ReconcilePaused", "message": "Fixture controller pause observation" }
+      ]
+    }
+  },
+  "warnings": []
+}

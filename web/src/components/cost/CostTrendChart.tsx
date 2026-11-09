@@ -511,6 +511,8 @@ export function kubecostTrendUnavailableMessage(
       return 'Kubecost rejected Radar’s API key. Check Settings → Cost.'
     case 'source_unavailable':
       return 'Radar could not reach Kubecost. Check Settings → Cost.'
+    case 'kubecost_port_forward_disabled':
+      return 'Automatic port-forwarding is turned off, so Radar can’t reach the Kubecost Aggregator it found in this cluster. Set the Kubecost URL in Settings → Cost.'
     case 'configuration_mismatch':
       return 'Kubecost returned data for a different cluster. Check the cluster ID in Settings → Cost.'
     case 'cost_settings_error':

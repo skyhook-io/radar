@@ -34,13 +34,16 @@ import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { getGitOpsResourceStatus } from './detail-helpers'
-import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
+import { isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
+import { FilterRailPanel } from '../shared/FilterRailPanel'
 
 // =============================================================================
 // GitOpsTableView — the canonical GitOps fleet list (Argo + Flux).
@@ -202,7 +205,13 @@ export interface GitOpsTableViewProps {
   // counts keyed "group/Kind" — e.g. "argoproj.io/Application" → 17. Drives
   // the Scope-section mode tabs and the empty-state check.
   counts: Record<string, number>
+  // Read coverage of `rows`, combined across every source and cluster that
+  // contributes to them. `unknown` (the default) keeps the presentation that
+  // predates coverage; only `partial` qualifies the view.
+  coverageStatus?: 'complete' | 'partial' | 'unknown'
   countsUnavailable?: string[]
+  // Count keys whose counts are lower bounds.
+  countsPartial?: string[]
   // @deprecated Superseded by `freshnessSlot` — kept for source compatibility
   // with existing consumers; no longer drives any affordance here.
   onRefresh?: () => void
@@ -281,6 +290,10 @@ export interface GitOpsTableViewProps {
   // In-flight action state, keyed by `row.id`. Drives the per-item
   // spinner so the user can tell which Sync/Refresh is still running.
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
+  // Set when the connected Radar is too old to turn auto-sync back on for an
+  // Application with automated.enabled: false; its Resume renders disabled.
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 }
 
 // ----- Main component --------------------------------------------------------
@@ -305,6 +318,8 @@ export function GitOpsTableView({
   error,
   counts,
   countsUnavailable,
+  countsPartial,
+  coverageStatus = 'unknown',
   freshnessSlot,
   onRowClick,
   rowHrefFor,
@@ -321,6 +336,8 @@ export function GitOpsTableView({
   onClearNamespaces,
   onRowAction,
   pendingRowActions,
+  argoResumeUpgrade,
+  argoResumeBlockedReason,
   filtersSide = 'left',
 }: GitOpsTableViewProps) {
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -402,6 +419,13 @@ export function GitOpsTableView({
       + (counts['source.toolkit.fluxcd.io/HelmRepository'] ?? 0),
     projects: counts['argoproj.io/AppProject'] ?? 0,
     alerts: counts['notification.toolkit.fluxcd.io/Alert'] ?? 0,
+  }
+  const partialCountKeys = new Set(countsPartial ?? [])
+  const modeCountsPartial: Record<GitOpsMode, boolean> = {
+    applications: coverageStatus === 'partial',
+    sources: ['source.toolkit.fluxcd.io/GitRepository', 'source.toolkit.fluxcd.io/OCIRepository', 'source.toolkit.fluxcd.io/HelmRepository'].some(key => partialCountKeys.has(key)),
+    projects: partialCountKeys.has('argoproj.io/AppProject'),
+    alerts: partialCountKeys.has('notification.toolkit.fluxcd.io/Alert'),
   }
   const totalGitOps = Object.entries(counts).reduce(
     (sum, [key, n]) => sum + (isGitOpsCountKey(key) ? n : 0),
@@ -548,7 +572,7 @@ export function GitOpsTableView({
   // Also require zero actual rows: the cold-cache retry can populate `rows`
   // before the separate counts map catches up, and a populated table must not
   // be hidden behind a "nothing here" screen.
-  if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter && !hasUnavailableGitOpsCounts) {
+  if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter && !hasUnavailableGitOpsCounts && coverageStatus !== 'partial') {
     return (
       <div className="flex h-full min-h-0 flex-1 items-start justify-center bg-theme-base px-4 pb-4 pt-[22vh]">
         <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
@@ -580,7 +604,7 @@ export function GitOpsTableView({
   const summaryTiles: SummaryTileSpec[] = [
     {
       key: 'total',
-      label: 'Total Applications',
+      label: coverageStatus === 'partial' ? 'Observed Applications' : 'Total Applications',
       value: allRows.length,
       tone: 'neutral',
       active: noOtherFiltersActive(),
@@ -678,6 +702,7 @@ export function GitOpsTableView({
         mode={mode}
         onModeChange={setMode}
         modeCounts={modeCounts}
+        modeCountsPartial={modeCountsPartial}
         syncCounts={syncCounts}
         syncFilters={syncFilters}
         onToggleSync={(value) => filters.toggle('sync', value)}
@@ -790,6 +815,10 @@ export function GitOpsTableView({
           </div>
         </div>
 
+        {coverageStatus === 'partial' && (
+          <p role="status" className="px-4 py-2 text-xs text-warning-text border-b border-theme-border">Partial results. Radar couldn't read every namespace for some GitOps resources or sources, so counts are lower bounds.</p>
+        )}
+
         {/* pb-20 keeps the last row (and its three-dot menu) scrollable clear
             of the app's fixed bottom-right overlay buttons; without the slack
             the bottom row's action trigger sits under them and can't be clicked
@@ -806,7 +835,7 @@ export function GitOpsTableView({
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary">
-              <p>{allRows.length === 0 && !hasGlobalNamespaceFilter ? 'No applications found.' : 'No applications match the current filters.'}</p>
+              <p>{noApplicationsMessage(allRows.length > 0, coverageStatus, hasGlobalNamespaceFilter)}</p>
               {hasGlobalNamespaceFilter && globalNamespaces && (
                 <p className="text-xs text-theme-text-tertiary">
                   Viewing {globalNamespaces.length === 1 ? `namespace: ${globalNamespaces[0]}` : `${globalNamespaces.length} namespaces`}
@@ -837,6 +866,8 @@ export function GitOpsTableView({
               destinationHrefFor={destinationHrefFor}
               onRowAction={onRowAction}
               pendingRowActions={pendingRowActions}
+              argoResumeUpgrade={argoResumeUpgrade}
+              argoResumeBlockedReason={argoResumeBlockedReason}
             />
           )}
         </div>
@@ -857,6 +888,7 @@ function GitOpsFilterSidebar({
   mode,
   onModeChange,
   modeCounts,
+  modeCountsPartial,
   syncCounts,
   syncFilters,
   onToggleSync,
@@ -884,6 +916,7 @@ function GitOpsFilterSidebar({
   mode: GitOpsMode
   onModeChange: (mode: GitOpsMode) => void
   modeCounts: Record<GitOpsMode, number>
+  modeCountsPartial: Record<GitOpsMode, boolean>
   syncCounts: Map<string, number>
   syncFilters: Set<string>
   onToggleSync: (value: string) => void
@@ -915,13 +948,17 @@ function GitOpsFilterSidebar({
         side === 'right' ? 'border-l max-[899px]:border-l-0' : 'border-r max-[899px]:border-r-0'
       }`}
     >
-      <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
-        <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
-        <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
-          Clear
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto">
+      <FilterRailPanel
+        activeCount={
+          syncFilters.size + healthFilters.size + automationFilters.size + kindFilters.size +
+          projectFilters.size + namespaceFilters.size + (lifecycleFilter === 'all' ? 0 : 1)
+        }
+        clear={
+          <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
+            Clear
+          </button>
+        }
+      >
         {loading ? (
           <BoardRailSkeleton
             sections={[
@@ -949,7 +986,7 @@ function GitOpsFilterSidebar({
                 }`}
               >
                 <div className="font-medium">{modeLabel(item)}</div>
-                <div className={mode === item ? 'text-white/70' : 'text-theme-text-tertiary'}>{modeCounts[item]}</div>
+                <div className={mode === item ? 'text-white/70' : 'text-theme-text-tertiary'}>{modeCountsPartial[item] ? '≥' : ''}{modeCounts[item]}</div>
               </button>
             ))}
           </div>
@@ -1040,7 +1077,7 @@ function GitOpsFilterSidebar({
         </GitOpsFilterSection>
           </>
         )}
-      </div>
+      </FilterRailPanel>
     </aside>
   )
 }
@@ -1265,6 +1302,8 @@ function GitOpsTable({
   destinationHrefFor,
   onRowAction,
   pendingRowActions,
+  argoResumeUpgrade,
+  argoResumeBlockedReason,
 }: {
   rows: GitOpsRow[]
   sort: { key: SortKey; dir: SortDir } | null
@@ -1276,6 +1315,8 @@ function GitOpsTable({
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 }) {
   const showActions = !!onRowAction
   return (
@@ -1382,7 +1423,7 @@ function GitOpsTable({
                   className="overflow-visible border-b border-theme-border px-2 py-2 text-right align-middle"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions)} />
+                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)} />
                 </td>
               )}
             </tr>
@@ -1397,10 +1438,12 @@ function GitOpsTable({
 // the row's tool (Argo vs Flux), current suspend state, terminating state,
 // and Argo's operationState.phase (used to gate the Terminate entry — only
 // shown while a sync is mid-flight, mirroring the detail-page condition).
-function buildRowActionItems(
+export function buildRowActionItems(
   row: GitOpsRow,
   onAction: (row: GitOpsRow, action: GitOpsRowAction) => void,
   pending?: Map<string, Set<GitOpsRowAction>>,
+  argoResumeUpgrade?: RadarUpgradeRequirement | null,
+  argoResumeBlockedReason?: string,
 ): RowActionItem[] {
   const inFlight = pending?.get(row.id)
   const isPending = (action: GitOpsRowAction) => inFlight?.has(action) ?? false
@@ -1453,13 +1496,16 @@ function buildRowActionItems(
       pending: isPending('hard-refresh'),
     })
     if (suspended) {
+      const resumeBlockedReason = isArgoAutoSyncSwitchedOff(row.raw)
+        ? argoResumeBlockedReason || (argoResumeUpgrade ? radarUpgradeNoteText(argoResumeUpgrade) : undefined)
+        : undefined
       items.push({
         key: 'resume',
         label: 'Resume',
         icon: Play,
-        onClick: () => onAction(row, 'resume'),
-        disabled: terminating,
-        disabledReason: terminating ? terminatingReason : undefined,
+        onClick: () => !resumeBlockedReason && onAction(row, 'resume'),
+        disabled: terminating || !!resumeBlockedReason,
+        disabledReason: terminating ? terminatingReason : resumeBlockedReason,
         pending: isPending('resume'),
         divider: true,
       })
@@ -1882,6 +1928,13 @@ function countMap(values: string[]) {
   return counts
 }
 
+function noApplicationsMessage(hasRows: boolean, coverageStatus: GitOpsTableViewProps['coverageStatus'], namespaceFiltered: boolean): string {
+  if (hasRows) return 'No applications match the current filters.'
+  if (coverageStatus === 'complete') return 'No applications found in the requested scope.'
+  if (coverageStatus === 'partial') return 'No applications found in the namespaces Radar could read.'
+  return namespaceFiltered ? 'No applications match the current filters.' : 'No applications found.'
+}
+
 function countLabels(rows: GitOpsRow[]) {
   const counts = new Map<string, number>()
   for (const row of rows) {
@@ -1973,7 +2026,7 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
     destinationNamespace: resource.spec?.destination?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: argoLastSync ?? '',
-    autoSync: Boolean(resource.spec?.syncPolicy?.automated),
+    autoSync: isArgoAutoSyncEnabled(resource),
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
     raw: resource,

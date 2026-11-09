@@ -13,12 +13,6 @@ import (
 // trivyGroup is the API group Trivy Operator writes its reports in.
 const trivyGroup = aicontext.TrivyGroup
 
-// kindRBACGroups are API groups whose namespaced kinds search reads only where
-// the caller may list that kind (Options.KindAccess). Seeing a namespace's
-// Pods doesn't mean being allowed to read its scan findings, and Trivy
-// reports carry CVE and exposed-secret findings.
-var kindRBACGroups = map[string]bool{trivyGroup: true}
-
 // maxTrivyFieldBytes bounds one indexed report entry. IDs and versions are
 // short; the cap only guards against a malformed report.
 const maxTrivyFieldBytes = 256
@@ -328,7 +322,7 @@ const findingsCheckEvery = 256
 type findingsScan struct {
 	ctx      context.Context
 	deadline time.Time
-	reason   string
+	spent    bool
 }
 
 func newFindingsScan(ctx context.Context) *findingsScan {
@@ -350,12 +344,18 @@ func (f *findingsScan) within() bool {
 	if f == nil {
 		return true
 	}
-	if f.reason != "" {
+	if f.spent {
 		return false
 	}
 	if f.ctx.Err() != nil || (!f.deadline.IsZero() && time.Now().After(f.deadline)) {
-		f.reason = FindingsTimeLimit
+		f.spent = true
 		return false
 	}
 	return true
+}
+
+// exhausted reports whether the budget ran out, so a report searched since
+// may have been searched only in part.
+func (f *findingsScan) exhausted() bool {
+	return f != nil && f.spent
 }

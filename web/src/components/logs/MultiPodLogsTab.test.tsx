@@ -1,0 +1,93 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const state = vi.hoisted(() => ({ logs: {} as Record<string, { data?: unknown; error?: unknown }>, viewer: [] as string[], requested: [] as string[] }))
+vi.mock('../../api/client', async (original) => ({
+  ...await original<typeof import('../../api/client')>(),
+  usePodLogs: (_ns: string, pod: string) => { if (pod) state.requested.push(pod); return state.logs[pod] ?? {} },
+  useResource: () => ({ data: { status: { phase: 'Running' } } }),
+}))
+vi.mock('./LogsViewer', () => ({ LogsViewer: ({ podName }: { podName: string }) => { state.viewer.push(podName); return <div>viewer:{podName}</div> } }))
+
+const { ApiError } = await import('../../api/client')
+const { MultiPodLogsTab } = await import('./MultiPodLogsTab')
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const pods = [{ kind: 'Pod', namespace: 'ml', name: 'gone-pod' }, { kind: 'Pod', namespace: 'ml', name: 'live-pod' }]
+let host: HTMLDivElement
+let root: ReturnType<typeof createRoot>
+beforeEach(() => { state.logs = {}; state.viewer = []; state.requested = []; host = document.createElement('div'); root = createRoot(host) })
+afterEach(() => act(() => root.unmount()))
+
+function render(selected: string, onSelectPod = vi.fn()) {
+  act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod={selected} onSelectPod={onSelectPod} />))
+  return onSelectPod
+}
+
+describe('MultiPodLogsTab', () => {
+  it('explains a Pod Radar can no longer find instead of rendering a blank pane, and keeps the other Pods', () => {
+    state.logs['gone-pod'] = { error: new ApiError('Pod not found', 404) }
+    const onSelect = render('gone-pod')
+    expect(host.textContent).toContain("Radar can't find gone-pod")
+    expect(state.viewer).toEqual([])
+    const live = [...host.querySelectorAll('button')].find(button => button.textContent === 'live-pod')!
+    act(() => live.click())
+    expect(onSelect).toHaveBeenCalledWith('live-pod')
+  })
+
+  it('shows the server reason for a denied log read', () => {
+    state.logs['live-pod'] = { error: new ApiError('no access to pod logs in namespace ml: requires get pods/log', 403) }
+    render('live-pod')
+    expect(host.textContent).toContain('requires get pods/log')
+    expect(host.textContent).not.toContain("can't find")
+  })
+
+  it('keeps a selected Pod that left the list selectable, marked, beside the one that remains', () => {
+    state.logs['gone-pod'] = { data: { containers: ['app'] } }
+    const onSelect = vi.fn()
+    act(() => root.render(<MultiPodLogsTab pods={[pods[1]]} namespace="ml" selectedPod="gone-pod" onSelectPod={onSelect} />))
+    const chips = [...host.querySelectorAll('button')].map(button => button.textContent)
+    expect(chips).toEqual(['live-pod', 'gone-pod· not in this list'])
+    expect(host.textContent).toContain('viewer:gone-pod')
+    expect(onSelect).not.toHaveBeenCalled()
+    act(() => [...host.querySelectorAll('button')][0].click())
+    expect(onSelect).toHaveBeenCalledWith('live-pod')
+  })
+
+  it('keeps the selected Pod\'s viewer when the list empties', () => {
+    state.logs['gone-pod'] = { data: { containers: ['app'] } }
+    act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod="gone-pod" onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
+    expect(host.textContent).toContain('viewer:gone-pod')
+    expect(host.textContent).toContain('gone-pod· not in this list')
+    expect(host.textContent).not.toContain('This RayCluster has no Pods right now.')
+  })
+
+  it('opens the default Pod when nothing is selected', () => {
+    const onSelect = vi.fn()
+    act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod={null} onSelectPod={onSelect} defaultPod="live-pod" />))
+    expect(onSelect).toHaveBeenCalledWith('live-pod')
+  })
+
+  it('shows the caller\'s reason instead of a viewer for a Pod with no output yet', () => {
+    state.logs['live-pod'] = { data: { containers: ['app'] } }
+    act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod="live-pod" onSelectPod={vi.fn()} selectedPodNote="Not scheduled" />))
+    expect(host.textContent).toContain('No logs shown for live-pod')
+    expect(host.textContent).toContain('Not scheduled')
+    expect(host.textContent).not.toContain('viewer:live-pod')
+    expect(state.requested).not.toContain('live-pod')
+  })
+
+  it('uses the caller\'s empty message when there are no Pods', () => {
+    act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod={null} onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
+    expect(host.textContent).toContain('This RayCluster has no Pods right now.')
+  })
+
+  it('keeps the viewer for a Pod whose containers loaded even if a later refetch fails', () => {
+    state.logs['live-pod'] = { data: { containers: ['app'] }, error: new ApiError('Pod not found', 404) }
+    render('live-pod')
+    expect(host.textContent).toContain('viewer:live-pod')
+    expect(host.textContent).not.toContain("can't find")
+  })
+})

@@ -190,6 +190,7 @@ func testDiagnoseInput(kind, namespace, name string) diagnoseInput {
 func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 	// The GitOps read is gated on a per-kind get SAR; grant it so the test
 	// exercises the dispatch fork (not the RBAC gate, covered separately).
 	getPermCache().Get("admin", nil).SetCanI("get", "argoproj.io", "applications", "alpha", true)
@@ -217,11 +218,9 @@ func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
 		t.Fatalf("expected forbidden without get on applications.argoproj.io, got %v", err)
 	}
 
-	// Granting the per-kind get lets the read through (then fails for not-found,
-	// not forbidden) — proving the gate is the only thing blocking it.
 	getPermCache().Get("limited", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
 	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook")); err == nil || strings.Contains(err.Error(), "forbidden") {
-		t.Errorf("with get granted, expected a non-forbidden (not-found) error, got %v", err)
+		t.Errorf("with get granted, expected a non-forbidden error, got %v", err)
 	}
 }
 
@@ -243,6 +242,7 @@ func TestHandleGitOpsDiagnose_NamespaceGate(t *testing.T) {
 func TestHandleDiagnose_InvalidKind(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	// configmap is not a workload, not a GitOps reconciler, and not a
 	// network entry kind - diagnose should reject it.
@@ -258,6 +258,7 @@ func TestHandleDiagnose_InvalidKind(t *testing.T) {
 func TestHandleDiagnose_MissingFields(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "", "alpha-pod")); err == nil {
 		t.Errorf("expected error for empty namespace, got nil")
@@ -284,6 +285,7 @@ func TestHandleDiagnose_ForbiddenNamespace(t *testing.T) {
 func TestHandleDiagnose_PodHappyPath(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "alpha-pod"))
 	if err != nil {
@@ -328,6 +330,7 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 	t.Cleanup(func() { getPermCache().Invalidate() })
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "frontend"))
 	if err != nil {
@@ -345,12 +348,13 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 func TestHandleDiagnose_PodNotFound(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "ghost-pod"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent pod, got nil")
 	}
-	if !strings.Contains(err.Error(), "not found") {
+	if !strings.HasPrefix(err.Error(), "object_not_found:") {
 		t.Errorf("expected 'not found' error, got %v", err)
 	}
 }
@@ -367,6 +371,7 @@ func TestHandleDiagnose_PodNotFound(t *testing.T) {
 func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 	// The stale-Secret FYI is attached only when the caller can read the
 	// ConfigMap and Secret the Pod references; builtin kinds resolve without
 	// discovery, so the grant has to be explicit rather than fall open.
@@ -408,6 +413,7 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 func TestHandleDiagnose_StaleSecretWriterNeedsSecretAccess(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 	perms := getPermCache().Get("admin", nil)
 	perms.SetCanI("get", "", "configmaps", "alpha", true)
 	perms.SetCanI("get", "", "secrets", "alpha", false)
@@ -428,6 +434,7 @@ func TestHandleDiagnose_StaleSecretWriterNeedsSecretAccess(t *testing.T) {
 func TestHandleDiagnose_DeploymentGroupIsCanonicalAndExact(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	mixedCase := testDiagnoseInput("deployment", "alpha", "cart")
 	mixedCase.Group = "ApPs"
@@ -467,6 +474,7 @@ func TestHandleDiagnose_RolloutGroupDefaultsAndCanonicalizes(t *testing.T) {
 		Name: "rollouts", Namespaced: true, Verbs: []string{"get", "list", "watch"},
 	}, rollout)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	for _, tc := range []struct {
 		name  string
@@ -499,12 +507,13 @@ func TestHandleDiagnose_RolloutGroupDefaultsAndCanonicalizes(t *testing.T) {
 func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "ghost"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent deployment, got nil")
 	}
-	if !strings.Contains(err.Error(), "not found") {
+	if !strings.HasPrefix(err.Error(), "object_not_found:") {
 		t.Errorf("expected 'not found' error, got %v", err)
 	}
 }

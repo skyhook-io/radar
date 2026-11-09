@@ -296,3 +296,39 @@ describe('printerTableKey collision safety', () => {
   })
 })
 
+
+
+describe('Crossplane condition source provenance', () => {
+  const resource = {
+    metadata: { annotations: { 'crossplane.io/paused': 'true' } },
+    spec: { resourceRefs: [] },
+    status: { conditions: [{ type: 'Synced', status: 'False', reason: 'ReconcilePaused' }, { type: 'Ready', status: 'False', reason: 'Unavailable' }] },
+  }
+  const synced = { name: 'Synced', jsonPath: ".status.conditions[?(@.type=='Synced')].status" }
+  const ready = { name: 'Ready', jsonPath: '.status.conditions[?(@.type=="Ready")].status' }
+
+  it('keeps condition source when sanitizing the table response', () => {
+    const table = sanitizePrinterTable({ columns: [synced, ready], cells: { a: ['False', 'False'] } })
+    expect(table?.columns[0].jsonPath).toBe(synced.jsonPath)
+    expect(table?.cells.a).toEqual(['False', 'False'])
+  })
+
+  it('neutralizes only the actual expected Synced observation and recorded Ready=True', () => {
+    expect(printerCellTone(synced, 'False', resource)).toBe('neutral')
+    expect(printerCellTone(ready, 'True', resource)).toBe('neutral')
+    expect(printerCellTone(ready, 'False', resource)).toBe('unhealthy')
+    expect(printerCellTone(ready, 'Unknown', resource)).toBe('unknown')
+  })
+
+  it.each([undefined, '.status.unrelated', '.spec.synced'])('keeps same-named unrelated or older-server columns conservative: %s', jsonPath => {
+    expect(printerCellTone({ name: 'Synced', jsonPath }, 'False', resource)).toBe('unhealthy')
+    expect(printerCellTone({ name: 'Ready', jsonPath }, 'True', resource)).toBe('healthy')
+  })
+
+  it('retains reconcile errors and missing annotation', () => {
+    const error = { ...resource, status: { conditions: [{ type: 'Synced', status: 'False', reason: 'ReconcileError' }] } }
+    expect(printerCellTone(synced, 'False', error)).toBe('unhealthy')
+    expect(printerCellTone(synced, 'False', { ...resource, metadata: {} })).toBe('unhealthy')
+    expect(printerCellTone(synced, 'False', { ...resource, spec: {} })).toBe('neutral')
+  })
+})

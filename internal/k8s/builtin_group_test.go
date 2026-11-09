@@ -48,7 +48,11 @@ func TestTypedKindOwnsGroup(t *testing.T) {
 		{"runtimeclasses", "node.k8s.io", false},
 		{"mutatingwebhookconfigurations", "admissionregistration.k8s.io", false},
 		{"validatingwebhookconfigurations", "admissionregistration.k8s.io", false},
+		{"validatingadmissionpolicies", "admissionregistration.k8s.io", false},
+		{"validatingadmissionpolicybindings", "admissionregistration.k8s.io", false},
 		{"volumeattachments", "storage.k8s.io", false},
+		{"apiservices", "apiregistration.k8s.io", false},
+		{"customresourcedefinitions", "apiextensions.k8s.io", false},
 
 		// Core kinds: own group is "" — typed, with or without an explicit "".
 		{"pods", "", true},
@@ -110,7 +114,11 @@ func TestBuiltinGVR(t *testing.T) {
 		{"runtimeclass", "node.k8s.io", schema.GroupVersionResource{Group: "node.k8s.io", Version: "v1", Resource: "runtimeclasses"}, true},
 		{"mutatingwebhookconfigurations", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}, true},
 		{"validatingwebhookconfiguration", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}, true},
+		{"validatingadmissionpolicy", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicies"}, true},
+		{"validatingadmissionpolicybindings", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingadmissionpolicybindings"}, true},
 		{"volumeattachments", "storage.k8s.io", schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "volumeattachments"}, true},
+		{"apiservices", "apiregistration.k8s.io", schema.GroupVersionResource{}, false},
+		{"customresourcedefinitions", "apiextensions.k8s.io", schema.GroupVersionResource{}, false},
 		{"services", "serving.knative.dev", schema.GroupVersionResource{}, false}, // CRD collision
 		{"widgets", "example.com", schema.GroupVersionResource{}, false},          // genuine CRD
 	}

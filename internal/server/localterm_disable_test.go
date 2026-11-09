@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"runtime"
 
 	"github.com/go-chi/chi/v5"
 	"net/http"
@@ -243,7 +244,8 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 		{name: "supported loopback deployment", server: Server{listenAddress: DefaultListenAddress}, host: "localhost:9280", want: true},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/capabilities", nil)
 			w := httptest.NewRecorder()
@@ -256,7 +258,8 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
 			}
 			var response struct {
-				LocalTerminal bool `json:"localTerminal"`
+				LocalTerminal bool   `json:"localTerminal"`
+				LocalShell    string `json:"localShell"`
 			}
 			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
 				t.Fatalf("decode capabilities: %v", err)
@@ -264,12 +267,19 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 			if response.LocalTerminal != tt.want {
 				t.Fatalf("localTerminal = %v, want %v", response.LocalTerminal, tt.want)
 			}
+			wantShell := "posix"
+			if runtime.GOOS == "windows" {
+				wantShell = "powershell"
+			}
+			if response.LocalShell != wantShell {
+				t.Fatalf("localShell = %q, want %q", response.LocalShell, wantShell)
+			}
 		})
 	}
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
 	k8s.InvalidateCapabilitiesCache()
-	for _, tt := range []struct {
+	disconnected := []struct {
 		name   string
 		server Server
 		host   string
@@ -277,7 +287,9 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 	}{
 		{name: "supported loopback deployment", server: Server{listenAddress: DefaultListenAddress}, host: "localhost:9280", want: true},
 		{name: "shared listener", server: Server{listenAddress: AllInterfacesAddress}, host: "localhost:9280", want: false},
-	} {
+	}
+	for i := range disconnected {
+		tt := &disconnected[i]
 		t.Run("disconnected/"+tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/capabilities", nil)
 			w := httptest.NewRecorder()

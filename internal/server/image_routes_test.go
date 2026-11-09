@@ -13,9 +13,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	authv1 "k8s.io/api/authorization/v1"
@@ -88,8 +88,8 @@ func TestImageRoutesPullSecretPermissions(t *testing.T) {
 	), map[string]k8score.ResourceScope{"pods": {Enabled: true}, "secrets": {Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
-	previousTransport := remote.DefaultTransport
-	t.Cleanup(func() { remote.DefaultTransport = previousTransport })
+	previousTransport := images.SetTestRegistryTransport(nil)
+	t.Cleanup(func() { images.SetTestRegistryTransport(previousTransport) })
 	for _, tc := range []struct {
 		name, wantUser  string
 		secretGet, exec bool
@@ -112,7 +112,7 @@ func TestImageRoutesPullSecretPermissions(t *testing.T) {
 			router := chi.NewRouter()
 			s.setupAppRoutes(router)
 			transport := &imageRouteRegistryTransport{}
-			remote.DefaultTransport = transport
+			images.SetTestRegistryTransport(transport)
 			for _, route := range []string{"metadata", "inspect", "file"} {
 				r := httptest.NewRequest(http.MethodGet, "/api/images/"+route+"?image=registry.example/app:v1&namespace=team&pod=app&path=/file.txt", nil)
 				r.Header.Set("X-Forwarded-User", "alice")
@@ -194,9 +194,8 @@ func TestImageRoutesAnonymousSkipsSecretReviews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previousTransport := remote.DefaultTransport
-	remote.DefaultTransport = &imageRouteRegistryTransport{publicManifest: manifest}
-	t.Cleanup(func() { remote.DefaultTransport = previousTransport })
+	previousTransport := images.SetTestRegistryTransport(&imageRouteRegistryTransport{publicManifest: manifest})
+	t.Cleanup(func() { images.SetTestRegistryTransport(previousTransport) })
 	r := httptest.NewRequest(http.MethodGet, "/api/images/metadata?image=registry.example/app:v1&namespace=team&pod=app", nil)
 	r.Header.Set("X-Forwarded-User", "alice")
 	w := httptest.NewRecorder()
@@ -245,9 +244,8 @@ func TestImageRoutesNonAuthoritativeSecretChecksNotCached(t *testing.T) {
 			s.permCache.Set("alice", nil, perms)
 			router := chi.NewRouter()
 			s.setupAppRoutes(router)
-			previousTransport := remote.DefaultTransport
-			remote.DefaultTransport = &imageRouteRegistryTransport{}
-			t.Cleanup(func() { remote.DefaultTransport = previousTransport })
+			previousTransport := images.SetTestRegistryTransport(&imageRouteRegistryTransport{})
+			t.Cleanup(func() { images.SetTestRegistryTransport(previousTransport) })
 			for range 2 {
 				r := httptest.NewRequest(http.MethodGet, "/api/images/metadata?image=registry.example/app:v1&namespace=team&pod=app", nil)
 				r.Header.Set("X-Forwarded-User", "alice")

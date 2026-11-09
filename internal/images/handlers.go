@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -62,6 +63,10 @@ func (h *Handlers) handleMetadata(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.inspector.GetMetadata(r.Context(), req)
 	if err != nil {
+		if isRefused(err) {
+			writeBlockedError(w, err)
+			return
+		}
 		errLower := strings.ToLower(err.Error())
 		if strings.Contains(errLower, "unauthorized") || strings.Contains(errLower, "denied") {
 			writeAuthError(w, image)
@@ -95,6 +100,10 @@ func (h *Handlers) handleInspect(w http.ResponseWriter, r *http.Request) {
 	result, err := h.inspector.Inspect(r.Context(), req)
 	if err != nil {
 		// Check for common errors
+		if isRefused(err) {
+			writeBlockedError(w, err)
+			return
+		}
 		errLower := strings.ToLower(err.Error())
 		if strings.Contains(errLower, "unauthorized") || strings.Contains(errLower, "denied") {
 			writeAuthError(w, image)
@@ -133,6 +142,10 @@ func (h *Handlers) handleGetFile(w http.ResponseWriter, r *http.Request) {
 
 	content, filename, err := h.inspector.GetFileContent(r.Context(), req, filePath)
 	if err != nil {
+		if isRefused(err) {
+			writeBlockedError(w, err)
+			return
+		}
 		errLower := strings.ToLower(err.Error())
 		if strings.Contains(errLower, "unauthorized") || strings.Contains(errLower, "denied") {
 			writeAuthError(w, image)
@@ -232,6 +245,7 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 			req.Image, useAmbient = digestRef, true
 		}
 	}
+	req.guarded = true
 	req.keychain = getPodKeychain(req.Namespace, pod, useAmbient, func(secretName string) bool {
 		if h.authorizeSecret == nil {
 			return false
@@ -311,6 +325,14 @@ func writeAuthError(w http.ResponseWriter, image string) {
 	}); err != nil {
 		log.Printf("[images] Failed to encode auth error response: %v", err)
 	}
+}
+
+func writeBlockedError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errCredentialsOverHTTP) {
+		writeError(w, http.StatusForbidden, "This image's registry uses plain HTTP, and Radar only sends registry credentials over HTTPS, so it can't open this private image.")
+		return
+	}
+	writeError(w, http.StatusForbidden, "Radar doesn't connect to this registry address (loopback, link-local, or an internal IP the registry pointed it to), so it can't open this image.")
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

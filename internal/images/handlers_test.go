@@ -3,6 +3,9 @@ package images
 import (
 	"context"
 	"errors"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,13 +13,17 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/google"
+	"github.com/google/go-containerregistry/pkg/v1/random"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -437,5 +444,408 @@ func TestImageRoutesPodCacheSyncing(t *testing.T) {
 		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "Pod cache is still syncing") {
 			t.Fatalf("%s: got %d %s", route, w.Code, w.Body.String())
 		}
+	}
+}
+
+// A caller who can read a Pod in one namespace gets nothing from another
+// namespace's Pods, images or pull secrets.
+func TestImageRoutesDenyOtherNamespaces(t *testing.T) {
+	theirs := imageTestPod()
+	theirs.Namespace = "payments"
+	theirs.Spec.Containers[0].Image = "payments.example/ledger:v1"
+	theirs.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "payments-secret"}}
+	imageTestCache(t, imageTestPod(), theirs, imageTestSecret("payments", "payments-secret", "payments.example", "payments-user"))
+	for _, route := range []string{"metadata", "inspect", "file"} {
+		for _, tc := range []struct {
+			name, namespace, image string
+			want                   int
+			message                string
+		}{
+			{"their Pod", "payments", "payments.example/ledger:v1", 403, "rbac_denied: requires get pods in namespace payments"},
+			{"their image through my Pod", "team", "payments.example/ledger:v1", 403, "image is not used by pod team/app"},
+		} {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				f := &fakeImageInspector{check: func(InspectRequest) { t.Fatal("inspection reached before authorization") }}
+				h := &Handlers{inspector: f, authorize: func(_ *http.Request, ns string) (bool, bool) { return ns == "team", true }}
+				w := serveImageTest(h, route, url.Values{"image": {tc.image}, "namespace": {tc.namespace}, "pod": {"app"}, "pullSecrets": {"payments-secret"}, "path": {"/file.txt"}}, true)
+				if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.message) {
+					t.Fatalf("got %d %s; want %d %q", w.Code, w.Body.String(), tc.want, tc.message)
+				}
+			})
+		}
+		t.Run(route+"/their secret named for my image", func(t *testing.T) {
+			f := &fakeImageInspector{check: func(req InspectRequest) {
+				if len(req.PullSecretNames) != 0 {
+					t.Fatalf("caller secrets retained: %v", req.PullSecretNames)
+				}
+				assertImageCredentials(t, req.keychain, "payments.example/ledger:v1", "")
+			}}
+			h := &Handlers{inspector: f, authorize: func(_ *http.Request, ns string) (bool, bool) { return ns == "team", true },
+				authorizeSecret: func(*http.Request, string, string) (bool, bool) { return true, true }}
+			w := serveImageTest(h, route, url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {"team"}, "pod": {"app"}, "pullSecrets": {"payments-secret"}, "path": {"/file.txt"}}, true)
+			if w.Code != 200 || f.calls != 1 {
+				t.Fatalf("got %d %s, calls=%d", w.Code, w.Body.String(), f.calls)
+			}
+		})
+	}
+}
+
+// guardTestRegistry serves an image whose layer is over the config-lookup
+// response cap, and counts requests; wrap rewrites requests before the
+// registry sees them.
+func guardTestRegistry(t *testing.T, wrap func(http.ResponseWriter, *http.Request) bool) (image string, configDigest string, hits *atomic.Int32) {
+	t.Helper()
+	hits = &atomic.Int32{}
+	var armed atomic.Bool
+	reg := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if wrap != nil && armed.Load() && wrap(w, r) {
+			return
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	image = strings.TrimPrefix(srv.URL, "http://") + "/library/app:v1"
+	img, err := random.Image(maxRegistryResponseBytes+1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := img.ConfigName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := name.ParseReference(image, name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(ref, img); err != nil {
+		t.Fatal(err)
+	}
+	hits.Store(0)
+	armed.Store(true)
+	return image, config.String(), hits
+}
+
+func serveGuardedImage(t *testing.T, image string, inCluster bool, route string, objects ...runtime.Object) *httptest.ResponseRecorder {
+	t.Helper()
+	pod := imageTestPod()
+	pod.Spec.Containers[0].Image = image
+	pod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "registry-secret"}}
+	imageTestCache(t, append(objects, pod)...)
+	inspector := &Inspector{cacheDir: t.TempDir(), newGuard: func() *guardedTransport { return newLayerTransport(inCluster) }}
+	h := &Handlers{inspector: inspector,
+		authorize:       func(*http.Request, string) (bool, bool) { return true, true },
+		authorizeSecret: func(*http.Request, string, string) (bool, bool) { return true, true }}
+	return serveImageTest(h, route, url.Values{"image": {image}, "namespace": {"team"}, "pod": {"app"}, "path": {"/missing"}}, true)
+}
+
+func TestImageRoutesRegistryNetworkGuard(t *testing.T) {
+	t.Run("local registry the Pod names, with a layer over the lookup cap", func(t *testing.T) {
+		image, _, hits := guardTestRegistry(t, nil)
+		for _, route := range []string{"metadata", "inspect"} {
+			if w := serveGuardedImage(t, image, false, route); w.Code != 200 || hits.Load() == 0 {
+				t.Fatalf("%s: got %d %s, hits=%d", route, w.Code, w.Body.String(), hits.Load())
+			}
+		}
+	})
+	t.Run("loopback in-cluster", func(t *testing.T) {
+		image, _, hits := guardTestRegistry(t, nil)
+		for _, route := range []string{"metadata", "inspect", "file"} {
+			w := serveGuardedImage(t, image, true, route)
+			if w.Code != 403 || !strings.Contains(w.Body.String(), "doesn't connect to this registry address") || hits.Load() != 0 {
+				t.Fatalf("%s: got %d %s, hits=%d", route, w.Code, w.Body.String(), hits.Load())
+			}
+		}
+	})
+	t.Run("link-local", func(t *testing.T) {
+		for _, inCluster := range []bool{false, true} {
+			w := serveGuardedImage(t, "169.254.169.254/library/app:v1", inCluster, "metadata")
+			if w.Code != 403 || !strings.Contains(w.Body.String(), "doesn't connect to this registry address") {
+				t.Fatalf("inCluster=%v: got %d %s", inCluster, w.Code, w.Body.String())
+			}
+		}
+	})
+	redirectToLoopback := func(t *testing.T, only func(path, config string) bool) {
+		var internalHits atomic.Int32
+		internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { internalHits.Add(1) }))
+		t.Cleanup(internal.Close)
+		internalURL, _ := url.Parse(internal.URL)
+		var config string
+		image, config, _ := guardTestRegistry(t, func(w http.ResponseWriter, r *http.Request) bool {
+			if r.Method != http.MethodGet || !only(r.URL.Path, config) {
+				return false
+			}
+			// localhost and 127.0.0.1 are different hosts to the guard.
+			http.Redirect(w, r, "http://localhost:"+internalURL.Port()+r.URL.Path, http.StatusTemporaryRedirect)
+			return true
+		})
+		for _, route := range []string{"metadata", "inspect"} {
+			w := serveGuardedImage(t, image, false, route)
+			if w.Code != 403 || internalHits.Load() != 0 {
+				t.Fatalf("%s: got %d %s, internal hits=%d", route, w.Code, w.Body.String(), internalHits.Load())
+			}
+		}
+	}
+	t.Run("blobs redirected to loopback", func(t *testing.T) {
+		redirectToLoopback(t, func(path, _ string) bool { return strings.Contains(path, "/blobs/") })
+	})
+	t.Run("only the config redirected to loopback", func(t *testing.T) {
+		redirectToLoopback(t, func(path, config string) bool { return strings.HasSuffix(path, "/blobs/"+config) })
+	})
+	t.Run("blobs redirected to the metadata address", func(t *testing.T) {
+		image, _, _ := guardTestRegistry(t, func(w http.ResponseWriter, r *http.Request) bool {
+			if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/blobs/") {
+				return false
+			}
+			http.Redirect(w, r, "http://169.254.169.254"+r.URL.Path, http.StatusTemporaryRedirect)
+			return true
+		})
+		for _, route := range []string{"metadata", "inspect"} {
+			w := serveGuardedImage(t, image, false, route)
+			if w.Code != 403 || !strings.Contains(w.Body.String(), "doesn't connect to this registry address") {
+				t.Fatalf("%s: got %d %s", route, w.Code, w.Body.String())
+			}
+		}
+	})
+	t.Run("token server at the metadata address", func(t *testing.T) {
+		image, _, _ := guardTestRegistry(t, func(w http.ResponseWriter, _ *http.Request) bool {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="https://169.254.169.254/token",service="registry"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return true
+		})
+		for _, route := range []string{"metadata", "inspect", "file"} {
+			w := serveGuardedImage(t, image, false, route)
+			if w.Code != 403 || !strings.Contains(w.Body.String(), "doesn't connect to this registry address") {
+				t.Fatalf("%s: got %d %s", route, w.Code, w.Body.String())
+			}
+		}
+	})
+	t.Run("credentials over plain HTTP", func(t *testing.T) {
+		var sentCredentials atomic.Int32
+		image, _, _ := guardTestRegistry(t, func(w http.ResponseWriter, r *http.Request) bool {
+			if r.Header.Get("Authorization") != "" {
+				sentCredentials.Add(1)
+			}
+			w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return true
+		})
+		registryHost, _, _ := strings.Cut(image, "/")
+		w := serveGuardedImage(t, image, false, "metadata", imageTestSecret("team", "registry-secret", registryHost, "pod-user"))
+		if w.Code != 403 || !strings.Contains(w.Body.String(), "only sends registry credentials over HTTPS") || sentCredentials.Load() != 0 {
+			t.Fatalf("got %d %s, credentialed requests=%d", w.Code, w.Body.String(), sentCredentials.Load())
+		}
+	})
+}
+
+// Self-hosted registries often serve tokens or blobs from a second internal
+// host, so image inspection allows any private address; loopback and
+// link-local keep the inventory's rules.
+func TestLayerTransportAllowsAnyPrivateHost(t *testing.T) {
+	for _, tc := range []struct {
+		ip        string
+		inCluster bool
+		want      bool
+	}{
+		{"10.0.0.5", true, true},
+		{"192.168.1.10", false, true},
+		{"100.64.0.1", true, true},
+		{"fd00::1", true, true},
+		{"127.0.0.1", true, false},
+		{"127.0.0.1", false, false},
+		{"169.254.169.254", false, false},
+		{"8.8.8.8", true, true},
+	} {
+		if got := newLayerTransport(tc.inCluster).ipAllowed(net.ParseIP(tc.ip), false); got != tc.want {
+			t.Errorf("%s inCluster=%v: got %v", tc.ip, tc.inCluster, got)
+		}
+	}
+	if newGuardedTransport(true).ipAllowed(net.ParseIP("10.0.0.5"), false) {
+		t.Error("the runtime inventory still limits private addresses to the named registry")
+	}
+}
+
+// Plain HTTP is refused only for requests that carry credentials: a
+// registry's redirect to an HTTP download URL carries none.
+func TestLayerTransportRefusesOnlyCredentialsOverHTTP(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	send := func(method, authorization string) error {
+		req := httptest.NewRequest(method, srv.URL+"/blob", nil).WithContext(withRegistryHost(context.Background(), host))
+		req.RequestURI = ""
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		resp, err := newLayerTransport(false).RoundTrip(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+	if err := send(http.MethodGet, ""); err != nil || hits.Load() != 1 {
+		t.Fatalf("a request without credentials: err %v, hits %d", err, hits.Load())
+	}
+	if err := send(http.MethodGet, "Basic dXNlcjpwYXNz"); !errors.Is(err, errCredentialsOverHTTP) || hits.Load() != 1 {
+		t.Fatalf("a request with credentials: err %v, hits %d", err, hits.Load())
+	}
+	// An OAuth token exchange sends its refresh token in the POST body.
+	if err := send(http.MethodPost, ""); !errors.Is(err, errCredentialsOverHTTP) || hits.Load() != 1 {
+		t.Fatalf("a token exchange: err %v, hits %d", err, hits.Load())
+	}
+}
+
+// With auth on, the caller is not the proxy's owner: outside a cluster too,
+// image inspection never lets a proxy pick the address.
+func TestLayerTransportLocalProxyFailsClosed(t *testing.T) {
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxied.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(proxy.Close)
+	proxyURL, _ := url.Parse(proxy.URL)
+	for _, target := range []string{"http://registry.does-not-resolve.invalid/v2/", "http://203.0.113.7/v2/"} {
+		g := newLayerTransport(false)
+		g.proxy = func(*http.Request) (*url.URL, error) { return proxyURL, nil }
+		req, _ := http.NewRequest(http.MethodGet, target, nil)
+		if _, err := g.RoundTrip(req); !isBlocked(err) || proxied.Load() != 0 {
+			t.Fatalf("%s: err %v, proxied %d", target, err, proxied.Load())
+		}
+	}
+}
+
+// A copy of a private image's manifest, served from another registry, has the
+// same digest. It must not unlock the layers another caller cached.
+func TestImageCacheNeedsTheImagesOwnRepository(t *testing.T) {
+	img, err := random.Image(1024, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve := func(withholdBlobs bool) (string, *atomic.Int32) {
+		var blobHits atomic.Int32
+		var armed atomic.Bool
+		reg := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if armed.Load() && strings.Contains(r.URL.Path, "/blobs/") {
+				blobHits.Add(1)
+				if withholdBlobs {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+			}
+			reg.ServeHTTP(w, r)
+		}))
+		t.Cleanup(srv.Close)
+		image := strings.TrimPrefix(srv.URL, "http://") + "/private/app:v1"
+		ref, err := name.ParseReference(image, name.Insecure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := remote.Write(ref, img); err != nil {
+			t.Fatal(err)
+		}
+		armed.Store(true)
+		return image, &blobHits
+	}
+	victim, victimBlobs := serve(false)
+	replay, _ := serve(true)
+	inspector := &Inspector{cacheDir: t.TempDir(), newGuard: func() *guardedTransport { return newLayerTransport(false) }}
+	ctx := context.Background()
+
+	victimFS, err := inspector.Inspect(ctx, InspectRequest{Image: victim, guarded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := firstImageFile(victimFS.Root)
+	if file == "" {
+		t.Fatal("test image has no files")
+	}
+	if _, _, err := inspector.GetFileContent(ctx, InspectRequest{Image: victim, guarded: true}, file); err != nil {
+		t.Fatalf("the victim reads its own file: %v", err)
+	}
+	downloaded := victimBlobs.Load()
+	if _, err := inspector.Inspect(ctx, InspectRequest{Image: victim, guarded: true}); err != nil || victimBlobs.Load() != downloaded {
+		t.Fatalf("the same repository reuses its cache: err %v, blob requests %d then %d", err, downloaded, victimBlobs.Load())
+	}
+	if fs, err := inspector.Inspect(ctx, InspectRequest{Image: replay, guarded: true}); err == nil {
+		t.Fatalf("a replayed manifest read the cached layers: %d files", fs.TotalFiles)
+	}
+	if _, _, err := inspector.GetFileContent(ctx, InspectRequest{Image: replay, guarded: true}, file); err == nil {
+		t.Fatal("a replayed manifest read a cached file")
+	}
+	if meta, err := inspector.GetMetadata(ctx, InspectRequest{Image: replay, guarded: true}); err != nil || meta.Cached || meta.Filesystem != nil {
+		t.Fatalf("a replayed manifest's metadata came from the cache: err %v, %+v", err, meta)
+	}
+}
+
+func firstImageFile(node *FileNode) string {
+	if node == nil {
+		return ""
+	}
+	if node.Type == "file" {
+		return node.Path
+	}
+	for _, child := range node.Children {
+		if path := firstImageFile(child); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+// The cache never answers before the registry has: a caller whose own
+// credentials can't read the manifest fails even after another caller cached
+// the image.
+func TestImageCacheDoesNotOutliveRegistryAccess(t *testing.T) {
+	img, err := random.Image(1024, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	var locked atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, _, ok := r.BasicAuth(); locked.Load() && (!ok || user != "alice") {
+			w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	image := strings.TrimPrefix(srv.URL, "http://") + "/private/app:v1"
+	ref, err := name.ParseReference(image, name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(ref, img); err != nil {
+		t.Fatal(err)
+	}
+	locked.Store(true)
+	alice := &pullSecretKeychain{auths: map[string]DockerConfigEntry{ref.Context().RegistryStr(): {Username: "alice", Password: "secret"}}}
+	inspector := &Inspector{cacheDir: t.TempDir()}
+	ctx := context.Background()
+
+	fs, err := inspector.Inspect(ctx, InspectRequest{Image: image, keychain: alice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := firstImageFile(fs.Root)
+	for name, keychain := range map[string]authn.Keychain{"no credentials": authn.NewMultiKeychain(), "wrong credentials": &pullSecretKeychain{auths: map[string]DockerConfigEntry{ref.Context().RegistryStr(): {Username: "bob", Password: "guess"}}}} {
+		bob := InspectRequest{Image: image, keychain: keychain}
+		if _, err := inspector.Inspect(ctx, bob); err == nil {
+			t.Fatalf("%s: inspect served from the cache", name)
+		}
+		if _, _, err := inspector.GetFileContent(ctx, bob, file); err == nil {
+			t.Fatalf("%s: a file served from the cache", name)
+		}
+		if _, err := inspector.GetMetadata(ctx, bob); err == nil {
+			t.Fatalf("%s: metadata served from the cache", name)
+		}
+	}
+	if _, _, err := inspector.GetFileContent(ctx, InspectRequest{Image: image, keychain: alice}, file); err != nil {
+		t.Fatalf("alice still reads her file: %v", err)
 	}
 }

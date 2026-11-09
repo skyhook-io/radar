@@ -26,7 +26,6 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   const showPortForward = canPortForward || !isLocal
   // Curl dials the Service directly from in-cluster, so it's only available when
   // Radar runs in-cluster/Cloud — locally you'd port-forward instead.
-  const showCurl = !isLocal
   // Which port's inline curl panel is open (one at a time). `closing` keeps the
   // panel mounted through its collapse animation before we drop it.
   const [curl, setCurl] = useState<{ port: number; closing: boolean } | null>(null)
@@ -38,6 +37,7 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   }, [])
   const spec = data.spec || {}
   const hasNoSelector = !spec.selector || Object.keys(spec.selector).length === 0
+  const showCurl = !isLocal
   const canListEndpointSlices = Boolean(namespace && serviceName && spec.type !== 'ExternalName')
   const serviceSlices = useServiceEndpointSlices(namespace, serviceName, canListEndpointSlices)
   // A Radar without the per-Service endpoint keeps its earlier behavior: only

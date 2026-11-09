@@ -46,7 +46,7 @@ func TestRequireHelmWrite_ChecksCallerInNamespace(t *testing.T) {
 		})
 	}))
 	t.Cleanup(srv.Close)
-	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
 	if err != nil {
 		t.Fatalf("create test client: %v", err)
 	}
@@ -117,4 +117,87 @@ func TestIsReleaseReadForbidden(t *testing.T) {
 			t.Errorf("isReleaseReadForbidden(%q) = %v, want %v", msg, got, want)
 		}
 	}
+}
+
+// Without auth Helm runs as Radar's ServiceAccount. One limited to some
+// namespaces (rbac.namespaces) can create Secrets only there, so the gate must
+// pass, for releases and for pod-local repository changes alike, even though
+// the cluster-wide check fails.
+func TestRequireHelmWrite_NamespaceLimitedServiceAccount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
+			writeK8sStatus(t, w, http.StatusNotFound, "NotFound", "unexpected test request")
+			return
+		}
+		var review authv1.SelfSubjectAccessReview
+		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+			t.Fatalf("decode self subject access review: %v", err)
+		}
+		a := review.Spec.ResourceAttributes
+		if a != nil && a.Namespace == "outage" && a.Resource == "secrets" {
+			writeK8sStatus(t, w, http.StatusInternalServerError, "InternalError", "permission service unavailable")
+			return
+		}
+		allowed := a != nil && a.Namespace == "app" && a.Resource == "secrets" && a.Verb == "create"
+		w.Header().Set("Content-Type", "application/json")
+		writeTestJSON(t, w, authv1.SelfSubjectAccessReview{
+			TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SelfSubjectAccessReview"},
+			Status:   authv1.SubjectAccessReviewStatus{Allowed: allowed},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	if err != nil {
+		t.Fatalf("create test client: %v", err)
+	}
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() {
+		k8s.SetTestClient(prev)
+		k8s.SetRBACNamespaces(nil)
+		k8s.InvalidateCapabilitiesCache()
+	})
+
+	cases := []struct {
+		name           string
+		rbacNamespaces []string
+		namespace      string
+		want           int
+	}{
+		{"release in a listed namespace", []string{"app"}, "app", http.StatusOK},
+		{"repository change", []string{"app"}, "", http.StatusOK},
+		{"repository permission lookup failed", []string{"outage"}, "", http.StatusServiceUnavailable},
+		{"repository permission denied", []string{"other"}, "", http.StatusForbidden},
+		{"target allowed without a probe list", nil, "app", http.StatusOK},
+		{"target allowed despite another probe", []string{"other"}, "app", http.StatusOK},
+		{"probe allowed but target denied", []string{"app"}, "other", http.StatusForbidden},
+		{"target permission lookup failed", []string{"app"}, "outage", http.StatusServiceUnavailable},
+	}
+	previousStatus := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k8s.SetRBACNamespaces(tc.rbacNamespaces)
+			k8s.InvalidateCapabilitiesCache()
+			req := httptest.NewRequest(http.MethodPost, "/api/helm/releases", nil)
+			rec := httptest.NewRecorder()
+			ok := requireHelmWrite(rec, req, tc.namespace)
+			if got := map[bool]int{true: http.StatusOK, false: rec.Code}[ok]; got != tc.want {
+				t.Errorf("status = %d, want %d (body %s)", got, tc.want, rec.Body.String())
+			}
+		})
+	}
+	// A cached grant must not turn a disconnected-cluster failure into a pass.
+	k8s.SetRBACNamespaces([]string{"app"})
+	k8s.InvalidateCapabilitiesCache()
+	if status, err := CheckWritePermission(t.Context(), ""); status != 0 || err != nil {
+		t.Fatalf("seed grant: %d %v", status, err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	for _, namespace := range []string{"", "app"} {
+		if status, err := CheckWritePermission(t.Context(), namespace); status != http.StatusServiceUnavailable || err == nil {
+			t.Fatalf("namespace=%q: disconnected preflight: %d %v", namespace, status, err)
+		}
+	}
+
 }

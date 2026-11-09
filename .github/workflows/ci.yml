@@ -82,6 +82,7 @@ jobs:
               - 'scripts/gpu-ecosystem-demo/**'
               - 'scripts/workload-metrics-demo/**'
               - 'scripts/check-whats-new.sh'
+              - 'scripts/vitest-*.ts'
             # What the settings browser journeys build and serve: the frontend
             # embedded in cmd/testserver. Go tests and their fixtures are not part
             # of it; web fixtures are, since the build type-checks web tests.
@@ -126,6 +127,9 @@ jobs:
 
       - name: Download dependencies
         run: go mod download
+
+      - name: Vet
+        run: go vet ./...
 
       - name: Run tests
         run: go test ./...
@@ -179,6 +183,11 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+      # go test runs only a subset of vet's checks; composites and copylocks
+      # are not in it.
+      - name: Vet
+        run: go vet ./...
 
       # internal/server runs in its own job; it is the slowest package by far.
       # The assignment fails the step if go list does; an argument would not.
@@ -303,9 +312,18 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # Headless runs only need the headless shell. The runner image ships Google
+      # Chrome, so Chromium's system libraries are already there; --with-deps
+      # would apt-install them again, which takes minutes on a slow mirror.
+      - run: npx playwright install --only-shell chromium
         working-directory: web
-      - run: make build
+      # Playwright serves cmd/testserver, which embeds the frontend; the explorer
+      # binary and a second type-check (Frontend job) aren't needed. Building the
+      # testserver first keeps its compile out of Playwright's server timeout.
+      - run: npx vite build
+        working-directory: web
+      - run: make embed
+      - run: go build -o /dev/null ./cmd/testserver
       - run: npm run test:e2e:settings
         working-directory: web
 

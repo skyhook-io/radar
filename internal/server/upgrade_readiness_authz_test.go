@@ -37,7 +37,7 @@ func TestHTTPUpgradeAuthorizerDecisionMatrix(t *testing.T) {
 			t.Fatalf("CanList(%q,%q,%q) = %+v, want allowed=%v authoritative=%v", tc.group, tc.resource, tc.namespace, got, tc.wantAllowed, tc.wantAuthoritative)
 		}
 	}
-	filtered := authz.FilterNamespacesByCanList("", "secrets", []string{"team-a", "team-b"})
+	filtered, _ := authz.FilterNamespacesByCanList("", "secrets", []string{"team-a", "team-b"})
 	if len(filtered) != 1 || filtered[0] != "team-a" {
 		t.Fatalf("FilterNamespacesByCanList = %v, want [team-a]", filtered)
 	}

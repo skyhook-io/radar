@@ -8,6 +8,9 @@ import {
 import {
   getCrossplaneResourceRefs,
   getBoundXRRef,
+  getCrossplanePauseState,
+  isManagedResource,
+  isComposite,
   isClaim,
   type CrossplaneResourceRef,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane'
@@ -140,6 +143,7 @@ export function CompositeRenderer({ data, onNavigate }: CompositeRendererProps) 
       const status = getResourceStatus(kindToPluralWithGroup(ref.kind, groupFromApiVersion(ref.apiVersion)), q.data.resource) ?? undefined
       map.set(key, {
         ref,
+        pauseState: isManagedResource(q.data.resource) || isComposite(q.data.resource) || getCrossplanePauseState(q.data.resource) === 'acknowledged' ? getCrossplanePauseState(q.data.resource) : null,
         status: status ? { ...status, level: (status as any).level ?? 'unknown' } : undefined,
       })
     })

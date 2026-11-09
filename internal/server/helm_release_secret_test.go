@@ -2,20 +2,25 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 const helmSecretTestName = "sh.helm.release.v1.web.v3"
@@ -55,6 +60,13 @@ func useHelmReleaseSecretCluster(t *testing.T, payload string) *fakeSecretAPI {
 		},
 	))
 
+	return serveLiveHelmReleaseSecret(t, payload)
+}
+
+// serveLiveHelmReleaseSecret points the live client at a fake API server that
+// answers GETs for the Helm release Secret with payload.
+func serveLiveHelmReleaseSecret(t *testing.T, payload string) *fakeSecretAPI {
+	t.Helper()
 	fakeAPI := &fakeSecretAPI{}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/namespaces/default/secrets/"+helmSecretTestName {
@@ -96,12 +108,15 @@ func TestSecretsList_HelmReleaseServedWithoutValues(t *testing.T) {
 			resp.Body.Close()
 			t.Fatalf("%s: expected 200, got %d", path, resp.StatusCode)
 		}
-		var rows []secretRow
-		err := json.NewDecoder(resp.Body).Decode(&rows)
+		var body struct {
+			Items []secretRow `json:"items"`
+		}
+		err := json.NewDecoder(resp.Body).Decode(&body)
 		resp.Body.Close()
 		if err != nil {
 			t.Fatalf("%s: decode: %v", path, err)
 		}
+		rows := body.Items
 		seen := map[string]secretRow{}
 		for _, row := range rows {
 			seen[row.Metadata.Name] = row
@@ -230,5 +245,69 @@ func TestSecretGet_HelmReleaseLiveReadOfAnotherObjectIsRetryable(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&body)
 	if body.Code != "cluster_connecting" {
 		t.Fatalf("code = %q, want cluster_connecting so the drawer retries", body.Code)
+	}
+}
+
+// A Secret still loading in another namespace is read from the namespaces
+// that have synced, and a Helm release Secret read that way is served as from
+// a fully synced cache: no values in the list, the live payload on a get.
+func TestSecretReads_HelmReleaseWhileAnotherNamespaceLoads(t *testing.T) {
+	client := fake.NewClientset(helmReleaseSecretFixture("H4sIpayload"))
+	client.PrependReactor("list", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "gamma" {
+			return true, nil, errors.New("gamma does not answer")
+		}
+		return false, nil, nil
+	})
+	t.Cleanup(func() {
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatalf("restore package fixture cache: %v", err)
+		}
+	})
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+		Client:                  client,
+		ResourceTypes:           map[string]bool{"secrets": true},
+		ResourceScopes:          map[string]k8score.ResourceScope{"secrets": {Enabled: true, Namespace: "default"}},
+		ResourceScopeNamespaces: map[string][]string{"secrets": {"default", "gamma"}},
+		DeferredTypes:           map[string]bool{"secrets": true},
+		DeferredSyncTimeout:     time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !k8s.GetResourceCache().AssessKindRead("secrets", []string{"default"}).Complete {
+		if time.Now().After(deadline) {
+			t.Fatal("default never synced")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fakeAPI := serveLiveHelmReleaseSecret(t, "H4sIpayload")
+
+	resp := get(t, "/api/resources/secrets?namespaces=default,gamma")
+	var list struct {
+		Items    []secretRow          `json:"items"`
+		Coverage resourceapi.Coverage `json:"coverage"`
+	}
+	err := json.NewDecoder(resp.Body).Decode(&list)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK || len(list.Items) != 1 || list.Coverage.Status != resourceapi.CoveragePartial {
+		t.Fatalf("list: status %d, %+v, %v", resp.StatusCode, list, err)
+	}
+	if value, hasKey := list.Items[0].Data["release"]; !hasKey || value != nil {
+		t.Fatalf("the list served a value for a Helm release Secret: %v", list.Items[0].Data)
+	}
+
+	resp = get(t, "/api/resources/secrets/default/"+helmSecretTestName)
+	defer resp.Body.Close()
+	var body struct {
+		Resource secretRow `json:"resource"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("get: status %d, %v", resp.StatusCode, err)
+	}
+	if v := body.Resource.Data["release"]; v == nil || *v != "SDRzSXBheWxvYWQ=" || fakeAPI.gets != 1 {
+		t.Fatalf("release value = %v after %d live GETs, want the live payload", v, fakeAPI.gets)
 	}
 }

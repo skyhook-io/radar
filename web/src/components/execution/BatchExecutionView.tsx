@@ -30,6 +30,7 @@ import { useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
 import { executionDefinitionDiffers, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 import { batchRunHasContainerOutcome, batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 import { JobSetAdmission } from './JobSetAdmission'
+import { runStateLabel } from './runState'
 
 const EMPTY_RUNS: WorkloadRun[] = []
 const SCHEDULED_KINDS = new Set(['CronJob', 'CronWorkflow', 'WorkflowTemplate', 'ClusterWorkflowTemplate', 'ScaledJob', 'JobSet'])
@@ -122,7 +123,15 @@ interface BatchExecutionProps {
   viewNamespaces?: string[]
 }
 
-export function BatchExecutionFullscreen({ leadContent, kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource, viewNamespaces }: BatchExecutionProps) {
+export function BatchExecutionFullscreen(props: BatchExecutionProps) {
+  const { resource, namespace, name, onNavigateToResource } = props
+  if (resource.apiVersion !== 'batch/v1' || resource.kind !== 'Job') return <BatchExecutionContent {...props} />
+  return <JobSetAdmission resource={resource} namespace={namespace} name={name} onNavigate={onNavigateToResource}>
+    {(admissionContent, kueueManaged) => <BatchExecutionContent {...props} admissionContent={admissionContent} kueueManaged={kueueManaged} />}
+  </JobSetAdmission>
+}
+
+function BatchExecutionContent({ leadContent, kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource, viewNamespaces, admissionContent, kueueManaged = false }: BatchExecutionProps & { admissionContent?: ReactNode; kueueManaged?: boolean }) {
   const scheduled = SCHEDULED_KINDS.has(kind)
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
   const jobSetRoot = isJobSetV1Alpha2(resource)
@@ -179,6 +188,7 @@ export function BatchExecutionFullscreen({ leadContent, kind, apiKind, namespace
   }, [runsQuery.data, runsQuery.isPlaceholderData, runs, resolvedRuns, selectedRunKey, defaultRun, onSelectRun, selectionMissing])
 
   const selectedRun = selectionMissing ? undefined : resolvedRuns.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
+  const selectedRunHeldByKueue = kueueManaged && selectedRun?.kind === 'jobs' && selectedRun.namespace === namespace && selectedRun.name === name && selectedRun.phase === 'Suspended'
   useEffect(() => {
     if (!selectedRun) return
     const selectionChanged = previousSelection.current !== selectedRunKey
@@ -355,7 +365,8 @@ export function BatchExecutionFullscreen({ leadContent, kind, apiKind, namespace
               <JobSetRenderer data={resource} mode="overview" shownMemberCounts={shownMemberCounts} onSelectRole={memberCollection ? selectRole : undefined} />
             </section>
           )}
-          {(jobSetRoot || (resource.apiVersion === 'batch/v1' && resource.kind === 'Job')) && <JobSetAdmission resource={resource} namespace={namespace} name={name} onNavigate={onNavigateToResource} />}
+          {admissionContent}
+          {jobSetRoot && <JobSetAdmission resource={resource} namespace={namespace} name={name} onNavigate={onNavigateToResource} />}
           {memberShell && <JobSetMemberComparison
             runs={runs} total={runsQuery.data?.total ?? 0} filteredTotal={runsQuery.data?.filteredTotal ?? runs.length}
             truncated={runsQuery.data?.truncated ?? false} loading={runsQuery.isLoading} error={runsQuery.error}
@@ -407,7 +418,7 @@ export function BatchExecutionFullscreen({ leadContent, kind, apiKind, namespace
                         {selectedResourceQuery.isFetching && <span>refreshing</span>}
                       </div>
                     </div>
-                    <span className={clsx('badge', phaseBadgeClass(selectedRun.phase))}>{selectedRun.phase}{selectedRun.deleting ? ' · deleting' : ''}</span>
+                    <span className={clsx('badge', selectedRunHeldByKueue ? 'status-neutral' : phaseBadgeClass(selectedRun.phase))}>{selectedRunHeldByKueue ? `Held by Kueue until admitted${selectedRun.deleting ? ' · deleting' : ''}` : runStateLabel(selectedRun)}</span>
                   </div>
                   {memberCollection && <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2 text-xs">
                     {!runs.some(run => workloadRunKey(run) === selectedRunKey) && <span className="text-theme-text-secondary">Selected Job is outside the current filter or shown window.</span>}
@@ -470,7 +481,7 @@ export function BatchExecutionFullscreen({ leadContent, kind, apiKind, namespace
                     <JobSetRenderer data={resource} mode="configuration" />
                   ) : (
                     <SourceFacts
-                      source={sourceFacts(kind, definitionResource, runs)}
+                      source={sourceFacts(kind, definitionResource, runs, kueueManaged)}
                       namespace={selectedRun?.namespace || namespace}
                       definitionLoading={Boolean(referencedDefinitionTarget) && referencedDefinitionQuery.isLoading}
                       definitionError={referencedDefinitionTarget ? referencedDefinitionQuery.error : undefined}
@@ -564,7 +575,7 @@ function scaledJobTone(resource: any): 'info' | 'warning' | 'success' | 'error' 
   }
 }
 
-function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
+function sourceFacts(kind: string, resource: any, runs: WorkloadRun[], kueueManaged = false) {
   const spec = resource?.spec ?? {}
   const status = resource?.status ?? {}
   const latest = pickLatestRun(runs)
@@ -649,9 +660,11 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
     }
   }
   if (kind === 'Job') {
+    const phase = jobPhase(resource)
+    const heldByKueue = kueueManaged && phase === 'Suspended'
     return {
-      state: jobPhase(resource),
-      stateTone: phaseTone(jobPhase(resource)),
+      state: heldByKueue ? 'Held by Kueue until admitted' : phase,
+      stateTone: heldByKueue ? 'info' : phaseTone(phase),
       progress: latest?.progress,
       duration: latest ? formatRunDuration(latest) : '',
       work: latest ? workCount(latest) : '',
@@ -678,7 +691,7 @@ function SourceFacts({ source, namespace, definitionLoading = false, definitionE
   return (
     <>
       <div className="grid grid-cols-2 gap-2">
-        {source.state !== 'Definition' && <FactTile label="State" value={source.state} tone={source.stateTone} />}
+        {source.state !== 'Definition' && <FactTile label="State" value={source.state} tone={source.stateTone} wrap />}
         {source.schedule && <FactTile label="Schedule" value={source.schedule} mono />}
         {source.concurrency && <FactTile label="Concurrency" value={source.concurrency} />}
       </div>
@@ -740,7 +753,7 @@ function ExecutionUnitDetails({ unit, namespace, pullSecrets, compact }: { unit:
       <div className={clsx(!compact && 'rounded-md bg-theme-elevated/40 px-3 py-2')}>
         {!compact && <div className="mb-1 flex items-center justify-between gap-3"><span className="truncate text-xs font-medium text-theme-text-primary">{unit.name}</span><span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{unit.type}</span></div>}
         <div className="space-y-1">
-          {unit.image && <DefinitionFact label="Image" value={unit.image} mono onClick={canBrowseImage ? () => setBrowseImage(true) : undefined} tooltip={canBrowseImage ? 'Browse image filesystem from registry' : undefined} />}
+          {unit.image && <DefinitionFact label="Image" value={unit.image} mono onClick={canBrowseImage ? () => setBrowseImage(true) : undefined} tooltip={canBrowseImage ? 'Browse image filesystem from registry' : IMAGE_BROWSE_VIA_POD} hint={!canBrowseImage} />}
           {unit.command && <DefinitionFact label="Command" value={unit.command} mono />}
           {!compact && unit.requests && <DefinitionFact label="Requests" value={unit.requests} />}
           {!compact && unit.limits && <DefinitionFact label="Limits" value={unit.limits} />}
@@ -760,15 +773,17 @@ function ExecutionUnitDetails({ unit, namespace, pullSecrets, compact }: { unit:
   )
 }
 
-function DefinitionFact({ label, value, mono = false, onClick, tooltip }: { label: string; value: string; mono?: boolean; onClick?: () => void; tooltip?: string }) {
-  const valueClassName = clsx('break-words text-theme-text-primary', mono && 'font-mono text-xs', onClick && 'text-accent-text hover:underline')
+const IMAGE_BROWSE_VIA_POD = "With sign-in on, browse an image's files from one of its Pods."
+
+function DefinitionFact({ label, value, mono = false, onClick, tooltip, hint = false }: { label: string; value: string; mono?: boolean; onClick?: () => void; tooltip?: string; hint?: boolean }) {
+  const valueClassName = clsx('break-words text-theme-text-primary', mono && 'font-mono text-xs', onClick && 'text-accent-text hover:underline', hint && 'cursor-help underline decoration-dotted decoration-theme-text-tertiary underline-offset-2')
   return (
     <div className="flex items-start justify-between gap-3 text-sm">
       <span className="shrink-0 text-theme-text-tertiary">{label}</span>
       <Tooltip content={tooltip ?? value} delay={300} wrapperClassName="min-w-0 text-right">
         {onClick
           ? <button type="button" onClick={onClick} className={clsx(valueClassName, 'text-right')}>{value}</button>
-          : <span className={valueClassName}>{value}</span>}
+          : <span className={valueClassName} tabIndex={hint ? 0 : undefined}>{value}{hint && tooltip && <span className="sr-only">. {tooltip}</span>}</span>}
       </Tooltip>
     </div>
   )
@@ -1271,16 +1286,16 @@ function RunRailButton({ run, selected, showNamespace, onClick }: { run: Workloa
           {formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}
         </span>
       </span>
-      <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{shortPhase(run.phase)}{run.deleting ? ' · deleting' : ''}</span>
+      <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{runStateLabel(run, shortPhase)}</span>
     </button>
   )
 }
 
-function FactTile({ label, value, tone, mono }: { label: string; value: string | number; tone?: string; mono?: boolean }) {
+function FactTile({ label, value, tone, mono, wrap = false }: { label: string; value: string | number; tone?: string; mono?: boolean; wrap?: boolean }) {
   return (
     <div className="rounded-md border border-theme-border bg-theme-surface px-3 py-2">
       <div className="text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">{label}</div>
-      <div className={clsx('mt-1 truncate text-sm font-semibold text-theme-text-primary', mono && 'font-mono', tone && phaseTextClass(tone))}>{value}</div>
+      <div className={clsx('mt-1 text-sm font-semibold text-theme-text-primary', wrap ? 'break-words' : 'truncate', mono && 'font-mono', tone && phaseTextClass(tone))}>{value}</div>
     </div>
   )
 }

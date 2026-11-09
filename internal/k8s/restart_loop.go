@@ -346,7 +346,7 @@ func restartLoopMayReplace(reason string) bool {
 	switch reason {
 	case "Running", "Pending", "Unknown", "", "PodInitializing", "ContainerCreating",
 		crashLoopReason, "Error", "Completed", "StartError", "ContainerCannotRun", "RunContainerError",
-		highRestartReason, livenessProbeFailedReason, readinessProbeFailedReason:
+		highRestartReason, livenessProbeFailedReason, readinessProbeFailedReason, readinessGatesNotReadyReason:
 		return true
 	}
 	return false

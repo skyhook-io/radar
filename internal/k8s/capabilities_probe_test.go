@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -878,5 +879,34 @@ func TestContextSwitchLeavesNoPreviousClusterPermissions(t *testing.T) {
 	}
 	if cached := GetCachedPermissionResult(); cached != nil {
 		t.Fatalf("the previous cluster's permissions survived a context switch: namespace=%q", cached.Namespace)
+	}
+}
+
+// Callers that skip work on the probe's word (the Helm storage read) need to
+// tell a confirmed denial from no answer: only a 403 confirms one. A timeout is
+// treated as allowed so informers retry, and a 401 or an untried namespace is
+// no answer at all.
+func TestProbeResourceAccessRecordsOnlyConfirmedDenials(t *testing.T) {
+	timeout := apierrors.NewServerTimeout(schema.GroupResource{Resource: "secrets"}, "list", 1)
+	dyn := fakeDyn(t, func(gvr schema.GroupVersionResource, ns string) bool {
+		return gvr.Resource != "secrets" || ns == "granted"
+	}).(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("list", "secrets", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		switch action.GetNamespace() {
+		case "slow":
+			return true, nil, timeout
+		case "rejected":
+			return true, nil, apierrors.NewUnauthorized("rejected")
+		}
+		return false, nil, nil
+	})
+	result, _ := probeResourceAccess(context.Background(), dyn, []string{"granted", "denied", "slow", "rejected"}, false)
+	if got := result.DeniedNamespaces["secrets"]; !slices.Equal(got, []string{"denied"}) {
+		t.Fatalf("denied namespaces = %v, want only the one that returned 403", got)
+	}
+
+	t.Cleanup(SetTestPermissionResult(result))
+	if cached := GetCachedPermissionResult(); !slices.Equal(cached.DeniedNamespaces["secrets"], []string{"denied"}) {
+		t.Fatalf("the cached copy lost the confirmed denials: %+v", cached.DeniedNamespaces)
 	}
 }

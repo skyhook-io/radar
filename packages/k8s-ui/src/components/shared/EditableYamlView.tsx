@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import {
   Copy,
   CopyPlus,
@@ -12,6 +12,8 @@ import {
 } from 'lucide-react'
 import { Download } from 'lucide-react'
 import { stringify as yamlStringify } from 'yaml'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { CrossplaneYamlApplyNotice } from '../ui/CrossplaneOperationNotice'
 import { CodeViewer } from '../ui/CodeViewer'
 import { YamlEditor } from '../ui/YamlEditor'
 import type { YamlSchemaLoader } from '../ui/YamlEditor'
@@ -21,6 +23,7 @@ import type { SelectedResource } from '../../types'
 import { resourceToYaml } from '../../utils/yaml'
 import { triggerDownload } from '../../utils/download'
 import { isCoreBatchJob } from '../../utils/api-resources'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 
 // ============================================================================
 // SUCCESS ANIMATION
@@ -197,6 +200,10 @@ export function EditableYamlView({
   onDownload,
 }: EditableYamlViewProps) {
   const draftKey = `radar_yaml_draft:${resource.kind}/${resource.namespace}/${resource.name}`
+  // Phones read YAML but don't start an edit or a duplicate: authoring YAML by
+  // touch is error-prone. Not folded into readOnly, which would discard an edit
+  // already open when a phone rotates from landscape to portrait.
+  const isPhone = usePhoneLayout()
 
   // Restore draft from sessionStorage (e.g., after session-expiry redirect).
   // All sessionStorage calls are wrapped in try-catch — storage can throw
@@ -207,6 +214,8 @@ export function EditableYamlView({
   const reviewGeneration = useRef(0)
   const [isEditing, setIsEditing] = useState(savedDraft.current !== null)
   const [editedYaml, setEditedYaml] = useState(savedDraft.current ?? '')
+  const pauseContextYaml = useDebouncedValue(!onPreview && isEditing ? editedYaml : '', 200)
+  const pauseBaselineYaml = useMemo(() => !onPreview && isEditing ? resourceToYaml(data) : '', [data, onPreview, isEditing])
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
   const [showErrorDetails, setShowErrorDetails] = useState(false)
   // Default on: the editor resubmits the full live manifest, so an unforced
@@ -216,6 +225,7 @@ export function EditableYamlView({
     yaml: string
     force: boolean
     originalYaml: string
+    resourceData: unknown
     documents: YamlPreviewResult[]
     nonAtomic: boolean
     context?: string
@@ -293,6 +303,7 @@ export function EditableYamlView({
           yaml: editedYaml,
           force,
           originalYaml: resourceToYaml(data),
+          resourceData: data,
           documents: result.documents,
           nonAtomic: result.nonAtomic,
           context: result.context,
@@ -382,7 +393,9 @@ export function EditableYamlView({
       return (
         <YamlReview
           submittedYaml={preview.yaml}
+          mode="update"
           originalYaml={preview.originalYaml}
+          resourceData={preview.resourceData}
           documents={preview.documents}
           nonAtomic={preview.nonAtomic}
           force={preview.force}
@@ -464,6 +477,8 @@ export function EditableYamlView({
             </button>
           </div>
         </div>
+
+        {!onPreview && <div className="px-4 pt-2"><CrossplaneYamlApplyNotice yaml={pauseContextYaml} baselineYaml={pauseBaselineYaml} resourceData={data} /></div>}
 
         {editWarning && (
           <div className="px-4 py-2.5 bg-amber-500/10 dark:bg-yellow-500/10 border-b border-amber-300 dark:border-yellow-500/30">
@@ -549,7 +564,7 @@ export function EditableYamlView({
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-theme-text-secondary">YAML</span>
         <div className="flex items-center gap-2">
-          {!readOnly && (
+          {!readOnly && !isPhone && (
             <button
               onClick={handleStartEdit}
               className="flex items-center gap-1 px-2 py-1 text-xs text-accent-text hover:text-accent-light hover:bg-theme-elevated rounded"
@@ -578,7 +593,7 @@ export function EditableYamlView({
               Download
             </button>
           </Tooltip>
-          {onDuplicate && (
+          {onDuplicate && !isPhone && (
             <Tooltip content="Duplicate as new resource">
               <button
                 onClick={() =>

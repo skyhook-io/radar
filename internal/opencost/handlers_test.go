@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -446,5 +447,16 @@ func TestConnectedResponsesIncludeCurrency(t *testing.T) {
 				t.Errorf("currency = %q, want GBP", body.Currency)
 			}
 		})
+	}
+}
+
+func TestConnectionFailureReasonRecognizesDisabledPortForward(t *testing.T) {
+	kubecost := fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, portforward.ErrAutoDisabled)
+	if got := ConnectionFailureReason(kubecost); got != pkgopencost.ReasonKubecostPortForwardDisabled {
+		t.Fatalf("Kubecost reason = %q, want %q", got, pkgopencost.ReasonKubecostPortForwardDisabled)
+	}
+	metrics := errors.Join(prometheuspkg.ErrPrometheusUnavailable, portforward.ErrAutoDisabled)
+	if got := ConnectionFailureReason(metrics); got != pkgopencost.ReasonMetricsPortForwardDisabled {
+		t.Fatalf("metrics reason = %q, want %q", got, pkgopencost.ReasonMetricsPortForwardDisabled)
 	}
 }

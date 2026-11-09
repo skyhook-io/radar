@@ -384,7 +384,7 @@ describe("investigation evidence provenance", () => {
     expect(validated.limitations).toEqual([
       expect.objectContaining({
         source: "Resource details",
-        kind: "truncated",
+        kind: "unknown",
       }),
     ]);
 

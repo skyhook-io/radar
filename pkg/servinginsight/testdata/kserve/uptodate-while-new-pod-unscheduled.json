@@ -1,0 +1,86 @@
+{
+  "apiVersion": "serving.kserve.io/v1beta1",
+  "kind": "InferenceService",
+  "metadata": {
+    "name": "iris-rolling",
+    "namespace": "ml-serving",
+    "generation": 2,
+    "annotations": {
+      "modelFormat": "sklearn",
+      "serving.kserve.io/deploymentMode": "Standard"
+    }
+  },
+  "spec": {
+    "predictor": {
+      "maxReplicas": 1,
+      "minReplicas": 1,
+      "model": {
+        "modelFormat": {
+          "name": "sklearn"
+        },
+        "name": "",
+        "resources": {
+          "limits": {
+            "cpu": "500m",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "192Mi"
+          }
+        },
+        "storageUri": "gs://kfserving-examples/models/sklearn/missing-model"
+      }
+    }
+  },
+  "status": {
+    "address": {
+      "url": "http://iris-rolling-predictor.ml-serving.svc.cluster.local"
+    },
+    "clusterServingRuntimeName": "kserve-sklearnserver",
+    "components": {
+      "predictor": {
+        "url": "http://iris-rolling-predictor-ml-serving.example.com"
+      }
+    },
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-03T02:17:45Z",
+        "status": "True",
+        "type": "IngressReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:18:52Z",
+        "message": "Deployment has minimum availability.",
+        "reason": "MinimumReplicasAvailable",
+        "status": "True",
+        "type": "PredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:18:10Z",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:17:45Z",
+        "severity": "Info",
+        "status": "False",
+        "type": "Stopped"
+      }
+    ],
+    "deploymentMode": "Standard",
+    "modelStatus": {
+      "copies": {
+        "failedCopies": 0,
+        "totalCopies": 1
+      },
+      "states": {
+        "activeModelState": "Loaded",
+        "targetModelState": "Loaded"
+      },
+      "transitionStatus": "UpToDate"
+    },
+    "observedGeneration": 2,
+    "url": "http://iris-rolling-ml-serving.example.com"
+  }
+}

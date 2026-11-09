@@ -1,0 +1,4 @@
+interface:
+  display_name: "Radar What’s New"
+  short_description: "Author, score, and preview Radar release notes"
+  default_prompt: "Use $whats-new to prepare or audit Radar’s in-app release notes from merged changes and verify the upgrade experience."

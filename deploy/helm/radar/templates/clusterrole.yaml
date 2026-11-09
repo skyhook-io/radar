@@ -1,8 +1,8 @@
 {{- if and (include "radar.userTokenMode" . | eq "true") (not .Values.cloud.enabled) }}
 {{- fail "auth.kubernetesCredentials=user-token requires cloud.enabled=true: the user's token reaches Radar only through the Radar Cloud tunnel" }}
 {{- end }}
-{{- if and (include "radar.userTokenMode" . | eq "true") (or .Values.cloud.insecureSkipVerify (hasPrefix "ws://" (toString .Values.cloud.url))) }}
-{{- fail "auth.kubernetesCredentials=user-token needs a verified tunnel: people's tokens travel over it, so cloud.insecureSkipVerify must be false and cloud.url must be wss://. Give the control plane a certificate the cluster trusts." }}
+{{- if and (include "radar.userTokenMode" . | eq "true") (or .Values.cloud.insecureSkipVerify (hasPrefix "ws://" (toString .Values.cloud.url)) (and (include "radar.cloudEnrollmentMode" . | eq "true") (hasPrefix "http://" (toString .Values.cloud.hubURL)))) }}
+{{- fail "auth.kubernetesCredentials=user-token needs a verified tunnel: people's tokens travel over it, so cloud.insecureSkipVerify must be false, cloud.url must be wss:// and cloud.hubURL https://. Give the control plane a certificate the cluster trusts." }}
 {{- end }}
 {{- if and (include "radar.userTokenMode" . | eq "true") .Values.cloud.defaultRbac.create }}
 {{- fail "auth.kubernetesCredentials=user-token requires cloud.defaultRbac.create=false: the Hub-role bindings (radar:owner/member/viewer) would grant cluster access to any token whose IdP groups include one of those names. People's access comes from your own RBAC in this mode." }}
@@ -109,6 +109,7 @@ rules:
       - daemonsets
       - statefulsets
       - replicasets
+      - controllerrevisions
     verbs: ["get", "list", "watch"]
 
   # Networking resources (read-only)
@@ -191,6 +192,17 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
 
+  {{- if or .Values.rbac.viewAdmissionPolicies (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # Native validating admission policies (read). Kept separate from
+  # rbac.viewWebhooks so no-auth installs can grant either admission surface
+  # independently. Auth/cloud reads are re-checked per requesting user.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+
   {{- if .Values.rbac.viewNodeRuntime }}
   # Kubelet runtime evidence (opt-in): upgrade-impact checks inspect kubelet
   # metrics and effective configuration through the Node proxy. In no-auth
@@ -209,7 +221,7 @@ rules:
     verbs: ["get"]
   {{- end }}
 
-  {{- if and .Values.rbac.podExec (include "radar.userTokenMode" . | eq "false") }}
+  {{- if and .Values.rbac.podExec (not .Values.disableExec) (include "radar.userTokenMode" . | eq "false") }}
   # Pod exec (opt-in - enables terminal feature)
   - apiGroups: [""]
     resources:
@@ -459,6 +471,12 @@ rules:
   - apiGroups: ["kueue.x-k8s.io", "autoscaling.x-k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  # Kueue's visibility API: where a pending Workload sits in its LocalQueue.
+  # Without authentication Radar asks as itself; signed-in users are asked as
+  # themselves and need this through their own roles (Kueue aggregates it to view).
+  - apiGroups: ["visibility.kueue.x-k8s.io"]
+    resources: ["localqueues/pendingworkloads"]
+    verbs: ["get"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kserve }}
   - apiGroups: ["serving.kserve.io"]
@@ -517,6 +535,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.flagger }}
+  - apiGroups: ["flagger.app"]
+    resources: ["canaries", "metrictemplates"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.opentelemetry }}
   - apiGroups: ["opentelemetry.io"]
     resources: ["*"]
@@ -545,6 +568,9 @@ rules:
   {{- if .Values.rbac.crdGroups.strimzi }}
   - apiGroups: ["strimzi.io", "kafka.strimzi.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["core.strimzi.io"]
+    resources: ["strimzipodsets"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.tekton }}

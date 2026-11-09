@@ -12,6 +12,7 @@ import { ClusterName } from '../ui/ClusterName'
 import { Input } from '../ui/Input'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
+import { useKeepInViewport } from '../../hooks/useKeepInViewport'
 
 export interface ClusterSwitcherItem {
   id: string
@@ -73,6 +74,9 @@ export interface ClusterSwitcherProps {
   variant?: 'chip' | 'segment'
   /** Muted label shown before the value in the 'segment' variant (e.g. "Cluster"). */
   label?: string
+  /** Lets the current row be picked, for hosts that show a screen about
+   *  another cluster on top of the current one (picking it dismisses that). */
+  currentSelectable?: boolean
 }
 
 // Trigger width cap. With middle-truncation kicking in, this is a
@@ -101,12 +105,15 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
   align = 'left',
   variant = 'chip',
   label,
+  currentSelectable = false,
 }, ref) => {
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useKeepInViewport(menuRef, isOpen)
 
   useImperativeHandle(ref, () => ({
     open: () => {
@@ -180,7 +187,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
   }, [isOpen])
 
   const select = (item: ClusterSwitcherItem) => {
-    if (item.disabled || item.id === currentId) return
+    if (item.disabled || (item.id === currentId && !currentSelectable)) return
     setIsOpen(false)
     if (item.href) {
       window.location.href = item.href
@@ -284,6 +291,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
 
       {isOpen && (
         <div
+          ref={menuRef}
           className={`absolute top-full ${positionClass} mt-1 z-50 min-w-[280px] max-w-[420px] bg-theme-surface border border-theme-border-light rounded-lg shadow-xl overflow-hidden`}
         >
           {searchable && (
@@ -337,12 +345,12 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                         data-highlighted={idx === highlightedIndex}
                         onClick={() => select(item)}
                         onMouseEnter={() => setHighlightedIndex(idx)}
-                        disabled={isCurrent || item.disabled}
+                        disabled={(isCurrent && !currentSelectable) || item.disabled}
                         title={item.title}
                         className={`
                           w-full flex items-center gap-2 px-3 py-2 text-left transition-colors
                           ${isCurrent
-                            ? 'selection'
+                            ? `selection${currentSelectable ? ' cursor-pointer' : ''}`
                             : idx === highlightedIndex
                               ? 'bg-theme-hover cursor-pointer'
                               : 'hover:bg-theme-hover cursor-pointer'}

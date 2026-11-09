@@ -136,6 +136,13 @@ func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, 
 	return lister.List(labels.Everything())
 }
 
+// AssessKindRead lets a reader tell a loading, failed or uncollected
+// namespace from one Radar holds completely, before it reads an empty list as
+// "none".
+func (a *topologyResourceProvider) AssessKindRead(resource string, namespaces []string) k8score.KindReadAssessment {
+	return a.cache.AssessKindRead(resource, namespaces)
+}
+
 func (a *topologyResourceProvider) Namespaces() ([]*corev1.Namespace, error) {
 	lister := a.cache.Namespaces()
 	if lister == nil {
@@ -260,4 +267,12 @@ func (a *topologyDynamicProvider) IsCRD(kind string) bool {
 
 func (a *topologyDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
 	return a.discovery.IsCRDGVR(gvr)
+}
+
+func (a *topologyDynamicProvider) ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
+	return a.dynCache.ListWatchedReadOnly(gvr)
+}
+
+func (a *topologyDynamicProvider) Observation(gvr schema.GroupVersionResource) k8score.DynamicResourceObservation {
+	return a.dynCache.Observation(gvr)
 }

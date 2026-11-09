@@ -38,7 +38,7 @@ export const APP_TREE_API_ERROR_FINDINGS = 'Meanwhile, rows marked "Found by Rad
 export const APP_TREE_API_ERROR_NO_FINDINGS = "Radar didn't find a problem on its own."
 
 export const REMOTE_DESTINATION_NOTICE =
-  "This application deploys to a different cluster, so its resources aren't visible from here."
+  "The recorded resources aren't confirmed to belong to this cluster, so local health and generated resources aren't shown."
 export const REMOTE_FLUX_TARGET_NOTICE =
   "This applies its resources to a different cluster, so they aren't visible from here."
 

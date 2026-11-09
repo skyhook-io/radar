@@ -50,6 +50,7 @@ cat >&2 <<EOF
 What's New: no notes for $version${ref:+ at $ref}.
 
 $version is a minor or major release, and those must tell users what's new.
+Read .agents/skills/whats-new/SKILL.md for the authoring and preview workflow.
 Add an entry to $catalog before tagging:
 
   {

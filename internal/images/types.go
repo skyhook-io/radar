@@ -41,6 +41,9 @@ type InspectRequest struct {
 	PodName         string   // Optional: pod name to auto-discover pull secrets
 	PullSecretNames []string // Optional: explicit pull secret names
 	keychain        authn.Keychain
+	// guarded sends every registry request through the network guard; set
+	// for authenticated callers.
+	guarded bool
 }
 
 // ImageMetadata contains lightweight metadata about an image (without downloading layers)

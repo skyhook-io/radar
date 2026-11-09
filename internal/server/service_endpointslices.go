@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 const (
@@ -54,9 +55,12 @@ func (s *Server) handleServiceEndpointSlices(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	namespaces := s.parseNamespacesForUser(withNamespaceFilter(r, namespace))
-	if _, status, msg, ok := s.preflightResourceList(r, "endpointslices", endpointSliceGroup, namespaces); !ok {
-		s.writeError(w, status, msg)
+	namespaces, accessCheckFailed := s.parseNamespacesForUserWithStatus(withNamespaceFilter(r, namespace))
+	if _, failure := s.preflightResourceList(r, "endpointslices", endpointSliceGroup, namespaces); failure != nil {
+		if failure.code == readreason.UserNoNamespaceAccess && accessCheckFailed {
+			failure = readFailuref(readreason.UserPermissionCheckFailed, "Radar could not determine your namespace access; retry when the permission check is available")
+		}
+		s.writeErrorCode(w, readStatusFor(failure.code), string(failure.code), failure.message)
 		return
 	}
 	cache, ok := s.gateResourceRead(w, "endpointslices", endpointSliceGroup)

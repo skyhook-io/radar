@@ -8,11 +8,16 @@ export function contentMatchLabel(matched: SearchMatchedField[] | undefined): st
   return matched.every((m) => m.site.startsWith('content:report.')) ? 'in findings' : 'in spec'
 }
 
-// partialSearchNotice explains a result the server says is incomplete, so a
-// missing CVE doesn't read as "not affected". Null when the search was whole.
-export function partialSearchNotice(data: { incomplete_findings?: string; access_incomplete?: boolean } | undefined): string | null {
-  if (data?.incomplete_findings || data?.access_incomplete) {
-    return 'Some scan reports were not fully searched. Try again, or narrow with ns:.'
+// partialSearchNotices explain a result the server says is incomplete, so a
+// missing CVE doesn't read as "not affected". One line per cause; empty when
+// the search was whole.
+export function partialSearchNotices(data: { incomplete_findings?: string; access_incomplete?: boolean } | undefined): string[] {
+  const out: string[] = []
+  if (data?.access_incomplete) {
+    out.push("Couldn't confirm your access to scan reports in some namespaces, so they were left out. Search again to check more.")
   }
-  return null
+  if (data?.incomplete_findings) {
+    out.push("Search ran out of time before checking every scan report's findings. Narrow with ns: to cover the rest.")
+  }
+  return out
 }

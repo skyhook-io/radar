@@ -4,12 +4,22 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+)
+
+var nkpLookupTimeout = 2 * time.Second
+
+var (
+	nkpAPIMu      sync.Mutex
+	nkpAPIChecked bool
+	nkpAPIAnswer  bool
 )
 
 var (
@@ -46,7 +56,7 @@ func InvalidateServerVersionCache() {
 type ClusterInfo struct {
 	Context            string `json:"context"`  // kubeconfig context name
 	Cluster            string `json:"cluster"`  // cluster name from kubeconfig
-	Platform           string `json:"platform"` // rke2, gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic
+	Platform           string `json:"platform"` // nkp, rke2, gke, gke-autopilot, eks, aks, nutanix, minikube, kind, docker-desktop, openshift, rancher, generic
 	KubernetesVersion  string `json:"kubernetesVersion"`
 	NodeCount          int    `json:"nodeCount"`
 	PodCount           int    `json:"podCount"`
@@ -100,6 +110,10 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 
 // GetClusterPlatform attempts to detect the Kubernetes platform/provider
 func GetClusterPlatform(ctx context.Context) (string, error) {
+	if isNKP(ctx) {
+		return "nkp", nil
+	}
+
 	var nodes []corev1.Node
 	cache := GetResourceCache()
 	if cache != nil {
@@ -144,6 +158,50 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 	}
 
 	return "generic", nil
+}
+
+// isNKP trusts the namespace cache only once it holds namespaces: an empty
+// list may just be unsynced. Otherwise it asks the API once per cluster, with
+// a short limit so cluster info never waits on a slow namespace read.
+func isNKP(ctx context.Context) bool {
+	if cache := GetResourceCache(); cache != nil {
+		if nsLister := cache.Namespaces(); nsLister != nil {
+			if nsList, err := nsLister.List(labels.Everything()); err == nil && len(nsList) > 0 {
+				for _, ns := range nsList {
+					if ns.Name == k8score.NKPNamespace {
+						return true
+					}
+				}
+				return false
+			}
+		}
+	}
+	client := GetClient()
+	if client == nil {
+		return false
+	}
+
+	nkpAPIMu.Lock()
+	defer nkpAPIMu.Unlock()
+	if nkpAPIChecked {
+		return nkpAPIAnswer
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, nkpLookupTimeout)
+	defer cancel()
+	_, err := client.CoreV1().Namespaces().Get(lookupCtx, k8score.NKPNamespace, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) {
+		return false
+	}
+	nkpAPIChecked, nkpAPIAnswer = true, err == nil
+	return nkpAPIAnswer
+}
+
+// InvalidatePlatformCache forgets the NKP answer read from the API.
+// Called during context switch so the next call asks the new cluster.
+func InvalidatePlatformCache() {
+	nkpAPIMu.Lock()
+	defer nkpAPIMu.Unlock()
+	nkpAPIChecked, nkpAPIAnswer = false, false
 }
 
 // IsGKEAutopilot detects if the cluster is GKE Autopilot

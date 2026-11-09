@@ -2,7 +2,7 @@
 
 Radar supports optional user authentication with per-user authorization powered by Kubernetes RBAC. When enabled, each user sees only the namespaces they have access to, and write operations (restart, scale, exec, Helm, etc.) are executed with the user's identity — so K8s RBAC controls what each user can do.
 
-> **No auth by default.** When running locally or without `--auth-mode`, everything works exactly as before — no login, no restrictions.
+> **No auth by default.** When running locally or without `--auth-mode`, everything works exactly as before — no login, no restrictions. What that exposes depends on where Radar listens: see [Without authentication](#without-authentication).
 
 ## How It Works
 
@@ -23,16 +23,26 @@ For **namespaced** resources, reads are authorized at **namespace granularity**:
 
 This is a deliberate tradeoff that follows from how Radar reads the cluster. Rather than calling the Kubernetes API on every request, Radar watches each resource kind once under its own ServiceAccount and serves reads from an in-memory cache shared by all users — that's what makes it fast on large clusters and able to render topology and real-time views. Because the cache is populated by Radar's identity, not yours, per-user access has to be re-derived by asking Kubernetes "is this user allowed?" via `SubjectAccessReview`. Doing that at namespace granularity is one such check per namespace; doing it per-resource-kind would be a check for *every kind in every namespace* on *every* read — many times the API-server load, and worst exactly on the large, multi-namespace clusters where the shared cache matters most. So namespace membership is the per-user filter, and per-kind checks are reserved for the cases below where the exposure is highest.
 
-Two kinds are gated more tightly, per-resource-kind, because the shared cache can hold data the user's own RBAC wouldn't grant:
+These kinds are gated more tightly, per-resource-kind, because the shared cache can hold data the user's own RBAC wouldn't grant:
 
 - **Secrets** (and Secret-derived data such as TLS certificate metadata) — shown only if the user can list Secrets in that namespace.
+- **Roles, RoleBindings and LimitRanges** — lists, detail pages, counts, search and MCP reads require the caller’s exact permission on that kind in the namespace (`list` for inventories, `get` for a single object).
+- **Trivy Operator reports** (the `aquasecurity.github.io` group: VulnerabilityReports, ExposedSecretReports, ConfigAuditReports, SbomReports and the rest): shown only if the user can list that report kind in that namespace, and across all namespaces at once only with a cluster-wide grant. An ExposedSecretReport holds the secret Trivy found in an image, so reports are treated like Secrets in lists, detail pages, counts, search and the MCP tools.
 - **Cluster-scoped resources** (Nodes, PersistentVolumes, ClusterRoles, cluster-scoped CRDs, etc.) — shown only if the user's RBAC permits listing that kind.
 
-Issues follow the same rule: you see an issue only if you could open its resource. A namespaced resource needs namespace access, a Secret also needs Secret access, and a cluster-scoped resource needs list on its kind. A cluster-scoped resource's issues are composed across namespaces, so a Node's issues can draw on Pods anywhere, but only rows from namespaces you can access feed them: another namespace's Pods never appear among its members or in its blast radius. Issues roll up to a resource's owner, such as a Pod's Deployment, only if you could open the owner; otherwise the issue stays on the resource. A finding drawn from a Secret's history reaches you without that history if you can't read the Secret: a Pod still running with environment values from a Secret that changed is flagged, with the restart it needs, but not which Secret or keys changed, or when. A finding that something your resource names does not exist (an Ingress's TLS Secret or IngressClass, a PVC's StorageClass, a RoleBinding's ClusterRole) is shown with namespace access: it says only that a name you can already read is missing, and Kubernetes reports a missing StorageClass in the PVC's events too. The Home dashboard's problem list and the MCP tools follow the same rules. The per-resource Issues view says when something was withheld, rather than showing an empty list as "none".
+Issues follow the same rule: you see an issue only if you could open its resource. A namespaced resource needs namespace access, the tightly gated namespaced kinds above also need exact kind access, and a cluster-scoped resource needs list on its kind. A cluster-scoped resource's issues are composed across namespaces, so a Node's issues can draw on Pods anywhere, but only rows from namespaces you can access feed them: another namespace's Pods never appear among its members or in its blast radius. Issues roll up to a resource's owner, such as a Pod's Deployment, only if you could open the owner; otherwise the issue stays on the resource. A finding drawn from a Secret's history reaches you without that history if you can't read the Secret: a Pod still running with environment values from a Secret that changed is flagged, with the restart it needs, but not which Secret or keys changed, or when. A finding that something your resource names does not exist (an Ingress's TLS Secret or IngressClass, a PVC's StorageClass, a RoleBinding's ClusterRole) is shown with namespace access: it says only that a name you can already read is missing, and Kubernetes reports a missing StorageClass in the PVC's events too. The Home dashboard's problem list and the MCP tools follow the same rules. The per-resource Issues view says when something was withheld, rather than showing an empty list as "none".
 
-**If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). See [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for the `rbac.create: false` + custom `Role` setup.
+Search uses the same exact list permissions as resource reads for Secrets, Roles, RoleBindings, LimitRanges and Trivy reports. Ordinary namespaced kinds, including ServiceAccounts, NetworkPolicies, ResourceQuotas and dynamic CRDs, use namespace visibility, as resource lists do. Sensitive-kind checks try a cluster-wide SAR first and fan out over visible namespaces only after a denial. Your own access is the scope of a search, so its coverage response reports a denial only for a kind or namespace the query names, keeping caller denial, failed permission checks and collector limitations apart; see [Search coverage](mcp.md#search-coverage-and-cel-object-filters).
 
-Deletion-impact previews require read access to the root resource and use the caller's visible topology. Related resources describe observed management relationships, not a guarantee of Kubernetes garbage collection. Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
+**If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). With the Helm chart, set `rbac.namespaces` to that boundary's namespaces; see [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for this and for the `rbac.create: false` + custom `Role` setup.
+
+Ownership answers (owners, children, and which GitOps manager manages an object) follow the same namespace rule in the UI.
+REST AI context and MCP additionally require exact-kind `get` access for ownership and manager references, so their
+answers can be narrower than the UI's. A manager the caller can't read contributes no evidence; a name in the object's
+own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
+`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
+
+Deletion-impact previews fetch the root as the caller and use caller-readable ownership data. Permission and collection gaps make the result partial; remote or unknown GitOps destinations expose no local inventory. See [Shared deletion preview](mcp.md#shared-deletion-preview). Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
 
 ### Image inspection
 
@@ -50,8 +60,20 @@ the digest the kubelet recorded as pulled for one of the Pod's containers. This
 covers images pulled with the node's cloud identity and no pull secret, such as
 Artifact Registry on GKE. Denied or non-authoritative checks drop the credential,
 with anonymous fallback. The `pullSecrets` query parameter and ServiceAccount pull
-secrets are ignored. Without an authenticated user, local image inspection keeps
-its existing credential discovery behavior.
+secrets are ignored. Every registry request, including redirects and token
+endpoints, is checked before Radar connects: link-local addresses (cloud metadata)
+are refused, and loopback is refused in-cluster (locally it is allowed only for the
+registry the Pod's image names). Private addresses are allowed, because self-hosted
+registries often serve tokens or layers from a second internal host. Credentials
+are sent only over HTTPS, as the node's container runtime does by default; a
+registry that needs credentials over plain HTTP can't be inspected. Behind an HTTP
+proxy, a request Radar can't pin to an address it has checked is refused rather
+than left to the proxy. A refused request returns 403. Downloaded layers are cached
+for a few minutes and shared by all users, keyed by the image's repository and
+digest, so a cached image is only served after the caller has read its manifest
+from that same repository.
+Without an authenticated user, local image inspection keeps its existing
+credential discovery and network behavior.
 
 ### Prometheus metrics
 
@@ -61,6 +83,39 @@ Two consequences worth knowing before you deploy:
 
 - A Role scoped with `resourceNames` doesn't pass the check, which needs the whole kind. It fails closed, so the user sees less rather than more.
 - Radar queries Prometheus with its own credentials; only the *authorization* is per user. If several tenants share one Prometheus, that backend needs its own isolation — Radar's gate isn't what separates them.
+
+## Without authentication
+
+Radar runs without authentication unless you configure it. Where it listens
+decides who can use it:
+
+- **Loopback** (the CLI and Desktop default, `127.0.0.1`): only programs on the
+  same machine reach Radar, and they act as your kubeconfig user, as `kubectl`
+  would.
+- **Shared** (any other `--listen-address`, including the `0.0.0.0` the Docker
+  image and Helm chart set): **anyone who can reach Radar's address is a full
+  user**, acting with Radar's ServiceAccount or kubeconfig identity. Keep such a
+  listener inside a network where everyone is trusted with that identity, or
+  enable authentication.
+
+Two things still hold on a shared listener without authentication:
+
+1. **A web page cannot use Radar.** A site open in a user's browser cannot act
+   through it: Radar answers only hostnames a page cannot point at Radar's
+   address (see [HTTP Listener](configuration.md#http-listener)), refuses
+   changes a browser started from another site (the browser itself keeps that
+   site from reading Radar's answers), and checks the origin of pod terminal
+   connections and `/mcp`.
+2. **Radar grants no more than its Kubernetes identity.** It gives no access to
+   the machine or process it runs in:
+   - the host local terminal is unavailable;
+   - profiling is off unless `RADAR_PPROF` turns it on;
+   - in a cluster, integration settings are set by the operator (Helm values or
+     flags), not from the UI;
+   - saved Prometheus credentials are sent only to the server they were
+     configured for;
+   - connecting the cluster to Radar Cloud, which outlasts the request, needs an
+     explicit acknowledgement.
 
 ## Auth Modes
 
@@ -100,7 +155,9 @@ radar --auth-mode=proxy \
       --auth-groups-header=X-Forwarded-Groups
 ```
 
-> **Security:** Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
+Groups can arrive as one comma-separated header or as one header per group, as proxies that forward Kubernetes impersonation headers send them (`groupsHeader: Impersonate-Group`). Radar refuses Kubernetes-reserved `system:` users and groups, except the group `system:authenticated`, which every signed-in user has.
+
+> **Security:** Your ingress must strip the user and groups headers Radar reads (`X-Forwarded-User` and `X-Forwarded-Groups` unless you set `userHeader` / `groupsHeader`) from external requests, and the auth proxy must replace them with its own values, to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
 
 > **Proxies:** Preserve the browser-facing `Host` header when proxying Radar. Radar accepts changes and pod exec sessions only from its own page, and it recognizes that page by comparing the browser's `Origin` with `Host` (or by `Sec-Fetch-Site`, which browsers send over HTTPS). If your proxy must rewrite `Host`, list the address users open Radar at in `trustedOrigins` (Helm) or `RADAR_TRUSTED_ORIGINS`. See [Changes fail with "Radar refused this request"](in-cluster.md#changes-fail-with-radar-refused-this-request).
 
@@ -257,7 +314,7 @@ Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `
 
 - Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers. Radar accepts those headers only on requests marked in-process by its authenticated Cloud tunnel; the ordinary pod TCP listener cannot assert Cloud identity.
 - Ships three default ClusterRoleBindings mapping Cloud's `radar:owner` / `radar:member` / `radar:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
-- Adds a **cluster-read add-on** (`cloud.defaultRbac.clusterScopedRead.{viewer,member,owner}`, each default on) granting `get/list/watch` on infrastructure the built-in `view`/`edit`/`admin` roles exclude — Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, RuntimeClasses, Leases (namespaced; the spec is only a holder and renew times — `edit`/`admin` already include them, so only viewers and the view-based system and AI grants gain), ClusterTrustBundles, CRDs, and admission webhook configurations — plus list-only Upgrade impact evidence for CSIDrivers, CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control configuration. When the matching collection is enabled, it also grants APIServices, PrometheusRules, Karpenter kinds, and node metrics. It does not grant Secrets, RBAC objects, API-server metrics, or kubelet proxy access. It's an independent axis per tier: set a tier `false` to make it namespaced-only (e.g. `clusterScopedRead.viewer: false`). Owner node cordon/drain is a separate cluster-scoped *write*, off by default (`cloud.defaultRbac.nodeOps`).
+- Adds a **cluster-read add-on** (`cloud.defaultRbac.clusterScopedRead.{viewer,member,owner}`, each default on) granting `get/list/watch` on infrastructure the built-in `view`/`edit`/`admin` roles exclude — Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, RuntimeClasses, Leases (namespaced; the spec is only a holder and renew times — `edit`/`admin` already include them, so only viewers and the view-based system and AI grants gain), ClusterTrustBundles, CRDs, admission webhook configurations, and ValidatingAdmissionPolicies and their bindings — plus list-only Upgrade impact evidence for CSIDrivers, CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control configuration. When the matching collection is enabled, it also grants APIServices, PrometheusRules, Karpenter kinds, and node metrics. It does not grant Secrets, RBAC objects, API-server metrics, or kubelet proxy access. It's an independent axis per tier: set a tier `false` to make it namespaced-only (e.g. `clusterScopedRead.viewer: false`). Owner node cordon/drain is a separate cluster-scoped *write*, off by default (`cloud.defaultRbac.nodeOps`).
 - Creates the default read grant for `radar:system`, Radar Cloud's alerts worker and timeline puller: a chart-owned role aggregated to match `view`, the cluster-read and integration-read add-ons, and cluster-wide Secret read. Helm release alerts and Secret changes in the timeline need Secret read; Helm stores releases as Secrets. No writes. Controlled by `cloud.systemRbac` (default `true`).
 - Creates the default read grant for alert-triggered AI investigations, recorded in Kubernetes audit logs as `radar:ai:<org>`: `radar:ai:reader` receives permissions based on `view` plus the cluster-read and integration-read add-ons. Stock `view` excludes Secrets, but includes pod logs and ConfigMaps; roles labelled `aggregate-to-view` widen this grant too. Controlled by `cloud.aiRbac` (default `true`). Requests a person starts or follows up on use that person's identity and groups, including follow-ups on alert-triggered investigations. MCP clients also use the user's permissions.
 - Treats `cloud.aiRbac` and `cloud.systemRbac` as controls for the chart's default grants, independent of `cloud.defaultRbac`. False or absent (including after a plain `--reuse-values` upgrade from an older chart) creates no default grant and leaves customer-created bindings untouched. These settings do not disable background jobs or automatic analysis; they control their default Kubernetes access.
@@ -279,13 +336,33 @@ A `radar:member` attempting to install a chart that bundles its own RBAC will ge
 <a id="user-token-mode"></a>
 #### User-token mode (no impersonation)
 
-Set `auth.kubernetesCredentials: user-token` (requires `cloud.enabled: true`; flag `--auth-k8s-credentials=user-token`, env `RADAR_AUTH_K8S_CREDENTIALS`) to stop Radar from impersonating anyone. The chart then grants the ServiceAccount no `impersonate` permission. Radar treats each tunneled request as follows:
+**Radar Cloud only.** This mode is for clusters connected to a self-managed Radar Cloud control plane that uses user tokens. Standalone Radar doesn't use it. Set it up on the control plane: [User tokens](https://radarhq.io/docs/cloud/self-hosted/user-tokens).
+
+Set `auth.kubernetesCredentials: user-token` (flag `--auth-k8s-credentials=user-token`, env `RADAR_AUTH_K8S_CREDENTIALS`). Radar then stops impersonating people, and the chart grants the ServiceAccount no `impersonate` permission.
+
+**How Radar handles each tunneled request:**
 
 - **With the user's token** (`X-Forwarded-Kubernetes-Token`): Radar asks the API server who the token belongs to (SelfSubjectReview) and makes every live call — writes, logs, exec, Helm — with that token alone, so the API server applies your own RBAC and audit logs show the real user. The forwarded username must match the token's username, or the request is refused.
 - **Without a token, as a person** (for example cross-cluster views): Radar serves its cache, filtered by that person's permissions, and refuses every live call with a 403 (`reason: user_token_required`).
 - **Without a token, as `radar:system:*` (group `radar:system`) or `radar:ai:<org>` (group `radar:ai:reader`)**: Radar reads with its ServiceAccount, after a SubjectAccessReview of every request against that identity's bindings (`cloud.systemRbac`, `cloud.aiRbac`).
 
-The `radar:*` role groups gate only Radar's own settings in this mode; they are never part of the identity Radar checks Kubernetes permissions for. The chart requires `cloud.defaultRbac.create=false`, because the API server would otherwise apply the tier bindings to any token whose IdP groups happen to be named `radar:owner`, `radar:member` or `radar:viewer`. Some Radar features read with the ServiceAccount in every mode and keep doing so: Prometheus queries, permission lookups for other subjects, and the in-cluster reachability check. They never write. The chart drops the ServiceAccount's `pods/exec` and `pods/portforward` grants in this mode (shells and port-forwards run on each person's token), so integrations that fall back to a ServiceAccount port-forward (Hubble, OpenCost) only work over their in-cluster Service. Your API servers must accept the ID tokens your identity provider issues to your self-managed Radar Cloud control plane's sign-in client. The tunnel must be verified: `wss://` with `cloud.insecureSkipVerify=false` (the chart and the binary both refuse otherwise). Tokens whose groups start with `radar:`, `cloud:` or `system:` (other than `system:authenticated`) are refused, because the API server would apply the chart's `radar:system` and `radar:ai:reader` bindings, or `system:masters`, to them; give your API server a non-empty `--oidc-groups-prefix`. Background identities only read through Radar: any other verb is refused before it reaches the API server. Cached reads still rely on the identity Radar Cloud forwards, as in every mode: the cache is filled by the ServiceAccount (Secrets included under auth) and filtered per person, so a compromised control plane could read the cache as anyone it names, although it can't make live calls without that person's token. The ServiceAccount keeps its cluster-wide reads (including Secrets under auth), as in every mode.
+**Requirements:**
+
+- Radar Cloud mode (`cloud.enabled: true`), with `cloud.defaultRbac.create=false`. With the default bindings, the API server would apply them to any token whose IdP groups are named `radar:owner`, `radar:member` or `radar:viewer`.
+- A verified tunnel: `wss://` with `cloud.insecureSkipVerify=false`. The chart and the binary both refuse otherwise.
+- API servers that accept the token the control plane relays: the ID token your identity provider issues to its sign-in client, or the access token, with `auth.oidc.clusterToken: access_token`.
+- A non-empty `--oidc-groups-prefix` on the API servers. Radar refuses tokens whose groups start with `radar:`, `cloud:` or `system:` (other than `system:authenticated`), because the API server would apply the chart's `radar:system` and `radar:ai:reader` bindings, or `system:masters`, to them.
+
+**What still uses the ServiceAccount:**
+
+- The cache. The ServiceAccount fills it and keeps its cluster-wide reads (Secrets included under auth), as in every mode. Each person's view is filtered by the identity Radar Cloud forwards, so a compromised control plane could read the cache as anyone it names, although it can't make live calls without that person's token.
+- Background identities. They only read: any other verb is refused before it reaches the API server.
+- Prometheus queries, permission lookups for other subjects, and the in-cluster reachability check. They never write.
+
+**Other effects:**
+
+- The `radar:*` role groups only gate Radar's own settings. Radar never uses them when it checks Kubernetes permissions.
+- The chart drops the ServiceAccount's `pods/exec` and `pods/portforward` grants, since shells and port-forwards run on each person's token. Integrations that fall back to a ServiceAccount port-forward (Hubble, OpenCost) only work over their in-cluster Service.
 
 Customer-facing documentation for Radar Cloud lives on [radarhq.io](https://radarhq.io). The authoritative reference for the Cloud-mode chart values is the comment block in [`deploy/helm/radar/values.yaml`](../deploy/helm/radar/values.yaml) under `cloud:`.
 
@@ -330,9 +407,9 @@ K8s ships with built-in ClusterRoles that work well with Radar. You don't need t
 
 | Built-in Role | What Users Can Do in Radar |
 |---------------|---------------------------|
-| `view` | See resources, topology, events, logs. No restart, scale, or Helm writes. |
-| `edit` | Everything in `view` + restart, scale, edit resources. Does NOT include exec or port-forward (those require `pods/exec` and `pods/portforward` subresources — use the custom `radar-operator` role below). |
-| `admin` | Everything in `edit` + manage RBAC within namespaces. Same exec/port-forward caveat as `edit`. |
+| `view` | See resources, topology, events, logs. No Secrets, exec, port-forward, restart, scale, or Helm writes. |
+| `edit` | Everything in `view` + restart, scale, edit resources, exec, and full access to Secrets. Also grants `pods/portforward`, which in-cluster Radar turns into a `kubectl` command to copy. To withhold exec or Secrets, use a custom role such as `radar-operator` below, without its optional exec rule. |
+| `admin` | Everything in `edit` + manage RBAC within namespaces. |
 | `cluster-admin` | Full access to everything across all namespaces, including exec and port-forward. |
 
 ```yaml
@@ -453,7 +530,7 @@ When auth is enabled:
 - The **namespace selector** only shows namespaces the user can access
 - **Topology, resources, events, dashboard** are filtered to accessible namespaces
 - **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are gated per-kind via `SubjectAccessReview` — a user sees them only if their own RBAC permits listing that kind, independent of namespace access
-- **Helm releases** are read with the user's own identity, like everything else. Helm stores releases as Secrets, so a user sees a release only where their RBAC grants `list secrets` in the storage namespace — and the K8s built-in `view` role deliberately does not. Radar resolves the namespaces the user can actually read release storage in and lists only there, returning 403 when there are none. Write operations (install, upgrade, rollback, uninstall) are impersonated and need the matching RBAC.
+- **Helm releases** are read with the user's own identity, like everything else. Helm stores releases as Secrets, so a user gets Helm's own records only where their RBAC grants `list secrets` in the storage namespace — and the K8s built-in `view` role deliberately does not. Radar resolves the namespaces the user can actually read release storage in and reads only there. Elsewhere the Helm view falls back to the Helm metadata on objects the user can already read, with status and Helm history unknown (Flux's recorded history still shows if they can read the `HelmRelease`), and reads no Secret; see [Without access to Secrets](helm.md#without-access-to-secrets). `/api/helm/releases` itself still returns 403 when there are none. Write operations (install, upgrade, rollback, uninstall) are impersonated and need the matching RBAC.
 - **Write buttons** (restart, scale, exec, Helm install, etc.) only appear if the user has permission
 - Write operations return **403** from K8s if RBAC denies them (shown as an error toast)
 - The **/api/auth/me** endpoint returns the current user info and whether auth is enabled
