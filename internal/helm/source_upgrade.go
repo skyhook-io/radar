@@ -2,11 +2,14 @@ package helm
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +23,33 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/repo"
 )
+
+var (
+	// errChartVersionMissing marks a classic index without the requested version.
+	errChartVersionMissing = errors.New("selected repository has no chart version")
+	// errChartDownload marks a failed chart download from the selected source;
+	// for OCI that is how a missing version surfaces.
+	errChartDownload = errors.New("download selected chart")
+)
+
+// ChartVersionUnavailable reports whether err came from the selected source
+// lacking the requested chart version or failing to download it.
+func ChartVersionUnavailable(err error) bool {
+	return errors.Is(err, errChartVersionMissing) || errors.Is(err, errChartDownload)
+}
+
+var errSourceTimedOut = errors.New("the chart source didn't respond in time")
+
+// SourceTimedOut reports whether err comes from a chart source that didn't
+// answer in time: a large index, or a source throttling parallel downloads.
+// Retrying shortly is the remedy, not reconfiguring the source.
+func SourceTimedOut(err error) bool {
+	if errors.Is(err, errSourceTimedOut) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
 
 type SourceUpgradeSelection struct {
 	Source           ChartSourceCandidate  `json:"source"`
@@ -44,6 +74,7 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		return nil, "", err
 	}
 	var data []byte
+	var indexDigest string
 	if c.chartPathLocator != nil {
 		ref := selected.Reference
 		if selected.Type == "repository" {
@@ -77,26 +108,16 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 			dl.RegistryClient = rc
 			dl.Options = append(dl.Options, getter.WithRegistryClient(rc))
 		} else {
-			configured := c.configuredRepositoryForSource(selected)
-			if configured == nil {
-				return nil, "", errSourceConflict
-			}
-			snapshot := *configured
-			snapshot.Name = "selected"
-			snapshot.URL = selected.URL
-			dl.Options = append(dl.Options, getter.WithInsecureSkipVerifyTLS(snapshot.InsecureSkipTLSverify))
-			repository, err := repo.NewChartRepository(&snapshot, getter.All(c.settings))
+			snapshot, index, err := c.fetchSelectedRepositoryIndex(selected, dir, 30*time.Second, 0)
 			if err != nil {
 				return nil, "", err
 			}
-			repository.Client, err = getter.NewHTTPGetter(getter.WithTimeout(30 * time.Second))
+			dl.Getters = c.repositoryGettersWithTimeout(&snapshot, 30*time.Second)
+			entry, err := index.Get(name, version)
 			if err != nil {
-				return nil, "", err
+				return nil, "", fmt.Errorf("%w %s for chart %s: %v", errChartVersionMissing, version, name, err)
 			}
-			repository.CachePath = dir
-			if _, err := repository.DownloadIndexFile(); err != nil {
-				return nil, "", fmt.Errorf("could not refresh the selected repository: %w", err)
-			}
+			indexDigest = entry.Digest
 			config := &repo.File{Repositories: []*repo.Entry{&snapshot}}
 			dl.RepositoryConfig = filepath.Join(dir, "repositories.yaml")
 			dl.RepositoryCache = dir
@@ -107,12 +128,15 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		}
 		path, _, err := dl.DownloadTo(ref, version, dir)
 		if err != nil {
-			return nil, "", fmt.Errorf("download selected chart: %w", err)
+			return nil, "", fmt.Errorf("%w: %w", errChartDownload, err)
 		}
 		data, err = os.ReadFile(path)
 		if err != nil {
 			return nil, "", err
 		}
+	}
+	if err := verifyChartDigest(data, indexDigest); err != nil {
+		return nil, "", fmt.Errorf("chart %s version %s: %w", name, version, withChartDigestGuidance(err, true))
 	}
 	sum := sha256.Sum256(data)
 	ch, err := loader.LoadArchive(bytes.NewReader(data))
@@ -126,6 +150,25 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		return nil, "", err
 	}
 	return ch, hex.EncodeToString(sum[:]), nil
+}
+
+// fetchSelectedRepositoryIndex downloads the selected classic repository's
+// current index into dir instead of trusting the local cache, so a read sees
+// the same entries a following download would. maxBytes caps the index
+// (0: no cap).
+func (c *Client) fetchSelectedRepositoryIndex(selected ChartSourceCandidate, dir string, timeout time.Duration, maxBytes int64) (repo.Entry, *repo.IndexFile, error) {
+	configured := c.configuredRepositoryForSource(selected)
+	if configured == nil {
+		return repo.Entry{}, nil, errSourceConflict
+	}
+	snapshot := *configured
+	snapshot.URL = selected.URL
+	index, err := c.downloadRepositoryIndex(snapshot, dir, timeout, maxBytes)
+	if err != nil {
+		return repo.Entry{}, nil, err
+	}
+	snapshot.Name = "selected"
+	return snapshot, index, nil
 }
 
 func sourceSelectionMatches(selection SourceUpgradeSelection, latest *release.Release) bool {

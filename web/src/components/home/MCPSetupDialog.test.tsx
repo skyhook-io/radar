@@ -1,20 +1,34 @@
 // @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { MCPSetupDialog } from './MCPSetupDialog'
 import { mcpEndpointUrl, setBasename } from '../../api/config'
+import { MCP_TOOL_CATALOG } from './mcpToolCatalog'
+
+const clipboard = vi.hoisted(() => ({ ok: true, copied: [] as string[] }))
+vi.mock('@skyhook-io/k8s-ui/utils/clipboard', () => ({
+  copyText: async (text: string) => {
+    if (clipboard.ok) clipboard.copied.push(text)
+    return clipboard.ok
+  },
+}))
 
 describe('MCP setup in read-only mode', () => {
   it('generates client configurations for the retained endpoint and hides writes', () => {
     setBasename('/radar')
     try {
       const url = mcpEndpointUrl(true)
-      const html = renderToStaticMarkup(<MCPSetupDialog open readOnly mcpUrl={url} onClose={() => {}} />)
+      const html = renderToStaticMarkup(<MCPSetupDialog open helmTools readOnly applicationEvidenceAvailable mcpUrl={url} onClose={() => {}} />)
       expect(html).toContain(`claude mcp add --transport http radar ${url}`)
       expect(html).toContain(`codex mcp add radar --url ${url}`)
       expect(html).toContain('/radar/mcp-readonly')
       expect(html).toContain('list_namespaces')
       expect(html).not.toContain('apply_resource')
+      expect(html).not.toContain('exec_pod')
+    expect(html).not.toContain('curl_service')
+      expect(html).not.toContain('collect_application_evidence')
       expect(html).not.toContain('in_cluster')
       expect(html).toContain('Read-only mode blocks write tools')
     } finally {
@@ -22,9 +36,136 @@ describe('MCP setup in read-only mode', () => {
     }
   })
 
-  it('keeps the full catalog in default mode', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+  it('explains disabled exec without including it in the available tool count', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools execTools={false} mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('apply_resource')
     expect(html).toContain('in_cluster')
+    expect(html).toContain('exec_pod')
+    expect(html).toContain('is disabled')
+    expect(html).toContain('--mcp-exec-tools')
+    expect(html).toContain(`${MCP_TOOL_CATALOG.length - 3} tools`)
   })
+
+  it('does not suggest an unsupported flag when the capability is absent', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    expect(html).not.toContain('exec_pod')
+    expect(html).not.toContain('curl_service')
+    expect(html).not.toContain('--mcp-exec-tools')
+  })
+
+  it('shows exec without enabling HTTP', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools execTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    expect(html).toContain('exec_pod')
+    expect(html).not.toContain('curl_service')
+    expect(html).toContain(`${MCP_TOOL_CATALOG.length - 2} tools`)
+    expect(html.indexOf('exec_pod')).toBeGreaterThan(html.indexOf('get_workload_logs'))
+  })
+
+  it('hides exec in read-only mode even if exec is requested', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools readOnly execTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
+    expect(html).not.toContain('exec_pod')
+    expect(html).not.toContain('curl_service')
+    expect(html).toContain(`${MCP_TOOL_CATALOG.filter((tool) => !tool.write && !tool.localOnly).length} tools`)
+  })
+
+  it('keeps the full catalog in default mode', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools applicationEvidenceAvailable mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    expect(html).toContain('apply_resource')
+    expect(html).toContain('in_cluster')
+    expect(html).toContain('collect_application_evidence')
+  })
+
+  it('hides local-only tools unless the server advertises availability', () => {
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    expect(html).toContain('apply_resource')
+    expect(html).not.toContain('collect_application_evidence')
+  })
+})
+
+describe('MCP setup prompt tip', () => {
+  it('tips to name Radar under the client setups, as plain text, without the in-Radar link when no handler is given', () => {
+    const host = document.createElement('div')
+    host.innerHTML = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    const tip = [...host.querySelectorAll('p')].find((p) => p.textContent?.startsWith('Tip:'))
+    expect(tip?.textContent).toBe(
+      "Tip: name Radar in your prompt so your agent uses Radar instead of kubectl, e.g. Use Radar to find what's broken in my cluster and why.",
+    )
+    expect(tip!.querySelector('code.inline-code')?.textContent).toBe("Use Radar to find what's broken in my cluster and why.")
+    expect(tip!.querySelector('button, pre')).toBeNull()
+    expect(tip!.nextElementSibling).toBeNull()
+    const html = host.innerHTML
+    expect(html.indexOf('Tip:')).toBeGreaterThan(html.indexOf('Connect your AI tool'))
+    expect(html.indexOf('Tip:')).toBeLessThan(html.indexOf('list_namespaces'))
+    expect(html).not.toContain('investigate from Radar itself')
+  })
+
+  it('closes the dialog, then opens the composer from the in-Radar link', () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const calls: string[] = []
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    try {
+      act(() => root.render(
+        <MCPSetupDialog
+          open
+          mcpUrl={mcpEndpointUrl()}
+          onClose={() => calls.push('close')}
+          onInvestigate={() => calls.push('investigate')}
+        />,
+      ))
+      const link = [...host.querySelectorAll('button')].find((b) => /investigate from Radar itself/.test(b.textContent ?? ''))
+      expect(link).toBeTruthy()
+      act(() => link!.click())
+      expect(calls).toEqual(['close', 'investigate'])
+    } finally {
+      act(() => root.unmount())
+      host.remove()
+    }
+  })
+
+  it.each([
+    [true, 'Copied'],
+    [false, 'Copy to clipboard'],
+  ])('copies the endpoint and shows the tick only when the copy worked (ok=%s)', async (ok, label) => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    clipboard.ok = ok
+    clipboard.copied = []
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    try {
+      act(() => root.render(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />))
+      const endpoint = [...host.querySelectorAll('code')].find((c) => c.textContent === mcpEndpointUrl())!
+      const copy = endpoint.closest('.relative')!.querySelector('button')!
+      await act(async () => copy.click())
+      expect(clipboard.copied).toEqual(ok ? [mcpEndpointUrl()] : [])
+      expect(copy.getAttribute('aria-label')).toBe(label)
+    } finally {
+      act(() => root.unmount())
+      host.remove()
+    }
+  })
+})
+
+it('shows HTTP independently of exec', () => {
+ const html = renderToStaticMarkup(<MCPSetupDialog open helmTools httpTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+ expect(html).toContain('curl_service')
+ expect(html).not.toContain('exec_pod')
+ expect(html).toContain(`${MCP_TOOL_CATALOG.length - 2} tools`)
+ const readOnly = renderToStaticMarkup(<MCPSetupDialog open helmTools readOnly httpTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
+ expect(readOnly).not.toContain('curl_service')
+})
+
+
+it('hides disabled Helm writes while retaining release reads and other writes', () => {
+  const html = renderToStaticMarkup(<MCPSetupDialog open helmTools={false} mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+  expect(html).not.toContain('manage_helm')
+  expect(html).toContain('get_helm_release')
+  expect(html).toContain('apply_resource')
+})
+
+it('shows registered Helm tools independently of target namespace permissions', () => {
+  const html = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+  expect(html).toContain('manage_helm')
 })

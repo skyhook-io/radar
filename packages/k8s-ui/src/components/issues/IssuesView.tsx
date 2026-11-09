@@ -1,7 +1,8 @@
+import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
-import { CardBody, CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
+import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
@@ -88,8 +89,8 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
         tone="healthy"
         variant="card"
         icon={CircleCheck}
-        headline="Nothing broken right now"
-        body="No active issues across the selected scope."
+        headline="No issues detected"
+        body="Radar's checks found nothing broken in the selected scope. They don't cover every failure, and Audit lists configuration that can still break things."
       />
     ) : (
       <EmptyState headline="No issue data yet" body="Connect a cluster to populate the issue queue." action={emptyAction} />
@@ -288,13 +289,16 @@ export function IssueRow({
             onToggle();
           }
         }}
-        className={`group @container/issue flex cursor-pointer items-center gap-3 border-l-[3px] py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_RAIL_CLASS[severity]}`}
+        className={`group @container/issue flex cursor-pointer items-center gap-3 phone:flex-wrap phone:gap-y-2 border-l-[3px] py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_RAIL_CLASS[severity]}`}
       >
         <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${ISSUE_SEVERITY_TEXT_CLASS[severity]}`} aria-hidden />
 
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{issueTitle(issue)}</span>
+        {/* Phones: the title takes its own line with the badge and reason
+            under it, and the severity, actions and chevron get a last line
+            (the right cluster below wraps under the text). */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1 phone:basis-[calc(100%-30px)]">
+          <div className="flex min-w-0 items-baseline gap-2 phone:flex-wrap phone:gap-y-1">
+            <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:basis-full">{issueTitle(issue)}</span>
             <span className={`shrink-0 self-center ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
             {renderBadges?.(slotCtx)}
             {/* The detector reason rides the title row while COLLAPSED so the
@@ -351,17 +355,28 @@ export function IssueRow({
           {/* Narrow container: the meta chips drop to their own line here rather
               than stealing width from the title on the row above. Hidden once the
               row is wide enough to hold them inline in the right cluster. */}
-          {metaChips('flex @2xl/issue:hidden')}
+          {metaChips('flex @2xl/issue:hidden phone:hidden')}
         </div>
 
         {/* Right cluster — the always-visible affordances (per-row action +
             chevron) plus, on a wide container, the inline meta chips. */}
-        <div className="flex shrink-0 items-center gap-3">
-          {metaChips('hidden @2xl/issue:flex')}
-          {renderActions?.(slotCtx)}
-          <CollapseChevron open={open} className="h-4 w-4" />
+        <div className="flex shrink-0 items-center gap-3 phone:basis-full phone:pl-[30px]">
+          {metaChips('hidden @2xl/issue:flex phone:flex')}
+          <div className="contents phone:ml-auto phone:flex phone:items-center phone:gap-3">
+            {renderActions?.(slotCtx)}
+            <CollapseChevron open={open} className="h-4 w-4" />
+          </div>
         </div>
       </div>
+
+      {(issue.action_primary || issue.hazard) && (
+        <Collapse open={!open} unmountOnExit>
+          <div className="px-4 pb-3 pl-6 text-xs">
+            {issue.cause && <p className="mb-1 text-theme-text-primary">{issue.cause}</p>}
+            <IssueGuidance hazard={issue.hazard} action={issue.action_primary ? issueGuidanceSummary(issue.action, issue.action_primary, issue.hazard) : undefined} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} ordered={issue.reason === 'SharedResourceWarning'} className="text-theme-text-tertiary" />
+          </div>
+        </Collapse>
+      )}
 
       {/* Details unmount after the close transition: a list can hold hundreds
           of rows and the body is the expensive part, so closed rows stay light. */}
@@ -504,11 +519,13 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
       </>
     ) : undefined;
 
+  const guidanceSummary = issueGuidanceSummary(issue.action, issue.action_primary, issue.hazard);
   const hasNextStep =
-    !!issue.action || !!sourceNextStep || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
+    !!guidanceSummary || !!issue.action_secondary?.length || !!sourceNextStep || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
 
   return (
     <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+      <IssueGuidance hazard={issue.hazard} className="text-sm leading-relaxed" />
       {/* When a parsed cause replaces the detector text, the terse reason code
           (CrashLoopBackOff, FailedMount…) rides the eyebrow — it's the greppable
           identifier operators anchor on, and the collapsed header drops it while
@@ -542,7 +559,7 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
           tone="fix"
           labelExtra={nextStepAttribution ?? undefined}
         >
-          {sourceNextStep ?? (issue.action ? <CardBody>{issue.action}</CardBody> : null)}
+          {sourceNextStep ?? <IssueGuidance action={guidanceSummary} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} ordered={issue.reason === 'SharedResourceWarning'} className="text-sm leading-relaxed text-theme-text-secondary" />}
           {/* Survives an override: this is a structured one-click fix with an
               apply path, not advice competing with the host's. */}
           {issue.remediation_kind === 'create-namespace' && issue.remediation_target ? (

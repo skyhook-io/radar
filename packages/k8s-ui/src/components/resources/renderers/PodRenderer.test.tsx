@@ -21,6 +21,70 @@ const pod = {
   status: { phase: 'Running' },
 }
 
+describe('PodRenderer completed readiness conditions', () => {
+  const completionConditions = [
+    { type: 'PodReadyToStartContainers', status: 'False' },
+    { type: 'Initialized', status: 'True', reason: 'PodCompleted' },
+    { type: 'Ready', status: 'False', reason: 'PodCompleted' },
+    { type: 'ContainersReady', status: 'False', reason: 'PodCompleted' },
+    { type: 'PodScheduled', status: 'True' },
+  ]
+  const renderConditions = (phase: string | undefined, conditions = completionConditions) => renderToString(
+    <PodRenderer
+      data={{ ...pod, status: { phase, conditions } }}
+      onCopy={() => undefined}
+      copied={null}
+    />,
+  )
+
+  it('keeps completed readiness observations visible without counting them as failing', () => {
+    const html = renderConditions('Succeeded')
+
+    expect(html).toContain('Conditions (5)')
+    expect(html).not.toContain('failing')
+    expect(html).toContain('PodReadyToStartContainers')
+    expect(html).toContain('ContainersReady')
+    expect(html).toContain('PodCompleted')
+  })
+
+  it('uses successful completion even when readiness reasons are stale or absent', () => {
+    const html = renderConditions('Succeeded', [
+      { type: 'PodReadyToStartContainers', status: 'False' },
+      { type: 'Ready', status: 'False', reason: 'ContainersNotReady' },
+      { type: 'ContainersReady', status: 'False' },
+    ])
+
+    expect(html).toContain('Conditions (3)')
+    expect(html).not.toContain('failing')
+    expect(html).toContain('ContainersNotReady')
+  })
+
+  it.each(['Running', 'Failed', undefined])('retains readiness failures when phase is %s', (phase) => {
+    const html = renderConditions(phase, [
+      { type: 'PodReadyToStartContainers', status: 'False' },
+      { type: 'Ready', status: 'False', reason: 'PodFailed' },
+      { type: 'ContainersReady', status: 'False' },
+    ])
+
+    expect(html).toContain('Conditions (3) · 3 failing')
+  })
+
+  it('does not let a completion reason hide readiness failures on a failed Pod', () => {
+    expect(renderConditions('Failed')).toContain('Conditions (5) · 3 failing')
+  })
+
+  it('retains unrelated false conditions after successful completion', () => {
+    const html = renderConditions('Succeeded', [
+      ...completionConditions,
+      { type: 'example.com/controller-ready', status: 'False', reason: 'ControllerFailed' },
+    ])
+
+    expect(html).toContain('Conditions (6) · 1 failing')
+    expect(html).toContain('example.com/controller-ready')
+    expect(html).toContain('ControllerFailed')
+  })
+})
+
 describe('PodRenderer envFrom expansion', () => {
   it('keeps same-name ConfigMap and Secret values separate', () => {
     const resolvedEnvFrom: ResolvedEnvFrom = {
@@ -481,4 +545,55 @@ it('shows reported running-but-unready nginx readiness as degraded', () => {
   const html = renderToString(<PodRenderer data={data} onCopy={() => {}} copied={null} />)
   expect(html).toMatch(/bg-amber-100[^>]*>Not Ready</)
   expect(html).toMatch(/>running</)
+})
+
+describe('finished Pod resource usage',()=>{
+ it.each(['Succeeded','Failed'])('explains ended live usage for %s without cluster repair advice',phase=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase}}} onCopy={()=>{}} copied={null} metricsUnavailable metricsHistory={{containers:[],metricsUnavailableReason:'not found'}} />)
+  expect(html).toContain('Live resource usage has ended for this Pod')
+  expect(html).toContain('No recorded usage is available.')
+  expect(html).not.toContain('Metrics collection error:')
+  expect(html).not.toContain('Radar cannot read metrics.k8s.io')
+  expect(html).not.toContain('No usage yet: this Pod is not running')
+ })
+ it('keeps a genuine collector error qualified as current on a finished Pod',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null} metricsHistory={{containers:[],collectionError:'forbidden: list pods.metrics.k8s.io'}} />)
+  expect(html).toContain('Current cluster metrics collection error:')
+  expect(html).toContain('forbidden: list pods.metrics.k8s.io')
+  expect(html).toContain('Live resource usage has ended for this Pod')
+ })
+ it('keeps recorded history and hides cached live usage after completion',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null}
+   metrics={{timestamp:'2026-10-25T12:00:00Z',containers:[{name:'cached-live',usage:{cpu:'100m',memory:'1Mi'}}]}}
+   metricsHistory={{containers:[{name:'recorded-history',dataPoints:[{timestamp:'2026-10-25T11:59:00Z',cpu:100,memory:1024}]}]}} />)
+  expect(html).toContain('recorded-history')
+  expect(html).not.toContain('cached-live')
+  expect(html).not.toContain('Last updated:')
+ })
+ it('distinguishes loading from a loaded empty terminal history',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null} metricsHistoryLoading />)
+  expect(html).toContain('Loading recorded usage...')
+  expect(html).not.toContain('No recorded usage is available.')
+ })
+ it('shows a failed terminal history fetch without claiming empty history',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Failed'}}} onCopy={()=>{}} copied={null} metricsHistoryError={new Error('Metrics history not available')} />)
+  expect(html).toContain('Recorded usage could not be loaded')
+  expect(html).toContain('Metrics history not available')
+  expect(html).not.toContain('No recorded usage is available.')
+ })
+ it('retains cached history when its refresh fails',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null}
+   metricsHistory={{containers:[{name:'recorded-history',dataPoints:[{timestamp:'2026-10-25T11:59:00Z',cpu:100,memory:1024}]}]}}
+   metricsHistoryError={new Error('Network request failed')} />)
+  expect(html).toContain('Recorded usage could not be refreshed')
+  expect(html).toContain('recorded-history')
+  expect(html).not.toContain('No recorded usage is available.')
+ })
+
+ it('keeps usage absent when the host wires no metrics state',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null} />)
+  expect(html).not.toContain('Resource Usage')
+  expect(html).not.toContain('Live resource usage has ended')
+ })
+
 })

@@ -72,8 +72,9 @@ func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
 		return k8s.DetectProblems(p.cache, "")
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
+	scope := k8s.NewDetectScope()
 	for _, ns := range namespaces {
-		perNs = append(perNs, k8s.DetectProblems(p.cache, ns))
+		perNs = append(perNs, k8s.DetectProblemsInScope(p.cache, ns, scope))
 	}
 	return flattenNamespacedProblems(perNs)
 }
@@ -92,13 +93,16 @@ func (p *CacheProvider) DetectMissingRefs(namespaces []string) []k8s.Detection {
 		out = append(out, k8s.DetectMissingWebhookRefs(p.cache, p.dynamic, p.discovery, "")...)
 		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, "")...)
 		out = append(out, k8s.DetectMissingCRDRefs(p.cache, p.dynamic, p.discovery, "")...)
+		out = append(out, k8s.DetectLiveTraefikMissingRefs(p.cache, p.dynamic, p.discovery, "", nil)...)
 		return out
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
+	scope := k8s.NewDetectScope()
 	for _, ns := range namespaces {
 		out := k8s.DetectMissingRefs(p.cache, ns)
 		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, ns)...)
 		out = append(out, k8s.DetectMissingCRDRefs(p.cache, p.dynamic, p.discovery, ns)...)
+		out = append(out, k8s.DetectLiveTraefikMissingRefs(p.cache, p.dynamic, p.discovery, ns, scope)...)
 		perNs = append(perNs, out)
 	}
 	// Webhook configs are cluster-scoped — namespace-bounded callers do
@@ -398,10 +402,11 @@ func podReferencesSecret(pod *corev1.Pod, secretName string) bool {
 
 // PodsDependingOnSecretProducer resolves a Secret-producing CR (cert-manager
 // Certificate via spec.secretName, external-secrets ExternalSecret via
-// spec.target.name defaulting to its own name) to the pods that reference the
-// Secret it owns. The producer→Secret edge is declared in the CR spec and the
-// Pod→Secret edge is declared in the pod spec, so the chain is structural. Returns
-// nil when the CR can't be fetched or names no target.
+// spec.target.name defaulting to its own name, Bitnami SealedSecret which the
+// controller forces to its own name) to the pods that reference the Secret it
+// owns. The producer→Secret edge is declared in the CR spec and the Pod→Secret
+// edge is declared in the pod spec, so the chain is structural. Returns nil when
+// the CR can't be fetched or names no target.
 func (p *CacheProvider) PodsDependingOnSecretProducer(group, kind, namespace, name string) (string, []Ref) {
 	if p == nil || p.cache == nil || namespace == "" || name == "" {
 		return "", nil
@@ -419,6 +424,10 @@ func (p *CacheProvider) PodsDependingOnSecretProducer(group, kind, namespace, na
 		if secretName == "" {
 			secretName = name // ExternalSecret defaults the target Secret to its own name
 		}
+	case "SealedSecret":
+		// The controller forces the produced Secret's name to the SealedSecret's
+		// own name; spec.template.metadata.name is overwritten and does not name it.
+		secretName = name
 	}
 	if secretName == "" {
 		return "", nil
@@ -794,15 +803,7 @@ func (p *CacheProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool,
 	if p.discovery == nil {
 		return false, false
 	}
-	kind := p.discovery.GetKindForGVR(gvr)
-	if kind == "" {
-		return false, false
-	}
-	ar, ok := p.discovery.GetResourceWithGroup(kind, gvr.Group)
-	if !ok {
-		return false, false
-	}
-	return ar.Namespaced, true
+	return p.discovery.NamespacedGVR(gvr)
 }
 
 func (p *CacheProvider) karpenterResourceDiscovery(group, kind string) karpenterResourceCoverage {

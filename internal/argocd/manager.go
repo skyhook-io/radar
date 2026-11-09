@@ -62,6 +62,16 @@ type revMetaEntry struct {
 // upstream on every request.
 const repositoriesTTL = 60 * time.Second
 
+// probeEndpointTimeout bounds a single reachability probe. On macOS,
+// resolving any *.local hostname (a common convention for local cluster
+// Gateway/Ingress hostnames) routes through mDNSResponder, which tries
+// multicast DNS first and only falls back to /etc/hosts after its own
+// hardcoded 5s timeout — so a tight probe budget can time out on DNS
+// resolution alone before the TCP connect even starts, misreporting a
+// live, reachable server as unreachable. 8s leaves headroom above that
+// worst case for the actual connect + HTTP round trip.
+var probeEndpointTimeout = 8 * time.Second
+
 // probeTimeout bounds a background probe. probeRetryInterval is the least
 // time between background probes, so a dead argocd-server doesn't get
 // hammered on every insights request and a slow one isn't re-checked on
@@ -69,16 +79,6 @@ const repositoriesTTL = 60 * time.Second
 const (
 	probeTimeout       = 15 * time.Second
 	probeRetryInterval = 30 * time.Second
-
-	// probeEndpointTimeout bounds a single reachability probe. On macOS,
-	// resolving any *.local hostname (a common convention for local cluster
-	// Gateway/Ingress hostnames) routes through mDNSResponder, which tries
-	// multicast DNS first and only falls back to /etc/hosts after its own
-	// hardcoded 5s timeout — so a tight probe budget can time out on DNS
-	// resolution alone before the TCP connect even starts, misreporting a
-	// live, reachable server as unreachable. 8s leaves headroom above that
-	// worst case for the actual connect + HTTP round trip.
-	probeEndpointTimeout = 8 * time.Second
 
 	// readFailureShownFor is how long a failed read stays reported with no
 	// read since. Pages that keep failing ask every 10s and renew it.

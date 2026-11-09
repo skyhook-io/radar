@@ -1,10 +1,12 @@
 package summarycontext
 
 import (
+	"slices"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -30,9 +32,13 @@ func scanTargetCache(t *testing.T) *k8s.ResourceCache {
 		}
 	}
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", UID: "uid-db"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "web-new-a", Namespace: "shop", UID: "uid-web-new-a",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-new", UID: "uid-web-new", Controller: &controller}},
+	}}
 	core, err := k8score.NewResourceCache(k8score.CacheConfig{
-		Client:        fake.NewClientset(rs("web-new", 3), rs("web-old", 0), sts),
-		ResourceTypes: map[string]bool{k8score.ReplicaSets: true, k8score.StatefulSets: true},
+		Client:        fake.NewClientset(rs("web-new", 3), rs("web-old", 0), sts, pod),
+		ResourceTypes: map[string]bool{k8score.ReplicaSets: true, k8score.StatefulSets: true, k8score.Pods: true},
 		DeferredTypes: map[string]bool{},
 	})
 	if err != nil {
@@ -44,7 +50,8 @@ func scanTargetCache(t *testing.T) *k8s.ResourceCache {
 	for {
 		rsList, _ := cache.ReplicaSets().List(labels.Everything())
 		stsList, _ := cache.StatefulSets().List(labels.Everything())
-		if len(rsList) == 2 && len(stsList) == 1 {
+		podList, _ := cache.Pods().List(labels.Everything())
+		if len(rsList) == 2 && len(stsList) == 1 && len(podList) == 1 {
 			return cache
 		}
 		if time.Now().After(deadline) {
@@ -104,7 +111,7 @@ func TestTrivyScanTarget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			managedBy, scanned := trivyScanTarget(cache, tc.report)
+			managedBy, scanned := trivyScanTarget(cache, tc.report, nil)
 			got := ""
 			if managedBy != nil {
 				got = managedBy.Kind + "/" + managedBy.Name
@@ -121,7 +128,7 @@ func TestTrivyScanTarget(t *testing.T) {
 		})
 	}
 
-	if m, s := trivyScanTarget(cache, &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "r", "namespace": "shop"}}}); m != nil || s != nil {
+	if m, s := trivyScanTarget(cache, &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "r", "namespace": "shop"}}}, nil); m != nil || s != nil {
 		t.Fatalf("a report with no owner names nothing: %+v %+v", m, s)
 	}
 }
@@ -144,11 +151,65 @@ func TestTrivyScanTarget_UnsyncedInformerIsNotADeletion(t *testing.T) {
 	t.Cleanup(func() { close(release); core.Stop() })
 	cache := &k8s.ResourceCache{ResourceCache: core}
 
-	managedBy, scanned := trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true))
+	managedBy, scanned := trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true), nil)
 	if scanned == nil || scanned.Missing || scanned.Replicas != nil {
 		t.Fatalf("a ReplicaSet the cache hasn't loaded yet must not read as missing: %+v", scanned)
 	}
 	if managedBy == nil || managedBy.Kind != "ReplicaSet" {
 		t.Fatalf("managedBy = %+v", managedBy)
+	}
+}
+
+// A row adds nothing the caller couldn't read: a scanned object they can't
+// read is described only by the report's own coordinates, and a workload
+// above a readable ReplicaSet is named only when they may read it too.
+func TestTrivyScanTargetReadsOnlyWhatTheCallerMay(t *testing.T) {
+	cache := scanTargetCache(t)
+	deny := func(kinds ...string) func(string, string, string) bool {
+		return func(_, kind, _ string) bool { return !slices.Contains(kinds, kind) }
+	}
+	managedBy, scanned := trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true), deny("ReplicaSet"))
+	if managedBy == nil || managedBy.Kind != "ReplicaSet" || scanned.Replicas != nil || scanned.Missing {
+		t.Fatalf("hidden ReplicaSet: managedBy %+v scanned %+v; want only the report's own coordinates", managedBy, scanned)
+	}
+	if _, gone := trivyScanTarget(cache, scanReport("ReplicaSet", "web-gone", true), deny("ReplicaSet")); gone.Missing {
+		t.Fatalf("hidden ReplicaSet's existence leaked: %+v", gone)
+	}
+	managedBy, scanned = trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true), deny("Deployment"))
+	if managedBy == nil || managedBy.Kind != "ReplicaSet" || scanned.Replicas == nil {
+		t.Fatalf("hidden Deployment: managedBy %+v; want the readable ReplicaSet, not its hidden parent", managedBy)
+	}
+}
+
+// A Pod report reaches the workload through the Pod's ReplicaSet: a caller
+// who can't read that ReplicaSet doesn't get the workload it leads to.
+func TestTrivyPodReportNeedsItsReplicaSetToBeReadable(t *testing.T) {
+	cache := scanTargetCache(t)
+	report := func() *unstructured.Unstructured {
+		u := scanReport("Pod", "web-new-a", false)
+		u.SetOwnerReferences(nil)
+		return u
+	}
+	if m, _ := trivyScanTarget(cache, report(), nil); m == nil || m.Kind != "Deployment" {
+		t.Fatalf("scenario: a readable chain resolves the Deployment, got %+v", m)
+	}
+	noRS := func(_, kind, _ string) bool { return kind != "ReplicaSet" }
+	if m, _ := trivyScanTarget(cache, report(), noRS); m != nil {
+		t.Fatalf("hidden ReplicaSet: managedBy %+v; want none", m)
+	}
+}
+
+func TestTrivyRolloutParentIsAControllerNotArgoCD(t *testing.T) {
+	controller := true
+	replicas := int32(1)
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "canary-rs", Namespace: "shop", UID: "uid-canary-rs", OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "canary", Controller: &controller}}}, Spec: appsv1.ReplicaSetSpec{Replicas: &replicas}}
+	cache, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(rs), ResourceTypes: map[string]bool{k8score.ReplicaSets: true}, DeferredTypes: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Stop()
+	managed, _ := trivyScanTarget(&k8s.ResourceCache{ResourceCache: cache}, scanReport("ReplicaSet", "canary-rs", true), nil)
+	if managed == nil || managed.Kind != "Rollout" || managed.Group != "argoproj.io" || managed.Source != "native" {
+		t.Fatalf("Rollout controller: %+v", managed)
 	}
 }

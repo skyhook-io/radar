@@ -19,10 +19,10 @@ func (s *Server) authorizeCNPGCachedRead(r *http.Request, namespace, resource st
 		return cnpgsvc.ErrCNPGDisconnected
 	}
 	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
-		return &cnpgsvc.ReadFailure{http.StatusForbidden, "no access to namespace " + namespace}
+		return &cnpgsvc.ReadFailure{Status: http.StatusForbidden, Message: "no access to namespace " + namespace}
 	}
 	if !s.canRead(r, cnpgsvc.Group, resource, namespace, "get") {
-		return &cnpgsvc.ReadFailure{http.StatusForbidden, "no access to " + resource + ".postgresql.cnpg.io in namespace " + namespace}
+		return &cnpgsvc.ReadFailure{Status: http.StatusForbidden, Message: "no access to " + resource + ".postgresql.cnpg.io in namespace " + namespace}
 	}
 	for _, g := range extra {
 		var allowed bool
@@ -32,7 +32,7 @@ func (s *Server) authorizeCNPGCachedRead(r *http.Request, namespace, resource st
 			allowed = s.canReadSubresource(r, g.Group, g.Resource, g.Subresource, namespace, g.Verb)
 		}
 		if !allowed {
-			return &cnpgsvc.ReadFailure{http.StatusForbidden, "no access to " + g.Resource + " in namespace " + namespace}
+			return &cnpgsvc.ReadFailure{Status: http.StatusForbidden, Message: "no access to " + g.Resource + " in namespace " + namespace}
 		}
 	}
 	return nil
@@ -43,11 +43,11 @@ func cnpgCachedResourceResult(object *unstructured.Unstructured, err error, kind
 	case err == nil && object != nil:
 		return object, nil
 	case err == nil, errors.Is(err, k8s.ErrUnknownDynamicKind):
-		return nil, &cnpgsvc.ReadFailure{http.StatusNotFound, "CloudNativePG " + kind + " " + namespace + "/" + name + " not found"}
+		return nil, &cnpgsvc.ReadFailure{Status: http.StatusNotFound, Message: "CloudNativePG " + kind + " " + namespace + "/" + name + " not found"}
 	case errors.Is(err, integration.ErrDynamicNotSynced):
-		return nil, &cnpgsvc.ReadFailure{http.StatusServiceUnavailable, "CloudNativePG " + kind + "s are still syncing"}
+		return nil, &cnpgsvc.ReadFailure{Status: http.StatusServiceUnavailable, Message: "CloudNativePG " + kind + "s are still syncing"}
 	default:
-		return nil, fmt.Errorf("%w: %w", &cnpgsvc.ReadFailure{http.StatusInternalServerError, "failed to read CloudNativePG " + kind}, err)
+		return nil, fmt.Errorf("%w: %w", &cnpgsvc.ReadFailure{Status: http.StatusInternalServerError, Message: "failed to read CloudNativePG " + kind}, err)
 	}
 }
 

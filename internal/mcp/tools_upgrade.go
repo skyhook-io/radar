@@ -140,8 +140,8 @@ func (a mcpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource str
 	return upgrade.EvidenceAuthorizationDecision{Allowed: allowed, Authoritative: true}
 }
 
-func (a mcpUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) []string {
-	return filterNamespacesByCanRead(a.ctx, group, resource, "list", namespaces)
+func (a mcpUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) ([]string, bool) {
+	return filterNamespacesByCanReadDecision(a.ctx, group, resource, "list", namespaces)
 }
 
 func handleGetUpgradeReadiness(ctx context.Context, req *mcp.CallToolRequest, input upgradeReadinessInput) (*mcp.CallToolResult, any, error) {

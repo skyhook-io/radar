@@ -182,6 +182,12 @@ type supportedCRDResource struct {
 // drift checks. Only installed catalog entries are warmed, so watch identities
 // stay bounded even when discovery exposes an unbounded CRD set.
 var supportedCRDFallbacks = []supportedCRDResource{
+	{Group: "opentelemetry.io", Versions: []string{"v1beta1", "v1alpha1"}, Resource: "opentelemetrycollectors", Kind: "OpenTelemetryCollector", Namespaced: true},
+	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "metrictemplates", Kind: "MetricTemplate", Namespaced: true},
+	{Group: "core.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "strimzipodsets", Kind: "StrimziPodSet", Namespaced: true},
+	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnects", Kind: "KafkaConnect", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnectors", Kind: "KafkaConnector", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applications", Kind: "Application", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applicationsets", Kind: "ApplicationSet", Namespaced: true},
@@ -220,6 +226,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "mutatingwebhookconfigurations", Kind: "MutatingWebhookConfiguration", Namespaced: false},
 	{Group: "scheduling.k8s.io", Versions: []string{"v1"}, Resource: "priorityclasses", Kind: "PriorityClass", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gatewayclasses", Kind: "GatewayClass", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gateways", Kind: "Gateway", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "httproutes", Kind: "HTTPRoute", Namespaced: true},

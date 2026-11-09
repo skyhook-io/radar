@@ -1,13 +1,17 @@
-import { forwardRef, useMemo, useState } from 'react'
+import { forwardRef, useEffect, useMemo, useState, useRef, useImperativeHandle } from 'react'
 import { Omnibar, type OmnibarHandle } from './Omnibar'
-import { useSearch, useNamespaceScope, useContexts, type SearchHit } from '../../api/client'
+import { useSearch, useNamespaceScope, useContexts, type SearchHit, type SearchResult } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import { loadRecentResources, recordRecentResource } from '../../hooks/useRecentResources'
 import { useCommandItems, type CommandItemCallbacks } from './command-items'
+import { PENDING_RETRY_BUDGET_MS, PENDING_RETRY_MS, searchCoverageNote } from './searchCoverageNote'
+import { useDiagnose } from '../diagnose/DiagnoseContext'
 
 interface RadarOmnibarProps extends CommandItemCallbacks {
   onOpenResource: (hit: SearchHit) => void
 }
+
+const stillLoading = (data: SearchResult | undefined) => !!data?.coverage?.gaps.some((gap) => gap.code === 'kind_sync_pending')
 
 // Radar standalone's omnibar: wires the injectable Omnibar to Radar's own hooks
 // (cluster /api/search, kubeconfig contexts, API discovery, recents). Radar Hub
@@ -16,11 +20,31 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   { onOpenResource, ...callbacks },
   ref,
 ) {
+  const omnibarRef = useRef<OmnibarHandle>(null)
+  useImperativeHandle(ref, () => ({
+    focus: () => omnibarRef.current?.focus(),
+    addModifier: (modifier) => omnibarRef.current?.addModifier(modifier),
+  }), [])
   // The omnibar debounces internally and emits the query to search here.
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  // The query whose still-loading re-queries ran out of budget while open.
+  const [exhaustedQuery, setExhaustedQuery] = useState<string | null>(null)
 
-  const { data: searchData, isFetching, isPlaceholderData, isError } = useSearch(query, { enabled: open, globalNs: true })
+  const { data: searchData, isFetching, isPlaceholderData, isError } = useSearch(query, {
+    context: 'status',
+    enabled: open,
+    globalNs: true,
+    refetchInterval: (data) => (open && stillLoading(data) && exhaustedQuery !== query ? PENDING_RETRY_MS : false),
+  })
+  const pending = !isPlaceholderData && stillLoading(searchData)
+  useEffect(() => {
+    if (!open || !pending) return
+    const timer = setTimeout(() => setExhaustedQuery(query), PENDING_RETRY_BUDGET_MS)
+    return () => clearTimeout(timer)
+  }, [open, pending, query])
+  useEffect(() => { if (!open) setExhaustedQuery(null) }, [open])
+
   const { data: nsScope } = useNamespaceScope()
   const { data: apiResources } = useAPIResources()
   const { data: contexts } = useContexts()
@@ -32,10 +56,30 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   }), [nsScope, apiResources])
 
   const commandItems = useCommandItems(callbacks)
+  // Words that find nothing (or more than a lookup) can become a question;
+  // the composer opens with them so where and since when stay visible.
+  const diagnose = useDiagnose()
+  const onInvestigateQuery = diagnose.available && diagnose.questions
+    ? // The omnibar seeds its ns: pills from the namespace picker, so no pill
+      // means the engineer cleared the scope: start across the cluster.
+      ({ text, namespaces }: { text: string; namespaces: string[] }) =>
+        diagnose.openQuestion({ text, namespaces })
+    : undefined
+  const { onNavigateKind } = callbacks
+  const note = searchCoverageNote(searchData?.coverage, {
+    hits: searchData?.hits,
+    query,
+    recheckKind: (kind) => omnibarRef.current?.addModifier({ key: 'kind', value: kind }),
+    pendingExhausted: exhaustedQuery === query,
+    openKindList: (kind, group) => {
+      const resource = apiResources?.find((r) => r.kind === kind && r.group === group)
+      return resource ? () => onNavigateKind(resource.name, resource.group) : undefined
+    },
+  })
 
   return (
     <Omnibar
-      ref={ref}
+      ref={omnibarRef}
       onOpenResource={onOpenResource}
       commandItems={commandItems}
       onQueryChange={(q, o) => { setQuery(q); setOpen(o) }}
@@ -43,8 +87,10 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
       isFetching={isFetching}
       isError={isError}
       isPlaceholderData={isPlaceholderData}
+      note={note}
       modifierOptions={modifierOptions}
       seedNamespaces={nsScope?.actives}
+      onInvestigateQuery={onInvestigateQuery}
       loadRecents={() => loadRecentResources(contextKey)}
       recordRecent={(r) => recordRecentResource(r, contextKey)}
     />

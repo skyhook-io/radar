@@ -3,8 +3,6 @@ package k8s
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -17,41 +15,15 @@ type MetricsMeta = k8score.MetricsMeta
 type ContainerMetrics = k8score.ContainerMetrics
 type ResourceUsage = k8score.ResourceUsage
 
-const metricsDiscoveryMissRefreshInterval = 30 * time.Second
-
-var metricsDiscoveryMissRefresh = struct {
-	sync.Mutex
-	discovery *ResourceDiscovery
-	at        time.Time
-}{}
-
 func ResolveMetricsGVR(resource string) (schema.GroupVersionResource, bool) {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
 		return schema.GroupVersionResource{}, false
 	}
 	_ = discovery.RefreshIfStale()
-	if gvr, ok := discovery.GetGVRWithGroup(resource, k8score.MetricsAPIGroup); ok {
-		return gvr, true
-	}
-
-	metricsDiscoveryMissRefresh.Lock()
-	defer metricsDiscoveryMissRefresh.Unlock()
-	if gvr, ok := discovery.GetGVRWithGroup(resource, k8score.MetricsAPIGroup); ok {
-		return gvr, true
-	}
-	if metricsDiscoveryMissRefresh.discovery != discovery {
-		metricsDiscoveryMissRefresh.discovery = discovery
-		metricsDiscoveryMissRefresh.at = time.Time{}
-	}
-	if time.Since(metricsDiscoveryMissRefresh.at) < metricsDiscoveryMissRefreshInterval {
-		return schema.GroupVersionResource{}, false
-	}
-	metricsDiscoveryMissRefresh.at = time.Now()
-	if err := discovery.Refresh(); err != nil {
-		return schema.GroupVersionResource{}, false
-	}
-	return discovery.GetGVRWithGroup(resource, k8score.MetricsAPIGroup)
+	return discovery.LookupRefreshingOnMiss(func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) {
+		return d.GetGVRWithGroup(resource, k8score.MetricsAPIGroup)
+	})
 }
 
 func MetricsAPIPath(resource string) (string, bool) {

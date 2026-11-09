@@ -46,6 +46,7 @@ import {
 import { ReadyBar } from './ReadyBar'
 import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo, BatchSignalChip } from './AppChips'
 import { AppIdentityTooltip, EnvHint, RolloutSummaryTooltip } from './AppTooltips'
+import { FilterRailPanel } from '../shared/FilterRailPanel'
 
 function ApplicationRuntimeCell({ apps, workloadClass, ready, desired }: { apps: AppRow[]; workloadClass: AppWorkloadClass; ready: number; desired: number }) {
   if (workloadClass !== 'job') {
@@ -337,6 +338,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // showSystem lives in the Filters rail, so Clear resets it too (and its
   // non-default ON state counts as an active filter that surfaces the button).
   const anyFilterActive = filters.isActive
+  const activeFilterCount = fHealth.size + fClass.size + fType.size + fEnv.size + fSource.size + (systemCount > 0 && showSystem ? 1 : 0)
   const clearAllFilters = () => {
     filters.clearAll()
   }
@@ -355,7 +357,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
           actions={
             <>
               {headerActions}
-              <SummaryTile label={total === 1 ? 'application' : 'applications'} value={total} loading={initialLoading} />
+              <SummaryTile label={total === 1 ? 'application' : 'applications'} phoneLabel={total === 1 ? 'app' : 'apps'} value={total} loading={initialLoading} />
               {healthTile('unhealthy', 'error')}
               {healthTile('degraded', 'warning')}
               {healthTile('healthy', 'success')}
@@ -381,13 +383,12 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             Arbitrary 900px breakpoint (not `sm`) so the collapse is independent of
             the consuming app's Tailwind breakpoint config (Hub uses defaults). */}
         <aside className="flex w-52 shrink-0 flex-col overflow-hidden border-r border-theme-border bg-theme-surface/90 max-[899px]:max-h-72 max-[899px]:w-full max-[899px]:border-b max-[899px]:border-r-0">
-          <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
-            <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
-            {anyFilterActive && (
+          <FilterRailPanel
+            activeCount={activeFilterCount}
+            clear={anyFilterActive && (
               <button type="button" onClick={clearAllFilters} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">Clear</button>
             )}
-          </div>
-          <div className="flex-1 overflow-y-auto">
+          >
             {initialLoading ? (
               <BoardRailSkeleton
                 sections={[
@@ -414,7 +415,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             )}
               </>
             )}
-          </div>
+          </FilterRailPanel>
         </aside>
 
         {/* Content: toolbar (search + sort) over the scrollable table. */}

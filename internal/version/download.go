@@ -152,6 +152,23 @@ func DownloadAsset(ctx context.Context, url string, dest string, progress Progre
 	return nil
 }
 
+// checksumFor reads sha256sum output ("hash  name", or "hash *name" in binary
+// mode, which is what sha256sum writes on Windows) and returns the hash for
+// assetName.
+func checksumFor(r io.Reader, assetName string) (string, error) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		parts := strings.Fields(scanner.Text())
+		if len(parts) == 2 && strings.TrimPrefix(parts[1], "*") == assetName {
+			return parts[0], nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read checksums: %w", err)
+	}
+	return "", fmt.Errorf("no checksum found for %s", assetName)
+}
+
 // VerifyChecksum downloads the checksums file from the release and verifies
 // that the given asset matches its expected SHA256 hash.
 func VerifyChecksum(ctx context.Context, release *githubReleaseWithAssets, assetPath string, assetName string) error {
@@ -185,22 +202,9 @@ func VerifyChecksum(ctx context.Context, release *githubReleaseWithAssets, asset
 		return fmt.Errorf("checksums download returned HTTP %d", resp.StatusCode)
 	}
 
-	// Parse checksum file (format: "sha256hash  filename")
-	var expectedHash string
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.Fields(line)
-		if len(parts) == 2 && parts[1] == assetName {
-			expectedHash = parts[0]
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read checksums: %w", err)
-	}
-	if expectedHash == "" {
-		return fmt.Errorf("no checksum found for %s", assetName)
+	expectedHash, err := checksumFor(resp.Body, assetName)
+	if err != nil {
+		return err
 	}
 
 	// Hash the downloaded file

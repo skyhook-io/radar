@@ -1,0 +1,461 @@
+{
+  "description": "JobSet root lifecycle. Go's jobset.Lifecycle must return phase/outcome; the topology node (pkg/topology) and the UI status badge (getJobSetStatus) must show label at level. Condition types are unique per JobSet here, as the API keeps them.",
+  "cases": [
+    {
+      "name": "controller has not reported",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        }
+      },
+      "phase": "unknown",
+      "outcome": "",
+      "label": "Unknown",
+      "level": "unknown"
+    },
+    {
+      "name": "reported roles with no Jobs yet",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "replicatedJobsStatus": [
+            {
+              "name": "workers"
+            }
+          ]
+        }
+      },
+      "phase": "pending",
+      "outcome": "",
+      "label": "Pending",
+      "level": "neutral"
+    },
+    {
+      "name": "reported zero counts",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "replicatedJobsStatus": [
+            {
+              "name": "workers",
+              "active": 0,
+              "ready": 0
+            }
+          ]
+        }
+      },
+      "phase": "pending",
+      "outcome": "",
+      "label": "Pending",
+      "level": "neutral"
+    },
+    {
+      "name": "active children",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "replicatedJobsStatus": [
+            {
+              "name": "workers",
+              "active": 2,
+              "ready": 1
+            }
+          ]
+        }
+      },
+      "phase": "active",
+      "outcome": "",
+      "label": "Active",
+      "level": "neutral"
+    },
+    {
+      "name": "child failures alone are not terminal",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "replicatedJobsStatus": [
+            {
+              "name": "workers",
+              "failed": 1
+            }
+          ]
+        }
+      },
+      "phase": "active",
+      "outcome": "",
+      "label": "Active",
+      "level": "neutral"
+    },
+    {
+      "name": "terminal Failed with its condition reason",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "terminalState": "Failed",
+          "conditions": [
+            {
+              "type": "Failed",
+              "status": "True",
+              "reason": "ReachedMaxRestarts"
+            }
+          ]
+        }
+      },
+      "phase": "finished",
+      "outcome": "failed",
+      "label": "ReachedMaxRestarts",
+      "level": "unhealthy"
+    },
+    {
+      "name": "terminal Failed without a condition",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "terminalState": "Failed"
+        }
+      },
+      "phase": "finished",
+      "outcome": "failed",
+      "label": "Failed",
+      "level": "unhealthy"
+    },
+    {
+      "name": "terminal Failed wins over Completed",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "terminalState": "Failed",
+          "conditions": [
+            {
+              "type": "Completed",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "finished",
+      "outcome": "failed",
+      "label": "Failed",
+      "level": "unhealthy"
+    },
+    {
+      "name": "terminal Completed",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "terminalState": "Completed",
+          "conditions": [
+            {
+              "type": "Completed",
+              "status": "True",
+              "reason": "AllJobsCompleted"
+            }
+          ]
+        }
+      },
+      "phase": "finished",
+      "outcome": "succeeded",
+      "label": "Completed",
+      "level": "neutral"
+    },
+    {
+      "name": "unrecognized terminal state",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "terminalState": "Future",
+          "conditions": [
+            {
+              "type": "Completed",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "unknown",
+      "outcome": "",
+      "label": "Unknown",
+      "level": "unknown"
+    },
+    {
+      "name": "Failed condition without terminal state",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Failed",
+              "status": "True",
+              "reason": "FailurePolicy"
+            }
+          ]
+        }
+      },
+      "phase": "finished",
+      "outcome": "failed",
+      "label": "FailurePolicy",
+      "level": "unhealthy"
+    },
+    {
+      "name": "Failed condition without a reason",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Failed",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "finished",
+      "outcome": "failed",
+      "label": "Failed",
+      "level": "unhealthy"
+    },
+    {
+      "name": "False Failed condition decides nothing",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Failed",
+              "status": "False"
+            }
+          ],
+          "replicatedJobsStatus": [
+            {
+              "name": "workers",
+              "active": 1
+            }
+          ]
+        }
+      },
+      "phase": "active",
+      "outcome": "",
+      "label": "Active",
+      "level": "neutral"
+    },
+    {
+      "name": "Completed condition",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Completed",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "finished",
+      "outcome": "succeeded",
+      "label": "Completed",
+      "level": "neutral"
+    },
+    {
+      "name": "suspended",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "spec": {
+          "suspend": true
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Suspended",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "suspended",
+      "outcome": "",
+      "label": "Suspended",
+      "level": "neutral"
+    },
+    {
+      "name": "resuming in order keeps Suspended while starting",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "spec": {
+          "suspend": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Suspended",
+              "status": "True"
+            },
+            {
+              "type": "StartupPolicyInProgress",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "active",
+      "outcome": "",
+      "label": "Starting",
+      "level": "degraded"
+    },
+    {
+      "name": "suspend requested wins over startup",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "spec": {
+          "suspend": true
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Suspended",
+              "status": "True"
+            },
+            {
+              "type": "StartupPolicyInProgress",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "suspended",
+      "outcome": "",
+      "label": "Suspended",
+      "level": "neutral"
+    },
+    {
+      "name": "recreating",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "RestartingJobSet",
+              "status": "True"
+            }
+          ],
+          "replicatedJobsStatus": []
+        }
+      },
+      "phase": "active",
+      "outcome": "",
+      "label": "Restarting",
+      "level": "degraded"
+    },
+    {
+      "name": "starting",
+      "jobSet": {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+          "name": "train",
+          "namespace": "ml"
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "StartupPolicyInProgress",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "phase": "active",
+      "outcome": "",
+      "label": "Starting",
+      "level": "degraded"
+    }
+  ]
+}

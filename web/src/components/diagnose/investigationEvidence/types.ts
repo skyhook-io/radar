@@ -1,4 +1,5 @@
 import { type Issue, type IssueRecentChange } from "@skyhook-io/k8s-ui";
+import { type UncheckedSource } from "../../../api/client";
 import { type TimeSeries } from "@skyhook-io/k8s-ui/components/charts";
 import {
   type DiagnosisChangeContext,
@@ -103,12 +104,14 @@ export interface InvestigationResourceContext extends DiagnosisResourceContext {
     highestSeverity?: string;
     topReason?: string;
     bySource?: Record<string, number>;
+    unchecked?: UncheckedSource[];
   };
   auditSummary?: {
     count: number;
     highestSeverity?: string;
     topFinding?: string;
   };
+  relatedFindings?: unknown;
   policySummary?: unknown;
   podSummary?: unknown;
   templateDivergence?: {
@@ -381,6 +384,8 @@ export type InvestigationEvidenceData =
   | {
       type: "issue";
       issue: Issue;
+      /** Association anchor; parent verification cannot establish recovery of this issue. */
+      associatedVia?: DiagnosisResourceRef;
       /**
        * A broad `issues` query can return failures from other resources. Keep
        * those factual observations, but do not let agent selection alone imply
@@ -459,6 +464,21 @@ export type InvestigationEvidenceData =
       type: "inventory";
       resources: InvestigationResourceSummary[];
       scope: string;
+      /**
+       * Set only when Radar's collector read the kind in just these
+       * namespaces: a name missing from the rows is unknown outside them.
+       */
+      namespacesRead?: string[];
+      /**
+       * Namespaces read that the listing doesn't name, because there were too
+       * many to list; they were read, so they are not a gap.
+       */
+      namespacesReadOmitted?: number;
+      /**
+       * Radar's own sentence for a partial or narrowed list: what it didn't
+       * read and why, shown with the rows so they never read as everything.
+       */
+      coverageNote?: string;
     }
   | {
       type: "ranking";
@@ -545,6 +565,8 @@ export interface InvestigationMetricsEvidence {
   selectorsUnknown?: boolean;
   subject?: DiagnosisResourceRef;
   pods?: number;
+  /** The pods a diagnose chart summed, by name, when its bundle listed them all. */
+  podNames?: string[];
   partial?: boolean;
 }
 export interface InvestigationEvidenceObservation {

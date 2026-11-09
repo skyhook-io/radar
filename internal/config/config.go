@@ -25,6 +25,8 @@ type Config struct {
 	Port                      int      `json:"port,omitempty"`
 	NoBrowser                 bool     `json:"noBrowser,omitempty"`
 	Browser                   string   `json:"browser,omitempty"`
+	NoVersionCheck            bool     `json:"noVersionCheck,omitempty"`
+	DisableAutoPortForward    bool     `json:"disableAutoPortForward,omitempty"`
 	TimelineStorage           string   `json:"timelineStorage,omitempty"`
 	TimelineDBPath            string   `json:"timelineDbPath,omitempty"`
 	TimelineRetention         string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables age cleanup
@@ -48,6 +50,8 @@ type Config struct {
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
 	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
 	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
+	MCPExecTools             *bool             `json:"mcpExecTools,omitempty"`
+	MCPHTTPTools             *bool             `json:"mcpHttpTools,omitempty"`
 	MCPReadOnly              *bool             `json:"mcpReadOnly,omitempty"`
 	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 	// DebugImage is the image used for ephemeral debug containers and node debug

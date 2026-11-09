@@ -136,6 +136,7 @@ func relatedMissingNodeClassIssueForAuthTest(pool, nodeClass issues.Ref) []issue
 }
 
 func TestRESTPodTemplateEvidenceRequiresKindRead(t *testing.T) {
+	addPackageNamespaces(t, "test")
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	s.permCache.Set("template-reader", nil, perms)

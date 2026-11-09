@@ -32,7 +32,7 @@ func TestGetChangesRefusesUntilConnected(t *testing.T) {
 		want   string
 	}{
 		{k8s.ConnectionStatus{State: k8s.StateConnecting}, "cluster_connecting: Cluster is still connecting, please retry shortly"},
-		{k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "dial tcp: i/o timeout"}, "not connected to cluster: dial tcp: i/o timeout"},
+		{k8s.ConnectionStatus{State: k8s.StateDisconnected, Error: "dial tcp: i/o timeout"}, "cluster_disconnected: not connected to cluster: dial tcp: i/o timeout. " + restoreConnection},
 	} {
 		k8s.SetConnectionStatus(tc.status)
 		result, _, err := handleGetChanges(context.Background(), nil, getChangesInput{})

@@ -314,18 +314,19 @@ func rolePriority(role NodeRole) int {
 	}
 }
 
+var kindPriorities = map[string]int{
+	"Namespace": 0, "AppProject": 1, "ServiceAccount": 2,
+	"Secret": 3, "SealedSecret": 3, "ConfigMap": 4,
+	"CustomResourceDefinition": 5,
+	"ClusterRole":              6, "ClusterRoleBinding": 7, "Role": 8, "RoleBinding": 9,
+	"Service":    10,
+	"Deployment": 11, "Rollout": 11, "StatefulSet": 11, "DaemonSet": 11,
+	"ReplicaSet": 12, "Pod": 13,
+	"Ingress": 14, "Gateway": 14, "HTTPRoute": 15,
+}
+
 func kindPriority(kind string) int {
-	priorities := map[string]int{
-		"Namespace": 0, "AppProject": 1, "ServiceAccount": 2,
-		"Secret": 3, "SealedSecret": 3, "ConfigMap": 4,
-		"CustomResourceDefinition": 5,
-		"ClusterRole":              6, "ClusterRoleBinding": 7, "Role": 8, "RoleBinding": 9,
-		"Service":    10,
-		"Deployment": 11, "Rollout": 11, "StatefulSet": 11, "DaemonSet": 11,
-		"ReplicaSet": 12, "Pod": 13,
-		"Ingress": 14, "Gateway": 14, "HTTPRoute": 15,
-	}
-	if p, ok := priorities[kind]; ok {
+	if p, ok := kindPriorities[kind]; ok {
 		return p
 	}
 	return 20

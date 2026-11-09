@@ -8,16 +8,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
-
-var jobSetV1Alpha2 = schema.GroupVersionKind{
-	Group:   "jobset.x-k8s.io",
-	Version: "v1alpha2",
-	Kind:    "JobSet",
-}
 
 const maxStateMessageBytes = 256
 
@@ -27,15 +21,14 @@ const maxStateMessageBytes = 256
 // tier retains them with bounded messages.
 func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resourcecontext.ExecutionSummary {
 	u, ok := obj.(*unstructured.Unstructured)
-	if !ok || u.GroupVersionKind() != jobSetV1Alpha2 {
+	if !ok || u.GroupVersionKind() != jobset.GVK {
 		return nil
 	}
 
 	detail := jobSetCounts(u)
-	conditions := jobSetConditions(u)
 	nativeState, _, _ := unstructured.NestedString(u.Object, "status", "terminalState")
 	suspendRequested, _, _ := unstructured.NestedBool(u.Object, "spec", "suspend")
-	phase, outcome, primary := jobSetPhase(nativeState, conditions, detail.Jobs, suspendRequested, tier)
+	phase, outcome, primary := jobSetPhase(jobset.Lifecycle(u), jobSetConditions(u), tier)
 	detail.Restarts = jobSetRestarts(u)
 	return &resourcecontext.ExecutionSummary{
 		Controller:        resourcecontext.ExecutionControllerJobSet,
@@ -51,44 +44,19 @@ func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resource
 
 func jobSetCounts(u *unstructured.Unstructured) resourcecontext.JobSetExecution {
 	detail := resourcecontext.JobSetExecution{}
-	replicatedJobs, _, _ := unstructured.NestedSlice(u.Object, "spec", "replicatedJobs")
-	detail.DeclaredRoles = int64(len(replicatedJobs))
-	for _, item := range replicatedJobs {
-		role, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		replicas, found, _ := unstructured.NestedInt64(role, "replicas")
-		if !found {
-			// Match the controller default for omitted replicas.
-			replicas = 1
-		}
-		detail.DeclaredJobs += replicas
-	}
-	statuses, observed, _ := unstructured.NestedSlice(u.Object, "status", "replicatedJobsStatus")
-	if !observed {
+	detail.DeclaredRoles, detail.DeclaredJobs = jobset.Declared(u)
+	observed := jobset.ObservedChildren(u)
+	if observed == nil {
 		return detail
 	}
-	jobs := &resourcecontext.ChildJobCounts{}
-	var observedRoles int64
-	for _, item := range statuses {
-		status, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _, _ := unstructured.NestedString(status, "name")
-		if name == "" {
-			continue
-		}
-		observedRoles++
-		jobs.Ready += int64Field(status, "ready")
-		jobs.Active += int64Field(status, "active")
-		jobs.Succeeded += int64Field(status, "succeeded")
-		jobs.Failed += int64Field(status, "failed")
-		jobs.Suspended += int64Field(status, "suspended")
+	detail.ObservedRoles = &observed.Roles
+	detail.Jobs = &resourcecontext.ChildJobCounts{
+		Ready:     observed.Ready,
+		Active:    observed.Active,
+		Succeeded: observed.Succeeded,
+		Failed:    observed.Failed,
+		Suspended: observed.Suspended,
 	}
-	detail.ObservedRoles = &observedRoles
-	detail.Jobs = jobs
 	return detail
 }
 
@@ -176,55 +144,31 @@ func stringField(object map[string]any, field string) string {
 	return value
 }
 
+// jobSetPhase maps the shared lifecycle onto the execution vocabulary and
+// attaches the deciding condition at the requested tier.
 func jobSetPhase(
-	nativeState string,
+	state jobset.State,
 	conditions map[string]resourcecontext.ConditionSummary,
-	jobs *resourcecontext.ChildJobCounts,
-	suspendRequested bool,
 	tier resourcecontext.ContextTier,
 ) (resourcecontext.ExecutionPhase, resourcecontext.ExecutionOutcome, *resourcecontext.ConditionSummary) {
-	// terminalState is authoritative even when conditions disagree; this is not
-	// a claim about freshness. Unknown native values must not fall through.
-	switch nativeState {
-	case "Failed":
-		return resourcecontext.ExecutionFinished, resourcecontext.ExecutionFailed, conditionForExecution(conditions, "Failed", tier)
-	case "Completed":
-		return resourcecontext.ExecutionFinished, resourcecontext.ExecutionSucceeded, conditionForExecution(conditions, "Completed", tier)
-	case "":
-	default:
-		return resourcecontext.ExecutionUnknown, "", nil
+	var primary *resourcecontext.ConditionSummary
+	if state.Condition != "" {
+		primary = conditionForExecution(conditions, state.Condition, tier)
 	}
-	for _, terminal := range []struct {
-		condition string
-		outcome   resourcecontext.ExecutionOutcome
-	}{{"Failed", resourcecontext.ExecutionFailed}, {"Completed", resourcecontext.ExecutionSucceeded}} {
-		if condition := conditionForExecution(conditions, terminal.condition, tier); condition != nil {
-			return resourcecontext.ExecutionFinished, terminal.outcome, condition
-		}
-	}
-	// In-order resume retains Suspended until every role has started.
-	if !suspendRequested {
-		if condition := conditionForExecution(conditions, "StartupPolicyInProgress", tier); condition != nil {
-			return resourcecontext.ExecutionActive, "", condition
-		}
-	}
-	if condition := conditionForExecution(conditions, "Suspended", tier); condition != nil {
-		return resourcecontext.ExecutionSuspended, "", condition
-	}
-	for _, conditionType := range []string{"RestartingJobSet", "StartupPolicyInProgress"} {
-		if condition := conditionForExecution(conditions, conditionType, tier); condition != nil {
-			return resourcecontext.ExecutionActive, "", condition
-		}
-	}
-	// Child activity cannot prove a root outcome. Missing counts also cannot
-	// establish inactivity, including when only restart totals are reported.
-	if jobs == nil {
-		return resourcecontext.ExecutionUnknown, "", nil
-	}
-	if jobs.Ready > 0 || jobs.Active > 0 || jobs.Succeeded > 0 || jobs.Failed > 0 || jobs.Suspended > 0 {
-		return resourcecontext.ExecutionActive, "", nil
-	}
-	return resourcecontext.ExecutionPending, "", nil
+	return executionPhases[state.Phase], executionOutcomes[state.Outcome], primary
+}
+
+var executionPhases = map[jobset.Phase]resourcecontext.ExecutionPhase{
+	jobset.PhasePending:   resourcecontext.ExecutionPending,
+	jobset.PhaseActive:    resourcecontext.ExecutionActive,
+	jobset.PhaseSuspended: resourcecontext.ExecutionSuspended,
+	jobset.PhaseFinished:  resourcecontext.ExecutionFinished,
+	jobset.PhaseUnknown:   resourcecontext.ExecutionUnknown,
+}
+
+var executionOutcomes = map[jobset.Outcome]resourcecontext.ExecutionOutcome{
+	jobset.OutcomeSucceeded: resourcecontext.ExecutionSucceeded,
+	jobset.OutcomeFailed:    resourcecontext.ExecutionFailed,
 }
 
 func conditionForExecution(conditions map[string]resourcecontext.ConditionSummary, conditionType string, tier resourcecontext.ContextTier) *resourcecontext.ConditionSummary {

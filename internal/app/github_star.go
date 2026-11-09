@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/launchday"
 	"golang.org/x/term"
 )
 
@@ -30,6 +31,9 @@ type starState struct {
 // Note: thresholds[0] is only used by the PromptedAt=="" path (first prompt).
 // Subsequent prompts use thresholds[dismissals] where dismissals >= 1.
 func (s *starState) shouldPrompt() bool {
+	if launchday.ProductHunt(time.Now()) {
+		return false
+	}
 	if s.StarredAt != "" {
 		return false
 	}

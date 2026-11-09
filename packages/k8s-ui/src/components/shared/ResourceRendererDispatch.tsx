@@ -1,3 +1,10 @@
+import { getCRDStatus } from '../resources/resource-utils-crd'
+import { getStrimziConnectorStatus } from '../resources/resource-utils-strimzi'
+import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnectorRenderer'
+import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
+import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
+import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
+import { getFlaggerCanaryStatus } from '../resources/resource-utils-flagger'
 import { getGitOpsTool } from '../gitops/detail-helpers'
 import { apiVersionToGroup } from '../../utils/navigation'
 import { hasReflectorDetails } from '../resources/renderers/ReflectorSection'
@@ -128,6 +135,7 @@ import {
   CronJobRenderer,
   CronWorkflowRenderer,
   HPARenderer,
+  CustomResourceDefinitionRenderer,
   NodeRenderer,
   PVCRenderer,
   RolloutRenderer,
@@ -159,6 +167,8 @@ import {
   RoleRenderer,
   RoleBindingRenderer,
   WebhookConfigRenderer,
+  ValidatingAdmissionPolicyRenderer,
+  ValidatingAdmissionPolicyBindingRenderer,
   EventRenderer,
   EndpointSliceRenderer,
   GenericRenderer,
@@ -295,6 +305,7 @@ import {
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
 import {
   getCrossplaneStatus,
+  getCrossplanePauseState,
   getProviderStatus,
   getProviderConfigStatus,
   isManagedResource,
@@ -316,13 +327,21 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
  * When an override is not provided, the base (shared) renderer is used.
  */
 export interface RendererOverrides {
+  CustomResourceDefinitionRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+
+  OpenTelemetryCollectorRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void; active?: boolean }>
   FluxHelmReleaseRenderer?: React.ComponentType<React.ComponentProps<typeof FluxHelmReleaseRenderer>>
   JobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   JobSetRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayJobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayClusterRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayServiceRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
-  KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void; relationships?: Relationships }>
+  LocalQueueRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  ClusterQueueRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   PodRenderer?: React.ComponentType<{
     data: any; onCopy: CopyHandler; copied: string | null
     onNavigate?: (ref: ResourceRef) => void
@@ -446,10 +465,22 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  ValidatingAdmissionPolicyRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  ValidatingAdmissionPolicyBindingRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
 }
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
 const KNOWN_KINDS = new Set([
+  'customresourcedefinitions',
+  'kafkaconnectors',
+  'opentelemetrycollectors', 'instrumentations',
+  'canaries', 'metrictemplates',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
@@ -502,6 +533,7 @@ const KNOWN_KINDS = new Set([
   'virtualservices', 'destinationrules', 'serviceentries',
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
+  'validatingadmissionpolicies', 'validatingadmissionpolicybindings',
   'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases', 'limitranges',
   'knativeservices', 'knativeconfigurations', 'knativerevisions', 'knativeroutes',
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
@@ -551,9 +583,13 @@ function isCAPITopologyGroup(apiVersion?: string): boolean {
 // ============================================================================
 
 interface ResourceRendererDispatchProps {
+  /** Whether the containing resource view is active; hosts can pause their reads. */
+  active?: boolean
   resource: SelectedResource
   data: any
   relationships?: Relationships
+  /** See RelatedResourcesSection. */
+  trackedBy?: string
   certificateInfo?: SecretCertificateInfo
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
@@ -597,9 +633,11 @@ interface ResourceRendererDispatchProps {
 }
 
 export function ResourceRendererDispatch({
+  active = true,
   resource,
   data,
   relationships,
+  trackedBy,
   certificateInfo,
   hpaDiagnosis,
   scalerDiagnostics,
@@ -706,6 +744,10 @@ export function ResourceRendererDispatch({
   const isFluxKind = ['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind)
   const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
   const isGroupGatedKind =
+    kind === 'customresourcedefinitions' ||
+    kind === 'kafkaconnectors' ||
+    ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
+    ['canaries', 'metrictemplates'].includes(kind) ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
     || kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
@@ -713,8 +755,13 @@ export function ResourceRendererDispatch({
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
     || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
+    || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
+    (kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io')) ||
+    (kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io')) ||
+    (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
+    (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (isFluxKind && isFluxResource)
     || (kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io'))
     || (kind === 'services' && (data?.apiVersion === 'v1' || isApiGroup(data?.apiVersion, 'serving.knative.dev')))
@@ -746,6 +793,8 @@ export function ResourceRendererDispatch({
     || (kind === 'admissionchecks' && isKueueQueueResource(data))
     || (kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion))
     || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
+    || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
+      && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -771,8 +820,11 @@ export function ResourceRendererDispatch({
   const JobSetComp = rendererOverrides?.JobSetRenderer ?? JobSetRenderer
   const RayJobComp = rendererOverrides?.RayJobRenderer ?? RayJobRenderer
   const RayClusterComp = rendererOverrides?.RayClusterRenderer ?? RayClusterRenderer
+  const CollectorComp = rendererOverrides?.OpenTelemetryCollectorRenderer ?? OpenTelemetryCollectorRenderer
   const RayServiceComp = rendererOverrides?.RayServiceRenderer ?? RayServiceRenderer
   const KueueWorkloadComp = rendererOverrides?.KueueWorkloadRenderer ?? KueueWorkloadRenderer
+  const LocalQueueComp = rendererOverrides?.LocalQueueRenderer ?? LocalQueueRenderer
+  const ClusterQueueComp = rendererOverrides?.ClusterQueueRenderer ?? ClusterQueueRenderer
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
@@ -799,9 +851,12 @@ export function ResourceRendererDispatch({
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
   const CAPIClusterComp = rendererOverrides?.CAPIClusterRenderer ?? CAPIClusterRenderer
+  const CRDComp = rendererOverrides?.CustomResourceDefinitionRenderer ?? CustomResourceDefinitionRenderer
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
+  const ValidatingAdmissionPolicyComp = rendererOverrides?.ValidatingAdmissionPolicyRenderer ?? ValidatingAdmissionPolicyRenderer
+  const ValidatingAdmissionPolicyBindingComp = rendererOverrides?.ValidatingAdmissionPolicyBindingRenderer ?? ValidatingAdmissionPolicyBindingRenderer
   const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
   const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
   const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
@@ -810,7 +865,7 @@ export function ResourceRendererDispatch({
 
   const sidebarContent = showCommonSections && (
     <>
-      <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} />
+      <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} kind={kind} trackedBy={trackedBy} />
       {kind !== 'events' && <EventsSection fullscreen={!!renderSidebar} events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
@@ -844,11 +899,11 @@ export function ResourceRendererDispatch({
         {kind === 'rayjobs' && data?.apiVersion === 'ray.io/v1' && <RayJobComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayclusters' && data?.apiVersion === 'ray.io/v1' && <RayClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayservices' && data?.apiVersion === 'ray.io/v1' && <RayServiceComp data={data} onNavigate={onNavigate} />}
-        {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} />}
+        {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} relationships={relationships} />}
         {kind === 'admissionchecks' && isKueueQueueResource(data) && <AdmissionCheckRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion) && <ProvisioningRequestRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'localqueues' && isKueueQueueResource(data) && <LocalQueueRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'clusterqueues' && isKueueQueueResource(data) && <ClusterQueueRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'localqueues' && isKueueQueueResource(data) && <LocalQueueComp data={data} onNavigate={onNavigate} />}
+        {kind === 'clusterqueues' && isKueueQueueResource(data) && <ClusterQueueComp data={data} onNavigate={onNavigate} />}
         {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetComp data={data} onNavigate={onNavigate} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
@@ -992,9 +1047,12 @@ export function ResourceRendererDispatch({
         {kind === 'serviceentries' && <IstioServiceEntryRenderer data={data} />}
         {kind === 'peerauthentications' && <IstioPeerAuthenticationRenderer data={data} />}
         {kind === 'authorizationpolicies' && <IstioAuthorizationPolicyRenderer data={data} />}
-        {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating />}
-        {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} />}
+        {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating onNavigate={onNavigate} />}
+        {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'validatingadmissionpolicies' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyComp data={data} onNavigate={onNavigate} />}
+        {kind === 'validatingadmissionpolicybindings' && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io') && <ValidatingAdmissionPolicyBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'ingressclasses' && <IngressClassRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io') && <CRDComp data={data} onNavigate={onNavigate} />}
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
         {kind === 'runtimeclasses' && <RuntimeClassRenderer data={data} />}
         {kind === 'leases' && <LeaseRenderer data={data} />}
@@ -1048,6 +1106,12 @@ export function ResourceRendererDispatch({
         {kind === 'compositionrevisions' && <CompositionRevisionRenderer data={data} onNavigate={onNavigate} />}
         {isCrossplaneMR && <ManagedResourceRenderer data={data} onNavigate={onNavigate} />}
         {(isCrossplaneXR || isCrossplaneClaim) && <CompositeComp data={data} onNavigate={onNavigate} />}
+
+        {kind === 'opentelemetrycollectors' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <CollectorComp data={data} onNavigate={onNavigate} active={active} />}
+        {kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io') && <StrimziConnectorRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
+        {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires
             for known-plural collisions where no apiVersion-gated renderer
@@ -1105,7 +1169,18 @@ export function diagnoseHealthHint(kind: string, data: any): DiagnoseHealthHint 
 export function getResourceStatus(kind: string, data: any): { text: string; color: string } | null {
   if (!data) return null
   const k = kind.toLowerCase()
+  if (k === 'customresourcedefinitions' && isApiGroup(data.apiVersion, 'apiextensions.k8s.io')) {
+    const status = getCRDStatus(data)
+    const badge = { text: status.text, color: HEALTH_BADGE_COLORS[status.tone], level: status.tone }
+    return badge
+  }
+  if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
 
+  if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
+    if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)
+    if (k === 'instrumentations') return getOpenTelemetryInstrumentationStatus(data)
+  }
+  if (k === 'canaries' && isApiGroup(data.apiVersion, 'flagger.app')) return getFlaggerCanaryStatus(data)
   if (k === 'pods') return getPodStatus(data)
   if (['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(k)) {
     return getWorkloadDisplayStatus(data, k).status
@@ -1366,6 +1441,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     const status = getKnativeConditionStatus(data)
     return { text: status.text, color: status.color }
   }
+
+  if (getCrossplanePauseState(data) === 'acknowledged') return getCrossplaneStatus(data)
 
   const derived = getGenericResourceStatus(data)
   if (derived) return { text: derived.text, color: HEALTH_BADGE_COLORS[derived.tone] }

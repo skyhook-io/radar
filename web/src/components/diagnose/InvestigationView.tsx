@@ -41,6 +41,7 @@ import {
   investigationPaneCenteredScrollTop,
   canStopInvestigation,
   canContinueInvestigation,
+  canContinueInOwnAgent,
   readOnlyNotice,
   canInvestigateFurther,
 } from "./investigationState";
@@ -60,7 +61,10 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Badge, gitOpsRouteForOwner, type GitOpsWrite } from "@skyhook-io/k8s-ui";
+import { Badge, gitOpsRouteForOwner, type GitOpsOwnerRef, type GitOpsWrite } from "@skyhook-io/k8s-ui";
+import { useResource } from "../../api/client";
+import { getApiBase } from "../../api/config";
+import { kindToPluralWithGroup } from "../../utils/navigation";
 import { useGitOpsWriteGuard } from "../../hooks/useGitOpsWriteGuard";
 import {
   Send,
@@ -84,6 +88,10 @@ import {
   type RunSummary,
 } from "../../api/diagnose";
 import { useDiagnose } from "./DiagnoseContext";
+import {
+  ExampleInvestigationProvider,
+  replayExampleInvestigation,
+} from "./exampleInvestigation";
 import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
 import {
   TurnView,
@@ -94,8 +102,8 @@ import {
   mergeStartupSignal,
   upsertTool,
   type Turn,
-  remediationHeadline,
 } from "./parts";
+import { NextStepJump, recommendedStepHeadline } from "./NextStepJump";
 import {
   investigationActivitySourceDomId,
   investigationEvidenceStepIdsByTurn,
@@ -110,11 +118,20 @@ import {
 } from "./InvestigationEvidencePane";
 import { partitionInvestigationEvidence } from "./investigationEvidencePartition";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
-import { formatInvestigationTarget } from "./target";
+import { QuestionFocus } from "./QuestionFocus";
+import { focusFromCase } from "./investigationFocus";
+import {
+  formatInvestigationTarget,
+  formatInvestigationTitle,
+  isQuestionOnly,
+  questionAskedAt,
+  rerunOpening,
+} from "./target";
 import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { diagnosisHasStoryShape } from "./investigationStory";
-import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
+import { assessmentStateLabel, verdictSentence } from "./verdictText";
+import { assessmentLimitLines } from "./investigationEvidencePresentation";
 
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
@@ -269,25 +286,80 @@ function captureEvidenceCardLayout(container: HTMLElement) {
 
 const APPLY_WRITES: GitOpsWrite[] = [{ scope: "spec", description: "The proposed change" }];
 
+// The card that ends a finished turn in Activity says what was found, so the
+// reader learns the answer before deciding to open Findings. It carries the
+// same qualifications Findings puts beside the sentence (how sure, whether an
+// apply or newer reads have overtaken it), so it never reads more settled
+// than Findings does. A long verdict is cut at three lines; one with no
+// sentence keeps the generic description.
+function CompletionSummary({
+  label,
+  state,
+  sentence,
+}: {
+  label: string;
+  state?: { text: string; warn: boolean };
+  sentence: string;
+}) {
+  return (
+    <span className="min-w-0 flex-1">
+      <span className="block text-xs text-theme-text-tertiary">
+        {label}
+        {state ? (
+          <>
+            {" · "}
+            <span className={state.warn ? "text-warning-text" : undefined}>
+              {state.text}
+            </span>
+          </>
+        ) : null}
+      </span>
+      {sentence ? (
+        <span className="mt-0.5 line-clamp-3 text-sm font-medium leading-snug text-theme-text-primary [overflow-wrap:anywhere]">
+          {sentence}
+        </span>
+      ) : (
+        <span className="block text-xs text-theme-text-secondary">
+          Assessment, evidence and next steps
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function InvestigationView({
   run,
   agentLabel,
   maximized,
   onOpenResource,
   onOpenTimeline,
+  onRevealDestination,
+  example = false,
+  onCloseExample,
+  onHandoffAllowedChange,
 }: {
   run: RunSummary;
   agentLabel: string;
   maximized: boolean;
+  /** The bundled example: replayed from the bundle, with nothing that acts
+   *  on it or sends it anywhere. */
+  example?: boolean;
+  onCloseExample?: () => void;
   /** Opens an unambiguous evidence subject in Radar's native resource views. */
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
   /** Opens Radar's Timeline filtered to the resource a changes card is about. */
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
+  /** Makes a page this view navigates to visible: restores or closes the panel. */
+  onRevealDestination?: () => void;
+  /** Whether nothing is writing to the agent's session, so the header may
+   *  offer to continue it in the user's own agent. */
+  onHandoffAllowedChange?: (allowed: boolean) => void;
 }) {
   const { kind, namespace, name } = run;
   const {
     refreshRuns,
     openInvestigation,
+    openQuestion,
     startError,
     startRefusal,
     dismissError,
@@ -296,26 +368,18 @@ export function InvestigationView({
   // Capabilities are the declared ones of the agent that ran this run, not
   // the picker's: a reopened run keeps the backend it was made with.
   const runAgent = agents.find((agent) => agent.name === run.agent);
-  const explanationEnabled = supportsAssessmentExplanation(runAgent);
-  const canApply = runAgent?.apply === true;
+  const explanationEnabled =
+    !example && supportsAssessmentExplanation(runAgent);
+  // A question-only run has no resource to bind a confirmed fix to.
+  const canApply =
+    !example && runAgent?.apply === true && !isQuestionOnly(run);
   // Read through a ref by the stream callback, which lives as long as the
   // run and would otherwise keep the value from before the agents loaded.
   const verifiesAfterApplyRef = useRef(false);
   verifiesAfterApplyRef.current = runAgent?.verification === true;
-  // Investigate again means look again, so it asks for a new session explicitly and only
-  // carries the issue forward — being handed the previous answer is the one
-  // thing someone clicking this doesn't want.
   const retryDiagnosis = useCallback(
-    () =>
-      openInvestigation({
-        kind,
-        group: run.group,
-        namespace,
-        name,
-        issueId: run.issueId,
-        fresh: true,
-      }),
-    [openInvestigation, kind, namespace, name, run.group, run.issueId],
+    () => openInvestigation(rerunOpening(run)),
+    [openInvestigation, run],
   );
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -569,7 +633,11 @@ export function InvestigationView({
     activityRevealRequestIdRef.current = 0;
     evidenceCardLayoutRef.current.clear();
     evidenceProjectionTurnsRef.current = [];
-    const cancel = subscribeRun(run.id, {
+    const subscribe = example
+      ? (_id: string, handlers: Parameters<typeof subscribeRun>[1]) =>
+          replayExampleInvestigation(handlers)
+      : subscribeRun;
+    const cancel = subscribe(run.id, {
       onEvent: (ev: DiagnoseStreamEvent, sequence?: number) => {
         const live = replayCompleteRef.current;
         switch (ev.type) {
@@ -963,12 +1031,29 @@ export function InvestigationView({
       declaredManager: run.managedBy,
       enabled: confirmApply,
     });
+  const applyTarget = useResource<unknown>(
+    confirmApply ? kindToPluralWithGroup(kind, run.group) : "",
+    namespace,
+    name,
+    run.group || undefined,
+    { enabled: confirmApply, cacheScope: getApiBase() },
+  );
   const navigateRouter = useNavigate();
   const {
     owner: applyOwner,
     ownerVerified: applyOwnerVerified,
     helmOwner: applyHelmOwner,
   } = applyOwnership;
+  // A page opened from the Apply dialog replaces it, and the panel makes
+  // room so the page isn't left underneath.
+  const openFromApply = useCallback(
+    (path: string) => {
+      setConfirmApply(false);
+      onRevealDestination?.();
+      navigateRouter(path);
+    },
+    [navigateRouter, onRevealDestination],
+  );
   const openApplyOwner = useMemo(() => {
     // A host without resource navigation (Radar Hub's fleet Diagnose panel)
     // has no route for the owner either.
@@ -976,16 +1061,20 @@ export function InvestigationView({
     const owner = applyOwner;
     const helmOwner = applyHelmOwner;
     if (owner && applyOwnerVerified) {
-      return () => navigateRouter(gitOpsRouteForOwner(owner));
+      return () => openFromApply(gitOpsRouteForOwner(owner));
     }
     if (helmOwner) {
       return () =>
-        navigateRouter(
+        openFromApply(
           `/helm?release=${encodeURIComponent(`${helmOwner.namespace}/${helmOwner.name}`)}`,
         );
     }
     return undefined;
-  }, [applyOwner, applyOwnerVerified, applyHelmOwner, navigateRouter, onOpenResource]);
+  }, [applyOwner, applyOwnerVerified, applyHelmOwner, openFromApply, onOpenResource]);
+  const openApplyManager = useMemo(
+    () => (onOpenResource ? (owner: GitOpsOwnerRef) => openFromApply(gitOpsRouteForOwner(owner)) : undefined),
+    [openFromApply, onOpenResource],
+  );
   const [pendingFix, setPendingFix] = useState("");
   const requestApply = (fix: string) => {
     if (interactionsBlocked) return;
@@ -1154,11 +1243,24 @@ export function InvestigationView({
         : undefined,
     [currentAssessment, currentAssessmentIdx, projection],
   );
+  const questionOnly = isQuestionOnly(run);
+  const questionFocus = useMemo(
+    () => (questionOnly ? focusFromCase(investigationCase) : []),
+    [questionOnly, investigationCase],
+  );
   // Findings is the newest assessment and nothing else: its own citations,
   // its own case, its own story. Earlier assessments stay complete in
   // Activity; answers that did not revise the assessment stay there too.
   const paneResolution = rootCauseEvidenceResolution;
   const storyShape = diagnosisHasStoryShape(currentAssessment?.diagnosis);
+  // A run that stopped without an assessment will never cite anything, so
+  // what it collected is all there is to show.
+  const assessmentPending = !currentAssessment?.diagnosis;
+  const showUncited =
+    assessmentPending &&
+    !busy &&
+    run.status !== "running" &&
+    run.status !== "stopping";
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
@@ -1167,9 +1269,16 @@ export function InvestigationView({
           paneResolution,
           investigationCase,
           storyShape,
+          showUncited,
         ).collectionByGroup.keys(),
       ),
-    [projection.groups, paneResolution, investigationCase, storyShape],
+    [
+      projection.groups,
+      paneResolution,
+      investigationCase,
+      storyShape,
+      showUncited,
+    ],
   );
   const evidenceStepIdsByTurn = useMemo(
     () =>
@@ -1502,12 +1611,10 @@ export function InvestigationView({
       currentAssessment?.diagnosis?.omittedEntries)
       ? assessmentSourcesNode
       : undefined;
-  const assessmentLimits = useMemo(() => {
-    const lines = groupEvidenceCoverage(currentAssessmentProjection.limitations)
-      // A capped preview or a history bound is bookkeeping for the record; Still
-      // open keeps the reads Radar could not complete.
-      .filter((group) => !group.historyOnly && !group.bookkeepingOnly)
-      .map((group) => `${group.label}: ${group.summary}`);
+  const { assessmentLimits, assessmentRoutineLimits } = useMemo(() => {
+    const { open: lines, routine } = assessmentLimitLines(
+      currentAssessmentProjection.limitations,
+    );
     // Two coverage gaps carry no limitation of their own; name the one that
     // applies.
     const gaps = investigationEvidenceCoverageGaps(
@@ -1520,7 +1627,7 @@ export function InvestigationView({
       lines.push(
         "Radar's full diagnose of this workload was not collected, so this check is partial",
       );
-    return lines;
+    return { assessmentLimits: lines, assessmentRoutineLimits: routine };
   }, [currentAssessmentProjection, kind]);
   const healthSignals = useMemo(
     () =>
@@ -1568,20 +1675,31 @@ export function InvestigationView({
     currentAssessment?.diagnosis &&
     (currentAssessment.diagnosis.remediation?.length ?? 0) > 0,
   );
+  const handoffAllowed =
+    !example &&
+    canContinueInOwnAgent({
+      run,
+      busy,
+      requestPending,
+      gone,
+      streamReady,
+      verificationPending,
+      latestTurnStatus: lastTurn?.status,
+    });
+  useEffect(() => {
+    onHandoffAllowedChange?.(handoffAllowed);
+  }, [handoffAllowed, onHandoffAllowedChange]);
+  useEffect(
+    () => () => onHandoffAllowedChange?.(false),
+    [onHandoffAllowedChange],
+  );
   const earlierPlan =
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
   // The jump link names the decision it leads to, not the section.
-  const nextStepLabel = (() => {
-    const dx = currentAssessment?.diagnosis;
-    if (!dx) return "Next steps ↓";
-    const index = dx.recommendedIndex ? dx.recommendedIndex - 1 : 0;
-    const text =
-      dx.steps?.[index]?.text ?? dx.remediation?.[index] ?? dx.remediation?.[0];
-    if (!text) return "Next steps ↓";
-    const headline = remediationHeadline(text);
-    return `Next: ${headline.length > 56 ? `${headline.slice(0, 56).trimEnd()}…` : headline} ↓`;
-  })();
+  const nextStepHeadline = recommendedStepHeadline(
+    currentAssessment?.diagnosis,
+  );
   // What a reader in a channel needs with the verdict: where, when, and the
   // receipts behind it, cause first, at most three.
   const assessmentCopy = useMemo(() => {
@@ -1591,7 +1709,8 @@ export function InvestigationView({
       .slice(0, 3);
     return {
       context: {
-        target: formatInvestigationTarget(run),
+        target: formatInvestigationTitle(run),
+        asked: isQuestionOnly(run) ? undefined : run.question,
         cluster: run.context,
         startedAt: run.createdAt,
         agent: agentLabel,
@@ -1714,7 +1833,7 @@ export function InvestigationView({
     setEvidenceUpdateAvailable(false);
   };
 
-  const composer = !unavailable ? (
+  const composer = example ? null : !unavailable ? (
     <div className="shrink-0 border-t border-theme-border px-3 py-2.5">
       {canStop ? (
         <button
@@ -1836,7 +1955,9 @@ export function InvestigationView({
               ? assessmentNeedsCurrentStateVerification
                 ? "Proposed before the apply attempt. Current state has not been verified."
                 : "Proposed before the latest evidence. Reassess before applying."
-              : undefined
+              : questionOnly
+                ? "To apply a fix, investigate the resource it changes from Focused on above."
+                : undefined
           }
           onApply={
             canOfferInvestigationApply({
@@ -1858,10 +1979,34 @@ export function InvestigationView({
     ) : undefined;
 
   return (
+    <ExampleInvestigationProvider value={example}>
     <div
       data-investigation-view
       className={`@container/investigation relative flex min-h-0 flex-1 flex-col bg-theme-surface ${maximized ? "investigation-split-enabled" : ""}`}
     >
+      {example ? (
+        <div
+          data-investigation-example
+          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
+        >
+          <Badge severity="info" size="sm">
+            Example
+          </Badge>
+          <span className="min-w-0 flex-1">
+            A sample investigation from a test cluster, not from yours. It is
+            read-only.
+          </span>
+          {onCloseExample ? (
+            <button
+              type="button"
+              onClick={onCloseExample}
+              className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover"
+            >
+              Close example
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {stale ? (
         <div className="flex items-center gap-2 border-b border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
@@ -1875,7 +2020,17 @@ export function InvestigationView({
           </span>
         </div>
       ) : null}
-      {!stale && gone ? (
+      {example && gone ? (
+        <div
+          role="alert"
+          className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+          <span className="min-w-0 flex-1">
+            Radar couldn&apos;t load the example. Close it and open it again.
+          </span>
+        </div>
+      ) : !stale && gone ? (
         <div className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
           <span className="min-w-0 flex-1">
@@ -1893,7 +2048,7 @@ export function InvestigationView({
           </button>
         </div>
       ) : null}
-      {!stale && !gone && endedEarly ? (
+      {!example && !stale && !gone && endedEarly ? (
         <div
           role="status"
           className="flex items-center gap-2 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary"
@@ -2092,6 +2247,11 @@ export function InvestigationView({
                           turn={turn}
                           agentLabel={agentLabel}
                           turnIndex={index}
+                          openingQuestion={
+                            index === 0 && !turn.question
+                              ? run.question
+                              : undefined
+                          }
                           evidenceStepIds={evidenceStepIdsByTurn.get(index)}
                           onViewEvidence={viewEvidenceSource}
                           sourceRevealRequest={activityRevealRequest}
@@ -2110,7 +2270,8 @@ export function InvestigationView({
                             turn.status === "error" &&
                             !turn.question &&
                             !turn.apply &&
-                            !stale
+                            !stale &&
+                            !example
                               ? retryDiagnosis
                               : undefined
                           }
@@ -2202,16 +2363,35 @@ export function InvestigationView({
                                 <Files className="h-4 w-4" />
                               )}
                             </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-xs font-semibold text-theme-text-primary">
-                                {turn.verify
-                                  ? "Verification complete"
-                                  : "Assessment ready"}
-                              </span>
-                              <span className="block text-[11px] text-theme-text-tertiary">
-                                Assessment, evidence and next steps
-                              </span>
-                            </span>
+                            <CompletionSummary
+                              label={
+                                assessmentNeedsCurrentStateVerification
+                                  ? "Assessment before apply"
+                                  : hasEvidenceCollectedAfterAssessment
+                                    ? "Earlier assessment"
+                                    : turn.verify
+                                      ? "Verification complete"
+                                      : "Assessment ready"
+                              }
+                              state={
+                                assessmentNeedsCurrentStateVerification
+                                  ? {
+                                      text: "Current state unverified",
+                                      warn: true,
+                                    }
+                                  : turn.diagnosis
+                                    ? assessmentStateLabel(
+                                        turn.diagnosis,
+                                        currentAssessmentEvidenceConflict,
+                                      )
+                                    : undefined
+                              }
+                              sentence={
+                                turn.diagnosis
+                                  ? verdictSentence(turn.diagnosis)
+                                  : ""
+                              }
+                            />
                             <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
                               View Findings
                               <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
@@ -2354,9 +2534,11 @@ export function InvestigationView({
                       className="investigation-assessment rounded-xl border p-3"
                     >
                       <div className="flex flex-wrap items-center gap-1.5">
+                        {/* A label for the block, not its headline: the
+                            verdict sentence below is what a reader looks for. */}
                         <h2
                           id={`${viewId}-assessment-heading`}
-                          className="text-lg font-semibold text-theme-text-primary"
+                          className="text-sm font-medium text-theme-text-secondary"
                         >
                           {assessmentNeedsCurrentStateVerification
                             ? "Assessment before apply"
@@ -2412,6 +2594,9 @@ export function InvestigationView({
                           assessmentLimits={
                             storyShape ? assessmentLimits : undefined
                           }
+                          assessmentRoutineLimits={
+                            storyShape ? assessmentRoutineLimits : undefined
+                          }
                           assessmentCopy={assessmentCopy}
                           healthSignals={storyShape ? healthSignals : undefined}
                           onRevealSource={viewEvidenceSource}
@@ -2420,8 +2605,13 @@ export function InvestigationView({
                           }
                           assessmentAction={
                             hasNextSteps ? (
-                              <button
-                                type="button"
+                              <NextStepJump
+                                label={
+                                  earlierPlan
+                                    ? "Earlier proposed steps"
+                                    : undefined
+                                }
+                                headline={nextStepHeadline}
                                 onClick={() => {
                                   const section = nextStepsRef.current;
                                   const scroller = evidenceScrollRef.current;
@@ -2438,12 +2628,7 @@ export function InvestigationView({
                                       : "smooth",
                                   });
                                 }}
-                                className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                              >
-                                {earlierPlan
-                                  ? "Earlier proposed steps ↓"
-                                  : nextStepLabel}
-                              </button>
+                              />
                             ) : null
                           }
                           explanation={explanationFor(currentAssessment)}
@@ -2508,6 +2693,40 @@ export function InvestigationView({
                       ) : null}
                     </section>
 
+                    {questionOnly && investigationCase ? (
+                      <QuestionFocus
+                        focus={questionFocus}
+                        stale={stale}
+                        onOpenResource={onOpenResource}
+                        // These start a new investigation, so a run that can
+                        // no longer take follow-ups doesn't block them.
+                        disabled={investigationInteractionsBlocked({
+                          streamReady,
+                          busy,
+                          requestPending,
+                          readOnly: false,
+                          verificationPending,
+                        })}
+                        onChooseResource={() =>
+                          openQuestion({
+                            text: run.question,
+                            namespaces: run.namespaces,
+                            lookBack: run.lookBack,
+                            askedAt: questionAskedAt(run),
+                            pickResource: true,
+                          })
+                        }
+                        onInvestigate={(resource) =>
+                          openInvestigation({
+                            ...resource,
+                            question: run.question,
+                            lookBack: run.lookBack,
+                            askedAt: questionAskedAt(run),
+                          })
+                        }
+                      />
+                    ) : null}
+
                     {hasMultipleAssessments ? (
                       <button
                         type="button"
@@ -2528,6 +2747,9 @@ export function InvestigationView({
 
                   <InvestigationEvidencePane
                     projection={projection}
+                    withoutTarget={questionOnly}
+                    assessmentPending={assessmentPending}
+                    showUncited={showUncited}
                     rootCauseEvidence={paneResolution}
                     investigationCase={investigationCase}
                     story={
@@ -2540,7 +2762,11 @@ export function InvestigationView({
                         : undefined
                     }
                     storyShell={storyShell}
-                    summarizedLimits={storyShape ? assessmentLimits : undefined}
+                    summarizedLimits={
+                      storyShape
+                        ? [...assessmentLimits, ...assessmentRoutineLimits]
+                        : undefined
+                    }
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||
@@ -2583,10 +2809,13 @@ export function InvestigationView({
               ]?.precondition
             : undefined
         }
+        resourceData={applyTarget.data}
         gitOpsGuard={applyGitOpsGuard}
         onOpenGitOpsOwner={openApplyOwner}
+        onOpenGitOpsManager={openApplyManager}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
     </div>
+    </ExampleInvestigationProvider>
   );
 }

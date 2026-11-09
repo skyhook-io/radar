@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { HelpCircle } from 'lucide-react'
 import { clsx } from 'clsx'
+import { isTouchIntent } from '@skyhook-io/k8s-ui'
 
 // The query operators recognized by the search engine (internal/search/parse.go).
 const OPERATORS: { syntax: string; desc: string }[] = [
@@ -16,6 +17,10 @@ const OPERATORS: { syntax: string; desc: string }[] = [
 // reference tooltip, not a second click-to-open panel stacked over the results).
 // Self-contained + portaled to <body> so the header's stacking context can't
 // trap it; a short close grace lets the pointer travel onto the card.
+// A tap also fires mouseenter, and the "?" can sit right under the finger
+// that just opened the search box, so hover ignores a tap's side effects. A
+// click (a tap, or assistive-technology activation) toggles the card, except
+// right after a mouse hover opened it; a tap elsewhere closes it.
 export function SearchSyntaxHelp() {
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -24,10 +29,21 @@ export function SearchSyntaxHelp() {
   const [anchor, setAnchor] = useState<{ right: number; top: number } | null>(null)
 
   const show = useCallback(() => { clearTimeout(closeTimer.current); setOpen(true) }, [])
+  const openedByHover = useRef(false)
   const scheduleHide = useCallback(() => {
     clearTimeout(closeTimer.current)
     closeTimer.current = setTimeout(() => setOpen(false), 120)
   }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: globalThis.PointerEvent) => {
+      const t = e.target as Node
+      if (!btnRef.current?.contains(t) && !popRef.current?.contains(t)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [open])
 
   useEffect(() => () => clearTimeout(closeTimer.current), [])
 
@@ -53,8 +69,13 @@ export function SearchSyntaxHelp() {
         type="button"
         tabIndex={-1}
         aria-label="Search syntax help"
-        onMouseEnter={show}
-        onMouseLeave={scheduleHide}
+        aria-expanded={open}
+        onMouseEnter={() => { if (!isTouchIntent()) { openedByHover.current = !open; show() } }}
+        onMouseLeave={() => { openedByHover.current = false; scheduleHide() }}
+        onClick={() => {
+          if (openedByHover.current) { openedByHover.current = false; return }
+          setOpen((o) => !o)
+        }}
         onMouseDown={(e) => e.preventDefault()}
         className={clsx('shrink-0 rounded p-0.5 cursor-help transition-colors', open ? 'text-theme-text-secondary' : 'text-theme-text-tertiary hover:text-theme-text-secondary')}
       >

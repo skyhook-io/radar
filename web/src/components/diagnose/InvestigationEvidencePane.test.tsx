@@ -1982,7 +1982,7 @@ describe("InvestigationEvidencePane honest result states", () => {
       projection.limitations.every((item) => item.presentation === "history"),
     ).toBe(true);
     const html = render(projection);
-    expect(html).toContain("Change history is limited");
+    expect(html).toContain("Radar&#x27;s coverage · 1 routine limit<");
     expect(html).not.toContain("Evidence coverage is incomplete");
     expect(html).not.toContain("access restrictions");
     const header = html.match(
@@ -2029,8 +2029,68 @@ describe("InvestigationEvidencePane honest result states", () => {
     );
     const html = render(projection);
     expect(html).toContain("Evidence coverage is incomplete");
-    expect(html).not.toContain("Change history is limited");
+    expect(html).not.toContain("routine limit");
     expect(investigationEvidenceCoverageLimited(projection)).toBe(true);
+  });
+
+  it("calls sampling caps and history bounds routine, in a neutral tone, and still lists each", () => {
+    const projection = project(
+      tool("empty-history", "get_changes", { changes: [] }),
+      tool("issues-capped", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_truncated: true,
+      }),
+    );
+    expect(
+      projection.limitations.every(
+        (item) =>
+          item.kind === "truncated" ||
+          (item.kind === "unknown" && item.presentation === "history"),
+      ),
+    ).toBe(true);
+    const html = render(projection);
+    const header =
+      html.match(
+        /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+      )?.[0] ?? "";
+    expect(header).toContain("Radar&#x27;s coverage · 2 routine limits");
+    expect(header).not.toContain("Evidence coverage is incomplete");
+    expect(header).not.toContain("text-red");
+    expect(header).not.toContain("text-amber");
+    // Folded, not dropped: every source keeps its row inside the strip.
+    const region = html.slice(
+      html.indexOf('id="investigation-evidence-coverage"'),
+    );
+    expect(region).toContain("Recent changes");
+    expect(region).toContain("Issue-related changes");
+  });
+
+  it("keeps a real failure red and first even when the other limits are routine", () => {
+    const projection = project(
+      tool("empty-history", "get_changes", { changes: [] }),
+      tool(
+        "denied-logs",
+        "get_pod_logs",
+        { error: "pods/log is forbidden" },
+        { isError: true },
+      ),
+    );
+    const html = render(projection);
+    const header =
+      html.match(
+        /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+      )?.[0] ?? "";
+    expect(header).toContain("Evidence coverage is incomplete");
+    expect(header).toContain("text-red-400");
+    expect(header).not.toContain("routine limit");
+    const region = html.slice(
+      html.indexOf('id="investigation-evidence-coverage"'),
+    );
+    expect(region.indexOf("pods/log is forbidden")).toBeLessThan(
+      region.indexOf("Recent changes"),
+    );
   });
 
   it("summarizes incomplete coverage and points to Activity for review", () => {
@@ -2742,6 +2802,63 @@ describe("cited broader cards and coverage rows", () => {
     expect(render(projection)).toContain(
       "4 results about other resources are not shown; they appear here when the assessment cites them.",
     );
+    // A question with no resource has no "other" resource to speak of.
+    expect(
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+          withoutTarget
+        />,
+      ),
+    ).toContain(
+      "4 results the assessment didn’t cite are not shown; they appear here when the assessment cites them.",
+    );
+    // Before there is an assessment nothing has been passed over yet.
+    expect(
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          collecting
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+          withoutTarget
+          assessmentPending
+        />,
+      ),
+    ).toContain(
+      "4 results are held for the assessment; the ones it cites appear here.",
+    );
+    // A run that stopped without one will never cite anything: show it all.
+    const stopped = partitionInvestigationEvidence(
+      projection.groups,
+      undefined,
+      undefined,
+      false,
+      true,
+    );
+    expect(stopped.hiddenBroader).toBe(0);
+    expect(stopped.main.length + stopped.workload.length).toBe(4);
+    const stoppedMarkup = renderToStaticMarkup(
+      <InvestigationEvidencePane
+        projection={projection}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={onViewSource}
+        onViewActivity={() => {}}
+        withoutTarget
+        assessmentPending
+        showUncited
+      />,
+    );
+    expect(stoppedMarkup).not.toContain("not shown");
+    expect(stoppedMarkup).toContain("Evidence collected");
+    expect(stoppedMarkup).not.toContain("about this resource");
+    expect(stoppedMarkup).not.toContain("No relevant evidence");
 
     const resolution = resolveInvestigationRootCauseEvidence(
       projection,

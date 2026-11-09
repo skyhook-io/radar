@@ -1,0 +1,95 @@
+import clockVectors from '../../../../../pkg/health/testdata/readiness_gate_clock.json'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getPodPhaseDisplay, getPodStatus, getPodProblems, podMatchesProblemCategory } from './resource-utils'
+afterEach(() => vi.useRealTimers())
+const makePod = (): any => ({ metadata: { creationTimestamp: '2026-10-25T10:00:00Z' }, spec: { readinessGates: [{ conditionType: 'example.com/ready' }] }, status: { phase: 'Running', conditions: [
+ { type: 'Ready', status: 'False', reason: 'ReadinessGatesNotReady', message: 'gate has not reported ready', lastTransitionTime: '2026-10-25T11:50:00Z' },
+ { type: 'ContainersReady', status: 'True', lastTransitionTime: '2026-10-25T11:53:00Z' },
+], containerStatuses: [{ name: 'app', ready: true, state: { running: {} } }] } })
+describe('declared readiness gates', () => {
+ it.each(['missing', 'False', 'True', 'Unknown'])('handles %s gate', status => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();if(status!=='missing')p.status.conditions.push({ type:'example.com/ready',status })
+  const blocked=status!=='True'
+  expect(getPodStatus(p).level).toBe(blocked?'degraded':'healthy')
+  expect(getPodPhaseDisplay(p).level).toBe(blocked?'degraded':'healthy')
+  const problems=getPodProblems(p)
+  expect(podMatchesProblemCategory(problems,0,'Not Ready')).toBe(blocked)
+  expect(podMatchesProblemCategory(problems,0,'Other')).toBe(false)
+  if(blocked)expect(getPodPhaseDisplay(p)).toMatchObject({text:'Running — Readiness gate blocked',hint:'gate has not reported ready'})
+ })
+ it.each([0,1])('keeps grace for transition %s', index => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.status.conditions[index].lastTransitionTime='2026-10-25T11:59:00Z'
+  expect(getPodStatus(p).level).toBe('healthy');expect(getPodPhaseDisplay(p).level).toBe('healthy')
+ })
+ it('leaves graceful termination to the lifecycle overlay',()=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.metadata.deletionTimestamp='2026-10-25T11:59:00Z'
+  expect(getPodStatus(p).level).toBe('neutral');expect(getPodPhaseDisplay(p).text).toContain('Terminating')
+  expect(podMatchesProblemCategory(getPodProblems(p),0,'Not Ready')).toBe(false)
+  p.status.containerStatuses[0].state={waiting:{reason:'ImagePullBackOff'}}
+  expect(getPodStatus(p).level).toBe('unhealthy');expect(getPodPhaseDisplay(p).level).toBe('unhealthy')
+ })
+ it('requires a declaration even with an older summary payload',()=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();delete p.spec.readinessGates;expect(getPodStatus(p).level).toBe('healthy')
+ })
+ it('preserves other readiness meanings and fatal failures',()=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.status.conditions[0].reason='NodeNotReady';expect(getPodStatus(p).level).toBe('healthy')
+  p.status.conditions[0].reason='ReadinessGatesNotReady';p.status.containerStatuses[0].state={waiting:{reason:'ImagePullBackOff'}}
+  expect(getPodStatus(p).level).toBe('unhealthy');expect(getPodPhaseDisplay(p).level).toBe('unhealthy')
+ })
+ it('keeps recent crash history ahead of gate text',()=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.status.containerStatuses[0]={name:'app',ready:true,restartCount:2,state:{running:{startedAt:'2026-10-25T11:59:55Z'}},lastState:{terminated:{reason:'Error',exitCode:1,finishedAt:'2026-10-25T11:59:50Z'}}}
+  expect(getPodStatus(p).text).not.toContain('gate')
+  expect(getPodPhaseDisplay(p).text).not.toContain('gate')
+ })
+
+ it.each([['recent',false,'2026-10-25T11:59:00Z','unhealthy'],['settled',false,'2026-10-25T11:54:00Z','degraded'],['probe passed',true,'2026-10-25T11:59:00Z','degraded']])('keeps %s OOM recovery ahead of gate status',(_name,probe,startedAt,want)=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.spec.containers=[{name:'app',...(probe?{readinessProbe:{}}:{})}]
+  p.status.containerStatuses[0]={name:'app',ready:true,restartCount:1,state:{running:{startedAt}},lastState:{terminated:{reason:'OOMKilled',exitCode:137,finishedAt:'2026-10-25T11:58:00Z'}}}
+  expect(getPodStatus(p).level).toBe(want);expect(getPodPhaseDisplay(p).level).toBe(want)
+  if(want==='unhealthy'){expect(getPodStatus(p).text).toBe('OOMKilled');expect(getPodPhaseDisplay(p).text).toContain('OOMKilled')}
+ })
+
+ it.each(['missing', 'recent', 'settled', 'completed'])('handles %s init OOM recovery with a gate', state => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p = makePod()
+  p.status.initContainerStatuses = [{name:'init',lastState:{terminated:{reason:'OOMKilled'}},state:state==='completed'?{terminated:{exitCode:0}}:{running:state==='missing'?{}:{startedAt:state==='recent'?'2026-10-25T11:59:00Z':'2026-10-25T11:54:00Z'}}}]
+  const want = state==='missing'||state==='recent'?'unhealthy':'degraded'
+  expect(getPodStatus(p).level).toBe(want)
+  expect(getPodPhaseDisplay(p).level).toBe(want)
+ })
+
+ it.each([0,1])('does not grant grace for future transition %s', index => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p = makePod()
+  p.status.conditions[index].lastTransitionTime='2026-10-25T13:00:00Z'
+  p.status.conditions[1-index].lastTransitionTime='2026-10-25T11:53:00Z'
+  expect(getPodStatus(p).level).toBe('degraded')
+  expect(getPodPhaseDisplay(p).level).toBe('degraded')
+ })
+ it('uses recent creation only as grace for missing transition times', () => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p = makePod()
+  p.status.conditions.forEach((c:any) => delete c.lastTransitionTime)
+  p.metadata.creationTimestamp='2026-10-25T11:59:00Z'
+  expect(getPodStatus(p).level).toBe('healthy')
+  p.metadata.creationTimestamp='2026-10-25T13:00:00Z'
+  expect(getPodStatus(p).level).toBe('degraded')
+ })
+
+})
+
+describe('readiness-gate clock contract',()=>{
+ it.each(clockVectors.vectors)('$name',v=>{
+  vi.useFakeTimers().setSystemTime(new Date(clockVectors.now))
+  expect(getPodStatus(v.object).level).toBe(v.blocked?'degraded':'healthy')
+  expect(getPodPhaseDisplay(v.object).level).toBe(v.blocked?'degraded':'healthy')
+  expect(podMatchesProblemCategory(getPodProblems(v.object),0,'Not Ready')).toBe(v.blocked)
+ })
+})

@@ -161,3 +161,45 @@ func TestWorkloadHealthWarning(t *testing.T) {
 		}
 	})
 }
+
+// A tracking ID copied from another object names that object's manager, not
+// this one's: no warning. A controller the manager answer doesn't model keeps
+// its warning beside one.
+func TestManagerWarningSkipsCopiesAndKeepsUnmodeledControllers(t *testing.T) {
+	secret := func(labels, annotations map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Secret",
+			"metadata": map[string]any{"namespace": "backup", "name": "copy", "labels": labels, "annotations": annotations}}}
+	}
+	copied := secret(nil, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:shop/original"})
+	if got := EnrichObjectWarnings(copied); len(got) != 0 {
+		t.Errorf("copied tracking ID warned: %q", got)
+	}
+	own := secret(nil, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:backup/copy"})
+	if got := EnrichObjectWarnings(own); len(got) != 1 {
+		t.Errorf("own tracking ID: %q; want one warning", got)
+	}
+	if got := EnrichRuntimeObjectAnsweredWarnings(own); len(got) != 0 {
+		t.Errorf("answered Argo CD warning kept: %q", got)
+	}
+	certManager := secret(map[string]any{"app.kubernetes.io/managed-by": "cert-manager"}, nil)
+	if got := EnrichRuntimeObjectAnsweredWarnings(certManager); len(got) != 1 {
+		t.Errorf("cert-manager warning beside an answer: %q; want it kept", got)
+	}
+	// A copied tracking ID doesn't hide the controller the object's own label names.
+	both := secret(map[string]any{"app.kubernetes.io/managed-by": "cert-manager"}, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:shop/original"})
+	for name, got := range map[string][]string{"plain": EnrichObjectWarnings(both), "answered": EnrichRuntimeObjectAnsweredWarnings(both)} {
+		if len(got) != 1 || !strings.Contains(got[0], "cert-manager") {
+			t.Errorf("%s: copied tracking ID beside a cert-manager label: %q; want the cert-manager warning", name, got)
+		}
+	}
+
+	// Beside the answer, a claim it weighs doesn't hide what it doesn't.
+	ownWithCertManager := secret(map[string]any{"app.kubernetes.io/managed-by": "cert-manager"}, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:backup/copy"})
+	if got := EnrichRuntimeObjectAnsweredWarnings(ownWithCertManager); len(got) != 1 || !strings.Contains(got[0], "cert-manager") {
+		t.Errorf("own tracking ID beside a cert-manager label, answered: %q; want the cert-manager warning", got)
+	}
+	helmLabels := secret(map[string]any{"app.kubernetes.io/managed-by": "Helm", "app.kubernetes.io/instance": "chart"}, nil)
+	if got := EnrichRuntimeObjectAnsweredWarnings(helmLabels); len(got) != 1 || !strings.Contains(got[0], "Helm") {
+		t.Errorf("Helm labels without a release annotation, answered: %q; want the Helm warning", got)
+	}
+}

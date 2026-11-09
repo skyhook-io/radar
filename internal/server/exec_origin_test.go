@@ -41,7 +41,8 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 		{name: "unrelated development port", server: Server{devMode: true}, host: "localhost:9280", origin: "http://localhost:9274", fetchSite: "same-site", want: false},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			scheme := "http"
 			if tt.tls {
@@ -80,7 +81,8 @@ func TestUpgradeWebSocketUsesServerOriginPolicy(t *testing.T) {
 		{name: "trusted origin behind a Host-rewriting proxy", server: Server{trustedOrigins: trustedOriginSet(t, "http://radar.internal")}, origin: func(string) string { return "http://radar.internal" }, wantOK: true},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := tt.server.upgradeWebSocket(w, r)

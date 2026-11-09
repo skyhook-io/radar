@@ -49,7 +49,8 @@ export function updateDemandSearchParam(
 // demandGroupVerdict synthesizes the one-line answer for the archetypal case:
 // every evaluated pool ruled the group out. The dominant leading reason across
 // incompatible pools headlines; the predicate tables below stay the receipts.
-// Anything short of all-pools-incompatible keeps the neutral counts line —
+// Anything short of all-pools-incompatible — including a pool Radar could not
+// evaluate — keeps the neutral counts line:
 // declared compatibility is not a scheduling guarantee, and a synthesized
 // verdict must not overclaim past what the evidence supports.
 export function demandGroupVerdict(group: CapacityDemandGroup): {
@@ -58,7 +59,7 @@ export function demandGroupVerdict(group: CapacityDemandGroup): {
   poolCount: number;
 } | null {
   const counts = group.poolEvaluationCounts;
-  if (counts.declaredCompatible > 0 || counts.incompatible === 0) return null;
+  if (counts.declaredCompatible > 0 || counts.incompatible === 0 || counts.unknown > 0) return null;
   const leading = group.poolEvaluations
     .filter((e) => e.result === "incompatible" && e.evidence.length > 0)
     .map((e) => e.evidence[0]);
@@ -632,6 +633,7 @@ function DemandGroupCard({
                         key={`${constraint.predicate}-${constraint.sourcePath}`}
                         tone="structural"
                         size="sm"
+                        className="phone:[overflow-wrap:anywhere]"
                       >
                         {constraint.key || constraint.predicate}
                         {constraint.operator ? ` ${constraint.operator}` : ""}
@@ -664,6 +666,7 @@ function DemandGroupCard({
                           key={`${toleration.key ?? "*"}-${toleration.effect ?? "*"}-${index}`}
                           tone="structural"
                           size="sm"
+                          className="phone:[overflow-wrap:anywhere]"
                         >
                           {toleration.key || "*"}
                           {toleration.value ? `=${toleration.value}` : ""}
@@ -810,14 +813,15 @@ function PoolEvaluationCard({
       <button
         type="button"
         aria-expanded={expanded}
-        className={`flex w-full items-center gap-2 px-3 py-2.5 text-left ${ROW_HOVER}`}
+        className={`flex w-full items-center gap-2 px-3 py-2.5 text-left phone:flex-wrap phone:gap-y-1 ${ROW_HOVER}`}
         onClick={() => setExpanded((current) => !current)}
       >
         <CollapseChevron open={expanded} className="h-4 w-4" />
         <span
           role="link"
           tabIndex={0}
-          className="font-mono text-sm font-medium text-accent-text hover:underline"
+          // Phones: a name longer than the row breaks inside it (chevron + gap = 1.5rem).
+          className="font-mono text-sm font-medium text-accent-text hover:underline phone:max-w-[calc(100%-1.5rem)] phone:break-words"
           onClick={(event) => {
             event.stopPropagation();
             onOpenPool(evaluation.pool.name);
@@ -833,7 +837,7 @@ function PoolEvaluationCard({
           {evaluation.pool.name}
         </span>
         <PoolEvaluationBadge result={evaluation.result} />
-        <span className="ml-auto text-[11px] text-theme-text-tertiary">
+        <span className="ml-auto text-[11px] text-theme-text-tertiary phone:whitespace-nowrap">
           {predicateCount} {predicateCount === 1 ? "predicate" : "predicates"}
           {evaluation.evidenceMeta.truncated ? " · truncated" : ""}
         </span>

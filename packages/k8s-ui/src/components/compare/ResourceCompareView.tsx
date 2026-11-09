@@ -5,6 +5,7 @@ import { YamlDiffEditor } from '../ui/YamlEditor'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
 import { pluralToKind } from '../../utils/navigation'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 import { toComparableYaml } from './normalize'
 import { SIDE_TONES, type CompareSide } from './types'
 
@@ -58,12 +59,15 @@ function ResourcePill({
   error,
   onChange,
   subtitle,
+  subtitleOnly,
 }: {
   resource: CompareResourceRef
   side: CompareSide
   error?: string
   onChange?: () => void
   subtitle?: string
+  /** Both sides are the same resource, so where it runs is all that tells them apart. */
+  subtitleOnly?: boolean
 }) {
   const tones = SIDE_TONES[side]
   const errTone = 'border-red-400/50 bg-red-500/10'
@@ -81,13 +85,19 @@ function ResourcePill({
         {label}
       </span>
       {error && <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" aria-hidden />}
-      <span className={clsx('truncate min-w-0', error ? 'text-red-300' : 'text-theme-text-primary')}>
-        {resource.namespace && <span className="opacity-60">{resource.namespace}/</span>}
-        {resource.name}
-        {subtitle && (
-          <span className="opacity-60 ml-1" aria-label={`Source: ${subtitle}`}>
-            · {subtitle}
-          </span>
+      <span className={clsx('truncate min-w-0', error ? 'text-red-300' : 'text-theme-text-primary')} title={subtitleOnly ? subtitle : undefined}>
+        {subtitleOnly ? (
+          subtitle
+        ) : (
+          <>
+            {resource.namespace && <span className="opacity-60">{resource.namespace}/</span>}
+            {resource.name}
+            {subtitle && (
+              <span className="opacity-60 ml-1" aria-label={`Source: ${subtitle}`}>
+                · {subtitle}
+              </span>
+            )}
+          </>
         )}
       </span>
       {onChange && (
@@ -120,7 +130,10 @@ export function ResourceCompareView({
   bleed = false,
 }: ResourceCompareViewProps) {
   const [specOnly, setSpecOnly] = useState(false)
-  const [unified, setUnified] = useState(false)
+  const [unifiedPicked, setUnified] = useState(false)
+  // Two side-by-side panes don't fit a phone, so phones always get one column.
+  const isPhone = usePhoneLayout()
+  const unified = unifiedPicked || isPhone
   const [hideUnchanged, setHideUnchanged] = useState(true)
   const [rawMetadata, setRawMetadata] = useState(false)
 
@@ -140,6 +153,10 @@ export function ResourceCompareView({
   // blank the editor. When the A/B identity changes (navigating to a
   // new pair on the same route), the latch resets so the loader shows
   // again until the new fetches settle.
+  // The same resource from two places: say what it is once, up top, so the pills
+  // can show the one thing that differs. Long names no longer push that out of view.
+  const sameResource = a.kind === b.kind && a.group === b.group && a.namespace === b.namespace && a.name === b.name &&
+    Boolean(aSubtitle && bSubtitle) && aSubtitle !== bSubtitle
   const settleKey = `${a.kind}|${a.namespace}|${a.name}|${a.group ?? ''}|${aSubtitle ?? ''}` +
     `|${b.kind}|${b.namespace}|${b.name}|${b.group ?? ''}|${bSubtitle ?? ''}`
   const settleKeyRef = useRef(settleKey)
@@ -156,15 +173,25 @@ export function ResourceCompareView({
     <div className="flex-1 min-w-0 flex flex-col h-full bg-theme-base">
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-400/70 via-skyhook-400/40 to-emerald-400/70" />
 
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
         <GitCompare className="w-5 h-5 text-skyhook-400 shrink-0" />
-        <h2 className="text-sm font-semibold text-theme-text-primary shrink-0 whitespace-nowrap">
+        <h2 className={clsx('text-sm font-semibold text-theme-text-primary whitespace-nowrap', sameResource ? 'min-w-0 max-w-[30%] truncate' : 'shrink-0')}>
           Compare <span className="text-theme-text-tertiary mx-0.5">·</span>{' '}
           <span className="text-theme-text-secondary font-medium">{kindLabel}</span>
+          {sameResource && (
+            <>
+              <span className="text-theme-text-tertiary mx-0.5">·</span>{' '}
+              <span className="text-theme-text-secondary font-medium" title={`${a.namespace}/${a.name}`}>
+                {a.namespace && <span className="opacity-60">{a.namespace}/</span>}
+                {a.name}
+              </span>
+            </>
+          )}
         </h2>
 
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} />
+        {/* The row wraps before the sides get too narrow to tell apart. */}
+        <div className="flex items-center gap-2 min-w-72 flex-1">
+          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} subtitleOnly={sameResource} />
           <Tooltip content="Swap A and B">
             <button
               onClick={onSwap}
@@ -173,14 +200,14 @@ export function ResourceCompareView({
               <ArrowLeftRight className="w-3.5 h-3.5" />
             </button>
           </Tooltip>
-          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} subtitle={bSubtitle} />
+          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} subtitle={bSubtitle} subtitleOnly={sameResource} />
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
           <ToggleButton active={rawMetadata} onClick={() => setRawMetadata(v => !v)} icon={<Sparkles className="w-3.5 h-3.5" />} label="Raw metadata" tooltip="Keep server-assigned noise (uid, resourceVersion, managedFields, last-applied)" />
           <ToggleButton active={specOnly} onClick={() => setSpecOnly(v => !v)} icon={<FileCode2 className="w-3.5 h-3.5" />} label="Spec only" tooltip="Drop status fields from both sides" />
           <ToggleButton active={hideUnchanged} onClick={() => setHideUnchanged(v => !v)} icon={<FileText className="w-3.5 h-3.5" />} label="Diff only" tooltip="Collapse unchanged regions" />
-          <ToggleButton active={unified} onClick={() => setUnified(v => !v)} icon={<Rows className="w-3.5 h-3.5" />} label="Unified" tooltip="Switch between side-by-side and single-column" />
+          {!isPhone && <ToggleButton active={unified} onClick={() => setUnified(v => !v)} icon={<Rows className="w-3.5 h-3.5" />} label="Unified" tooltip="Switch between side-by-side and single-column" />}
         </div>
 
         <div className="w-px h-5 bg-theme-border shrink-0" aria-hidden />

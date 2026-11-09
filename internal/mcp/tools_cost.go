@@ -330,7 +330,7 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 	requested := requestedNamespaces(input.Namespace)
 	allowed := scopedNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason(requested), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, requested), opencost.ResolveCurrency(), ""), nil
 	}
 
 	// Selected() first on the success path: currency detection consults the
@@ -493,7 +493,7 @@ func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (cost
 	base := costResponse{View: "workloads", Namespace: namespace}
 
 	if allowed := scopedNamespacesForUser(ctx, []string{namespace}); allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason([]string{namespace}), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, []string{namespace}), opencost.ResolveCurrency(), ""), nil
 	}
 
 	connection, err := opencost.Selected(ctx)
@@ -770,7 +770,7 @@ func costTrendView(ctx context.Context, input getCostInput) (costResponse, error
 	requested := requestedNamespaces(input.Namespace)
 	allowed := scopedNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason(requested), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, requested), opencost.ResolveCurrency(), ""), nil
 	}
 
 	connection, err := opencost.Selected(ctx)
@@ -1030,7 +1030,7 @@ func truncateRows[T any](rows []T, limit int) ([]T, bool) {
 
 func costRemediation(reason string) string {
 	switch reason {
-	case ReasonOutsideNamespaceScope:
+	case ReasonOutsideNamespacePin:
 		// The pinned namespace is not named: this caller was denied, and may have
 		// no access to it either.
 		return "radar is pinned to a single namespace with --namespace-scope, so it cannot report on the requested scope. This is a startup flag, not a permissions problem — restart radar without --namespace-scope for cluster-wide cost."
@@ -1065,6 +1065,10 @@ func costRemediation(reason string) string {
 		return "The cost source has not retained enough history for this range. Try a shorter range, or wait for it to accumulate."
 	case pkgopencost.ReasonNotFound:
 		return "The requested resource no longer exists."
+	case pkgopencost.ReasonMetricsPortForwardDisabled:
+		return "Automatic port-forwarding is turned off, and Radar can't reach Prometheus directly, so OpenCost metrics are unavailable. Set a metrics URL for this cluster in Radar's Settings → Metrics."
+	case pkgopencost.ReasonKubecostPortForwardDisabled:
+		return "Automatic port-forwarding is turned off, so Radar can't reach the Kubecost Aggregator it found in this cluster. Set the Kubecost URL for this cluster in Radar's Settings → Cost."
 	case pkgopencost.ReasonQueryError, pkgopencost.ReasonSourceUnavailable:
 		return "The selected cost source's connection or query failed. For OpenCost metrics, check Radar's Metrics connection status; for Kubecost, check its URL, network path and backend health."
 	default:

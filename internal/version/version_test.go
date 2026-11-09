@@ -11,6 +11,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/skyhook-io/radar/internal/launchday"
 )
 
 func TestIsNewerVersion(t *testing.T) {
@@ -555,4 +558,325 @@ func resetUpdateCache() {
 	mu.Lock()
 	defer mu.Unlock()
 	updateCache = map[string]updateCacheEntry{}
+	disabledByFlag = false
+	lastManualResult = nil
+}
+
+func TestCheckForUpdateDisabledByFlag(t *testing.T) {
+	var requestCount int
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.0")
+	resetUpdateCache()
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	SetDisabled(true)
+	if !IsDisabled() {
+		t.Fatal("expected IsDisabled() to be true when disabled by flag")
+	}
+
+	info := CheckForUpdate(context.Background())
+	if info == nil {
+		t.Fatal("expected non-nil UpdateInfo when disabled")
+	}
+	if info.UpdateAvail {
+		t.Errorf("expected UpdateAvail to be false when disabled, got true")
+	}
+	if info.LatestVersion != "" {
+		t.Errorf("expected LatestVersion to be empty when disabled, got %q", info.LatestVersion)
+	}
+	if info.ReleaseURL != defaultReleasesURL {
+		t.Errorf("expected ReleaseURL to be %q when disabled, got %q", defaultReleasesURL, info.ReleaseURL)
+	}
+	if requestCount != 0 {
+		t.Errorf("CheckForUpdate made %d HTTP requests when disabled, want 0", requestCount)
+	}
+
+	infoRelease := CheckForUpdateRelease(context.Background())
+	if infoRelease == nil || infoRelease.UpdateAvail {
+		t.Errorf("expected CheckForUpdateRelease to return clean UpdateInfo with UpdateAvail=false")
+	}
+	if requestCount != 0 {
+		t.Errorf("CheckForUpdateRelease made %d HTTP requests when disabled, want 0", requestCount)
+	}
+
+	if err := RelayUpdateCheck(context.Background()); err != nil {
+		t.Errorf("RelayUpdateCheck returned error when disabled: %v", err)
+	}
+	if requestCount != 0 {
+		t.Errorf("RelayUpdateCheck made %d HTTP requests when disabled, want 0", requestCount)
+	}
+}
+
+func TestCheckForUpdateEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		envVar   string
+		value    string
+		disabled bool
+	}{
+		{"explicit opt-out", "RADAR_DISABLE_VERSION_CHECK", "1", true},
+		{"true opt-out", "RADAR_DISABLE_VERSION_CHECK", "true", true},
+		{"case-insensitive opt-out", "RADAR_DISABLE_VERSION_CHECK", "TRUE", true},
+		{"zero leaves checks enabled", "RADAR_DISABLE_VERSION_CHECK", "0", false},
+		{"false leaves checks enabled", "RADAR_DISABLE_VERSION_CHECK", "false", false},
+		{"unset leaves checks enabled", "RADAR_DISABLE_VERSION_CHECK", "", false},
+		{"DNT leaves checks enabled", "DO_NOT_TRACK", "1", false},
+		{"unused alias leaves checks enabled", "RADAR_NO_VERSION_CHECK", "1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requestCount int
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount++
+				_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+			}))
+			defer proxy.Close()
+
+			previousURL, previousVersion := releasesURL, Current
+			releasesURL = proxy.URL
+			SetCurrent("1.2.0")
+			resetUpdateCache()
+			t.Cleanup(func() {
+				releasesURL = previousURL
+				SetCurrent(previousVersion)
+				resetUpdateCache()
+			})
+
+			t.Setenv("RADAR_DISABLE_VERSION_CHECK", "")
+			t.Setenv(tc.envVar, tc.value)
+			if got := IsDisabled(); got != tc.disabled {
+				t.Fatalf("IsDisabled() = %v for %s=%q, want %v", got, tc.envVar, tc.value, tc.disabled)
+			}
+
+			info := CheckForUpdate(context.Background())
+			if info == nil {
+				t.Fatal("expected non-nil UpdateInfo")
+			}
+			if tc.disabled {
+				if info.UpdateAvail || info.LatestVersion != "" {
+					t.Errorf("expected no release lookup when disabled, got %+v", info)
+				}
+				if requestCount != 0 {
+					t.Errorf("made %d requests when disabled, want 0", requestCount)
+				}
+			} else {
+				if !info.UpdateAvail || info.LatestVersion != "1.3.0" {
+					t.Errorf("expected available update from release lookup, got %+v", info)
+				}
+				if requestCount != 1 {
+					t.Errorf("made %d requests when enabled, want 1", requestCount)
+				}
+			}
+		})
+	}
+}
+
+func TestManualUpdateCheckPreservesAutomaticOptOut(t *testing.T) {
+	for _, byEnv := range []bool{false, true} {
+		name := "flag"
+		if byEnv {
+			name = "environment"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("RADAR_DISABLE_VERSION_CHECK", "")
+			var requests atomic.Int32
+			var status atomic.Int32
+			status.Store(http.StatusOK)
+			var tag atomic.Value
+			tag.Store("v1.3.0")
+			queries := make(chan url.Values, 16)
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				queries <- r.URL.Query()
+				if code := int(status.Load()); code != http.StatusOK {
+					w.WriteHeader(code)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(githubRelease{TagName: tag.Load().(string)})
+			}))
+			t.Cleanup(proxy.Close)
+			previousURL, previousGitHub, previousVersion := releasesURL, githubURL, Current
+			releasesURL, githubURL = proxy.URL, proxy.URL
+			SetCurrent("1.2.0")
+			resetUpdateCache()
+			t.Cleanup(func() {
+				releasesURL, githubURL = previousURL, previousGitHub
+				SetCurrent(previousVersion)
+				resetUpdateCache()
+			})
+
+			if info := CheckForUpdate(context.Background()); info.LatestVersion != "1.3.0" {
+				t.Fatalf("warm cache: %+v", info)
+			}
+			<-queries
+			if byEnv {
+				t.Setenv("RADAR_DISABLE_VERSION_CHECK", "1")
+			} else {
+				SetDisabled(true)
+			}
+			for _, latest := range []string{"1.4.0", "1.5.0"} {
+				tag.Store("v" + latest)
+				info := CheckForUpdateManual(context.Background())
+				if info.Error != "" || !info.UpdateAvail || info.LatestVersion != latest {
+					t.Fatalf("fresh manual lookup: %+v", info)
+				}
+				if source := (<-queries).Get("source"); source != "release-only" {
+					t.Fatalf("manual source = %q, want release-only", source)
+				}
+			}
+			if got := requests.Load(); got != 3 {
+				t.Fatalf("requests = %d, want warm cache plus two fresh checks", got)
+			}
+			if !IsDisabled() {
+				t.Fatal("manual check changed the opt-out")
+			}
+			if info := CheckForUpdate(context.Background()); info.LatestVersion != "1.5.0" || !info.UpdateAvail {
+				t.Fatalf("automatic refresh lost the manual result: %+v", info)
+			}
+			if info := CheckForUpdateRelease(context.Background()); info.LatestVersion != "1.5.0" {
+				t.Fatalf("release-only refresh lost the manual result: %+v", info)
+			}
+			if err := RelayUpdateCheck(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := requests.Load(); got != 3 {
+				t.Fatalf("automatic checks made requests after manual check: %d", got)
+			}
+
+			status.Store(http.StatusBadGateway)
+			if info := CheckForUpdateManual(context.Background()); info.Error == "" {
+				t.Fatalf("failed manual lookup reported success: %+v", info)
+			}
+			if !IsDisabled() {
+				t.Fatal("failed manual check changed the opt-out")
+			}
+			status.Store(http.StatusOK)
+			for _, current := range []string{"dev", "1.6.0-37-g8b325b372", "abc1234", "radar-app-v0.3.1"} {
+				SetCurrent(current)
+				if info := CheckForUpdateManual(context.Background()); info.Error != "" || info.LatestVersion != "1.5.0" || info.UpdateAvail || info.BuildChannel != "development" {
+					t.Fatalf("development build manual result: %+v", info)
+				}
+			}
+			tag.Store("invalid")
+			if info := CheckForUpdateManual(context.Background()); info.Error == "" {
+				t.Fatalf("invalid release version reported success: %+v", info)
+			}
+		})
+	}
+}
+
+func TestManualUpdateCheckSupersedesInFlightAutomaticLookup(t *testing.T) {
+	for _, source := range []string{"", "release-only"} {
+		t.Run(source, func(t *testing.T) {
+			t.Setenv("RADAR_DISABLE_VERSION_CHECK", "")
+			started, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			var requests atomic.Int32
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tag := "v1.4.0"
+				if requests.Add(1) == 1 {
+					close(started)
+					<-release
+					tag = "v1.3.0"
+				}
+				_ = json.NewEncoder(w).Encode(githubRelease{TagName: tag})
+			}))
+			t.Cleanup(proxy.Close)
+			t.Cleanup(func() { once.Do(func() { close(release) }) })
+			previousURL, previousVersion := releasesURL, Current
+			releasesURL = proxy.URL
+			SetCurrent("1.2.0")
+			resetUpdateCache()
+			t.Cleanup(func() {
+				releasesURL = previousURL
+				SetCurrent(previousVersion)
+				resetUpdateCache()
+			})
+
+			automatic := make(chan *UpdateInfo, 1)
+			go func() { automatic <- checkForUpdateCached(checkOptions{source: source}) }()
+			<-started
+			manual := CheckForUpdateManual(context.Background())
+			once.Do(func() { close(release) })
+			background := <-automatic
+			if manual.LatestVersion != "1.4.0" || manual.Error != "" {
+				t.Fatalf("manual result: %+v", manual)
+			}
+			if background.LatestVersion != "1.4.0" {
+				t.Fatalf("in-flight lookup replaced manual result: %+v", background)
+			}
+			for _, info := range []*UpdateInfo{CheckForUpdate(context.Background()), CheckForUpdateRelease(context.Background())} {
+				if info.LatestVersion != "1.4.0" || info.Error != "" {
+					t.Fatalf("cached lookup lost manual result: %+v", info)
+				}
+			}
+			if got := requests.Load(); got != 2 {
+				t.Fatalf("requests = %d, want one automatic and one manual", got)
+			}
+		})
+	}
+}
+
+// A build of a commit past a release tag parses as a prerelease of that tag,
+// so the tag would always read as an update.
+func TestAutomaticCheckOffersNoUpdateToDevelopmentBuilds(t *testing.T) {
+	t.Setenv("RADAR_DISABLE_VERSION_CHECK", "")
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.18.2"})
+	}))
+	defer proxy.Close()
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	for _, current := range []string{"1.18.2-22-ga0694c7fa", "1.18.2-22-ga0694c7fa-dirty", "1.18.2-dirty"} {
+		SetCurrent(current)
+		resetUpdateCache()
+		info := CheckForUpdate(context.Background())
+		if info.UpdateAvail || info.LatestVersion != "1.18.2" || info.Error != "" {
+			t.Errorf("CheckForUpdate with %q = %+v, want latest 1.18.2 and no update", current, info)
+		}
+	}
+	SetCurrent("1.18.1")
+	resetUpdateCache()
+	if info := CheckForUpdate(context.Background()); !info.UpdateAvail {
+		t.Errorf("a release behind the latest got no update: %+v", info)
+	}
+}
+
+func TestUpdateCheckCarriesTheProductHuntLaunch(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.3.0","productHuntLaunch":{"enabled":false,"url":"","start":"0001-01-01T00:00:00Z","end":"0001-01-01T00:00:00Z"}}`))
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion, previousLaunch := releasesURL, Current, launchday.Current()
+	releasesURL = proxy.URL
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+		_ = launchday.Set(previousLaunch)
+	})
+
+	SetCurrent("1.2.0")
+	resetUpdateCache()
+	CheckForUpdate(context.Background())
+	if launchday.ProductHunt(time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)) {
+		t.Error("a launch the update check turned off should not apply")
+	}
 }

@@ -74,6 +74,12 @@
       "object": { "status": { "phase": "Pending", "conditions": [{ "type": "PodScheduled", "status": "False", "reason": "Unschedulable" }] } }
     },
     {
+      "name": "pod held by scheduling gate is neutral",
+      "kind": "Pod",
+      "level": "neutral",
+      "object": { "metadata": { "creationTimestamp": "2020-01-01T00:00:00Z" }, "spec": { "schedulingGates": [{ "name": "kueue.x-k8s.io/admission" }] }, "status": { "phase": "Pending" } }
+    },
+    {
       "name": "deployment all replicas ready is healthy",
       "kind": "Deployment",
       "level": "healthy",
@@ -192,6 +198,7 @@
       "kind": "DaemonSet",
       "level": "unhealthy",
       "object": { "metadata": { "generation": 5 }, "status": { "observedGeneration": 5, "desiredNumberScheduled": 3, "numberReady": 0, "updatedNumberScheduled": 3 } }
-    }
+    },
+    {"name": "pod blocked by declared readiness gate with unknown onset", "kind": "Pod", "level": "degraded", "object": {"spec": {"readinessGates": [{"conditionType": "example.com/ready"}]}, "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "False", "reason": "ReadinessGatesNotReady"}, {"type": "ContainersReady", "status": "True"}], "containerStatuses": [{"ready": true, "state": {"running": {}}}]}}}
   ]
 }

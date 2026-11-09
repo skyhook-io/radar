@@ -1,0 +1,18 @@
+suite: Kueue visibility API RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants only get on LocalQueue pending Workloads in the visibility group
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "visibility.kueue.x-k8s.io")]
+          value:
+            apiGroups: ["visibility.kueue.x-k8s.io"]
+            resources: ["localqueues/pendingworkloads"]
+            verbs: ["get"]
+  - it: omits it when Kueue collection is disabled
+    set:
+      rbac.crdGroups.kueue: false
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "visibility.kueue.x-k8s.io")]

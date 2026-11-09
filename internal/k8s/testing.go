@@ -72,7 +72,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 // (delay their informer start via syncDelays), promoting them at runtime — the
 // state a SyncTimeout produces in production. syncTimeout bounds Phase 1 and
 // deferredSyncTimeout bounds the promoted kinds' background sync, so a test
-// can walk the full progressive contract: kind_sync_pending -> kind_sync_failed
+// can walk the full progressive contract: kind_sync_pending -> kind_sync_timed_out
 // -> served after a late sync. Call ResetResourceCache to clean up.
 //
 // This is intended for integration tests only.
@@ -682,4 +682,13 @@ func InitTestDynamicResourceCacheWithFallbacks(dynClient dynamic.Interface, reso
 		resourcePermsMu.Unlock()
 	}()
 	return InitTestDynamicResourceCache(dynClient, resources)
+}
+
+func SetTestContextOperationInProgress(active bool) func() {
+	var value int32
+	if active {
+		value = 1
+	}
+	previous := activeContextOperations.Swap(value)
+	return func() { activeContextOperations.Store(previous) }
 }

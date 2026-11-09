@@ -1,0 +1,18 @@
+# TYPE rabbitmq_process_resident_memory_bytes gauge
+# HELP rabbitmq_process_resident_memory_bytes Memory used in bytes
+rabbitmq_process_resident_memory_bytes 134975488
+# TYPE rabbitmq_disk_space_available_bytes gauge
+# HELP rabbitmq_disk_space_available_bytes Disk space available in bytes
+rabbitmq_disk_space_available_bytes 15277850624
+# TYPE rabbitmq_resident_memory_limit_bytes gauge
+# HELP rabbitmq_resident_memory_limit_bytes Memory high watermark in bytes
+rabbitmq_resident_memory_limit_bytes 2412409651
+# TYPE rabbitmq_disk_space_available_limit_bytes gauge
+# HELP rabbitmq_disk_space_available_limit_bytes Free disk space low watermark in bytes
+rabbitmq_disk_space_available_limit_bytes 50000000
+# TYPE rabbitmq_alarms_free_disk_space_watermark untyped
+# HELP rabbitmq_alarms_free_disk_space_watermark is 1 if free disk space watermark alarm is in effect
+rabbitmq_alarms_free_disk_space_watermark 0
+# TYPE rabbitmq_alarms_memory_used_watermark untyped
+# HELP rabbitmq_alarms_memory_used_watermark is 1 if VM memory watermark alarm is in effect
+rabbitmq_alarms_memory_used_watermark 0

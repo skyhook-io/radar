@@ -107,8 +107,9 @@ func setupArgoApplicationsDynamicCache(t *testing.T) {
 
 func listApplications(t *testing.T, query string) []map[string]any {
 	t.Helper()
-	var items []map[string]any
-	assertOK(t, get(t, "/api/resources/applications?group=argoproj.io"+query), &items)
+	var response testResourceListEnvelope
+	assertOK(t, get(t, "/api/resources/applications?group=argoproj.io"+query), &response)
+	items := response.Items
 	if len(items) != 1 {
 		t.Fatalf("got %d applications, want 1", len(items))
 	}
@@ -174,8 +175,9 @@ func TestListResourcesIncludeSummaryE2E(t *testing.T) {
 // informer-cache object must stay intact (the row builders share slices with
 // it but never mutate).
 func TestListPodsIncludeSummaryE2E(t *testing.T) {
-	var summarized []map[string]any
-	assertOK(t, get(t, "/api/resources/pods?include=summary"), &summarized)
+	var summaryResponse testResourceListEnvelope
+	assertOK(t, get(t, "/api/resources/pods?include=summary"), &summaryResponse)
+	summarized := summaryResponse.Items
 	if len(summarized) == 0 {
 		t.Fatal("no pods in summary response")
 	}
@@ -191,8 +193,9 @@ func TestListPodsIncludeSummaryE2E(t *testing.T) {
 		t.Error("summary pod lost metadata.name")
 	}
 
-	var full []map[string]any
-	assertOK(t, get(t, "/api/resources/pods"), &full)
+	var fullResponse testResourceListEnvelope
+	assertOK(t, get(t, "/api/resources/pods"), &fullResponse)
+	full := fullResponse.Items
 	fullContainers := mustNested(t, full[0], "spec", "containers").([]any)
 	fc0, _ := fullContainers[0].(map[string]any)
 	if fc0["image"] == nil {

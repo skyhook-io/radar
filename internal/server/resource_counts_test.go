@@ -155,6 +155,7 @@ func TestResourceCountsSkipsKubernetes137BrowseProbeAboveNamespaceCap(t *testing
 	for i := range namespaces {
 		namespaces[i] = fmt.Sprintf("ns-%d", i)
 	}
+	addPackageNamespaces(t, namespaces...)
 	rec := httptest.NewRecorder()
 	testServerSrv.handleResourceCounts(rec, httptest.NewRequest(http.MethodGet, "/api/resource-counts?namespaces="+strings.Join(namespaces, ","), nil))
 	if rec.Code != http.StatusOK {
@@ -450,4 +451,74 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestResourceCountsCountsCustomResourceDefinitionsFromTheirInformer(t *testing.T) {
+	definitionGVR := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	endpointSliceGVR := schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
+	definition := func(name string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]any{"name": name},
+		}}
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			definitionGVR:    "CustomResourceDefinitionList",
+			endpointSliceGVR: "EndpointSliceList",
+		},
+		definition("widgets.example.com"), definition("gadgets.example.com"),
+	)
+	dyn.PrependReactor("list", "endpointslices", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &unstructured.UnstructuredList{}, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition", Name: "customresourcedefinitions", Namespaced: false, IsCRD: false, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	dynCache := k8s.GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(definitionGVR); err != nil {
+		t.Fatalf("EnsureWatching(crds): %v", err)
+	}
+	if !dynCache.WaitForSync(definitionGVR, 2*time.Second) {
+		t.Fatal("CRD informer did not sync")
+	}
+
+	decode := func(rec *httptest.ResponseRecorder) ResourceCountsResponse {
+		t.Helper()
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var body ResourceCountsResponse
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return body
+	}
+	const key = "apiextensions.k8s.io/CustomResourceDefinition"
+
+	rec := httptest.NewRecorder()
+	testServerSrv.handleResourceCounts(rec, httptest.NewRequest(http.MethodGet, "/api/resource-counts", nil))
+	if got := decode(rec).Counts[key]; got != 2 {
+		t.Fatalf("CustomResourceDefinition count = %d, want 2", got)
+	}
+
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	user := &auth.User{Username: "alice"}
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "apiextensions.k8s.io", "customresourcedefinitions", "", false)
+	s.permCache.Set(user.Username, nil, perms)
+	rec = httptest.NewRecorder()
+	s.handleResourceCounts(rec, requestWithUser(http.MethodGet, "/api/resource-counts", user))
+	denied := decode(rec)
+	if _, ok := denied.Counts[key]; ok {
+		t.Fatalf("denied CustomResourceDefinition leaked a count: %v", denied.Counts[key])
+	}
+	if !containsString(denied.Forbidden, key) {
+		t.Fatalf("denied CustomResourceDefinition should be forbidden, got: %v", denied.Forbidden)
+	}
 }

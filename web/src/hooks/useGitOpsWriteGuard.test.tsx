@@ -5,18 +5,25 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SetImageDialog, canConfirmGitOpsWrite, setImageSelectionKey, type WorkloadImageInventory } from '@skyhook-io/k8s-ui'
 import { afterEach, expect, it, vi } from 'vitest'
 import { useGitOpsWriteGuard, type GitOpsWriteGuardState } from './useGitOpsWriteGuard'
+import { findInheritedGitOpsLookupRef } from './useResolvedGitOpsOwner'
 
 const mocks = vi.hoisted(() => ({
   applications: { data: undefined as unknown[] | undefined, isPending: true, isError: false },
   inherited: { data: undefined as unknown, isPending: false, isError: false },
   target: { data: undefined as unknown, relationships: undefined as unknown, isLoading: false, isError: false },
+  ownerObject: undefined as unknown,
+  resourceRead: vi.fn(),
+  resourceList: vi.fn(),
   evidence: vi.fn(),
   evidenceUnsupported: false,
 }))
 vi.mock('../api/client', () => ({
-  useResource: (kind: string) => (kind === 'deployments' ? mocks.target : { data: undefined, isLoading: false, isError: false }),
+  useResource: (...args: unknown[]) => {
+    mocks.resourceRead(...args)
+    return args[0] === 'deployments' ? mocks.target : { data: args[0] ? mocks.ownerObject : undefined, isLoading: false, isError: false }
+  },
   useResourceWithRelationships: () => mocks.inherited,
-  useResources: () => mocks.applications,
+  useResources: (...args: unknown[]) => { mocks.resourceList(...args); return mocks.applications },
   useRadarFeature: () => ({
     guard: async (fn: () => unknown) => {
       if (!mocks.evidenceUnsupported) return fn()
@@ -36,6 +43,9 @@ afterEach(() => {
   mocks.inherited = { data: undefined, isPending: false, isError: false }
   mocks.target = { data: undefined, relationships: undefined, isLoading: false, isError: false }
   mocks.evidence.mockReset()
+  mocks.ownerObject = undefined
+  mocks.resourceRead.mockReset()
+  mocks.resourceList.mockReset()
 })
 
 it.each(['resolved', 'failed', 'empty', 'ambiguous'])('waits for Argo Application namespace lookup before handling %s ownership', async (outcome) => {
@@ -454,4 +464,118 @@ it("doesn't hold Update for a host that reports the selection without judging it
     await act(async () => root.unmount())
     host.remove()
   }
+})
+
+const managerApp = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'server-app' }
+const managerAnswer: import('@skyhook-io/k8s-ui').ManagerAnswer = { state: 'listed', lead: managerApp, direct: { object: deployment, recorders: [managerApp] } }
+
+it.each(['disagree', 'shared', 'claimed'] as const)('fetches evidence for %s without a lead', async state => {
+  const manager = { ...managerAnswer, state, lead: undefined, direct: { object: deployment, recorders: state === 'claimed' ? [] : state === 'shared' ? [managerApp, { ...managerApp, name: 'second-recorder' }] : [managerApp], claims: [{ manager: { ...managerApp, name: 'claim' }, source: 'argo-instance-label' as const, check: 'omitted' as const }, ...(state === 'claimed' ? [{ manager: managerApp, source: 'argo-instance-label' as const, check: 'omitted' as const }] : [])] } }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: null, manager, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.evidence).toHaveBeenCalledTimes(1)
+    expect(mocks.evidence.mock.calls[0][0].owner).toBeUndefined()
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+  } finally { await h.cleanup() }
+})
+
+it('fetches via evidence and names the parent without acknowledgment', async () => {
+  const manager = { ...managerAnswer, direct: { object: pod }, via: managerAnswer.direct }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: managerApp, manager, policy: null, paths: [] })
+  const h = await renderGuard({ target: pod, resource: {}, relationships: { ownership: { children: { complete: true }, manager } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.evidence).toHaveBeenCalledTimes(1)
+    expect(h.ref.state!.ownership.inheritedLookupRef).toBeNull()
+    expect(h.ref.state!.guard?.level).toBe('info')
+    expect(h.ref.state!.guard?.requiresAck).toBe(false)
+    expect(h.ref.state!.guard?.summary).toContain('Deployment prod/web')
+  } finally { await h.cleanup() }
+})
+
+it.each(['none', 'unknown', 'disagree', 'shared', 'claimed', 'listed'] as const)('adopts the server %s answer over a conflicting client lead', async state => {
+  const serverManager = { ...managerAnswer, state, lead: state === 'listed' ? managerApp : undefined, direct: { object: deployment } }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: managerApp, manager: serverManager, policy: null, paths: [] })
+  const clientManager = { ...managerAnswer, lead: { ...managerApp, name: 'stale-client' } }
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager: clientManager } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.ownership.manager).toEqual(serverManager)
+    expect(h.ref.state!.guard?.owner?.name ?? null).toBe(state === 'listed' ? 'server-app' : null)
+    expect(h.ref.state!.guard?.summary).not.toContain('stale-client')
+    if (state === 'none' || state === 'unknown') expect(h.ref.state!.guard?.level).toBe('none')
+  } finally { await h.cleanup() }
+})
+
+// A live answer naming another manager doesn't inherit the cached one's
+// verification or status: a link to it would rest on a check of the old one.
+it("doesn't carry the cached manager's verification to a different live manager", async () => {
+  mocks.ownerObject = { status: { sync: { status: 'Synced' }, health: { status: 'Healthy' } } }
+  const other = { ...managerApp, name: 'live-app' }
+  const live = { state: 'claimed' as const, lead: other, direct: { object: deployment, claims: [{ manager: other, source: 'argo-tracking-id' as const, check: 'missing' as const }] } }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: other, manager: live, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager: managerAnswer } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.ownership.owner?.name).toBe('live-app')))
+    expect(h.ref.state!.ownership.ownerVerified).toBe(false)
+    expect(h.ref.state!.ownership.ownerStatus).toBeNull()
+  } finally { await h.cleanup() }
+})
+
+// An object adopted since the cache saw it has a manager the cache doesn't.
+it('checks a cached none against the live object', async () => {
+  const cachedNone = { state: 'none' as const, direct: { object: deployment } }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: managerApp, manager: managerAnswer, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager: cachedNone } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(mocks.evidence).toHaveBeenCalled()))
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.owner?.name).toBe('server-app')))
+  } finally { await h.cleanup() }
+})
+
+it('does not guess an Argo namespace or inherit through the browser with an answer', async () => {
+  const unresolved = { ...managerAnswer, state: 'claimed' as const, lead: { ...managerApp, namespace: '' } }
+  mocks.applications.data = [{ metadata: { name: managerApp.name, namespace: 'guessed' } }]
+  mocks.inherited = { data: { resource: {}, relationships: { managedBy: [managerApp] } }, isPending: false, isError: false }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: unresolved.lead, policy: null, paths: [] })
+  const h = await renderGuard({ target: pod, resource: {}, relationships: { ...podRelationships, ownership: { children: { complete: true }, manager: unresolved } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.ownership.owner?.namespace).toBe('')
+    expect(h.ref.state!.ownership.ownerMatchedByName).toBe(false)
+    expect(h.ref.state!.ownership.inheritedLookupRef).toBeNull()
+    expect(mocks.evidence.mock.calls[0][0].owner.namespace).toBe('')
+  } finally { await h.cleanup() }
+})
+
+
+it('still fetches the lead for sync and health without listing namesakes', async () => {
+  mocks.ownerObject = { status: { sync: { status: 'Synced' }, health: { status: 'Healthy' } } }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: managerApp, manager: managerAnswer, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager: managerAnswer } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.resourceRead).toHaveBeenCalledWith('applications', 'argocd', 'server-app', 'argoproj.io', expect.objectContaining({ enabled: true }))
+    expect(mocks.resourceList).toHaveBeenCalledWith('applications', undefined, 'argoproj.io', expect.objectContaining({ enabled: false }))
+    expect(h.ref.state!.ownership.ownerStatus).toMatchObject({ sync: 'Synced', health: 'Healthy' })
+  } finally { await h.cleanup() }
+})
+
+
+it.each(['agree', 'listed', 'claimed', 'disagree', 'shared', 'unknown', 'none'] as const)('image prefetch skips browser inheritance for %s answers', state => {
+  expect(findInheritedGitOpsLookupRef({ ...podRelationships, ownership: { children: { complete: true }, manager: { state, direct: { object: pod } } } }, null, pod)).toBeNull()
+})
+
+
+it.each(['cycle', 'truncated'] as const)('fetches evidence for a %s chain without a stop object', async chainEnd => {
+  const manager = { state: 'unknown' as const, direct: { object: deployment }, chainEnd }
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: null, manager, policy: null, paths: [] })
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: { ownership: { children: { complete: true }, manager } }, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.evidence).toHaveBeenCalledTimes(1)
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+  } finally { await h.cleanup() }
 })

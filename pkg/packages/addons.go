@@ -155,7 +155,7 @@ func ClassifyAddon(chart, appName, partOf, name, addonManagerMode, image string)
 	if v := strings.TrimSpace(addonManagerMode); v != "" {
 		return true, "addonmanager.kubernetes.io/mode=" + v
 	}
-	chartBase, _ := splitChart(chart)
+	chartBase, _ := SplitChart(chart)
 	if addon, why := classifyAddonValue("chart", chartBase, true); addon {
 		return addon, why
 	}

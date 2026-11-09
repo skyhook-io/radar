@@ -20,6 +20,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -55,9 +56,7 @@ type writeEvidenceRef struct {
 type gitOpsWriteEvidenceRequest struct {
 	writeEvidenceRef
 	Paths []string `json:"paths"`
-	// Owner is the GitOps owner the client resolved (it may be inherited from
-	// a parent workload). When absent, the object's own tracking metadata is
-	// used.
+	// Owner is a hint used only when the server cannot answer management.
 	Owner *writeEvidenceRef `json:"owner,omitempty"`
 }
 
@@ -126,12 +125,18 @@ type controllerOwnerEvidence struct {
 }
 
 type gitOpsWriteEvidenceResponse struct {
-	UID             string                   `json:"uid"`
-	ResourceVersion string                   `json:"resourceVersion"`
-	Owner           *topology.ResourceRef    `json:"owner"`
-	Policy          *gitOpsWritePolicy       `json:"policy"`
-	PolicyError     string                   `json:"policyError,omitempty"`
-	ControllerOwner *controllerOwnerEvidence `json:"controllerOwner,omitempty"`
+	Manager *topology.ManagerAnswer `json:"manager,omitempty"`
+	// ManagerUnavailable is the reason code when Radar couldn't answer what
+	// manages the live object (it changed under the cache, or the cache isn't
+	// ready). The caller's owner hint is then not used either: an exemption
+	// read from it could belong to the object as it was.
+	ManagerUnavailable string                   `json:"managerUnavailable,omitempty"`
+	UID                string                   `json:"uid"`
+	ResourceVersion    string                   `json:"resourceVersion"`
+	Owner              *topology.ResourceRef    `json:"owner"`
+	Policy             *gitOpsWritePolicy       `json:"policy"`
+	PolicyError        string                   `json:"policyError,omitempty"`
+	ControllerOwner    *controllerOwnerEvidence `json:"controllerOwner,omitempty"`
 	// OwnerTracksTarget: the Argo CD Application's status lists this object
 	// among its resources, which confirms an owner the client matched by name.
 	OwnerTracksTarget bool                 `json:"ownerTracksTarget,omitempty"`
@@ -192,8 +197,19 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 	}
 
 	req.writeEvidenceRef = canonicalWriteEvidenceRef(req.writeEvidenceRef, target)
-	owner := resolveWriteEvidenceOwner(req, target)
-	if owner != nil && owner.Namespace == "" && owner.Group == "argoproj.io" && strings.EqualFold(owner.Kind, "Application") {
+	var manager *topology.ManagerAnswer
+	var unavailable string
+	if fetched, ok := k8s.OwnershipObservation(target); ok {
+		manager, unavailable = k8s.AnswerLiveManager(fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+	}
+	var owner *topology.ResourceRef
+	switch {
+	case manager != nil:
+		owner = manager.Lead
+	case unavailable == "":
+		owner = resolveWriteEvidenceOwner(req, target)
+	}
+	if manager == nil && owner != nil && owner.Namespace == "" && owner.Group == "argoproj.io" && strings.EqualFold(owner.Kind, "Application") {
 		owner.Namespace = findTrackingArgoApplication(r.Context(), dyn, owner.Name, req.writeEvidenceRef)
 	}
 	var ownerObj *unstructured.Unstructured
@@ -210,7 +226,9 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	s.writeJSON(w, buildGitOpsWriteEvidence(target, req.writeEvidenceRef, req.Paths, owner, ownerObj, ownerErr))
+	resp := buildGitOpsWriteEvidence(target, req.writeEvidenceRef, req.Paths, owner, ownerObj, ownerErr)
+	resp.Manager, resp.ManagerUnavailable = manager, unavailable
+	s.writeJSON(w, resp)
 }
 
 // canonicalWriteEvidenceRef takes the kind and group from the object itself:
@@ -515,11 +533,8 @@ func readGitOpsWritePolicy(owner *topology.ResourceRef, ownerObj, target *unstru
 	switch ownerTool(owner) {
 	case "argocd":
 		p := &gitOpsWritePolicy{Tool: "argocd"}
-		automated, hasAutomated, _ := unstructured.NestedMap(ownerObj.Object, "spec", "syncPolicy", "automated")
-		auto := hasAutomated && automated != nil
-		if enabled, ok := automated["enabled"].(bool); ok && !enabled {
-			auto = false
-		}
+		automated, _, _ := unstructured.NestedMap(ownerObj.Object, "spec", "syncPolicy", "automated")
+		auto := gitops.ArgoAutoSyncEnabled(ownerObj)
 		selfHeal, _ := automated["selfHeal"].(bool)
 		prune, _ := automated["prune"].(bool)
 		p.Auto = evidenceBool(auto)

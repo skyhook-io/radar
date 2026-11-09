@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // ReadOnlyTools is the explicit allowlist of Radar MCP read tools an
@@ -17,14 +18,16 @@ var ReadOnlyTools = []string{
 	"get_dashboard", "top_resources", "list_resources", "get_resource",
 	"get_topology", "get_neighborhood", "get_events", "get_pod_logs",
 	"diagnose", "list_namespaces", "get_changes", "get_cluster_audit",
-	"list_helm_releases", "get_helm_release", "list_packages", "issues",
+	"list_helm_releases", "get_helm_release", "get_helm_chart", "list_packages", "issues",
 	"search", "get_subject_permissions", "query_prometheus", "discover_metrics",
 	"get_prometheus_rules", "get_workload_logs", "get_cluster_upgrade_readiness",
 	"get_cost", "get_rightsizing", "wait_for", "get_runtime_versions",
 }
 
-// WriteTools are the mutating Radar MCP tools — enabled only on an apply turn
-// the user explicitly confirmed. Never on the read-only investigation path.
+// WriteTools are the mutating Radar MCP tools supported by the built-in AI —
+// enabled only on an apply turn the user explicitly confirmed. Never on the
+// read-only investigation path. Exec is excluded; deletion is excluded until
+// built-in approval presents its impact preview.
 var WriteTools = []string{
 	"apply_resource", "patch_resource", "manage_workload",
 	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops",
@@ -71,10 +74,12 @@ func (t Target) Label() string {
 
 // HealthSignal is the compact server-side health frame captured when a run
 // starts. Issue fields describe live operational findings; audit fields are
-// static posture findings and should not be treated as proof of an outage.
+// posture findings, mostly latent risk, though some can be live failures.
 // Issues/AuditFindings carry the top actual rows (capped) — aggregates alone
 // read as vague and starve the prompt of detail Radar already has.
 type HealthSignal struct {
+	CrossplanePause resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
+
 	AuditMissingInputs []string     `json:"auditMissingInputs,omitempty"`
 	Health             string       `json:"health,omitempty"`
 	IssueCount         int          `json:"issueCount,omitempty"`
@@ -288,7 +293,7 @@ func explanationRuledOut(assessment Verdict) []string {
 // the reasoning the model must do before either. The prose story comes AFTER
 // the verdict block so the verdict is derived from the working notes rather
 // than rationalised from a story already written.
-const answerFormatInstruction = "FINAL ANSWER, three parts in this order. (1) Evidence ledger: one line per result you will cite, stating what it shows and what it does not cover, and one line per alternative cause, naming the result that contradicts it or marking it untested. Radar keeps everything before the verdict block in Activity, out of Findings. (2) The fenced ```json verdict block, consistent with the ledger: check the summary against each gap last, since it is the sentence most likely to say more than the ledger allows. (3) The story: everything after the block is what Findings shows. The summary, root_cause and story claim nothing the ledger marks as not covered: a result about one restart supports a sentence about one restart; something absent now was not necessarily never there; neighbours that restarted at similar ages suggest a shared cause and do not confirm one; words like ever, never, all and since creation need a result that shows them. Where the ledger states a limit, the story keeps it rather than restating the claim without it. "
+const answerFormatInstruction = "FINAL ANSWER, three parts in this order. (1) Evidence ledger: one line per result you will cite, stating what it shows and what it does not cover, and one line per alternative cause, naming the result that contradicts it or marking it untested. Radar keeps everything before the verdict block in Activity, out of Findings. (2) The fenced ```json verdict block, consistent with the ledger: check the summary against each gap last, since it is the sentence most likely to say more than the ledger allows. (3) The story: everything after the block is what Findings shows. The summary, root_cause and story claim nothing the ledger marks as not covered: a result about one restart supports a sentence about one restart; something absent now was not necessarily never there; a list covers only its coverage.scope, so a partial or narrowed list says nothing about what it did not read, and rows from your namespaces are not the cluster; neighbours that restarted at similar ages suggest a shared cause and do not confirm one; words like ever, never, all and since creation need a result that shows them. Where the ledger states a limit, the story keeps it rather than restating the claim without it. "
 
 func verdictContract(policy CitationPolicy) string {
 	citable := "at most 8 results from this investigation that returned data"
@@ -303,16 +308,17 @@ func verdictContract(policy CitationPolicy) string {
 		"healthy=true only when your checks verified the resource is fine: root_cause and steps empty, recommended_index 0, and every adverse result Radar captured cited with role benign and a claim saying why it is not a live problem — cite the adverse observation itself with its subject and observation kind (the warning event, the issue card), not the resource it is about — or Radar keeps its warning up beside your verdict. " +
 		"inconclusive=true when you could not determine the cause: root_cause empty, the blocking question first in unresolved, verify or investigate steps offered. healthy and inconclusive are mutually exclusive. " +
 		"root_cause: the paragraph under the headline, two or three plain sentences for a reader who will not open the analysis: what failed, the mechanism, and the one result that shows it, with since-when if a result gives it. No [[radar:...]] markers here or in summary. GitHub-flavored markdown; backticks only for an identifier the reader needs exactly, not for every name. Claim nothing the ledger does not cover; empty when healthy or inconclusive. " +
-		"root_cause_evidence_refs: at most 3 refs of the checks that establish WHY, copied exactly from their [[radar:evidence-ref=ev_...]] markers; empty when root_cause is empty. " +
+		"A ref is the whole string after evidence-ref= in a tool result's [[radar:evidence-ref=ev_...]] marker: ev_, then 26 to 128 characters from a-z and 2-7, an underscore, and 26 to 128 more (like ev_k3m5q2x7tbw4hn6d…_p4t6w2n6ejxq7lm3…, always copied in full from the marker). An index such as ev0, ev_1 or 0 is never a ref. " +
+		"root_cause_evidence_refs: at most 3 refs of the checks that establish WHY, copied exactly from their markers; empty when root_cause is empty. " +
 		"evidence: " + citable + " (a call that errored or was denied cannot be cited; say in the story what it would have shown), each with its ref copied exactly, a role (cause: establishes why; symptom: what it looks like; context: checked and worth seeing; benign: looks adverse but is not a live problem; demoted: related but less relevant; rules_out: this result contradicts a hypothesis), an optional one-sentence claim (required for benign, demoted and rules_out), and a gap: one clause naming what this result does not cover that a reader might assume it does (the other restarts, the other pods, earlier history), written to stand on its own under the card, a fragment rather than a sentence: 'live spec only, not the Git manifest', never 'Shows the live spec, not the manifest'; omitted when nothing is assumed. A gap is a limit of the evidence, never a licence to claim past it. Refs may repeat with different subjects. When a result covers several resources, pods, containers or log streams, subject names the one you mean (kind and name required; group is the API group and is empty for core kinds such as Pod, ConfigMap, Secret, Service, Event and Node; for a listing, name the entry you mean, or give kind and namespace with no name when the point is what the listing does not contain; namespace, container, stream and observation as needed, observation being the evidence kind, exactly one of: resource (anything a call returned about a resource: a single resource, a listing, a ranking, a posture card, a Helm release, a permissions check, a neighborhood), logs, events, changes, metrics, metrics:cpu / metrics:memory / metrics:restarts for a diagnose bundle's charts, alerts with name as the rule's name, or issue; any other word leaves the item unplaced). The diagnose bundle is never about one thing: every citation of it needs a subject. " +
 		"ruled_out: at most 5 hypotheses, each pointing at the 0-based evidence item whose result contradicts it, meaning the hypothesis predicts something that result shows to be false (a container that ran does not rule out the wrong image; an empty window does not rule out an earlier change); a hypothesis nothing contradicts is untested and belongs in unresolved, not here. " +
-		"steps: up to 6 actions someone can take, empty on a healthy verdict, each self-contained and copy-pasteable in GitHub-flavored markdown with inline code for commands (a fenced bash block only for real multi-line scripts, fence lines on their own). kind: mitigate changes the cluster to restore service, verify settles an unresolved item, investigate gathers more; these are purposes, not an order. precondition: the condition under which the step is right, empty when there is none. A warning or a thing not to do belongs in the story, not in steps. " +
+		"steps: up to 6 actions someone can take, empty on a healthy verdict, each opening with one short imperative sentence of under 12 words that names the action (Radar shows that sentence alone where space is short), the details after it, and each self-contained and copy-pasteable in GitHub-flavored markdown with inline code for commands (a fenced bash block only for real multi-line scripts, fence lines on their own). kind: mitigate changes the cluster to restore service, verify settles an unresolved item, investigate gathers more; these are purposes, not an order. precondition: the condition under which the step is right, empty when there is none. A warning or a thing not to do belongs in the story, not in steps. " +
 		"recommended_index: the one mitigate step Apply should perform, 1-based, safe, targeted, reversible, with no precondition and depending on nothing you inferred or left untested (a cluster type read off a node name is an inference; an intent you could not read is untested); when a step depends on such a thing it carries it as its precondition, the discriminating verify step comes first, and recommended_index is 0. recommended_reason: one clause on why it is the safe pick and, when the fix restores a behaviour the evidence cannot confirm is the wanted one (a default config, an earlier template), a few words saying so; empty when 0. " +
 		"revises_assessment: false on an initial or verification turn. confidence: 0..1. "
 }
 
 const storyGuidance = "STORY: prose an on-call engineer reads top to bottom, after the verdict block. Its job is the why: how the evidence leads to the headline, what else was checked, and what the evidence does not cover. It need not repeat the summary; open with whatever the reader must see first, knowing they will look for the result behind the headline. Length and shape are yours: as short as the case allows, never a bullet list restating results. An on-call reader gives it about a minute, so most cases fit in 150-250 words and only a case with several moving parts needs more; a healthy story stops once present health, the limit of any adverse signal, and what would reopen the question are clear. A healthy story says how long the target has been in this state only when a cited result shows it (a pod's start time, a rollout's completion, an event's age); restart or rollout age alone does not establish continuous health, so otherwise say it is healthy at the time of this check and that how long is unknown. Radar's audit findings are posture, not part of the story unless one bears on the cause. " +
-	"PLACING A CARD: put [[radar:evidence=N]] alone on a line, where N is the 0-based index into evidence (the index, never the ev_ reference: [[radar:evidence-ref=...]] is the ledger's marker on a tool result and must not appear in the story, the summary or root_cause), and Radar renders that result's card there; [[radar:evidence=N|compact]] renders its header and your role label, without your note; log cards also retain the last two selected log lines; the same marker inside a sentence places the card under that paragraph if nothing else places it, and otherwise is a reference back to the card; prefer the own-line form, which lets you choose where the card lands. A marker inside a code span, code block or blockquote is literal text; the story holds no ```json fence of its own. Two or three cards is typical; 6 is the ceiling, not a target. " +
+	"PLACING A CARD: put [[radar:evidence=N]] alone on a line, where N is the 0-based index into evidence (the index belongs only in this marker, never in a ref field; and the marker takes the index, never the ev_ reference: [[radar:evidence-ref=...]] is the ledger's marker on a tool result and must not appear in the story, the summary or root_cause), and Radar renders that result's card there; [[radar:evidence=N|compact]] renders its header and your role label, without your note; log cards also retain the last two selected log lines, and a chart starts folded unless you call it the cause or the symptom; the same marker inside a sentence places the card under that paragraph if nothing else places it, and otherwise is a reference back to the card; prefer the own-line form, which lets you choose where the card lands. A marker inside a code span, code block or blockquote is literal text; the story holds no ```json fence of its own. Two or three cards is typical; 6 is the ceiling, not a target. " +
 	"Only results Radar renders as cards can be placed: diagnose, get_resource, list_resources, list_namespaces, list_helm_releases, list_packages or search with at least one row, get_events, get_pod_logs, get_workload_logs, get_changes, get_neighborhood, get_topology, get_helm_release (with its hooks, history and values), get_subject_permissions (with its effective rules), get_prometheus_rules, query_prometheus, discover_metrics, issues, top_resources (a ranking; the workload's own row is marked), and get_cluster_audit or get_cluster_upgrade_readiness (only the findings about this resource or its relations become a card; a scan with none becomes a receipt); an empty listing or get_dashboard can be cited in evidence but has no card, so never place it. WHEN TO PLACE: your judgement. Place a card where seeing the result changes how the sentence lands: the log line that names the error, the spec field that is wrong, the chart that shows when. Not every claim needs a card. Every result about this resource that Radar captured is listed under Captured results regardless, and every read is in Activity, so cite a result in evidence without placing it when a card would interrupt the reading, or place it compact when the reader needs the fact but not the detail. Close with what would change the answer, or one clause saying nothing open would, unless that is already plain. "
 
 // followUpInstruction keeps Findings stable across ordinary questions.
@@ -365,6 +371,8 @@ func healthFrame(target string, health *HealthSignal) string {
 			}
 			b.WriteString(".")
 		}
+	case health.CrossplanePause != "" && health.Health != "":
+		fmt.Fprintf(&b, "Radar records %s availability as %s, with 0 active issue rows.", target, health.Health)
 	case health.Health == "healthy":
 		fmt.Fprintf(&b, "Radar currently reports %s as healthy and flags 0 active issues.", target)
 	case health.Health != "":
@@ -372,8 +380,14 @@ func healthFrame(target string, health *HealthSignal) string {
 	default:
 		fmt.Fprintf(&b, "Radar currently flags 0 active issues on %s.", target)
 	}
+	switch health.CrossplanePause {
+	case resourcecontext.CrossplanePauseRequested:
+		b.WriteString(" This resource carries the crossplane.io/paused annotation set to true; no Synced=False/ReconcilePaused acknowledgement is recorded.")
+	case resourcecontext.CrossplanePauseAcknowledged:
+		b.WriteString(" The crossplane.io/paused annotation requests a pause for this resource, corroborated by its recorded Synced=False/ReconcilePaused condition. Recorded availability is not a fresh external check while reconciliation is paused.")
+	}
 	if health.AuditCount > 0 {
-		fmt.Fprintf(&b, " Radar audit also reports %d static posture finding%s", health.AuditCount, pluralS(health.AuditCount))
+		fmt.Fprintf(&b, " Radar audit also reports %d posture finding%s", health.AuditCount, pluralS(health.AuditCount))
 		if health.AuditSeverity != "" || health.TopFinding != "" {
 			b.WriteString(";")
 			if health.AuditSeverity != "" {
@@ -391,7 +405,7 @@ func healthFrame(target string, health *HealthSignal) string {
 			}
 			b.WriteString(".")
 		}
-		b.WriteString(" Treat audit findings as static posture and remediation priority, not evidence of an active outage.")
+		b.WriteString(" Audit findings are posture and remediation priority, mostly latent risk, but some (expired certificates, dangling references) can be live failures; check them before dismissing.")
 	}
 	if len(health.AuditMissingInputs) > 0 {
 		fmt.Fprintf(&b, " The audit scan could not read these inputs: %s. Zero audit findings do not establish that all checks passed.", strings.Join(health.AuditMissingInputs, ", "))

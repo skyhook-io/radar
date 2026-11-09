@@ -4,6 +4,8 @@ import {
   ResourceCompareView,
   CompareResourcePicker,
   parseRef,
+  resourceCoverageNotice,
+  resourceNarrowedNotice,
   refToParam,
   type CompareResourceRef,
   type CompareSide,
@@ -42,7 +44,7 @@ export function CompareViewRoute() {
   const aQuery = useResource<unknown>(a?.kind ?? '', a?.namespace ?? '', a?.name ?? '', a?.group)
   const bQuery = useResource<unknown>(b?.kind ?? '', b?.namespace ?? '', b?.name ?? '', b?.group)
 
-  const { candidates, isPending: candidatesPending, error: candidatesError } = useCompareCandidates(kind, group, !!pickerOpen)
+  const { candidates, coverage: candidatesCoverage, isPending: candidatesPending, error: candidatesError } = useCompareCandidates(kind, group, !!pickerOpen)
 
   const updateParam = useCallback(
     (next: Record<string, string>) => {
@@ -114,6 +116,8 @@ export function CompareViewRoute() {
           source={source}
           sourceSide={pickerOpen}
           candidates={candidates}
+          coverageNote={resourceCoverageNotice(candidatesCoverage)}
+          scopeNote={resourceNarrowedNotice(candidatesCoverage)}
           loading={candidatesPending}
           error={candidatesError}
           onPick={handlePick}

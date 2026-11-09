@@ -29,15 +29,23 @@ func TestDetectCNI(t *testing.T) {
 		{name: "Canal before Calico and Flannel", daemonSets: []string{"calico-node", "kube-flannel-ds", "rke2-canal"}, want: "canal"},
 		{name: "Cilium before Canal", daemonSets: []string{"cilium", "rke2-canal"}, want: "cilium"},
 		{name: "Calico remains Calico", daemonSets: []string{"calico-node"}, want: "calico"},
+		{name: "Calico installed by the Tigera operator", daemonSets: []string{"calico-system/calico-node"}, want: "calico"},
+		{name: "Canal before operator Calico", daemonSets: []string{"calico-system/calico-node", "rke2-canal"}, want: "canal"},
 		{name: "Flannel remains Flannel", daemonSets: []string{"kube-flannel-ds"}, want: "flannel"},
+		{name: "Flannel from the upstream manifest", daemonSets: []string{"kube-flannel/kube-flannel-ds"}, want: "flannel"},
+		{name: "calico-node in an unrelated namespace", daemonSets: []string{"default/calico-node"}, want: "unknown"},
 		{name: "prefix does not match", daemonSets: []string{"rke2-canal-old"}, want: "unknown"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			objects := make([]runtime.Object, 0, len(tt.daemonSets))
-			for _, name := range tt.daemonSets {
-				objects = append(objects, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system"}})
+			for _, ref := range tt.daemonSets {
+				namespace, name, found := strings.Cut(ref, "/")
+				if !found {
+					namespace, name = "kube-system", ref
+				}
+				objects = append(objects, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}})
 			}
 			m := &Manager{k8sClient: fake.NewSimpleClientset(objects...)}
 			got, _ := m.detectCNI(context.Background(), "generic")
@@ -61,6 +69,21 @@ func TestDetectClusterInfoFallsBackToRKE2ServerVersion(t *testing.T) {
 	}
 	if info.Platform != "rke2" {
 		t.Errorf("platform = %q, want rke2", info.Platform)
+	}
+}
+
+func TestDetectClusterInfoPrefersNKPOverNodeProvider(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}, Spec: corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0123"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kommander-flux"}},
+	)
+
+	info, err := (&Manager{k8sClient: client}).detectClusterInfo(context.Background())
+	if err != nil {
+		t.Fatalf("detectClusterInfo() error = %v", err)
+	}
+	if info.Platform != "nkp" {
+		t.Errorf("platform = %q, want nkp", info.Platform)
 	}
 }
 
