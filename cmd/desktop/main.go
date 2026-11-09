@@ -250,13 +250,16 @@ func main() {
 
 	app.SetGlobals(cfg)
 	versionpkg.SetDesktop(true)
-	// An AppImage is a read-only image and cannot replace itself: no in-app
-	// updater (below), and the UI links to the release instead.
-	versionpkg.SetUpdateByDownload(desktopenv.InAppImage())
+	// Installs the in-app updater can't replace (AppImage, .deb/.rpm, a folder
+	// Radar can't write to) get no updater (below) and no cleanup of an .old
+	// file Radar didn't make; the UI says how to update instead.
+	updateMode := updater.DetectMode()
+	versionpkg.SetManualUpdate(string(updateMode))
 	desktopenv.SetGPUPolicy(gpuPolicyName(linuxGPUPolicy))
 
-	// Clean up leftover files from previous update
-	updater.CleanupOldUpdate()
+	if updateMode == updater.ModeInPlace {
+		updater.CleanupOldUpdate()
+	}
 
 	// Initialize K8s client — if this fails (e.g., no kubeconfig found),
 	// still start the UI so the user sees the error instead of a silent exit.
@@ -279,7 +282,7 @@ func main() {
 
 	// Create server and attach desktop updater
 	srv := app.CreateServer(cfg)
-	if !desktopenv.InAppImage() {
+	if updateMode == updater.ModeInPlace {
 		srv.SetUpdater(updater.New())
 	}
 

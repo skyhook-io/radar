@@ -52,7 +52,7 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   const startUpdate = useStartDesktopUpdate()
   const applyUpdate = useApplyDesktopUpdate()
   const isDesktop = versionInfo?.installMethod === 'desktop'
-  const desktopSelfUpdate = isDesktop && !versionInfo?.updateByDownload
+  const desktopSelfUpdate = isDesktop && !versionInfo?.manualUpdate
   const { data: updateStatus } = useDesktopUpdateStatus(desktopUpdating || (inSettings && expanded && desktopSelfUpdate))
 
   useEffect(() => {
@@ -214,11 +214,11 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
             {!inSettings && <>You're on {versionInfo.currentVersion}.</>}
           </p>
 
-          {/* Desktop that cannot replace itself (AppImage): download link */}
-          {isDesktop && !desktopSelfUpdate && versionInfo.releaseUrl && (
+          {/* Desktop that cannot replace itself: how to update, and the download */}
+          {isDesktop && versionInfo.manualUpdate && versionInfo.releaseUrl && (
             <>
               <p className="text-xs text-theme-text-secondary mt-1">
-                This AppImage can't update itself. Download the new one and use it in place of this file.
+                {MANUAL_UPDATE_TEXT[versionInfo.manualUpdate]}
               </p>
               <a
                 href={versionInfo.releaseUrl}
@@ -324,6 +324,12 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
       {panel}
     </div>
   )
+}
+
+const MANUAL_UPDATE_TEXT: Record<NonNullable<VersionInfo['manualUpdate']>, string> = {
+  appimage: "This AppImage can't update itself. Download the new one and use it in place of this file.",
+  package: 'Download the new .deb or .rpm and install it with your package manager, such as apt or dnf.',
+  download: "Radar can't replace itself in this folder. Download the new version and copy it over this one, as an administrator if the folder needs it.",
 }
 
 function CopyIcon({ copied, failed }: { copied: boolean; failed: boolean }) {

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let deploymentMode = 'local'
 let installMethod = 'direct'
-let updateByDownload: boolean | undefined
+let manualUpdate: 'appimage' | 'package' | 'download' | undefined
 
 vi.mock('../../api/client', () => ({
   useCapabilities: () => ({ data: { deployment: { mode: deploymentMode } } }),
@@ -14,7 +14,7 @@ vi.mock('../../api/client', () => ({
       latestVersion: '1.3.0',
       updateAvailable: true,
       installMethod,
-      updateByDownload,
+      manualUpdate,
       releaseUrl: 'https://github.com/skyhook-io/radar/releases/tag/v1.3.0',
       // Off, so the Product Hunt launch day doesn't take the corner whatever today is.
       productHuntLaunch: { enabled: false, url: '', start: '0001-01-01T00:00:00Z', end: '0001-01-01T00:00:00Z' },
@@ -41,7 +41,7 @@ describe('UpdateNotification', () => {
   beforeEach(() => {
     deploymentMode = 'local'
     installMethod = 'direct'
-    updateByDownload = undefined
+    manualUpdate = undefined
   })
 
   it('keeps the update popup for local installations', () => {
@@ -58,9 +58,9 @@ describe('UpdateNotification', () => {
     expect(html).not.toContain('href="https://github.com/skyhook-io/radar/releases/tag/v1.3.0"')
   })
 
-  it('links desktop installs that cannot update themselves to the release instead', () => {
+  it.each(['appimage', 'package', 'download'] as const)('links %s desktop installs to the release instead of updating in place', how => {
     installMethod = 'desktop'
-    updateByDownload = true
+    manualUpdate = how
     const html = renderNotification()
     expect(html).toContain('href="https://github.com/skyhook-io/radar/releases/tag/v1.3.0"')
     // Only the dismiss button: no in-app update.
