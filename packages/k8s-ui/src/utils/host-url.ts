@@ -22,6 +22,13 @@ function isConcreteHost(host: string): boolean {
   return host !== '' && !host.includes('*')
 }
 
+/** A hostname that names one host, normalized, or null for empty and wildcard
+ * names. For routes a browser can't open (gRPC), it is all there is to copy. */
+export function concreteHostname(host: string | undefined | null): string | null {
+  const h = normalizeHost(host)
+  return isConcreteHost(h) ? h : null
+}
+
 // Plain URL path characters only. Prefix/Exact paths are literal to the API,
 // but some controllers (ingress-nginx with use-regex) read them as patterns,
 // so a path with regex syntax is never put into a URL.

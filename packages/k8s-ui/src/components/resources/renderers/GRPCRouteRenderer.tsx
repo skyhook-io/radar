@@ -3,6 +3,8 @@ import { Section, PropertyList, Property, ConditionsSection, AlertBanner, Resour
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
 import { gatewayBackendResourceRef, gatewayParentResourceRef } from '../../../utils/gateway-references'
+import { concreteHostname } from '../../../utils/host-url'
+import { HostLinkActions } from '../../ui/HostLinkActions'
 
 interface GRPCRouteRendererProps {
   data: any
@@ -66,10 +68,16 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
             label="Hostnames"
             value={
               hostnames.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {hostnames.map((h: string) => (
-                    <Badge key={h} tone="structural">{h}</Badge>
-                  ))}
+                <div className="flex flex-col items-start gap-1">
+                  {hostnames.map((h: string) => {
+                    const copyable = concreteHostname(h)
+                    return (
+                      <div key={h} className="flex max-w-full items-center gap-1">
+                        <Badge tone="structural" className="min-w-0 break-all">{h}</Badge>
+                        {copyable && <HostLinkActions hostname={copyable} />}
+                      </div>
+                    )
+                  })}
                 </div>
               ) : (
                 <span className="text-xs text-theme-text-tertiary">Any</span>

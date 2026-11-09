@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IngressRenderer } from './IngressRenderer'
 import { HTTPRouteRenderer } from './HTTPRouteRenderer'
+import { GRPCRouteRenderer } from './GRPCRouteRenderer'
 import type { GatewayLookup } from '../../../utils/host-url'
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -85,5 +86,20 @@ describe('hostname Open and Copy', () => {
     const el = await mount(<HTTPRouteRenderer data={route} parentGateways={[{ namespace: 'shop', name: 'main-gw', status: 'loading' }]} />)
     expect(openLinks(el)).toEqual([])
     expect(el.querySelectorAll('button[aria-label^="Copy"]')).toHaveLength(0)
+  })
+
+  it('offers only Copy hostname for GRPCRoute hostnames, and nothing for wildcards', async () => {
+    const grpc = {
+      metadata: { name: 'orders', namespace: 'shop' },
+      spec: { parentRefs: [{ name: 'main-gw' }], hostnames: ['grpc.example.com', '*.grpc.example.com'], rules: [] },
+    }
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const el = await mount(<GRPCRouteRenderer data={grpc} />)
+    expect(openLinks(el)).toEqual([])
+    const copies = el.querySelectorAll<HTMLButtonElement>('button[aria-label^="Copy"]')
+    expect(copies).toHaveLength(1)
+    await act(async () => { copies[0].click() })
+    expect(writeText).toHaveBeenCalledWith('grpc.example.com')
   })
 })
