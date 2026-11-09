@@ -438,10 +438,15 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       const branch = nodeData.branch as string;
       return branch ? `${ready} • ${branch}` : ready;
     }
-    case "Pod":
-      // Phase stays Running while a deleted Pod drains; kubectl shows Terminating.
-      if (Number(nodeData.terminating) > 0) return "Terminating";
-      return (nodeData.phase as string) || "Unknown";
+    case "Pod": {
+      const phase = (nodeData.phase as string) || "Unknown";
+      if (Number(nodeData.terminating) > 0) {
+        // Phase stays Running while a deleted Pod drains; kubectl shows Terminating.
+        // A Pod that already finished keeps its outcome visible.
+        return phase === "Failed" || phase === "Succeeded" ? `${phase} • terminating` : "Terminating";
+      }
+      return phase;
+    }
     case "Service": {
       const svcType = (nodeData.type as string) || "ClusterIP";
       const ports = (nodeData.ports as ServicePortEntry[] | undefined) || [];

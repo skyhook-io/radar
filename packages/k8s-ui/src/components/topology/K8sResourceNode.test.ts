@@ -12,6 +12,8 @@ describe('baseSubtitle', () => {
     expect(baseSubtitle('Pod', { phase: 'Running', terminating: 1 })).toBe('Terminating')
     expect(baseSubtitle('Pod', { phase: 'Running', terminating: 0 })).toBe('Running')
     expect(baseSubtitle('Pod', { phase: 'Running' })).toBe('Running')
+    expect(baseSubtitle('Pod', { phase: 'Failed', terminating: 1 })).toBe('Failed • terminating')
+    expect(baseSubtitle('Pod', { phase: 'Succeeded', terminating: 1 })).toBe('Succeeded • terminating')
   })
   it('describes workflow templates without dropping newer topology kinds', () => {
     expect(baseSubtitle('WorkflowTemplate', { entrypoint: 'main', templateCount: 3 })).toBe('main • 3 templates')
