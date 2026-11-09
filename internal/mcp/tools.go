@@ -2613,9 +2613,10 @@ type mcpMetrics struct {
 }
 
 type mcpClusterInfo struct {
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Version  string `json:"version"`
+	Name              string `json:"name"`                        // kubeconfig context, or "in-cluster"
+	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
+	Platform          string `json:"platform"`
+	Version           string `json:"version"`
 }
 
 type mcpNodeSummary = health.NodeFleetCounts
@@ -2785,6 +2786,15 @@ func mcpHelmDashboardPriority(r helm.HelmRelease) int {
 	return helm.ReleasePriority(r)
 }
 
+func mcpClusterInfoFromInfo(info *k8s.ClusterInfo) mcpClusterInfo {
+	return mcpClusterInfo{
+		Name:              info.DisplayName(),
+		KubeconfigCluster: info.KubeconfigCluster(),
+		Platform:          info.Platform,
+		Version:           info.KubernetesVersion,
+	}
+}
+
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
 	d := mcpDashboard{
 		ResourceCounts: make(map[string]int),
@@ -2795,11 +2805,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 	// Cluster info
 	if info, err := k8s.GetClusterInfo(ctx); err == nil {
-		d.Cluster = mcpClusterInfo{
-			Name:     info.Cluster,
-			Platform: info.Platform,
-			Version:  info.KubernetesVersion,
-		}
+		d.Cluster = mcpClusterInfoFromInfo(info)
 	}
 
 	now := time.Now()

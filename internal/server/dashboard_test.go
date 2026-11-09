@@ -409,3 +409,46 @@ func TestDashboardReadinessGateEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestDashboardClusterFromInfo_NamesTheContext(t *testing.T) {
+	cases := []struct {
+		name     string
+		info     k8s.ClusterInfo
+		wantName string
+		// wantEntry "" means the kubeconfigCluster key must be absent.
+		wantEntry string
+	}{
+		// Several GitLab agent contexts share one cluster entry; each must keep its own name.
+		{"shared entry A", k8s.ClusterInfo{Context: "group/project:agent-a", Cluster: "gitlab_com"}, "group/project:agent-a", "gitlab_com"},
+		{"shared entry B", k8s.ClusterInfo{Context: "group/project:agent-b", Cluster: "gitlab_com"}, "group/project:agent-b", "gitlab_com"},
+		{"context equals entry", k8s.ClusterInfo{Context: "kind-dev", Cluster: "kind-dev"}, "kind-dev", "kind-dev"},
+		{"no context", k8s.ClusterInfo{Cluster: "gitlab_com"}, "gitlab_com", "gitlab_com"},
+		{"no cluster entry", k8s.ClusterInfo{Context: "plain-dev"}, "plain-dev", ""},
+		{"in-cluster", k8s.ClusterInfo{Context: "in-cluster", Cluster: "in-cluster", InCluster: true}, "in-cluster", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(dashboardClusterFromInfo(&tc.info))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["name"] != tc.wantName {
+				t.Errorf("name = %v, want %q (%s)", payload["name"], tc.wantName, raw)
+			}
+			entry, has := payload["kubeconfigCluster"]
+			if tc.wantEntry == "" && has {
+				t.Errorf("kubeconfigCluster should be absent: %s", raw)
+			}
+			if tc.wantEntry != "" && entry != tc.wantEntry {
+				t.Errorf("kubeconfigCluster = %v, want %q (%s)", entry, tc.wantEntry, raw)
+			}
+			if _, has := payload["context"]; has {
+				t.Errorf("unexpected context key: %s", raw)
+			}
+		})
+	}
+}

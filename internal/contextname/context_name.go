@@ -1,6 +1,10 @@
 package contextname
 
-import "regexp"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // Keep these provider patterns aligned with packages/k8s-ui/src/utils/context-name.ts.
 var (
@@ -8,6 +12,8 @@ var (
 	eksArnContextRe = regexp.MustCompile(`^arn:aws:eks:([^:]+):(\d+):cluster/(.+)$`)
 	eksctlContextRe = regexp.MustCompile(`^(.+)@([^.]+)\.([^.]+)\.eksctl\.io$`)
 	aksContextRe    = regexp.MustCompile(`^cluster(?:User|Admin)_([^_]+)_(.+)$`)
+	// oc login: <project>/<server host, dots as dashes, or [IPv6]>:<port>/<user>
+	openshiftContextRe = regexp.MustCompile(`^([a-z0-9][a-z0-9-]*)/([a-z0-9][a-z0-9-]*|\[[0-9a-fA-F:.]+\]):(\d{1,5})/(.+)$`)
 )
 
 // ShortName extracts the human-facing cluster segment from provider-generated
@@ -24,6 +30,12 @@ func ShortName(contextName string) string {
 	}
 	if m := aksContextRe.FindStringSubmatch(contextName); m != nil {
 		return m[2]
+	}
+	if m := openshiftContextRe.FindStringSubmatch(contextName); m != nil {
+		port, _ := strconv.Atoi(m[3])
+		if !strings.HasSuffix(m[1], "-") && !strings.HasSuffix(m[2], "-") && port >= 1 && port <= 65535 {
+			return m[2]
+		}
 	}
 	return contextName
 }

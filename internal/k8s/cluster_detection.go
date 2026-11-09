@@ -65,6 +65,25 @@ type ClusterInfo struct {
 	CRDDiscoveryStatus string `json:"crdDiscoveryStatus,omitempty"` // idle, discovering, ready
 }
 
+// DisplayName is the kubeconfig context, which names the cluster the way the
+// user picked it: several contexts can share one cluster entry (GitLab agents,
+// Teleport). In-cluster mode, and a context-less kubeconfig, fall back to Cluster.
+func (i *ClusterInfo) DisplayName() string {
+	if i.InCluster || i.Context == "" {
+		return i.Cluster
+	}
+	return i.Context
+}
+
+// KubeconfigCluster is the kubeconfig cluster entry the context points at, or
+// "" in in-cluster mode, where Cluster holds only the "in-cluster" sentinel.
+func (i *ClusterInfo) KubeconfigCluster() string {
+	if i.InCluster {
+		return ""
+	}
+	return i.Cluster
+}
+
 // GetClusterInfo returns detected cluster information
 func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	platform, _ := GetClusterPlatform(ctx)
