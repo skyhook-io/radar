@@ -752,6 +752,7 @@ export function ResourceRendererDispatch({
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
+    || kind === 'httproutes' || kind === 'grpcroutes'
     || kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'databaseroles' || kind === 'jobsets'
@@ -771,6 +772,7 @@ export function ResourceRendererDispatch({
     || (kind === 'ingresses' && ['networking.k8s.io', 'extensions', 'networking.internal.knative.dev'].some(group => isApiGroup(data?.apiVersion, group)))
     || (kind === 'certificates' && ['cert-manager.io', 'networking.internal.knative.dev'].some(group => isApiGroup(data?.apiVersion, group)))
     || (kind === 'gateways' && ['gateway.networking.k8s.io', 'networking.istio.io'].some(group => isApiGroup(data?.apiVersion, group)))
+    || ((kind === 'httproutes' || kind === 'grpcroutes') && isApiGroup(data?.apiVersion, 'gateway.networking.k8s.io'))
     || (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
     || (kind === 'backups' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'velero.io')))
     || ((kind === 'scheduledbackups' || kind === 'poolers') && isCNPGApiVersion)
@@ -929,8 +931,8 @@ export function ResourceRendererDispatch({
         {kind === 'challenges' && <ChallengeRenderer data={data} />}
         {kind === 'gateways' && groupGatedMatched && (isApiGroup(data.apiVersion, 'networking.istio.io') ? <IstioGatewayRenderer data={data} /> : <GatewayRenderer data={data} onNavigate={onNavigate} />)}
         {kind === 'gatewayclasses' && <GatewayClassRenderer data={data} />}
-        {kind === 'httproutes' && <HTTPRouteComp data={data} onNavigate={onNavigate} />}
-        {kind === 'grpcroutes' && <GRPCRouteRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'httproutes' && groupGatedMatched && <HTTPRouteComp data={data} onNavigate={onNavigate} />}
+        {kind === 'grpcroutes' && groupGatedMatched && <GRPCRouteRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
         {kind === 'udproutes' && <SimpleRouteRenderer data={data} kind="UDPRoute" onNavigate={onNavigate} />}
@@ -1285,7 +1287,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (isApiGroup(data.apiVersion, 'gateway.networking.k8s.io')) return getGatewayStatus(data)
   }
   if (k === 'gatewayclasses') return getGatewayClassStatus(data)
-  if (k === 'httproutes' || k === 'grpcroutes' || k === 'tcproutes' || k === 'tlsroutes' || k === 'udproutes') return getRouteStatus(data)
+  if ((k === 'httproutes' || k === 'grpcroutes') && isApiGroup(data.apiVersion, 'gateway.networking.k8s.io')) return getRouteStatus(data)
+  if (k === 'tcproutes' || k === 'tlsroutes' || k === 'udproutes') return getRouteStatus(data)
   if (k === 'sealedsecrets') return getSealedSecretStatus(data)
   if (k === 'poddisruptionbudgets') return getPDBStatus(data)
   const isFluxResource = getGitOpsTool(k, apiVersionToGroup(data.apiVersion)) === 'flux'
