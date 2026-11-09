@@ -538,7 +538,11 @@ func unschedulableAction(reasons []SchedulingReason) string {
 		// The selector excluded some nodes and the rest failed a later filter:
 		// that filter is the blocker on the nodes the pod actually targets.
 		if base := dominantAction(reasons, func(r SchedulingReason) bool { return schedAfterNodeAffinity[r.Class] }); base != "" {
-			return moreThan(2, "The nodes that match the pod's nodeSelector/affinity can't take it. "+base)
+			const matching = "The nodes that match the pod's nodeSelector/affinity"
+			if rest, ok := strings.CutPrefix(base, "Candidate nodes "); ok {
+				return moreThan(2, matching+" "+rest)
+			}
+			return moreThan(2, matching+" can't take it. "+base)
 		}
 		// Nodes rejected before the selector check (a taint, a cordon) were
 		// never matched against it, so they may be the pod's targets.

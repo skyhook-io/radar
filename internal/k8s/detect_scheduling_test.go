@@ -502,6 +502,10 @@ func TestUnschedulableAction(t *testing.T) {
 			{Class: SchedNodeAffinitySelector, NodeCount: 30},
 			{Class: SchedUntoleratedTaint, TaintKey: "nvidia.com/gpu", NodeCount: 3},
 		}, `If they're the pod's target nodes, add a toleration for taint "nvidia.com/gpu"`},
+		{"a later class without a candidate-nodes action keeps its own sentence", []SchedulingReason{
+			{Class: SchedNodeAffinitySelector, NodeCount: 30},
+			{Class: SchedPodAntiAffinity, NodeCount: 2},
+		}, "nodeSelector/affinity can't take it. The pod-anti-affinity rule"},
 		{"two shortages are two constraints", []SchedulingReason{
 			{Class: SchedInsufficientResource, Resource: "cpu", NodeCount: 1},
 			{Class: SchedInsufficientResource, Resource: "memory", NodeCount: 1},
@@ -528,7 +532,7 @@ func TestUnschedulableActionSelectorScopesLaterFilters(t *testing.T) {
 	msg := "0/34 nodes are available: 2 Insufficient nvidia.com/gpu, 32 node(s) didn't match Pod's node affinity/selector. preemption: 0/34 nodes are available: 2 No preemption victims found for incoming pod, 32 Preemption is not helpful for scheduling."
 	_, reasons := parseSchedulerMessage(msg)
 	got := unschedulableAction(reasons)
-	for _, want := range []string{"match the pod's nodeSelector/affinity can't take it", "enough nvidia.com/gpu"} {
+	for _, want := range []string{"The nodes that match the pod's nodeSelector/affinity don't have enough nvidia.com/gpu"} {
 		if !hasSubstr(got, want) {
 			t.Errorf("action %q missing %q", got, want)
 		}
