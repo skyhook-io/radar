@@ -136,7 +136,8 @@ export function findSecretsStorePodStatus(pod: any, volume: SecretsStoreVolume, 
   return statuses.find(status => {
     if (!volume.className || status?.status?.secretProviderClassName !== volume.className) return false
     const targetPath = status?.status?.targetPath
-    if (typeof targetPath === 'string' && targetPath !== '' && !targetPath.includes(volumeSegment)) return false
+    // Windows nodes report the path with backslashes.
+    if (typeof targetPath === 'string' && targetPath !== '' && !targetPath.replaceAll('\\', '/').includes(volumeSegment)) return false
     const owners: any[] = status?.metadata?.ownerReferences ?? []
     if (uid) return owners.some(owner => owner?.kind === 'Pod' && owner?.uid === uid)
     return status?.status?.podName === podName

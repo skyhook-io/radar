@@ -172,6 +172,11 @@ describe('getSecretsStoreMountState', () => {
     expect(getSecretsStoreMountState(twoVolumes, second, ok([mountedStatus])).state).toBe('not-mounted-yet')
   })
 
+  it('matches a Windows node target path', () => {
+    const windowsStatus = { ...mountedStatus, status: { ...mountedStatus.status, targetPath: `c:\\var\\lib\\kubelet\\pods\\${POD_UID}\\volumes\\kubernetes.io~csi\\secrets-store\\mount` } }
+    expect(getSecretsStoreMountState(pod(), volume, ok([windowsStatus])).state).toBe('mounted')
+  })
+
   it('does not call a pending Pod unmounted from a partial status read', () => {
     const waiting = pod({ phase: 'Pending', running: false })
     expect(getSecretsStoreMountState(waiting, volume, ok([], false))).toEqual({ state: 'unknown', reason: 'incomplete' })
