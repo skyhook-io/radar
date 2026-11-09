@@ -294,14 +294,16 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 }
 
 // noteFamilyMismatch adds why one family is missing while the other drew.
+// Its edges are missing, not figures on the edges shown, so the warning holds
+// whatever a viewer's filters leave, as missing TCP connections do.
 func (s *IstioSource) noteFamilyMismatch(ctx context.Context, opts FlowOptions, response *FlowsResponse, sc clusterScope, metric, lead string) {
 	reason := s.familyMismatch(ctx, opts, sc, metric)
 	if reason == "" {
 		return
 	}
 	response.Warning = strings.TrimSpace(lead + " " + reason + " " + response.Warning)
-	if response.WarningKind == "" {
-		response.WarningKind = WarningPartial
+	if response.WarningKind != WarningTransient {
+		response.WarningKind = WarningIncomplete
 	}
 }
 

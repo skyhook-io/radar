@@ -118,6 +118,10 @@ func TestIstioFamiliesScopedSeparately(t *testing.T) {
 	if !strings.Contains(resp.Warning, "TCP connections aren't shown") || !strings.Contains(resp.Warning, "isn't labeled by cluster") {
 		t.Errorf("warning %q does not explain the missing TCP connections", resp.Warning)
 	}
+	// Whole edges are missing, so the warning must outlast a viewer's filters.
+	if resp.WarningKind != WarningIncomplete {
+		t.Errorf("warning kind = %s, want %s", resp.WarningKind, WarningIncomplete)
+	}
 }
 
 func TestIstioScopeFollowsCurrentCluster(t *testing.T) {
