@@ -243,7 +243,7 @@ type FlowsResponse struct {
 	// it keeps the retrying behaviour it had. A client must not retry
 	// WarningPartial: the answer will not change, and the warning explains
 	// something the user needs to read rather than wait out. WarningIncomplete
-	// is not retried either.
+	// and WarningCluster are not retried either.
 	WarningKind string `json:"warningKind,omitempty"`
 	// CoveredSince is when Flows start being complete, set when a source read
 	// only its newest records and some of the window did not fit: Hubble

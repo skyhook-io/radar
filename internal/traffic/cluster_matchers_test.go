@@ -365,8 +365,15 @@ func TestMixedClustersNote(t *testing.T) {
 		{"ambiguous", func(string) (string, promclient.SeriesIsolation, error) {
 			return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
 		}, map[string]bool{"a": true, "b": true}, true},
-		{"unproven, labeled", func(string) (string, promclient.SeriesIsolation, error) { return "", unverified, nil }, map[string]bool{"b": true}, true},
-		{"unproven, single unlabeled store", func(string) (string, promclient.SeriesIsolation, error) { return "", unverified, nil }, map[string]bool{"": true}, false},
+		{"nothing proves the cluster", func(string) (string, promclient.SeriesIsolation, error) { return "", unverified, nil }, map[string]bool{"b": true}, true},
+		{"cluster unlabeled in kube-state-metrics, traffic labeled", func(string) (string, promclient.SeriesIsolation, error) {
+			return "", unverified, promclient.ErrScopeMismatch
+		}, map[string]bool{"a": true, "b": true}, true},
+		// A store holding this cluster without cluster labels, like a dedicated
+		// Prometheus: the map reads the unlabeled series, as it always has.
+		{"cluster unlabeled everywhere", func(string) (string, promclient.SeriesIsolation, error) {
+			return `cluster=""`, unverified, nil
+		}, map[string]bool{"": true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stubScope(t, tc.resolve)
@@ -430,5 +437,50 @@ func TestNoClusterWarningWhenThisClusterHasSeries(t *testing.T) {
 	rows := []map[string]string{{"cluster": "a"}, {"cluster": "b"}}
 	if got := sc.clusterMismatchWarning(rows, "Beyla"); got != "" {
 		t.Errorf("warning for a quiet cluster: %q", got)
+	}
+}
+
+// Proven labels stay when this cluster's series carry them under more than one
+// identity (two scrape pipelines, one adding cluster_name): dropping them would
+// draw other clusters' traffic.
+func TestAmbiguityKeepsProvenLabels(t *testing.T) {
+	useConfiguredStore(t)
+	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+		return "", promclient.SeriesIsolation{Mode: promclient.SeriesIsolationVerified, Labels: map[string]string{"cluster": "a"}}, promclient.ErrScopeAmbiguous
+	})
+	resp, err := newScopedBeyla(&beylaStore{l4: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := flowNames(resp.Flows); len(names) != 2 || !names["backend-a"] || resp.WarningKind == WarningCluster {
+		t.Errorf("flows = %v, warning %q; want cluster a's flows only, no note", names, resp.Warning)
+	}
+}
+
+// HTTP series Radar couldn't scope are left out and named, without taking the
+// network flows with them.
+func TestHTTPScopeFailureKeepsNetworkFlows(t *testing.T) {
+	useConfiguredStore(t)
+	stubScope(t, func(metric string) (string, promclient.SeriesIsolation, error) {
+		if metric == beylaL7Metric {
+			return "", promclient.SeriesIsolation{}, errors.New("query timed out")
+		}
+		return clusterA(metric)
+	})
+	store := &beylaStore{l4: map[string]bool{"a": true}, l7: map[string]bool{"a": true}}
+	resp, err := newScopedBeyla(store).GetFlows(t.Context(), FlowOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := flowNames(resp.Flows); !names["backend-a"] || names["http-a"] {
+		t.Errorf("flows = %v, want the network flows without HTTP", names)
+	}
+	if !strings.Contains(resp.Warning, "HTTP request rates") {
+		t.Errorf("warning %q does not name the missing HTTP figures", resp.Warning)
+	}
+	for _, q := range store.sent() {
+		if strings.Contains(q, beylaL7Metric) {
+			t.Errorf("queried HTTP series without a cluster scope: %s", q)
+		}
 	}
 }

@@ -328,7 +328,7 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 		}, nil
 	}
 
-	scope, err := c.clusterScope(ctx)
+	scope, err := c.resolveClusterScope(ctx)
 	if err != nil {
 		return scopeCheckFailed("caretta", err), nil
 	}
@@ -805,11 +805,11 @@ func carettaLinksQuery(namespace string, sc clusterScope) string {
 		sc.with(fmt.Sprintf(`server_namespace="%s"`, safeNS)))
 }
 
-// clusterScope decides the cluster scope of Caretta's queries. Only a store the
+// resolveClusterScope decides the cluster scope of Caretta's queries. Only a store the
 // operator configured can hold several clusters; Caretta's own caretta-vm and
 // any store found in the cluster hold this one.
-func (c *CarettaSource) clusterScope(ctx context.Context) (clusterScope, error) {
-	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "", c.identityRows)
+func (c *CarettaSource) resolveClusterScope(ctx context.Context) (clusterScope, error) {
+	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "")
 }
 
 func (c *CarettaSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {

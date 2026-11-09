@@ -50,6 +50,10 @@ func beylaJobSelector() string {
 // not empty the others.
 type beylaScopes struct {
 	l4, l7 clusterScope
+	// l7Unchecked is set when Radar could not check which cluster the HTTP
+	// series belong to. They are left out, and named as missing, rather than
+	// drawn unchecked or taking the network flows down with them.
+	l7Unchecked bool
 }
 
 // l4Selector and l7Selector are the full matcher fragments for each family:
@@ -63,15 +67,12 @@ func (sc beylaScopes) l7Selector() string { return sc.l7.with(beylaJobSelector()
 // cluster's metrics.
 func (s *BeylaSource) resolveScopes(ctx context.Context) (beylaScopes, error) {
 	url, _ := metricsConfig()
-	l4, err := scopeForMetric(ctx, s.flowMetricName(), beylaJobSelector(), url != "", s.identityRows)
+	l4, err := scopeForMetric(ctx, s.flowMetricName(), beylaJobSelector(), url != "")
 	if err != nil {
 		return beylaScopes{}, err
 	}
-	l7, err := scopeForMetric(ctx, beylaL7Metric, beylaJobSelector(), url != "", s.identityRows)
-	if err != nil {
-		return beylaScopes{}, err
-	}
-	return beylaScopes{l4: l4, l7: l7}, nil
+	l7, err := scopeForMetric(ctx, beylaL7Metric, beylaJobSelector(), url != "")
+	return beylaScopes{l4: l4, l7: l7, l7Unchecked: err != nil}, nil
 }
 
 func (s *BeylaSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {
@@ -87,7 +88,7 @@ func (s *BeylaSource) identityRows(ctx context.Context, query string) ([]map[str
 }
 
 // clusterMismatch explains an empty map when the cluster matchers removed
-// every series that carries traffic in the window: L4 first, then HTTP.
+// every series present in the window: L4 first, then HTTP.
 func (s *BeylaSource) clusterMismatch(ctx context.Context, opts FlowOptions, sc beylaScopes) string {
 	w := beylaWindow(opts.Since)
 	families := []struct {
@@ -112,11 +113,12 @@ func (s *BeylaSource) clusterMismatch(ctx context.Context, opts FlowOptions, sc 
 	return ""
 }
 
-// beylaActiveSeries selects the series that carried traffic in the window,
-// filtered to namespace on any of nsLabels.
+// beylaActiveSeries selects the series present in the window, filtered to
+// namespace on any of nsLabels. Present rather than increasing: an idle series
+// carrying this cluster's labels means a quiet cluster, not a label mismatch.
 func beylaActiveSeries(metric, sel, namespace string, nsLabels []string, w rateWindow) string {
 	active := func(more string) string {
-		return fmt.Sprintf(`(rate(%s{%s%s}[%s]) > 0)`, metric, sel, more, w.promQL)
+		return fmt.Sprintf(`last_over_time(%s{%s%s}[%s])`, metric, sel, more, w.promQL)
 	}
 	if namespace == "" {
 		return active("")
@@ -533,8 +535,10 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 		return nil, presence, fmt.Errorf("L4 query: %w", err)
 	}
 
-	l7Flows, err := s.queryL7(ctx, opts, sc.l7Selector())
-	if err != nil {
+	var l7Flows []Flow
+	if sc.l7Unchecked {
+		presence.failed = append(presence.failed, "HTTP request rates")
+	} else if l7Flows, err = s.queryL7(ctx, opts, sc.l7Selector()); err != nil {
 		log.Printf("[beyla] L7 query failed (continuing with L4 only): %v", err)
 		l7Flows = nil
 		presence.failed = append(presence.failed, "HTTP request rates")
@@ -615,8 +619,12 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 	// could not name, in which case no bucket carries that port at all.
 	portedDsts := presence.portedDsts
 
-	latency, errorRates, detailFailed := s.queryL7Detail(ctx, opts, sc.l7Selector())
-	presence.failed = append(presence.failed, detailFailed...)
+	var latency, errorRates l7Detail
+	if !sc.l7Unchecked {
+		var detailFailed []string
+		latency, errorRates, detailFailed = s.queryL7Detail(ctx, opts, sc.l7Selector())
+		presence.failed = append(presence.failed, detailFailed...)
+	}
 	perPort, perDst := l7ByPortAndDestination(l7Flows)
 	for key, edges := range byDstPort {
 		l7, ok := perPort[key]

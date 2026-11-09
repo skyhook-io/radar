@@ -105,3 +105,18 @@ func TestTrafficAnchorNamespace(t *testing.T) {
 		t.Errorf("namespace-scoped cache: %q", got)
 	}
 }
+
+// Two identities among the series the proven labels select are still this
+// cluster's; the traffic map keeps filtering by those labels.
+func TestTrafficScopeAmbiguityKeepsProvenLabels(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
+		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "a"}, 1), vec(map[string]string{"cluster": "a", "cluster_name": "a"}, 1)}}, nil
+	}}
+	_, iso, err := decideScope(context.Background(), q, trafficScopeProbe("caretta_links_observed", ""), map[string]string{"cluster": "a"})
+	if !errors.Is(err, ErrScopeAmbiguous) {
+		t.Fatalf("err = %v, want ambiguous", err)
+	}
+	if !maps.Equal(iso.Labels, map[string]string{"cluster": "a"}) {
+		t.Errorf("ambiguity dropped the proven labels: %+v", iso)
+	}
+}

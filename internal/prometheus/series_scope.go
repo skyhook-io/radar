@@ -99,14 +99,15 @@ func (client *Client) ResolvePVCScope(ctx context.Context, namespace string, cla
 // automatic proof anchors on kube-system, which always runs Pods, or on any
 // namespace the cache holds when it never sees kube-system. On
 // ErrScopeMismatch the isolation still names the proven labels, so a caller
-// can say which cluster the traffic failed to match.
+// can say which cluster the traffic failed to match, and on ErrScopeAmbiguous
+// after a proof it names the labels every ambiguous series already carries.
 func (client *Client) ResolveTrafficScope(ctx context.Context, metric, selector string, cache *k8s.ResourceCache) (string, SeriesIsolation, error) {
 	return client.resolveScope(ctx, trafficAnchorNamespace(cache), trafficScopeProbe(metric, selector), nil, cache)
 }
 
 func trafficScopeProbe(metric, selector string) scopeProbe {
 	return scopeProbe{
-		metric: metric, selectors: []string{selector}, singlePartition: true,
+		metric: metric, selectors: []string{selector}, singlePartition: true, allowUnlabeledProof: true,
 		unverifiedNote: "Radar couldn't confirm this traffic belongs to this exact cluster (no cluster label it could check)",
 	}
 }
@@ -243,7 +244,7 @@ func decideVerifiedScope(ctx context.Context, q seriesQuerier, probe scopeProbe,
 	if probe.singlePartition {
 		present, err := readScopePartition(ctx, q, probe, m)
 		if err != nil {
-			return "", SeriesIsolation{}, err
+			return "", iso, err
 		}
 		if present {
 			return m, iso, nil

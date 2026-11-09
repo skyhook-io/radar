@@ -39,9 +39,6 @@ var resolveTrafficScope = func(ctx context.Context, metric, selector string) (st
 	return client.ResolveTrafficScope(ctx, metric, selector, k8s.GetResourceCache())
 }
 
-// identityRows runs an instant query and returns each result row's labels.
-type identityRows func(ctx context.Context, query string) ([]map[string]string, error)
-
 // scopeForMetric decides how to keep metric's traffic queries to this cluster.
 // selector is the source's own matcher fragment for the metric (may be empty).
 // filter is false when the source reads a store Radar found on its own, such
@@ -50,37 +47,35 @@ type identityRows func(ctx context.Context, query string) ([]map[string]string, 
 //
 // An error means Radar could not check which cluster the series belong to;
 // the caller shows nothing rather than risk drawing another cluster's traffic.
-func scopeForMetric(ctx context.Context, metric, selector string, filter bool, rows identityRows) (clusterScope, error) {
+func scopeForMetric(ctx context.Context, metric, selector string, filter bool) (clusterScope, error) {
 	if !filter {
 		return clusterScope{}, nil
 	}
 	matchers, iso, err := resolveTrafficScope(ctx, metric, selector)
 	switch {
 	case err == nil && matchers != "":
+		// The operator's labels, the labels proven for this cluster, or, when
+		// this cluster's kube-state-metrics carry no cluster label, the
+		// series without one.
 		return clusterScope{matchers: matchers, labels: iso.Labels}, nil
 	case err == nil && iso.Mode == promclient.SeriesIsolationUnverified:
-		// No proof of this cluster, and the series hold one identity. Unlabeled,
-		// that is a store holding one cluster and the map is right. Labeled, it
-		// may be another cluster's, so say so.
-		sc := clusterScope{}
-		found, err := rows(ctx, sc.identityCountQuery(metric+"{"+selector+"}"))
-		if err != nil {
-			return clusterScope{}, err
-		}
-		sc.mixed = sc.carriesIdentity(found)
-		return sc, nil
+		// Nothing proves which cluster this is. A store holding one identity
+		// may still hold another cluster's traffic, so say so.
+		return clusterScope{mixed: true}, nil
 	case err == nil:
 		// An operator declared the store single-cluster.
 		return clusterScope{}, nil
-	case errors.Is(err, promclient.ErrScopeMismatch):
-		// The proven labels select none of this metric's series. Keep them: the
-		// query comes back empty and the empty-map warning names them.
-		m, mErr := prom.WorkloadMetricsScope{ClusterLabels: iso.Labels}.Matchers()
-		if mErr != nil || m == "" {
-			return clusterScope{}, err
+	case errors.Is(err, promclient.ErrScopeMismatch), errors.Is(err, promclient.ErrScopeAmbiguous):
+		// With proven labels, keep them. On a mismatch the query comes back
+		// empty and the empty-map warning names them; on ambiguity every
+		// series they select is still this cluster's, under more labels.
+		if len(iso.Labels) > 0 {
+			if m, mErr := (prom.WorkloadMetricsScope{ClusterLabels: iso.Labels}).Matchers(); mErr == nil {
+				return clusterScope{matchers: m, labels: iso.Labels}, nil
+			}
 		}
-		return clusterScope{matchers: m, labels: iso.Labels}, nil
-	case errors.Is(err, promclient.ErrScopeAmbiguous):
+		// No labels proven: this cluster's kube-state-metrics carry none while
+		// the traffic does, or no proof at all. Radar can't tell clusters apart.
 		return clusterScope{mixed: true}, nil
 	}
 	log.Printf("[traffic] Could not check which cluster %s series belong to: %v", metric, err)
