@@ -42,6 +42,7 @@ const (
 	WarningTransient  = pkgtraffic.WarningTransient
 	WarningPartial    = pkgtraffic.WarningPartial
 	WarningIncomplete = pkgtraffic.WarningIncomplete
+	WarningCluster    = pkgtraffic.WarningCluster
 )
 
 // Re-export functions from pkg/traffic.

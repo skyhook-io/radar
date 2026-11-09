@@ -274,6 +274,11 @@ const (
 	// came with, so it is shown beside them and not retried for, and it goes
 	// when they are filtered away.
 	WarningPartial = "partial"
+	// WarningCluster is about which cluster the traffic belongs to, in a
+	// metrics store shared by several: why none of it could be tied to this
+	// cluster, or that the flows shown may include other clusters'. It holds
+	// until the store or Radar's cluster labels change, so it is not retried.
+	WarningCluster = "cluster"
 )
 
 // AggregatedFlow represents flows aggregated by service pair.
