@@ -418,8 +418,9 @@ func diagnoseUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) 
 // set, names the PersistentVolume pinning the pod ahead of the scheduler
 // summary, and a rollout deadlock replaces the per-class action.
 func diagnoseParsedUnschedulable(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts, vol *volumePlacement) (message, action string) {
-	message = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes)
-	action = unschedulableAction(reasons)
+	sc := schedulingContext{defaultOrder: usesDefaultScheduler(pod)}
+	message, sc.selectorUnsatisfiable = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes, sc)
+	action = unschedulableAction(reasons, sc)
 	if action == "" {
 		action = genericUnschedulableAction
 	}
@@ -440,11 +441,47 @@ func describeUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) 
 	return msg
 }
 
-func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts) string {
+// schedulingContext is what the advice may assume about a verdict.
+type schedulingContext struct {
+	// defaultOrder: the pod uses kube-scheduler, whose default filters check
+	// NodeAffinity before resource fit, ports, volumes and inter-pod rules.
+	// Other schedulers, such as Volcano, check resources first.
+	defaultOrder bool
+	// selectorUnsatisfiable: no node carries a label the pod requires.
+	selectorUnsatisfiable bool
+}
+
+func hasLaterFilterReason(reasons []SchedulingReason) bool {
+	for _, r := range reasons {
+		if r.NodeCount > 0 && schedAfterNodeAffinity[r.Class] {
+			return true
+		}
+	}
+	return false
+}
+
+// kube-scheduler profiles that keep the default filter order: GKE's
+// optimize-utilization profile renames the scheduler but only changes scoring.
+var defaultOrderSchedulers = map[string]bool{
+	"":                                      true,
+	corev1.DefaultSchedulerName:             true,
+	"gke.io/optimize-utilization-scheduler": true,
+}
+
+func usesDefaultScheduler(pod *corev1.Pod) bool {
+	return pod == nil || defaultOrderSchedulers[pod.Spec.SchedulerName]
+}
+
+// renderUnschedulableMessage also reports whether it resolved the selector as
+// unsatisfiable, so the advice agrees with the message.
+func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts, sc schedulingContext) (string, bool) {
 	var parts []string
 	resolvedAffinity := false
 	for _, r := range reasons {
-		if r.Class == SchedNodeAffinitySelector {
+		// Without node facts every label looks missing; and under kube-scheduler's
+		// order a count from a later filter proves some node matched the selector,
+		// which outweighs Radar's own view of the nodes.
+		if r.Class == SchedNodeAffinitySelector && len(nodes) > 0 && !(sc.defaultOrder && hasLaterFilterReason(reasons)) {
 			if resolved := resolveUnsatisfiableNodeSelector(extractPodPlacement(pod), nodes); len(resolved) > 0 {
 				parts = append(parts, resolved...)
 				resolvedAffinity = true
@@ -452,26 +489,26 @@ func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, rea
 			break
 		}
 	}
-	if summary := summarizeReasons(reasons, resolvedAffinity); summary != "" {
+	if summary := summarizeReasons(reasons, resolvedAffinity, sc.defaultOrder); summary != "" {
 		parts = append(parts, summary)
 	}
 	if len(parts) == 0 {
 		if total > 0 {
-			return fmt.Sprintf("Pod is unschedulable (0/%d nodes available)", total)
+			return fmt.Sprintf("Pod is unschedulable (0/%d nodes available)", total), resolvedAffinity
 		}
 		if schedulerMessageOnlyIgnoredNoise(schedMsg) {
-			return "Pod is unschedulable"
+			return "Pod is unschedulable", resolvedAffinity
 		}
 		if msg := strings.TrimSpace(schedMsg); msg != "" {
-			return msg
+			return msg, resolvedAffinity
 		}
-		return "Pod is unschedulable"
+		return "Pod is unschedulable", resolvedAffinity
 	}
 	msg := strings.Join(parts, "; ")
 	if total > 0 {
 		msg = fmt.Sprintf("%s (0/%d nodes available)", msg, total)
 	}
-	return msg
+	return msg, resolvedAffinity
 }
 
 func schedulerMessageOnlyIgnoredNoise(msg string) bool {
@@ -515,25 +552,127 @@ func isIgnoredSchedulerClause(clause string) bool {
 // "start here"), but when more than one class blocks placement it says so rather
 // than implying the single fix is sufficient. Returns "" when nothing is
 // confidently actionable so the caller can fall back to the generic action.
-func unschedulableAction(reasons []SchedulingReason) string {
-	// Lead with the dominant reason that is ALSO actionable — picking the
-	// highest-NodeCount overall would fall back to generic when an unparsed
-	// (SchedOther) clause happens to reject the most nodes, even though a
-	// smaller, actionable clause (e.g. VolumeBinding) is present.
-	base := ""
-	bestCount := -1
-	distinct := map[SchedReasonClass]bool{}
+func unschedulableAction(reasons []SchedulingReason, sc schedulingContext) string {
+	// One constraint per class and resource: "Insufficient cpu" and
+	// "Insufficient memory" are two things to fix.
+	type constraint struct {
+		class    SchedReasonClass
+		resource string
+	}
+	distinct := map[constraint]bool{}
+	matchingNodes := map[constraint]bool{}
+	selector, unclassified := false, false
 	for _, r := range reasons {
-		distinct[r.Class] = true
-		if a := actionForSchedClass(r); a != "" && r.NodeCount > bestCount {
-			base, bestCount = a, r.NodeCount
+		distinct[constraint{r.Class, r.Resource}] = true
+		selector = selector || r.Class == SchedNodeAffinitySelector
+		unclassified = unclassified || (r.Class == SchedOther && r.NodeCount > 0)
+		if schedAfterNodeAffinity[r.Class] {
+			matchingNodes[constraint{r.Class, r.Resource}] = true
 		}
 	}
+	moreThan := func(n int, base string) string {
+		if len(distinct) > n {
+			base += " More than one constraint blocks scheduling — the message lists them all."
+		}
+		return base
+	}
+	if selector && sc.selectorUnsatisfiable {
+		return moreThan(1, actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector}))
+	}
+	if selector && sc.defaultOrder {
+		// The selector excluded some nodes and the rest failed a later filter:
+		// that filter is the blocker on the nodes the pod actually targets.
+		if base := dominantAction(reasons, func(r SchedulingReason) bool { return schedAfterNodeAffinity[r.Class] }); base != "" {
+			const matching = "The nodes that match the pod's nodeSelector/affinity"
+			if rest, ok := strings.CutPrefix(base, "Candidate nodes "); ok {
+				base = matching + " " + rest
+			} else {
+				base = matching + " can't take it. " + base
+			}
+			// Only constraints on the matching nodes count here: a taint was checked
+			// before the selector and may sit on nodes the pod doesn't target.
+			if len(matchingNodes) > 1 {
+				base += " More than one constraint blocks scheduling — the message lists them all."
+			}
+			return base
+		}
+		// Nodes rejected before the selector check (a taint, a cordon) were
+		// never matched against it, so they may be the pod's targets. A clause
+		// Radar can't classify (such as a DRA claim failure) could be the real
+		// blocker on the matching nodes, so it gets the general advice instead.
+		if unclassified {
+			return ""
+		}
+		if early := dominantReason(reasons, func(r SchedulingReason) bool {
+			return !schedAfterNodeAffinity[r.Class] && r.Class != SchedNodeAffinitySelector
+		}); early != nil {
+			return moreThan(2, "Some nodes were rejected before the nodeSelector/affinity check. If they're the pod's target nodes, "+targetNodesAction(*early)+" Otherwise, "+lowerFirst(actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector})))
+		}
+	}
+	base := dominantAction(reasons, func(SchedulingReason) bool { return true })
 	if base == "" {
 		return ""
 	}
-	if len(distinct) > 1 {
-		base += " More than one constraint blocks scheduling — the message lists them all."
+	return moreThan(1, base)
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// schedAfterNodeAffinity holds the classes whose kube-scheduler filters run
+// after NodeAffinity in the default plugin order. A node is counted under the
+// first filter it fails, so a node counted under one of these passed the pod's
+// nodeSelector/affinity. Taint and unschedulable checks run before NodeAffinity,
+// so their nodes may not match the selector at all.
+var schedAfterNodeAffinity = map[SchedReasonClass]bool{
+	SchedNoPorts:              true,
+	SchedInsufficientResource: true,
+	SchedVolumeCount:          true,
+	SchedVolumeBinding:        true,
+	SchedVolumeNodeAffinity:   true,
+	SchedTopologySpread:       true,
+	SchedPodAffinity:          true,
+	SchedPodAntiAffinity:      true,
+}
+
+// dominantReason is dominantAction's reason, for callers that word it themselves.
+func dominantReason(reasons []SchedulingReason, eligible func(SchedulingReason) bool) *SchedulingReason {
+	var best *SchedulingReason
+	for i, r := range reasons {
+		if eligible(r) && actionForSchedClass(r) != "" && (best == nil || r.NodeCount > best.NodeCount) {
+			best = &reasons[i]
+		}
+	}
+	return best
+}
+
+// targetNodesAction words an earlier-filter blocker for nodes that may be the
+// pod's targets.
+func targetNodesAction(r SchedulingReason) string {
+	if r.Class == SchedNodeUnschedulable {
+		return "they're cordoned, not ready, or reserved by a taint — uncordon or recover one, or tolerate the reservation taint."
+	}
+	return lowerFirst(actionForSchedClass(r))
+}
+
+// dominantAction returns the action of the eligible reason that rejected the
+// most nodes and is actionable. Picking the highest NodeCount overall would fall
+// back to generic when an unparsed (SchedOther) clause rejects the most nodes,
+// even though a smaller, actionable clause (e.g. VolumeBinding) is present.
+func dominantAction(reasons []SchedulingReason, eligible func(SchedulingReason) bool) string {
+	base := ""
+	bestCount := -1
+	for _, r := range reasons {
+		if !eligible(r) {
+			continue
+		}
+		if a := actionForSchedClass(r); a != "" && r.NodeCount > bestCount {
+			base, bestCount = a, r.NodeCount
+		}
 	}
 	return base
 }
@@ -587,14 +726,31 @@ func actionForSchedClass(r SchedulingReason) string {
 // Clauses are ordered by how many nodes each rejected, descending — the
 // scheduler emits them in an arbitrary predicate order, so leading with the
 // widest-blast-radius constraint surfaces the dominant reason first ("2 node(s)
-// node affinity/selector mismatch" before "1 node(s) pod anti-affinity
-// conflict") instead of whichever predicate the scheduler happened to list
-// first. Stable, so equal counts keep the scheduler's order; count-0
-// whole-message clauses (e.g. unbound PVC) sink to the end.
-func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
+// untolerated taint" before "1 node(s) insufficient cpu") instead of whichever
+// predicate the scheduler happened to list first. Stable, so equal counts keep
+// the scheduler's order; count-0 whole-message clauses (e.g. unbound PVC) sink
+// to the end.
+//
+// One exception, for kube-scheduler's default filter order: when the selector
+// excluded some nodes, the clauses from filters after the selector check (see
+// schedAfterNodeAffinity) lead, because they describe the nodes the pod
+// targets. The selector mismatch is usually the pod's intent, not the problem.
+func summarizeReasons(reasons []SchedulingReason, skipAffinity, defaultOrder bool) string {
 	ordered := make([]SchedulingReason, len(reasons))
 	copy(ordered, reasons)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].NodeCount > ordered[j].NodeCount })
+	selector := false
+	for _, r := range reasons {
+		selector = selector || r.Class == SchedNodeAffinitySelector
+	}
+	targets := func(r SchedulingReason) bool {
+		return defaultOrder && selector && !skipAffinity && r.NodeCount > 0 && schedAfterNodeAffinity[r.Class]
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ti, tj := targets(ordered[i]), targets(ordered[j]); ti != tj {
+			return ti
+		}
+		return ordered[i].NodeCount > ordered[j].NodeCount
+	})
 
 	var parts []string
 	for _, r := range ordered {
