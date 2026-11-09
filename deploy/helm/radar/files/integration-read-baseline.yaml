@@ -70,9 +70,9 @@ entries:
     resources: ["validatingadmissionpolicies","validatingadmissionpolicybindings"]
     scope: Cluster
     collection: ""
-    decision: withhold
-    reason: "Admission policy declarations expose enforcement coverage and gaps; this renderer adds no default Cloud caller grant, so existing tier and user RBAC remain authoritative."
-    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on alongside admission webhook configurations, under its existing tier gates."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); cloud-rbac-cluster-read.yaml"
   - group: "amd.com"
     resources: ["deviceconfigs"]
     scope: Namespaced

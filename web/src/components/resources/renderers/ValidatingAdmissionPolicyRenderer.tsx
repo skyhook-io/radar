@@ -29,7 +29,7 @@ export function ValidatingAdmissionPolicyRenderer({
     { enabled: Boolean(name), refetchInterval: 30000 },
   )
   const bindings = (query.data ?? []).filter(binding => binding?.spec?.policyName === name)
-  const bindingLookupComplete = query.coverage?.status === 'complete'
+  const bindingLookupComplete = query.coverage?.status === 'complete' && !query.error
   const bindingTitle = bindingLookupComplete
     ? `Bindings (${bindings.length})`
     : bindings.length > 0 ? `Bindings (${bindings.length}+)` : 'Bindings'

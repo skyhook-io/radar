@@ -99,6 +99,20 @@ describe('ValidatingAdmissionPolicy reverse binding lookup', () => {
     expect(partial).toContain('This list may be incomplete')
   })
 
+  it('stops reporting an exact count when a refresh fails after a complete list', () => {
+    mock.query = {
+      data: [binding('owner-prod', 'require-owner')],
+      coverage: { status: 'complete' },
+      error: new Error('binding list unavailable'),
+      isLoading: false,
+    }
+    const stale = render()
+    expect(stale).toContain('Bindings (1+)')
+    expect(stale).not.toContain('Bindings (1)')
+    expect(stale).toContain('This may be incomplete')
+    expect(stale).toContain('owner-prod')
+  })
+
   it('keeps the binding wrapper declarative and free of parameter discovery reads', () => {
     mock.policyQuery = { data: { resource: policy } }
     const html = renderToStaticMarkup(<ValidatingAdmissionPolicyBindingRenderer data={{

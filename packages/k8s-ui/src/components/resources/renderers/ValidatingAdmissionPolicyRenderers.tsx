@@ -12,6 +12,7 @@ import {
 import type { ResourceRef } from '../../../types'
 
 const ADMISSION_REGISTRATION_GROUP = 'admissionregistration.k8s.io'
+const PARAM_NAMESPACE_UNSET = 'Not set: a namespaced parameter is read from the evaluated object’s namespace'
 
 interface ExpressionWarning {
   fieldRef?: string
@@ -196,7 +197,7 @@ function TypeChecking({ data }: { data: any }) {
         ) : result.warnings.map((warning, index) => (
           <div key={index} className="card-inner">
             {warning.fieldRef && <div className="font-mono text-xs text-theme-text-tertiary">{warning.fieldRef}</div>}
-            <div className="text-sm text-warning-text">{warning.warning ?? 'Unspecified type-check warning'}</div>
+            <pre className="font-mono text-xs text-warning-text whitespace-pre-wrap break-words">{warning.warning ?? 'Unspecified type-check warning'}</pre>
           </div>
         ))}
       </div>
@@ -274,12 +275,12 @@ function ParameterReference({ data }: { data: any }) {
       <PropertyList>
         {reference.mode === 'name' && <>
           <Property label="Name" value={reference.name} />
-          <Property label="Namespace" value={reference.namespace ?? 'Not specified'} />
+          <Property label="Namespace" value={reference.namespace ?? PARAM_NAMESPACE_UNSET} />
         </>}
         {reference.mode === 'selector' && (
           <>
             <Property label="Selector" value={<LabelSelectorDisplay selector={reference.selector} />} />
-            <Property label="Namespace" value={reference.namespace ?? 'Not specified'} />
+            <Property label="Namespace" value={reference.namespace ?? PARAM_NAMESPACE_UNSET} />
           </>
         )}
         <Property label="Parameter Not Found" value={reference.parameterNotFoundAction ?? 'Deny (default)'} />

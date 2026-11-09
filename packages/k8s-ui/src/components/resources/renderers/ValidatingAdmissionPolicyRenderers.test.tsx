@@ -168,6 +168,25 @@ describe('ValidatingAdmissionPolicy renderers', () => {
     expect(html).not.toContain('>strict</button>')
   })
 
+  it('keeps the line breaks the API server puts in a type-check warning', () => {
+    const html = renderToStaticMarkup(<ValidatingAdmissionPolicyRenderer data={{
+      ...policy,
+      metadata: { name: 'typo', generation: 1 },
+      status: { observedGeneration: 1, typeChecking: { expressionWarnings: [{ fieldRef: 'spec.validations[0].expression', warning: "undefined field 'replicasTypo'\n | object.spec.replicasTypo <= 3\n | ...........^" }] } },
+    }} />)
+    expect(html).toMatch(/<pre class="[^"]*whitespace-pre-wrap[^"]*">undefined field/)
+  })
+
+  it('explains an unset parameter namespace instead of reading it as missing', () => {
+    const html = renderToStaticMarkup(<ValidatingAdmissionPolicyBindingRenderer data={{
+      apiVersion: policy.apiVersion,
+      metadata: { name: 'require-owner-prod' },
+      spec: { policyName: 'require-owner', validationActions: ['Deny'], paramRef: { name: 'strict' } },
+    }} onNavigate={() => {}} />)
+    expect(html).toContain('evaluated object’s namespace')
+    expect(html).not.toContain('Not specified')
+  })
+
   it('navigates only the declared policy with exact group and cluster scope', async () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     const onNavigate = vi.fn()
