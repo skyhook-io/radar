@@ -129,3 +129,14 @@ jobs:
             smoke-out-wayland/
           retention-days: 7
           if-no-files-found: ignore
+
+      # The AppImage itself, for trying this build by hand. A workflow
+      # artifact only: no release, tag or update channel points at it.
+      - name: Upload AppImage
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: appimage-build
+          path: radar-desktop_smoke_linux_amd64.AppImage
+          retention-days: 7
+          if-no-files-found: ignore
