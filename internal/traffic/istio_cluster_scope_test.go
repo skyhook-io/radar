@@ -260,3 +260,25 @@ func TestIstioTCPCheckedOnItsOwn(t *testing.T) {
 		t.Errorf("flows = %v, want HTTP by the HTTP proof and TCP by the TCP proof", names)
 	}
 }
+
+// The note about missing TCP edges keeps its kind under the mixed-clusters
+// note, or a viewer's filters would drop both.
+func TestIstioMissingFamilyNoteSurvivesMixedNote(t *testing.T) {
+	useConfiguredStore(t)
+	stubScope(t, func(metric string) (string, promclient.SeriesIsolation, error) {
+		if metric == istioTCPMetric {
+			return clusterA(metric)
+		}
+		return "", promclient.SeriesIsolation{Mode: promclient.SeriesIsolationUnverified}, nil
+	})
+	resp, err := scopedIstio(&istioStore{http: map[string]bool{"a": true}, tcp: map[string]bool{"": true}}).GetFlows(t.Context(), FlowOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Warning, "may include other clusters' traffic") || !strings.Contains(resp.Warning, "TCP connections aren't shown") {
+		t.Fatalf("warning %q, want both notes", resp.Warning)
+	}
+	if resp.WarningKind != WarningIncomplete {
+		t.Errorf("warning kind = %s, want %s", resp.WarningKind, WarningIncomplete)
+	}
+}
