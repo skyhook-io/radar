@@ -285,7 +285,7 @@ const NEGATIVE_POLARITY_PATTERNS: RegExp[] = [
   /^Frequent/,
 ]
 
-function isInvertedPolarityCondition(type: string | undefined): boolean {
+export function isInvertedPolarityCondition(type: string | undefined): boolean {
   if (!type) return false
   if (NEGATIVE_POLARITY_TYPES.has(type)) return true
   return NEGATIVE_POLARITY_PATTERNS.some((re) => re.test(type))
