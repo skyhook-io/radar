@@ -538,7 +538,7 @@ func TestUnschedulableAction(t *testing.T) {
 		}, "More than one constraint"},
 	}
 	for _, c := range cases {
-		got := unschedulableAction(c.reasons)
+		got := unschedulableAction(c.reasons, schedulingContext{defaultOrder: true})
 		if c.want == "" {
 			if got != "" {
 				t.Errorf("%s: want empty, got %q", c.name, got)
@@ -556,7 +556,7 @@ func TestUnschedulableAction(t *testing.T) {
 func TestUnschedulableActionSelectorScopesLaterFilters(t *testing.T) {
 	msg := "0/34 nodes are available: 2 Insufficient nvidia.com/gpu, 32 node(s) didn't match Pod's node affinity/selector. preemption: 0/34 nodes are available: 2 No preemption victims found for incoming pod, 32 Preemption is not helpful for scheduling."
 	_, reasons := parseSchedulerMessage(msg)
-	got := unschedulableAction(reasons)
+	got := unschedulableAction(reasons, schedulingContext{defaultOrder: true})
 	for _, want := range []string{"The nodes that match the pod's nodeSelector/affinity don't have enough nvidia.com/gpu"} {
 		if !hasSubstr(got, want) {
 			t.Errorf("action %q missing %q", got, want)
@@ -572,13 +572,61 @@ func TestUnschedulableActionSelectorScopesLaterFilters(t *testing.T) {
 	for i, r := range reasons {
 		reversed[len(reasons)-1-i] = r
 	}
-	if again := unschedulableAction(reversed); again != got {
+	if again := unschedulableAction(reversed, schedulingContext{defaultOrder: true}); again != got {
 		t.Errorf("reason order changed the advice:\n%q\n%q", got, again)
 	}
 
 	mixed := append(reversed, SchedulingReason{Class: SchedPodAntiAffinity, NodeCount: 1})
-	if got := unschedulableAction(mixed); !hasSubstr(got, "enough nvidia.com/gpu") || !hasSubstr(got, "More than one constraint") {
+	if got := unschedulableAction(mixed, schedulingContext{defaultOrder: true}); !hasSubstr(got, "enough nvidia.com/gpu") || !hasSubstr(got, "More than one constraint") {
 		t.Errorf("two blockers on the matching nodes should both be acknowledged: %q", got)
+	}
+}
+
+// Messages captured from live clusters. Volcano checks resources before the
+// selector, so its counts say nothing about which nodes matched it.
+func TestDiagnoseUnschedulableOnlyScopesTheDefaultScheduler(t *testing.T) {
+	volcanoMsg := "Node: 0/21 nodes are unavailable: 1 Insufficient cpu, 16 node(s) didn't match Pod's node affinity/selector, 4 Insufficient pods."
+	volcano := &corev1.Pod{Spec: corev1.PodSpec{SchedulerName: "volcano"}}
+	msg, action := diagnoseUnschedulable(volcano, volcanoMsg, nil)
+	if hasSubstr(action, "match the pod's nodeSelector/affinity can't") || hasSubstr(action, "match the pod's nodeSelector/affinity have") {
+		t.Errorf("Volcano advice claims the matching nodes are known: %q", action)
+	}
+	if strings.Index(msg, "16 node(s) node affinity/selector mismatch") > strings.Index(msg, "4 node(s) insufficient pods") {
+		t.Errorf("Volcano headline should keep count order: %q", msg)
+	}
+
+	gpuMsg := "0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 2 Insufficient nvidia.com/gpu, 4 node(s) had untolerated taint(s)."
+	for _, name := range []string{"", corev1.DefaultSchedulerName} {
+		_, action := diagnoseUnschedulable(&corev1.Pod{Spec: corev1.PodSpec{SchedulerName: name}}, gpuMsg, nil)
+		if !hasSubstr(action, "don't have enough nvidia.com/gpu") {
+			t.Errorf("schedulerName %q: want selector-scoped advice, got %q", name, action)
+		}
+	}
+}
+
+// A selector no node can satisfy gets selector advice, even when tainted nodes
+// make the message look like the taint might be the blocker.
+func TestDiagnoseUnschedulableUnsatisfiableSelectorLeads(t *testing.T) {
+	msg := "0/21 nodes are available: 13 node(s) didn't match Pod's node affinity/selector, 8 node(s) had untolerated taint(s)."
+	pod := &corev1.Pod{Spec: corev1.PodSpec{NodeSelector: map[string]string{"radar.skyhook.io/probe": "no-such-node"}}}
+	nodes := []NodeFacts{{Name: "n1", Labels: map[string]string{"radar.skyhook.io/simulated": "true"}}}
+	_, action := diagnoseUnschedulable(pod, msg, nodes)
+	if !strings.HasPrefix(action, "No node matches the pod's nodeSelector/affinity") || hasSubstr(action, "toleration") {
+		t.Errorf("unsatisfiable selector should lead the advice: %q", action)
+	}
+	// The same message with a selector some node satisfies keeps both branches.
+	pod.Spec.NodeSelector = map[string]string{"radar.skyhook.io/simulated": "true"}
+	if _, action := diagnoseUnschedulable(pod, msg, nodes); !hasSubstr(action, "If they're the pod's target nodes") {
+		t.Errorf("satisfiable selector with taints should give both branches: %q", action)
+	}
+}
+
+func TestInsufficientResourceIgnoresSentenceBreak(t *testing.T) {
+	_, reasons := parseSchedulerMessage("0/4 nodes are available: 2 Too many pods, 4 Insufficient memory. no new claims to deallocate, preemption: 0/4 nodes are available: 4 Preemption is not helpful for scheduling.")
+	for _, r := range reasons {
+		if r.Class == SchedInsufficientResource && r.Resource != "pods" && r.Resource != "memory" {
+			t.Errorf("resource %q, want memory", r.Resource)
+		}
 	}
 }
 

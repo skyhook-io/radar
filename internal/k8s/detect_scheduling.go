@@ -418,8 +418,9 @@ func diagnoseUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) 
 // set, names the PersistentVolume pinning the pod ahead of the scheduler
 // summary, and a rollout deadlock replaces the per-class action.
 func diagnoseParsedUnschedulable(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts, vol *volumePlacement) (message, action string) {
-	message = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes)
-	action = unschedulableAction(reasons)
+	sc := schedulingContext{defaultOrder: usesDefaultScheduler(pod)}
+	message, sc.selectorUnsatisfiable = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes, sc)
+	action = unschedulableAction(reasons, sc)
 	if action == "" {
 		action = genericUnschedulableAction
 	}
@@ -440,7 +441,23 @@ func describeUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) 
 	return msg
 }
 
-func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts) string {
+// schedulingContext is what the advice may assume about a verdict.
+type schedulingContext struct {
+	// defaultOrder: the pod uses kube-scheduler, whose default filters check
+	// NodeAffinity before resource fit, ports, volumes and inter-pod rules.
+	// Other schedulers, such as Volcano, check resources first.
+	defaultOrder bool
+	// selectorUnsatisfiable: no node carries a label the pod requires.
+	selectorUnsatisfiable bool
+}
+
+func usesDefaultScheduler(pod *corev1.Pod) bool {
+	return pod == nil || pod.Spec.SchedulerName == "" || pod.Spec.SchedulerName == corev1.DefaultSchedulerName
+}
+
+// renderUnschedulableMessage also reports whether it resolved the selector as
+// unsatisfiable, so the advice agrees with the message.
+func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts, sc schedulingContext) (string, bool) {
 	var parts []string
 	resolvedAffinity := false
 	for _, r := range reasons {
@@ -452,26 +469,26 @@ func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, rea
 			break
 		}
 	}
-	if summary := summarizeReasons(reasons, resolvedAffinity); summary != "" {
+	if summary := summarizeReasons(reasons, resolvedAffinity, sc.defaultOrder); summary != "" {
 		parts = append(parts, summary)
 	}
 	if len(parts) == 0 {
 		if total > 0 {
-			return fmt.Sprintf("Pod is unschedulable (0/%d nodes available)", total)
+			return fmt.Sprintf("Pod is unschedulable (0/%d nodes available)", total), resolvedAffinity
 		}
 		if schedulerMessageOnlyIgnoredNoise(schedMsg) {
-			return "Pod is unschedulable"
+			return "Pod is unschedulable", resolvedAffinity
 		}
 		if msg := strings.TrimSpace(schedMsg); msg != "" {
-			return msg
+			return msg, resolvedAffinity
 		}
-		return "Pod is unschedulable"
+		return "Pod is unschedulable", resolvedAffinity
 	}
 	msg := strings.Join(parts, "; ")
 	if total > 0 {
 		msg = fmt.Sprintf("%s (0/%d nodes available)", msg, total)
 	}
-	return msg
+	return msg, resolvedAffinity
 }
 
 func schedulerMessageOnlyIgnoredNoise(msg string) bool {
@@ -515,7 +532,7 @@ func isIgnoredSchedulerClause(clause string) bool {
 // "start here"), but when more than one class blocks placement it says so rather
 // than implying the single fix is sufficient. Returns "" when nothing is
 // confidently actionable so the caller can fall back to the generic action.
-func unschedulableAction(reasons []SchedulingReason) string {
+func unschedulableAction(reasons []SchedulingReason, sc schedulingContext) string {
 	// One constraint per class and resource: "Insufficient cpu" and
 	// "Insufficient memory" are two things to fix.
 	type constraint struct {
@@ -534,7 +551,10 @@ func unschedulableAction(reasons []SchedulingReason) string {
 		}
 		return base
 	}
-	if selector {
+	if selector && sc.selectorUnsatisfiable {
+		return moreThan(1, actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector}))
+	}
+	if selector && sc.defaultOrder {
 		// The selector excluded some nodes and the rest failed a later filter:
 		// that filter is the blocker on the nodes the pod actually targets.
 		if base := dominantAction(reasons, func(r SchedulingReason) bool { return schedAfterNodeAffinity[r.Class] }); base != "" {
@@ -654,11 +674,11 @@ func actionForSchedClass(r SchedulingReason) string {
 // the scheduler's order; count-0 whole-message clauses (e.g. unbound PVC) sink
 // to the end.
 //
-// One exception: when the selector excluded some nodes, the clauses from
-// filters after the selector check (see schedAfterNodeAffinity) lead, because
-// they describe the nodes the pod targets. The selector mismatch is usually
-// the pod's intent, not the problem.
-func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
+// One exception, for kube-scheduler's default filter order: when the selector
+// excluded some nodes, the clauses from filters after the selector check (see
+// schedAfterNodeAffinity) lead, because they describe the nodes the pod
+// targets. The selector mismatch is usually the pod's intent, not the problem.
+func summarizeReasons(reasons []SchedulingReason, skipAffinity, defaultOrder bool) string {
 	ordered := make([]SchedulingReason, len(reasons))
 	copy(ordered, reasons)
 	selector := false
@@ -666,7 +686,7 @@ func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
 		selector = selector || r.Class == SchedNodeAffinitySelector
 	}
 	targets := func(r SchedulingReason) bool {
-		return selector && !skipAffinity && r.NodeCount > 0 && schedAfterNodeAffinity[r.Class]
+		return defaultOrder && selector && !skipAffinity && r.NodeCount > 0 && schedAfterNodeAffinity[r.Class]
 	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		if ti, tj := targets(ordered[i]), targets(ordered[j]); ti != tj {
