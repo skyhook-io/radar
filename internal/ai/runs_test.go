@@ -1582,6 +1582,7 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	r.status = "done"
 	r.sessionID = "sess-42"
 	r.preview = "bad image"
+	r.assessedAt = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	r.mu.Unlock()
 	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "bad image"}}})
 	st.(*sqliteRunStore).barrier()
@@ -1591,6 +1592,9 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	runs := m2.List()
 	if len(runs) != 1 || runs[0].Status != "done" || runs[0].SessionID != "sess-42" || runs[0].Preview != "bad image" || runs[0].Group != "argoproj.io" {
 		t.Fatalf("restart lost state: %+v", runs)
+	}
+	if runs[0].AssessedAt == nil || !runs[0].AssessedAt.Equal(time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("restart lost assessedAt: %v", runs[0].AssessedAt)
 	}
 	if got := m2.Get("run-1").Group; got != "argoproj.io" {
 		t.Fatalf("hydrated run group = %q, want argoproj.io", got)
@@ -2160,7 +2164,7 @@ func TestClearHistoryFencesStartAndAddTurn(t *testing.T) {
 	started := make(chan startResult, 1)
 	go func() {
 		close(startReady)
-		summary, err := manager.Start("Pod", "", "default", "new", "claude", ExecutionProfileSafeguarded, "", "", "", nil)
+		summary, err := manager.Start(StartSpec{Kind: "Pod", Namespace: "default", Name: "new", Agent: "claude", Profile: ExecutionProfileSafeguarded})
 		started <- startResult{summary: summary, err: err}
 	}()
 	<-startReady
@@ -2505,4 +2509,37 @@ func waitForMutexHeld(t *testing.T, mu *sync.Mutex) {
 		runtime.Gosched()
 	}
 	t.Fatal("timed out waiting for concurrent operation to hold mutex")
+}
+
+func TestPreviewFollowsTheAssessmentFindingsShows(t *testing.T) {
+	cause := investigation.Verdict{Summary: "Pods crash on a bad flag", RootCause: "--bad-flag"}
+	for _, tc := range []struct {
+		name        string
+		turn        StreamEvent
+		apply       bool
+		verdict     investigation.Verdict
+		wantPreview string
+		assessed    bool
+	}{
+		{"opening turn", StreamEvent{Type: "turn"}, false, cause, "Pods crash on a bad flag", true},
+		{"healthy", StreamEvent{Type: "turn"}, false, investigation.Verdict{Healthy: true}, "Healthy", true},
+		{"inconclusive without a headline", StreamEvent{Type: "turn"}, false, investigation.Verdict{Inconclusive: true}, "Inconclusive", true},
+		{"remediation-only verification", StreamEvent{Type: "turn", Question: "check", Verify: true}, false, investigation.Verdict{Remediation: []string{"Roll back to v1"}}, "Roll back to v1", true},
+		{"verification", StreamEvent{Type: "turn", Question: "check again", Verify: true}, false, investigation.Verdict{Summary: "Fixed", Healthy: true}, "Fixed", true},
+		{"revising question", StreamEvent{Type: "turn", Question: "what about the probe?"}, false, investigation.Verdict{Summary: "The probe", RootCause: "probe path", RevisesAssessment: true}, "The probe", true},
+		{"answer", StreamEvent{Type: "turn", Question: "what is a probe?"}, false, investigation.Verdict{RootCause: "an answer"}, "Earlier", false},
+		{"apply", StreamEvent{Type: "turn", Question: "apply", Apply: true}, true, investigation.Verdict{RootCause: "applied"}, "Earlier", false},
+		{"unstructured opening", StreamEvent{Type: "turn"}, false, investigation.Verdict{Report: "prose"}, "Earlier", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			earlier := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+			r := &Run{status: "running", inFlight: true, preview: "Earlier", assessedAt: earlier, subs: map[int]chan RunEvent{}}
+			r.append(tc.turn)
+			r.finishTurn(Diagnosis{Verdict: tc.verdict}, nil, tc.apply, time.Minute)
+			sum := r.Summary()
+			if sum.Preview != tc.wantPreview || sum.AssessedAt == nil || sum.AssessedAt.Equal(earlier) == tc.assessed {
+				t.Fatalf("preview %q assessedAt %v, want %q newly assessed=%v", sum.Preview, sum.AssessedAt, tc.wantPreview, tc.assessed)
+			}
+		})
+	}
 }

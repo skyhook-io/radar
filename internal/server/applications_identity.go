@@ -1017,7 +1017,7 @@ func collectArgoClaims(items []*unstructured.Unstructured, sourcePaths map[strin
 
 		spec, _ := item.Object["spec"].(map[string]any)
 		dest, _ := spec["destination"].(map[string]any)
-		claim := argoClaim{Identity: id}
+		claim := argoClaim{Identity: id, AppNamespace: item.GetNamespace(), AppName: name}
 		if dest != nil {
 			claim.DestServer, _ = dest["server"].(string)
 			claim.DestName, _ = dest["name"].(string)

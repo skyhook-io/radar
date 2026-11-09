@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 
+	"github.com/skyhook-io/radar/internal/server"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -218,10 +219,10 @@ func createMenu(desktopApp *DesktopApp, version, goos string) *menu.Menu {
 		})
 	}
 	helpMenu.AddText("Documentation", nil, func(_ *menu.CallbackData) {
-		runtime.BrowserOpenURL(desktopApp.ctx, "https://github.com/skyhook-io/radar#readme")
+		server.OpenSystemBrowser("https://github.com/skyhook-io/radar#readme")
 	})
 	helpMenu.AddText("GitHub Repository", nil, func(_ *menu.CallbackData) {
-		runtime.BrowserOpenURL(desktopApp.ctx, "https://github.com/skyhook-io/radar")
+		server.OpenSystemBrowser("https://github.com/skyhook-io/radar")
 	})
 
 	return appMenu

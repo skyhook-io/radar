@@ -102,3 +102,111 @@ func TestCurrentControllerRevisionPodHashes(t *testing.T) {
 		t.Fatalf("current ControllerRevision pod hash = %q, want new", got[types.UID("agent")])
 	}
 }
+
+func TestBuildDeploymentRevisionsReportReadiness(t *testing.T) {
+	replicaSet := func(revision string, ready int64) unstructured.Unstructured {
+		rs := unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{
+				"annotations": map[string]any{"deployment.kubernetes.io/revision": revision},
+			},
+			"status": map[string]any{"readyReplicas": ready},
+		}}
+		return rs
+	}
+
+	got := BuildDeploymentRevisions([]unstructured.Unstructured{replicaSet("1", 3), replicaSet("2", 0)}, "")
+	if len(got) != 2 || got[0].Number != 2 {
+		t.Fatalf("revisions = %#v", got)
+	}
+	if *got[0].ReadyReplicas != 0 || *got[0].Serving {
+		t.Fatalf("newest revision ready=%d serving=%v, want 0/false", *got[0].ReadyReplicas, *got[0].Serving)
+	}
+	if *got[1].ReadyReplicas != 3 || !*got[1].Serving {
+		t.Fatalf("older revision ready=%d serving=%v, want 3/true", *got[1].ReadyReplicas, *got[1].Serving)
+	}
+}
+
+func TestApplyControllerRevisionServing(t *testing.T) {
+	revisions := func() []WorkloadRevision {
+		return []WorkloadRevision{
+			{Number: 2, PodHash: "db-new", IsCurrent: true},
+			{Number: 1, PodHash: "db-old"},
+		}
+	}
+	workload := func(generation int64, status map[string]any) *unstructured.Unstructured {
+		status["observedGeneration"] = generation
+		obj := &unstructured.Unstructured{Object: map[string]any{"status": status}}
+		obj.SetGeneration(generation)
+		return obj
+	}
+
+	t.Run("settled StatefulSet", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(4, map[string]any{
+			"currentRevision": "db-new", "updateRevision": "db-new", "readyReplicas": int64(3), "replicas": int64(3), "currentReplicas": int64(3),
+		}), "statefulsets")
+		if !*got[0].Serving || *got[0].ReadyReplicas != 3 || *got[1].Serving || *got[1].ReadyReplicas != 0 {
+			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
+		}
+	})
+
+	t.Run("OnDelete StatefulSet with pods left on a reverted revision stays unknown", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(4, map[string]any{
+			"currentRevision": "db-new", "updateRevision": "db-new", "readyReplicas": int64(3), "replicas": int64(3), "currentReplicas": int64(1),
+		}), "statefulsets")
+		if got[0].Serving != nil || got[1].Serving != nil || got[0].ReadyReplicas != nil {
+			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
+		}
+	})
+
+	t.Run("DaemonSet with a misscheduled pod stays unknown", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(4, map[string]any{
+			"desiredNumberScheduled": int64(3), "updatedNumberScheduled": int64(3), "numberReady": int64(3), "numberMisscheduled": int64(1),
+		}), "daemonsets")
+		if got[0].Serving != nil || got[1].Serving != nil || got[0].ReadyReplicas != nil {
+			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
+		}
+	})
+
+	t.Run("mid-update StatefulSet stays unknown", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(4, map[string]any{
+			"currentRevision": "db-old", "updateRevision": "db-new", "readyReplicas": int64(3),
+		}), "statefulsets")
+		if got[0].Serving != nil || got[1].Serving != nil || got[0].ReadyReplicas != nil {
+			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
+		}
+	})
+
+	t.Run("StatefulSet status behind spec stays unknown", func(t *testing.T) {
+		got := revisions()
+		stale := workload(4, map[string]any{"currentRevision": "db-new", "updateRevision": "db-new"})
+		stale.SetGeneration(5)
+		applyControllerRevisionServing(got, stale, "statefulsets")
+		if got[0].Serving != nil {
+			t.Fatalf("revision = %+v", got[0])
+		}
+	})
+
+	t.Run("settled DaemonSet", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(1, map[string]any{
+			"desiredNumberScheduled": int64(5), "updatedNumberScheduled": int64(5), "numberReady": int64(4),
+		}), "daemonsets")
+		if !*got[0].Serving || *got[0].ReadyReplicas != 4 || *got[1].Serving {
+			t.Fatalf("revisions = %+v / %+v", got[0], got[1])
+		}
+	})
+
+	t.Run("mid-update DaemonSet stays unknown", func(t *testing.T) {
+		got := revisions()
+		applyControllerRevisionServing(got, workload(1, map[string]any{
+			"desiredNumberScheduled": int64(5), "updatedNumberScheduled": int64(2), "numberReady": int64(5),
+		}), "daemonsets")
+		if got[0].Serving != nil {
+			t.Fatalf("revision = %+v", got[0])
+		}
+	})
+}

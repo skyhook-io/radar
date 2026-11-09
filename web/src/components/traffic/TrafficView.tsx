@@ -1308,7 +1308,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // source it names may since have gone. A retry detects again first, which
   // also picks another available source, and the first failed connect gets
   // one such retry on its own.
-  const handleConnect = useCallback((redetect: boolean) => {
+  const handleConnect = useCallback((redetect: boolean, automatic = false) => {
     setIsConnecting(true)
     setConnectionError(null)
     queryClient.removeQueries({ queryKey: ['traffic-flows'] })
@@ -1324,7 +1324,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       }
       const detected = fresh ? detectSourcesAgain() : Promise.resolve(undefined)
       detected.then(
-        () => connectMutation.mutate(undefined, {
+        () => connectMutation.mutate({ automatic }, {
           onSuccess: (data) => {
             if (!data.connected && data.error) {
               fail(data.error)
@@ -1355,7 +1355,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   useEffect(() => {
     if (wizardState === 'ready' && !hasAutoConnectedRef.current && !isConnecting) {
       hasAutoConnectedRef.current = true
-      handleConnect(false)
+      handleConnect(false, true)
     }
   }, [wizardState, isConnecting, handleConnect])
 

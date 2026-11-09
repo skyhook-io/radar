@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, CornerDownLeft, Loader2, AlertTriangle, Info } from 'lucide-react'
+import { Search, CornerDownLeft, Loader2, AlertTriangle, Info, Sparkles } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_MENU, TW_EASE_UI, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
@@ -136,6 +136,11 @@ export interface OmnibarProps {
    *  searching, handing the full (uncapped) query off to the host's dedicated
    *  search surface. Omit to keep the omnibar a pure launcher. */
   onViewAllResults?: (query: string) => void
+  /** When set, an "Investigate" row tails the list while there is free text,
+   *  handing the words, and any `ns:` modifiers as where to start, to the
+   *  host's AI investigation composer as a question. It is last so a
+   *  resource or command match always comes first. */
+  onInvestigateQuery?: (query: { text: string; namespaces: string[] }) => void
   /** Empty-launcher content. `true` (default) lists Views + Actions — the
    *  cmd-K menu. `false` shows only Actions so recents/search lead and views
    *  surface on type (use when the views are already always-visible, e.g. a
@@ -153,6 +158,7 @@ type Row =
   | { id: string; kind: 'resource'; hit: SearchHit; recent?: boolean }
   | { id: string; kind: 'command'; command: CommandItem }
   | { id: string; kind: 'viewAll'; query: string; count: number }
+  | { id: string; kind: 'investigate'; text: string; namespaces: string[] }
 
 const COMMAND_CATEGORY_ORDER = ['Views', 'Resource Kinds', 'Namespaces', 'Clusters', 'Actions']
 const PAGE = 8
@@ -184,6 +190,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     loadRecents,
     recordRecent,
     onViewAllResults,
+    onInvestigateQuery,
     launcherShowsViews = true,
     placeholder = 'Search resources & commands…',
     size = 'default',
@@ -330,9 +337,18 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     if (onViewAllResults && searchActive && resourceRows.length > 0) {
       out.push({ id: 'view-all', kind: 'viewAll', query: queryString, count: searchData?.total_matched ?? resourceRows.length })
     }
+    if (onInvestigateQuery && freeText) {
+      out.push({
+        id: 'investigate',
+        kind: 'investigate',
+        text: freeText,
+        namespaces: pills.filter((pill) => pill.key === 'ns').map((pill) => pill.value),
+      })
+    }
     return out
-  }, [recentRows, leadingKinds, resourceRows, commandGroups, freeText, pills.length, searchActive, onViewAllResults, queryString, searchData])
+  }, [recentRows, leadingKinds, resourceRows, commandGroups, freeText, pills, searchActive, onViewAllResults, onInvestigateQuery, queryString, searchData])
   const viewAllRow = rows.find((r): r is Extract<Row, { kind: 'viewAll' }> => r.kind === 'viewAll')
+  const investigateRow = rows.find((r): r is Extract<Row, { kind: 'investigate' }> => r.kind === 'investigate')
 
   // Selection tracked by stable id (not array index) so Enter can never fire a
   // stale row when the set shifts. Auto-follows the TOP result until the user
@@ -385,13 +401,15 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
       row.command.action()
     } else if (row.kind === 'viewAll') {
       onViewAllResults?.(row.query)
+    } else if (row.kind === 'investigate') {
+      onInvestigateQuery?.({ text: row.text, namespaces: row.namespaces })
     } else {
       const h = row.hit
       recordRecent?.({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name, cluster: h.cluster, clusterName: h.clusterName })
       onOpenResource(h)
     }
     close()
-  }, [onOpenResource, recordRecent, onViewAllResults, close])
+  }, [onOpenResource, recordRecent, onViewAllResults, onInvestigateQuery, close])
 
   // The resources shown don't (yet) belong to the current query: the debounce
   // hasn't fired, the data is React Query placeholder, or results haven't landed.
@@ -412,6 +430,9 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
       const row = rows[selectedIndex]
       if (row) {
         if (row.kind === 'resource' && resourcesStale) return
+        // Investigate sits first only until results land; an Enter before
+        // then is someone looking for a resource, not asking a question.
+        if (row.kind === 'investigate' && resourcesStale && !userMovedRef.current) return
         execute(row)
         return
       }
@@ -564,6 +585,29 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
               >
                 <Search className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
                 <span className="text-sm text-[var(--color-brand)]">See all {viewAllRow.count} result{viewAllRow.count === 1 ? '' : 's'}</span>
+                <CornerDownLeft className="w-3 h-3 ml-auto shrink-0 text-theme-text-tertiary" />
+              </button>
+            )}
+
+            {investigateRow && (
+              <button
+                type="button"
+                data-selected={investigateRow.id === selectedId}
+                onMouseEnter={() => selectRow(investigateRow.id)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => execute(investigateRow)}
+                className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 mt-1 text-left border-t border-theme-border transition-colors', investigateRow.id === selectedId ? 'selection' : 'hover:bg-theme-elevated/40')}
+              >
+                <Sparkles className="w-4 h-4 shrink-0 text-accent" />
+                <span className="min-w-0 truncate text-sm text-theme-text-primary">Investigate “{investigateRow.text}”</span>
+                {/* The words come first; a long namespace list must not squeeze them out. */}
+                <span className="max-w-[45%] shrink-0 truncate text-xs text-theme-text-tertiary">
+                  as a question{investigateRow.namespaces.length > 2
+                    ? ` · in ${investigateRow.namespaces.length} namespaces`
+                    : investigateRow.namespaces.length > 0
+                      ? ` · in ${investigateRow.namespaces.join(', ')}`
+                      : ''}
+                </span>
                 <CornerDownLeft className="w-3 h-3 ml-auto shrink-0 text-theme-text-tertiary" />
               </button>
             )}

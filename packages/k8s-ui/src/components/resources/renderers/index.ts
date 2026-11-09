@@ -130,6 +130,7 @@ export * from './VeleroBackupRepositoryRenderer'
 export * from './VPARenderer'
 export * from './VulnerabilityReportRenderer'
 export * from './WebhookConfigRenderer'
+export * from './ValidatingAdmissionPolicyRenderers'
 export * from './WorkflowRenderer'
 export * from './WorkflowTemplateRenderer'
 export * from './WorkloadRenderer'
@@ -196,3 +197,9 @@ export { RayJobRenderer } from './RayJobRenderer'
 export { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from './OpenTelemetryRenderers'
 export { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from './FlaggerRenderers'
 export { SecretProviderClassRenderer, SecretsStoreMountsSection } from './SecretsStoreRenderers'
+
+export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
+
+export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
+
+export { CRDSchemaBrowser, type CRDSchemaBrowserProps } from './CRDSchemaBrowser'

@@ -74,6 +74,12 @@
       "object": { "status": { "phase": "Pending", "conditions": [{ "type": "PodScheduled", "status": "False", "reason": "Unschedulable" }] } }
     },
     {
+      "name": "pod held by scheduling gate is neutral",
+      "kind": "Pod",
+      "level": "neutral",
+      "object": { "metadata": { "creationTimestamp": "2020-01-01T00:00:00Z" }, "spec": { "schedulingGates": [{ "name": "kueue.x-k8s.io/admission" }] }, "status": { "phase": "Pending" } }
+    },
+    {
       "name": "deployment all replicas ready is healthy",
       "kind": "Deployment",
       "level": "healthy",

@@ -1,7 +1,8 @@
+import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
-import { CardBody, CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
+import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
@@ -368,6 +369,15 @@ export function IssueRow({
         </div>
       </div>
 
+      {(issue.action_primary || issue.hazard) && (
+        <Collapse open={!open} unmountOnExit>
+          <div className="px-4 pb-3 pl-6 text-xs">
+            {issue.cause && <p className="mb-1 text-theme-text-primary">{issue.cause}</p>}
+            <IssueGuidance hazard={issue.hazard} action={issue.action_primary ? issueGuidanceSummary(issue.action, issue.action_primary, issue.hazard) : undefined} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} ordered={issue.reason === 'SharedResourceWarning'} className="text-theme-text-tertiary" />
+          </div>
+        </Collapse>
+      )}
+
       {/* Details unmount after the close transition: a list can hold hundreds
           of rows and the body is the expensive part, so closed rows stay light. */}
       <Collapse open={open} unmountOnExit id={panelId}>
@@ -509,11 +519,13 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
       </>
     ) : undefined;
 
+  const guidanceSummary = issueGuidanceSummary(issue.action, issue.action_primary, issue.hazard);
   const hasNextStep =
-    !!issue.action || !!sourceNextStep || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
+    !!guidanceSummary || !!issue.action_secondary?.length || !!sourceNextStep || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
 
   return (
     <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+      <IssueGuidance hazard={issue.hazard} className="text-sm leading-relaxed" />
       {/* When a parsed cause replaces the detector text, the terse reason code
           (CrashLoopBackOff, FailedMount…) rides the eyebrow — it's the greppable
           identifier operators anchor on, and the collapsed header drops it while
@@ -547,7 +559,7 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
           tone="fix"
           labelExtra={nextStepAttribution ?? undefined}
         >
-          {sourceNextStep ?? (issue.action ? <CardBody>{issue.action}</CardBody> : null)}
+          {sourceNextStep ?? <IssueGuidance action={guidanceSummary} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} ordered={issue.reason === 'SharedResourceWarning'} className="text-sm leading-relaxed text-theme-text-secondary" />}
           {/* Survives an override: this is a structured one-click fix with an
               apply path, not advice competing with the host's. */}
           {issue.remediation_kind === 'create-namespace' && issue.remediation_target ? (

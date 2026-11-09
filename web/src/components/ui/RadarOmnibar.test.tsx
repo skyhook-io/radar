@@ -7,6 +7,7 @@ import type { SearchCoverageEntry } from './searchCoverageNote'
 import { coverageOf } from './searchCoverage.fixtures'
 
 vi.mock('../../api/usage-data', () => ({ recordUsageEvent: vi.fn() }))
+vi.mock('../diagnose/DiagnoseContext', () => ({ useDiagnose: () => ({ available: false, questions: false, openQuestion: vi.fn() }) }))
 vi.mock('../../hooks/useRecentResources', () => ({ loadRecentResources: () => [], recordRecentResource: vi.fn() }))
 vi.mock('../../api/apiResources', async (importOriginal) => ({ ...(await importOriginal<object>()), useAPIResources: () => ({ data: [] }) }))
 vi.mock('./command-items', async (importOriginal) => ({ ...(await importOriginal<object>()), useCommandItems: () => [] }))

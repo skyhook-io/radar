@@ -92,6 +92,18 @@ describe('hasSyncPolicy', () => {
     })
     expect(hasSyncPolicy(app)).toBe(true)
   })
+
+  // Argo CD 3.x switches automation off in place with enabled: false; the
+  // Automation facet must count that app as Manual, not Auto.
+  test('automated.enabled=false is manual', () => {
+    const row = (automated: Record<string, unknown>) => normalizeArgoApplication({
+      metadata: { name: 'guestbook', namespace: 'argocd' },
+      spec: { project: 'default', source: {}, destination: {}, syncPolicy: { automated } },
+      status: {},
+    })
+    expect(row({ prune: true, selfHeal: true }).autoSync).toBe(true)
+    expect(row({ enabled: false, prune: true, selfHeal: true }).autoSync).toBe(false)
+  })
 })
 
 describe('normalizeArgoApplicationSet destination', () => {

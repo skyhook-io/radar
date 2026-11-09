@@ -64,8 +64,9 @@ func main() {
 	historyLimit := flag.Int("history-limit", fileCfg.HistoryLimitOr(10000), "Maximum number of events to retain in timeline")
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing")
-	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions")
-	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells and pod file browsing")
+	disableHelmWrite := flag.Bool("disable-helm-write", false, "Disable Helm release writes, per-release source updates, values previews and manage_helm; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue")
+	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP exec_pod")
+	disableAutoPortForward := flag.Bool("disable-auto-port-forward", fileCfg.DisableAutoPortForward, "Never open port-forwards on Radar's own initiative (metrics, traffic, cost and Argo CD discovery); port-forwards you start still work")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
@@ -119,6 +120,13 @@ func main() {
 	// set GTK_THEME so WebKitGTK's prefers-color-scheme media query works.
 	applySystemTheme()
 
+	// Inside the AppImage the process runs in the image's library directory
+	// (see scripts/build-appimage.sh). Relative paths in the environment are
+	// resolved against the folder it was launched from, then processes Radar
+	// starts get the environment it was launched with.
+	desktopenv.ResolveLaunchEnv()
+	separateChildEnv()
+
 	kubeconfigFlagSet := false
 	kubeconfigDirsFlagSet := false
 	namespaceFlagSet := false
@@ -167,6 +175,10 @@ func main() {
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
+	resolvedKubeconfig = desktopenv.ResolveLaunchPath(resolvedKubeconfig)
+	for i, dir := range resolvedKubeconfigDirs {
+		resolvedKubeconfigDirs[i] = desktopenv.ResolveLaunchPath(dir)
+	}
 
 	// The device flow and consent page must identify this build and target the
 	// same control plane the CLI would — Desktop starts the same shared server.
@@ -201,9 +213,10 @@ func main() {
 		FakeInCluster:             *fakeInCluster,
 		DisableHelmWrite:          *disableHelmWrite,
 		DisableExec:               *disableExec,
+		DisableAutoPortForward:    *disableAutoPortForward,
 		PodShellDefault:           *podShellDefault,
 		TimelineStorage:           *timelineStorage,
-		TimelineDBPath:            *timelineDBPath,
+		TimelineDBPath:            desktopenv.ResolveLaunchPath(*timelineDBPath),
 		TimelinePostgresDSN:       os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
 		TimelineRetention:         *timelineRetention,
 		TimelineMaxSizeBytes:      timelineMaxSizeBytes,
@@ -226,8 +239,9 @@ func main() {
 		MCPEnabled:                mcpMode.Enabled,
 		MCPReadOnly:               mcpMode.ReadOnly,
 		MCPExecTools:              mcpFlags.ExecToolsEnabled(),
+		MCPHTTPTools:              mcpFlags.HTTPToolsEnabled(),
 		AIHistory:                 fileCfg.AIHistoryOr(true),
-		AIHistoryDBPath:           fileCfg.AIHistoryDBPath,
+		AIHistoryDBPath:           desktopenv.ResolveLaunchPath(fileCfg.AIHistoryDBPath),
 	}
 
 	if !cfg.RestoreLastDesktopContext {
@@ -236,10 +250,16 @@ func main() {
 
 	app.SetGlobals(cfg)
 	versionpkg.SetDesktop(true)
+	// Installs the in-app updater can't replace (AppImage, .deb/.rpm, a folder
+	// Radar can't write to) get no updater (below) and no cleanup of an .old
+	// file Radar didn't make; the UI says how to update instead.
+	updateMode := updater.DetectMode()
+	versionpkg.SetManualUpdate(string(updateMode))
 	desktopenv.SetGPUPolicy(gpuPolicyName(linuxGPUPolicy))
 
-	// Clean up leftover files from previous update
-	updater.CleanupOldUpdate()
+	if updateMode == updater.ModeInPlace {
+		updater.CleanupOldUpdate()
+	}
 
 	// Initialize K8s client — if this fails (e.g., no kubeconfig found),
 	// still start the UI so the user sees the error instead of a silent exit.
@@ -262,8 +282,9 @@ func main() {
 
 	// Create server and attach desktop updater
 	srv := app.CreateServer(cfg)
-	desktopUpdater := updater.New()
-	srv.SetUpdater(desktopUpdater)
+	if updateMode == updater.ModeInPlace {
+		srv.SetUpdater(updater.New())
+	}
 
 	// Start server and wait until it's accepting connections
 	ready := make(chan struct{})

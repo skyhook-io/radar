@@ -430,6 +430,7 @@ Some features require additional permissions. Most are disabled by default for s
 | Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Webhooks view | `rbac.viewWebhooks: true` | `false` | Show admission webhook configurations. Off by default because they expose the cluster's admission-control posture; auto-enabled when auth or cloud mode enforces each user's own RBAC |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | `false` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings. Off by default because they expose admission-control coverage and gaps; auto-enabled when auth or cloud mode enforces each user's own RBAC |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | `false` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Enable only for a trusted no-auth audience; authenticated users need this permission on their own Kubernetes identity |
 | Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
 
@@ -494,7 +495,7 @@ Radar decides what it can read at startup, so RBAC changes take effect when the 
 
 You see what you have access to — Radar doesn't require cluster-admin. Whatever your ServiceAccount (or the impersonated user, when auth is enabled) can list, Radar shows. Resource types you can't list show an actionable denied-state instead of a misleading "0 / None found": for a core cluster-scoped kind (Node, PV, StorageClass, and the like) your identity can't read, Radar shows a copyable `ClusterRole` + `ClusterRoleBinding` request to hand to a cluster admin (reason `rbac_denied`), and distinguishes that from a kind Radar's own ServiceAccount can't read, where a user-level grant wouldn't help (reason `unavailable`, no snippet). The "Your access on this cluster" dialog lists the core cluster-scoped kinds being hidden alongside your effective rules. Namespaces you can't access don't appear.
 
-A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespace.
+A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespaces. With the Helm chart, set `rbac.namespaces` to the namespaces Radar may read; the chart binds Radar's role and, in Radar Cloud, each Cloud role only there. See the chart README's [Limit Radar to selected namespaces](../deploy/helm/radar/README.md#limit-radar-to-selected-namespaces). The manual setup below is for `rbac.create: false`.
 
 **Stalled API requests.** If a read from the Kubernetes API stalls without the connection resetting (for example, a proxy whose upstream dropped silently), Radar ends it after 60 seconds with no data and retries, instead of freezing that resource's data until a restart. Slow transfers that keep making progress are never cut, and log streams, exec and port-forward are unaffected.
 
@@ -644,6 +645,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.helm` | Enable Helm write operations | `false` |
 | `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.viewWebhooks` | Show admission webhook configurations | `false` |
+| `rbac.viewAdmissionPolicies` | Show native validating admission policies and bindings | `false` |
 | `rbac.viewNodeRuntime` | Inspect kubelet metrics and effective configuration for upgrade impact | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | `get/list/watch` on every API group and resource, including core Secrets; overrides per-group flags | `false` |

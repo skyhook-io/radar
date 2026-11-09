@@ -308,8 +308,9 @@ func charCluster() *charFixture {
 	addReplicaSet(apiRS)
 	addPod(charPod("shop", "api-6b7-a", "node-a", map[string]string{"app": "api"}, charPodSpec("", ""), charController("apps/v1", "ReplicaSet", apiRS.Name, string(apiRS.UID))))
 
-	// Flux HelmRelease shop/redis: paired origin labels on every kind its label
-	// producer reads; redis-legacy only by the bare instance label; a hook Job.
+	// Flux HelmRelease shop/redis, with no inventory: paired origin labels on
+	// every kind its label producer reads; redis-legacy only by the bare
+	// instance label and a hook Job, neither of them its member.
 	redisLabels := map[string]string{"helm.toolkit.fluxcd.io/name": "redis", "helm.toolkit.fluxcd.io/namespace": "shop"}
 	addDeployment(charDeployment("shop", "redis", 1, redisLabels, charPodSpec("", "")))
 	addDeployment(charDeployment("shop", "redis-legacy", 1, map[string]string{"app.kubernetes.io/instance": "redis"}, charPodSpec("", "")))
@@ -924,11 +925,9 @@ var charRoutes = []charRoute{
 	{"sse-relationship-cache", "sealedsecret/team/db-creds", "secret/team/db-creds", ""},
 	{"sse-relationship-cache", "certificate/shop/web-tls", "secret/shop/web-tls", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "deployment/shop/redis", ""},
-	{"sse-relationship-cache", "helmrelease/shop/redis", "deployment/shop/redis-legacy", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "service/shop/redis", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "statefulset/shop/redis-replica", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "daemonset/shop/redis-exporter", ""},
-	{"sse-relationship-cache", "helmrelease/shop/redis", "job/shop/redis-migrate", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "cronjob/shop/redis-backup", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "rollout/shop/redis-proxy", ""},
 	{"sse-relationship-cache", "application/argocd/shop", "deployment/shop/web", ""},

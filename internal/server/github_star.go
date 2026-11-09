@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/launchday"
 	"net/http"
 	"os"
@@ -39,7 +40,7 @@ func (s *Server) handleGitHubStar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ghPath, _ := exec.LookPath("gh")
-	cmd := exec.Command(ghPath, "api", "user/starred/"+githubStarRepo, "-X", "PUT", "--silent")
+	cmd := ghCommand(ghPath, "api", "user/starred/"+githubStarRepo, "-X", "PUT", "--silent")
 	if err := cmd.Run(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to star repo via gh CLI")
 		return
@@ -143,5 +144,13 @@ func isGhReady() bool {
 	if err != nil {
 		return false
 	}
-	return exec.Command(ghPath, "auth", "status").Run() == nil
+	return ghCommand(ghPath, "auth", "status").Run() == nil
+}
+
+// ghCommand runs gh from the folder Radar was launched from when that differs
+// from its own working directory (inside the AppImage).
+func ghCommand(ghPath string, args ...string) *exec.Cmd {
+	cmd := exec.Command(ghPath, args...)
+	cmd.Dir = desktopenv.ChildDir()
+	return cmd
 }

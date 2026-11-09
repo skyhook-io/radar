@@ -30,7 +30,11 @@ and scope; it never proves that no external controller or writer exists.
 | Where to inspect a list row or search hit next | `summaryContext.managedBy` | One controller-first lead, with `source` identifying its evidence and `omitted` qualifying incomplete reads. See [selection rules](#the-top-controller). |
 | Source hints for request changes | rightsizing `managedBy: {tool, signal}` | Controller owner, GitOps/Helm metadata, `addonmanager` mode ([rightsizing](mcp.md#managedby--source-hints-for-request-changes)) |
 
-The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager".
+The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager". The Applications view's `sourceRef` is each workload's `View.Manager` lead under the summary rules below, read with Radar's own access because its rows are shared by every caller with the same namespaces. Each response then withholds a GitOps source, with the delivery state read from it, from a caller who can't get that Application, Kustomization or HelmRelease. A row whose workloads don't all lead to one source, without two of them leading to different ones, takes the single Argo CD Application or Flux Kustomization whose list names every workload in it, if there is one.
+
+Topology draws a manages edge from a GitOps manager to what its status records: an Application's `status.resources`, a Kustomization's or HelmRelease's inventory. A HelmRelease that records no inventory draws them by the same origin-label rule the resource tree uses.
+
+The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, with a namespace-scoped private view and separate per-kind output checks. It can traverse cached hidden intermediates without emitting their identity or metadata. Display topology supplies presentation, observed spec links, and label-based roots for HelmReleases without inventory (`gitops.FluxHelmLabelledRelease`: both origin labels, no hooks, nothing a controller generated). Owner-reference truth comes from the ownership view. The traversal rules (work budget, destination checks, display Pod groups, hidden parents, which gaps raise a notice) live in `pkg/gitops/tree` (`builder.go`, `ownership.go`) and their tests.
 
 ## Layers
 
@@ -55,7 +59,8 @@ The four `managedBy` fields answer different questions; read `manager` for "whic
   (`ReadableDependents` for typed kinds, `ReadableIndexed` for dynamic ones).
 - **`pkg/ownership/cachesource`: the cache source.** One traversal (`dynamicIndexed`) reads either index for custom
   resources. It reads a resource watched at several versions from one version, pins the namespaces a version is watched
-  in at the session's first look, and turns every unread kind or namespace into a gap.
+  in at the session's first look, and turns every unread kind or namespace into a gap. Dependent searches reuse the
+  session's unwatched-kind gaps; watched stores are still read each time, so a loading store can become available.
 
 ## What manages an object
 
@@ -82,10 +87,11 @@ characters names the tracking ID's Application.
 
 When the object's evidence doesn't settle it, the walk follows the controller chain (Pod → ReplicaSet → Deployment) to
 the nearest ancestor whose evidence does: **via**. Weak claims don't stop the walk: copied ones, and metadata a
-controller-owned object inherits (an instance label from its template, Helm annotations from its Deployment). If nothing
-settles it and the object makes no claim of its own, the nearest ancestor claim answers as **via**, **claimed**; other
-claims on the way stay in **between**. A walk that can't follow an owner says so (**stop**), and a manager the request
-read differently earlier (still loading, or another incarnation) leaves the answer incomplete.
+controller-owned object inherits (an instance label from its template, Helm annotations from its Deployment, Flux origin
+labels naming a manager that doesn't exist or whose list was read and leaves it out). If nothing settles it and the
+object makes no claim of its own, the nearest ancestor claim answers as **via**, **claimed**; other claims on the way
+stay in **between**. A walk that can't follow an owner says so (**stop**), and a manager the request read differently
+earlier (still loading, or another incarnation) leaves the answer incomplete.
 
 On the wire (`relationships.ownership.manager`) the answer carries the state and the evidence that answered. Which
 lists Radar couldn't read stays internal: `unknown` reports it left no answer. A positive state doesn't mean every list
@@ -148,7 +154,10 @@ Execution and caching details live in [summarycontext](../internal/summarycontex
 
 - A **gap** is a kind (and namespace) the read couldn't cover, with a `pkg/readreason` code. A whole-kind state is one
   gap however many namespaces a search names.
-- `DependentCandidatesRead.Complete()`: no gaps, among the kinds the garbage collector acts on.
+- `DependentCandidatesRead.Complete()`: no gaps, among the kinds the garbage collector acts on. Its `Gaps` slice is
+  read-only, may be shared across searches, and is never changed by later session reads; clone it before modifying it.
+  The cache source prepares each scope when first searched and shares equal coverage arrays, but still reads watched
+  stores and their readiness on each search.
 - `RecordingManagersRead.Complete()`: no gaps, no unreadable and no remote managers, among the three manager kinds.
   An object with no recorders may still be managed by something Radar doesn't read.
 - Answers can be stale, never confidently wrong: a store answers as fresh as its informer, and a manager's list as fresh

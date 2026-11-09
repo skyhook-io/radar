@@ -71,6 +71,17 @@ rbac:
   create: true
   # Additional rules to add to the ClusterRole
   additionalRules: []
+  # Limit Radar to these namespaces. Radar's ServiceAccount and, with
+  # cloud.enabled, the Radar Cloud people, alerts and AI bindings get their usual
+  # roles only in the listed namespaces, so Radar never reads anything outside
+  # them. Cluster-scoped views (Nodes, PersistentVolumes, CRDs) show no access.
+  # Leave it unset for cluster-wide access; an empty list is refused. Set this
+  # at install: narrowing an install that already reported to Radar Cloud does
+  # not remove what Radar Cloud holds. With auth or cloud on, Radar's own
+  # namespace must not be listed.
+  # namespaces:
+  #   - app
+  #   - billing
 
   # Privileged permissions (disabled by default for security)
   # Enable these based on features you need:
@@ -119,6 +130,14 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
+  # Allow reading native ValidatingAdmissionPolicy and
+  # ValidatingAdmissionPolicyBinding resources so the resource browser can show
+  # their declared rules and binding relationships. Auto-enabled when auth is on
+  # (auth.mode != none) or in cloud mode, where every read is re-checked against
+  # the requesting user's own permissions. For no-auth installs this stays
+  # opt-in because policies expose admission-control coverage and gaps.
+  viewAdmissionPolicies: false
+
   # Allow the no-auth in-cluster Radar identity to read kubelet metrics and
   # effective configuration through nodes/proxy for upgrade-impact checks.
   # This exposes node-level runtime and configuration details to anyone who
@@ -126,7 +145,7 @@ rbac:
   # Authenticated users need this permission on their own Kubernetes identity.
   viewNodeRuntime: false
 
-  # Allow pod exec (enables terminal feature)
+  # Allow pod exec (enables terminal feature). disableExec overrides this.
   podExec: false
 
   # Allow pod logs (enables log viewer)
@@ -202,7 +221,7 @@ rbac:
     kuberay: true           # ray.io (RayClusters, RayJobs, RayServices)
     kubeshark: true         # kubeshark.io
     kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
-    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests)
+    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests) + get localqueues/pendingworkloads in visibility.kueue.x-k8s.io (pending position)
     kured: true             # kured.io
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
     lws: true               # leaderworkerset.x-k8s.io
@@ -219,7 +238,7 @@ rbac:
     reloader: true          # reloader.stakater.com
     sealedSecrets: true     # bitnami.com
     secretsStoreCsi: true   # secrets-store.csi.x-k8s.io (Secrets Store CSI Driver: SecretProviderClasses, SecretProviderClassPodStatuses)
-    strimzi: true           # strimzi.io, kafka.strimzi.io
+    strimzi: true           # strimzi.io, kafka.strimzi.io, core.strimzi.io (StrimziPodSet only)
     tekton: true            # tekton.dev
     traefik: true           # traefik.io, traefik.containo.us
     trivy: true             # aquasecurity.github.io
@@ -622,8 +641,11 @@ usageReporting:
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:
-  # Opt in to exec_pod; also requires rbac.podExec for local ServiceAccount access.
+  # Opt in to exec_pod; requires pods/exec permission (rbac.podExec for Radar
+  # ServiceAccount access).
   execTools: false
+  # Independent Service HTTP opt-in. Requires services/proxy; does not enable exec.
+  httpTools: false
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 
@@ -736,6 +758,13 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Turn off pod exec through Radar on this cluster for everyone, Owners included:
+# terminals, debug shells, pod file browsing, CloudNativePG sessions and the MCP
+# exec_pod tool. Wins over rbac.podExec and mcp.execTools, and removes the exec
+# rule from Radar's ServiceAccount. kubectl access is unchanged: Kubernetes RBAC
+# still decides that.
+disableExec: false
 
 # Additional command-line flags appended to the container args, after the ones
 # the chart derives from the values above. Use it for flags the chart does not

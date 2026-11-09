@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -417,6 +418,52 @@ func TestMiddleware_ProxyHeaders_GroupsTrimmed(t *testing.T) {
 	}
 	if user.Groups[0] != "devs" || user.Groups[1] != "admins" {
 		t.Errorf("groups = %v, want [devs admins]", user.Groups)
+	}
+}
+
+// Proxies that forward Kubernetes impersonation headers send one
+// Impersonate-Group header per group, often starting with
+// system:authenticated.
+func TestMiddleware_ProxyHeaders_RepeatedGroupHeaders(t *testing.T) {
+	cfg := proxyConfig()
+	cfg.GroupsHeader = "Impersonate-Group"
+	handler := Authenticate(cfg)(http.HandlerFunc(echoUser))
+
+	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
+	req.Header.Set("X-Forwarded-User", "ws:alice@example.com")
+	req.Header.Add("Impersonate-Group", "system:authenticated")
+	req.Header.Add("Impersonate-Group", "oidc:ws:platform-team")
+	req.Header.Add("Impersonate-Group", "oidc:ws, oidc:sre")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	var user User
+	json.NewDecoder(rec.Body).Decode(&user)
+	want := []string{"system:authenticated", "oidc:ws:platform-team", "oidc:ws", "oidc:sre"}
+	if !slices.Equal(user.Groups, want) {
+		t.Errorf("groups = %v, want %v", user.Groups, want)
+	}
+}
+
+func TestMiddleware_ProxyHeaders_RepeatedGroupHeadersStillRejectReserved(t *testing.T) {
+	cfg := proxyConfig()
+	cfg.GroupsHeader = "Impersonate-Group"
+	handler := Authenticate(cfg)(http.HandlerFunc(echoUser))
+
+	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
+	req.Header.Set("X-Forwarded-User", "alice")
+	req.Header.Add("Impersonate-Group", "system:authenticated")
+	req.Header.Add("Impersonate-Group", "system:masters")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 

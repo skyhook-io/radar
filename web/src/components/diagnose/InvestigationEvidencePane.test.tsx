@@ -2802,6 +2802,63 @@ describe("cited broader cards and coverage rows", () => {
     expect(render(projection)).toContain(
       "4 results about other resources are not shown; they appear here when the assessment cites them.",
     );
+    // A question with no resource has no "other" resource to speak of.
+    expect(
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+          withoutTarget
+        />,
+      ),
+    ).toContain(
+      "4 results the assessment didn’t cite are not shown; they appear here when the assessment cites them.",
+    );
+    // Before there is an assessment nothing has been passed over yet.
+    expect(
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          collecting
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+          withoutTarget
+          assessmentPending
+        />,
+      ),
+    ).toContain(
+      "4 results are held for the assessment; the ones it cites appear here.",
+    );
+    // A run that stopped without one will never cite anything: show it all.
+    const stopped = partitionInvestigationEvidence(
+      projection.groups,
+      undefined,
+      undefined,
+      false,
+      true,
+    );
+    expect(stopped.hiddenBroader).toBe(0);
+    expect(stopped.main.length + stopped.workload.length).toBe(4);
+    const stoppedMarkup = renderToStaticMarkup(
+      <InvestigationEvidencePane
+        projection={projection}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={onViewSource}
+        onViewActivity={() => {}}
+        withoutTarget
+        assessmentPending
+        showUncited
+      />,
+    );
+    expect(stoppedMarkup).not.toContain("not shown");
+    expect(stoppedMarkup).toContain("Evidence collected");
+    expect(stoppedMarkup).not.toContain("about this resource");
+    expect(stoppedMarkup).not.toContain("No relevant evidence");
 
     const resolution = resolveInvestigationRootCauseEvidence(
       projection,

@@ -5,6 +5,7 @@ import { useAPIResources } from '../../api/apiResources'
 import { loadRecentResources, recordRecentResource } from '../../hooks/useRecentResources'
 import { useCommandItems, type CommandItemCallbacks } from './command-items'
 import { PENDING_RETRY_BUDGET_MS, PENDING_RETRY_MS, searchCoverageNote } from './searchCoverageNote'
+import { useDiagnose } from '../diagnose/DiagnoseContext'
 
 interface RadarOmnibarProps extends CommandItemCallbacks {
   onOpenResource: (hit: SearchHit) => void
@@ -55,6 +56,15 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   }), [nsScope, apiResources])
 
   const commandItems = useCommandItems(callbacks)
+  // Words that find nothing (or more than a lookup) can become a question;
+  // the composer opens with them so where and since when stay visible.
+  const diagnose = useDiagnose()
+  const onInvestigateQuery = diagnose.available && diagnose.questions
+    ? // The omnibar seeds its ns: pills from the namespace picker, so no pill
+      // means the engineer cleared the scope: start across the cluster.
+      ({ text, namespaces }: { text: string; namespaces: string[] }) =>
+        diagnose.openQuestion({ text, namespaces })
+    : undefined
   const { onNavigateKind } = callbacks
   const note = searchCoverageNote(searchData?.coverage, {
     hits: searchData?.hits,
@@ -80,6 +90,7 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
       note={note}
       modifierOptions={modifierOptions}
       seedNamespaces={nsScope?.actives}
+      onInvestigateQuery={onInvestigateQuery}
       loadRecents={() => loadRecentResources(contextKey)}
       recordRecent={(r) => recordRecentResource(r, contextKey)}
     />

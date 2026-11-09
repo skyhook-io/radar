@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -637,5 +638,103 @@ func TestResourceIssuesCountsWithheldTerminatingClusterCR(t *testing.T) {
 	}
 	if len(response.Issues) != 1 || response.Issues[0].Category != issuesapi.CategoryTerminationStuck || response.Withheld != nil {
 		t.Fatalf("the list grant must expose the termination issue: %s", w.Body.String())
+	}
+}
+
+// A Kueue queue check needs the ClusterQueue, which the server authorizes by
+// one cluster-scoped permission; a caller without it gets "not checked" on the
+// pages of the queue and its runs, never an empty "none".
+func TestResourceIssuesReportAKueueQueueCheckTheCallerCannotMake(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	lqGVR := schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "localqueues"}
+	wlGVR := schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads"}
+	cqGVR := schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "clusterqueues"}
+	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	obj := func(gvr schema.GroupVersionResource, kind, namespace, name string, spec map[string]any, conditions []any) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": gvr.Group + "/" + gvr.Version, "kind": kind, "spec": spec, "status": map[string]any{"conditions": conditions}}}
+		u.SetNamespace(namespace)
+		u.SetName(name)
+		u.SetUID(types.UID(kind + "-" + name))
+		u.SetGeneration(1)
+		u.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-time.Hour)))
+		return u
+	}
+	cond := func(t, status, reason, message string) map[string]any {
+		return map[string]any{"type": t, "status": status, "reason": reason, "message": message, "observedGeneration": int64(1), "lastTransitionTime": old}
+	}
+	lq := obj(lqGVR, "LocalQueue", "team", "q", map[string]any{"clusterQueue": "gpu", "stopPolicy": "None"}, []any{cond("Active", "False", "ClusterQueueIsInactive", "Can't submit new workloads to clusterQueue")})
+	wl := obj(wlGVR, "Workload", "team", "w", map[string]any{"queueName": "q"}, []any{cond("QuotaReserved", "False", "Inadmissible", "ClusterQueue gpu is inactive")})
+	cq := obj(cqGVR, "ClusterQueue", "", "gpu", map[string]any{"stopPolicy": "None"}, []any{cond("Active", "False", "FlavorNotFound", "Can't admit new workloads: references missing ResourceFlavor(s): gpu.")})
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		lqGVR: "LocalQueueList", wlGVR: "WorkloadList", cqGVR: "ClusterQueueList",
+	}, lq, wl, cq)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{
+		{Group: lqGVR.Group, Version: lqGVR.Version, Kind: "LocalQueue", Name: lqGVR.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}},
+		{Group: wlGVR.Group, Version: wlGVR.Version, Kind: "Workload", Name: wlGVR.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}},
+		{Group: cqGVR.Group, Version: cqGVR.Version, Kind: "ClusterQueue", Name: cqGVR.Resource, IsCRD: true, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// No pre-warm: the Issues read itself starts the namespace informers.
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	perms.SetCanI("list", cqGVR.Group, cqGVR.Resource, "", false)
+	perms.SetCanI("get", cqGVR.Group, cqGVR.Resource, "", false)
+	s.permCache.Set("pg-user", nil, perms)
+	for _, path := range []string{
+		"/api/issues/resource/LocalQueue/team/q?coverage=1&group=kueue.x-k8s.io",
+		"/api/issues/resource/Workload/team/w?coverage=1&group=kueue.x-k8s.io",
+	} {
+		var w *httptest.ResponseRecorder
+		var response ResourceIssuesResponse
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+			w = resourceIssuesRequest(t, s, path)
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: status=%d body=%s", path, w.Code, w.Body.String())
+			}
+			response = ResourceIssuesResponse{}
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Unchecked) == 1 && response.Unchecked[0].Reason == issuesapi.UncheckedReasonCallerAccessDenied || time.Now().After(deadline) {
+				break
+			}
+		}
+		if len(response.Issues) != 0 || len(response.Unchecked) != 1 || response.Unchecked[0].Source != issuesapi.UncheckedSourceKueue || response.Unchecked[0].Reason != issuesapi.UncheckedReasonCallerAccessDenied {
+			t.Fatalf("%s: want an unchecked Kueue queue check, not an all-clear: %s", path, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "subjects") || strings.Contains(w.Body.String(), "FlavorNotFound") {
+			t.Fatalf("%s leaks internal subjects or the ClusterQueue's state: %s", path, w.Body.String())
+		}
+	}
+
+	// With the permission, the LocalQueue row shows and nothing is unchecked.
+	perms.SetCanI("list", cqGVR.Group, cqGVR.Resource, "", true)
+	perms.SetCanI("get", cqGVR.Group, cqGVR.Resource, "", true)
+	// The first ClusterQueue read starts its informer; until it syncs the
+	// LocalQueue page says so instead of "none".
+	var w *httptest.ResponseRecorder
+	var response ResourceIssuesResponse
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		w = resourceIssuesRequest(t, s, "/api/issues/resource/LocalQueue/team/q?coverage=1&group=kueue.x-k8s.io")
+		response = ResourceIssuesResponse{}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Issues) > 0 || time.Now().After(deadline) {
+			break
+		}
+		if len(response.Unchecked) != 1 || response.Unchecked[0].Reason != issuesapi.UncheckedReasonSyncPending {
+			t.Fatalf("while ClusterQueues load the page must say so: %s", w.Body.String())
+		}
+	}
+	if len(response.Issues) != 1 || response.Issues[0].Reason != issues.ReasonKueueClusterQueueInactive || len(response.Unchecked) != 0 {
+		t.Fatalf("a caller who can list ClusterQueues gets the row: %s", w.Body.String())
 	}
 }
