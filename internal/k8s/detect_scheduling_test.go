@@ -614,10 +614,45 @@ func TestDiagnoseUnschedulableUnsatisfiableSelectorLeads(t *testing.T) {
 	if !strings.HasPrefix(action, "No node matches the pod's nodeSelector/affinity") || hasSubstr(action, "toleration") {
 		t.Errorf("unsatisfiable selector should lead the advice: %q", action)
 	}
+	// Without node facts, Radar can't tell, so both branches stay.
+	pod.Spec.NodeSelector = map[string]string{"radar.skyhook.io/probe": "no-such-node"}
+	if msg, action := diagnoseUnschedulable(pod, msg, nil); !hasSubstr(action, "If they're the pod's target nodes") || hasSubstr(msg, "no node carries label") {
+		t.Errorf("without node facts the selector must stay unresolved: %q / %q", msg, action)
+	}
+	// A later-filter count proves some node matched, whatever Radar's node view says.
+	gpuMsg := "0/3 nodes are available: 2 Insufficient nvidia.com/gpu, 1 node(s) didn't match Pod's node affinity/selector."
+	pod.Spec.NodeSelector = map[string]string{"pool": "gpu"}
+	if msg, action := diagnoseUnschedulable(pod, gpuMsg, nodes); !hasSubstr(action, "don't have enough nvidia.com/gpu") || hasSubstr(msg, "no node carries label") {
+		t.Errorf("scheduler evidence of matching nodes should win: %q / %q", msg, action)
+	}
 	// The same message with a selector some node satisfies keeps both branches.
 	pod.Spec.NodeSelector = map[string]string{"radar.skyhook.io/simulated": "true"}
 	if _, action := diagnoseUnschedulable(pod, msg, nodes); !hasSubstr(action, "If they're the pod's target nodes") {
 		t.Errorf("satisfiable selector with taints should give both branches: %q", action)
+	}
+}
+
+func TestUnschedulableActionEdgeCases(t *testing.T) {
+	sc := schedulingContext{defaultOrder: true}
+	// A taint was checked before the selector, so it isn't a second constraint
+	// on the matching nodes.
+	_, live := parseSchedulerMessage("0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 2 Insufficient nvidia.com/gpu, 4 node(s) had untolerated taint(s).")
+	if got := unschedulableAction(live, sc); hasSubstr(got, "More than one constraint") {
+		t.Errorf("taint shouldn't count against the matching nodes: %q", got)
+	}
+	cordoned := []SchedulingReason{{Class: SchedNodeAffinitySelector, NodeCount: 10}, {Class: SchedNodeUnschedulable, NodeCount: 2}}
+	if got := unschedulableAction(cordoned, sc); !hasSubstr(got, "If they're the pod's target nodes, they're cordoned, not ready") {
+		t.Errorf("cordoned branch should read as a sentence: %q", got)
+	}
+	// An unclassified clause (a DRA claim failure) may be the matching nodes'
+	// blocker, so the taint branch must not claim the answer.
+	dra := []SchedulingReason{{Class: SchedNodeAffinitySelector, NodeCount: 10}, {Class: SchedOther, NodeCount: 2}, {Class: SchedUntoleratedTaint, NodeCount: 3}}
+	if got := unschedulableAction(dra, sc); hasSubstr(got, "If they're the pod's target nodes") {
+		t.Errorf("unclassified count should fall back to general advice: %q", got)
+	}
+	gke := &corev1.Pod{Spec: corev1.PodSpec{SchedulerName: "gke.io/optimize-utilization-scheduler"}}
+	if !usesDefaultScheduler(gke) {
+		t.Error("GKE's optimize-utilization profile keeps kube-scheduler's filter order")
 	}
 }
 
