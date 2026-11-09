@@ -1039,6 +1039,7 @@ The [Secrets Store CSI Driver](https://secrets-store-csi-driver.sigs.k8s.io/) mo
 | Mount failed | Warning `FailedMount` event naming the volume, while the Pod has not started |
 | Not mounted yet | Pod pending, no status and no failure event |
 | Mount not recorded | Pod started but the driver wrote no status for it |
+| Status shared | Another volume of this Pod uses the same class. The driver keeps one status per Pod and class, naming only the volume mounted last, so this volume has none of its own |
 | Class not found | A complete read of the namespace's classes has no class with that name |
 | No permission / could not read all / unavailable | The class or status read was denied, partial, or the API is not served |
 

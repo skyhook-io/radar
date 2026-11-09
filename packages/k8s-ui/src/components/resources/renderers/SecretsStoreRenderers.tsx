@@ -68,6 +68,9 @@ function MountDetail({ mount }: { mount: SecretsStoreMountState }) {
   if (mount.state === 'not-recorded') {
     return <p className="mt-2 text-xs text-theme-text-tertiary">The driver writes a status only after a successful mount, and none exists for this volume. It may have been deleted, or the volume was mounted by a driver version that does not record one.</p>
   }
+  if (mount.state === 'status-shared') {
+    return <p className="mt-2 text-xs text-theme-text-tertiary">The driver keeps one status per Pod and class, and it names volume {mount.volumeName}, which uses the same class. See that volume for the mounted objects.</p>
+  }
   return null
 }
 

@@ -169,7 +169,24 @@ describe('getSecretsStoreMountState', () => {
     twoVolumes.spec.volumes.push({ name: 'secrets-store-2', csi: { driver: 'secrets-store.csi.k8s.io', volumeAttributes: { secretProviderClass: 'vault-database' } } })
     const [first, second] = getSecretsStoreVolumes(twoVolumes)
     expect(getSecretsStoreMountState(twoVolumes, first, ok([mountedStatus])).state).toBe('mounted')
-    expect(getSecretsStoreMountState(twoVolumes, second, ok([mountedStatus])).state).toBe('not-mounted-yet')
+    expect(getSecretsStoreMountState(twoVolumes, second, ok([mountedStatus]))).toEqual({ state: 'status-shared', volumeName: 'secrets-store' })
+  })
+
+  it('names the sibling volume whose status covers a shared class on a running Pod', () => {
+    const twoVolumes: any = pod()
+    twoVolumes.spec.volumes.push({ name: 'secrets-store-2', csi: { driver: 'secrets-store.csi.k8s.io', volumeAttributes: { secretProviderClass: 'vault-database' } } })
+    twoVolumes.spec.containers.push({ name: 'sidecar', volumeMounts: [{ name: 'secrets-store-2', mountPath: '/mnt/b' }] })
+    const [first, second] = getSecretsStoreVolumes(twoVolumes)
+    const lastMounted = { ...mountedStatus, status: { ...mountedStatus.status, targetPath: mountedStatus.status.targetPath.replace('/secrets-store/', '/secrets-store-2/') } }
+    expect(getSecretsStoreMountState(twoVolumes, second, ok([lastMounted])).state).toBe('mounted')
+    expect(getSecretsStoreMountState(twoVolumes, first, ok([lastMounted]))).toEqual({ state: 'status-shared', volumeName: 'secrets-store-2' })
+  })
+
+  it('does not call a status shared when its target path names a volume of another class', () => {
+    const twoVolumes: any = pod()
+    twoVolumes.spec.volumes.push({ name: 'other', csi: { driver: 'secrets-store.csi.k8s.io', volumeAttributes: { secretProviderClass: 'other-class' } } })
+    const elsewhere = { ...mountedStatus, status: { ...mountedStatus.status, targetPath: mountedStatus.status.targetPath.replace('/secrets-store/', '/other/') } }
+    expect(getSecretsStoreMountState(twoVolumes, volume, ok([elsewhere])).state).toBe('not-recorded')
   })
 
   it('matches a Windows node target path', () => {

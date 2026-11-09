@@ -53,6 +53,8 @@ export type SecretsStoreMountState =
   | { state: 'failed'; message: string; count?: number; timestamp?: string }
   | { state: 'not-mounted-yet' }
   | { state: 'not-recorded' }
+  /** The one status the driver keeps for this Pod and class names `volumeName`, a sibling volume. */
+  | { state: 'status-shared'; volumeName: string }
   | { state: 'unknown'; reason: SecretsStoreUnknownReason; message?: string }
 
 /** The subset of a k8s Event (as Radar's timeline serves it) this module reads. */
@@ -122,6 +124,28 @@ export function lookupSecretProviderClass(className: string | undefined, classes
   return classes.complete ? { state: 'missing' } : { state: 'unknown', reason: 'incomplete' }
 }
 
+// Windows nodes report targetPath with backslashes.
+function statusTargetPath(status: any): string | undefined {
+  const targetPath = status?.status?.targetPath
+  return typeof targetPath === 'string' && targetPath !== '' ? targetPath.replaceAll('\\', '/') : undefined
+}
+
+function volumeSegment(volumeName: string): string {
+  return `/kubernetes.io~csi/${volumeName}/`
+}
+
+/** Statuses the driver wrote for this Pod and this volume's class. */
+function podClassStatuses(pod: any, volume: SecretsStoreVolume, statuses: any[]): any[] {
+  const uid = pod?.metadata?.uid
+  const podName = pod?.metadata?.name
+  return statuses.filter(status => {
+    if (!volume.className || status?.status?.secretProviderClassName !== volume.className) return false
+    const owners: any[] = status?.metadata?.ownerReferences ?? []
+    if (uid) return owners.some(owner => owner?.kind === 'Pod' && owner?.uid === uid)
+    return status?.status?.podName === podName
+  })
+}
+
 /**
  * The status the driver wrote for this Pod's volume. Matched by the owning
  * Pod's UID, so a status left by an earlier Pod with the same name (a
@@ -130,18 +154,25 @@ export function lookupSecretProviderClass(className: string | undefined, classes
  * only the one in its target path is proven mounted.
  */
 export function findSecretsStorePodStatus(pod: any, volume: SecretsStoreVolume, statuses: any[]): any | undefined {
-  const uid = pod?.metadata?.uid
-  const podName = pod?.metadata?.name
-  const volumeSegment = `/kubernetes.io~csi/${volume.volumeName}/`
-  return statuses.find(status => {
-    if (!volume.className || status?.status?.secretProviderClassName !== volume.className) return false
-    const targetPath = status?.status?.targetPath
-    // Windows nodes report the path with backslashes.
-    if (typeof targetPath === 'string' && targetPath !== '' && !targetPath.replaceAll('\\', '/').includes(volumeSegment)) return false
-    const owners: any[] = status?.metadata?.ownerReferences ?? []
-    if (uid) return owners.some(owner => owner?.kind === 'Pod' && owner?.uid === uid)
-    return status?.status?.podName === podName
+  return podClassStatuses(pod, volume, statuses).find(status => {
+    const targetPath = statusTargetPath(status)
+    return targetPath === undefined || targetPath.includes(volumeSegment(volume.volumeName))
   })
+}
+
+/**
+ * Another volume of this Pod whose status covers this volume's class. The
+ * driver keeps one status per Pod and class, and its target path names only
+ * the volume mounted last.
+ */
+function findSharedStatusVolume(pod: any, volume: SecretsStoreVolume, statuses: any[]): string | undefined {
+  const siblings = getSecretsStoreVolumes(pod).filter(other => other.volumeName !== volume.volumeName && other.className === volume.className)
+  for (const status of podClassStatuses(pod, volume, statuses)) {
+    const targetPath = statusTargetPath(status)
+    const sibling = targetPath && siblings.find(other => targetPath.includes(volumeSegment(other.volumeName)))
+    if (sibling) return sibling.volumeName
+  }
+  return undefined
 }
 
 /**
@@ -192,6 +223,8 @@ export function getSecretsStoreMountState(
   const failure = findSecretsStoreMountFailure(volume.volumeName, events, pod)
   if (failure && podAwaitsMount(pod)) return { state: 'failed', message: failure.message!, count: failure.count, timestamp: failure.timestamp }
   if (statuses.state !== 'ok') return unknownFrom(statuses)
+  const sharedWith = findSharedStatusVolume(pod, volume, statuses.items)
+  if (sharedWith) return { state: 'status-shared', volumeName: sharedWith }
   // A pending Pod can already have this volume mounted; only a complete read
   // proves it has no status yet.
   if (!statuses.complete) return { state: 'unknown', reason: 'incomplete' }
@@ -228,6 +261,7 @@ export function secretsStoreMountLabel(mount: SecretsStoreMountState): { text: s
     case 'failed': return { text: 'Mount failed', level: 'unhealthy' }
     case 'not-mounted-yet': return { text: 'Not mounted yet', level: 'degraded' }
     case 'not-recorded': return { text: 'Mount not recorded', level: 'unknown' }
+    case 'status-shared': return { text: 'Status shared', level: 'unknown' }
     case 'unknown': return { text: secretsStoreUnknownText(mount.reason, 'mount state'), level: 'unknown' }
   }
 }
