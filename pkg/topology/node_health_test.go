@@ -212,9 +212,6 @@ func TestHPANodeHealth(t *testing.T) {
 	})
 }
 
-// Expanding a pod group must not re-derive health from the phase: a
-// crash-looping pod sits at Phase=Running, so the group has to carry the
-// verdict pkg/health already computed.
 func TestDeletingPodIsMarkedTerminating(t *testing.T) {
 	deleted := metav1.NewTime(time.Now())
 	draining := &corev1.Pod{
@@ -248,6 +245,9 @@ func TestDeletingPodIsMarkedTerminating(t *testing.T) {
 	}
 }
 
+// Expanding a pod group must not re-derive health from the phase: a
+// crash-looping pod sits at Phase=Running, so the group has to carry the
+// verdict pkg/health already computed.
 func TestPodGroupCarriesComputedPodStatus(t *testing.T) {
 	crashing := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "prod"},
