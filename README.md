@@ -190,7 +190,7 @@ sudo apt install ./radar-desktop_*.deb
 
 **Fedora/RHEL** — download the `.rpm` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
 ```bash
-sudo rpm -i radar-desktop_*.rpm
+sudo dnf install ./radar-desktop_*.rpm
 ```
 
 **Linux (AppImage, any distro)** — download the `.AppImage` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
