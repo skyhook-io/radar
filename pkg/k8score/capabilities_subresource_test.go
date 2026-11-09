@@ -32,3 +32,28 @@ func TestCanISendsSubresourceInItsOwnField(t *testing.T) {
 		t.Errorf("plain resource = %q / %q", got.Resource, got.Subresource)
 	}
 }
+
+func TestCanITreatsAnUnansweredReviewAsAFailedCall(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		status          authv1.SubjectAccessReviewStatus
+		allowed, apiErr bool
+	}{
+		{name: "denied", status: authv1.SubjectAccessReviewStatus{}, allowed: false, apiErr: false},
+		{name: "authorizer failed", status: authv1.SubjectAccessReviewStatus{EvaluationError: "webhook timed out"}, allowed: false, apiErr: true},
+		{name: "allowed despite another authorizer failing", status: authv1.SubjectAccessReviewStatus{Allowed: true, EvaluationError: "webhook timed out"}, allowed: true, apiErr: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			client.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				review := action.(k8stesting.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+				review.Status = tc.status
+				return true, review, nil
+			})
+			allowed, apiErr := CanI(context.Background(), client, "db", "", "pods/exec", "create")
+			if allowed != tc.allowed || apiErr != tc.apiErr {
+				t.Fatalf("allowed=%v apiErr=%v, want %v %v", allowed, apiErr, tc.allowed, tc.apiErr)
+			}
+		})
+	}
+}
