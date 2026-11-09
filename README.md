@@ -193,6 +193,15 @@ sudo apt install ./radar-desktop_*.deb
 sudo rpm -i radar-desktop_*.rpm
 ```
 
+**Linux (AppImage, any distro)** — download the `.AppImage` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
+```bash
+chmod +x radar-desktop_*_linux_amd64.AppImage
+./radar-desktop_*_linux_amd64.AppImage
+```
+The AppImage doesn't update itself. When a new version is out, Radar links to the download.
+
+Kubeconfig login plugins (`exec`) run from inside the AppImage, not from the folder you started it in. If a plugin's `args` name a file by a relative path, such as `--token-file token.json`, the plugin can't find it and Radar shows "Authentication Failed". Give the full path instead, such as `--token-file /home/you/.kube/token.json`. A relative `command`, such as `./token.sh`, works: it's looked up next to the kubeconfig file.
+
 **Scoop (Windows):**
 ```powershell
 scoop bucket add skyhook https://github.com/skyhook-io/scoop-bucket
