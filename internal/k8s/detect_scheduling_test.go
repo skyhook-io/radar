@@ -539,12 +539,12 @@ func TestUnschedulableActionSelectorScopesLaterFilters(t *testing.T) {
 		}
 	}
 
-	reversed := []SchedulingReason{
-		{Class: SchedInsufficientResource, Resource: "nvidia.com/gpu", NodeCount: 2},
-		{Class: SchedNodeAffinitySelector, NodeCount: 32},
+	reversed := make([]SchedulingReason, len(reasons))
+	for i, r := range reasons {
+		reversed[len(reasons)-1-i] = r
 	}
-	if got := unschedulableAction(reversed); !hasSubstr(got, "enough nvidia.com/gpu") || hasSubstr(got, "relax it") {
-		t.Errorf("reason order changed the advice: %q", got)
+	if again := unschedulableAction(reversed); again != got {
+		t.Errorf("reason order changed the advice:\n%q\n%q", got, again)
 	}
 
 	mixed := append(reversed, SchedulingReason{Class: SchedPodAntiAffinity, NodeCount: 1})
