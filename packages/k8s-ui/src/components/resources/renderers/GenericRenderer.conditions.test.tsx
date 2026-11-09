@@ -22,6 +22,14 @@ describe('genericConditionTone', () => {
     expect(genericConditionTone(resource, cond(type, status))).toBe(tone)
   })
 
+  it('follows a deliberate stop on readiness that is False because of it', () => {
+    const stopped = { ...resource, status: { conditions: [cond('Stopped', 'True')] } }
+    const stoppedReady = { type: 'Ready', status: 'False', reason: 'Stopped' }
+    expect(genericConditionTone(stopped, stoppedReady)).toBe('neutral')
+    expect(genericConditionTone(stopped, { type: 'Ready', status: 'False', reason: 'MinimumReplicasUnavailable' })).toBe('fail')
+    expect(genericConditionTone(resource, stoppedReady)).toBe('fail')
+  })
+
   it('reads Stopped as a state only on KServe resources', () => {
     const other = { apiVersion: 'example.com/v1', kind: 'Pipeline', metadata: { name: 'etl' } }
     expect(genericConditionTone(other, cond('Stopped', 'True'))).toBe('ok')
@@ -42,6 +50,13 @@ describe('GenericRenderer conditions', () => {
   it("doesn't color a healthy service's Stopped=False red", () => {
     const html = render([cond('Ready', 'True'), cond('Stopped', 'False')])
     expect(chipClass(html, 'Stopped', 'False')).not.toContain('status-red')
+  })
+
+  it('shows a deliberately stopped model as stopped, not failed', () => {
+    const html = render([cond('Stopped', 'True'), { type: 'Ready', status: 'False', reason: 'Stopped' }])
+    expect(html).toContain("This model is stopped and isn&#x27;t serving requests.")
+    expect(html).not.toContain('bg-red-500/10')
+    expect(chipClass(html, 'Ready', 'False')).not.toContain('status-red')
   })
 
   it('keeps a failed positive condition red', () => {

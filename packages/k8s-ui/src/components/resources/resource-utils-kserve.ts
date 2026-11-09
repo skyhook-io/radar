@@ -23,6 +23,12 @@ function truncateMiddle(value: string, max = 44): string {
 // KSERVE INFERENCESERVICE UTILITIES
 // ============================================================================
 
+// KServe sets Stopped=True when a model's owner stops it: it isn't serving, by
+// choice. That is a state, not a failure.
+export function isInferenceServiceStopped(resource: any): boolean {
+  return findCondition(resource, 'Stopped')?.status === 'True'
+}
+
 export function getInferenceServiceStatus(resource: any): StatusBadge {
   const transition = resource.status?.modelStatus?.transitionStatus
   if (transition === 'BlockedByFailedLoad') {
@@ -30,6 +36,10 @@ export function getInferenceServiceStatus(resource: any): StatusBadge {
   }
   if (transition === 'InvalidSpec') {
     return { text: 'Invalid spec', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  if (isInferenceServiceStopped(resource)) {
+    return { text: 'Stopped', color: healthColors.neutral, level: 'neutral' }
   }
 
   const readyCond = findCondition(resource, 'Ready')

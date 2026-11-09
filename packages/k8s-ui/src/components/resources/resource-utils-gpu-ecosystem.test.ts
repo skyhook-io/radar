@@ -120,6 +120,14 @@ describe('GPU ecosystem API contracts', () => {
     }).text).toBe('Invalid spec')
   })
 
+  it('shows a deliberately stopped InferenceService as a neutral state, after load failures', () => {
+    const stopped = [{ type: 'Stopped', status: 'True' }, { type: 'Ready', status: 'False', reason: 'Stopped' }]
+    expect(getInferenceServiceStatus({ status: { conditions: stopped } })).toMatchObject({ text: 'Stopped', level: 'neutral' })
+    expect(getInferenceServiceStatus({
+      status: { conditions: stopped, modelStatus: { transitionStatus: 'BlockedByFailedLoad' } },
+    }).text).toBe('Load failed')
+  })
+
   it('reads the inline replicas field in both served LLMInferenceService versions', () => {
     expect(getLLMInferenceServiceReplicas({ spec: { replicas: 3 } })).toBe('3')
   })

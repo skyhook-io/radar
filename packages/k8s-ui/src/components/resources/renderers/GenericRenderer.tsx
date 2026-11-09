@@ -5,6 +5,7 @@ import { Section, PropertyList, Property, isInvertedPolarityCondition } from '..
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
 import { isApiGroup } from '../resource-utils-cnpg'
+import { getInferenceServiceStatus, isInferenceServiceStopped } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
@@ -159,6 +160,9 @@ const BANNER_TYPE: Record<HealthLevel, HealthType> = {
 }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
+  if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && getInferenceServiceStatus(resource).level === 'neutral') {
+    return { type: 'unknown', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
+  }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
   if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
@@ -330,9 +334,12 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
 // ============================================================================
 
 // KServe's Stopped reports an intentional state rather than health: True for a
-// model its owner stopped, False otherwise.
+// model its owner stopped, False otherwise. While it is True, readiness that is
+// False only because of the stop follows it.
 function isKServeStopState(resource: any, cond: any): boolean {
-  return cond.type === 'Stopped' && isApiGroup(resource?.apiVersion, 'serving.kserve.io')
+  if (!isApiGroup(resource?.apiVersion, 'serving.kserve.io')) return false
+  if (cond.type === 'Stopped') return true
+  return cond.status === 'False' && cond.reason === 'Stopped' && isInferenceServiceStopped(resource)
 }
 const WARNING_CONDITION_TYPES = new Set(['Degraded', 'Warning', 'ScalingLimited'])
 const POSITIVE_CONDITION_TYPES = new Set(['Ready', 'Available', 'Healthy', 'Initialized', 'Complete'])
