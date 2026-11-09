@@ -64,6 +64,7 @@
         "namespaces": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, "description": "Limit Radar's ServiceAccount and the Radar Cloud bindings to these namespaces. Leave unset for cluster-wide access." },
         "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
         "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user." },
+        "viewAdmissionPolicies": { "type": "boolean", "description": "Allow reading native ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding resources. Auto-enabled under auth or cloud mode." },
         "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
         "podLogs": { "type": "boolean" },
         "portForward": { "type": "boolean" },

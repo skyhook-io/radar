@@ -100,6 +100,11 @@ rules:
   - apiGroups: ["admissionregistration.k8s.io"]
     resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
     verbs: ["get", "list", "watch"]
+  # Native admission policies reveal the same admission posture as the webhook
+  # configurations above, so the tiers read both or neither.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+    verbs: ["get", "list", "watch"]
   # Upgrade impact evidence. These kinds are not cached or browsable.
   - apiGroups: ["storage.k8s.io"]
     resources: ["csidrivers", "csistoragecapacities"]
