@@ -1,4 +1,5 @@
-{{- if .Values.mcp.oauth.enabled }}
+{{- $mcpOAuth := dig "oauth" "enabled" false (.Values.mcp | default dict) }}
+{{- if $mcpOAuth }}
 {{- if not .Values.mcp.enabled }}
 {{- fail "mcp.oauth.enabled requires mcp.enabled=true" }}
 {{- end }}
@@ -114,7 +115,7 @@ spec:
   {{- /* Enrollment: the Hub keeps one connection per cluster. In a rolling
          update the new pod would wait until the old one is gone and the Hub
          sees its connection drop. */}}
-  {{- if or .Values.mcp.oauth.enabled $enroll (and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite")) }}
+  {{- if or $mcpOAuth $enroll (and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite")) }}
   strategy:
     type: Recreate
   {{- end }}
@@ -232,7 +233,7 @@ spec:
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}
-            {{- if .Values.mcp.oauth.enabled }}
+            {{- if $mcpOAuth }}
             - --mcp-oauth
             {{- end }}
             {{- if .Values.debug.image }}

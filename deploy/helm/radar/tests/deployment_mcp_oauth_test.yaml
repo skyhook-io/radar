@@ -70,3 +70,15 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "mcp.oauth.enabled requires replicaCount=1: OAuth clients and tokens are stored in memory and are not shared across pods"
+
+  # helm upgrade --reuse-values renders with the previous release's values, which
+  # predate mcp.oauth; a null here drops the chart default the same way.
+  - it: renders values from a release that predates mcp.oauth
+    set:
+      mcp.oauth: null
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-oauth
+      - notExists:
+          path: spec.strategy
