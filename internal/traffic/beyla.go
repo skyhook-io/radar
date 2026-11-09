@@ -90,27 +90,31 @@ func (s *BeylaSource) identityRows(ctx context.Context, query string) ([]map[str
 // clusterMismatch explains an empty map when the cluster matchers removed
 // every series present in the window: L4 first, then HTTP.
 func (s *BeylaSource) clusterMismatch(ctx context.Context, opts FlowOptions, sc beylaScopes) string {
-	w := beylaWindow(opts.Since)
-	families := []struct {
-		scope  clusterScope
-		active string
-	}{
-		{sc.l4, beylaActiveSeries(s.flowMetricName(), beylaJobSelector(), opts.Namespace, []string{"k8s_src_namespace", "k8s_dst_namespace"}, w)},
-		{sc.l7, beylaActiveSeries(beylaL7Metric, beylaJobSelector(), opts.Namespace, []string{"k8s_namespace_name"}, w)},
+	if warning := s.l4Mismatch(ctx, opts, sc.l4); warning != "" {
+		return warning
 	}
-	for _, f := range families {
-		if f.scope.matchers == "" {
-			continue
-		}
-		rows, err := s.identityRows(ctx, f.scope.identityCountQuery(f.active))
-		if err != nil {
-			continue
-		}
-		if warning := f.scope.clusterMismatchWarning(rows, "Beyla"); warning != "" {
-			return warning
-		}
+	return s.l7Mismatch(ctx, opts, sc.l7)
+}
+
+func (s *BeylaSource) l4Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
+	return s.familyMismatch(ctx, sc, beylaActiveSeries(s.flowMetricName(), beylaJobSelector(), opts.Namespace,
+		[]string{"k8s_src_namespace", "k8s_dst_namespace"}, beylaWindow(opts.Since)))
+}
+
+func (s *BeylaSource) l7Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
+	return s.familyMismatch(ctx, sc, beylaActiveSeries(beylaL7Metric, beylaJobSelector(), opts.Namespace,
+		[]string{"k8s_namespace_name"}, beylaWindow(opts.Since)))
+}
+
+func (s *BeylaSource) familyMismatch(ctx context.Context, sc clusterScope, active string) string {
+	if sc.matchers == "" {
+		return ""
 	}
-	return ""
+	rows, err := s.identityRows(ctx, sc.identityCountQuery(active))
+	if err != nil {
+		return ""
+	}
+	return sc.clusterMismatchWarning(rows, "Beyla")
 }
 
 // beylaActiveSeries selects the series present in the window, filtered to
@@ -405,6 +409,8 @@ type l4LabelPresence struct {
 	// long-lived connections keep a stable port and measure fine — so it is
 	// measured rather than assumed from the configuration.
 	replyLossFraction float64
+	// l7Flows counts the HTTP records the scoped HTTP query returned.
+	l7Flows int
 	// failed names the enrichment queries that errored. Their figures are absent
 	// from the edges, which without a warning reads as measured zero: no errors,
 	// no requests, nothing received.
@@ -451,6 +457,15 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	mismatch := ""
 	if len(flows) == 0 {
 		mismatch = s.clusterMismatch(ctx, opts, scopes)
+	} else if presence.l7Flows == 0 && !scopes.l7Unchecked {
+		// The network flows drew, but the cluster filter may have removed every
+		// HTTP series. Say so, or the edges read as carrying no requests.
+		if l7 := s.l7Mismatch(ctx, opts, scopes.l7); l7 != "" {
+			response.Warning = strings.TrimSpace("HTTP request rates, errors and latency are missing from these edges. " + l7 + " " + response.Warning)
+			if response.WarningKind == "" {
+				response.WarningKind = WarningPartial
+			}
+		}
 	}
 	applyClusterScopeWarning(response, mismatch, scopes.l4.mixed || scopes.l7.mixed)
 	return response, nil
@@ -543,6 +558,7 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc
 		l7Flows = nil
 		presence.failed = append(presence.failed, "HTTP request rates")
 	}
+	presence.l7Flows = len(l7Flows)
 
 	// Fill in what came back before anything else reads BytesRecv: the L7 split
 	// below weights each caller by its share of the conversation, and half a

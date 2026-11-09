@@ -276,6 +276,9 @@ func TestBeylaFamiliesScopedSeparately(t *testing.T) {
 	if names := flowNames(resp.Flows); !names["backend-a"] || names["backend-b"] || names["http-"] {
 		t.Errorf("flows = %v, want cluster a's network flows and no unattributed HTTP", names)
 	}
+	if !strings.Contains(resp.Warning, "HTTP request rates, errors and latency are missing") || !strings.Contains(resp.Warning, "isn't labeled by cluster") {
+		t.Errorf("warning %q does not explain the missing HTTP figures", resp.Warning)
+	}
 }
 
 // A context switch re-proves the cluster: the next request must use the new
@@ -452,8 +455,12 @@ func TestAmbiguityKeepsProvenLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if names := flowNames(resp.Flows); len(names) != 2 || !names["backend-a"] || resp.WarningKind == WarningCluster {
-		t.Errorf("flows = %v, warning %q; want cluster a's flows only, no note", names, resp.Warning)
+	if names := flowNames(resp.Flows); len(names) != 2 || !names["backend-a"] {
+		t.Errorf("flows = %v, want cluster a's flows only", names)
+	}
+	// Two identities under the same labels may also be two clusters sharing them.
+	if resp.WarningKind != WarningCluster {
+		t.Errorf("warning = %q (%s), want the may-include-other-clusters note", resp.Warning, resp.WarningKind)
 	}
 }
 

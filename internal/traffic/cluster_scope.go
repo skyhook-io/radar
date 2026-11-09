@@ -66,12 +66,15 @@ func scopeForMetric(ctx context.Context, metric, selector string, filter bool) (
 		// An operator declared the store single-cluster.
 		return clusterScope{}, nil
 	case errors.Is(err, promclient.ErrScopeMismatch), errors.Is(err, promclient.ErrScopeAmbiguous):
-		// With proven labels, keep them. On a mismatch the query comes back
-		// empty and the empty-map warning names them; on ambiguity every
-		// series they select is still this cluster's, under more labels.
+		// With proven labels, keep them: they still exclude every series
+		// another cluster labels differently. On a mismatch the query comes
+		// back empty and the empty-map warning names them. On ambiguity the
+		// series they select carry more than one identity, which may be one
+		// cluster scraped twice or two clusters sharing these labels, so the
+		// map also says it may include other clusters' traffic.
 		if len(iso.Labels) > 0 {
 			if m, mErr := (prom.WorkloadMetricsScope{ClusterLabels: iso.Labels}).Matchers(); mErr == nil {
-				return clusterScope{matchers: m, labels: iso.Labels}, nil
+				return clusterScope{matchers: m, labels: iso.Labels, mixed: errors.Is(err, promclient.ErrScopeAmbiguous)}, nil
 			}
 		}
 		// No labels proven: this cluster's kube-state-metrics carry none while
