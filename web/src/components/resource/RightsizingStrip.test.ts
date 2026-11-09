@@ -189,7 +189,13 @@ describe('pod-level request below one container\'s usage', () => {
   it('does not ask to raise the request when an HPA scales on it', () => {
     const note = podLevelOverUseNote({ ...podLevel(0.44, '440m'), hpaManaged: true })
     expect(note).toContain('440m')
-    expect(note).not.toBe(podLevelOverUseNote(podLevel(0.44, '440m')))
+    expect(note).toContain('HPA')
+  })
+
+  it('asks for an autoscaling check when Radar could not read HPAs', () => {
+    const note = podLevelOverUseNote({ ...podLevel(0.44, '440m'), hpaEvidenceAvailable: false })
+    expect(note).toContain('440m')
+    expect(note).toContain('HPA')
   })
 
   it('stays quiet before six hours of samples', () => {

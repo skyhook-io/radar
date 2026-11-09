@@ -624,8 +624,11 @@ describe('PodRenderer OOMKilled limit hint', () => {
     <PodRenderer data={oomPod(podLimit, containerLimit)} onCopy={() => undefined} copied={null} />,
   )
 
-  // The limit must appear after the OOM exit, not only in the pod's resource summary above it.
-  const afterOOM = (html: string, value: string) => html.slice(html.indexOf('OOMKilled')).includes(value)
+  // The OOM exit row only, not the resource summaries around it.
+  const afterOOM = (html: string, value: string) => {
+    const start = html.indexOf('OOMKilled')
+    return html.slice(start, html.indexOf('</div>', start)).includes(value)
+  }
 
   it('shows the pod-level memory limit beside the OOM exit when the container sets none', () => {
     expect(afterOOM(render('48Mi'), '48Mi')).toBe(true)
@@ -638,6 +641,8 @@ describe('PodRenderer OOMKilled limit hint', () => {
   })
 
   it('shows only the container limit when the pod sets none', () => {
-    expect(afterOOM(render(undefined, '96Mi'), '96Mi')).toBe(true)
+    const html = render(undefined, '96Mi')
+    expect(afterOOM(html, '96Mi')).toBe(true)
+    expect(afterOOM(html, 'pod limit')).toBe(false)
   })
 })

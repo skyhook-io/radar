@@ -387,12 +387,14 @@ export function podLevelOverUseNote(row: RightsizingRow): string | undefined {
   )
     return undefined
   const resource = row.resource === 'cpu' ? 'CPU' : 'memory'
-  const finding = `This container alone used ${row.observed.formatted} (${row.observed.name}), more than the pod's ${row.podLevelRequest} ${resource} request, so the pod uses more than it reserves. Radar can't size pod-level requests yet;`
+  const finding = `This container alone used ${row.observed.formatted} (${row.observed.name}), more than the pod's whole ${row.podLevelRequest} ${resource} request. Radar can't size pod-level requests yet.`
   // An HPA scaling on this resource divides usage by the pod request, so
   // raising it changes scaling; Radar never suggests that unreviewed.
-  return row.hpaManaged
-    ? `${finding} the HPA scales on this request, so review its target before raising spec.resources.requests.${row.resource}.`
-    : `${finding} raise spec.resources.requests.${row.resource} to cover what the pod uses.`
+  if (row.hpaManaged)
+    return `${finding} The HPA scales on this request, so review its target before raising spec.resources.requests.${row.resource}.`
+  if (!row.hpaEvidenceAvailable)
+    return `${finding} Radar couldn't check for an HPA on this resource, so check autoscaling before raising spec.resources.requests.${row.resource}.`
+  return `${finding} Consider raising spec.resources.requests.${row.resource}.`
 }
 
 // Mirrors rightsizingMinSamples (six hours of 5-minute samples) in
