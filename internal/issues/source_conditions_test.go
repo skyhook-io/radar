@@ -2,6 +2,7 @@ package issues
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -792,6 +793,79 @@ func TestDetectGatewayRouteParentIssues_StaleAndCurrentBothFailing(t *testing.T)
 	}
 	if strings.Contains(got[0].Message, "No listeners match this parent ref") {
 		t.Fatalf("stale listener detail must not leak into the message: %q", got[0].Message)
+	}
+}
+
+// A route whose spec moved from one listener to another can keep the old
+// listener's failed status.parents entry (Envoy Gateway does not prune it). Only
+// parents still referenced by spec.parentRefs describe the live route.
+func TestDetectGatewayRouteParentIssues_IgnoresParentsRemovedFromSpec(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+	ts := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	gwRef := func(section string) map[string]any {
+		return map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "envoy-public", "namespace": "kube-system", "sectionName": section}
+	}
+	cond := func(condType, status, reason, message string, gen int64) map[string]any {
+		return map[string]any{"type": condType, "status": status, "reason": reason, "message": message, "observedGeneration": gen, "lastTransitionTime": ts}
+	}
+	staleHTTPS := map[string]any{
+		"parentRef": gwRef("https"),
+		"conditions": []any{
+			cond("Accepted", "False", "NoMatchingParent", "No listeners match this parent ref", 1),
+			cond("BackendsAvailable", "False", "EndpointsNotFound", "no ready endpoints", 1),
+			cond("ResolvedRefs", "True", "ResolvedRefs", "Resolved all the Object references for the Route", 1),
+		},
+	}
+	route := func(specRefs []any, parents ...any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"name": "immich", "namespace": "immich", "generation": int64(2)},
+			"spec":     map[string]any{"parentRefs": specRefs},
+			"status":   map[string]any{"parents": parents},
+		}}
+	}
+
+	tests := []struct {
+		name        string
+		route       *unstructured.Unstructured
+		wantReasons []string
+		wantMsg     string
+	}{
+		{
+			name: "stale removed parent ignored, current parent accepted",
+			route: route([]any{gwRef("websecure")}, staleHTTPS, map[string]any{
+				"parentRef": gwRef("websecure"),
+				"conditions": []any{
+					cond("Accepted", "True", "Accepted", "Route is accepted", 2),
+					cond("ResolvedRefs", "True", "ResolvedRefs", "Resolved all the Object references for the Route", 2),
+				},
+			}),
+		},
+		{
+			name: "current parent failure still reported",
+			route: route([]any{gwRef("websecure")}, staleHTTPS, map[string]any{
+				"parentRef": gwRef("websecure"),
+				"conditions": []any{
+					cond("Accepted", "False", "NotAllowedByListeners", "listener does not allow this route", 2),
+				},
+			}),
+			wantReasons: []string{"Accepted: NotAllowedByListeners"},
+			wantMsg:     "listener websecure: listener does not allow this route",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectGatewayRouteParentIssues(routeGVR, "HTTPRoute", tt.route)
+			var reasons []string
+			for _, iss := range got {
+				reasons = append(reasons, iss.Reason)
+			}
+			if !slices.Equal(reasons, tt.wantReasons) {
+				t.Fatalf("reasons = %q, want %q", reasons, tt.wantReasons)
+			}
+			if tt.wantMsg != "" && !strings.Contains(got[0].Message, tt.wantMsg) {
+				t.Fatalf("message %q must contain %q", got[0].Message, tt.wantMsg)
+			}
+		})
 	}
 }
 
