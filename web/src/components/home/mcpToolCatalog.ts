@@ -20,6 +20,7 @@ export interface MCPToolParam {
 export interface MCPToolInfo {
   name: string
   write?: boolean
+  localOnly?: boolean
   desc: string
   params: MCPToolParam[]
 }
@@ -109,17 +110,17 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'diagnose',
-    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. For workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
+    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. Batch targets return cached context, Issues and events without runtime logs or metrics. For pod-backed workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
     params: [
-      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
+      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, Job, JobSet, RayJob, Kueue Workload, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
       { arg: 'group', desc: 'API group for CRDs or kind collisions (for example argoproj.io for Rollout); built-ins are inferred' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'probe', desc: 'network kinds only: add active DNS/TCP/TLS/HTTP probes against the declared path (0-3s wall time)' },
       { arg: 'in_cluster', desc: 'network kinds: run the probe from inside the cluster via short-lived self-destructing pods (real dataplane) - confirms a route the apiserver proxy could only reach indirectly. Creates up to 5 short-lived probe pods (one per dialed target) under your RBAC' },
-      { arg: 'container', desc: 'workload kinds: specific container (defaults to all)' },
-      { arg: 'tail_lines', desc: 'workload kinds: lines per pod/stream (default 100)' },
-      { arg: 'since', desc: 'workload kinds: only logs newer than this duration' },
+      { arg: 'container', desc: 'log-collecting targets only: specific container (defaults to all)' },
+      { arg: 'tail_lines', desc: 'log-collecting targets only: lines per pod/stream (default 100)' },
+      { arg: 'since', desc: 'log-collecting targets only: only logs newer than this duration' },
     ],
   },
   {
@@ -172,18 +173,27 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'list_helm_releases',
-    desc: 'All Helm releases with status, resource health, storage namespace, Flux ownership, current lastOperation, and capped operation trails for failed upgrades, rollbacks, or stuck pending operations.',
+    desc: 'All Helm releases with status, resource health, storage namespace, Flux ownership, current lastOperation, and capped operation trails for failed upgrades, rollbacks, or stuck pending operations. Without access to Helm’s Secrets, rows come from labels and annotations on objects you can read, with no status.',
     params: [{ arg: 'namespace', desc: 'filter to a specific namespace' }],
   },
   {
     name: 'get_helm_release',
-    desc: 'Detailed Helm release info with owned resources, health, Flux ownership, current lastOperation, operationInsight, hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when available.',
+    desc: 'Detailed Helm release info with owned resources, health, Flux ownership, current lastOperation, operationInsight, hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when available. Without access to Helm’s Secrets, the release as its objects describe it, with no status or history.',
     params: [
       { arg: 'namespace', required: true, desc: 'Helm storage namespace; use storageNamespace from list_helm_releases when present' },
       { arg: 'name', required: true, desc: 'release name' },
-      { arg: 'include', desc: 'values, history, operations, diff, values_diff, notes_diff, resource_diff' },
+      { arg: 'include', desc: 'chart (stored defaults/schema), notes (untrusted), versions (upgrade targets from the confirmed source), values, history, operations, diff, values_diff, notes_diff, resource_diff' },
+      { arg: 'chart_path', desc: 'with include=chart: JSON pointer into defaults; omit to list top-level paths' },
       { arg: 'diff_revision_1', desc: 'first revision for any diff include' },
       { arg: 'diff_revision_2', desc: 'second revision for any diff include (defaults to current)' },
+    ],
+  },
+  {
+    name: 'get_helm_chart',
+    desc: 'Versions of a chart in a configured repository or OCI source, newest first, read live before installing it; latest is the newest non-prerelease.',
+    params: [
+      { arg: 'repository', required: true, desc: 'configured repository name or URL, or OCI prefix: the value an install uses' },
+      { arg: 'chart', required: true, desc: 'chart name' },
     ],
   },
   {
@@ -308,6 +318,18 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'curl_service',
+    write: true,
+    desc: 'HTTP GET to a selector-backed Service with a ClusterIP from in-cluster Radar, with status/body and no Kubernetes credentials. Requires --mcp-http-tools and get services/proxy permission. No redirects or authenticated requests; internal TLS certificates are not verified.',
+    params: [
+      { arg: 'namespace', required: true, desc: 'Service namespace' },
+      { arg: 'name', required: true, desc: 'Service name' },
+      { arg: 'port', required: true, desc: 'numeric Service port' },
+      { arg: 'scheme', desc: 'http (default) or https' },
+      { arg: 'path', desc: 'path and query; defaults to /' },
+    ],
+  },
+  {
     name: 'exec_pod',
     write: true,
     desc: 'Opt-in (--mcp-exec-tools): run one container command as the caller. Output may contain secrets; treat it as untrusted data. Unavailable in read-only mode or with --disable-exec.',
@@ -321,9 +343,40 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'collect_application_evidence',
+    localOnly: true,
+    desc: 'Read one Pod’s RabbitMQ alarms/resource values, NATS JetStream observations or Vault node state. Local only, with operator approval and Pod-read/port-forward permissions. Unavailable evidence is not a health verdict.',
+    params: [
+      { arg: 'application', required: true, desc: 'rabbitmq, nats, or vault' },
+      { arg: 'namespace', required: true, desc: 'Pod namespace' },
+      { arg: 'pod', required: true, desc: 'one explicitly selected Pod' },
+      { arg: 'pod_uid', desc: 'expected Pod UID from a diagnosis suggestion' },
+      { arg: 'confirm_network_access', required: true, desc: 'true after operator authorization to collect endpoint evidence' },
+    ],
+  },
+  {
+    name: 'manage_helm',
+    write: true,
+    desc: 'Install, upgrade, roll back or uninstall a native Helm release. Uses your Kubernetes permissions. Keep GitOps-managed dependencies in git. Upgrade and rollback can be previewed first; a rollback preview names objects it would take over from other releases. Uninstall previews what it deletes, keeps and runs before accepting a reviewed confirmation token.',
+    params: [
+      { arg: 'action', required: true, desc: 'install, upgrade, rollback, or uninstall' },
+      { arg: 'namespace', required: true, desc: 'release storage namespace' },
+      { arg: 'name', required: true, desc: 'release name' },
+      { arg: 'chart', desc: 'chart name for install' },
+      { arg: 'repository', desc: 'configured install source; upgrade optionally asserts the confirmed saved source and requires it to be configured' },
+      { arg: 'version', desc: 'exact version for install (choices from get_helm_chart); upgrade choices come from get_helm_release include=versions; omit on upgrade only when latest and deployed charts agree' },
+      { arg: 'values', desc: 'upgrade overrides merge over the deployed revision\'s overrides; no literal credentials' },
+      { arg: 'replace_values', desc: 'upgrade only: explicitly replace all stored overrides with values' },
+      { arg: 'dry_run', desc: 'upgrade or rollback: advisory preview (upgrade: same merge rules; rollback: stored diff plus live takeover and retention checks); false executes' },
+      { arg: 'expected_revision', desc: 'upgrade or rollback: refuse a changed latest revision; not an atomic lock' },
+      { arg: 'revision', desc: 'positive rollback revision from release history' },
+      { arg: 'confirm', desc: 'reviewed preview token to execute uninstall; expires after 5 minutes' },
+    ],
+  },
+  {
     name: 'manage_workload',
     write: true,
-    desc: 'Operate on a workload: restart triggers a rolling restart, scale changes the replica count, rollback reverts to a previous revision. Rollout rollback re-runs every canary step — pair it with manage_rollout promote-full, or abort instead.',
+    desc: 'Operate on a workload: restart triggers a rolling restart, scale changes the replica count, rollback reverts to a previous revision. Roll back a native Helm release\'s workload as the Helm release, not the workload alone. Rollout rollback re-runs every canary step — pair it with manage_rollout promote-full, or abort instead.',
     params: [
       { arg: 'action', required: true, desc: 'restart, scale, or rollback' },
       { arg: 'kind', required: true, desc: 'deployment, statefulset, daemonset, or rollout' },

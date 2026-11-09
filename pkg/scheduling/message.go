@@ -120,7 +120,9 @@ func classifyClause(clause string) (Reason, bool) {
 	case strings.Contains(clause, "Insufficient"):
 		reason.Class = InsufficientResource
 		if match := insufficientPattern.FindStringSubmatch(clause); match != nil {
-			reason.Resource = match[1]
+			// A sentence break inside the clause ("Insufficient memory. no new claims
+			// to deallocate") would otherwise end the resource name with a dot.
+			reason.Resource = strings.TrimRight(match[1], ".")
 		}
 	case strings.Contains(lower, "too many pods"):
 		reason.Class = InsufficientResource

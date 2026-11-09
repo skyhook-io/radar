@@ -52,6 +52,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -104,6 +105,7 @@ type Server struct {
 	mcpReadOnlyHandler      http.Handler
 	mcpInvestigationHandler http.Handler
 	mcpExecTools            bool
+	mcpHTTPTools            bool
 	diagConfig              *DiagConfig
 	effectiveConfig         *config.Config // running config for GET /api/config
 	stopUsageData           context.CancelFunc
@@ -122,9 +124,10 @@ type Server struct {
 	// newExecutor builds the exec client for pod file transfers. Nil in
 	// production, where the package default is used; tests substitute a fake so
 	// the transfer can be driven end to end without a cluster.
-	newExecutor     func(*rest.Config, *url.URL) (remotecommand.Executor, error)
-	cloudConnectCfg CloudConnectConfig
-	cloudInstall    *cloudInstallManager
+	newExecutor         func(*rest.Config, *url.URL) (remotecommand.Executor, error)
+	cloudConnectCfg     CloudConnectConfig
+	cloudInstall        *cloudInstallManager
+	applicationEvidence *applicationEvidenceAPI
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
@@ -223,6 +226,7 @@ type Config struct {
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	MCPExecTools            bool                        // effective exec tool registration on the public MCP handler
+	MCPHTTPTools            bool                        // effective HTTP tool registration on the public MCP handler
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
 	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
@@ -267,6 +271,7 @@ func New(cfg Config) *Server {
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
 		mcpExecTools:            cfg.MCPExecTools,
+		mcpHTTPTools:            cfg.MCPHTTPTools,
 		diagConfig:              cfg.DiagConfig,
 		effectiveConfig:         cfg.EffectiveConfig,
 		promURLFlag:             cfg.PrometheusURLFlag,
@@ -316,6 +321,7 @@ func New(cfg Config) *Server {
 	}
 	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
+	s.applicationEvidence = newApplicationEvidenceAPI()
 	s.cloudInstall.sharedListener = s.sharedListener
 
 	// Turn on AI investigations if an agent CLI is installed. Later installs are
@@ -488,7 +494,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"http://localhost:*", "http://127.0.0.1:*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Content-Type", requestOriginHeader},
 		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
 		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq"},
@@ -700,6 +706,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
 			r.Get("/trace/{kind}/{namespace}/{name}", s.handleTrace)
+			r.Get("/application-evidence/candidates", s.handleApplicationEvidenceCandidates)
+			r.Post("/application-evidence/collect", s.handleCollectApplicationEvidence)
 			// Whether the active "test from inside the cluster" (a short-lived,
 			// restricted, self-destructing probe Job as the caller's RBAC) can
 			// run - gates the UI button and names the cluster + namespace the
@@ -809,10 +817,15 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/jobsets/{namespace}/{name}/logs", s.handleJobSetLogs)
 			r.Get("/kueue/admission/{kind}/{namespace}/{name}", s.handleKueueAdmission)
 			r.Get("/kueue/provisioning/{namespace}/{name}", s.handleKueueProvisioning)
+			r.Get("/kueue/position/{namespace}/{name}", s.handleKueuePosition)
+			r.Get("/kueue/clusterqueues/{name}/workloads", s.handleKueueClusterQueueWorkloads)
+			r.Get("/kueue/localqueues/{namespace}/{name}/workloads", s.handleKueueLocalQueueWorkloads)
 
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
 			helmHandlers.ConfigWriteAllowed = s.requireHelmSourceConfigWrite
+			helmHandlers.ObjectScope = s.helmObjectScope
+			helmHandlers.ResolveStorageNamespaces = s.resolveHelmStorageScope
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -1462,29 +1475,11 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, info)
 }
 
-func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
-	var caps *k8s.Capabilities
-	var err error
-
-	// When auth is enabled, check capabilities for the specific user
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		caps, err = k8s.CheckCapabilitiesForUser(r.Context(), user.Username, user.Groups)
-	} else {
-		caps, err = k8s.CheckCapabilities(r.Context())
-	}
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	responseCaps := *caps
-	caps = &responseCaps
-
-	caps.MCPEnabled = s.mcpEnabled()
-	caps.MCPReadOnly = s.mcpReadOnly()
-	caps.MCPExecTools = s.mcpHandler != nil && s.mcpExecTools
-	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
-	caps.CloudConnect = s.cloudConnectCapability()
-	caps.Features = k8s.FeatureCapabilities{
+// advertisedFeatures lists what this binary serves. Every flag is true here;
+// an older binary simply lacks it.
+func advertisedFeatures() k8s.FeatureCapabilities {
+	return k8s.FeatureCapabilities{
+		ApplicationEvidence:      true,
 		ResourceReadCoverage:     true,
 		SearchCoverage:           true,
 		YAMLReview:               true,
@@ -1505,8 +1500,41 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		ArgoEnableSelfHealOff:    true,
 		AgentSigninCheck:         true,
 		HelmSourceIdentity:       true,
+		HelmInventory:            true,
 		ClusterScopedPlaceholder: true,
+		KueuePendingPosition:     true,
+		RayClusterPods:           true,
+		PodSidecarMarks:          true,
+		KueueQueueWorkloads:      true,
 	}
+}
+
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	var caps *k8s.Capabilities
+	var err error
+
+	// When auth is enabled, check capabilities for the specific user
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		caps, err = k8s.CheckCapabilitiesForUser(r.Context(), user.Username, user.Groups)
+	} else {
+		caps, err = k8s.CheckCapabilities(r.Context())
+	}
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	responseCaps := *caps
+	caps = &responseCaps
+
+	caps.MCPEnabled = s.mcpEnabled()
+	caps.MCPReadOnly = s.mcpReadOnly()
+	caps.MCPExecTools = s.mcpHandler != nil && s.mcpExecTools
+	caps.MCPHTTPTools = s.mcpHandler != nil && s.mcpHTTPTools
+	caps.MCPHelmTools = s.mcpHandler != nil && !k8s.ForceDisableHelmWrite
+	caps.MCPApplicationEvidence = s.mcpApplicationEvidenceAvailable(r)
+	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
+	caps.CloudConnect = s.cloudConnectCapability()
+	caps.Features = advertisedFeatures()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
@@ -1666,6 +1694,21 @@ func (s *Server) parseNamespacesForUserWithStatus(r *http.Request) ([]string, bo
 //   - (namespaces, true) list each and merge
 //   - (nil, false)       no namespace access — caller returns an empty result
 func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
+	namespaces, ok, _ := s.resolveHelmNamespacesChecked(r)
+	return namespaces, ok
+}
+
+// resolveHelmNamespacesChecked is resolveHelmNamespaces that also says whether
+// every Secrets check behind the answer was answered.
+func (s *Server) resolveHelmNamespacesChecked(r *http.Request) ([]string, bool, bool) {
+	namespaces, ok, checked, _ := s.resolveHelmStorageScope(r)
+	return namespaces, ok, checked
+}
+
+// resolveHelmStorageScope is resolveHelmNamespacesChecked that also returns
+// the namespaces it left out because the caller can't list Secrets there, so
+// a read over the result can say what it didn't check.
+func (s *Server) resolveHelmStorageScope(r *http.Request) ([]string, bool, bool, []string) {
 	// An explicit ?namespace=/?namespaces= request is honored as-is. Helm reads
 	// run as the caller (user impersonation, or the SA when auth is off), so the
 	// apiserver authorizes the secrets read directly — routing this through
@@ -1680,15 +1723,15 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 		// instead of reading releases the cache doesn't cover.
 		if k8s.ForceNamespaceScope {
 			if target := k8s.GetNamespaceScopeTarget(); target != "" && slices.Contains(explicit, target) {
-				return []string{target}, true
+				return []string{target}, true, true, nil
 			}
-			return []string{}, true
+			return []string{}, true, true, nil
 		}
-		return explicit, true
+		return explicit, true, true, nil
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	return s.resolveHelmNamespacesForScope(r, namespaces)
+	return upgrade.ResolveHelmNamespacesChecked(r.Context(), httpUpgradeAuthorizer{s: s, r: r}, namespaces)
 }
 
 // resolveHelmNamespacesForScope applies Helm's Secret-specific RBAC and
@@ -2998,9 +3041,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.writeJSON(w, topology.ResourceWithRelationships{
-			Resource:      resource,
-			Relationships: relationships,
-			HPADiagnosis:  hpaDiagnosisFor(resource),
+			RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
+			Resource:        resource,
+			Relationships:   relationships,
+			HPADiagnosis:    hpaDiagnosisFor(resource),
 		})
 		return
 	}
@@ -3231,9 +3275,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// Pass the already-fetched resource so ManagedBy synthesis uses the
 	// authoritative object instead of a group-blind kind/name lookup.
 	response := topology.ResourceWithRelationships{
-		Resource:      resource,
-		Relationships: s.relationshipsFor(r, kind, namespace, name, resource),
-		HPADiagnosis:  hpaDiagnosisFor(resource),
+		RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
+		Resource:        resource,
+		Relationships:   s.relationshipsFor(r, kind, namespace, name, resource),
+		HPADiagnosis:    hpaDiagnosisFor(resource),
 	}
 
 	// Enrich TLS secrets with parsed certificate info
@@ -4899,11 +4944,18 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := k8s.PerformContextSwitch(name); err != nil {
+	if err := k8s.PerformCheckedContextSwitch(r.Context(), name); err != nil {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
-			s.writeError(w, http.StatusBadRequest, err.Error())
+			countRefusedSwitch(err)
+			s.writeSwitchPreflightError(w, "", err)
+			return
+		}
+		// Another switch or retry started while this one checked its target;
+		// nothing was torn down on this request's behalf.
+		if errors.Is(err, k8s.ErrReconnectSuperseded) {
+			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
@@ -4945,6 +4997,7 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
+		"disconnectedAt":  status.DisconnectedAt,
 		// Lets the browser stand down its auto-retry for the whole auth-loss
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
@@ -5146,6 +5199,9 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// CAPI connects keep the unchecked switch: the merged source is shared by
+	// reconnects to the same workload cluster, and probing outside the switch
+	// lock would let one request discard a source another just refreshed.
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
 		discarded := k8s.DiscardFailedMergedContext(mergedPath, created)
 		if discarded {
@@ -5205,6 +5261,26 @@ func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		// Can't change HTTP status at this point, but log for debugging
 		log.Printf("Failed to encode JSON response: %v", err)
+	}
+}
+
+// writeSwitchPreflightError answers a context switch refused before any
+// teardown. When the refusal was a failed reachability check it adds
+// errorType, the connection screen's error vocabulary, so the UI can explain
+// it in plain words while the person stays on their current cluster.
+func (s *Server) writeSwitchPreflightError(w http.ResponseWriter, prefix string, err error) {
+	var probeErr *k8s.ContextProbeError
+	if !errors.As(err, &probeErr) {
+		s.writeError(w, http.StatusBadRequest, prefix+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	if encodeErr := json.NewEncoder(w).Encode(map[string]string{
+		"error":     prefix + probeErr.Error(),
+		"errorType": probeErr.Classification(),
+	}); encodeErr != nil {
+		log.Printf("Failed to encode error response: %v", encodeErr)
 	}
 }
 
@@ -5356,6 +5432,7 @@ func (s *Server) requireConnected(w http.ResponseWriter) bool {
 // the frontend keeps the surface in a loading state ("still loading") instead
 // of declaring a healthy, still-syncing cluster unavailable.
 func (s *Server) writeNotConnected(w http.ResponseWriter) {
+	markClusterNotConnected(w)
 	if k8s.GetConnectionStatus().State == k8s.StateConnecting {
 		s.writeErrorCode(w, http.StatusServiceUnavailable, "cluster_connecting", "Cluster is still connecting, please retry shortly")
 		return

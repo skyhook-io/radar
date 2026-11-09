@@ -285,7 +285,7 @@ const NEGATIVE_POLARITY_PATTERNS: RegExp[] = [
   /^Frequent/,
 ]
 
-function isInvertedPolarityCondition(type: string | undefined): boolean {
+export function isInvertedPolarityCondition(type: string | undefined): boolean {
   if (!type) return false
   if (NEGATIVE_POLARITY_TYPES.has(type)) return true
   return NEGATIVE_POLARITY_PATTERNS.some((re) => re.test(type))
@@ -1016,7 +1016,7 @@ function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | 
 }
 
 // ownerNote says why no owner is named, when there is an owner reference.
-function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
+export function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
   const ref = coverage?.ownerRef
   const named = ref?.kind && ref.name ? `${ref.kind} ${ref.name}` : 'the owner it names'
   switch (coverage?.primaryOwnerState) {

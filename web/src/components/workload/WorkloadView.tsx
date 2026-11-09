@@ -1,10 +1,11 @@
+import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { workloadPodAwaitsScheduling } from '../capacity/podDemandGate'
-import { clsx } from 'clsx'
-import { Terminal, Stethoscope } from 'lucide-react'
+import { Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
   EditableYamlView,
@@ -55,7 +56,6 @@ import {
   fetchWorkloadHistoryPage,
   useChanges,
   useResourceWithRelationships,
-  usePodLogs,
   useTopology,
   useUpdateResource,
   usePreviewResources,
@@ -106,6 +106,9 @@ import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, Reachab
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
+import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
+import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
+import { isKubeRayCluster } from '../logs/rayClusterPods'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -131,8 +134,20 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
+import { recordUsageEvent } from '../../api/usage-data'
+import { issueResourceOpener } from './issueResourceOpener'
 
 type TabType = WorkloadTabType
+
+// The usage-report view a tab counts under. Timeline holds the resource's
+// events (it replaced the Events tab), so it counts as panel:events.
+const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+  logs: 'panel:logs',
+  yaml: 'panel:yaml',
+  metrics: 'panel:metrics',
+  timeline: 'panel:events',
+}
+
 const BATCH_EXECUTION_KINDS = new Set([
   'Job',
   'CronJob',
@@ -531,8 +546,14 @@ export function WorkloadView({
           ? 'reachability' // the network tab was renamed Reachability
           : (rawTab as TabType) || 'overview'
 
+
+  // A panel counts when someone switches to it. Counting renders instead would
+  // recount the same open tab: the drawer mounts hidden WorkloadView layers
+  // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {
+      const panel = PANEL_USAGE_VIEWS[tab]
+      if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
         params.delete('tab')
@@ -541,7 +562,7 @@ export function WorkloadView({
       }
       setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory, state: location.state })
     },
-    [pushTabHistory, searchParams, setSearchParams, location.state],
+    [migratedTab, pushTabHistory, searchParams, setSearchParams, location.state],
   )
 
   const selectedRunKey = searchParams.get('run') ?? ''
@@ -553,6 +574,13 @@ export function WorkloadView({
       setSearchParams(params, { replace: true })
     },
     [searchParams, setSearchParams],
+  )
+  // A pushed entry, so Back returns to the graph.
+  const handleSelectTopologyMember = useCallback(
+    (memberKey: string) => {
+      setSearchParams(memberOverviewParams(searchParams, memberKey), { state: location.state })
+    },
+    [searchParams, setSearchParams, location.state],
   )
 
   // Fetch resource with relationships
@@ -833,6 +861,7 @@ export function WorkloadView({
   }, [schedulingEvidence, handleTabChange])
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
+  const openIssueResource = issueResourceOpener(rest.onNavigateToResource)
   const {
     onCompareTo,
     onCompareAcrossClusters,
@@ -1185,6 +1214,8 @@ export function WorkloadView({
         olderHistoryError={historyFallback ? null : olderHistoryError}
         historyScoped={!historyFallback}
         historyIncomplete={!historyFallback && Boolean(historyQuery.data?.incomplete)}
+        historyCoverage={historyFallback ? undefined : historyQuery.data?.historyCoverage}
+        historyGaps={historyFallback ? undefined : historyQuery.data?.gaps}
         historyError={(historyFallback ? namespaceChanges.error : historyQuery.error) as Error | null}
         onRetryHistory={() => void (historyFallback ? namespaceChanges.refetch() : historyQuery.refetch())}
         relatedTimelineEvents={relatedTimelineEvents}
@@ -1212,6 +1243,8 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            resourceLoading={resourceLoading}
+            resourceError={resourceError}
             group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
@@ -1219,6 +1252,7 @@ export function WorkloadView({
           />
         )}
         {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
+        onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
@@ -1305,7 +1339,12 @@ export function WorkloadView({
           return (
           <>
             {diagnoseInline}
+            <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}
+            <RelatedFindingsSection
+              data={resourceResponse?.relatedFindings}
+              onResourceClick={openIssueResource}
+            />
             <AuditOverviewSection
               findings={auditFindings ?? []}
               onViewAll={() => navigateRouter('/checks')}
@@ -1321,17 +1360,7 @@ export function WorkloadView({
             renderDetailSection={schedulingEvidence?.state === 'reported' ? ({ issue }) => issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason ? <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} /> : null : undefined}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
-            onResourceClick={
-              rest.onNavigateToResource
-                ? (ref) =>
-                    rest.onNavigateToResource?.({
-                      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                      namespace: ref.namespace ?? '',
-                      name: ref.name,
-                      group: ref.group ?? '',
-                    })
-                : undefined
-            }
+            onResourceClick={openIssueResource}
           />
           </div>
         )}
@@ -1370,6 +1399,16 @@ export function WorkloadView({
       {comparePicker}
     </>
   )
+}
+
+/** The search params that open `memberKey` in the Overview: the member and
+ *  the tab change in one write, since two writes from the same render would
+ *  each start from the old params and the second would drop the first. */
+export function memberOverviewParams(current: URLSearchParams, memberKey: string): URLSearchParams {
+  const params = new URLSearchParams(current)
+  params.set('run', memberKey)
+  params.delete('tab')
+  return params
 }
 
 export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
@@ -1491,6 +1530,8 @@ function LogsTabContent({
   selectedRunKey,
   onSelectRun,
   viewNamespaces,
+  resourceLoading,
+  resourceError,
 }: {
   kind: string
   apiKind: string
@@ -1506,6 +1547,8 @@ function LogsTabContent({
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
   viewNamespaces: string[]
+  resourceLoading: boolean
+  resourceError: Error | null
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1524,6 +1567,22 @@ function LogsTabContent({
 
   const integrationLogs = resourceLogs({ kind, group, namespace, name }, resource)
   if (integrationLogs) return integrationLogs
+
+  if (isKubeRayCluster(kind, group, resource?.apiVersion)) {
+    return (
+      <RayClusterLogsTab
+        namespace={namespace}
+        name={name}
+        uid={resource?.metadata?.uid}
+        suspendRequested={resource?.spec?.suspend === true}
+        rootLoading={resourceLoading}
+        rootError={resourceError}
+        historyPods={pods}
+        selectedPod={selectedPod}
+        onSelectPod={onSelectPod}
+      />
+    )
+  }
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
@@ -1616,85 +1675,6 @@ function PodLogsTab({
         initialContainer={initialContainer || undefined}
         autoStream={autoStream}
       />
-    </div>
-  )
-}
-
-function MultiPodLogsTab({
-  pods,
-  namespace,
-  selectedPod,
-  onSelectPod,
-  initialContainer,
-}: {
-  pods: ResourceRef[]
-  namespace: string
-  selectedPod: string | null
-  onSelectPod: (name: string | null) => void
-  initialContainer?: string | null
-}) {
-  useEffect(() => {
-    if (pods.length > 0 && !selectedPod) {
-      onSelectPod(pods[0].name)
-    }
-  }, [pods, selectedPod, onSelectPod])
-
-  const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
-
-  // Fetch container list for the selected pod
-  const { data: logsData } = usePodLogs(podNamespace, selectedPod || '', {
-    tailLines: 1,
-  })
-  const containers = logsData?.containers || []
-
-  // A terminated pod (common for Job/CronJob children) has nothing to follow —
-  // only stream live ones. Wait for the pod to load before deciding so we don't
-  // briefly auto-stream a completed pod while its phase is still unknown.
-  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, selectedPod || '')
-  const phase = selectedPodResource?.status?.phase
-  const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
-
-  if (pods.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-        <Terminal className="w-12 h-12 mb-4 opacity-50" />
-        <p>No pods available</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="h-full flex flex-col">
-      {pods.length > 1 && (
-        <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
-          {pods.map((pod) => (
-            <button
-              key={pod.name}
-              onClick={() => onSelectPod(pod.name)}
-              className={clsx(
-                'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
-                selectedPod === pod.name
-                  ? 'bg-blue-500 text-theme-text-primary'
-                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover',
-              )}
-            >
-              {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
-            </button>
-          ))}
-        </div>
-      )}
-      {selectedPod && containers.length > 0 && (
-        <div className="flex-1 min-h-0">
-          <LogsViewer
-            key={selectedPod}
-            namespace={podNamespace}
-            podName={selectedPod}
-            containers={containers}
-            initialContainer={initialContainer || undefined}
-            autoStream={autoStream}
-          />
-        </div>
-      )}
     </div>
   )
 }

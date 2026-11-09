@@ -2856,3 +2856,170 @@ func TestDegradedRollupQualifiesIncompleteTree(t *testing.T) {
 		}
 	}
 }
+
+// missingNamespaceApp builds a failed Argo Application whose operation failed
+// because a namespace is missing, with the CreateNamespace sync option set or
+// not and deploying to this cluster or a remote one.
+func missingNamespaceApp(createNamespaceSet, remote bool) *unstructured.Unstructured {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":   "Failed",
+			"message": `one or more objects failed to apply, reason: namespaces "observability" not found (retried 5 times).`,
+		},
+	})
+	if createNamespaceSet {
+		_ = unstructured.SetNestedStringSlice(root.Object, []string{"CreateNamespace=true"}, "spec", "syncPolicy", "syncOptions")
+	}
+	if remote {
+		_ = unstructured.SetNestedField(root.Object, "https://remote.example.com", "spec", "destination", "server")
+	}
+	return root
+}
+
+func operationIssue(t *testing.T, issues []Issue) Issue {
+	t.Helper()
+	for _, iss := range issues {
+		if iss.Scope == ScopeOperation {
+			return iss
+		}
+	}
+	t.Fatalf("no operation-scope issue in %+v", issues)
+	return Issue{}
+}
+
+const addOptionAdvice = "add the CreateNamespace=true sync option"
+const optionInSyncOptionsAdvice = "CreateNamespace=true in the Application's syncOptions"
+
+// TestBuildIssuesCreateNamespaceAlreadySet pins the operation-failed branch:
+// when the Application already sets CreateNamespace=true, Radar must not
+// re-suggest it, in either the local Cause or the remote Action.
+func TestBuildIssuesCreateNamespaceAlreadySet(t *testing.T) {
+	t.Run("unset local keeps the add-the-option advice (regression guard)", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(false, false), nil, "argocd", nil))
+		if !strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("unset Cause should still advise enabling the option: %q", got.Cause)
+		}
+		if got.Remediation == nil || got.Remediation.Kind != RemediationCreateNamespace {
+			t.Errorf("unset local should keep the one-click remediation, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("set local drops the suggestion but keeps the one-click fix", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(true, false), nil, "argocd", nil))
+		if strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("set Cause must not re-suggest the option: %q", got.Cause)
+		}
+		if !strings.Contains(got.Cause, "already sets CreateNamespace=true") {
+			t.Errorf("set Cause should say the option is already set: %q", got.Cause)
+		}
+		if got.Remediation == nil || got.Remediation.Kind != RemediationCreateNamespace {
+			t.Errorf("set local should keep the one-click remediation, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("set remote drops the suggestion and strips the local fix", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(true, true), nil, "argocd", nil))
+		if strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("set remote Action must not re-suggest the option: %q", got.Action)
+		}
+		if !strings.Contains(got.Action, "already sets CreateNamespace=true") {
+			t.Errorf("set remote Action should say the option is already set: %q", got.Action)
+		}
+		if got.Remediation != nil {
+			t.Errorf("remote remediation should be stripped, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("unset remote keeps the add-the-option action", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(false, true), nil, "argocd", nil))
+		if !strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("unset remote Action should offer the option: %q", got.Action)
+		}
+	})
+
+	// A pruning hazard clears the one-click fix; that must hold even when
+	// CreateNamespace=true is set, so a retrying sync can't prune everything.
+	t.Run("sync hazard still wins over the one-click fix", func(t *testing.T) {
+		root := missingNamespaceApp(true, false)
+		_ = unstructured.SetNestedField(root.Object, "OutOfSync", "status", "sync", "status")
+		_ = unstructured.SetNestedSlice(root.Object, []any{
+			map[string]any{"kind": "ConfigMap", "name": "a", "requiresPruning": true},
+		}, "status", "resources")
+		got := operationIssue(t, buildIssues(root, nil, "argocd", nil))
+		if got.Hazard == "" {
+			t.Fatalf("expected a sync hazard to be set, got %+v", got)
+		}
+		if got.Remediation != nil {
+			t.Errorf("hazard should keep the one-click fix cleared, got %+v", got.Remediation)
+		}
+	})
+}
+
+// TestArgoApplicationConditionsCreateNamespaceAlreadySet pins the SyncError
+// condition branch (the third call site).
+func TestArgoApplicationConditionsCreateNamespaceAlreadySet(t *testing.T) {
+	appWithSyncError := func(createNamespaceSet, remote bool) *unstructured.Unstructured {
+		root := argoApp(map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "SyncError", "message": `namespaces "observability" not found`},
+			},
+		})
+		if createNamespaceSet {
+			_ = unstructured.SetNestedStringSlice(root.Object, []string{"CreateNamespace=true"}, "spec", "syncPolicy", "syncOptions")
+		}
+		if remote {
+			_ = unstructured.SetNestedField(root.Object, "https://remote.example.com", "spec", "destination", "server")
+		}
+		return root
+	}
+	syncErrorIssue := func(t *testing.T, issues []Issue) Issue {
+		t.Helper()
+		for _, iss := range issues {
+			if iss.Reason == "SyncError" {
+				return iss
+			}
+		}
+		t.Fatalf("no SyncError issue in %+v", issues)
+		return Issue{}
+	}
+
+	t.Run("set local drops the suggestion, keeps the fix", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(true, false), ""))
+		if strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("set Cause must not re-suggest the option: %q", got.Cause)
+		}
+		if got.Remediation == nil || got.Remediation.Kind != RemediationCreateNamespace {
+			t.Errorf("set local should keep the one-click remediation, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("set remote drops the suggestion and the fix", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(true, true), ""))
+		if strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("set remote Action must not re-suggest the option: %q", got.Action)
+		}
+		if !strings.Contains(got.Action, "already sets CreateNamespace=true") {
+			t.Errorf("set remote Action should give real guidance that the option is set, not empty: %q", got.Action)
+		}
+		if strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("set remote Cause must not re-suggest the option: %q", got.Cause)
+		}
+		if got.Remediation != nil {
+			t.Errorf("remote remediation should be stripped, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("unset local keeps the suggestion (regression guard)", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(false, false), ""))
+		if !strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("unset Cause should still advise enabling the option: %q", got.Cause)
+		}
+	})
+
+	t.Run("unset remote keeps the add-the-option action", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(false, true), ""))
+		if !strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("unset remote Action should offer the option: %q", got.Action)
+		}
+	})
+}

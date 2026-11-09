@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -81,7 +82,10 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, status)
 			return
 		}
-		errorlog.Record("prometheus", "error", "connection failed: %v", err)
+		// Turned-off port-forwarding is the operator's setting, not a failure.
+		if !errors.Is(err, portforward.ErrAutoDisabled) {
+			errorlog.Record("prometheus", "error", "connection failed: %v", err)
+		}
 		writeError(w, http.StatusBadGateway, "Prometheus connection failed: "+err.Error())
 		return
 	}

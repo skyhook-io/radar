@@ -267,6 +267,18 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 	}
 }
 
+// workloadPodsHaveContainer accepts every container a log read can target,
+// including init containers, which the default selection returns while one is
+// failing during initialization.
+func workloadPodsHaveContainer(pods []*corev1.Pod, name string) bool {
+	for _, pod := range pods {
+		if len(k8s.GetContainersForPod(pod, name, true)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input getWorkloadLogsInput) (*mcp.CallToolResult, any, error) {
 	kind := normalizeWorkloadLogsKind(input.Kind)
 	if kind == "" {
@@ -322,19 +334,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 
 	// Validate container name if specified
 	if input.Container != "" {
-		found := false
-		for _, pod := range pods {
-			for _, c := range pod.Spec.Containers {
-				if c.Name == input.Container {
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-		if !found {
+		if !workloadPodsHaveContainer(pods, input.Container) {
 			return nil, nil, fmt.Errorf("container %q not found in any pod of %s %s/%s", input.Container, kind, input.Namespace, input.Name)
 		}
 	}

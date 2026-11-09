@@ -84,6 +84,123 @@ describe('Kueue admission investigation', () => {
     expect(html.includes('Admission status; execution is shown separately.')).toBe(phase === 'admitted' || phase === 'quota_reserved')
   })
 
+  it('shows the server-classified admission state instead of the generic qualifier', () => {
+    const html = render(response({ decision: 'unsatisfied', kueue: { phase: 'pending', admission: { state: 'local_queue_missing', attention: 'action_needed', blocker: { code: 'local_queue_missing', source: 'condition', name: 'QuotaReserved', reason: 'Inadmissible', message: "LocalQueue gpu doesn't exist" } } } }))
+    expect(html).toContain('Pending admission')
+    expect(html).toContain('LocalQueue missing')
+  })
+
+  it('names an unrecognized reason verbatim and renders unknown codes as sent', () => {
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'unrecognized', attention: 'unknown', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'SomethingNew' } } } })))
+      .toContain('Kueue: <code>SomethingNew</code>')
+    // A coarse reason the primary condition already shows is not repeated.
+    const coarse = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'failed to assign flavors to pod set main: boom' }, kueue: { phase: 'pending', admission: { state: 'unrecognized', attention: 'unknown', blocker: { code: 'unrecognized', source: 'condition', name: 'QuotaReserved', reason: 'Pending' } } } }))
+    expect(coarse).not.toContain('Unclassified reason')
+    expect(coarse).not.toContain('Kueue: <code>Pending</code>')
+    expect(coarse).toContain('failed to assign flavors to pod set main: boom')
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'a_future_code', attention: 'a_future_class' } } }))).toContain('a_future_code')
+  })
+
+  it('does not repeat the phase, and leads with the state for a withdrawn Workload', () => {
+    const admitted = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none' } } }))
+    expect(admitted.match(/>Admitted</g)).toHaveLength(1)
+    const deactivated = render(response({ decision: 'held', kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
+    expect(deactivated).toContain('>Deactivated<')
+    expect(deactivated).not.toContain('Pending admission')
+    expect(deactivated).not.toContain('Workload inactive')
+    expect(deactivated).not.toContain('Admission held')
+  })
+
+  it('takes staleness from the server classification, once', () => {
+    const stale = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', admission: { state: 'admitted', attention: 'none', stale: true } } }))
+    expect(stale.match(/>Admitted</g)).toHaveLength(1)
+    expect(stale).toContain('Reported before the Workload')
+    // A stale primary condition does not contradict a current classification.
+    const current = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', observedGeneration: 1 }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
+    expect(current).not.toContain('Stale evidence')
+    expect(current).not.toContain('Reported before')
+  })
+
+  it('shows the condition behind the state only when nothing else on the card says it', () => {
+    const backoff = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'couldn\'t assign flavors' }, kueue: { phase: 'pending', admission: { state: 'requeue_backoff', attention: 'waiting', blocker: { code: 'requeue_backoff', source: 'condition', name: 'Requeued', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
+    expect(backoff).toContain('Requeued · PodsReadyTimeout: Exceeded the PodsReady timeout')
+    const sameMessage = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'The workload is deactivated due to a rejected check' }, kueue: { phase: 'pending', active: false, admission: { state: 'deactivated_by_kueue', attention: 'action_needed', inactive: { code: 'deactivated_by_kueue', source: 'condition', name: 'Evicted', reason: 'DeactivatedDueToAdmissionCheck', message: 'The workload is deactivated due to a rejected check' } } } }))
+    expect(sameMessage.match(/deactivated due to a rejected check/g)).toHaveLength(1)
+    const check = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'QuotaReserved' }, kueue: { phase: 'quota_reserved', admission: { state: 'admission_check_rejected', attention: 'action_needed', blocker: { code: 'admission_check_rejected', source: 'admission_check', name: 'capacity', reason: 'Rejected', message: 'Provisioning request cannot satisfy this workload' } } } }))
+    expect(check).toContain('Admission check rejected')
+    expect(check).not.toContain('capacity · Rejected')
+  })
+
+  it('leads with the deciding evidence and its transition time while retaining the earlier condition in Technical details', () => {
+    const since = '2026-09-26T10:00:00Z'
+    const data = response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'Earlier quota shortage', observedGeneration: 1 }, kueue: { phase: 'pending', admission: { state: 'requeue_backoff', attention: 'waiting', blocker: { code: 'requeue_backoff', source: 'condition', name: 'Requeued', reason: 'PodsReadyTimeout', message: 'Waiting for the retry delay', since } } } })
+    const html = render(data)
+    expect(html.indexOf('Waiting for the retry delay')).toBeLessThan(html.indexOf('Technical details<'))
+    expect(html.indexOf('Earlier quota shortage')).toBeGreaterThan(html.indexOf('Technical details<'))
+    expect(html).toContain(`Requeued since <time dateTime="${since}"`)
+    expect(html).toContain('condition in Technical details was reported before')
+    data.workloads[0].scheduling!.observations![0].primaryCondition!.message = 'Waiting for the retry delay'
+    const repeated = render(data)
+    expect(repeated).toContain(`Requeued since <time dateTime="${since}"`)
+    expect(repeated.match(/Waiting for the retry delay/g)).toHaveLength(1)
+    delete data.workloads[0].scheduling!.observations![0].kueue!.admission!.blocker!.since
+    expect(render(data)).not.toContain('Requeued since')
+  })
+
+  it('does not repeat an eviction the supporting evidence already lists', () => {
+    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'QuotaReserved', message: 'Quota reserved' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'Preempted', message: 'Preempted to accommodate a workload' }], kueue: { phase: 'quota_reserved', admission: { state: 'preempted', attention: 'waiting', disruption: { code: 'preempted', source: 'condition', name: 'Evicted', reason: 'Preempted', message: 'Preempted to accommodate a workload' } } } }))
+    expect(html).not.toContain('Evicted · Preempted')
+  })
+
+  it('lets the classified state carry the tone instead of a warning phase badge', () => {
+    const waiting = render(response({ decision: 'unsatisfied', kueue: { phase: 'pending', admission: { state: 'insufficient_quota', attention: 'waiting' } } }))
+    expect(waiting).not.toContain('bg-amber')
+    expect(render(response({ decision: 'unsatisfied', kueue: { phase: 'pending' } }))).toMatch(/Pending admission/)
+  })
+
+  it('shows a fresh eviction next to the pending phase without repeating it', () => {
+    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'Preempted to accommodate a workload' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'Preempted', message: 'Preempted to accommodate a workload' }], kueue: { phase: 'pending', admission: { state: 'preempted', attention: 'waiting', blocker: { code: 'no_decision' }, disruption: { code: 'preempted', source: 'condition', name: 'Evicted', reason: 'Preempted', message: 'Preempted to accommodate a workload' } } } }))
+    expect(html).toContain('Pending admission')
+    expect(html).toContain('>Preempted<')
+    expect(html.match(/Preempted to accommodate a workload/g)?.length).toBeLessThanOrEqual(2)
+  })
+
+  it('marks a stale withdrawn state without its hint', () => {
+    const html = render(response({ kueue: { phase: 'pending', admission: { state: 'deactivation_pending', attention: 'action_needed', stale: true, inactive: { code: 'deactivation_pending', source: 'condition', name: 'DeactivationTarget', reason: 'AdmissionCheck', stale: true } } } }))
+    expect(html).not.toContain('Pending admission')
+    expect(html).toContain('Deactivating')
+    expect(html).toContain('Reported before the Workload')
+    expect(html).not.toContain('Kueue is deactivating the Workload')
+  })
+
+  it('keeps the admitted phase for a Workload deactivated while still admitted', () => {
+    const html = render(response({ decision: 'satisfied', kueue: { phase: 'admitted', active: false, admission: { state: 'deactivated', attention: 'paused', inactive: { code: 'deactivated', source: 'spec', name: 'active' } } } }))
+    expect(html).toContain('>Admitted<')
+    expect(html).toContain('>Deactivated<')
+  })
+
+  it('flags a deactivation whose cause Kueue did not record', () => {
+    const html = render(response({ decision: 'held', primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending' }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' }], kueue: { phase: 'pending', active: false, admission: { state: 'deactivated', attention: 'unknown', inactive: { code: 'deactivated', source: 'condition', name: 'Evicted', reason: 'PodsReadyTimeout', message: 'Exceeded the PodsReady timeout' } } } }))
+    expect(html).toContain('>Deactivated<')
+    expect(html).toContain('doesn&#x27;t say whether Kueue or a person deactivated it')
+    expect(html).toContain('Exceeded the PodsReady timeout')
+  })
+
+  it('suggests what an actionable state usually asks, and nothing for normal waiting', () => {
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'local_queue_missing', attention: 'action_needed' } } }))).toContain('ask an admin to create the LocalQueue')
+    expect(render(response({ kueue: { phase: 'pending', admission: { state: 'insufficient_quota', attention: 'waiting' } } }))).not.toContain('ask an admin')
+  })
+
+  it('quietly marks a stale primary condition under a current classification', () => {
+    const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', reason: 'Pending', message: 'old', observedGeneration: 1 }, kueue: { phase: 'pending', admission: { state: 'requeue_backoff', attention: 'waiting', blocker: { code: 'requeue_backoff', source: 'condition', name: 'Requeued', reason: 'PodsReadyTimeout' } } } }))
+    expect(html).toContain('The condition in Technical details was reported before')
+    expect(html).not.toContain('Stale evidence')
+  })
+
+  it('keeps the generic qualifier when an older Radar sends no admission state', () => {
+    expect(render(response({ decision: 'unknown', kueue: { phase: 'pending' } }))).toContain('Admission unknown')
+  })
+
   it('keeps disruptions, inactive state, check retries and requeues distinct', () => {
     const html = render(response({ decision: 'held', kueue: { phase: 'pending', active: false, requeueState: { count: 0, requeueAt: '2026-09-22T00:00:00Z' } }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'Preempted' }], gates: [{ kind: 'preemption_gate', name: 'gate', decision: 'unsatisfied', retryCount: 0, requeueAfterSeconds: 0 }] }))
     expect(html).toContain('Workload inactive')

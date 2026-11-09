@@ -15,13 +15,21 @@ var rayServiceV1 = schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind:
 
 const maxApplications = 8
 
-// ForResource returns serving evidence only for exact, supported resource identities.
+// ForResource accepts unstructured ray.io/v1 RayServices and
+// serving.kserve.io/v1beta1 InferenceServices. Other inputs return nil; a
+// supported resource with no status returns an empty provider block, not health.
 func ForResource(obj runtime.Object) *resourcecontext.ServingSummary {
 	u, ok := obj.(*unstructured.Unstructured)
-	if !ok || u.GroupVersionKind() != rayServiceV1 {
+	if !ok {
 		return nil
 	}
-	return &resourcecontext.ServingSummary{RayService: forRayService(u)}
+	switch u.GroupVersionKind() {
+	case rayServiceV1:
+		return &resourcecontext.ServingSummary{RayService: forRayService(u)}
+	case kserveInferenceServiceV1beta1:
+		return &resourcecontext.ServingSummary{KServeInferenceService: forKServeInferenceService(u)}
+	}
+	return nil
 }
 
 // forRayService follows KubeRay v1.7.0; the served API version alone does not

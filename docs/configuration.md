@@ -26,9 +26,10 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
-| `--disable-exec` | `false` | Disable pod terminal, debug shells and pod file browsing |
-| `--disable-helm-write` | `false` | Disable Helm write operations |
+| `--disable-exec` | `false` | Disable pod terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP `exec_pod` |
+| `--disable-helm-write` | `false` | Disable release writes, per-release source updates, values previews and `manage_helm`; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
+| `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
 | `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
@@ -94,6 +95,15 @@ existing deployments are unaffected.
 ignored with `--disable-exec`, `--mcp-read-only`, or disabled MCP. The CLI
 flag overrides the config key, including `--mcp-exec-tools=false`. Helm
 operators use `mcp.execTools: true`. See [exec_pod](mcp.md#exec_pod).
+
+`--mcp-http-tools`, `"mcpHttpTools": true`, or Helm `mcp.httpTools: true` opts in
+to [curl_service](mcp.md#curl_service), independently of `exec_pod`. It defaults
+to false, needs in-cluster Radar with writable MCP, and is not affected by
+`--disable-exec`. Each call needs `get services/proxy` on the target Service, as the caller or, without auth, as Radar's ServiceAccount. The
+CLI flag overrides the config key, including `--mcp-http-tools=false`.
+Catalog-only modes omit the tool unless `--fake-in-cluster` is set.
+`/api/capabilities.mcpHttpTools` and `/api/config.effective.mcpHttpTools` report
+the effective state (older Radar versions omit them: treat absent as off), and startup logs explain a suppressed opt-in.
 
 MCP is enabled with read and write tools by default. `--no-mcp` disables all
 MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
@@ -315,6 +325,7 @@ below describe that installation-scoped behavior.
   "port": 9280,
   "noBrowser": false,
   "noVersionCheck": false,
+  "disableAutoPortForward": false,
   "browser": "",
   "timelineStorage": "memory",
   "timelineDbPath": "~/.radar/timeline.db",
@@ -344,6 +355,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `noVersionCheck` | Disable automatic version checks; Desktop's manual Check for Updates remains available |
+| `disableAutoPortForward` | Never open a port-forward on Radar's own initiative (same as `--disable-auto-port-forward`) |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
 | `timelineStorage` | `memory`, `sqlite`, or `postgres` |
 | `timelineDbPath` | Path to SQLite database (sqlite only) |
@@ -361,6 +373,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `argoCdInsecureTls` | Skip TLS verification for argocd-server (self-signed default installs). Scoped to the Argo CD client only. |
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. Same rule as `prometheusHeaders`: requires `prometheusUrl`. |
 | `mcpExecTools` | Opt in to `exec_pod` (`--mcp-exec-tools`, default false) |
+| `mcpHttpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`, default false) |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
 
@@ -495,6 +508,8 @@ Radar supports switching between Kubernetes contexts at runtime through the UI. 
 In shared OSS installations (in-cluster or authentication-enabled), context switching is disabled. The operator selects the connection at startup. This includes Helm installations and Pods using an explicit kubeconfig on a non-loopback listener; a personal loopback CLI in a development Pod remains local.
 
 Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps pointing wherever it pointed before.
+
+While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once. If a switch fails after Radar has already left the previous cluster, the same button switches back to it.
 
 ### Expired credentials
 
@@ -757,6 +772,28 @@ In-cluster Radar has no context switcher. Configure the integration for that
 installation, using Secret-backed environment variables for credentials where
 supported; local config persistence is not a replacement for deployment configuration.
 
+#### Automatic port-forwarding
+
+Running locally, Radar reaches the services it discovers in a cluster (Prometheus,
+Hubble Relay, Caretta's metrics store, Kubecost, Argo CD) through a port-forward when
+it can't reach them directly. Each port-forward is a `pods/portforward` request, which
+some clusters audit or alert on.
+
+To stop this, start Radar with `--disable-auto-port-forward`, or set
+`"disableAutoPortForward": true` in the config file. It applies to every context for
+the whole run. Prometheus, Hubble and Argo CD discovery still try a direct
+connection to the Service. Caretta and Kubecost discovery have no direct path from
+your machine. An integration Radar can't reach shows as unavailable and says why.
+For metrics (which Caretta traffic also reads), Kubecost and Argo CD, save the URL
+for that cluster in Settings to use it. Hubble has no URL setting, so it needs a
+direct route to the `hubble-relay` Service.
+
+Port-forwards you start from the UI, and evidence collection you trigger from the UI
+or an AI agent, still open port-forwards.
+
+A placeholder `--prometheus-url` does not do the same job: it applies only to the
+launch context, so switching to another context goes back to discovery.
+
 ## Workload metrics overrides by run mode
 
 Workload metrics and PVC usage normally use automatic identity matching.
@@ -876,7 +913,7 @@ Radar Desktop doesn't take command-line flags, so set the same list in `~/.radar
 
 Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default the UI picks up when it loads. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
 
-This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
+This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. A custom resource kind refused everywhere Radar checked stays refused for a minute before Radar checks again, so access granted to it while Radar runs can take that long to appear. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
 
 ## Audit evidence under partial access
 

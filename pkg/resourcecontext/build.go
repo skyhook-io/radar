@@ -27,6 +27,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -36,6 +37,8 @@ import (
 // Hosts pre-compute issue, audit and policy summaries; Build never calls
 // internal services.
 type Options struct {
+	// RelatedFindings is access-checked by the host and discarded on connection change.
+	RelatedFindings []issuesapi.RelatedFindingsGroup
 	// OpenTelemetryAutoInstrumentation was computed from access-checked cache reads by the
 	// host. A connection change discards the whole observation.
 	OpenTelemetryAutoInstrumentation *OpenTelemetryAutoInstrumentationContext
@@ -435,6 +438,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.Serving = opts.Serving
 
 	// 4. Pre-computed summaries — pass-through.
+	rc.RelatedFindings = opts.RelatedFindings
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
 	rc.AppReferences = filterAppReferences(ctx, opts.AppReferences, opts.AccessChecker, omitted)
@@ -2054,6 +2058,10 @@ func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac 
 		}
 		out.ConcurrentAdmission = &concurrent
 	}
+	if scheduling.Admission != nil {
+		admission := scheduling.Admission.Clone()
+		out.Admission = &admission
+	}
 
 	out.PodSetAssignments = nil
 	for _, assignment := range scheduling.PodSetAssignments {
@@ -2078,6 +2086,7 @@ func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac 
 		}
 		out.PodSetAssignments = append(out.PodSetAssignments, filteredAssignment)
 	}
+	out.PendingPosition = scheduling.PendingPosition.Clone()
 	return &out
 }
 

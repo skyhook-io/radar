@@ -6,6 +6,7 @@ import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
+import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
   type DetailSlots, type HostResource, type HostFeatures, type HostKind, type KindListProps,
@@ -17,6 +18,7 @@ import { RayClusterRenderer } from '../components/resources/renderers/RayCluster
 import { OpenTelemetryCollectorRenderer } from '../components/resources/renderers/OpenTelemetryCollectorRenderer'
 import { RayServiceRenderer } from '../components/resources/renderers/RayServiceRenderer'
 import { KueueWorkloadRenderer } from '../components/resources/renderers/KueueWorkloadRenderer'
+import { ClusterQueueRenderer, LocalQueueRenderer, LocalQueueStatusBadge } from '../components/resources/renderers/KueueQueueRenderers'
 import { PodRenderer } from '../components/resources/renderers/PodRenderer'
 import { KarpenterNodePoolRenderer } from '../components/resources/renderers/KarpenterNodePoolRenderer'
 import { NodeRenderer } from '../components/resources/renderers/NodeRenderer'
@@ -42,6 +44,13 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
+  {
+    id: 'kueue-queues',
+    renderers: { LocalQueueRenderer, ClusterQueueRenderer },
+    // The header badge reads the LocalQueue's ClusterQueue like its detail does, so header and detail agree; the table keeps the LocalQueue's own report.
+    resources: [{ name: 'localqueues', group: 'kueue.x-k8s.io' }],
+    detailSlots: () => ({ renderStatusBadge: (resource: any) => <LocalQueueStatusBadge data={resource} /> }),
+  },
   { id: 'opentelemetry', renderers: { OpenTelemetryCollectorRenderer } },
   { id: 'ray', renderers: { RayJobRenderer, RayServiceRenderer, RayClusterRenderer } },
   { id: 'capacity', renderers: { KarpenterNodePoolRenderer } },
@@ -52,6 +61,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   cnpgResourceHost,
+  crdResourceHost,
 ]
 
 export const resourceRendererOverrides = composeResourceHosts(resourceHosts)

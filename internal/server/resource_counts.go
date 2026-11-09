@@ -48,6 +48,13 @@ var featuredKubernetesAPIs = map[string]struct{}{
 	"certificates.k8s.io/ClusterTrustBundle":    {},
 }
 
+// CustomResourceDefinition is built in, but Radar watches it through the same
+// dynamic informer as custom kinds, so it is counted the same way: from that
+// cache, behind the caller's own list permission.
+func isCRDDefinitionKind(group, kind string) bool {
+	return group == "apiextensions.k8s.io" && kind == "CustomResourceDefinition"
+}
+
 func isFeaturedKubernetesAPI(group, kind string) bool {
 	_, ok := featuredKubernetesAPIs[group+"/"+kind]
 	return ok
@@ -322,7 +329,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			crds := make(map[string]discoveredInfo)
 			var crdOrder []string
 			for _, res := range resources {
-				if !res.IsCRD {
+				if !res.IsCRD && !isCRDDefinitionKind(res.Group, res.Kind) {
 					continue
 				}
 				// Informer-backed counts only work for listable+watchable kinds.

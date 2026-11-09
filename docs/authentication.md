@@ -34,7 +34,7 @@ Issues follow the same rule: you see an issue only if you could open its resourc
 
 Search uses the same exact list permissions as resource reads for Secrets, Roles, RoleBindings, LimitRanges and Trivy reports. Ordinary namespaced kinds, including ServiceAccounts, NetworkPolicies, ResourceQuotas and dynamic CRDs, use namespace visibility, as resource lists do. Sensitive-kind checks try a cluster-wide SAR first and fan out over visible namespaces only after a denial. Your own access is the scope of a search, so its coverage response reports a denial only for a kind or namespace the query names, keeping caller denial, failed permission checks and collector limitations apart; see [Search coverage](mcp.md#search-coverage-and-cel-object-filters).
 
-**If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). See [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for the `rbac.create: false` + custom `Role` setup.
+**If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). With the Helm chart, set `rbac.namespaces` to that boundary's namespaces; see [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for this and for the `rbac.create: false` + custom `Role` setup.
 
 Ownership answers (owners, children, and which GitOps manager manages an object) follow the same namespace rule in the UI.
 REST AI context and MCP additionally require exact-kind `get` access for ownership and manager references, so their
@@ -407,9 +407,9 @@ K8s ships with built-in ClusterRoles that work well with Radar. You don't need t
 
 | Built-in Role | What Users Can Do in Radar |
 |---------------|---------------------------|
-| `view` | See resources, topology, events, logs. No restart, scale, or Helm writes. |
-| `edit` | Everything in `view` + restart, scale, edit resources. Does NOT include exec or port-forward (those require `pods/exec` and `pods/portforward` subresources — use the custom `radar-operator` role below). |
-| `admin` | Everything in `edit` + manage RBAC within namespaces. Same exec/port-forward caveat as `edit`. |
+| `view` | See resources, topology, events, logs. No Secrets, exec, port-forward, restart, scale, or Helm writes. |
+| `edit` | Everything in `view` + restart, scale, edit resources, exec, and full access to Secrets. Also grants `pods/portforward`, which in-cluster Radar turns into a `kubectl` command to copy. To withhold exec or Secrets, use a custom role such as `radar-operator` below, without its optional exec rule. |
+| `admin` | Everything in `edit` + manage RBAC within namespaces. |
 | `cluster-admin` | Full access to everything across all namespaces, including exec and port-forward. |
 
 ```yaml
@@ -530,7 +530,7 @@ When auth is enabled:
 - The **namespace selector** only shows namespaces the user can access
 - **Topology, resources, events, dashboard** are filtered to accessible namespaces
 - **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are gated per-kind via `SubjectAccessReview` — a user sees them only if their own RBAC permits listing that kind, independent of namespace access
-- **Helm releases** are read with the user's own identity, like everything else. Helm stores releases as Secrets, so a user sees a release only where their RBAC grants `list secrets` in the storage namespace — and the K8s built-in `view` role deliberately does not. Radar resolves the namespaces the user can actually read release storage in and lists only there, returning 403 when there are none. Write operations (install, upgrade, rollback, uninstall) are impersonated and need the matching RBAC.
+- **Helm releases** are read with the user's own identity, like everything else. Helm stores releases as Secrets, so a user gets Helm's own records only where their RBAC grants `list secrets` in the storage namespace — and the K8s built-in `view` role deliberately does not. Radar resolves the namespaces the user can actually read release storage in and reads only there. Elsewhere the Helm view falls back to the Helm metadata on objects the user can already read, with status and Helm history unknown (Flux's recorded history still shows if they can read the `HelmRelease`), and reads no Secret; see [Without access to Secrets](helm.md#without-access-to-secrets). `/api/helm/releases` itself still returns 403 when there are none. Write operations (install, upgrade, rollback, uninstall) are impersonated and need the matching RBAC.
 - **Write buttons** (restart, scale, exec, Helm install, etc.) only appear if the user has permission
 - Write operations return **403** from K8s if RBAC denies them (shown as an error toast)
 - The **/api/auth/me** endpoint returns the current user info and whether auth is enabled

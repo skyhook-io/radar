@@ -42,7 +42,7 @@
     "yaml": "^2.9.1"
   },
   "peerDependencies": {
-    "@skyhook-io/k8s-ui": ">=1.18.2",
+    "@skyhook-io/k8s-ui": ">=1.19.1",
     "@tanstack/react-query": ">=5",
     "@xyflow/react": ">=12.0.0",
     "clsx": ">=2",
@@ -55,11 +55,11 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.62.0",
+    "@playwright/test": "^1.64.1",
     "@skyhook-io/k8s-ui": "*",
     "@tailwindcss/vite": "^4.3.3",
-    "@tanstack/react-query": "^5.104.5",
-    "@types/node": "^26.6.2",
+    "@tanstack/react-query": "^5.105.0",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

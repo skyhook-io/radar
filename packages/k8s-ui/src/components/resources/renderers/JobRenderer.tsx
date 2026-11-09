@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react'
 import { Clock } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
-import { formatDuration } from '../resource-utils'
+import { formatDuration, isKueueQueuedJob } from '../resource-utils'
 
 interface JobRendererProps {
   data: any
   admissionContent?: ReactNode
+  kueueManaged?: boolean
 }
 
 // Extract problems from Job status and conditions
@@ -44,7 +45,7 @@ function getJobProblems(data: any): string[] {
   return problems
 }
 
-export function JobRenderer({ data, admissionContent }: JobRendererProps) {
+export function JobRenderer({ data, admissionContent, kueueManaged = false }: JobRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = status.conditions || []
@@ -66,6 +67,7 @@ export function JobRenderer({ data, admissionContent }: JobRendererProps) {
   // Check if job completed successfully
   const isComplete = conditions.some((c: any) => c.type === 'Complete' && c.status === 'True')
   const isSuspended = spec.suspend === true
+  const heldByKueue = kueueManaged || isKueueQueuedJob(data)
 
   return (
     <>
@@ -76,7 +78,10 @@ export function JobRenderer({ data, admissionContent }: JobRendererProps) {
 
       {/* Suspended is an intentional state, not a fault — keep it informational. */}
       {isSuspended && !hasProblems && (
-        <AlertBanner variant="info" title="Job Suspended" message="Pods will not be created until this Job is resumed." />
+        <AlertBanner variant="info"
+          title={heldByKueue ? 'Held by Kueue until admitted' : 'Job Suspended'}
+          message={heldByKueue ? 'See Kueue admission for the queue and admission evidence.' : 'Pods will not be created until this Job is resumed.'}
+        />
       )}
 
       {/* Success banner */}

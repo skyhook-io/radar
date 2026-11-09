@@ -140,6 +140,13 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	// hosts merge the destination cluster's own tree on top (mergeGitOpsTrees).
 	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && (!gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root))) ||
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
+	// The local catalog doesn't describe a remote cluster; built-in scope
+	// holds everywhere.
+	if tool == ToolFluxCD && remote {
+		alignManagedScope(managed, nil)
+	} else if tool == ToolFluxCD {
+		alignManagedScope(managed, b.ownership.Catalog())
+	}
 	// Without recorded Helm inventory, recover roots from topology labels.
 	// A remote release's objects aren't in local topology, so a local match is
 	// someone else's.

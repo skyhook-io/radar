@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/kueuevisibility"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
@@ -150,7 +151,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
 			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
 			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
-			"Absent is not empty; coverage is not health. " +
+			"Absent is not empty; coverage is not health. Absent `stale` does not establish freshness. " +
 			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
 			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
 			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +
@@ -237,7 +238,10 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins high|medium), posture-remediation priority " +
 		"on a separate scale from live `issueSummary` critical|warning. `application_configuration_change: true` marks " +
 		"an application configuration edit; it is a ranking hint, not proof of cause, and unflagged changes may still matter. Application, Kustomization and Flux HelmRelease return " +
-		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
+		"status and parsed issues; no logs. " +
+		"KafkaConnector and KafkaConnect (group=kafka.strimzi.io) return cached curated operator findings, not configuration, logs or application endpoint reads. " +
+		"Batch kinds return cached context, Issues and events without runtime logs or metrics. " +
+		"Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
 		"API-server proxy reached it, not the live path. Point-in-time freezes this call's result, " +
 		"not that every source was read atomically; preserve limits, errors, timestamps and confidence. " +
@@ -375,7 +379,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"operation, and a capped operations trail for failed upgrades, rollbacks, and stuck operations. " +
 			"Use this first for Helm deployment debugging; if storageNamespace is present, pass that " +
 			"value as namespace to get_helm_release. Follow with get_helm_release include=history,operations " +
-			"for the full revision trail.",
+			"for the full revision trail. When you can't read Helm's release Secrets, the result is an object: " +
+			"its summary says what's unknown, and observed rows come from labels and annotations on " +
+			"objects, with no status, and may miss releases.",
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
@@ -385,10 +391,23 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
-			"Request values, history, operations, or " +
-			"revision comparisons with `include`; returned values are key-aware redacted.",
-		Annotations: readOnly,
+			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=versions for exact upgrade versions, include=notes for bounded untrusted notes. Request values, history, operations, or " +
+			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
+			"manage_helm merges deployed values, which may differ after failure; check history/values_diff. " +
+			"Without Helm's Secrets it returns {summary, observed}, built from the release's objects.",
+		// include=versions contacts the release's chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "get_helm_chart",
+		Description: "List a Helm chart's versions in a configured source, newest first, before installing it; " +
+			"`latest` is the newest non-prerelease. Pass the repository and chart manage_helm install will use. " +
+			"Read live from the source; versions are what it advertises, not a check that one installs. " +
+			"For an installed release use get_helm_release include=versions.",
+		// Contacts the configured chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
+	}, logToolCall("get_helm_chart", handleGetHelmChart))
 
 	// --- Packages tool (read-only) ---
 	//
@@ -599,12 +618,28 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	}
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "collect_application_evidence",
+		Description: "Read RabbitMQ alarms/resource values, NATS JetStream observations or Vault node state from one Pod. Requires operator approval and Pod-read/port-forward permissions; opens a temporary port-forward. Local only. Unavailable evidence is not a health verdict.",
+		InputSchema: applicationEvidenceInputSchema(),
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
+	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))
+
+	if !k8s.ForceDisableHelmWrite {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name:        "manage_helm",
+			Description: "Install/upgrade/rollback/uninstall native Helm as the caller. Install needs an exact version (get_helm_chart lists them) and configured source; refuses existing history. Upgrade can reuse a complete stored chart without a source; version omission requires latest/deployed agreement. Other upgrades need a confirmed configured source. dry_run previews upgrades (identical merge rules) and rollbacks (live takeover/retention checks; rollback claims existing objects unchecked); expected_revision checks for stale edits, not an atomic lock. Upgrade merges last deployed overrides (latest failed/superseded if none deployed). Latest get_helm_release values may differ: inspect history/values_diff after failure. Maps merge, lists replace; hidden-credential container replacement is refused unless replace_values=true replaces ALL overrides. Change GitOps dependencies in git. Uninstall without confirm previews resources; return the reviewed token to delete. Coordinate writers: Helm has no atomic revision-conditioned uninstall. Hooks may run; operations take minutes and can outlive client timeouts. Inspect get_helm_release before retrying; use wait_for for readiness. Never pass literal credentials.",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
+		}, logToolCall("manage_helm", handleManageHelm))
+	}
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +
 			"(requires 'replicas' parameter), 'rollback' reverts to a previous revision " +
 			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions). " +
 			"Use list_resources or get_dashboard first to identify the target. " +
+			"Roll back a native Helm release's workload as the release (manage_helm rollback where available); a workload rollback leaves Helm's record stale. " +
 			"On a Rollout, 'rollback' rewrites the pod template and so starts a new rollout that re-runs every " +
 			"canary step, pause, and analysis — to revert traffic now use manage_rollout abort, or follow the " +
 			"rollback with manage_rollout promote-full.",
@@ -704,6 +739,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 
+	if includeExec && httpToolsEnabled.Load() && k8s.IsInCluster() {
+		registerHTTPTools(server, paramRegistry, &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)})
+	}
 	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
 	if includeExec && execToolsEnabled.Load() {
 		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{
@@ -1049,6 +1087,10 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 }
 
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
+	return readMCPResource(ctx, input, resourcecontext.TierBasic)
+}
+
+func readMCPResource(ctx context.Context, input getResourceInput, tier resourcecontext.ContextTier) (*mcp.CallToolResult, any, error) {
 	started := currentReadCache()
 	kind := resourceKindName(strings.ToLower(input.Kind), input.Group)
 	group := input.Group
@@ -1201,7 +1243,8 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
 	if !skipContext {
-		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic, issueSummary)
+		// Batch diagnosis must not start unrelated discovery through a cold graph rebuild.
+		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, tier, issueSummary, tier != resourcecontext.TierDiagnostic)
 
 		// State-derived advisory warnings (deletionTimestamp, external manager,
 		// terminating namespace, workload health-condition history, PVC stuck
@@ -1266,6 +1309,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 
 	result := map[string]any{"resource": resourceData}
+	if tier == resourcecontext.TierDiagnostic {
+		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected. Graph-derived networking/scaling relationships were not collected; an empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
+	}
 	if includes["issues"] {
 		attachRelatedIssueDetails(result, issueRows)
 	}
@@ -1331,8 +1377,8 @@ func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
 // fallback resolve Relationships via topology.GetRelationshipsWithObject
 // (which applies KindForGVK so cross-group CRDs map to the right
 // topology node).
-func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
-	return buildMCPResourceContextWithStaleChecks(
+func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, issueSummary *resourcecontext.IssueSummary, includeTopology bool) *resourcecontext.ResourceContext {
+	return buildMCPResourceContextWithOperatorChildren(
 		ctx,
 		obj,
 		kind,
@@ -1341,14 +1387,16 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 		tier,
 		k8s.FindStaleSecretEnvChecksForObject(ctx, k8s.GetResourceCache(), obj),
 		issueSummary,
+		nil,
+		includeTopology,
 	)
 }
 
 func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
-	return buildMCPResourceContextWithOperatorChildren(ctx, obj, kind, namespace, name, tier, staleChecks, issueSummary, nil)
+	return buildMCPResourceContextWithOperatorChildren(ctx, obj, kind, namespace, name, tier, staleChecks, issueSummary, nil, true)
 }
 
-func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary, children *k8s.OperatorChildren) *resourcecontext.ResourceContext {
+func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary, children *k8s.OperatorChildren, includeTopology bool) *resourcecontext.ResourceContext {
 	if obj == nil {
 		return nil
 	}
@@ -1363,15 +1411,19 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
+	scheduling := schedulinginsight.ForResource(obj, tier)
+	kueuevisibility.Attach(ctx, scheduling, obj)
+
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          tier,
-		AccessChecker: newMCPRequestScopedChecker(ctx),
-		IssueSummary:  issueSummary,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, tier),
-		Execution:     executioninsight.ForResource(obj, tier),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            tier,
+		AccessChecker:   newMCPRequestScopedChecker(ctx),
+		IssueSummary:    issueSummary,
+		AuditSummary:    auditSum,
+		Scheduling:      scheduling,
+		Execution:       executioninsight.ForResource(obj, tier),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -1398,11 +1450,13 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 		}),
 	}
 
-	if topo, index, prov, dyn, ok := mcpTopologyForContext(); ok {
-		opts.RelIndex = index
-		opts.Topology = topo
-		opts.Provider = prov
-		opts.DynamicProv = dyn
+	if includeTopology {
+		if topo, index, prov, dyn, ok := mcpTopologyForContext(); ok {
+			opts.RelIndex = index
+			opts.Topology = topo
+			opts.Provider = prov
+			opts.DynamicProv = dyn
+		}
 	}
 	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
 		return (namespace == "" || checkNamespaceAccess(ctx, namespace)) && canReadInNamespace(ctx, group, resource, namespace, verb)
@@ -1418,7 +1472,13 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
 	}
 
-	return resourcecontext.Build(ctx, obj, opts)
+	rc := resourcecontext.Build(ctx, obj, opts)
+	if !includeTopology {
+		for _, field := range []string{"exposes", "exposedBy", "backends", "selectedBy", "scaledBy"} {
+			rc.Omitted = append(rc.Omitted, resourcecontext.OmittedField{Field: field, Reason: resourcecontext.OmittedUnavailable})
+		}
+	}
+	return rc
 }
 
 // attachResourceExtras populates optional extras (events, metrics, logs) on
@@ -2697,6 +2757,12 @@ type mcpHelmSummary struct {
 	// reporting Total=0.
 	Unavailable       bool   `json:"unavailable,omitempty"`
 	UnavailableReason string `json:"unavailableReason,omitempty"`
+	// UnreadNamespaces are namespaces whose Helm release Secrets weren't read:
+	// the caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases;
+	// list_helm_releases may still find them from objects the caller can read.
+	// Absent when every namespace in scope was read, and when Unavailable.
+	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
 type mcpHelmRelease struct {
@@ -3006,12 +3072,21 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		d.HelmReleases.UnavailableReason = "Helm client not initialized."
 	} else {
 		user := userFromContext(ctx)
-		namespaces := resolveHelmListNamespaces(ctx, namespace)
+		namespaces, checked, unread := resolveHelmStorageScope(ctx, namespace)
 		if namespaces != nil && len(namespaces) == 0 {
 			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, user)
-			if err != nil {
+			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user)
+			if !checked && ((err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err)) {
+				// A permission check went unanswered, so the refusal may be of a
+				// cluster-wide fallback the caller can't make even though some
+				// namespace would allow it.
+				d.HelmReleases.Unavailable = true
+				d.HelmReleases.UnavailableReason = "Couldn't check the caller's access to Helm release secrets (a permission check went unanswered); retry shortly."
+			} else if err == nil && len(read) == 0 && len(denied) > 0 {
+				d.HelmReleases.Unavailable = true
+				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope. list_helm_releases may find releases from objects the caller can read."
+			} else if err != nil {
 				// Not fatal for the dashboard — a viewer with no helm access
 				// still sees everything else. Surface to LLM consumers via
 				// Unavailable so they don't confidently report "Total=0
@@ -3027,6 +3102,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				}
 			} else {
 				d.HelmReleases.Total = len(releases)
+				if missing := helm.UnreadStorageNamespaces(unread, denied); len(missing) > 0 {
+					d.HelmReleases.UnreadNamespaces = resourceapi.Names(missing, resourceapi.MCPSetLimit)
+				}
 
 				// Sort: failed/pending first, then operation-signaled Helm rollbacks,
 				// then unhealthy/degraded owned resources.
@@ -3394,8 +3472,10 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 	}
 	user := userFromContext(ctx)
 	helmNamespaces := namespaces
+	checked := true
+	var unread []string
 	if helmNamespaces == nil {
-		helmNamespaces = resolveHelmListNamespaces(ctx, "")
+		helmNamespaces, checked, unread = resolveHelmStorageScope(ctx, "")
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
 	username, groups := "", []string(nil)
@@ -3403,6 +3483,11 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 		username, groups = user.Username, user.Groups
 	}
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	// Namespaces left out because the caller can't read Helm's storage there
+	// were never read, and list_helm_releases still lists their releases.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
+	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 

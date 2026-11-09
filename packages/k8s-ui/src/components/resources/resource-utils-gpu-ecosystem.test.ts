@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   getClusterQueueCohort,
@@ -116,6 +118,21 @@ describe('GPU ecosystem API contracts', () => {
     expect(getInferenceServiceStatus({
       status: { modelStatus: { transitionStatus: 'InvalidSpec' } },
     }).text).toBe('Invalid spec')
+  })
+
+  it('shows a deliberately stopped InferenceService as a neutral state, unless something else failed', () => {
+    const metadata = { annotations: { 'serving.kserve.io/stop': 'true' } }
+    const stopped = [{ type: 'Stopped', status: 'True' }, { type: 'Ready', status: 'False', reason: 'Stopped' }]
+    expect(getInferenceServiceStatus({ metadata, status: { conditions: stopped } })).toMatchObject({ text: 'Stopped', level: 'neutral' })
+    expect(getInferenceServiceStatus({
+      metadata, status: { conditions: stopped, modelStatus: { transitionStatus: 'BlockedByFailedLoad' } },
+    }).text).toBe('Load failed')
+    // A resume that failed: still Stopped=True, but a component reports its own error.
+    expect(getInferenceServiceStatus({
+      metadata, status: { conditions: [...stopped, { type: 'PredictorReady', status: 'False', reason: 'ReconcileFailed' }] },
+    })).toMatchObject({ text: 'ReconcileFailed', level: 'unhealthy' })
+    // The stop annotation was removed: not an intentional stop any more.
+    expect(getInferenceServiceStatus({ status: { conditions: stopped } }).level).not.toBe('neutral')
   })
 
   it('reads the inline replicas field in both served LLMInferenceService versions', () => {
@@ -333,5 +350,15 @@ describe('JobSet status evidence boundaries', () => {
     const conditions = [{ type: 'Suspended', status: 'True' }, { type: 'StartupPolicyInProgress', status: 'True' }]
     expect(getJobSetStatus({ spec: { suspend: false }, status: { conditions } }).text).toBe('Starting')
     expect(getJobSetStatus({ spec: { suspend: true }, status: { conditions } }).text).toBe('Suspended')
+  })
+})
+
+// The topology node (pkg/topology) and Go's lifecycle read the same vectors.
+describe('JobSet status shared lifecycle vectors', () => {
+  const vectors = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../../pkg/jobset/testdata/lifecycle.json', import.meta.url)), 'utf8')) as {
+    cases: { name: string; jobSet: unknown; label: string; level: string }[]
+  }
+  it.each(vectors.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    expect(getJobSetStatus(c.jobSet)).toMatchObject({ text: c.label, level: c.level })
   })
 })

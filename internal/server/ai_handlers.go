@@ -49,11 +49,13 @@ import (
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/kueuevisibility"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/executioninsight"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/policyreports"
@@ -577,15 +579,19 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueSubjectAccess(r), s.issueEvidenceAccess(r), canonicalGroup, canonicalKind, namespace, name)
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
+	scheduling := schedulinginsight.ForResource(obj, resourcecontext.TierBasic)
+	kueuevisibility.Attach(r.Context(), scheduling, obj)
+
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            resourcecontext.TierBasic,
+		AccessChecker:   s.newRequestScopedChecker(r),
+		IssueSummary:    issueSum,
+		AuditSummary:    auditSum,
+		Scheduling:      scheduling,
+		Execution:       executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -718,7 +724,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 	// surfaces the grouped issues its pods are evidence for, and on a pod beyond
 	// the inline-Members cap too. The old flat-by-exact-resource match missed
 	// both (a Deployment matched no Kind=Pod evidence rows → empty summary).
+	var unchecked []issuesapi.UncheckedSource
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked:            func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		SkipPodTemplateContext: !includeFacts,
 		Namespaces:             namespaces,
 		CanReadClusterScoped:   canReadClusterScoped,
@@ -727,6 +735,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		CanReadEvidence:        canReadEvidence,
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
+		if len(unchecked) > 0 {
+			return &resourcecontext.IssueSummary{Unchecked: unchecked}, nil
+		}
 		return nil, nil
 	}
 	bySource := make(map[string]int, len(matched))
@@ -752,6 +763,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		TopReason:       topReason,
 		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
+		Unchecked:       unchecked,
 	}, matched
 }
 

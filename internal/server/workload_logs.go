@@ -31,6 +31,7 @@ import (
 	"github.com/skyhook-io/radar/internal/podlogs"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
@@ -471,10 +472,23 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	follows := 0
 	generation := 0
 
+	// The containers each Pod's last discovery pass selected. Reports from a
+	// container outside it come from a follow that is no longer wanted.
+	selected := map[string]map[string]bool{}
+
 	// Start streaming from each pod/container
 	startPodStreams := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
 			containers := k8s.GetContainersForPod(pod, container, true)
+			keep := make(map[string]bool, len(containers))
+			for _, c := range containers {
+				keep[c] = true
+			}
+			selected[pod.Name] = keep
+			stopDeselectedLogStreams(&activeStreams, pod, containers)
+			if dropDeselectedNotices(unavailable, pod.Name, keep) {
+				sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
+			}
 			for _, c := range containers {
 				key := pod.Name + "/" + c
 				if value, exists := activeStreams.Load(key); exists {
@@ -524,6 +538,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	for _, p := range pods {
 		knownPods[p.Name] = p.UID
 	}
+	sentPodInfo := podlogs.NewSentPodInfo(podInfos)
 
 	// Main loop: forward logs and handle pod discovery
 	for {
@@ -543,8 +558,8 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 		case result := <-resultCh:
 			key := result.key
 			// A stream canceled during pod removal can still deliver its report.
-			podName, _, _ := strings.Cut(key, "/")
-			if uid, known := knownPods[podName]; known && uid == result.uid {
+			podName, containerName, _ := strings.Cut(key, "/")
+			if uid, known := knownPods[podName]; known && uid == result.uid && selected[podName][containerName] {
 				changed := false
 				if result.err != nil {
 					changed = unavailable.Add(key, result.follow, result.err.Error())
@@ -583,9 +598,15 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 						sendSSEEvent(w, flusher, "pod_removed", map[string]string{"pod": p.Name, "reason": "replaced"})
 					}
 					knownPods[p.Name] = p.UID
+					info := podlogs.BuildPodInfo(p, time.Now())
+					sentPodInfo.Changed(info)
 					// Notify frontend about new pod
 					sendSSEEvent(w, flusher, "pod_added", map[string]any{
-						"pods": []podlogs.PodInfo{podlogs.BuildPodInfo(p, time.Now())},
+						"pods": []podlogs.PodInfo{info},
+					})
+				} else if info := podlogs.BuildPodInfo(p, time.Now()); sentPodInfo.Changed(info) {
+					sendSSEEvent(w, flusher, "pod_updated", map[string]any{
+						"pods": []podlogs.PodInfo{info},
 					})
 				}
 			}
@@ -594,6 +615,8 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			for podName := range knownPods {
 				if !currentPodNames[podName] {
 					delete(knownPods, podName)
+					delete(sentPodInfo, podName)
+					delete(selected, podName)
 					stopPodLogStreams(&activeStreams, cursors, podName)
 					if unavailable.RemovePod(podName) {
 						sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
@@ -1025,7 +1048,7 @@ func loadJobSetJobs(ctx context.Context, namespace, name string) (*unstructured.
 	if err != nil {
 		return nil, nil, workloadParentGetError("jobset", namespace, name, err)
 	}
-	if !isSupportedJobSet(jobSet) {
+	if !jobset.Supported(jobSet) {
 		return nil, nil, &workloadError{http.StatusBadRequest, "only jobset.x-k8s.io/v1alpha2 JobSets have child Jobs"}
 	}
 	if cache.Jobs() == nil {
@@ -1041,7 +1064,6 @@ func loadJobSetJobs(ctx context.Context, namespace, name string) (*unstructured.
 const maxJobSetMemberRuns = 200
 
 const (
-	jobSetAPIVersion                  = "jobset.x-k8s.io/v1alpha2"
 	replicatedJobNameLabel            = "jobset.sigs.k8s.io/replicatedjob-name"
 	replicatedJobReplicasLabel        = "jobset.sigs.k8s.io/replicatedjob-replicas"
 	jobSetJobIndexLabel               = "jobset.sigs.k8s.io/job-index"
@@ -1054,14 +1076,10 @@ const (
 	jobSetJobRestartAttemptAnnotation = "jobset.sigs.k8s.io/job-restart-attempt"
 )
 
-func isSupportedJobSet(jobSet *unstructured.Unstructured) bool {
-	return jobSet != nil && jobSet.GetAPIVersion() == jobSetAPIVersion && jobSet.GetKind() == "JobSet"
-}
-
 func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job, query jobSetMemberQuery) WorkloadRunsResponse {
 	runs := make([]WorkloadRun, 0)
 	for _, job := range jobs {
-		if job == nil || !jobSetControls(jobSet, job) {
+		if job == nil || !jobset.Controls(jobSet, job) {
 			continue
 		}
 		runs = append(runs, jobSetMemberRunInfo(jobSet, job))
@@ -1096,17 +1114,6 @@ func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job, qu
 	return result
 }
 
-func jobSetControls(jobSet *unstructured.Unstructured, child metav1.Object) bool {
-	if !isSupportedJobSet(jobSet) || child == nil || child.GetNamespace() != jobSet.GetNamespace() {
-		return false
-	}
-	owner := metav1.GetControllerOf(child)
-	if owner == nil || owner.APIVersion != jobSetAPIVersion || owner.Kind != "JobSet" || owner.Name != jobSet.GetName() {
-		return false
-	}
-	return jobSet.GetUID() != "" && owner.UID == jobSet.GetUID()
-}
-
 func jobSetMemberRunInfo(jobSet *unstructured.Unstructured, job *batchv1.Job) WorkloadRun {
 	run := jobRunInfo(job)
 	labels := job.GetLabels()
@@ -1124,15 +1131,12 @@ func jobSetMemberRunInfo(jobSet *unstructured.Unstructured, job *batchv1.Job) Wo
 		RestartAttempt:        annotations[jobSetRestartAttemptAnnotation],
 		JobRestartAttempt:     annotations[jobSetJobRestartAttemptAnnotation],
 	}
-	if job.DeletionTimestamp != nil {
-		run.Deleting = true
-	}
 	return run
 }
 
 func resolveJobSetLauncher(ctx context.Context, cache *k8s.ResourceCache, job *batchv1.Job) *WorkloadRunResourceRef {
 	owner := metav1.GetControllerOf(job)
-	if owner == nil || owner.APIVersion != jobSetAPIVersion || owner.Kind != "JobSet" || owner.Name == "" || owner.UID == "" {
+	if owner == nil || owner.APIVersion != jobset.APIVersion || owner.Kind != jobset.Kind || owner.Name == "" || owner.UID == "" {
 		return nil
 	}
 	jobSet, err := cache.GetDynamicWithGroup(ctx, "JobSet", job.Namespace, owner.Name, "jobset.x-k8s.io")
@@ -1143,7 +1147,7 @@ func resolveJobSetLauncher(ctx context.Context, cache *k8s.ResourceCache, job *b
 }
 
 func jobSetLauncher(jobSet *unstructured.Unstructured, job *batchv1.Job) *WorkloadRunResourceRef {
-	if job == nil || !jobSetControls(jobSet, job) {
+	if job == nil || !jobset.Controls(jobSet, job) {
 		return nil
 	}
 	return &WorkloadRunResourceRef{Kind: "JobSet", Namespace: job.Namespace, Name: jobSet.GetName(), Group: "jobset.x-k8s.io"}
@@ -1286,6 +1290,7 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 		Namespace:    job.Namespace,
 		Name:         job.Name,
 		Phase:        phase,
+		Deleting:     job.DeletionTimestamp != nil,
 		Active:       phase == "Running" || phase == "Pending",
 		StartedAt:    formatMetaTime(job.Status.StartTime),
 		ScheduledAt:  scheduledAt,

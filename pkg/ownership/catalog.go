@@ -140,6 +140,20 @@ func (c *Catalog) Kind(gk resourceid.GroupKind) (CatalogKind, bool) {
 	return k, ok
 }
 
+// Scope says whether gk is namespaced, and whether Radar can tell: a built-in
+// kind's scope is its own unless discovery is ambiguous about the kind or
+// serves it with the other scope; any other kind's is the catalog's.
+func (c *Catalog) Scope(gk resourceid.GroupKind) (namespaced, known bool) {
+	if c.Ambiguous(gk) {
+		return false, false
+	}
+	k, served := c.Kind(gk)
+	if b, builtin := resourceid.BuiltinForKind(gk.Kind); builtin && b.Group == gk.Group {
+		return b.Namespaced, !served || k.Namespaced == b.Namespaced
+	}
+	return k.Namespaced, served
+}
+
 // Ambiguous reports whether two resources of gk's group serve gk, or its
 // versions serve it at different scopes.
 func (c *Catalog) Ambiguous(gk resourceid.GroupKind) bool {

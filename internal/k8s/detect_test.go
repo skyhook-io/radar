@@ -39,7 +39,6 @@ func TestDetectProblems_PopulatesGroup(t *testing.T) {
 	oneReplica := int32(1)
 	minReplicas := int32(1)
 	now := time.Now()
-	// Job needs to be older than 1h to surface a "stuck" problem.
 	jobStart := metav1.NewTime(now.Add(-2 * time.Hour))
 
 	client := fake.NewClientset(
@@ -86,13 +85,13 @@ func TestDetectProblems_PopulatesGroup(t *testing.T) {
 				},
 			},
 		},
-		// Job stuck Active>0 for >1h with no completions.
+		// Job with a terminal JobFailed condition.
 		&batchv1.Job{
 			ObjectMeta: metav1.ObjectMeta{Name: "migrate", Namespace: "prod", CreationTimestamp: jobStart},
 			Status: batchv1.JobStatus{
-				Active:    1,
-				Succeeded: 0,
-				Failed:    0,
+				Conditions: []batchv1.JobCondition{
+					{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
+				},
 			},
 		},
 	)
@@ -1044,6 +1043,91 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 	assertProblem(t, problems, "Service", "api", "Unresolved named targetPort: http", "high")
 	assertProblem(t, problems, "PersistentVolumeClaim", "data", "Lost", "critical")
 	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
+}
+
+// TestJobDetection_AgeAloneIsNotFailure guards that a long-running active Job
+// with no failure evidence is not reported as a failure, while a Job that has
+// truly failed — or whose pods are failing — still surfaces.
+func TestJobDetection_AgeAloneIsNotFailure(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	jobCtrl := true
+	// Healthy, long-running active Job: 12h old, one active pod, nothing failed
+	// or succeeded, no terminal condition. This is work in progress.
+	healthy := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "training", Namespace: "prod", UID: "training-uid", CreationTimestamp: metav1.NewTime(now.Add(-12 * time.Hour))},
+		Status:     batchv1.JobStatus{Active: 1},
+	}
+	// Truly failed Job: a terminal JobFailed condition.
+	failed := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "migrate", Namespace: "prod", UID: "migrate-uid", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit", LastTransitionTime: metav1.NewTime(now.Add(-time.Minute))}},
+		},
+	}
+	// A still-active Job whose pod is crash-looping: no terminal condition yet,
+	// but the failing pod is real evidence and must still surface (on the pod).
+	crashJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "importer", Namespace: "prod", UID: "importer-uid", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
+		Status:     batchv1.JobStatus{Active: 1},
+	}
+	crashPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "importer-abc", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "importer", UID: "importer-uid", Controller: &jobCtrl}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:         "app",
+				RestartCount: 5,
+				State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Reason: "Error", ExitCode: 1,
+					StartedAt: metav1.NewTime(now.Add(-3 * time.Second)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Second)),
+				}},
+			}},
+		},
+	}
+
+	client := fake.NewClientset(healthy, failed, crashJob, crashPod)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Job", "migrate", "BackoffLimitExceeded") &&
+			hasProblem(problems, "Pod", "importer-abc", "CrashLoopBackOff") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Done-when #1: a healthy long-running Job produces no failure row.
+	for _, p := range problems {
+		if p.Kind == "Job" && p.Name == "training" {
+			t.Fatalf("healthy long-running Job should produce no problem, got %+v", p)
+		}
+	}
+	// Done-when #2: a truly failed Job still surfaces, and a failing pod of an
+	// otherwise-active Job still surfaces on the pod.
+	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
+	assertProblem(t, problems, "Pod", "importer-abc", "CrashLoopBackOff", "critical")
+	// The active crash-looping Job gets no Job-level row of its own (its evidence
+	// is the pod); age alone never fabricates one.
+	for _, p := range problems {
+		if p.Kind == "Job" && p.Name == "importer" {
+			t.Fatalf("active Job with a failing pod should carry no Job-level failure row, got %+v", p)
+		}
+	}
 }
 
 func TestPodsMatchingServiceExcludesSucceededPods(t *testing.T) {

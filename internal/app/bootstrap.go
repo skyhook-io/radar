@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -47,6 +48,7 @@ type AppConfig struct {
 	RestoreLastDesktopContext   bool
 	Namespace                   string
 	Namespaces                  []string
+	RBACNamespaces              []string
 	Port                        int
 	PortFallback                bool // Port is a preference, not a requirement (Desktop's remembered port)
 	ListenAddress               string
@@ -63,6 +65,7 @@ type AppConfig struct {
 	FakeInCluster               bool
 	DisableHelmWrite            bool
 	DisableExec                 bool
+	DisableAutoPortForward      bool
 	DisableLocalTerminal        bool
 	PodShellDefault             string
 	DebugImage                  string
@@ -99,6 +102,7 @@ type AppConfig struct {
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
 	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -115,8 +119,13 @@ func SetGlobals(cfg AppConfig) {
 	// Init-only write, before any goroutine reads it; later reads happen under
 	// clientMu and assume no concurrent mutation.
 	k8s.ForceInCluster = cfg.FakeInCluster
+	mcppkg.SetHTTPToolsEnabled(cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster())
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
+	portforward.SetAutoDisabled(cfg.DisableAutoPortForward)
+	if cfg.DisableAutoPortForward {
+		log.Printf("[portforward] Automatic port-forwarding is turned off: metrics, traffic, cost and Argo CD discovery will not open port-forwards")
+	}
 	k8s.ForceDisableLocalTerminal = cfg.DisableLocalTerminal
 	k8s.ListPageSize = cfg.ListPageSize
 	k8s.ForceNamespaceScope = cfg.NamespaceScope
@@ -157,6 +166,17 @@ func InitializeK8s(cfg AppConfig) error {
 		return fmt.Errorf("failed to initialize K8s client: %w", err)
 	}
 
+	if len(cfg.RBACNamespaces) > 0 {
+		k8s.SetRBACNamespaces(cfg.RBACNamespaces)
+		probed := slices.DeleteFunc(slices.Concat([]string{k8s.GetContextNamespace()}, cfg.Namespaces, cfg.RBACNamespaces), func(ns string) bool { return ns == "" })
+		slices.Sort(probed)
+		if probed = slices.Compact(probed); len(probed) > k8s.MaxScopeCandidates {
+			return fmt.Errorf("--rbac-namespaces with the context namespace and --namespaces gives %d namespaces to probe, over the fanout cap of %d; raise --max-scope-candidates", len(probed), k8s.MaxScopeCandidates)
+		}
+		if _, source := k8s.GetAccessibleNamespacesWithSource(context.Background()); source == k8s.NamespaceListCluster {
+			log.Printf("[k8s] --rbac-namespaces is set, but this ServiceAccount can list namespaces cluster-wide, so Radar is not limited to %v. Remove the cluster-wide grant to limit it.", cfg.RBACNamespaces)
+		}
+	}
 	if len(cfg.Namespaces) > 0 {
 		k8s.SetFallbackNamespaces(cfg.Namespaces)
 		if err := validateNamespaceFanout(cfg.Namespaces, k8s.GetContextNamespace(), k8s.MaxScopeCandidates); err != nil {
@@ -369,6 +389,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				prometheuspkg.Retire()
 				return err
 			}
+			if cfg.LocalConnections.HasLaunchOverride(config.IntegrationMetrics) && selection.View.State != "launch" {
+				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
+			}
 			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 			url, headers := prometheuspkg.CurrentConfig()
 			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
@@ -505,6 +528,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		MCP:                       &cfg.MCPEnabled,
 		MCPReadOnly:               &cfg.MCPReadOnly,
 		MCPExecTools:              &cfg.MCPExecTools,
+		MCPHTTPTools:              &cfg.MCPHTTPTools,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -569,6 +593,13 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 	mcppkg.SetExecToolsEnabled(mcpExecTools)
 	serverCfg.MCPExecTools = mcpExecTools
+	mcpHTTPTools := cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster()
+	if cfg.MCPHTTPTools && !mcpHTTPTools {
+		log.Printf("[mcp] curl_service opt-in suppressed (MCP enabled=%t, read-only=%t, in-cluster=%t)", cfg.MCPEnabled, cfg.MCPReadOnly, k8s.IsInCluster())
+	}
+	effectiveCfg.MCPHTTPTools = &mcpHTTPTools
+	mcppkg.SetHTTPToolsEnabled(mcpHTTPTools)
+	serverCfg.MCPHTTPTools = mcpHTTPTools
 	if cfg.MCPEnabled {
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
@@ -576,7 +607,10 @@ func CreateServer(cfg AppConfig) *server.Server {
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
 		if !cfg.MCPReadOnly {
-			serverCfg.MCPHandler = mcppkg.NewHandler()
+			serverCfg.MCPHandler = mcppkg.NewHandlerWithoutApplicationEvidence()
+			if !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured {
+				serverCfg.MCPHandler = mcppkg.NewHandler()
+			}
 			serverCfg.MCPApplyHandler = mcppkg.NewApplyHandler()
 		}
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()

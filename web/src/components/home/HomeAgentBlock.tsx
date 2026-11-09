@@ -14,10 +14,17 @@ export function HomeAgentBlock({
   mcpUrl,
   readOnly,
   execTools,
+  httpTools,
+  helmTools,
+  applicationEvidenceAvailable,
 }: {
   mcpUrl: string
   readOnly?: boolean
   execTools?: boolean
+  httpTools?: boolean
+  /** Whether the native Helm MCP tool is registered; target Kubernetes permissions still required. */
+  helmTools?: boolean
+  applicationEvidenceAvailable?: boolean
 }) {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const d = useDiagnose()
@@ -52,7 +59,10 @@ export function HomeAgentBlock({
         mcpUrl={mcpUrl}
         readOnly={readOnly}
         execTools={execTools}
+        httpTools={httpTools}
+        helmTools={helmTools}
         onInvestigate={showInvestigate && d.available ? () => openComposer(d) : undefined}
+        applicationEvidenceAvailable={applicationEvidenceAvailable}
       />
     </div>
   )
