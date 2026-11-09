@@ -7,6 +7,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/jobset"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -46,7 +47,11 @@ func TestApplicationsListJobSetInsteadOfExactMembers(t *testing.T) {
 	}
 	cache := k8s.GetResourceCache()
 	g := buildAppGraph(cache, []string{"ml"})
-	inputs := collectAppWorkloads(context.Background(), cache, []string{"ml"}, g, false)
+	session, err := k8s.BeginOwnershipRead(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := collectAppWorkloads(context.Background(), cache, []string{"ml"}, g, ownership.NewView(session, ownership.Unrestricted()), false)
 	if len(inputs) != 5 {
 		t.Fatalf("workloads: %+v", inputs)
 	}
