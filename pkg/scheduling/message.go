@@ -55,15 +55,23 @@ func ParseMessage(message string) (totalNodes int, reasons []Reason) {
 
 	match := nodesAvailablePattern.FindStringSubmatchIndex(message)
 	if match == nil {
-		// Without the per-node frame the message is one statement, not a list
-		// of node clauses: Volcano's gang-scheduling "pod group is not ready,
-		// 1 Pending, …; Pending: 1 Unschedulable" says nothing about nodes.
 		whole := NormalizeClause(message)
-		if IsIgnoredClause(whole) {
+		// A single clause without the per-node frame ("2 Too many pods", the
+		// unbound-volume verdict) reads as itself.
+		if !strings.ContainsAny(whole, ",;:") {
+			if reason, ok := classifyClause(whole); ok {
+				return 0, []Reason{reason}
+			}
 			return 0, nil
 		}
+		// Longer text without the frame is one statement, not a list of node
+		// clauses: Volcano's gang-scheduling "pod group is not ready, 1 Pending,
+		// …; Pending: 1 Unschedulable" says nothing about nodes.
 		if reason, ok := classifyClause(whole); ok && reason.Class == VolumeBinding {
 			return 0, []Reason{reason}
+		}
+		if IsIgnoredClause(whole) {
+			return 0, nil
 		}
 		return 0, []Reason{{Class: Other, Raw: whole}}
 	}

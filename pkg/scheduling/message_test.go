@@ -101,6 +101,12 @@ func TestParseMessageVolcano(t *testing.T) {
 	if reasons[0].Class != InsufficientResource || reasons[0].Resource != "cpu" || reasons[0].NodeCount != 1 {
 		t.Errorf("first clause lost its count: %+v", reasons[0])
 	}
+	if _, reasons := ParseMessage("2 Too many pods"); len(reasons) != 1 || reasons[0].Class != InsufficientResource || reasons[0].Resource != "pods" || reasons[0].NodeCount != 2 {
+		t.Errorf("a single unframed clause should read as itself: %+v", reasons)
+	}
+	if _, reasons := ParseMessage("no new claims to deallocate, pod has unbound immediate PersistentVolumeClaims"); len(reasons) != 1 || reasons[0].Class != VolumeBinding {
+		t.Errorf("the volume verdict should survive DRA filler: %+v", reasons)
+	}
 	gang := "pod group is not ready, 1 Pending, 1 minAvailable; Pending: 1 Unschedulable"
 	if total, reasons := ParseMessage(gang); total != 0 || len(reasons) != 1 || reasons[0] != (Reason{Class: Other, Raw: gang}) {
 		t.Errorf("gang message = %d/%+v, want it whole, as one unclassified reason", total, reasons)
