@@ -455,6 +455,9 @@ export interface RendererOverrides {
   }>
   // PVC: host wraps the base renderer to add a kubelet-derived usage gauge
   // when Prometheus is scraping kubelet endpoints.
+  // HTTPRoute: host reads the parent Gateways so hostnames open with the
+  // scheme their listeners serve.
+  HTTPRouteRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   PVCRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -854,6 +857,7 @@ export function ResourceRendererDispatch({
   const CRDComp = rendererOverrides?.CustomResourceDefinitionRenderer ?? CustomResourceDefinitionRenderer
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
+  const HTTPRouteComp = rendererOverrides?.HTTPRouteRenderer ?? HTTPRouteRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
   const ValidatingAdmissionPolicyComp = rendererOverrides?.ValidatingAdmissionPolicyRenderer ?? ValidatingAdmissionPolicyRenderer
   const ValidatingAdmissionPolicyBindingComp = rendererOverrides?.ValidatingAdmissionPolicyBindingRenderer ?? ValidatingAdmissionPolicyBindingRenderer
@@ -925,7 +929,7 @@ export function ResourceRendererDispatch({
         {kind === 'challenges' && <ChallengeRenderer data={data} />}
         {kind === 'gateways' && groupGatedMatched && (isApiGroup(data.apiVersion, 'networking.istio.io') ? <IstioGatewayRenderer data={data} /> : <GatewayRenderer data={data} onNavigate={onNavigate} />)}
         {kind === 'gatewayclasses' && <GatewayClassRenderer data={data} />}
-        {kind === 'httproutes' && <HTTPRouteRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'httproutes' && <HTTPRouteComp data={data} onNavigate={onNavigate} />}
         {kind === 'grpcroutes' && <GRPCRouteRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
