@@ -597,3 +597,43 @@ describe('finished Pod resource usage',()=>{
  })
 
 })
+
+describe('PodRenderer OOMKilled limit hint', () => {
+  const oomPod = (podLimit: string | undefined, containerLimit: string | undefined) => ({
+    metadata: { name: 'api', namespace: 'default' },
+    spec: {
+      ...(podLimit ? { resources: { limits: { memory: podLimit } } } : {}),
+      containers: [{
+        name: 'api',
+        image: 'example/api:latest',
+        ...(containerLimit ? { resources: { limits: { memory: containerLimit } } } : {}),
+      }],
+    },
+    status: {
+      phase: 'Running',
+      containerStatuses: [{
+        name: 'api',
+        ready: false,
+        restartCount: 3,
+        state: { waiting: { reason: 'CrashLoopBackOff' } },
+        lastState: { terminated: { reason: 'OOMKilled', exitCode: 137 } },
+      }],
+    },
+  })
+  const render = (podLimit?: string, containerLimit?: string) => renderToString(
+    <PodRenderer data={oomPod(podLimit, containerLimit)} onCopy={() => undefined} copied={null} />,
+  )
+
+  // The limit must appear after the OOM exit, not only in the pod's resource summary above it.
+  const afterOOM = (html: string, value: string) => html.slice(html.indexOf('OOMKilled')).includes(value)
+
+  it('shows the pod-level memory limit beside the OOM exit when the container sets none', () => {
+    expect(afterOOM(render('48Mi'), '48Mi')).toBe(true)
+  })
+
+  it('shows the container limit, not the pod limit, when the container sets one', () => {
+    const html = render('256Mi', '96Mi')
+    expect(afterOOM(html, '96Mi')).toBe(true)
+    expect(afterOOM(html, '256Mi')).toBe(false)
+  })
+})

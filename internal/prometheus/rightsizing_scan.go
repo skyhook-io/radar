@@ -704,7 +704,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		}
 	}
 	setCurrentQuantities(&row, request, limit, resourceName)
-	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName))
+	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName), resourceName)
 	if queryErr := evidence.errors[resourceName]; queryErr != nil {
 		row.QueryError = RowUsageQueryFailed
 		return row

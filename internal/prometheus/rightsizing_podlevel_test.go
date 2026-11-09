@@ -42,9 +42,10 @@ func TestFixedPodLevelRequest(t *testing.T) {
 			wantCPU: "300m",
 		},
 		{
-			name:    "pod-level limit only defaults the request to the limit",
-			spec:    corev1.PodSpec{Resources: &corev1.ResourceRequirements{Limits: resourceList("memory", "256Mi")}, Containers: []corev1.Container{{Name: "app"}}},
-			wantMem: "256Mi",
+			// The request defaults to the limit, but adding container requests
+			// changes it, so container sizing still applies.
+			name: "a pod-level limit alone does not fix the request",
+			spec: corev1.PodSpec{Resources: &corev1.ResourceRequirements{Limits: resourceList("memory", "256Mi")}, Containers: []corev1.Container{{Name: "app"}}},
 		},
 		{
 			name: "pod-level limit with a container request derives the request from containers",
@@ -67,11 +68,11 @@ func TestFixedPodLevelRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "derivation is per resource",
-			spec: corev1.PodSpec{Resources: &corev1.ResourceRequirements{Limits: resourceList("cpu", "1", "memory", "256Mi")}, Containers: []corev1.Container{
+			name: "per resource",
+			spec: corev1.PodSpec{Resources: &corev1.ResourceRequirements{Requests: resourceList("memory", "128Mi"), Limits: resourceList("cpu", "1", "memory", "256Mi")}, Containers: []corev1.Container{
 				{Name: "app", Resources: corev1.ResourceRequirements{Requests: resourceList("cpu", "100m")}},
 			}},
-			wantMem: "256Mi",
+			wantMem: "128Mi",
 		},
 	}
 	for _, tc := range tests {
@@ -207,6 +208,23 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 			t.Errorf("sidecar cpu = %+v, want missing_request", row)
 		}
 	})
+}
+
+func TestComputeRightsizing_PodLimitOnlyStillSizesContainers(t *testing.T) {
+	// Pod limit only: the admitted request defaults to the limit (1 core), and
+	// container requests replace that default, so sizing them is meaningful.
+	spec := corev1.PodSpec{Resources: &corev1.ResourceRequirements{Limits: resourceList("cpu", "1", "memory", "256Mi")},
+		Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}}
+	workload := rightsizingWorkload{podSpec: &spec, containers: extractRuntimeContainers(&spec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, hpaAvailable: true}
+	cpu := map[string]float64{"app": 0.44, "sidecar": 0.3}
+	mem := map[string]float64{"app": 66 * 1024 * 1024, "sidecar": 40 * 1024 * 1024}
+	rows := computeRightsizing(context.Background(), podLevelQuerier(cpu, mem, 2016), "Deployment", "ns", "api", workload).Rows
+	for _, want := range []struct{ container, resource, rec string }{{"app", "cpu", "550m"}, {"sidecar", "cpu", "350m"}, {"app", "memory", "96Mi"}, {"sidecar", "memory", "64Mi"}} {
+		row := rowFor(rows, want.container, want.resource)
+		if row.Fit != FitMissingRequest || row.RecommendedReq == nil || *row.RecommendedReq != want.rec || row.PodLevelRequest != nil {
+			t.Errorf("%s %s = %+v, want missing_request suggesting %s", want.container, want.resource, row, want.rec)
+		}
+	}
 }
 
 func TestBuildScanRow_PodLevelRequest(t *testing.T) {

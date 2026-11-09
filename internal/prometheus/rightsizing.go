@@ -118,9 +118,10 @@ type RightsizingRow struct {
 	CurrentRequestValue *float64              `json:"currentRequestValue,omitempty"`
 	CurrentLimit        *string               `json:"currentLimit,omitempty"`
 	CurrentLimitValue   *float64              `json:"currentLimitValue,omitempty"`
-	// PodLevelRequest is the pod's fixed pod-level request for this resource,
-	// set only on FitPodLevelRequest rows.
+	// PodLevelRequest is the request the pod sets in spec.resources for this
+	// resource, set whenever the pod has one; the value is in the row's units.
 	PodLevelRequest         *string            `json:"podLevelRequest,omitempty"`
+	PodLevelRequestValue    *float64           `json:"podLevelRequestValue,omitempty"`
 	Observed                *ObservedStatistic `json:"observed,omitempty"`
 	Peak                    *ObservedStatistic `json:"peak,omitempty"`
 	CalculatedReq           *string            `json:"calculatedRequest,omitempty"`
@@ -586,36 +587,21 @@ func forEachPodContainer(spec *corev1.PodSpec, visit func(*corev1.Container)) {
 	}
 }
 
-// fixedPodLevelRequest returns the pod-level request the template fixes for a
-// resource, or nil when the pod's request for it follows its containers. With
-// pod-level resources the scheduler reserves the pod-level request and ignores
-// container requests. Templates are not defaulted, so this follows Pod
-// defaulting: an explicit pod-level request is used as is; with only a
-// pod-level limit, the request defaults to that limit when no container
-// declares a request or limit for the resource, and is otherwise derived from
-// the containers' requests, which then still decide the reservation.
+// fixedPodLevelRequest returns the pod-level request the template sets for a
+// resource, or nil when it sets none. With a pod-level request the scheduler
+// reserves it and ignores container requests. A pod-level limit alone does not
+// fix the request: Kubernetes defaults the request to the limit only when no
+// container sets one, so adding container requests changes the reservation
+// and sizing them still applies.
 func fixedPodLevelRequest(podSpec *corev1.PodSpec, name corev1.ResourceName) *resource.Quantity {
 	if podSpec.Resources == nil {
 		return nil
 	}
-	if q, ok := podSpec.Resources.Requests[name]; ok {
-		qc := q.DeepCopy()
-		return &qc
-	}
-	limit, ok := podSpec.Resources.Limits[name]
+	q, ok := podSpec.Resources.Requests[name]
 	if !ok {
 		return nil
 	}
-	for _, list := range [][]corev1.Container{podSpec.Containers, podSpec.InitContainers} {
-		for _, c := range list {
-			_, requested := c.Resources.Requests[name]
-			_, limited := c.Resources.Limits[name]
-			if requested || limited {
-				return nil
-			}
-		}
-	}
-	qc := limit.DeepCopy()
+	qc := q.DeepCopy()
 	return &qc
 }
 
@@ -889,7 +875,7 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 		}
 	}
 	setCurrentQuantities(&row, req, lim, resourceName)
-	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName))
+	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName), resourceName)
 	stat := results[resourceName+"_stat"]
 	coverage := results[resourceName+"_coverage"]
 	if stat.err != nil {
@@ -934,10 +920,12 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 	return row
 }
 
-func setPodLevelRequest(row *RightsizingRow, podRequest *resource.Quantity) {
+func setPodLevelRequest(row *RightsizingRow, podRequest *resource.Quantity, resourceName string) {
 	if podRequest != nil {
 		formatted := podRequest.String()
+		value := quantityToFloat(*podRequest, resourceName)
 		row.PodLevelRequest = &formatted
+		row.PodLevelRequestValue = &value
 	}
 }
 

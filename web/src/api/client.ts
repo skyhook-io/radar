@@ -3953,6 +3953,7 @@ export interface RightsizingRow {
   currentLimitValue?: number;
   /** The pod's fixed pod-level request (spec.resources), set when fit is pod_level_request. */
   podLevelRequest?: string;
+  podLevelRequestValue?: number;
   observed?: {
     name: "P95" | "P99" | "Max";
     value: number;

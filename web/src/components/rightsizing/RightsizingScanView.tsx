@@ -19,7 +19,7 @@ import {
   useRightsizingScan,
   type RightsizingRow,
 } from '../../api/client'
-import { RIGHTSIZING_DOCS_URL } from '../resource/RightsizingStrip'
+import { podLevelOverUseNote, RIGHTSIZING_DOCS_URL } from '../resource/RightsizingStrip'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { CostViewTabs } from '../cost/CostViewTabs'
 import {
@@ -965,9 +965,8 @@ function primaryEvidenceNote(row: RightsizingRow) {
   if (row.fit === 'pod_level_request' && !row.queryError)
     return (
       <p className="mt-1 text-xs text-theme-text-tertiary">
-        This pod sets a pod-level request in spec.resources, which the scheduler reserves instead
-        of container requests. Radar shows this container&apos;s usage but doesn&apos;t size the
-        pod-level request.
+        {podLevelOverUseNote(row) ??
+          "This pod sets a pod-level request in spec.resources, which the scheduler reserves instead of container requests. Radar shows this container's usage but doesn't size the pod-level request."}
       </p>
     )
   if (row.hpaManaged)

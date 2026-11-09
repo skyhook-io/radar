@@ -362,11 +362,31 @@ export function getRightsizingExplanation(row: RightsizingRow): string | undefin
 }
 
 function podLevelRequestExplanation(row: RightsizingRow, podLevelRequest: string): string {
+  const overUse = podLevelOverUseNote(row)
+  if (overUse) return overUse
   const resource = row.resource === 'cpu' ? 'CPU' : 'memory'
   const own = row.currentRequest
     ? ` This container's own request (${row.currentRequest}) no longer decides what is reserved.`
     : ''
   return `This pod sets one ${resource} request for all its containers: ${podLevelRequest} in spec.resources. The scheduler reserves that instead of container requests, so Radar doesn't suggest a request per container; check the pod-level request against the usage of its containers.${own}`
+}
+
+/**
+ * One container's usage above the pod's whole request is a sound lower bound on
+ * the pod's own use. Adding containers up would overstate it, so only this case
+ * is called out.
+ */
+export function podLevelOverUseNote(row: RightsizingRow): string | undefined {
+  if (
+    row.fit !== 'pod_level_request' ||
+    !row.observed ||
+    !row.podLevelRequest ||
+    row.podLevelRequestValue == null ||
+    row.observed.value <= row.podLevelRequestValue
+  )
+    return undefined
+  const resource = row.resource === 'cpu' ? 'CPU' : 'memory'
+  return `This container alone used ${row.observed.formatted} (${row.observed.name}), more than the pod's ${row.podLevelRequest} ${resource} request, so the pod uses more than it reserves. Radar can't size pod-level requests yet; raise spec.resources.requests.${row.resource} to cover what the pod uses.`
 }
 
 function confidenceLabel(row: RightsizingRow) {

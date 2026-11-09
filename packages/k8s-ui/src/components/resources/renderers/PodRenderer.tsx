@@ -772,9 +772,11 @@ export function PodRenderer({
                         {lastTermination.exitCode !== undefined && lastTermination.exitCode !== 0 && (
                           <span className="text-theme-text-tertiary">(code {lastTermination.exitCode})</span>
                         )}
-                        {lastTermination.reason === 'OOMKilled' && container.resources?.limits?.memory && (
+                        {lastTermination.reason === 'OOMKilled' && (container.resources?.limits?.memory ? (
                           <span className="text-theme-text-tertiary">— limit: {container.resources.limits.memory}</span>
-                        )}
+                        ) : podResources?.limits?.memory ? (
+                          <span className="text-theme-text-tertiary">— pod limit: {podResources.limits.memory}</span>
+                        ) : null)}
                       </div>
                       {lastTermination.finishedAt && (() => {
                         const agoLabel = formatMsAgo(lastTermination.finishedAt)
