@@ -606,6 +606,71 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 
 	})
 
+	// Group and group-kind exclusions run before the limit, so excluded churn
+	// cannot fill a bounded scan; unknown versions match no exclusion.
+	t.Run("group and group-kind exclusions run before the limit", func(t *testing.T) {
+		store := newStore(t)
+		row := func(id string, offset time.Duration, kind, apiVersion string) timeline.TimelineEvent {
+			e := informer(id, offset)
+			e.Kind, e.APIVersion = kind, apiVersion
+			return e
+		}
+		mustAppend(t, store, row("custom", 0, "BGPConfiguration", "crd.projectcalico.org/v1"))
+		mustAppend(t, store, row("same-group-other-kind", time.Second, "AppProject", "argoproj.io/v1alpha1"))
+		mustAppend(t, store, row("unknown", 2*time.Second, "Widget", ""))
+		for i := 0; i < 5; i++ {
+			mustAppend(t, store, row(fmt.Sprintf("tracked-%d", i), time.Minute+time.Duration(i)*time.Second, "Application", "argoproj.io/v1alpha1"))
+			mustAppend(t, store, row(fmt.Sprintf("builtin-%d", i), 2*time.Minute+time.Duration(i)*time.Second, "Deployment", "apps/v1"))
+		}
+		opts := timeline.QueryOptions{
+			ExcludeAPIGroups:  []string{"apps"},
+			ExcludeGroupKinds: []resourceid.GroupKind{{Group: "argoproj.io", Kind: "Application"}},
+			Limit:             3, IncludeManaged: true,
+		}
+		got, err := store.Query(ctx, opts)
+		if err != nil || fmt.Sprint(idsOfEvents(got)) != "[unknown same-group-other-kind custom]" {
+			t.Fatalf("exclusions before limit: got %v, error %v", idsOfEvents(got), err)
+		}
+		opts.RequireAPIVersion = true
+		got, err = store.Query(ctx, opts)
+		if err != nil || fmt.Sprint(idsOfEvents(got)) != "[same-group-other-kind custom]" {
+			t.Fatalf("exclusions with RequireAPIVersion: got %v, error %v", idsOfEvents(got), err)
+		}
+	})
+
+	// DesiredStateUpdates drops status-only updates before the limit, so a
+	// controller's status writes cannot fill a bounded read; creates and
+	// deletes pass whatever their diff.
+	t.Run("desired-state updates filter runs before the limit", func(t *testing.T) {
+		store := newStore(t)
+		row := func(id string, offset time.Duration, eventType timeline.EventType, paths ...string) timeline.TimelineEvent {
+			e := informer(id, offset)
+			e.EventType = eventType
+			if paths != nil {
+				e.Diff = &timeline.DiffInfo{}
+				for _, p := range paths {
+					e.Diff.Fields = append(e.Diff.Fields, timeline.FieldChange{Path: p, OldValue: "a", NewValue: "b"})
+				}
+			}
+			return e
+		}
+		mustAppend(t, store, row("spec", 0, timeline.EventTypeUpdate, "spec.replicas", "metadata.generation"))
+		mustAppend(t, store, row("mixed", time.Second, timeline.EventTypeUpdate, "status.conditions[Ready]", "Spec.Foo"))
+		mustAppend(t, store, row("top-level", 2*time.Second, timeline.EventTypeUpdate, "rules[0].host"))
+		mustAppend(t, store, row("node-label", 3*time.Second, timeline.EventTypeUpdate, "metadata.labels[team]"))
+		mustAppend(t, store, row("create", 4*time.Second, timeline.EventTypeAdd))
+		for i, paths := range [][]string{
+			{"status.conditions[Ready]"}, {"status"}, {"status[0]"}, {"resource"}, {"metadata.generation"},
+			{"metadata.deletionTimestamp"}, {"STATUS.phase"}, nil, {},
+		} {
+			mustAppend(t, store, row(fmt.Sprintf("noise-%d", i), time.Minute+time.Duration(i)*time.Second, timeline.EventTypeUpdate, paths...))
+		}
+		got, err := store.Query(ctx, timeline.QueryOptions{DesiredStateUpdates: true, Limit: 5, IncludeManaged: true})
+		if err != nil || fmt.Sprint(idsOfEvents(got)) != "[create node-label top-level mixed spec]" {
+			t.Fatalf("desired-state updates before limit: got %v, error %v", idsOfEvents(got), err)
+		}
+	})
+
 	// Excluding managed rows or K8s Events after the limit would let newer
 	// excluded rows fill it, returning a short page with an older visible row
 	// missing and nothing to say so.

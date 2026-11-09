@@ -131,6 +131,7 @@ func EventTypeToOperation(et EventType) string  { return pkgtimeline.EventTypeTo
 func HealthStateToString(hs HealthState) string { return pkgtimeline.HealthStateToString(hs) }
 func StringToHealthState(s string) HealthState  { return pkgtimeline.StringToHealthState(s) }
 func ToLegacyDiffInfo(d *DiffInfo) *DiffInfo    { return pkgtimeline.ToLegacyDiffInfo(d) }
+func IsDesiredStatePath(path string) bool       { return pkgtimeline.IsDesiredStatePath(path) }
 
 // Store constructors.
 func NewMemoryStore(maxSize int) *pkgtimeline.MemoryStore { return pkgtimeline.NewMemoryStore(maxSize) }
@@ -338,6 +339,9 @@ func setGlobalStore(s EventStore) {
 	globalStore = s
 	globalStoreMu.Unlock()
 }
+
+// SetStoreForTest replaces the global store, for tests that wrap it.
+func SetStoreForTest(s EventStore) { setGlobalStore(s) }
 
 // ResetStore stops and clears the event store.
 // This must be called before reinitializing when switching contexts.

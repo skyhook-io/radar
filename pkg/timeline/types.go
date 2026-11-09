@@ -4,6 +4,7 @@
 package timeline
 
 import (
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -157,6 +158,36 @@ type TimelineEvent struct {
 // IsManaged returns true if this resource is managed by another (RS, Pod, Event)
 func (e *TimelineEvent) IsManaged() bool {
 	return e.Owner != nil || e.Kind == "ReplicaSet" || e.Kind == "Pod" || e.Kind == "Event"
+}
+
+// IsDesiredStatePath reports whether a recorded diff path names desired
+// state: anything but status, the generic "resource changed" marker, and
+// object metadata other than labels and annotations (a generation bump alone
+// names no field). The SQL stores apply the same rule
+// (internal/timeline desiredStatePathSQL); change both together.
+func IsDesiredStatePath(path string) bool {
+	p := strings.ToLower(path)
+	switch {
+	case p == "status", strings.HasPrefix(p, "status."), strings.HasPrefix(p, "status["),
+		p == "resource", p == "metadata.generation":
+		return false
+	case strings.HasPrefix(p, "metadata."):
+		return strings.HasPrefix(p, "metadata.labels") || strings.HasPrefix(p, "metadata.annotations")
+	}
+	return true
+}
+
+// HasDesiredStateField reports whether diff records a desired-state field.
+func HasDesiredStateField(diff *DiffInfo) bool {
+	if diff == nil {
+		return false
+	}
+	for _, f := range diff.Fields {
+		if IsDesiredStatePath(f.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 // FilterPreset defines a named filter configuration

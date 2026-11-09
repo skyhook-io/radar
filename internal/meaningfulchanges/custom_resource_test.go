@@ -47,7 +47,7 @@ func TestClassifyCustomResourceLifecycle(t *testing.T) {
 }
 
 func TestClassifyBuiltinLifecycleExclusions(t *testing.T) {
-	for _, kind := range []string{"Pod", "ReplicaSet", "Job", "Node", "Endpoints", "PersistentVolumeClaim", "ServiceAccount"} {
+	for _, kind := range []string{"Pod", "ReplicaSet", "Job", "Endpoints", "PersistentVolumeClaim", "ServiceAccount"} {
 		for _, op := range []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete} {
 			if got, _ := classify(timeline.TimelineEvent{Source: timeline.SourceInformer, Kind: kind, EventType: op}); got != "" {
 				t.Fatalf("%s %s = %q, want excluded", kind, op, got)
@@ -57,6 +57,10 @@ func TestClassifyBuiltinLifecycleExclusions(t *testing.T) {
 	for _, op := range []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete} {
 		if got, _ := classify(timeline.TimelineEvent{Source: timeline.SourceInformer, APIVersion: "storage.k8s.io/v1", Kind: "CSINode", EventType: op}); got != "" {
 			t.Fatalf("CSINode %s = %q, want excluded", op, got)
+		}
+		// A Node joining or leaving changes capacity.
+		if got, _ := classify(timeline.TimelineEvent{Source: timeline.SourceInformer, APIVersion: "v1", Kind: "Node", EventType: op}); got != issuesapi.ChangeCategoryLifecycle {
+			t.Fatalf("Node %s = %q, want lifecycle", op, got)
 		}
 	}
 }
