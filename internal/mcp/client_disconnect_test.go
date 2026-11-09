@@ -198,6 +198,28 @@ func TestListResourcesStopsDuringTheFirstProbeWhenANewProtocolClientLeaves(t *te
 	}
 }
 
+// A call whose own deadline passes during that first probe reports the
+// deadline, the same as one that passes during the sync wait, not a failed
+// read of the kind.
+func TestListResourcesReportsItsDeadlineDuringTheFirstProbe(t *testing.T) {
+	releaseLists := installColdWidgets(t, true)
+	defer releaseLists()
+	for name, input := range map[string]listResourcesInput{
+		"one namespace":  {Kind: "widgets", Group: "example.test", Namespace: "cold"},
+		"all namespaces": {Kind: "widgets", Group: "example.test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			_, _, err := handleListResources(ctx, &mcpsdk.CallToolRequest{}, input)
+			var classified *readError
+			if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &classified) {
+				t.Fatalf("err = %v, want the caller's deadline", err)
+			}
+		})
+	}
+}
+
 // Write tools keep running when the client leaves. A deployment scale whose
 // PATCH is still in flight when a 2026-07-28 client disconnects must reach the
 // API server with a live request and finish.
@@ -205,6 +227,8 @@ func TestWriteToolKeepsRunningWhenANewProtocolClientLeaves(t *testing.T) {
 	patchArrived := make(chan struct{})
 	patchCancelled := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releasePatch := func() { releaseOnce.Do(func() { close(release) }) }
 	patched := make(chan struct{})
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch || !strings.HasSuffix(r.URL.Path, "/namespaces/shop/deployments/web") {
@@ -246,6 +270,9 @@ func TestWriteToolKeepsRunningWhenANewProtocolClientLeaves(t *testing.T) {
 	took := timeToolCalls(server)
 	httpServer := httptest.NewServer(handlerForServer(server))
 	defer httpServer.Close()
+	// Runs before either server closes, so a failing run can't leave the
+	// PATCH, and with it both servers, waiting forever.
+	defer releasePatch()
 
 	callAndGiveUp(t, httpServer.URL, discoverProtocolVersion, "manage_workload",
 		map[string]any{"action": "scale", "kind": "deployment", "namespace": "shop", "name": "web", "replicas": 3})
@@ -262,7 +289,7 @@ func TestWriteToolKeepsRunningWhenANewProtocolClientLeaves(t *testing.T) {
 		t.Fatal("the client leaving cancelled manage_workload's PATCH mid-flight")
 	case <-time.After(500 * time.Millisecond):
 	}
-	close(release)
+	releasePatch()
 	select {
 	case <-patched:
 	case <-patchCancelled:

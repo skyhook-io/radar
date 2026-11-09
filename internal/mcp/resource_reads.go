@@ -744,6 +744,10 @@ func checkDynamicResourceRead(ctx context.Context, kind, group, namespace, verb 
 }
 
 func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, verb string, readErr error, dynamicCache *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, ok bool) (bool, error) {
+	// A read that ended with the caller's context says nothing about the kind.
+	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(readErr, ctxErr) {
+		return false, ctxErr
+	}
 	var classified *readError
 	if errors.As(readErr, &classified) {
 		return false, readErr
