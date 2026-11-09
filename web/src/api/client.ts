@@ -427,8 +427,8 @@ export async function fetchJSON<T>(
 // ============================================================================
 
 export interface DashboardCluster {
-  // Kubeconfig context, or "in-cluster". Radar before the kubeconfigCluster
-  // field sent the kubeconfig cluster entry here.
+  // Kubeconfig context, or "in-cluster". The kubeconfig cluster entry is in
+  // kubeconfigCluster.
   name: string;
   // Kubeconfig cluster entry the context points at; several contexts can
   // share one. Absent in in-cluster mode and from older Radar.

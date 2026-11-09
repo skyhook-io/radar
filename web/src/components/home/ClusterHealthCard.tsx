@@ -251,7 +251,7 @@ export function ClusterHealthCard({
               // tooltip in that case; local mode keeps it so users can hover
               // to see the full kubeconfig context path.
               <Tooltip content={isInCluster ? '' : rawName} wrapperClassName="!block min-w-0">
-              <h2 aria-label={headlineName} className="text-xl font-semibold text-theme-text-primary leading-tight mb-1.5">
+              <h2 aria-label={isInCluster ? headlineName : rawName} className="text-xl font-semibold text-theme-text-primary leading-tight mb-1.5">
                 {/* Generated contexts often share a long prefix and differ only at the end.
                     MiddleEllipsis exposes only the cut text to screen readers; aria-label keeps the full name. */}
                 <MiddleEllipsis text={headlineName} />

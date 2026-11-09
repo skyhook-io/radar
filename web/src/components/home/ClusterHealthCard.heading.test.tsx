@@ -60,3 +60,13 @@ it('names the heading with the full context, which the middle cut hides from scr
   const b = 'gitlab-org/infra/platform/k8s-agents:staging-us-east-agent'
   expect(render(b).getAttribute('aria-label')).toBe(b)
 })
+
+it('names an OpenShift heading with the full context, so two projects on one server stay apart', () => {
+  host = document.createElement('div')
+  document.body.append(host)
+  root = createRoot(host)
+  const a = 'proj-a/api-prod-example-com:6443/alice'
+  const heading = render(a)
+  expect(heading.getAttribute('aria-label')).toBe(a)
+  expect(heading.textContent).not.toBe(a)
+})
