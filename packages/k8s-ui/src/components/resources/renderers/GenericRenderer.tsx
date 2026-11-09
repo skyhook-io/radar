@@ -160,8 +160,10 @@ const BANNER_TYPE: Record<HealthLevel, HealthType> = {
 }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
-  if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && getInferenceServiceStatus(resource).level === 'neutral') {
-    return { type: 'unknown', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
+  if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && isInferenceServiceStopRequested(resource)) {
+    const status = getInferenceServiceStatus(resource)
+    if (status.level === 'neutral') return { type: 'unknown', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
+    return { type: BANNER_TYPE[status.level], label: status.text }
   }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
@@ -349,7 +351,8 @@ export type GenericConditionTone = 'neutral' | 'ok' | 'warning' | 'fail' | 'uncl
 // One tone per condition, so the icon, the status chip, the sort order and
 // whether the section opens all agree. Unknown-polarity False is 'unclear'
 // (slate icon, red chip): many such conditions are positive, like
-// PredictorReady, and their False is a real failure.
+// PredictorReady, and their False is a real failure. An Unknown status is not
+// a failure, so its chip isn't red.
 export function genericConditionTone(resource: any, cond: any): GenericConditionTone {
   if (getCrossplaneConditionTone(resource, cond) === 'neutral') return 'neutral'
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
@@ -388,7 +391,7 @@ function GenericConditionsSection({ conditions, resource }: { conditions: any[];
             unclear: 'text-slate-400',
             unknown: 'text-yellow-400',
           }[tone]
-          const chipRed = tone === 'fail' || tone === 'unclear' || tone === 'unknown'
+          const chipRed = tone === 'fail' || tone === 'unclear'
 
           return (
             <div key={`${cond.type}-${index}`} className="flex items-start gap-2 text-sm">

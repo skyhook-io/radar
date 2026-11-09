@@ -65,7 +65,13 @@ describe('GenericRenderer conditions', () => {
   it("doesn't call a failed resume stopped", () => {
     const html = render([cond('Stopped', 'True'), { type: 'PredictorReady', status: 'False', reason: 'ReconcileFailed' }, { type: 'Ready', status: 'False', reason: 'Stopped' }], stopRequested)
     expect(html).not.toContain('isn&#x27;t serving requests')
+    expect(html).toContain('ReconcileFailed')
+    expect(html).toContain('bg-red-500/10')
     expect(chipClass(html, 'PredictorReady', 'False')).toContain('status-red')
+  })
+
+  it("doesn't color an Unknown status as a failure", () => {
+    expect(chipClass(render([cond('Ready', 'Unknown')]), 'Ready', 'Unknown')).not.toContain('status-red')
   })
 
   it('keeps a failed positive condition red', () => {

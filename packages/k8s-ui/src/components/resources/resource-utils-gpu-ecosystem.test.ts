@@ -130,7 +130,7 @@ describe('GPU ecosystem API contracts', () => {
     // A resume that failed: still Stopped=True, but a component reports its own error.
     expect(getInferenceServiceStatus({
       metadata, status: { conditions: [...stopped, { type: 'PredictorReady', status: 'False', reason: 'ReconcileFailed' }] },
-    }).level).not.toBe('neutral')
+    })).toMatchObject({ text: 'ReconcileFailed', level: 'unhealthy' })
     // The stop annotation was removed: not an intentional stop any more.
     expect(getInferenceServiceStatus({ status: { conditions: stopped } }).level).not.toBe('neutral')
   })

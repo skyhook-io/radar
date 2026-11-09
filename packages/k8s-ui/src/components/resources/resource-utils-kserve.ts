@@ -54,6 +54,12 @@ export function getInferenceServiceStatus(resource: any): StatusBadge {
   if (isInferenceServiceStopped(resource)) {
     return { text: 'Stopped', color: healthColors.neutral, level: 'neutral' }
   }
+  // Stop requested but a component failed for its own reason (a failed resume):
+  // name that reason, not the stop.
+  if (isInferenceServiceStopRequested(resource)) {
+    const failed = READINESS_CONDITIONS.map((type) => findCondition(resource, type)).find((c) => c?.status === 'False' && c.reason !== 'Stopped')
+    if (failed) return { text: failed.reason || `${failed.type} false`, color: healthColors.unhealthy, level: 'unhealthy' }
+  }
 
   const readyCond = findCondition(resource, 'Ready')
   if (readyCond?.status === 'True') {
