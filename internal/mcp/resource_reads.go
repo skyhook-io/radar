@@ -795,10 +795,11 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
 			// The caller's deadline bounds this wait: an MCP tool call that
 			// ends must not keep a goroutine blocked on a sync it can't use.
-			if _, waitErr := dynamicCache.ListBlockingContext(ctx, gvr, namespace, dynamicSyncWait); waitErr != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return false, ctxErr
-				}
+			_, waitErr := dynamicCache.ListBlockingContext(ctx, gvr, namespace, dynamicSyncWait)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
+			if waitErr != nil {
 				return checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, waitErr, dynamicCache, gvr, ok)
 			}
 		}
