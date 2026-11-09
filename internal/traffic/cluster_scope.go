@@ -183,7 +183,8 @@ const mixedClustersNote = "Radar couldn't work out which cluster this traffic co
 // applyClusterScopeWarning sets the cluster warning on a response: the reason
 // for an empty map, or the note that the flows shown may mix clusters. The
 // note joins a warning the source already set, since which cluster the flows
-// belong to matters more than their details. An empty-map reason never
+// belong to matters more than their details, but a transient kind stays so
+// the client still retries the read that failed. An empty-map reason never
 // replaces one: the source's warning is about what it could read at all.
 func applyClusterScopeWarning(response *FlowsResponse, mismatch string, mixed bool) {
 	switch {
@@ -192,7 +193,9 @@ func applyClusterScopeWarning(response *FlowsResponse, mismatch string, mixed bo
 		response.WarningKind = WarningCluster
 	case len(response.Flows) > 0 && mixed:
 		response.Warning = strings.TrimSpace(mixedClustersNote + " " + response.Warning)
-		response.WarningKind = WarningCluster
+		if response.WarningKind != WarningTransient {
+			response.WarningKind = WarningCluster
+		}
 	}
 }
 
