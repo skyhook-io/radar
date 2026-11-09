@@ -1872,6 +1872,12 @@ export interface VersionInfo {
   releaseNotes?: string;
   installMethod: InstallMethod;
   updateCommand?: string;
+  /**
+   * Desktop install that cannot update itself, and how the user updates instead:
+   * a new AppImage, a new .deb/.rpm through the package manager, or a download
+   * because Radar can't write to its folder. Absent: Update Now works.
+   */
+  manualUpdate?: 'appimage' | 'package' | 'download';
   error?: string;
   productHuntLaunch?: { enabled: boolean; url: string; start: string; end: string };
 }

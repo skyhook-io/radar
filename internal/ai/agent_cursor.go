@@ -130,6 +130,7 @@ func (a *cursorAgent) resolveApprovalFlags() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	help := exec.CommandContext(ctx, a.bin, "--help")
+	help.Dir = launchDir()
 	addAgentDirToPath(help)
 	out, _ := help.CombinedOutput()
 	if ctx.Err() != nil {

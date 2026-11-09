@@ -211,6 +211,7 @@ func probeVersion(ctx context.Context, path string) string {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, path, "--version")
+	cmd.Dir = launchDir()
 	addAgentDirToPath(cmd)
 	out, err := cmd.Output()
 	if err != nil {

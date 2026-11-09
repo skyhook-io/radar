@@ -38,7 +38,7 @@ func displayServer() string {
 func readAll(keys []string) []EnvVar {
 	out := make([]EnvVar, 0, len(keys))
 	for _, k := range keys {
-		v, set := os.LookupEnv(k)
+		v, set := webviewLookup(k, os.LookupEnv)
 		out = append(out, EnvVar{Key: k, Value: v, Set: set})
 	}
 	return out

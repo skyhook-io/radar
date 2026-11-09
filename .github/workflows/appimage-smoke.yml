@@ -1,0 +1,142 @@
+name: AppImage smoke test
+
+# Builds the Linux desktop AppImage the way the release job does and launches
+# it on a distro without WebKitGTK, so packaging breaks show up on the pull
+# request instead of on a release tag. Runs from forks with a read-only token
+# and no secrets.
+on:
+  pull_request:
+    paths:
+      - scripts/build-appimage.sh
+      - scripts/appimage/**
+      - .github/workflows/release-desktop.yml
+      - .github/workflows/appimage-smoke.yml
+      - cmd/desktop/**
+      - internal/desktopenv/**
+      - internal/server/desktop_open_url.go
+      - deploy/linux/**
+      - build/appicon.png
+      - go.mod
+      - go.sum
+      - Makefile
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appimage-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Build and launch the AppImage
+    # Same runner as release-desktop.yml build-linux: the AppImage bundles
+    # this system's GTK and WebKitGTK, and its glibc sets the floor.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      # The steps from here to "Build AppImage" mirror release-desktop.yml
+      # build-linux (minus nfpm); keep them in step so this tests what ships.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev imagemagick
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build frontend
+        run: make frontend embed
+
+      - name: Create dummy kubeconfig for Wails binding generation
+        run: |
+          mkdir -p ~/.kube
+          echo 'apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: https://localhost:6443
+            name: dummy
+          contexts:
+          - context:
+              cluster: dummy
+              user: dummy
+            name: dummy
+          current-context: dummy
+          users:
+          - name: dummy
+            user:
+              token: dummy' > ~/.kube/config
+
+      - name: Build Linux binary
+        run: |
+          cd cmd/desktop && wails build -platform linux/amd64 -tags webkit2_41 -ldflags "-X main.version=0.0.0-smoke"
+          mv ../../build/bin/Radar ../../build/bin/radar-desktop
+
+      - name: Build AppImage
+        run: scripts/build-appimage.sh build/bin/radar-desktop smoke
+
+      # A clean Ubuntu 24.04 container has no WebKitGTK, so the app can only
+      # start from what the AppImage bundles. The AppImage relies on the host
+      # for GL/EGL and fonts, which every desktop has; the container gets them.
+      - name: Launch on Ubuntu 24.04 without WebKitGTK
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w \
+            ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
+            bash -c 'export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq xvfb xdotool imagemagick curl procps fonts-dejavu-core libegl1 libgl1 libgles2 libfontconfig1 openssl python3 ca-certificates >/dev/null
+              if ldconfig -p | grep -q libwebkit2gtk; then echo "WebKitGTK is installed; the test would not prove the bundle works" >&2; exit 1; fi
+              scripts/appimage/smoke.sh radar-desktop_smoke_linux_amd64.AppImage smoke-out'
+
+      # A user who chose Wayland (GDK_BACKEND=wayland) gets it, and the app
+      # starts on a compositor that cannot run X11 apps.
+      - name: Launch on a Wayland session without Xwayland
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w \
+            ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
+            bash -c 'export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends weston imagemagick curl procps fonts-dejavu-core libegl1 libgl1 libgles2 libfontconfig1 openssl python3 ca-certificates >/dev/null
+              if ldconfig -p | grep -q libwebkit2gtk; then echo "WebKitGTK is installed; the test would not prove the bundle works" >&2; exit 1; fi
+              if command -v Xwayland >/dev/null; then echo "Xwayland is installed; the test would not prove the app uses Wayland" >&2; exit 1; fi
+              scripts/appimage/smoke.sh radar-desktop_smoke_linux_amd64.AppImage smoke-out-wayland wayland'
+
+      - name: Upload log and screenshot
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: appimage-smoke
+          path: |
+            smoke-out/
+            smoke-out-wayland/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # The AppImage itself, for trying this build by hand. A workflow
+      # artifact only: no release, tag or update channel points at it.
+      - name: Upload AppImage
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: appimage-build
+          path: radar-desktop_smoke_linux_amd64.AppImage
+          retention-days: 7
+          if-no-files-found: ignore

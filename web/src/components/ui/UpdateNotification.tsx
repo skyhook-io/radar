@@ -52,7 +52,8 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   const startUpdate = useStartDesktopUpdate()
   const applyUpdate = useApplyDesktopUpdate()
   const isDesktop = versionInfo?.installMethod === 'desktop'
-  const { data: updateStatus } = useDesktopUpdateStatus(desktopUpdating || (inSettings && expanded && isDesktop))
+  const desktopSelfUpdate = isDesktop && !versionInfo?.manualUpdate
+  const { data: updateStatus } = useDesktopUpdateStatus(desktopUpdating || (inSettings && expanded && desktopSelfUpdate))
 
   useEffect(() => {
     if (!expanded) return
@@ -213,8 +214,25 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
             {!inSettings && <>You're on {versionInfo.currentVersion}.</>}
           </p>
 
+          {/* Desktop that cannot replace itself: how to update, and the download */}
+          {isDesktop && versionInfo.manualUpdate && versionInfo.releaseUrl && (
+            <>
+              <p className="text-xs text-theme-text-secondary mt-1">
+                {MANUAL_UPDATE_TEXT[versionInfo.manualUpdate]}
+              </p>
+              <a
+                href={versionInfo.releaseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-accent-text hover:underline"
+              >
+                Download from GitHub →
+              </a>
+            </>
+          )}
+
           {/* Desktop: in-app update flow */}
-          {isDesktop && (
+          {desktopSelfUpdate && (
             <DesktopUpdateControls
               state={effectiveState}
               progress={updateStatus?.progress}
@@ -306,6 +324,12 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
       {panel}
     </div>
   )
+}
+
+const MANUAL_UPDATE_TEXT: Record<NonNullable<VersionInfo['manualUpdate']>, string> = {
+  appimage: "This AppImage can't update itself. Download the new one and use it in place of this file.",
+  package: 'Download the new .deb or .rpm and install it with your package manager, such as apt or dnf.',
+  download: "Radar can't replace itself in this folder. Download the new version and copy it over this one, as an administrator if the folder needs it.",
 }
 
 function CopyIcon({ copied, failed }: { copied: boolean; failed: boolean }) {

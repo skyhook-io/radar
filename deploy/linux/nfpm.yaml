@@ -14,6 +14,10 @@ contents:
     dst: /usr/share/applications/radar-desktop.desktop
   - src: build/appicon.png
     dst: /usr/share/icons/hicolor/512x512/apps/radar-desktop.png
+  # Tells Radar it was installed from this package, so it offers no in-app
+  # update (internal/updater/mode_linux.go). Looked up relative to the binary.
+  - src: deploy/linux/is-packaged-app
+    dst: /usr/share/radar-desktop/is-packaged-app
 overrides:
   deb:
     depends:
