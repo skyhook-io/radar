@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // A series scope keeps a query to this Kubernetes cluster's series in a
@@ -47,6 +49,9 @@ type SeriesIsolation struct {
 func withScope(selector, matchers string) string {
 	if matchers == "" {
 		return selector
+	}
+	if selector == "" {
+		return matchers
 	}
 	return selector + "," + matchers
 }
@@ -86,6 +91,48 @@ func (p scopeProbe) over(sel string) string {
 // kubelet volume stats over window (0 for an instant read).
 func (client *Client) ResolvePVCScope(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, SeriesIsolation, error) {
 	return client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
+}
+
+// ResolveTrafficScope decides the cluster-identity matchers for one traffic
+// metric's series (selector narrows them, e.g. to Beyla's jobs) across the
+// whole store. The map has no namespace of its own, so the
+// automatic proof anchors on kube-system, which always runs Pods, or on any
+// namespace the cache holds when it never sees kube-system. On
+// ErrScopeMismatch the isolation still names the proven labels, so a caller
+// can say which cluster the traffic failed to match.
+func (client *Client) ResolveTrafficScope(ctx context.Context, metric, selector string, cache *k8s.ResourceCache) (string, SeriesIsolation, error) {
+	return client.resolveScope(ctx, trafficAnchorNamespace(cache), trafficScopeProbe(metric, selector), nil, cache)
+}
+
+func trafficScopeProbe(metric, selector string) scopeProbe {
+	return scopeProbe{
+		metric: metric, selectors: []string{selector}, singlePartition: true,
+		unverifiedNote: "Radar couldn't confirm this traffic belongs to this exact cluster (no cluster label it could check)",
+	}
+}
+
+func trafficAnchorNamespace(cache *k8s.ResourceCache) string {
+	const preferred = "kube-system"
+	if cache == nil || cache.Pods() == nil {
+		return preferred
+	}
+	if pods, err := cache.Pods().Pods(preferred).List(labels.Everything()); err == nil && len(pods) > 0 {
+		return preferred
+	}
+	pods, err := cache.Pods().List(labels.Everything())
+	if err != nil || len(pods) == 0 {
+		return preferred
+	}
+	namespace := pods[0].Namespace
+	for _, pod := range pods[1:] {
+		namespace = min(namespace, pod.Namespace)
+	}
+	return namespace
+}
+
+// ClusterIdentityLabels are the labels Radar reads as a cluster's identity.
+func ClusterIdentityLabels() []string {
+	return slices.Clone(partitionLabels)
 }
 
 func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
@@ -218,7 +265,7 @@ func decideVerifiedScope(ctx context.Context, q seriesQuerier, probe scopeProbe,
 			return "", SeriesIsolation{}, err
 		}
 		if len(all.Series) > 0 {
-			return "", SeriesIsolation{}, ErrScopeMismatch
+			return "", iso, ErrScopeMismatch
 		}
 	}
 	return m, iso, nil
