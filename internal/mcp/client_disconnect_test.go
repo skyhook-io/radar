@@ -211,7 +211,18 @@ func TestListResourcesReportsItsDeadlineDuringTheFirstProbe(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
-			_, _, err := handleListResources(ctx, &mcpsdk.CallToolRequest{}, input)
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := handleListResources(ctx, &mcpsdk.CallToolRequest{}, input)
+				done <- err
+			}()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(2 * time.Second):
+				releaseLists()
+				t.Fatal("list_resources was still waiting on the access probe 2s after its 100ms deadline")
+			}
 			var classified *readError
 			if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &classified) {
 				t.Fatalf("err = %v, want the caller's deadline", err)
