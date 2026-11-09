@@ -168,6 +168,8 @@ def short_args(args):
 
 def report(out):
     """Write report.md for a run directory and print the verdict table."""
+    namespaces_file = out / 'namespaces.json'
+    own = json.loads(namespaces_file.read_text()) if namespaces_file.exists() else {}
     tools_file = out / 'tools.json'
     write_tools = set(json.loads(tools_file.read_text())['write']) if tools_file.exists() else set()
     path = out / 'results.jsonl'
@@ -189,7 +191,9 @@ def report(out):
         for c in calls:
             mark = 'NOT RADAR' if c['foreign'] else 'ERR' if c['err'] else 'ok '
             write = ' (write tool)' if c['tool'] in write_tools else ''
-            lines.append(f"- {mark} `{c['tool']}`{write} {short_args(c['args'])}")
+            ns = (c['args'] or {}).get('namespace')
+            elsewhere = f' OTHER NAMESPACE {ns}' if ns and own.get(r['agent']) and ns != own[r['agent']] else ''
+            lines.append(f"- {mark} `{c['tool']}`{write}{elsewhere} {short_args(c['args'])}")
             if c['err']:
                 lines.append(f"  -> {c['out'][:400].replace(chr(10), ' ')}")
         lines.append(f"\nreply: {final.strip()[:1200]}\n")
@@ -206,7 +210,8 @@ def report(out):
     (out / 'report.md').write_text('# Agent test report\n\n' + summary + '\n\nREAD means the state check can\'t '
                                    'decide: read the reply against the answer key. ERROR means the agent CLI or the '
                                    'runner failed, so that agent stopped. NOT RADAR counts calls to something other '
-                                   'than Radar\'s MCP, which the test is meant to rule out. Calls to tools Radar '
+                                   'than Radar\'s MCP, which the test is meant to rule out. OTHER NAMESPACE marks a call outside the '
+                                   'agent\'s own namespace, which the state checks don\'t see. Calls to tools Radar '
                                    'marks as writes are labelled, so a READ task can be checked for side effects.\n\n' + '\n'.join(lines) + '\n')
     print('\n' + summary + f'\n\nfull report: {out / "report.md"}')
 
@@ -306,6 +311,7 @@ def main():
     out = Path(a.out) if a.out else Path(tempfile.mkdtemp(prefix=f'radar-agent-test-{run_id}-'))
     out.mkdir(parents=True, exist_ok=True)
     print(f'run directory: {out}')
+    (out / 'namespaces.json').write_text(json.dumps(namespaces, indent=1))
     work = Path(tempfile.mkdtemp(prefix='radar-agent-work-'))  # holds credentials; removed however the run ends
     env = Env(work, work / 'kubeconfig')
     radar, attempted, children, threads = None, [], [], []
@@ -428,9 +434,11 @@ def main():
                 print('deleting test namespaces...')
                 for ns in attempted:
                     try:
-                        env.kubectl('delete', 'namespace', ns, '--ignore-not-found', '--wait=false', check=False, timeout=60)
+                        p = env.kubectl('delete', 'namespace', ns, '--ignore-not-found', '--wait=false', check=False, timeout=60)
+                        if p.returncode:
+                            print(f'WARNING: could not delete namespace {ns}: {p.stderr.strip()}')
                     except subprocess.TimeoutExpired:
-                        print(f'could not delete namespace {ns}: kubectl timed out')
+                        print(f'WARNING: could not delete namespace {ns}: kubectl timed out')
             elif attempted:
                 print('kept namespaces: ' + ', '.join(attempted))
     finally:

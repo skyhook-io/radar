@@ -12,8 +12,9 @@ or the wording of errors and results. It isn't part of CI: it costs model tokens
 and its results vary from run to run.
 
 > [!WARNING]
-> Agents act through Radar with the identity of the kubeconfig context you choose. Use a test
-> cluster. The runner creates one namespace per agent, labelled `radar-agent-test=<run id>`, and
+> Agents act through Radar with the identity of the kubeconfig context you choose, in any namespace
+> it can reach: the prompt names each agent's namespace, but nothing enforces it. The report marks
+> calls to another namespace. Use a test cluster. The runner creates one namespace per agent, labelled `radar-agent-test=<run id>`, and
 > deletes them at the end unless you pass `--keep`.
 
 ## Run

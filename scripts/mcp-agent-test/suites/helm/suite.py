@@ -57,8 +57,12 @@ def setup(env, ns):
 
 
 def state(env, ns):
-    """Every release in ns with its full history and each revision's user values, as Helm records them."""
+    """Every release in ns with its full history, each revision's user values, and the chart source
+    type Radar labels a revision with when it installs or upgrades it (none for the helm CLI)."""
     out = {}
+    secrets = json.loads(env.kubectl('get', 'secrets', '-n', ns, '-l', 'owner=helm', '-o', 'json').stdout)['items']
+    source = {(s['metadata']['labels'].get('name'), s['metadata']['labels'].get('version')):
+              s['metadata']['labels'].get('radarhq.io/chart-source-type') for s in secrets}
     for r in json.loads(env.helm('list', '-n', ns, *LIST_ALL, '-o', 'json').stdout or '[]'):
         name = r['name']
         hist = json.loads(env.helm('history', name, '-n', ns, '-o', 'json').stdout or '[]')
@@ -66,7 +70,8 @@ def state(env, ns):
             # A failed read raises: treating it as "no values" would pass --reset-values checks.
             v = env.helm('get', 'values', name, '-n', ns, '--revision', str(h['revision']), '-o', 'json')
             h['values'] = (json.loads(v.stdout) if v.stdout.strip() else None) or {}
-        out[name] = [{k: h.get(k) for k in ('revision', 'status', 'chart', 'description', 'values')} for h in hist]
+            h['source'] = source.get((name, str(h['revision'])))
+        out[name] = [{k: h.get(k) for k in ('revision', 'status', 'chart', 'description', 'values', 'source')} for h in hist]
     return out
 
 
@@ -139,8 +144,8 @@ def check(task, before, after):
         return ok, f"web {cur['chart']} {cur['values']} (want revision {target['revision']}: {target['chart']} {target['values']})"
     if task == 'A6':
         cur = (after.get('api') or [None])[-1]
-        ok = bool(cur) and cur['status'] == 'deployed' and cur['chart'] == 'podinfo-6.5.0'
-        return ok, f'api: {cur and (cur["status"], cur["chart"])}'
+        ok = bool(cur) and cur['status'] == 'deployed' and cur['chart'] == 'podinfo-6.5.0' and cur['source'] == 'oci'
+        return ok, f'api: {cur and (cur["status"], cur["chart"], "source " + str(cur["source"]))} (want the OCI source)'
     if task == 'A7':
         cur, why = _new_revision(before, after, 'web')
         if not cur:
@@ -160,7 +165,8 @@ def check(task, before, after):
     if task == 'A10':
         cur = (after.get('cache') or [None])[-1]
         if not cur:
-            return None, 'cache is not installed: a clear report of why (a timeout, or a request for a version) passes'
+            return None, ('cache is not installed: passes only if the reply reports the source timing out; '
+                          'asking the user for a version fails, since get_helm_chart lists them')
         ok = (cur['status'] == 'deployed' and cur['chart'] == f'redis-{NEWEST_REDIS}'
               and _get(cur['values'], 'auth.enabled') is False and _get(cur['values'], 'architecture') == 'standalone')
         return ok, f"cache {cur['status']} {cur['chart']} (want redis-{NEWEST_REDIS}) values {cur['values']}"
