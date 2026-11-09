@@ -588,6 +588,26 @@ function ContainerResourcesLine({ resources }: { resources: any }) {
   )
 }
 
+// Pod-level budget (spec.resources) is shared by all containers, so it stays
+// its own row rather than being merged into the container rows.
+export function PodAggregateResources({ resources }: { resources: any }) {
+  const hasRequests = Object.keys(resources?.requests ?? {}).length > 0
+  const hasLimits = Object.keys(resources?.limits ?? {}).length > 0
+  if (!hasRequests && !hasLimits) return null
+  return (
+    <div className="rounded-[10px] border border-dashed border-theme-border p-3">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
+        <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
+      </div>
+      <div className="text-xs text-theme-text-secondary space-y-1">
+        {hasRequests && <div>Requests: {formatResources(resources.requests)}</div>}
+        {hasLimits && <div>Limits: {formatResources(resources.limits)}</div>}
+      </div>
+    </div>
+  )
+}
+
 export function PodTemplateSection({ template }: { template: any }) {
   if (!template) return null
   const initContainers = template.spec?.initContainers || []
@@ -595,6 +615,7 @@ export function PodTemplateSection({ template }: { template: any }) {
 
   return (
     <div className="space-y-2">
+      <PodAggregateResources resources={template.spec?.resources} />
       {initContainers.length > 0 && (
         <>
           <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide">Init Containers</div>
