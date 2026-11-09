@@ -439,6 +439,8 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       return branch ? `${ready} • ${branch}` : ready;
     }
     case "Pod":
+      // Phase stays Running while a deleted Pod drains; kubectl shows Terminating.
+      if (Number(nodeData.terminating) > 0) return "Terminating";
       return (nodeData.phase as string) || "Unknown";
     case "Service": {
       const svcType = (nodeData.type as string) || "ClusterIP";

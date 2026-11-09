@@ -5,6 +5,13 @@ describe('baseSubtitle', () => {
   it('explains earlier Job runs on grouped and loose Pods', () => {
     expect(baseSubtitle('PodGroup', { earlierJobRun: 'train-workers-0', terminating: 6 })).toBe('Earlier run • terminating')
     expect(baseSubtitle('Pod', { earlierJobRun: 'hook', terminating: 0 })).toBe('Earlier run')
+    expect(baseSubtitle('Pod', { earlierJobRun: 'hook', terminating: 1 })).toBe('Earlier run • terminating')
+  })
+
+  it('names a Pod being deleted Terminating, not its Running phase', () => {
+    expect(baseSubtitle('Pod', { phase: 'Running', terminating: 1 })).toBe('Terminating')
+    expect(baseSubtitle('Pod', { phase: 'Running', terminating: 0 })).toBe('Running')
+    expect(baseSubtitle('Pod', { phase: 'Running' })).toBe('Running')
   })
   it('describes workflow templates without dropping newer topology kinds', () => {
     expect(baseSubtitle('WorkflowTemplate', { entrypoint: 'main', templateCount: 3 })).toBe('main • 3 templates')
