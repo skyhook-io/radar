@@ -145,3 +145,22 @@ describe('live pod inventory', () => {
     )
   })
 })
+
+describe('pod-level request rows', () => {
+  it('explains the pod-level value instead of promising a per-container verdict', () => {
+    const message = getRightsizingExplanation(
+      row({
+        fit: 'pod_level_request',
+        recommendationReason: 'pod_level_request',
+        podLevelRequest: '128Mi',
+        resource: 'memory',
+      }),
+    )
+    expect(message).toContain('128Mi')
+  })
+
+  it('labels a fit this frontend does not know instead of rendering nothing', () => {
+    const unknownFit = 'future_fit' as unknown as Parameters<typeof getRightsizingPresentation>[0]
+    expect(getRightsizingPresentation(unknownFit).label).toBe('future_fit')
+  })
+})

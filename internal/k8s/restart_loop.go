@@ -63,7 +63,10 @@ type restartLoop struct {
 	// status is the looping container's status, for diagnoses that need it.
 	status corev1.ContainerStatus
 	// memoryLimit reports whether the container declares a memory limit.
-	memoryLimit    bool
+	memoryLimit bool
+	// podMemoryLimit reports a pod-level memory limit (spec.resources), which
+	// caps the combined use of every container in the pod, including this one.
+	podMemoryLimit bool
 	restartCount   int32
 	lastExitCode   int32
 	lastReason     string
@@ -138,6 +141,7 @@ func activeRestartLoop(pod *corev1.Pod, probes map[string]probeFailure, now time
 		return restartLoop{}, false
 	}
 	best.memoryLimit = containerHasMemoryLimit(pod, best.container)
+	best.podMemoryLimit = podHasMemoryLimit(pod)
 	return withProbeEvidence(best, pod, probes), true
 }
 
@@ -162,6 +166,27 @@ func containerHasMemoryLimit(pod *corev1.Pod, name string) bool {
 		}
 	}
 	return false
+}
+
+// podHasMemoryLimit reports a declared pod-level memory limit. Only a pod whose
+// spec.resources sets one has it: the kubelet can fill status.resources from
+// the containers' values on a pod without one. When declared, the enacted value
+// in status wins over the spec, as for containers. A zero limit sets no cap.
+func podHasMemoryLimit(pod *corev1.Pod) bool {
+	if pod.Spec.Resources == nil {
+		return false
+	}
+	if _, declared := pod.Spec.Resources.Limits[corev1.ResourceMemory]; !declared {
+		return false
+	}
+	if pod.Status.Resources != nil {
+		if _, ok := pod.Status.Resources.Limits[corev1.ResourceMemory]; ok {
+			_, positive := explicitMemoryLimit(pod.Status.Resources.Limits)
+			return positive
+		}
+	}
+	_, positive := explicitMemoryLimit(pod.Spec.Resources.Limits)
+	return positive
 }
 
 // otherContainerActiveOOM reports an active OOM on any container other than
@@ -404,9 +429,16 @@ func (l restartLoop) message() string {
 func (l restartLoop) diagnosis() (cause, action string) {
 	ref := l.ref()
 	if l.lastReason == "OOMKilled" {
-		if !l.memoryLimit {
+		switch {
+		case !l.memoryLimit && l.podMemoryLimit:
+			return fmt.Sprintf("%s keeps being OOMKilled. It has no memory limit of its own, so the pod's memory limit (spec.resources) applies to it: the kernel kills a process in the pod when all its containers together reach that limit.", ref),
+				"Compare the pod's total memory use before each kill with its memory limit: raise spec.resources.limits.memory if that much memory is legitimate, or find the container whose use grows (leak, spike, heap or cache settings). If the pod stayed under its limit, check the node for memory pressure."
+		case !l.memoryLimit:
 			return fmt.Sprintf("%s keeps being OOMKilled. It has no memory limit, so the kernel killed it under node memory pressure.", ref),
 				"Check the node's memory pressure and what else runs there, set a memory request that reflects real usage so the scheduler places it with room, and look for a leak or spike in this container."
+		case l.podMemoryLimit:
+			return fmt.Sprintf("%s keeps being OOMKilled. It has its own memory limit, and the pod's memory limit (spec.resources) also caps all its containers together, so either limit can trigger the kill.", ref),
+				"Compare the container's memory use before each kill with its own limit, and the pod's total use with the pod's memory limit: raise whichever limit was reached if that much memory is legitimate (a container limit can't exceed the pod's, so raising it past the pod limit means raising spec.resources.limits.memory too), or find the leak or spike (heap settings, caches, request bursts). If both stayed under their limits, check the node for memory pressure."
 		}
 		return fmt.Sprintf("%s keeps being OOMKilled.", ref),
 			"Compare the container's memory use before each kill with its limit: raise the limit if the working set is legitimate, or find the leak or spike (heap settings, caches, request bursts). If it stayed under its limit, the node was under memory pressure: check the node."

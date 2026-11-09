@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	resourcehelper "k8s.io/component-helpers/resource"
 )
 
 // Sentinel errors distinguish the cache-loading failure modes so handlers can
@@ -74,7 +75,15 @@ const (
 	FitUnderRequested      RightsizingFit = "under_requested"
 	FitMissingRequest      RightsizingFit = "missing_request"
 	FitInsufficientHistory RightsizingFit = "insufficient_history"
+	// FitPodLevelRequest marks a container whose pod sets a fixed pod-level
+	// request (spec.resources) for the resource. The scheduler reserves that
+	// pod-level value instead of the containers' requests, so no per-container
+	// request is suggested.
+	FitPodLevelRequest RightsizingFit = "pod_level_request"
 )
+
+// ReasonPodLevelRequest is the recommendationReason of a FitPodLevelRequest row.
+const ReasonPodLevelRequest = "pod_level_request"
 
 type RightsizingConfidence string
 
@@ -101,33 +110,36 @@ type ObservedStatistic struct {
 }
 
 type RightsizingRow struct {
-	Container               string                `json:"container"`
-	Resource                string                `json:"resource"`
-	Fit                     RightsizingFit        `json:"fit"`
-	Confidence              RightsizingConfidence `json:"confidence"`
-	CurrentRequest          *string               `json:"currentRequest,omitempty"`
-	CurrentRequestValue     *float64              `json:"currentRequestValue,omitempty"`
-	CurrentLimit            *string               `json:"currentLimit,omitempty"`
-	CurrentLimitValue       *float64              `json:"currentLimitValue,omitempty"`
-	Observed                *ObservedStatistic    `json:"observed,omitempty"`
-	Peak                    *ObservedStatistic    `json:"peak,omitempty"`
-	CalculatedReq           *string               `json:"calculatedRequest,omitempty"`
-	CalculatedRequestValue  *float64              `json:"calculatedRequestValue,omitempty"`
-	RecommendedReq          *string               `json:"recommendedRequest,omitempty"`
-	RecommendedRequestValue *float64              `json:"recommendedRequestValue,omitempty"`
-	ReductionLimited        bool                  `json:"reductionLimited,omitempty"`
-	Bursty                  bool                  `json:"bursty,omitempty"`
-	RecommendationReason    string                `json:"recommendationReason,omitempty"`
-	SampleCount             int                   `json:"sampleCount"`
-	ExpectedSamples         int                   `json:"expectedSamples"`
-	Coverage                float64               `json:"coverage"`
-	HPAManaged              bool                  `json:"hpaManaged"`
-	HPAEvidenceAvailable    bool                  `json:"hpaEvidenceAvailable"`
-	ThrottleAvailable       bool                  `json:"throttleAvailable,omitempty"`
-	ThrottleRatio           *float64              `json:"throttleRatio,omitempty"`
-	CurrentPodOOM           bool                  `json:"currentPodOOM,omitempty"`
-	WindowOOMEvidence       bool                  `json:"windowOomEvidence,omitempty"`
-	OOMEvidenceAvailable    bool                  `json:"oomEvidenceAvailable"`
+	Container           string                `json:"container"`
+	Resource            string                `json:"resource"`
+	Fit                 RightsizingFit        `json:"fit"`
+	Confidence          RightsizingConfidence `json:"confidence"`
+	CurrentRequest      *string               `json:"currentRequest,omitempty"`
+	CurrentRequestValue *float64              `json:"currentRequestValue,omitempty"`
+	CurrentLimit        *string               `json:"currentLimit,omitempty"`
+	CurrentLimitValue   *float64              `json:"currentLimitValue,omitempty"`
+	// PodLevelRequest is the pod's fixed pod-level request for this resource,
+	// set only on FitPodLevelRequest rows.
+	PodLevelRequest         *string            `json:"podLevelRequest,omitempty"`
+	Observed                *ObservedStatistic `json:"observed,omitempty"`
+	Peak                    *ObservedStatistic `json:"peak,omitempty"`
+	CalculatedReq           *string            `json:"calculatedRequest,omitempty"`
+	CalculatedRequestValue  *float64           `json:"calculatedRequestValue,omitempty"`
+	RecommendedReq          *string            `json:"recommendedRequest,omitempty"`
+	RecommendedRequestValue *float64           `json:"recommendedRequestValue,omitempty"`
+	ReductionLimited        bool               `json:"reductionLimited,omitempty"`
+	Bursty                  bool               `json:"bursty,omitempty"`
+	RecommendationReason    string             `json:"recommendationReason,omitempty"`
+	SampleCount             int                `json:"sampleCount"`
+	ExpectedSamples         int                `json:"expectedSamples"`
+	Coverage                float64            `json:"coverage"`
+	HPAManaged              bool               `json:"hpaManaged"`
+	HPAEvidenceAvailable    bool               `json:"hpaEvidenceAvailable"`
+	ThrottleAvailable       bool               `json:"throttleAvailable,omitempty"`
+	ThrottleRatio           *float64           `json:"throttleRatio,omitempty"`
+	CurrentPodOOM           bool               `json:"currentPodOOM,omitempty"`
+	WindowOOMEvidence       bool               `json:"windowOomEvidence,omitempty"`
+	OOMEvidenceAvailable    bool               `json:"oomEvidenceAvailable"`
 	// The cluster cache could not answer for this workload's pods — denied, or
 	// still warming when the wait ran out — so CurrentPodOOM is false for want
 	// of an answer. Unset when the pods were read, including when the workload
@@ -270,9 +282,14 @@ type containerSpec struct {
 	cpuLim *resource.Quantity
 	memReq *resource.Quantity
 	memLim *resource.Quantity
+	// The pod's fixed pod-level requests, shared by every container.
+	podCPUReq *resource.Quantity
+	podMemReq *resource.Quantity
 }
 
 type rightsizingWorkload struct {
+	// podSpec is the workload's pod template, for checks that need the whole pod.
+	podSpec       *corev1.PodSpec
 	containers    []containerSpec
 	podNames      []string
 	currentPodOOM map[string]bool
@@ -373,6 +390,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 
 	hpaManaged, hpaAvailable := loadHPAManagedResources(ctx, cache, kind, namespace, name)
 	workload := rightsizingWorkload{
+		podSpec:       podTemplate,
 		containers:    extractRuntimeContainers(podTemplate),
 		currentPodOOM: map[string]bool{},
 		hpaManaged:    hpaManaged,
@@ -473,7 +491,150 @@ func extractRuntimeContainers(podSpec *corev1.PodSpec) []containerSpec {
 			containers = append(containers, extractContainerSpec(c))
 		}
 	}
+	podCPU := fixedPodLevelRequest(podSpec, corev1.ResourceCPU)
+	podMem := fixedPodLevelRequest(podSpec, corev1.ResourceMemory)
+	for i := range containers {
+		containers[i].podCPUReq, containers[i].podMemReq = podCPU, podMem
+	}
 	return containers
+}
+
+// ReasonRequestsExceedPodLimit marks a suggested increase that, with the
+// workload's other suggested increases, would take the pod's derived request
+// above its pod-level limit. The API server rejects such a pod, so the suggestion is
+// withheld like one that exceeds the container's own limit.
+const ReasonRequestsExceedPodLimit = "requests_exceed_pod_limit"
+
+// withholdIncreasesAbovePodLimit checks a workload's suggested increases
+// against the pod-level limit when the pod has one but no fixed pod-level
+// request: the pod request is then derived from the containers' requests and
+// must stay within the limit. All increases for a resource are applied
+// together to a copy of the template, with every other request as it is, so
+// they hold whether or not any suggested reduction is applied. The pod request
+// is computed the way Kubernetes validates it: container requests default to
+// their limits, and init containers and sidecars are counted by resourcehelper.
+func withholdIncreasesAbovePodLimit(rows []RightsizingRow, podSpec *corev1.PodSpec) {
+	if podSpec == nil || podSpec.Resources == nil {
+		return
+	}
+	for _, resourceName := range []string{"cpu", "memory"} {
+		name := corev1.ResourceName(resourceName)
+		limit, limited := podSpec.Resources.Limits[name]
+		if !limited || fixedPodLevelRequest(podSpec, name) != nil {
+			continue
+		}
+		increases := map[string]resource.Quantity{}
+		for _, row := range rows {
+			if row.Resource != resourceName || row.RecommendedReq == nil || row.RecommendedRequestValue == nil {
+				continue
+			}
+			// Kubernetes defaults a missing container request to its limit, so
+			// that is the request a suggestion is compared against.
+			baseline := row.CurrentRequestValue
+			if baseline == nil {
+				baseline = row.CurrentLimitValue
+			}
+			if baseline != nil && *row.RecommendedRequestValue <= *baseline {
+				continue
+			}
+			if q, err := resource.ParseQuantity(*row.RecommendedReq); err == nil {
+				increases[row.Container] = q
+			}
+		}
+		if len(increases) == 0 {
+			continue
+		}
+		candidate := &corev1.Pod{Spec: *podSpec.DeepCopy()}
+		forEachPodContainer(&candidate.Spec, func(c *corev1.Container) {
+			if q, ok := increases[c.Name]; ok {
+				if c.Resources.Requests == nil {
+					c.Resources.Requests = corev1.ResourceList{}
+				}
+				c.Resources.Requests[name] = q
+			}
+			if _, requested := c.Resources.Requests[name]; !requested {
+				if l, ok := c.Resources.Limits[name]; ok {
+					if c.Resources.Requests == nil {
+						c.Resources.Requests = corev1.ResourceList{}
+					}
+					c.Resources.Requests[name] = l.DeepCopy()
+				}
+			}
+		})
+		total := resourcehelper.AggregateContainerRequests(candidate, resourcehelper.PodResourcesOptions{})[name]
+		if total.Cmp(limit) <= 0 {
+			continue
+		}
+		for i := range rows {
+			row := &rows[i]
+			if _, increased := increases[row.Container]; !increased || row.Resource != resourceName {
+				continue
+			}
+			row.LimitConflict = true
+			row.RecommendationReason = ReasonRequestsExceedPodLimit
+			row.RecommendedReq, row.RecommendedRequestValue, row.ReductionLimited = nil, nil, false
+		}
+	}
+}
+
+func forEachPodContainer(spec *corev1.PodSpec, visit func(*corev1.Container)) {
+	for i := range spec.Containers {
+		visit(&spec.Containers[i])
+	}
+	for i := range spec.InitContainers {
+		visit(&spec.InitContainers[i])
+	}
+}
+
+// fixedPodLevelRequest returns the pod-level request the template fixes for a
+// resource, or nil when the pod's request for it follows its containers. With
+// pod-level resources the scheduler reserves the pod-level request and ignores
+// container requests. Templates are not defaulted, so this follows Pod
+// defaulting: an explicit pod-level request is used as is; with only a
+// pod-level limit, the request defaults to that limit when no container
+// declares a request or limit for the resource, and is otherwise derived from
+// the containers' requests, which then still decide the reservation.
+func fixedPodLevelRequest(podSpec *corev1.PodSpec, name corev1.ResourceName) *resource.Quantity {
+	if podSpec.Resources == nil {
+		return nil
+	}
+	if q, ok := podSpec.Resources.Requests[name]; ok {
+		qc := q.DeepCopy()
+		return &qc
+	}
+	limit, ok := podSpec.Resources.Limits[name]
+	if !ok {
+		return nil
+	}
+	for _, list := range [][]corev1.Container{podSpec.Containers, podSpec.InitContainers} {
+		for _, c := range list {
+			_, requested := c.Resources.Requests[name]
+			_, limited := c.Resources.Limits[name]
+			if requested || limited {
+				return nil
+			}
+		}
+	}
+	qc := limit.DeepCopy()
+	return &qc
+}
+
+// markPodLevelRequest gives a row whose pod fixes a pod-level request its
+// verdict. A row whose usage query failed, or that has no usage samples at all,
+// keeps that answer: the evidence gap is still a gap.
+func markPodLevelRequest(row *RightsizingRow) {
+	if row.PodLevelRequest == nil || row.QueryError != "" || row.Observed == nil {
+		return
+	}
+	row.Fit = FitPodLevelRequest
+	row.RecommendationReason = ReasonPodLevelRequest
+}
+
+func podLevelRequestFor(container containerSpec, resourceName string) *resource.Quantity {
+	if resourceName == "cpu" {
+		return container.podCPUReq
+	}
+	return container.podMemReq
 }
 
 func extractContainerSpec(c corev1.Container) containerSpec {
@@ -528,6 +689,7 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 			resp.Rows = append(resp.Rows, row)
 		}
 	}
+	withholdIncreasesAbovePodLimit(resp.Rows, workload.podSpec)
 	resp.Warnings = evidenceQueryWarnings(results)
 	for _, row := range resp.Rows {
 		if row.Observed != nil {
@@ -706,8 +868,9 @@ func terminationEvidenceByContainer(result *prom.QueryResult) map[string]termina
 	return values
 }
 
-func buildRightsizingRow(container containerSpec, resourceName string, expected int, ownerCoverage OwnerCoverage, workload rightsizingWorkload, results map[string]queryOutcome) RightsizingRow {
-	row := RightsizingRow{Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow, ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable, LiveInventoryUnavailable: workload.liveInventoryUnavailable}
+func buildRightsizingRow(container containerSpec, resourceName string, expected int, ownerCoverage OwnerCoverage, workload rightsizingWorkload, results map[string]queryOutcome) (row RightsizingRow) {
+	defer markPodLevelRequest(&row)
+	row = RightsizingRow{Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow, ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable, LiveInventoryUnavailable: workload.liveInventoryUnavailable}
 	var req, lim *resource.Quantity
 	statistic := "P95"
 	if resourceName == "cpu" {
@@ -726,6 +889,7 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 		}
 	}
 	setCurrentQuantities(&row, req, lim, resourceName)
+	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName))
 	stat := results[resourceName+"_stat"]
 	coverage := results[resourceName+"_coverage"]
 	if stat.err != nil {
@@ -770,6 +934,13 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 	return row
 }
 
+func setPodLevelRequest(row *RightsizingRow, podRequest *resource.Quantity) {
+	if podRequest != nil {
+		formatted := podRequest.String()
+		row.PodLevelRequest = &formatted
+	}
+}
+
 func setCurrentQuantities(row *RightsizingRow, req, lim *resource.Quantity, resourceName string) {
 	if req != nil {
 		value := quantityToFloat(*req, resourceName)
@@ -799,6 +970,9 @@ func confidenceFor(samples int, coverage float64, ownerCoverage OwnerCoverage) R
 }
 
 func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *resource.Quantity, resourceName string) {
+	if row.PodLevelRequest != nil {
+		return
+	}
 	calculated := calculatedRequest(observed, resourceName)
 	calculatedValue := quantityToFloat(resource.MustParse(calculated), resourceName)
 	minimum := float64(rightsizingMemoryMin)

@@ -962,6 +962,14 @@ function EvidenceNote({ row }: { row: RightsizingRow }) {
 }
 
 function primaryEvidenceNote(row: RightsizingRow) {
+  if (row.fit === 'pod_level_request' && !row.queryError)
+    return (
+      <p className="mt-1 text-xs text-theme-text-tertiary">
+        This pod sets a pod-level request in spec.resources, which the scheduler reserves instead
+        of container requests. Radar shows this container&apos;s usage but doesn&apos;t size the
+        pod-level request.
+      </p>
+    )
   if (row.hpaManaged)
     return (
       <p className="mt-1 text-xs text-theme-text-tertiary">
@@ -985,6 +993,14 @@ function primaryEvidenceNote(row: RightsizingRow) {
     return (
       <p className="mt-1 text-xs text-theme-text-tertiary">
         Radar could not verify restart history before suggesting a lower memory request.
+      </p>
+    )
+  if (row.recommendationReason === 'requests_exceed_pod_limit')
+    return (
+      <p className="mt-1 text-xs text-theme-text-tertiary">
+        Together with the other containers&apos; requests and suggested increases, the calculated
+        request would take the pod above its pod-level limit. Decide how to split the limit, or
+        raise it.
       </p>
     )
   if (row.limitConflict)

@@ -213,10 +213,10 @@ function FitCard({ row, window }: { row: RightsizingRow; window: string }) {
       <div className="flex items-baseline gap-2 tabular-nums">
         <div>
           <div className="text-[10px] uppercase tracking-wide text-theme-text-quaternary">
-            Current request
+            {row.podLevelRequest ? 'Pod-level request' : 'Current request'}
           </div>
           <div className="text-lg font-semibold text-theme-text-primary">
-            {row.currentRequest ?? 'Unset'}
+            {row.podLevelRequest ?? row.currentRequest ?? 'Unset'}
           </div>
         </div>
         <ArrowRight className="h-4 w-4 text-theme-text-quaternary" />
@@ -247,7 +247,9 @@ function CompactFitRow({ row }: { row: RightsizingRow }) {
       <span className="w-12 text-[10px] uppercase tracking-wide text-theme-text-quaternary">
         {row.resource}
       </span>
-      <span className="min-w-14 text-theme-text-secondary">{row.currentRequest ?? 'unset'}</span>
+      <span className="min-w-14 text-theme-text-secondary">
+        {row.podLevelRequest ? `pod ${row.podLevelRequest}` : (row.currentRequest ?? 'unset')}
+      </span>
       {row.recommendedRequest && (
         <>
           <ArrowRight className="h-3 w-3 text-theme-text-quaternary" />
@@ -298,6 +300,7 @@ export function getRightsizingPresentation(fit: RightsizingFit, queryError?: str
     under_requested: 'Under-requested',
     missing_request: 'Missing request',
     insufficient_history: 'Insufficient history',
+    pod_level_request: 'Pod-level request',
   }
   const severities: Record<RightsizingFit, 'success' | 'info' | 'warning' | 'neutral'> = {
     balanced: 'success',
@@ -305,8 +308,10 @@ export function getRightsizingPresentation(fit: RightsizingFit, queryError?: str
     under_requested: 'warning',
     missing_request: 'warning',
     insufficient_history: 'neutral',
+    pod_level_request: 'neutral',
   }
-  return { label: labels[fit], severity: severities[fit] }
+  // An older frontend can meet a fit added by a newer agent.
+  return { label: labels[fit] ?? fit, severity: severities[fit] ?? ('neutral' as const) }
 }
 
 function FitExplanation({ row }: { row: RightsizingRow }) {
@@ -327,6 +332,8 @@ export function getRightsizingExplanation(row: RightsizingRow): string | undefin
       'Radar could not verify recent OOM history, so it withheld a lower memory request.',
     recommended_request_exceeds_limit:
       'The evidence-based request would exceed the current limit; review the limit first.',
+    requests_exceed_pod_limit:
+      "Together with the other containers' requests and suggested increases, this request would take the pod above its pod-level limit (spec.resources), which Kubernetes rejects. Decide how to split the limit between containers, or raise the pod limit.",
   }
   // A denied pod read leaves currentPodOOM unknown rather than false, so it
   // qualifies whatever else is said instead of replacing it — including a
@@ -336,6 +343,8 @@ export function getRightsizingExplanation(row: RightsizingRow): string | undefin
       ? "Radar could not read this workload's pods, so it could not check them for out-of-memory restarts."
       : undefined
   const qualified = (base: string) => (inventoryNote ? `${base} ${inventoryNote}` : base)
+  if (row.fit === 'pod_level_request' && row.podLevelRequest && !row.queryError)
+    return qualified(podLevelRequestExplanation(row, row.podLevelRequest))
   if (row.reductionLimited && row.calculatedRequest && row.recommendedRequest) {
     const burstNote = row.bursty && row.peak ? ` CPU P99 reached ${row.peak.formatted}.` : ''
     return qualified(
@@ -350,6 +359,14 @@ export function getRightsizingExplanation(row: RightsizingRow): string | undefin
   return qualified(
     message ?? 'CPU throttling metrics are unavailable; no throttling conclusion was drawn.',
   )
+}
+
+function podLevelRequestExplanation(row: RightsizingRow, podLevelRequest: string): string {
+  const resource = row.resource === 'cpu' ? 'CPU' : 'memory'
+  const own = row.currentRequest
+    ? ` This container's own request (${row.currentRequest}) no longer decides what is reserved.`
+    : ''
+  return `This pod sets one ${resource} request for all its containers: ${podLevelRequest} in spec.resources. The scheduler reserves that instead of container requests, so Radar doesn't suggest a request per container; check the pod-level request against the usage of its containers.${own}`
 }
 
 function confidenceLabel(row: RightsizingRow) {
