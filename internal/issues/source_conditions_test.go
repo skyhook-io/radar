@@ -869,6 +869,97 @@ func TestDetectGatewayRouteParentIssues_IgnoresParentsRemovedFromSpec(t *testing
 	}
 }
 
+// The moved-listener route above, at generation 2, in the other shapes a
+// controller leaves in status.parents: NGINX Gateway Fabric's single-listener
+// report for a parentRef that names no listener, the old listener's entry after
+// the parentRef was widened, a route with no spec.parentRefs, and a failing exact
+// parent whose observedGeneration lags.
+func TestDetectGatewayRouteParentIssues_ListenerShapesAtCurrentGeneration(t *testing.T) {
+	ts := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	gwRef := func(section string) map[string]any {
+		ref := map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "envoy-public", "namespace": "kube-system"}
+		if section != "" {
+			ref["sectionName"] = section
+		}
+		return ref
+	}
+	cond := func(condType, status, reason, message string, gen int64) map[string]any {
+		return map[string]any{"type": condType, "status": status, "reason": reason, "message": message, "observedGeneration": gen, "lastTransitionTime": ts}
+	}
+	report := func(ref map[string]any, conds ...any) map[string]any {
+		return map[string]any{"parentRef": ref, "conditions": conds}
+	}
+	route := func(specRefs []any, parents ...any) *unstructured.Unstructured {
+		obj := map[string]any{
+			"metadata": map[string]any{"name": "immich", "namespace": "immich", "generation": int64(2)},
+			"status":   map[string]any{"parents": parents},
+		}
+		if specRefs != nil {
+			obj["spec"] = map[string]any{"parentRefs": specRefs}
+		}
+		return &unstructured.Unstructured{Object: obj}
+	}
+	unscoped := []any{gwRef("")}
+	oldHTTPS := report(gwRef("https"), cond("Accepted", "False", "NoMatchingParent", "No listeners match this parent ref", 1))
+	accepted := report(gwRef(""),
+		cond("Accepted", "True", "Accepted", "Route is accepted", 2),
+		cond("ResolvedRefs", "True", "ResolvedRefs", "Resolved all the Object references for the Route", 2),
+	)
+
+	tests := []struct {
+		name        string
+		route       *unstructured.Unstructured
+		wantReasons []string
+	}{
+		{
+			name: "single-listener report for an unscoped parentRef at the current generation",
+			route: route(unscoped, report(gwRef("web"),
+				cond("Accepted", "False", "NoMatchingListenerHostname", "no hostname intersections", 2),
+			)),
+			wantReasons: []string{"Accepted: NoMatchingListenerHostname"},
+		},
+		{
+			name:  "widened parentRef drops the old listener's entry before the new report",
+			route: route(unscoped, oldHTTPS),
+		},
+		{
+			name:  "widened parentRef drops the old listener's entry next to the new report",
+			route: route(unscoped, oldHTTPS, accepted),
+		},
+		{
+			name: "single-listener report missing observedGeneration is not inferred",
+			route: route(unscoped, report(gwRef("web"), map[string]any{
+				"type": "Accepted", "status": "False", "reason": "NoMatchingListenerHostname", "message": "no hostname intersections", "lastTransitionTime": ts,
+			})),
+		},
+		{
+			name: "no spec.parentRefs attaches to nothing, even at the current generation",
+			route: route(nil, report(gwRef("web"),
+				cond("Accepted", "False", "NoMatchingListenerHostname", "no hostname intersections", 2),
+			)),
+		},
+		{
+			name: "failing exact parent with a lagging observedGeneration is still reported",
+			route: route([]any{gwRef("websecure")}, report(gwRef("websecure"),
+				cond("Accepted", "False", "NotAllowedByListeners", "listener does not allow this route", 1),
+			)),
+			wantReasons: []string{"Accepted: NotAllowedByListeners"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Compose(httpRouteProvider(tt.route), Filters{})
+			var reasons []string
+			for _, iss := range got {
+				reasons = append(reasons, iss.Reason)
+			}
+			if !slices.Equal(reasons, tt.wantReasons) {
+				t.Fatalf("reasons = %q, want %q", reasons, tt.wantReasons)
+			}
+		})
+	}
+}
+
 type routeCond struct {
 	condType, status, reason string
 	observed                 int64
