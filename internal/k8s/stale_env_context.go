@@ -41,7 +41,10 @@ type StaleEnvFact struct {
 	// OrderOnly: every change Radar observed to the key since the container
 	// started only reordered the value's comma-separated entries.
 	OrderOnly bool
-	Message   string
+	// NoRestartNeeded and HistoryIncomplete: see StaleSecretEnvCheck.
+	NoRestartNeeded   bool
+	HistoryIncomplete bool
+	Message           string
 }
 
 // FindStaleEnvForPods returns the stale env facts of these Pods' Secret- and
@@ -112,6 +115,8 @@ func findStaleEnv(ctx context.Context, cache *ResourceCache, pods []*corev1.Pod,
 						ContainerStartedAt: check.ContainerStartedAt,
 						ChangedAt:          check.SecretChangedAt,
 						OrderOnly:          check.OrderOnly,
+						NoRestartNeeded:    check.NoRestartNeeded,
+						HistoryIncomplete:  check.HistoryIncomplete,
 						Message:            check.Message,
 					})
 				}
@@ -318,7 +323,7 @@ func groupStaleEnvFacts(rows []StaleEnvFact) []StaleEnvFact {
 	byKey := make(map[string]*group)
 	for _, row := range rows {
 		key := row.Container + "\x00" + row.Env + "\x00" + row.SourceKind + "\x00" + row.SourceName + "\x00" +
-			row.Key + "\x00" + row.ReferenceKind + "\x00" + row.EvidenceSource + "\x00" + strconv.FormatBool(row.OrderOnly)
+			row.Key + "\x00" + row.ReferenceKind + "\x00" + row.EvidenceSource + "\x00" + strconv.FormatBool(row.OrderOnly) + "\x00" + strconv.FormatBool(row.HistoryIncomplete)
 		current := byKey[key]
 		if current == nil {
 			current = &group{fact: row, pods: make(map[string]bool)}
@@ -344,6 +349,9 @@ func groupStaleEnvFacts(rows []StaleEnvFact) []StaleEnvFact {
 		a, b := out[i], out[j]
 		if a.EvidenceSource != b.EvidenceSource {
 			return a.EvidenceSource == staleSecretEvidenceObservedChange
+		}
+		if a.NoRestartNeeded != b.NoRestartNeeded {
+			return b.NoRestartNeeded
 		}
 		if a.SourceKind != b.SourceKind {
 			return a.SourceKind > b.SourceKind // Secret before ConfigMap

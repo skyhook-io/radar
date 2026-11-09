@@ -66,7 +66,15 @@ type StaleSecretEnvCheck struct {
 	// container started only reordered the value's comma-separated entries,
 	// and Radar's history covers that whole time.
 	OrderOnly bool
-	Message   string
+	// NoRestartNeeded marks the Rook monitor reorder note, which explains a
+	// write instead of reporting a possibly stale value. It sorts after every
+	// other row, so caps drop it first.
+	NoRestartNeeded bool
+	// HistoryIncomplete is set on that note when Radar's history doesn't
+	// cover the container's whole run. Rows that differ in it are never
+	// merged, so the note's caveat can't be lost to another Pod's.
+	HistoryIncomplete bool
+	Message           string
 }
 
 const (
@@ -265,7 +273,7 @@ func groupStaleSecretEnvChecks(checks []StaleSecretEnvCheck) []StaleSecretEnvChe
 	for _, check := range checks {
 		key := check.Namespace + "\x00" + check.Container + "\x00" + check.EnvName + "\x00" +
 			check.ReferenceKind + "\x00" + check.EvidenceSource + "\x00" + check.Prefix + "\x00" +
-			check.SecretName + "\x00" + check.Key + "\x00" + strconv.FormatBool(check.OrderOnly)
+			check.SecretName + "\x00" + check.Key + "\x00" + strconv.FormatBool(check.OrderOnly) + "\x00" + strconv.FormatBool(check.HistoryIncomplete)
 		current := byKey[key]
 		if current == nil {
 			current = &group{check: check, pods: make(map[string]bool)}
@@ -1072,21 +1080,40 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 // per-container cap as a parameter; perContainer <= 0 means no cap, for callers
 // that filter to one Secret first and cap only what they present.
 func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent, perContainer int) []StaleSecretEnvCheck {
+	checks, _ := findStaleSecretEnvChecksAndRookReorders(cache, pods, events, perContainer)
+	return checks
+}
+
+// rookMonReorderRead is a container whose only observed change to Rook's
+// monitor list keys since it started was a reorder, which the Rook rule keeps
+// out of the checks.
+type rookMonReorderRead struct {
+	pod           *corev1.Pod
+	container     string
+	referenceKind string
+	prefix        string
+	secretName    string
+	startedAt     time.Time
+	complete      bool
+}
+
+func findStaleSecretEnvChecksAndRookReorders(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent, perContainer int) ([]StaleSecretEnvCheck, []rookMonReorderRead) {
 	if perContainer <= 0 {
 		perContainer = math.MaxInt
 	}
 	if cache == nil || cache.Secrets() == nil {
-		return nil
+		return nil, nil
 	}
 	changes := latestSecretDataChanges(events)
 	if len(changes) == 0 {
-		return nil
+		return nil, nil
 	}
 	changesBySecret := secretDataChangesBySecret(changes)
 	completeSince := envHistoryCompleteSince(time.Now())
 	exists := make(map[string]bool)
 	checked := make(map[string]bool)
 	var out []StaleSecretEnvCheck
+	var rookReorders []rookMonReorderRead
 	for _, pod := range pods {
 		if pod == nil {
 			continue
@@ -1099,6 +1126,7 @@ func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, even
 			}
 			startedAt := status.State.Running.StartedAt.Time
 			var containerChecks []StaleSecretEnvCheck
+			var containerRookReorders []rookMonReorderRead
 			add := func(envName, referenceKind, prefix, secretName, key string, change secretKeyChange) {
 				changedAt, orderOnly, stale := change.since(startedAt, completeSince)
 				if !stale {
@@ -1108,6 +1136,10 @@ func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, even
 				// reorder of Rook's monitor sets is no evidence of a stale
 				// value, so the Issue reads as if the reorder never happened.
 				if change.onlyReorderedSince(startedAt) && isRookMonOrderInsensitiveKey(cachedSecret(cache, pod.Namespace, secretName), key) {
+					if !slices.ContainsFunc(containerRookReorders, func(read rookMonReorderRead) bool { return read.secretName == secretName }) {
+						containerRookReorders = append(containerRookReorders, rookMonReorderRead{pod: pod, container: container.Name, referenceKind: referenceKind,
+							prefix: prefix, secretName: secretName, startedAt: startedAt, complete: !startedAt.Before(completeSince)})
+					}
 					return
 				}
 				containerChecks = append(containerChecks, newStaleSecretEnvCheck(pod, container.Name, envName, referenceKind, prefix, secretName, key, startedAt, changedAt, orderOnly))
@@ -1135,6 +1167,13 @@ func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, even
 					add(envFrom.Prefix+change.key, "envFrom", envFrom.Prefix, envFrom.SecretRef.Name, change.key, change.secretKeyChange)
 				}
 			}
+			// The note says the reorder was the only change Radar saw, so a
+			// container with any other change to that Secret doesn't get it.
+			for _, read := range containerRookReorders {
+				if !slices.ContainsFunc(containerChecks, func(check StaleSecretEnvCheck) bool { return check.SecretName == read.secretName }) {
+					rookReorders = append(rookReorders, read)
+				}
+			}
 			// The cap may only drop order-only checks, so "every check is
 			// order-only" stays a statement about every changed key.
 			sort.SliceStable(containerChecks, func(i, j int) bool {
@@ -1147,7 +1186,7 @@ func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, even
 		}
 	}
 	sortStaleSecretEnvChecks(out)
-	return out
+	return out, rookReorders
 }
 
 func cachedSecret(cache *ResourceCache, namespace, name string) *corev1.Secret {
@@ -1185,7 +1224,7 @@ func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*cor
 }
 
 func findStaleSecretEnvChecksWithManagedFieldsUpTo(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent, perContainer int) []StaleSecretEnvCheck {
-	out := findStaleSecretEnvChecksUpTo(cache, pods, events, perContainer)
+	out, rookReorders := findStaleSecretEnvChecksAndRookReorders(cache, pods, events, perContainer)
 	if perContainer <= 0 {
 		perContainer = math.MaxInt
 	}
@@ -1244,6 +1283,27 @@ func findStaleSecretEnvChecksWithManagedFieldsUpTo(cache *ResourceCache, pods []
 			}
 		}
 	}
+	// A Rook monitor list reorder raises no Issue, but the write still
+	// happened after these containers started; it gets the same soft,
+	// keyless row as any other write Radar can't call a data change. It needs
+	// no action, so it only takes cap space the rows above left free.
+	for _, read := range rookReorders {
+		containerIdentity := read.pod.Namespace + "\x00" + read.pod.Name + "\x00" + read.container
+		if checksPerContainer[containerIdentity] >= perContainer {
+			continue
+		}
+		// History matches Secrets by name, so a Secret recreated after the
+		// container started may not be the one whose reorder Radar saw.
+		if secret := cachedSecret(cache, read.pod.Namespace, read.secretName); secret == nil || !secret.CreationTimestamp.Time.Before(read.startedAt) {
+			continue
+		}
+		write, ok := secretDataManagerLastWrite(cache, read.pod.Namespace, read.secretName)
+		if !ok || !read.startedAt.Before(write.at) {
+			continue
+		}
+		out = append(out, newRookMonReorderStaleSecretEnvCheck(read, write))
+		checksPerContainer[containerIdentity]++
+	}
 	sortStaleSecretEnvChecks(out)
 	return out
 }
@@ -1266,6 +1326,9 @@ func sortStaleSecretEnvChecks(out []StaleSecretEnvCheck) {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].EvidenceSource != out[j].EvidenceSource {
 			return out[i].EvidenceSource == staleSecretEvidenceObservedChange
+		}
+		if out[i].NoRestartNeeded != out[j].NoRestartNeeded {
+			return out[j].NoRestartNeeded
 		}
 		if out[i].Namespace != out[j].Namespace {
 			return out[i].Namespace < out[j].Namespace
@@ -1381,16 +1444,8 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 // Secret, which drops the whole row for anyone else.
 func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt time.Time, write secretDataManagerWrite) StaleSecretEnvCheck {
 	changedAt := write.at
-	writer := "a field manager that owns its data"
+	writer, names := managedFieldsWriter(write)
 	hedge := "managedFields cannot identify which field changed, so the write may not have touched data at all"
-	names := slices.DeleteFunc(slices.Clone(write.managers), isUnnamedManagedFieldsManager)
-	switch len(names) {
-	case 0:
-	case 1:
-		writer = names[0] + ", a field manager that owns its data"
-	default:
-		writer = strings.Join(names, " and ") + ", field managers that own its data"
-	}
 	if len(names) > 0 && !slices.ContainsFunc(names, func(name string) bool { return !writesSecretMetadata(name) }) {
 		verb := "writes"
 		if len(names) > 1 {
@@ -1409,6 +1464,46 @@ func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKi
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
 		Message:            fmt.Sprintf("Secret/%s had a write at %s by %s, after container %s started at %s; %s, and if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), writer, container, startedAt.UTC().Format(time.RFC3339), hedge),
+	}
+}
+
+func managedFieldsWriter(write secretDataManagerWrite) (string, []string) {
+	names := slices.DeleteFunc(slices.Clone(write.managers), isUnnamedManagedFieldsManager)
+	switch len(names) {
+	case 0:
+		return "a field manager that owns its data", names
+	case 1:
+		return names[0] + ", a field manager that owns its data", names
+	default:
+		return strings.Join(names, " and ") + ", field managers that own its data", names
+	}
+}
+
+// newRookMonReorderStaleSecretEnvCheck is the soft row for a container whose
+// only observed monitor list change was a reorder. It keeps the managedFields
+// row's shape (no key, the writer's last write time) so every surface treats
+// it as a note, never an Issue, and says what Radar saw instead of the
+// generic "may not have touched data" hedge.
+func newRookMonReorderStaleSecretEnvCheck(read rookMonReorderRead, write secretDataManagerWrite) StaleSecretEnvCheck {
+	writer, _ := managedFieldsWriter(write)
+	message := fmt.Sprintf("Secret/%s had a write at %s by %s, after container %s started at %s. Since then, the only change Radar saw to the monitor list this container reads from it was a reorder, and Ceph reads that list as a set, so no restart is needed for it.",
+		read.secretName, write.at.UTC().Format(time.RFC3339), writer, read.container, read.startedAt.UTC().Format(time.RFC3339))
+	if !read.complete {
+		message += " Radar's change history doesn't cover this container's whole run, so it can't rule out an earlier monitor change it missed."
+	}
+	return StaleSecretEnvCheck{
+		Namespace:          read.pod.Namespace,
+		PodName:            read.pod.Name,
+		Container:          read.container,
+		ReferenceKind:      read.referenceKind,
+		EvidenceSource:     staleSecretEvidenceManagedFields,
+		Prefix:             read.prefix,
+		SecretName:         read.secretName,
+		ContainerStartedAt: read.startedAt,
+		SecretChangedAt:    write.at,
+		NoRestartNeeded:    true,
+		HistoryIncomplete:  !read.complete,
+		Message:            message,
 	}
 }
 

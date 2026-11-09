@@ -382,29 +382,172 @@ func TestStaleConfigMapEnvOrderOnly(t *testing.T) {
 	}
 }
 
-func TestStaleSecretEnvRookReorderAddsNoManagedFieldsFallback(t *testing.T) {
+func TestStaleSecretEnvRookReorderNote(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	startedAt := now.Add(-10 * time.Minute)
 	reorderAt := now.Add(-time.Minute)
 	controller := true
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "rook-ceph-config", Namespace: "shop", UID: types.UID("rook-config-uid"),
-			OwnerReferences: []metav1.OwnerReference{{APIVersion: "ceph.rook.io/v1", Kind: "CephCluster", Name: "rook-ceph", UID: "c", Controller: &controller}},
-			ManagedFields: []metav1.ManagedFieldsEntry{{
-				Manager: "rook", Operation: metav1.ManagedFieldsOperationUpdate, Time: &metav1.Time{Time: reorderAt},
-				FieldsType: "FieldsV1", FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:mon_host":{}}}`)},
-			}},
-		},
-		Type: "kubernetes.io/rook",
-		Data: map[string][]byte{"mon_host": []byte(rookMonHostRe)},
+	secretWrittenAt := func(name string, writeAt time.Time, data map[string][]byte) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "shop", UID: types.UID(name + "-uid"),
+				ManagedFields: []metav1.ManagedFieldsEntry{{
+					Manager: "rotator", Operation: metav1.ManagedFieldsOperationUpdate, Time: &metav1.Time{Time: writeAt},
+					FieldsType: "FieldsV1", FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:PASSWORD":{}}}`)},
+				}},
+			},
+			Data: data,
+		}
 	}
-	pod := staleSecretEnvPod("rook-ceph-mon-a", startedAt, true, secretKeyEnv("ROOK_CEPH_MON_HOST", "rook-ceph-config", "mon_host"))
-	cache := envHistoryTestCache(t, pod, secret)
-	event := secretDiffEvent(reorderAt, "shop", "rook-ceph-config", map[string]string{"mon_host": rookMonHost}, map[string]string{"mon_host": rookMonHostRe})
-	if checks := findStaleSecretEnvChecksWithManagedFieldsUpTo(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{event}, 0); len(checks) != 0 {
-		t.Fatalf("Rook reorder fell back to a managedFields row: %+v", checks)
+	rookSecret := func(writeAt time.Time) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "rook-ceph-config", Namespace: "shop", UID: types.UID("rook-config-uid"),
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "ceph.rook.io/v1", Kind: "CephCluster", Name: "rook-ceph", UID: "c", Controller: &controller}},
+				ManagedFields: []metav1.ManagedFieldsEntry{{
+					Manager: "rook", Operation: metav1.ManagedFieldsOperationUpdate, Time: &metav1.Time{Time: writeAt},
+					FieldsType: "FieldsV1", FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:mon_host":{},"f:mon_initial_members":{}}}`)},
+				}},
+			},
+			Type: "kubernetes.io/rook",
+			Data: map[string][]byte{"mon_host": []byte(rookMonHostRe), "mon_initial_members": []byte("c,a,b")},
+		}
 	}
+	monPod := func(envs ...corev1.EnvVar) *corev1.Pod {
+		return staleSecretEnvPod("rook-ceph-mon-a", startedAt, true, envs...)
+	}
+	monHostEnv := secretKeyEnv("ROOK_CEPH_MON_HOST", "rook-ceph-config", "mon_host")
+	membersEnv := secretKeyEnv("ROOK_CEPH_MON_INITIAL_MEMBERS", "rook-ceph-config", "mon_initial_members")
+	monReorder := secretDiffEvent(reorderAt, "shop", "rook-ceph-config",
+		map[string]string{"mon_host": rookMonHost, "mon_initial_members": "a,b,c"},
+		map[string]string{"mon_host": rookMonHostRe, "mon_initial_members": "c,a,b"})
+	wantNote := "Secret/rook-ceph-config had a write at " + reorderAt.Format(time.RFC3339) + " by rook, a field manager that owns its data, after container app started at " +
+		startedAt.Format(time.RFC3339) + ". Since then, the only change Radar saw to the monitor list this container reads from it was a reorder, and Ceph reads that list as a set, so no restart is needed for it."
+	const notWatched = " Radar's change history doesn't cover this container's whole run, so it can't rule out an earlier monitor change it missed."
+
+	onlyFact := func(t *testing.T, cache *ResourceCache, pod *corev1.Pod) StaleEnvFact {
+		t.Helper()
+		if detections := detectStaleSecretEnv(cache, "shop", now); len(detections) != 0 {
+			t.Fatalf("Rook reorder raised an Issue: %+v", detections)
+		}
+		facts := FindStaleEnvForPods(context.Background(), cache, []*corev1.Pod{pod})
+		if len(facts) != 1 {
+			t.Fatalf("facts = %+v", facts)
+		}
+		if facts[0].EvidenceSource != staleSecretEvidenceManagedFields || facts[0].Key != "" || facts[0].Env != "" || !facts[0].ChangedAt.Equal(reorderAt) {
+			t.Fatalf("note is not a keyless managedFields row: %+v", facts[0])
+		}
+		return facts[0]
+	}
+
+	t.Run("a reorder Radar watched end to end gets the note and no Issue", func(t *testing.T) {
+		pod := monPod(monHostEnv, membersEnv)
+		cache := envHistoryTestCache(t, pod, rookSecret(reorderAt))
+		recordObserved(t, startedAt.Add(-time.Minute), monReorder)
+		if fact := onlyFact(t, cache, pod); fact.Message != "Pod rook-ceph-mon-a: "+wantNote {
+			t.Fatalf("message = %q", fact.Message)
+		}
+		checks := FindStaleSecretEnvChecksForPods(context.Background(), cache, []*corev1.Pod{pod})
+		if len(checks) != 1 || checks[0].Message != wantNote {
+			t.Fatalf("diagnose checks = %+v", checks)
+		}
+	})
+
+	t.Run("a container older than Radar's history says an earlier change can't be ruled out", func(t *testing.T) {
+		pod := monPod(monHostEnv, membersEnv)
+		cache := envHistoryTestCache(t, pod, rookSecret(reorderAt))
+		recordObserved(t, startedAt.Add(time.Minute), monReorder)
+		if fact := onlyFact(t, cache, pod); fact.Message != "Pod rook-ceph-mon-a: "+wantNote+notWatched {
+			t.Fatalf("message = %q", fact.Message)
+		}
+	})
+
+	t.Run("Pods with and without full history keep separate notes", func(t *testing.T) {
+		watched := startedAt.Add(time.Minute)
+		early := staleSecretEnvPod("rook-ceph-mon-z", startedAt, true, monHostEnv, membersEnv)
+		late := staleSecretEnvPod("rook-ceph-mon-a", watched.Add(time.Minute), true, monHostEnv, membersEnv)
+		cache := envHistoryTestCache(t, early, late, rookSecret(reorderAt))
+		recordObserved(t, watched, monReorder)
+		facts := FindStaleEnvForPods(context.Background(), cache, []*corev1.Pod{early, late})
+		checks := FindStaleSecretEnvChecksForPods(context.Background(), cache, []*corev1.Pod{early, late})
+		for _, messages := range [][]string{factMessages(facts), checkMessages(checks)} {
+			if len(messages) != 2 || strings.Contains(messages[0], notWatched) == strings.Contains(messages[1], notWatched) {
+				t.Fatalf("notes merged across history coverage: %q", messages)
+			}
+		}
+	})
+
+	t.Run("the note only takes cap space other rows left free", func(t *testing.T) {
+		pod := monPod(monHostEnv, secretKeyEnv("PASSWORD", "db-password", "PASSWORD"))
+		cache := envHistoryTestCache(t, pod, rookSecret(reorderAt), secretWrittenAt("db-password", reorderAt, map[string][]byte{"PASSWORD": []byte("x")}))
+		recordObserved(t, startedAt.Add(-time.Minute), monReorder)
+		checks := findStaleSecretEnvChecksWithManagedFieldsUpTo(cache, []*corev1.Pod{pod}, []timeline.TimelineEvent{monReorder}, 1)
+		if len(checks) != 1 || checks[0].SecretName != "db-password" {
+			t.Fatalf("checks = %+v", checks)
+		}
+	})
+
+	t.Run("the note sorts after rows that may need a restart", func(t *testing.T) {
+		pod := monPod(monHostEnv, secretKeyEnv("PASSWORD", "s1", "PASSWORD"))
+		cache := envHistoryTestCache(t, pod, rookSecret(reorderAt), secretWrittenAt("s1", reorderAt, map[string][]byte{"PASSWORD": []byte("x")}))
+		recordObserved(t, startedAt.Add(-time.Minute), monReorder)
+		facts := FindStaleEnvForPods(context.Background(), cache, []*corev1.Pod{pod})
+		checks := FindStaleSecretEnvChecksForPods(context.Background(), cache, []*corev1.Pod{pod})
+		if len(facts) != 2 || facts[0].SourceName != "s1" || !facts[1].NoRestartNeeded {
+			t.Fatalf("facts = %+v", facts)
+		}
+		if len(checks) != 2 || checks[0].SecretName != "s1" || !checks[1].NoRestartNeeded {
+			t.Fatalf("checks = %+v", checks)
+		}
+	})
+
+	t.Run("no note when another key of the Secret really changed", func(t *testing.T) {
+		pod := monPod(monHostEnv, membersEnv)
+		cache := envHistoryTestCache(t, pod, rookSecret(reorderAt))
+		recordObserved(t, startedAt.Add(-time.Minute), secretDiffEvent(reorderAt, "shop", "rook-ceph-config",
+			map[string]string{"mon_host": rookMonHost, "mon_initial_members": "a,b,d"},
+			map[string]string{"mon_host": rookMonHostRe, "mon_initial_members": "c,a,b"}))
+		facts := FindStaleEnvForPods(context.Background(), cache, []*corev1.Pod{pod})
+		if len(facts) != 1 || facts[0].EvidenceSource != staleSecretEvidenceObservedChange || facts[0].Key != "mon_initial_members" {
+			t.Fatalf("facts = %+v", facts)
+		}
+	})
+
+	t.Run("no note when the Secret was recreated after the container started", func(t *testing.T) {
+		pod := monPod(monHostEnv, membersEnv)
+		secret := rookSecret(reorderAt)
+		secret.CreationTimestamp = metav1.Time{Time: startedAt.Add(time.Minute)}
+		cache := envHistoryTestCache(t, pod, secret)
+		recordObserved(t, startedAt.Add(-time.Minute), monReorder)
+		if facts := FindStaleEnvForPods(context.Background(), cache, []*corev1.Pod{pod}); len(facts) != 0 {
+			t.Fatalf("facts = %+v", facts)
+		}
+	})
+
+	t.Run("no note when the last write came before the container started", func(t *testing.T) {
+		pod := monPod(monHostEnv, membersEnv)
+		cache := envHistoryTestCache(t, pod, rookSecret(startedAt.Add(-time.Minute)))
+		recordObserved(t, startedAt.Add(-time.Minute), monReorder)
+		if facts := FindStaleEnvForPods(context.Background(), cache, []*corev1.Pod{pod}); len(facts) != 0 {
+			t.Fatalf("facts = %+v", facts)
+		}
+	})
+}
+
+func factMessages(facts []StaleEnvFact) []string {
+	var out []string
+	for _, fact := range facts {
+		out = append(out, fact.Message)
+	}
+	return out
+}
+
+func checkMessages(checks []StaleSecretEnvCheck) []string {
+	var out []string
+	for _, check := range checks {
+		out = append(out, check.Message)
+	}
+	return out
 }
 
 // recordObserved records events in a fresh timeline whose observation began
