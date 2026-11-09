@@ -526,3 +526,19 @@ func TestManagerWalksPastFluxLabelsAControllerCopied(t *testing.T) {
 		}
 	}
 }
+
+// A Pod Flux labelled and a ReplicaSet later adopted: the HelmRelease records
+// no inventory, so nothing says the labels were copied, and they answer.
+func TestManagerKeepsFluxLabelsWhoseListCannotBeRead(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	d := b.Add("apps", "Deployment", "apps", "web")
+	rs := b.Add("apps", "ReplicaSet", "apps", "web-1", d.OwnerRef(true))
+	pod := b.Meta(b.Add("", "Pod", "apps", "adopted", rs.OwnerRef(true)), map[string]string{"helm.toolkit.fluxcd.io/name": "legacy", "helm.toolkit.fluxcd.io/namespace": "apps"}, nil)
+	b.Manager(ownership.FluxHelmRelease, "apps", "legacy", ownership.MembersUnreadable, "")
+	b.Manager(ownership.FluxKustomization, "flux-system", "apps", ownership.MembersRecorded, "", d.Ref)
+	got := view(t, b.World(), ownership.Unrestricted()).Manager(pod.Ref)
+	legacy := resourceid.Ref{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "apps", Name: "legacy"}
+	if got.Via != nil || len(got.Direct.Claims) != 1 || got.Direct.Claims[0].Weak || got.Lead == nil || *got.Lead != legacy {
+		t.Fatalf("answer %+v; want the Pod's own unreadable-list claim to answer", got)
+	}
+}

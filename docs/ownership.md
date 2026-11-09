@@ -88,7 +88,7 @@ characters names the tracking ID's Application.
 When the object's evidence doesn't settle it, the walk follows the controller chain (Pod → ReplicaSet → Deployment) to
 the nearest ancestor whose evidence does: **via**. Weak claims don't stop the walk: copied ones, and metadata a
 controller-owned object inherits (an instance label from its template, Helm annotations from its Deployment, Flux
-origin labels copied from its controller). If nothing settles it and the object makes no claim of its own, the nearest
+origin labels naming a manager whose list was read and leaves it out). If nothing settles it and the object makes no claim of its own, the nearest
 ancestor claim answers as **via**, **claimed**; other claims on the way stay in **between**. A walk that can't follow an owner says so (**stop**), and a manager the request
 read differently earlier (still loading, or another incarnation) leaves the answer incomplete.
 
