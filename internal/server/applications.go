@@ -319,7 +319,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := *s.filterApplicationAuthenticationRefs(r, resp)
+	out := *s.filterApplicationsForUser(r, resp)
 	if perms := k8s.GetCachedPermissionResult(); !accessUnknown && perms != nil {
 		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms.ReadsApplicationsInEvery)}
 	}
@@ -364,6 +364,7 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	resp = s.filterApplicationsForUser(r, resp)
 	var app *appRow
 	for i := range resp.Applications {
 		if resp.Applications[i].Key == key {
@@ -635,10 +636,10 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
 		}
-		// Rows are shared by every caller with these namespaces, and a row's
-		// source names only its manager, so managers are read as Radar reads
-		// them, as the managed-source pass below reads every Application and
-		// Kustomization.
+		// Rows are shared by every caller with these namespaces, so managers
+		// are read as Radar reads them, as the managed-source pass below reads
+		// every Application and Kustomization. Each caller's copy withholds a
+		// source they can't read (filterApplicationSources).
 		managers := ownership.NewView(session, ownership.Unrestricted())
 		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, managers, canListClusterWorkflowTemplates)
 		if err := session.ValidateCaches(); err != nil {
@@ -2930,6 +2931,45 @@ func namespaceFromKey(key string) string {
 
 // (worstAppHealth / appHealthRank removed — the app rollup now uses
 // packages.WorseHealth, the single rollup ordering.)
+
+// filterApplicationsForUser projects the shared rows for the caller.
+func (s *Server) filterApplicationsForUser(r *http.Request, shared *applicationsResponse) *applicationsResponse {
+	return s.filterApplicationSources(r, s.filterApplicationAuthenticationRefs(r, shared))
+}
+
+// filterApplicationSources withholds a row's GitOps source, and the delivery
+// state read from it, from a caller who can't get that Application,
+// Kustomization or HelmRelease. Rows name sources found with Radar's own
+// access, often in a namespace the caller can't read. A native Helm source is
+// named by the workloads' own annotations, so it stays.
+func (s *Server) filterApplicationSources(r *http.Request, shared *applicationsResponse) *applicationsResponse {
+	if auth.UserFromContext(r.Context()) == nil {
+		return shared
+	}
+	var out *applicationsResponse
+	for i := range shared.Applications {
+		ref := shared.Applications[i].SourceRef
+		if ref == nil || ref.Type != "gitops" {
+			continue
+		}
+		if resource := gitOpsPluralKind(ref.Kind); ref.Group != "" && resource != "" && s.canRead(r, ref.Group, resource, ref.Namespace, "get") {
+			continue
+		}
+		if out == nil {
+			cp := *shared
+			cp.Applications = append([]appRow(nil), shared.Applications...)
+			out = &cp
+		}
+		row := &out.Applications[i]
+		row.SourceRef = nil
+		row.SourceStatus = nil
+		row.Health = row.RuntimeHealth
+	}
+	if out == nil {
+		return shared
+	}
+	return out
+}
 
 // Applications rows are shared across callers, so authentication references are authorized on a copy after the cache.
 func (s *Server) filterApplicationAuthenticationRefs(r *http.Request, shared *applicationsResponse) *applicationsResponse {
