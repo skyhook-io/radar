@@ -109,7 +109,7 @@ describe('matchesTimelineSearch', () => {
     namespace: 'payments',
     reason: 'ScalingReplicaSet',
     message: 'Scaled up replica set',
-    diff: { summary: 'image bumped to v2', fields: [] },
+    diff: { summary: 'image bumped to v2', fields: [], fieldManagers: [{ manager: 'kubectl-edit', operation: 'Update' }, { manager: 'kube-controller-manager', operation: 'Update', subresource: 'status' }] },
   })
 
   it('empty term matches everything', () => {
@@ -122,6 +122,10 @@ describe('matchesTimelineSearch', () => {
     expect(matchesTimelineSearch(e, 'scalingreplica')).toBe(true)
     expect(matchesTimelineSearch(e, 'replica set')).toBe(true)
     expect(matchesTimelineSearch(e, 'v2')).toBe(true)
+  })
+  it('matches the field manager that wrote the change', () => {
+    expect(matchesTimelineSearch(e, 'kubectl-edit')).toBe(true)
+    expect(matchesTimelineSearch(e, 'kube-controller-manager (status)')).toBe(true)
   })
   it('non-match returns false', () => {
     expect(matchesTimelineSearch(e, 'zzz-nope')).toBe(false)

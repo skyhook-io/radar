@@ -158,6 +158,9 @@ export interface IssueRecentChange {
   /** Referencing workloads or Pods left out of consumed_by because the caller may not read them. */
   consumed_by_withheld?: IssueWithheld;
   running_previous_value?: IssueRunningPreviousValue;
+  /** Field managers (metadata.managedFields) that wrote this update, e.g. "kubectl-edit",
+   *  "kube-controller-manager (status)": client labels, never users. Absent when unknown. */
+  field_managers?: string[];
   updates_in_window?: number;
   first_update_at?: string;
 }

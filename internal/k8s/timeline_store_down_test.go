@@ -34,18 +34,18 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 	}
 
 	initialSyncComplete.Store(false)
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "add", nil, pod("listed", time.Hour), nil, false)
+	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "add", nil, pod("listed", time.Hour), nil, false, nil)
 	if got := storeDown(); got != 0 {
 		t.Fatalf("an object listed at startup counted as a lost change: store_unavailable=%d", got)
 	}
 
 	initialSyncComplete.Store(true)
-	recordToTimelineStore("ctx", "Pod", "shop", "relisted", "u2", "add", nil, pod("relisted", time.Hour), nil, false)
+	recordToTimelineStore("ctx", "Pod", "shop", "relisted", "u2", "add", nil, pod("relisted", time.Hour), nil, false, nil)
 	if got := storeDown(); got != 0 {
 		t.Fatalf("a relisted old object counted as a lost change: store_unavailable=%d", got)
 	}
 
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), pod("listed", time.Hour), nil, false)
+	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), pod("listed", time.Hour), nil, false, nil)
 	if got := storeDown(); got != 0 {
 		t.Fatalf("an update with nothing to record counted as a lost change: store_unavailable=%d", got)
 	}
@@ -55,9 +55,9 @@ func TestTimelineStoreDownCountsLostChangesOnly(t *testing.T) {
 
 	running := pod("listed", time.Hour)
 	running.Status.Phase = corev1.PodRunning
-	recordToTimelineStore("ctx", "Pod", "shop", "new", "u3", "add", nil, pod("new", time.Second), nil, false)
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), running, nil, false)
-	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "delete", pod("listed", time.Hour), nil, nil, false)
+	recordToTimelineStore("ctx", "Pod", "shop", "new", "u3", "add", nil, pod("new", time.Second), nil, false, nil)
+	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "update", pod("listed", time.Hour), running, nil, false, nil)
+	recordToTimelineStore("ctx", "Pod", "shop", "listed", "u1", "delete", pod("listed", time.Hour), nil, nil, false, nil)
 	recordK8sEventToTimeline("ctx", k8sEventPod("new", "Started"))
 	if got := storeDown(); got != 4 {
 		t.Fatalf("store_unavailable=%d, want 4 (new add, update, delete, K8s event)", got)

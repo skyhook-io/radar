@@ -405,6 +405,16 @@ export interface K8sEvent {
 export interface DiffInfo {
   fields: FieldChange[]
   summary: string
+  // Field managers (metadata.managedFields) whose entries changed in this
+  // update: client labels such as kubectl-edit or helm, never users. Absent
+  // when unknown.
+  fieldManagers?: FieldManagerWrite[]
+}
+
+export interface FieldManagerWrite {
+  manager: string
+  operation?: string
+  subresource?: string
 }
 
 export interface FieldChange {

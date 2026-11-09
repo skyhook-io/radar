@@ -1222,8 +1222,25 @@ func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange 
 				NewValue: f.NewValue,
 			})
 		}
+		change.FieldManagers = fieldManagerLabels(e.Diff.FieldManagers)
 	}
 	return change
+}
+
+// fieldManagerLabels renders managers as "manager", or "manager
+// (subresource)" for a status or scale write.
+func fieldManagerLabels(managers []k8score.FieldManagerWrite) []string {
+	var out []string
+	for _, m := range managers {
+		label := m.Manager
+		if m.Subresource != "" {
+			label += " (" + m.Subresource + ")"
+		}
+		if !slices.Contains(out, label) {
+			out = append(out, label)
+		}
+	}
+	return out
 }
 
 func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {

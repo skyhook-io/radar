@@ -363,8 +363,17 @@ type RecentChange struct {
 	// RunningPreviousValue reports observed writes with likely stale env readers.
 	// Absence means not established, rather than no stale readers.
 	RunningPreviousValue *RunningPreviousValue `json:"running_previous_value,omitempty"`
-	UpdatesInWindow      int                   `json:"updates_in_window,omitempty"`
-	FirstUpdateAt        string                `json:"first_update_at,omitempty"`
+	// FieldManagers names, for an update, the Kubernetes field managers whose
+	// managedFields entries changed between the previous observed version and
+	// this one: "kubectl-edit", "helm", "kube-controller-manager (status)".
+	// They are labels the writing client chose, naming a tool or controller,
+	// not a user. When several are listed, each wrote some of the change; which
+	// field each wrote is not recorded. Absent means unknown, not that nothing
+	// wrote. A row merging several updates (updates_in_window) lists the
+	// managers of the updates Radar could attribute.
+	FieldManagers   []string `json:"field_managers,omitempty"`
+	UpdatesInWindow int      `json:"updates_in_window,omitempty"`
+	FirstUpdateAt   string   `json:"first_update_at,omitempty"`
 }
 
 // RunningPreviousValue describes Pods that likely retain an earlier env value.
