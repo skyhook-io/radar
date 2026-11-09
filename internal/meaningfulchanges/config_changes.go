@@ -15,7 +15,7 @@ import (
 
 const (
 	runningPreviousValueNote          = "These Pods started before Radar observed this write and read the changed keys as env vars. Env values are set when a container starts, so they likely still hold the earlier value until they restart."
-	runningPreviousOrderOnlyValueNote = "These Pods started before Radar observed this write and read the changed keys as env vars. The write only reordered each key's comma-separated entries, with none added or removed, so they keep the old order until they restart. That matters only if the app treats the new order differently."
+	runningPreviousOrderOnlyValueNote = "These Pods started before Radar observed this write and read the changed keys as env vars. For those keys, every change since the Pods started only reordered comma-separated entries, with none added or removed, so they keep the old order until they restart. That matters only if the app treats the new order differently."
 )
 
 func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.RecentChange, podsByNamespace map[string][]*corev1.Pod, viewer Viewer) {
@@ -128,7 +128,9 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 		secret := resourceKey(change.Kind, change.Namespace, change.Name)
 		key := secret
 		if change.RunningPreviousValue != nil {
-			key += "\x00" + strings.Join(change.RunningPreviousValue.Keys, "\x00")
+			// The note is part of the key: readers that missed a real change
+			// and readers that only missed a reorder stay on separate rows.
+			key += "\x00" + strings.Join(change.RunningPreviousValue.Keys, "\x00") + "\x00" + change.RunningPreviousValue.Note
 		}
 		index, found := groups[key]
 		if change.RunningPreviousValue == nil {

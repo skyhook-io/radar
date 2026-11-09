@@ -1160,8 +1160,9 @@ func cachedSecret(cache *ResourceCache, namespace, name string) *corev1.Secret {
 
 // envHistoryCompleteSince is the earliest time from which Radar holds every
 // change it observed: after this process started watching, after anything
-// the store evicted, and inside the env-history lookback. A container that
-// started earlier may have missed a change Radar never saw.
+// the store evicted or failed to record for Secrets or ConfigMaps, and inside
+// the env-history lookback. A container that started earlier may have missed
+// a change Radar never saw.
 func envHistoryCompleteSince(now time.Time) time.Time {
 	started := timeline.ObservationStart()
 	if started.IsZero() {
@@ -1171,8 +1172,10 @@ func envHistoryCompleteSince(now time.Time) time.Time {
 	if started.After(since) {
 		since = started
 	}
-	if evicted := timeline.HistoryEvictedThrough(); evicted.After(since) {
-		since = evicted
+	for _, boundary := range []time.Time{timeline.HistoryEvictedThrough(), timeline.LastStoreFailure("Secret"), timeline.LastStoreFailure("ConfigMap")} {
+		if boundary.After(since) {
+			since = boundary
+		}
 	}
 	return since
 }
@@ -1294,6 +1297,12 @@ func (c *secretKeyChange) observe(at time.Time, orderOnly bool) {
 		c.changedAt = at
 	}
 	if !orderOnly && at.After(c.realChangedAt) {
+		c.realChangedAt = at
+	}
+}
+
+func (c *secretKeyChange) observeAdd(at time.Time) {
+	if at.After(c.realChangedAt) {
 		c.realChangedAt = at
 	}
 }
@@ -1480,7 +1489,8 @@ func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]
 		}
 		reordered := reorderedKeysByField(event.Diff.Fields)
 		for _, field := range event.Diff.Fields {
-			if !isSecretDataModificationPath(field.Path) {
+			added := field.Path == "data (added keys)" || field.Path == "stringData (added keys)"
+			if !added && !isSecretDataModificationPath(field.Path) {
 				continue
 			}
 			keys := stringValues(field.NewValue)
@@ -1494,7 +1504,14 @@ func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]
 				}
 				identity := secretDataKey{namespace: event.Namespace, name: event.Name, key: key}
 				change := out[identity]
-				change.observe(event.Timestamp, modified && reordered[keyListFieldBase(field.Path)][key])
+				if added {
+					// An added key can't make a running value stale, but a
+					// container that started before the add doesn't hold the
+					// key at all, so a later reorder isn't order-only for it.
+					change.observeAdd(event.Timestamp)
+				} else {
+					change.observe(event.Timestamp, modified && reordered[keyListFieldBase(field.Path)][key])
+				}
 				out[identity] = change
 			}
 		}

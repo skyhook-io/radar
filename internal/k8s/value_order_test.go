@@ -292,6 +292,26 @@ func TestStaleSecretEnvOrderOnlyChanges(t *testing.T) {
 		assertRealChangeCopy(t, onlyDetection(t, detectStaleSecretEnv(cache, "shop", now)), "Radar observed that key change at "+reorderAt.Format(time.RFC3339))
 	})
 
+	t.Run("a key added after the container started, then reordered, is not order-only", func(t *testing.T) {
+		deployment, replicaSet, pod := ownedStaleSecretEnvPod("catalog", startedAt)
+		pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-config"}}}}
+		cache := envHistoryTestCache(t, deployment, replicaSet, pod, appSecret.DeepCopy())
+		recordObserved(t, watched,
+			secretDiffEvent(realAt, "shop", "app-config", map[string]string{}, map[string]string{"BROKERS": "k0,k1"}),
+			brokersReorder)
+		assertRealChangeCopy(t, onlyDetection(t, detectStaleSecretEnv(cache, "shop", now)), "Radar observed that key change at "+realAt.Format(time.RFC3339))
+	})
+
+	t.Run("a failed history write since the container started rules out order-only", func(t *testing.T) {
+		deployment, replicaSet, pod := ownedStaleSecretEnvPod("catalog", startedAt, secretKeyEnv("BROKERS", "app-config", "BROKERS"))
+		cache := envHistoryTestCache(t, deployment, replicaSet, pod, appSecret.DeepCopy())
+		recordObserved(t, watched, brokersReorder)
+		timeline.RecordDrop("Secret", "shop", "app-config", timeline.DropReasonStoreFailed, "update", ActiveClusterContext())
+		t.Cleanup(timeline.ResetMetricsForContextSwitch)
+		assertRealChangeCopy(t, onlyDetection(t, detectStaleSecretEnv(cache, "shop", now)), "Radar observed that key change at "+reorderAt.Format(time.RFC3339))
+		timeline.ResetMetricsForContextSwitch()
+	})
+
 	t.Run("the per-container cap never hides a real change behind reorders", func(t *testing.T) {
 		data := map[string][]byte{}
 		oldValues, newValues := map[string]string{}, map[string]string{}
