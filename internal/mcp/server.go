@@ -233,10 +233,10 @@ func handlerForServerSelector(selectServer func(*http.Request) *mcpsdk.Server) h
 		log.Printf("[mcp] WARNING: DNS-rebinding Host check DISABLED via env (bench mode)")
 	}
 
-	handler := runtimeLocalCaller(mcpsdk.NewStreamableHTTPHandler(
+	handler := runtimeLocalCaller(withHTTPRequestContext(mcpsdk.NewStreamableHTTPHandler(
 		selectServer,
 		streamOpts,
-	))
+	)))
 
 	// go-sdk v1.6 removed the implicit cross-origin protection default;
 	// wrap the handler so a malicious page can't drive the local MCP server.

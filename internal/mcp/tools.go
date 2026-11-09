@@ -138,7 +138,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"get_dashboard or issues first. " +
 			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
-	}, logToolCall("list_resources", handleListResources))
+	}, logToolCall("list_resources", stopsWhenCallerLeaves(handleListResources)))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
