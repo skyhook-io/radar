@@ -271,19 +271,44 @@ func TestDescribeUnschedulable_ResourcesAndTaint(t *testing.T) {
 
 // TestDescribeUnschedulable_OrdersByBlastRadius pins that the dominant
 // constraint (the one that rejected the most nodes) leads the summary, even
-// when the scheduler listed a narrower predicate first. Bare pod + nil nodes so
-// node-affinity stays unresolved and both clauses flow through summarizeReasons.
+// when the scheduler listed a narrower predicate first.
 func TestDescribeUnschedulable_OrdersByBlastRadius(t *testing.T) {
 	msg := describeUnschedulable(&corev1.Pod{},
-		"0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, "+
-			"2 node(s) didn't match Pod's node affinity/selector.", nil)
-	affinity := strings.Index(msg, "node affinity/selector mismatch")
-	antiAffinity := strings.Index(msg, "pod anti-affinity conflict")
-	if affinity < 0 || antiAffinity < 0 {
+		"0/3 nodes are available: 1 Insufficient cpu, 2 node(s) had untolerated taint {dedicated: gpu}.", nil)
+	taint := strings.Index(msg, "untolerated taint")
+	cpu := strings.Index(msg, "insufficient cpu")
+	if taint < 0 || cpu < 0 {
 		t.Fatalf("message %q missing an expected clause", msg)
 	}
-	if affinity > antiAffinity {
-		t.Errorf("expected wider node affinity/selector clause (2 nodes) before anti-affinity (1 node): %q", msg)
+	if taint > cpu {
+		t.Errorf("expected the wider taint clause (2 nodes) before insufficient cpu (1 node): %q", msg)
+	}
+}
+
+// When the selector excluded most nodes, the clauses about the nodes it
+// targets lead, whatever their counts. Bare pod + nil nodes so node-affinity
+// stays unresolved and every clause flows through summarizeReasons.
+func TestDescribeUnschedulable_TargetNodesLeadWhenSelectorExcludesOthers(t *testing.T) {
+	msg := describeUnschedulable(&corev1.Pod{},
+		"0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 2 Insufficient nvidia.com/gpu, "+
+			"4 node(s) had untolerated taint(s), 1 node(s) didn't satisfy existing pods anti-affinity rules.", nil)
+	want := []string{"2 node(s) insufficient nvidia.com/gpu", "1 node(s) pod anti-affinity", "15 node(s) node affinity/selector mismatch", "4 node(s) untolerated taint"}
+	last := -1
+	for _, w := range want {
+		i := strings.Index(msg, w)
+		if i < 0 {
+			t.Fatalf("message %q missing %q", msg, w)
+		}
+		if i < last {
+			t.Errorf("%q is out of order in %q", w, msg)
+		}
+		last = i
+	}
+
+	selectorOnly := describeUnschedulable(&corev1.Pod{},
+		"0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 6 node(s) had untolerated taint(s).", nil)
+	if strings.Index(selectorOnly, "node affinity/selector") > strings.Index(selectorOnly, "untolerated taint") {
+		t.Errorf("without a later-filter clause, count order should hold: %q", selectorOnly)
 	}
 }
 

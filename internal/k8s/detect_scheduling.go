@@ -649,14 +649,31 @@ func actionForSchedClass(r SchedulingReason) string {
 // Clauses are ordered by how many nodes each rejected, descending — the
 // scheduler emits them in an arbitrary predicate order, so leading with the
 // widest-blast-radius constraint surfaces the dominant reason first ("2 node(s)
-// node affinity/selector mismatch" before "1 node(s) pod anti-affinity
-// conflict") instead of whichever predicate the scheduler happened to list
-// first. Stable, so equal counts keep the scheduler's order; count-0
-// whole-message clauses (e.g. unbound PVC) sink to the end.
+// untolerated taint" before "1 node(s) insufficient cpu") instead of whichever
+// predicate the scheduler happened to list first. Stable, so equal counts keep
+// the scheduler's order; count-0 whole-message clauses (e.g. unbound PVC) sink
+// to the end.
+//
+// One exception: when the selector excluded some nodes, the clauses from
+// filters after the selector check (see schedAfterNodeAffinity) lead, because
+// they describe the nodes the pod targets. The selector mismatch is usually
+// the pod's intent, not the problem.
 func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
 	ordered := make([]SchedulingReason, len(reasons))
 	copy(ordered, reasons)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].NodeCount > ordered[j].NodeCount })
+	selector := false
+	for _, r := range reasons {
+		selector = selector || r.Class == SchedNodeAffinitySelector
+	}
+	targets := func(r SchedulingReason) bool {
+		return selector && !skipAffinity && r.NodeCount > 0 && schedAfterNodeAffinity[r.Class]
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ti, tj := targets(ordered[i]), targets(ordered[j]); ti != tj {
+			return ti
+		}
+		return ordered[i].NodeCount > ordered[j].NodeCount
+	})
 
 	var parts []string
 	for _, r := range ordered {
