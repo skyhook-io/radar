@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
+import { isApiGroup } from '../resource-utils-cnpg'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
@@ -328,21 +329,24 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
 // CONDITIONS SECTION
 // ============================================================================
 
-// Conditions that report an intentional state rather than health: KServe sets
-// Stopped=True for a model its owner stopped, and Stopped=False otherwise.
-const STATE_CONDITION_TYPES = new Set(['Stopped'])
+// KServe's Stopped reports an intentional state rather than health: True for a
+// model its owner stopped, False otherwise.
+function isKServeStopState(resource: any, cond: any): boolean {
+  return cond.type === 'Stopped' && isApiGroup(resource?.apiVersion, 'serving.kserve.io')
+}
 const WARNING_CONDITION_TYPES = new Set(['Degraded', 'Warning', 'ScalingLimited'])
 const POSITIVE_CONDITION_TYPES = new Set(['Ready', 'Available', 'Healthy', 'Initialized', 'Complete'])
 
 export type GenericConditionTone = 'neutral' | 'ok' | 'warning' | 'fail' | 'unclear' | 'unknown'
 
 // One tone per condition, so the icon, the status chip, the sort order and
-// whether the section opens all agree. Unknown-polarity False stays 'unclear'
-// (slate icon, red chip), as before: many such conditions are positive, like
+// whether the section opens all agree. Unknown-polarity False is 'unclear'
+// (slate icon, red chip): many such conditions are positive, like
 // PredictorReady, and their False is a real failure.
 export function genericConditionTone(resource: any, cond: any): GenericConditionTone {
-  if (getCrossplaneConditionTone(resource, cond) === 'neutral' || STATE_CONDITION_TYPES.has(cond.type)) return 'neutral'
+  if (getCrossplaneConditionTone(resource, cond) === 'neutral') return 'neutral'
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
+  if (isKServeStopState(resource, cond)) return 'neutral'
   const isTrue = cond.status === 'True'
   if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
   if (isInvertedPolarityCondition(cond.type)) return isTrue ? 'fail' : 'ok'

@@ -17,8 +17,15 @@ describe('genericConditionTone', () => {
     ['Degraded', 'True', 'warning'],
     ['PredictorReady', 'False', 'unclear'],
     ['PredictorReady', 'Unknown', 'unknown'],
+    ['Stopped', 'Unknown', 'unknown'],
   ])('%s=%s is %s', (type, status, tone) => {
     expect(genericConditionTone(resource, cond(type, status))).toBe(tone)
+  })
+
+  it('reads Stopped as a state only on KServe resources', () => {
+    const other = { apiVersion: 'example.com/v1', kind: 'Pipeline', metadata: { name: 'etl' } }
+    expect(genericConditionTone(other, cond('Stopped', 'True'))).toBe('ok')
+    expect(genericConditionTone(other, cond('Stopped', 'False'))).toBe('unclear')
   })
 })
 
