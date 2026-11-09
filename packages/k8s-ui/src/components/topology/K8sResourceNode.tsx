@@ -522,6 +522,14 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       const count = (nodeData.podCount as number) || 0;
       const healthy = (nodeData.healthy as number) || 0;
       const unhealthy = (nodeData.unhealthy as number) || 0;
+      // Termination and health are separate: a draining Pod can be healthy.
+      // The card is narrow, so the unhealthy count comes first and survives truncation.
+      const pods = (nodeData.pods as Array<{ terminating?: boolean }> | undefined) || [];
+      const terminating = pods.filter(p => p.terminating === true).length;
+      if (terminating > 0) {
+        const draining = `${terminating === count ? 'all' : terminating} terminating`;
+        return unhealthy > 0 ? `${count} pods • ${unhealthy} unhealthy • ${draining}` : `${count} pods • ${draining}`;
+      }
       if (unhealthy > 0) {
         return `${count} pods (${unhealthy} unhealthy)`;
       }

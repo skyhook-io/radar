@@ -8,6 +8,14 @@ describe('baseSubtitle', () => {
     expect(baseSubtitle('Pod', { earlierJobRun: 'hook', terminating: 1 })).toBe('Earlier run • terminating')
   })
 
+  it('counts terminating members on a collapsed Pod group', () => {
+    const pods = (n: number) => Array.from({ length: 6 }, (_, i) => ({ terminating: i < n }))
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 6, pods: pods(0) })).toBe('6 pods (6 healthy)')
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 6, pods: pods(2) })).toBe('6 pods • 2 terminating')
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 0, pods: pods(6) })).toBe('6 pods • all terminating')
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 5, unhealthy: 1, pods: pods(2) })).toBe('6 pods • 1 unhealthy • 2 terminating')
+  })
+
   it('names a Pod being deleted Terminating, not its Running phase', () => {
     expect(baseSubtitle('Pod', { phase: 'Running', terminating: 1 })).toBe('Terminating')
     expect(baseSubtitle('Pod', { phase: 'Running', terminating: 0 })).toBe('Running')
