@@ -87,7 +87,8 @@ func BudgetedNamespaceAccess(ctx context.Context, namespaces []string, budget *a
 // contains "" when the whole-scope check denies or cannot answer, respectively.
 // Other empty outputs may be nil; finite denied/unchecked outputs name members.
 // budget must be seeded once per request with MaxAccessChecks and shared across
-// kinds and both access gates. Cached decisions are free. Both callbacks return
+// kinds and both access gates, or split between kinds so that the request's
+// budgets add up to no more than MaxAccessChecks. Cached decisions are free. Both callbacks return
 // (false, false) for no answer and must be safe for concurrent use; fresh checks
 // run at most 16 at once and must honor ctx. After an unanswered whole-scope
 // check only cached namespace decisions are used; the rest remain unchecked.

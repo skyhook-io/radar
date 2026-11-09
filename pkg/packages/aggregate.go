@@ -1,6 +1,7 @@
 package packages
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
@@ -53,7 +54,7 @@ func Aggregate(s Sources) []PackageRow {
 		chartName := h.ChartName
 		chartVersion := h.ChartVersion
 		if chartName == "" || chartVersion == "" {
-			parsedName, parsedVer := splitChart(h.Chart)
+			parsedName, parsedVer := SplitChart(h.Chart)
 			if chartName == "" {
 				chartName = parsedName
 			}
@@ -89,7 +90,7 @@ func Aggregate(s Sources) []PackageRow {
 		}
 		var chartName, chartVersion string
 		if chartLabel != "" {
-			chartName, chartVersion = splitChart(chartLabel)
+			chartName, chartVersion = SplitChart(chartLabel)
 		}
 		if chartName == "" && releaseName != "" {
 			chartName = releaseName
@@ -266,18 +267,30 @@ func sourceRank(s SourceCode) int {
 	return 5
 }
 
-// splitChart splits a Helm chart string like "cert-manager-1.14.0" or
-// "cert-manager-v1.14.0" into (name, version). Returns ("", "") if the
-// string doesn't look like name-version. Handles charts whose own name
-// contains hyphens ("kube-prometheus-stack-45.27.2").
+// dottedChartVersion matches a whole chart version with at least major.minor,
+// whatever follows it. Only a dotted version anchors the split from the left:
+// a chart name can hold a bare number ("foo-2-bar-1.2.3").
+var dottedChartVersion = regexp.MustCompile(`^v?\d+\.\d+(\.\d+)?([-+_.][0-9A-Za-z._+-]*)?$`)
+
+// SplitChart splits a Helm chart string like "cert-manager-1.14.0" or
+// "cert-manager-v1.14.0" into (name, version). Empty input returns ("", "").
+// Handles charts whose own name contains hyphens
+// ("kube-prometheus-stack-45.27.2") and versions whose pre-release does
+// ("foo-1.2.3-1").
 //
-// Heuristic: find the last hyphen followed by a digit-or-v-digit; the
+// Heuristic: the first hyphen followed by a whole dotted version wins.
+// Otherwise find the last hyphen followed by a digit-or-v-digit; the
 // name is the prefix, the version is the suffix. Falls back to the
 // whole string as name with empty version when no version part is
 // found.
-func splitChart(s string) (name, version string) {
+func SplitChart(s string) (name, version string) {
 	if s == "" {
 		return "", ""
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i-1] == '-' && dottedChartVersion.MatchString(s[i:]) {
+			return s[:i-1], s[i:]
+		}
 	}
 	for i := len(s) - 1; i >= 1; i-- {
 		if s[i-1] != '-' {

@@ -20,6 +20,7 @@ import (
 //	stable crashloop     → unhealthy when down, degraded when Running+Ready
 //	fatal waiting reason → unhealthy
 //	active OOMKilled     → unhealthy
+//	scheduling-gated     → neutral  (deliberately held; not aged into a problem)
 //	Pending > 5m         → degraded ; Pending < 5m → healthy (startup grace)
 //	readiness probe/gate → degraded
 //	active thrash        → degraded
@@ -49,6 +50,13 @@ func Pod(pod *corev1.Pod, now time.Time) Verdict {
 	case LevelNeutral:
 		if pod.Status.Phase == corev1.PodSucceeded {
 			v.Reason = "Completed"
+		} else if PodHasSchedulingGates(pod) {
+			// Explain the hold so the pod doesn't read as a bare, unexplained
+			// Pending: name the state and the gate(s) blocking scheduling.
+			v.Reason = corev1.PodReasonSchedulingGated
+			if gates := SchedulingGateNames(pod); len(gates) > 0 {
+				v.Message = "Held by scheduling gate(s): " + strings.Join(gates, ", ")
+			}
 		}
 	}
 	return v
@@ -112,6 +120,18 @@ func classifyPodLevel(pod *corev1.Pod, now time.Time) Level {
 	}
 	if crashLoopLevel == LevelDegraded {
 		return LevelDegraded
+	}
+
+	// A pod held by a scheduling gate is Pending on purpose — a controller is
+	// blocking scheduling until a condition is met (Kueue admission, topology
+	// assignment, a custom gate). It is an intentional lifecycle state, not an
+	// all-clear, so it reads Neutral (like Completed / batch work) rather than
+	// aging into a Pending problem. Placed before the age check so a deliberately
+	// held pod never turns degraded purely on elapsed time; the container-fault
+	// checks above still run first, so a real fault still surfaces. Once the gate
+	// is removed (slice empty) the pod ages normally again.
+	if PodHasSchedulingGates(pod) {
+		return LevelNeutral
 	}
 
 	// Pods pending past the startup grace window.
@@ -221,6 +241,12 @@ func PodProblemReason(pod *corev1.Pod, now time.Time) string {
 // with nothing to act on. The second pass restores the plain walk so a pod whose
 // containers all succeeded still reports what it did.
 func podProblemReasonRaw(pod *corev1.Pod, now time.Time) string {
+	if IsEvictedPod(pod) {
+		if cs := oomKilledContainer(pod); cs != nil {
+			return containerStateReason(cs)
+		}
+		return PodEvictedReason
+	}
 	if cs := problemContainer(pod, true); cs != nil {
 		return containerStateReason(cs)
 	}
@@ -281,6 +307,24 @@ func problemContainer(pod *corev1.Pod, skipSucceeded bool) *corev1.ContainerStat
 	return nil
 }
 
+// oomKilledContainer is the first container whose current state is an
+// OOMKilled termination, in any position. On an Evicted pod it is the only
+// container that outranks the pod-level reason: the kubelet kills the other
+// containers on its way out, so they end as Error or ContainerStatusUnknown
+// with exit 137 — a consequence of the eviction, not its cause — while the
+// kernel OOM-killed this one before the kubelet chose the pod. Scanning every
+// position keeps a killed sidecar listed first from hiding it.
+func oomKilledContainer(pod *corev1.Pod) *corev1.ContainerStatus {
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for i := range statuses {
+			if t := statuses[i].State.Terminated; t != nil && t.Reason == "OOMKilled" {
+				return &statuses[i]
+			}
+		}
+	}
+	return nil
+}
+
 func containerStateReason(cs *corev1.ContainerStatus) string {
 	if cs.State.Waiting != nil {
 		return cs.State.Waiting.Reason
@@ -311,6 +355,12 @@ func containerStateMessage(cs *corev1.ContainerStatus) string {
 // container's failure. A failing container with no message stays empty rather
 // than borrowing one.
 func PodProblemMessage(pod *corev1.Pod) string {
+	if IsEvictedPod(pod) {
+		if cs := oomKilledContainer(pod); cs != nil {
+			return containerStateMessage(cs)
+		}
+		return pod.Status.Message
+	}
 	if cs := problemContainer(pod, true); cs != nil {
 		return containerStateMessage(cs)
 	}

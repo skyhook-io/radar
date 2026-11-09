@@ -1,6 +1,7 @@
 package diagnose
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -159,6 +160,82 @@ func TestParseArgoOperationError_NamespaceRemediation(t *testing.T) {
 	if got.RemediationHint == "" {
 		t.Errorf("RemediationHint = empty, want non-empty operator copy")
 	}
+}
+
+// TestWithCreateNamespaceState pins the suppression of the dead-end
+// "add CreateNamespace=true" advice when the Application already sets the option.
+func TestWithCreateNamespaceState(t *testing.T) {
+	parse := func() ParsedFailure {
+		return ParseArgoOperationError(`failed to apply: namespaces "observability" not found`)
+	}
+
+	t.Run("option set rewrites cause and keeps the one-click remediation", func(t *testing.T) {
+		got := WithCreateNamespaceState(parse(), true)
+		if strings.Contains(got.Cause, "CreateNamespace=true in the Application's syncOptions") {
+			t.Errorf("Cause still suggests adding the option: %q", got.Cause)
+		}
+		if !strings.Contains(got.Cause, "already sets CreateNamespace=true") {
+			t.Errorf("Cause should state the option is already set: %q", got.Cause)
+		}
+		if got.RemediationKind != RemediationCreateNamespace {
+			t.Errorf("RemediationKind = %q, want the create-namespace button kept %q", got.RemediationKind, RemediationCreateNamespace)
+		}
+		if got.RemediationTarget != "observability" {
+			t.Errorf("RemediationTarget = %q, want %q", got.RemediationTarget, "observability")
+		}
+	})
+
+	t.Run("option unset leaves the diagnosis unchanged", func(t *testing.T) {
+		got := WithCreateNamespaceState(parse(), false)
+		if !reflect.DeepEqual(got, parse()) {
+			t.Errorf("unset should be a no-op; got %+v", got)
+		}
+		if !strings.Contains(got.Cause, "CreateNamespace=true") {
+			t.Errorf("unset Cause should keep the add-the-option advice: %q", got.Cause)
+		}
+	})
+
+	t.Run("non-namespace diagnosis is untouched", func(t *testing.T) {
+		in := ParseArgoOperationError(`admission webhook "x" denied the request`)
+		if got := WithCreateNamespaceState(in, true); !reflect.DeepEqual(got, in) {
+			t.Errorf("non-namespace diagnosis should be a no-op; got %+v", got)
+		}
+	})
+}
+
+// TestWithoutLocalRemediation pins the remote-destination action text, which
+// must omit the "add CreateNamespace=true" clause when the option is already set.
+func TestWithoutLocalRemediation(t *testing.T) {
+	parse := func() ParsedFailure {
+		return ParseArgoOperationError(`failed to apply: namespaces "observability" not found`)
+	}
+
+	t.Run("option unset keeps the add-the-option action and strips the button", func(t *testing.T) {
+		p, action := WithoutLocalRemediation(parse(), false)
+		if !strings.Contains(action, "add the CreateNamespace=true sync option") {
+			t.Errorf("action should offer the option when unset: %q", action)
+		}
+		if p.RemediationKind != "" {
+			t.Errorf("remote remediation should be stripped, got kind %q", p.RemediationKind)
+		}
+	})
+
+	t.Run("option set drops the add-the-option clause", func(t *testing.T) {
+		_, action := WithoutLocalRemediation(parse(), true)
+		if strings.Contains(action, "add the CreateNamespace=true sync option") {
+			t.Errorf("action must not re-suggest the option when set: %q", action)
+		}
+		if !strings.Contains(action, "already sets CreateNamespace=true") {
+			t.Errorf("action should state the option is already set: %q", action)
+		}
+	})
+
+	t.Run("non-namespace diagnosis yields no action", func(t *testing.T) {
+		in := ParseArgoOperationError(`admission webhook "x" denied the request`)
+		if _, action := WithoutLocalRemediation(in, true); action != "" {
+			t.Errorf("action = %q, want empty for a non-namespace diagnosis", action)
+		}
+	})
 }
 
 func TestParseArgoOperationError_HookFailures(t *testing.T) {

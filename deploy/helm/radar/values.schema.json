@@ -61,6 +61,7 @@
       "properties": {
         "create": { "type": "boolean" },
         "additionalRules": { "type": "array", "items": { "type": "object" } },
+        "namespaces": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, "description": "Limit Radar's ServiceAccount and the Radar Cloud bindings to these namespaces. Leave unset for cluster-wide access." },
         "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
         "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user." },
         "viewAdmissionPolicies": { "type": "boolean", "description": "Allow reading native ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding resources. Auto-enabled under auth or cloud mode." },
@@ -124,6 +125,7 @@
         }
       }
     },
+    "disableExec": { "type": "boolean", "description": "Turn off pod exec through Radar for everyone on this cluster. Wins over rbac.podExec and mcp.execTools." },
     "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
     "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
     "podSecurityContext": { "type": "object" },
@@ -380,7 +382,8 @@
       "additionalProperties": true,
       "properties": {
         "enabled": { "type": "boolean" },
-        "execTools": { "type": "boolean" }
+        "execTools": { "type": "boolean" },
+        "httpTools": { "type": "boolean" }
       }
     },
     "cost": {

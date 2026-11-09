@@ -24,6 +24,11 @@ var ErrPrometheusNotFound = errors.New("no Prometheus service found in cluster")
 
 var errPrometheusUnreachable = errors.New("No working Prometheus endpoint found.\nCandidate services could not be reached")
 
+// errAutoPortForwardDisabled: candidates exist but none answered directly, and
+// the forward that would reach them from this machine is turned off.
+var errAutoPortForwardDisabled = unreachableBecause(portforward.ErrAutoDisabled,
+	"Prometheus isn't reachable directly from this machine, and automatic port-forwarding is turned off. Set a metrics URL for this cluster in Settings → Metrics.")
+
 // prometheusUnreachableError carries a complete sentence for an unreachable
 // installation. Unlike fmt's %w it does not append the wrapped sentinel's
 // text, which would contradict the sentence.
@@ -239,6 +244,17 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			errorlog.Record("prometheus", "warning", "no Prometheus service reachable in cluster")
 		}
 		return "", "", errPrometheusUnreachable
+	}
+
+	// The operator turned automatic port-forwarding off: the direct pass was the
+	// only lane, as in-cluster. This is a setting, not a failure, so it records
+	// nothing in the error log; the status error says what to do instead.
+	if portforward.AutoDisabled() {
+		log.Printf("[prometheus] no candidate reachable via direct probe (%s); automatic port-forwarding is turned off, not attempting port-forward", took(directStart))
+		c.mu.Lock()
+		c.discoveryService = nil
+		c.mu.Unlock()
+		return "", "", errAutoPortForwardDisabled
 	}
 
 	log.Printf("[prometheus] no candidate reachable via direct probe (%s); falling back to port-forward", took(directStart))

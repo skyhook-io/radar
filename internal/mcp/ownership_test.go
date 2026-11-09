@@ -295,7 +295,7 @@ func TestResourceContextOwnerAsksNothingAboutChildren(t *testing.T) {
 		return group == "" && resource == "nodes", nil
 	})
 
-	rc := buildMCPResourceContext(ctx, node, "Node", "", "n1", resourcecontext.TierBasic, nil)
+	rc := buildMCPResourceContext(ctx, node, "Node", "", "n1", resourcecontext.TierBasic, nil, true)
 	if rc == nil || rc.Owner != nil {
 		t.Fatalf("context = %+v; want one without an owner", rc)
 	}

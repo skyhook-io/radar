@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -361,6 +362,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	jobToCronJob := make(map[string]string) // jobKey -> cronJobID (for shortcut edges)
 	scaledJobIDs := make(map[string]string)
 	jobToScaledJob := make(map[string]string) // jobKey -> scaledJobID (for shortcut edges)
+	jobIncarnation := jobIncarnations{uids: map[string]types.UID{}, jobSets: map[types.UID]string{}}
 	workflowIDs := make(map[string]string)
 	cronWorkflowIDs := make(map[string]string)
 	workflowToCronWorkflow := make(map[string]string) // workflowKey -> cronWorkflowID (for shortcut edges)
@@ -1271,6 +1273,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		}
 	}
+
+	// 1i-a. Add JobSet nodes. Their member Jobs attach in the Job pass.
+	var jobSets jobSetRoots
+	nodes, warnings, jobSets = b.addJobSetNodes(nodes, warnings, opts)
 
 	// 1i-b. Add Cluster API (CAPI) nodes and edges
 	capiClusterIDs := make(map[string]string) // ns/name -> clusterID
@@ -2928,6 +2934,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		jobID := fmt.Sprintf("job/%s/%s", job.Namespace, job.Name)
 		jobIDs[job.Namespace+"/"+job.Name] = jobID
+		jobIncarnation.uids[job.Namespace+"/"+job.Name] = job.UID
 
 		// Determine status
 		status := getJobStatus(job)
@@ -2962,6 +2969,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		// Track ConfigMap/Secret/PVC references
 		refs := extractWorkloadReferences(job.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(jobID, job.Namespace, refs)
+
+		if root, ok := jobSets.controllerOf(job); ok {
+			jobSetID := jobSetNodeID(root.GetNamespace(), root.GetName())
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", jobSetID, jobID),
+				Source: jobSetID,
+				Target: jobID,
+				Type:   EdgeManages,
+			})
+			if job.UID != "" {
+				jobIncarnation.jobSets[job.UID] = jobSetID
+			}
+		}
 
 		// Connect to owner CronJob or KEDA ScaledJob
 		for _, ownerRef := range job.OwnerReferences {
@@ -3257,7 +3277,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !opts.MatchesNamespaceFilter(pod.Namespace) {
 				continue
 			}
-			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, workflowIDs)
+			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobIncarnation, workflowIDs)
 			if workloadID == "" {
 				addPodHealth(orphanByNS, pod.Namespace, pod)
 				orphanRestarts[pod.Namespace] += ComputePodRestarts(pod)
@@ -3272,6 +3292,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		// Group pods using shared grouping logic
 		groupingResult := GroupPods(pods, PodGroupingOptions{
 			Namespaces: opts.Namespaces,
+			JobUIDs:    jobIncarnation.uids,
 		})
 
 		// Create nodes and edges for each group
@@ -3287,18 +3308,20 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				for _, pod := range group.Pods {
 					podID := GetPodID(pod)
 					podNode := CreatePodNode(pod, b.provider, true) // includeNodeName=true for resources view
+					jobIncarnation.markEarlierJobRun(&podNode, []*corev1.Pod{pod})
 					if role := podRolloutTrafficRole(pod, replicaSetToRollout, rolloutTrafficByID); role != "" {
 						podNode.Data["trafficRole"] = role
 					}
 					nodes = append(nodes, podNode)
 
 					// Connect to owner (resources view specific)
-					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow)...)
+					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobIncarnation, workflowIDs, workflowToCronWorkflow)...)
 				}
 			} else {
 				// Large group - create PodGroup
 				podGroupID := GetPodGroupID(group)
 				podGroupNode := CreatePodGroupNode(group, b.provider)
+				jobIncarnation.markEarlierJobRun(&podGroupNode, group.Pods)
 
 				// A large group's pods can span more than one owning
 				// ReplicaSet and traffic role at once (a Rollout mid-
@@ -3324,7 +3347,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						podRoleByKey[p.Namespace+"/"+p.Name] = role
 					}
 					for _, ref := range p.OwnerReferences {
-						ownerKey := p.Namespace + "/" + ref.Kind + "/" + ref.Name
+						ownerKey := podOwnerKey(p.Namespace, ref)
 						if _, ok := ownerReps[ownerKey]; !ok {
 							ownerReps[ownerKey] = p
 						}
@@ -3346,7 +3369,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				// below and pod_grouping.go's "ownerKey" on each pod.
 				ownerKeyToSourceIDs := map[string][]string{}
 				for ownerKey, p := range ownerReps {
-					for _, e := range b.createPodOwnerEdges(p, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow) {
+					for _, e := range b.createPodOwnerEdges(p, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobIncarnation, workflowIDs, workflowToCronWorkflow) {
 						ownerKeyToSourceIDs[ownerKey] = append(ownerKeyToSourceIDs[ownerKey], e.Source)
 						if !seenEdgeID[e.ID] {
 							seenEdgeID[e.ID] = true
@@ -3978,10 +4001,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !opts.MatchesNamespaceFilter(namespace) {
 					continue
 				}
-				targetName, _, _ := unstructured.NestedString(sealedSecret.Object, "spec", "template", "metadata", "name")
-				if targetName == "" {
-					targetName = sealedSecret.GetName()
-				}
+				// The controller forces the produced Secret's name to the
+				// SealedSecret's own name; spec.template.metadata.name is
+				// overwritten and does not name the output Secret.
+				targetName := sealedSecret.GetName()
 				key := workloadRefKey{namespace: namespace, name: targetName}
 				consumers := secretConsumers[key]
 				if len(consumers) == 0 {
@@ -5749,7 +5772,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 17. Add generic CRD nodes connected via owner references
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {
-		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
+		var issuance []declaredDependency
+		nodes, edges, issuance = b.enrollGenericCRDNodes(nodes, edges, opts, jobSets.uids())
+		var issuerWarnings []string
+		nodes, edges, issuerWarnings = addObservedDependencyEdges(nodes, edges, issuance, b.dynamic, opts)
+		warnings = append(warnings, issuerWarnings...)
 	}
 	edges = addKnativeReferenceEdges(nodes, edges, knativeTriggerResources, knativeSourceResources, knativeChannelResources)
 	edges = addGitOpsManagedResourceEdges(
@@ -7477,6 +7504,7 @@ func (b *Builder) resolvePodWorkloadID(
 	replicaSetToDeployment map[string]string,
 	replicaSetToRollout map[string]string,
 	jobIDs map[string]string,
+	jobs jobIncarnations,
 	workflowIDs map[string]string,
 ) string {
 	if workflowName := pod.Labels["workflows.argoproj.io/workflow"]; workflowName != "" {
@@ -7522,7 +7550,7 @@ func (b *Builder) resolvePodWorkloadID(
 			}
 			return ""
 		case "Job":
-			if jobID, ok := jobIDs[ownerKey]; ok {
+			if jobID, ok := jobIDs[ownerKey]; ok && jobs.current(ownerKey, ownerRef) {
 				return jobID
 			}
 			return ""
@@ -7589,6 +7617,7 @@ func (b *Builder) createPodOwnerEdges(
 	jobIDs map[string]string,
 	jobToCronJob map[string]string,
 	jobToScaledJob map[string]string,
+	jobs jobIncarnations,
 	workflowIDs map[string]string,
 	workflowToCronWorkflow map[string]string,
 ) []Edge {
@@ -7712,7 +7741,18 @@ func (b *Builder) createPodOwnerEdges(
 				Type:   EdgeManages,
 			})
 		case "Job":
-			if ownerID, ok := jobIDs[ownerKey]; ok {
+			if earlier := jobs.earlierJob(pod); earlier != nil && earlier.UID == ownerRef.UID {
+				// The replacement Job supplies context, not ownership of the old Pods.
+				if jobSetID := jobs.jobSets[jobs.uids[ownerKey]]; jobSetID != "" {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s-earlier-run", jobSetID, targetID),
+						Source: jobSetID, Target: targetID, Type: EdgeUses,
+						Label: "Same Job name",
+					})
+				}
+				continue
+			}
+			if ownerID, ok := jobIDs[ownerKey]; ok && jobs.current(ownerKey, ownerRef) {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
 					Source: ownerID,
@@ -7733,6 +7773,15 @@ func (b *Builder) createPodOwnerEdges(
 					edges = append(edges, Edge{
 						ID:                fmt.Sprintf("%s-to-%s-shortcut", scaledJobID, targetID),
 						Source:            scaledJobID,
+						Target:            targetID,
+						Type:              EdgeManages,
+						SkipIfKindVisible: string(KindJob),
+					})
+				}
+				if jobSetID, ok := jobs.jobSets[ownerRef.UID]; ok && ownerRef.UID != "" {
+					edges = append(edges, Edge{
+						ID:                fmt.Sprintf("%s-to-%s-shortcut", jobSetID, targetID),
+						Source:            jobSetID,
 						Target:            targetID,
 						Type:              EdgeManages,
 						SkipIfKindVisible: string(KindJob),
@@ -8724,10 +8773,22 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 // multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
 // intermediate nodes only become resolvable after their parents are added.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
+	nodes, edges, _ = b.enrollGenericCRDNodes(nodes, edges, opts, nil)
+	return nodes, edges
+}
+
+// enrollGenericCRDNodes is addGenericCRDNodes that also returns the issuer
+// dependencies of the cert-manager issuance stages it admitted, parsed from
+// the objects enrollment already read so the issuer join lists nothing again.
+//
+// ownerUIDs (resource key -> UID) names the incarnation of owners the caller
+// drew from their objects; an owner reference naming another UID for one of
+// them, an earlier same-named owner's, draws no edge.
+func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions, ownerUIDs map[string]types.UID) ([]Node, []Edge, []declaredDependency) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
 	if dynamicCache == nil || resourceDiscovery == nil {
-		return nodes, edges
+		return nodes, edges, nil
 	}
 
 	// Build indexes for both graph IDs and exact Kubernetes resource identities.
@@ -8768,11 +8829,14 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		nodeID      string
 		node        Node
 		ownerRefs   []ResourceRef
+		ownerUIDs   []types.UID
 		resourceKey string
 		typeKey     string
 		existing    bool
+		issuer      *declaredDependency
 	}
 	var candidates []candidate
+	var issuance []declaredDependency
 
 	type watchedCRD struct {
 		gvr  schema.GroupVersionResource
@@ -8848,10 +8912,12 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			}
 
 			var ownerResources []ResourceRef
+			var ownerResourceUIDs []types.UID
 			for _, ref := range ownerRefs {
 				if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
 					continue
 				}
+				ownerResourceUIDs = append(ownerResourceUIDs, ref.UID)
 				ownerResources = append(ownerResources, ResourceRef{
 					Group: resourceid.GroupFromAPIVersion(ref.APIVersion), Kind: ref.Kind, Namespace: ns, Name: ref.Name,
 				})
@@ -8873,9 +8939,11 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 					},
 				},
 				ownerRefs:   ownerResources,
+				ownerUIDs:   ownerResourceUIDs,
 				resourceKey: resourceKey,
 				typeKey:     typeKey,
 				existing:    existing,
+				issuer:      issuanceIssuerDependency(resource),
 			})
 		}
 	}
@@ -8890,10 +8958,15 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			}
 
 			var ownerEdges []Edge
-			for _, owner := range c.ownerRefs {
-				ownerID, ok := existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, owner.Namespace, owner.Name)]
+			for i, owner := range c.ownerRefs {
+				ownerKey := resourceid.ResourceKey(owner.Group, owner.Kind, owner.Namespace, owner.Name)
+				ownerID, ok := existingResourceIDs[ownerKey]
 				if !ok && owner.Namespace != "" {
-					ownerID, ok = existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, "", owner.Name)]
+					ownerKey = resourceid.ResourceKey(owner.Group, owner.Kind, "", owner.Name)
+					ownerID, ok = existingResourceIDs[ownerKey]
+				}
+				if drawn := ownerUIDs[ownerKey]; ok && drawn != "" && c.ownerUIDs[i] != "" && c.ownerUIDs[i] != drawn {
+					ok = false
 				}
 				if ok {
 					ownerEdges = append(ownerEdges, Edge{
@@ -8911,6 +8984,9 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 					existingIDs[c.nodeID] = true
 					existingResourceIDs[c.resourceKey] = c.nodeID
 					crdCounts[c.typeKey]++
+				}
+				if c.issuer != nil {
+					issuance = append(issuance, *c.issuer)
 				}
 				for _, edge := range ownerEdges {
 					key := ownerPair{edge.Source, edge.Target}
@@ -8930,7 +9006,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		}
 	}
 
-	return nodes, edges
+	return nodes, edges, issuance
 }
 
 // annotateNodePolicyCoverage adds "policyStatus" to workload node Data

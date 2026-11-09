@@ -1,3 +1,6 @@
+import { CRDVersionsCell } from './renderers/crd-cells'
+import { getCRDColumnValue } from './resource-utils-crd'
+import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import type { ResourceCoverage } from '../../types/resource-coverage'
@@ -369,6 +372,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+  'connectCluster', 'connectorClass', 'connectorTasks',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -579,6 +583,15 @@ const DEFAULT_COLUMNS: Column[] = [
 ]
 
 const KNOWN_COLUMNS: Record<string, Column[]> = {
+  kafkaconnectors: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Operator Snapshot', width: 'w-44 shrink-0', tooltip: 'Operator-reported connector and task state, not a live runtime check.' },
+    { key: 'connectCluster', label: 'KafkaConnect', width: 'min-w-32' },
+    { key: 'connectorClass', label: 'Class', width: 'min-w-48' },
+    { key: 'connectorTasks', label: 'Tasks / Max', width: 'w-28 shrink-0', tooltip: 'Reported tasks / configured maximum. A smaller count is not itself a failure.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
   opentelemetrycollectors: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
@@ -729,7 +742,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   jobs: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'completions', label: 'Completions', width: 'w-32' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1009,6 +1022,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'cohort', label: 'Cohort', width: 'w-32', tooltip: 'Queues in this cohort can share unused quota, subject to borrowing and lending limits' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads in this ClusterQueue waiting for admission, across namespaces; inspect workload status for the blocker' },
+    { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads holding a quota reservation in this ClusterQueue, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads admitted through this ClusterQueue, across namespaces; admission does not mean their pods are running' },
     { key: 'flavors', label: 'Flavors', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1019,6 +1033,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads submitted to this LocalQueue that are waiting for ClusterQueue admission' },
+    { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads from this LocalQueue holding a quota reservation, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads from this LocalQueue admitted to its ClusterQueue; their pods may still be waiting to run' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1715,6 +1730,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'holder', label: 'Holder', width: 'w-48' },
     { key: 'renewTime', label: 'Last Renewed', width: 'w-32', tooltip: 'Time since the recorded renewal; red means it exceeds leaseDurationSeconds. Check holder health and API connectivity' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  customresourcedefinitions: [
+    { key: 'name', label: 'Name' },
+    { key: 'kind', label: 'Kind', width: 'w-56' },
+    { key: 'scope', label: 'Scope', width: 'w-32' },
+    { key: 'versions', label: 'Served Versions', width: 'w-64' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   priorityclasses: [
@@ -2914,6 +2937,7 @@ function isCuratedUnboundedGroup(key: string, group: string): boolean {
  * cannot occupy one. See CORE_API_GROUPS.
  */
 const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
+  kafkaconnectors: ['kafka.strimzi.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -4640,12 +4664,12 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
+        } else if (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
       },
       enabled: highlightedIndex >= 0 && !compareMode && (
-        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
+        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
         isCoreBatchJob(selectedKind.name, selectedKind.group)
       ),
     },
@@ -5441,6 +5465,11 @@ export function ResourcesView({
     const meta = resource.metadata || {}
     const status = resource.status || {}
     const kindLower = kind?.toLowerCase() || ''
+    const connectorValue = getStrimziConnectorColumnValue(resource, column)
+    if (connectorValue !== undefined) {
+      if (column === 'connectorTasks') return Array.isArray(resource.status?.connectorStatus?.tasks) ? resource.status.connectorStatus.tasks.length : -1
+      return connectorValue
+    }
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
@@ -7579,6 +7608,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     return <KyvernoCleanupPolicyCell resource={resource} column={column} />
   }
 
+  const connectorValue = getStrimziConnectorColumnValue(resource, column)
+  if (connectorValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{connectorValue || '-'}</span>
+  }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
@@ -7703,6 +7737,8 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <IngressClassCell resource={resource} column={column} />
     case 'leases':
       return <LeaseCell resource={resource} column={column} />
+    case 'customresourcedefinitions':
+      return isApiGroup(resource.apiVersion, 'apiextensions.k8s.io') ? <CRDCell resource={resource} column={column} /> : <GenericCell resource={resource} column={column} />
     case 'priorityclasses':
       return <PriorityClassCell resource={resource} column={column} />
     case 'runtimeclasses':
@@ -8871,7 +8907,7 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getJobStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge whitespace-nowrap', status.color)}>
           {status.text}
         </span>
       )
@@ -9250,7 +9286,10 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
     case 'pods': {
       const m = metrics.nodes.get(resource.metadata?.name)
       const allocatable = resource.status?.allocatable?.pods
-      const podCount = m?.podCount ?? 0
+      // No metrics entry means the count wasn't loaded (e.g. node metrics are
+      // off while a namespace is selected), not that the node runs no Pods.
+      if (!m) return <span className="text-sm text-theme-text-tertiary font-mono">-</span>
+      const podCount = m.podCount ?? 0
       if (!allocatable) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
       // Allocatable pods is a Quantity, so a 1000-pod node reports "1k" —
       // a raw-integer read would see 1 and peg the bar at 21600%.
@@ -9911,4 +9950,12 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
+}
+
+function CRDCell({ resource, column }: { resource: any; column: string }) {
+  if (column === 'status') return <GenericCell resource={resource} column={column} />
+  const spec = resource.spec || {}
+  if (column === 'versions') return <CRDVersionsCell versions={spec.versions || []} />
+  const value = getCRDColumnValue(resource, column)
+  return <span className="text-sm text-theme-text-secondary">{value || '-'}</span>
 }

@@ -4408,6 +4408,9 @@
           }
         }
       },
+      "configRefs": [
+        {"kind": "StorageClass", "namespace": "", "name": "standard", "group": "storage.k8s.io"}
+      ],
       "consumers": [
         {"kind": "Pod", "namespace": "team", "name": "db-0"}
       ],

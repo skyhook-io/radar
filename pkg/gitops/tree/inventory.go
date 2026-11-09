@@ -6,6 +6,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 type gitOpsStatus struct {
@@ -87,6 +89,31 @@ func parseFluxManagedResources(root *unstructured.Unstructured) []managedResourc
 		}
 	}
 	return out
+}
+
+// alignManagedScope drops a namespace recorded for an object whose kind is
+// cluster-scoped. Charts often stamp the release namespace on every object,
+// ClusterRoles included, and helm-controller records it; the object has none,
+// so the recorded ref would match nothing live. Scope comes from the catalog
+// as ownership reads it; with a nil catalog only built-in kinds are aligned.
+// A kind whose scope Radar can't tell keeps what was recorded.
+func alignManagedScope(managed []managedResource, catalog *ownership.Catalog) {
+	for i := range managed {
+		ref := &managed[i].Ref
+		if ref.Namespace == "" {
+			continue
+		}
+		gk := resourceid.GroupKind{Group: ref.Group, Kind: ref.Kind}
+		var namespaced, known bool
+		if catalog != nil {
+			namespaced, known = catalog.Scope(gk)
+		} else if b, builtin := resourceid.BuiltinForKind(gk.Kind); builtin && b.Group == gk.Group {
+			namespaced, known = b.Namespaced, true
+		}
+		if known {
+			ref.Namespace = gitops.MemberNamespace(namespaced, ref.Namespace, "")
+		}
+	}
 }
 
 func parseFluxInventoryID(id string) (ResourceRef, bool) {

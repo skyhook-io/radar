@@ -35,3 +35,30 @@ tests:
             apiGroups: [apps]
             resources: [deployments, daemonsets, statefulsets, replicasets, controllerrevisions]
             verbs: [get, list, watch]
+
+  - it: omits HTTP when only exec is enabled
+    template: deployment.yaml
+    set:
+      mcp.execTools: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-http-tools
+  - it: enables HTTP independently of exec
+    template: deployment.yaml
+    set:
+      mcp.httpTools: true
+      mcp.execTools: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-http-tools
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-exec-tools
+  - it: rejects a string HTTP opt-in
+    template: deployment.yaml
+    set:
+      mcp.httpTools: "false"
+    asserts:
+      - failedTemplate: {}

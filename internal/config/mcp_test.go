@@ -160,3 +160,39 @@ func TestMCPFlagsExecToolsPersistence(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPFlagsHTTPTools(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		for _, args := range [][]string{nil, {"--mcp-http-tools"}, {"--mcp-http-tools=false"}} {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			flags := RegisterMCPFlags(fs, Config{MCPHTTPTools: &saved})
+			if err := fs.Parse(args); err != nil {
+				t.Fatal(err)
+			}
+			want := saved
+			if len(args) > 0 {
+				want = args[0] == "--mcp-http-tools"
+			}
+			if flags.HTTPToolsEnabled() != want {
+				t.Fatalf("saved=%v args=%v got=%v", saved, args, flags.HTTPToolsEnabled())
+			}
+			help := fs.Lookup("mcp-http-tools").Usage
+			if strings.Contains(help, "run_pod") || !strings.Contains(help, "curl_service") {
+				t.Fatal(help)
+			}
+		}
+	}
+}
+
+func TestMCPFlagsHTTPToolsPersistence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, value := range []bool{true, false} {
+		if err := Save(Config{MCPHTTPTools: &value}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadForStartup()
+		if err != nil || got.MCPHTTPTools == nil || *got.MCPHTTPTools != value {
+			t.Fatalf("round trip: %+v %v", got, err)
+		}
+	}
+}

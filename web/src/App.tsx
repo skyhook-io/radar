@@ -46,7 +46,7 @@ import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
-import { ConnectionErrorView } from './components/ConnectionErrorView'
+import { DisconnectedView, FailedSwitchView } from './components/SwitchAwareConnectionError'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
@@ -89,7 +89,7 @@ import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 const ALL_NODE_KINDS: NodeKind[] = [
   'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute', 'UDPRoute',
   'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
-  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'PersistentVolumeClaim', 'Namespace',
+  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'JobSet', 'PersistentVolumeClaim', 'Namespace',
   'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
   'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
   'Broker', 'Trigger', 'PingSource', 'ApiServerSource', 'ContainerSource', 'SinkBinding', 'Channel',
@@ -821,7 +821,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     navigate({ pathname: `/resources/${pluralKind}`, search: newParams.toString() })
   }, [searchParams, navigate])
 
-  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null) => {
+  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null, observed?: boolean) => {
     const newParams = new URLSearchParams()
     const globalNamespaces = searchParams.get('namespaces')
     if (globalNamespaces) {
@@ -832,7 +832,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       newParams.set('releaseStorage', storageNamespace)
     }
     if (investigationRunID) newParams.set('ai-run', investigationRunID)
-    setSelectedHelmRelease({ namespace, name, storageNamespace })
+    setSelectedHelmRelease({ namespace, name, storageNamespace, observed })
     if (mainView === 'helm') {
       setSearchParams(newParams, { replace: true })
       return
@@ -1042,7 +1042,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
   const { connection, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
@@ -1055,7 +1055,26 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // empty drawer over a not-yet-loaded view. Gating both on the SAME readiness so
   // a drawer only ever sits over a real content surface.
   const contentReady = !isSwitching && !authMePending &&
-    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
+    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && !failedSwitch
+
+  // The last context that was connected, so a screen about a cluster that
+  // won't connect can offer a way back to it.
+  const [lastConnectedContext, setLastConnectedContext] = useState<string | null>(null)
+  useEffect(() => {
+    if (connection.state === 'connected' && connection.context) setLastConnectedContext(connection.context)
+  }, [connection.state, connection.context])
+  // A refused switch is about the cluster that was still connected. Once that
+  // connection changes in any way (dropped, reconnecting, or switched from
+  // another tab), the screen is stale.
+  const failedSwitchFrom = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!failedSwitch) {
+      failedSwitchFrom.current = undefined
+      return
+    }
+    failedSwitchFrom.current ??= connection.context
+    if (connection.state !== 'connected' || connection.context !== failedSwitchFrom.current) setFailedSwitch(null)
+  }, [failedSwitch, connection.state, connection.context, setFailedSwitch])
 
   // Progressive shell during the initial informer sync: once the server
   // publishes per-kind sync progress, render the app instead of the splash.
@@ -1623,7 +1642,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (slashIdx > 0) {
         const ns = releaseParam.slice(0, slashIdx)
         const name = releaseParam.slice(slashIdx + 1)
-        setSelectedHelmRelease({ namespace: ns, name, storageNamespace: searchParams.get('releaseStorage') || undefined })
+        const storageNamespace = searchParams.get('releaseStorage') || undefined
+        // Keep what a row click knows about the release; the URL doesn't carry it.
+        setSelectedHelmRelease(prev => (prev?.namespace === ns && prev.name === name && prev.storageNamespace === storageNamespace ? prev : { namespace: ns, name, storageNamespace }))
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- run only when searchParams change; namespacesKey/namespaceScope are read for that transition
@@ -2009,11 +2030,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Connection error view - show when disconnected */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'disconnected' && (
-        <ConnectionErrorView
+        <DisconnectedView
           connection={connection}
           onRetry={retryConnection}
           isRetrying={isRetrying}
+          lastConnectedContext={lastConnectedContext}
         />
+      )}
+
+      {/* A switch refused before leaving the current cluster: the error screen
+          for the cluster that didn't answer, over the still-connected app. */}
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && failedSwitch && (
+        <FailedSwitchView currentContext={connection.context} />
       )}
 
       {/* Connecting view — shown during initial connection or retry.
@@ -2323,7 +2351,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <HelmView
             namespaces={namespaces}
             selectedRelease={selectedHelmRelease}
-            onReleaseClick={navigateToHelmRelease}
+            onReleaseClick={(namespace, name, storageNamespace, observed) => navigateToHelmRelease(namespace, name, storageNamespace, undefined, observed)}
           />
         )}
 

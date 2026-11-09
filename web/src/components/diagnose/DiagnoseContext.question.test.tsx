@@ -170,7 +170,7 @@ describe("starting from a question", () => {
       group: "apps",
       namespace: "shop",
       name: "api",
-      context: "ctx",
+      context: "cluster-a",
       status: "running",
       question,
       createdAt: "2026-10-28T09:00:00Z",

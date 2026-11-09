@@ -251,6 +251,15 @@ export function adaptDiagnose(
       : "producer-related";
   };
   addNarrowHint(builder, source, value);
+  const resourceOnly = nonEmptyString(value.coverage);
+  if (resourceOnly) {
+    builder.limit(
+      source,
+      "Diagnosis coverage",
+      value.coverage as string,
+      "unknown",
+    );
+  }
 
   const relatedRaw = value.relatedIssues;
   const related = Array.isArray(relatedRaw)
@@ -330,6 +339,9 @@ export function adaptDiagnose(
     source.confirmedSuccess &&
     related.length === 0 &&
     relatedValid &&
+    (context?.relatedFindings === undefined ||
+      (Array.isArray(context.relatedFindings) &&
+        context.relatedFindings.length === 0)) &&
     isDiagnosableWorkloadKind(resource.kind)
   ) {
     const scope = scopeFromArgs(source);
@@ -357,6 +369,42 @@ export function adaptDiagnose(
     related.some((item) => item.severity === "critical"),
     bundleRelevance,
   );
+
+  if (
+    apiVersionToGroup(resource.apiVersion) === "kafka.strimzi.io" &&
+    (resource.kind === "KafkaConnector" || resource.kind === "KafkaConnect")
+  ) {
+    const snapshot = record(value.operatorSnapshot);
+    if (
+      !snapshot ||
+      !["observed", "failing", "recovered", "unknown"].includes(
+        String(snapshot.state),
+      ) ||
+      typeof snapshot.generationCurrent !== "boolean"
+    ) {
+      invalidPayload(builder, source, "Operator snapshot");
+    } else if (snapshot.state === "unknown") {
+      builder.limit(
+        source,
+        "Operator snapshot",
+        `Operator status is unverifiable: ${nonEmptyString(snapshot.reason) ? snapshot.reason : "unknown"}. Missing findings do not establish application health.`,
+        "unknown",
+      );
+    } else if (
+      resource.kind === "KafkaConnector" &&
+      source.confirmedSuccess &&
+      snapshot.state === "recovered" &&
+      snapshot.generationCurrent === true
+    ) {
+      builder.connectorRecoveryBySource.set(source.id, {
+        group: "kafka.strimzi.io",
+        kind: "KafkaConnector",
+        namespace: resource.metadata.namespace,
+        name: resource.metadata.name,
+      });
+    }
+    return;
+  }
 
   if (Array.isArray(blockersRaw)) {
     for (const { blocker, pods, foldedInto } of blockerGroups) {
@@ -643,7 +691,7 @@ export function adaptDiagnose(
         `events:diagnose:${scopeFromArgs(source)}`,
         typeof value.eventsTotalGroups !== "number" ||
           value.eventsTotalGroups <= events.length,
-        true,
+        !resourceOnly,
         relatedRelevance,
       );
     } else {
@@ -660,7 +708,7 @@ export function adaptDiagnose(
       [],
       `events:diagnose:${scopeFromArgs(source)}`,
       true,
-      true,
+      !resourceOnly,
       relatedRelevance,
     );
   } else if (eventsRaw !== undefined) {

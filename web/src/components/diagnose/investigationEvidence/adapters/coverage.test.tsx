@@ -457,6 +457,22 @@ describe("listing cards (helm releases, packages, search)", () => {
     ]);
   });
 
+  it.each([[[]], [[{ name: "shop", namespace: "shop", chart: "shop" }]]])(
+    "keeps a partial Helm read's limits with its rows: %j",
+    (observed) => {
+      const summary = "Partial: 0 releases read from Helm and 1 observed.";
+      const projection = project([
+        tool("helm", "list_helm_releases", { summary, releases: [], observed }),
+      ]);
+      expect(projection.limitations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ source: "Helm releases", kind: "unknown" }),
+        ]),
+      );
+      expect(JSON.stringify(projection.limitations)).toContain(summary);
+    },
+  );
+
   it("lists Helm releases with their status and chart", () => {
     const projection = project([
       tool(
@@ -495,6 +511,62 @@ describe("listing cards (helm releases, packages, search)", () => {
       "failed · redis 19.0.1",
     ]);
     expect(data.resources[1].issue).toBe("0/1 pods ready");
+  });
+
+  it("lists observed Helm releases without a status of their own", () => {
+    const projection = project([
+      tool("helm", "list_helm_releases", {
+        summary: "Partial: 1 releases read from Helm and 1 observed.",
+        releases: [{ name: "podinfo", namespace: "shop", chart: "podinfo", chartVersion: "6.15.0", status: "failed", revision: 3 }],
+        observed: [{ name: "redis", namespace: "team-b", chart: "redis", chartVersion: "19.0.1", resourceCount: 2, healthIssue: "ImagePullBackOff" }],
+        storageDenied: { count: 1, names: ["team-b"] },
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "inventory");
+    const data = group.latest.data;
+    if (data.type !== "inventory") throw new Error("expected inventory");
+    expect(data.resources.map((row) => row.status)).toEqual([
+      "failed · podinfo 6.15.0",
+      "status unknown · redis 19.0.1",
+    ]);
+    expect(data.resources[1].issue).toBe("ImagePullBackOff");
+  });
+
+  it("shows an observed get_helm_release as an observed row with its limits", () => {
+    const summary = "Observed: Helm's release Secrets can't be read here.";
+    const projection = project([
+      tool("helm", "get_helm_release", {
+        summary,
+        observed: { name: "redis", namespace: "team-b", chart: "redis", chartVersion: "19.0.1", resourceCount: 2, resources: [] },
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "inventory");
+    const data = group.latest.data;
+    if (data.type !== "inventory") throw new Error("expected inventory");
+    expect(data.resources.map((row) => row.status)).toEqual(["status unknown · redis 19.0.1"]);
+    expect(JSON.stringify(projection.limitations)).toContain(summary);
+    expect(JSON.stringify(projection.limitations)).not.toContain("couldn't summarize");
+  });
+
+  it.each([
+    ["owns the target", "api", "producer-related"],
+    ["doesn't own it", "worker", "broader"],
+  ])("ranks an observed Helm release by whether it %s", (_, name, relevance) => {
+    const projection = project([
+      tool("diag", "diagnose", targetBundle),
+      tool("helm", "get_helm_release", {
+        summary: "Observed: Helm's release Secrets can't be read here.",
+        observed: {
+          name: "shop",
+          namespace: "shop",
+          chart: "shop",
+          resourceCount: 1,
+          resources: [{ kind: "Deployment", apiVersion: "apps/v1", namespace: "shop", name }],
+        },
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "inventory");
+    expect(group.latest.relevance).toBe(relevance);
   });
 
   it("lists packages with their version and sources", () => {

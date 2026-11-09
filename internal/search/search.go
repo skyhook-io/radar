@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -242,7 +243,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
-		if !shouldScanTyped(tk.Kind, tk.Group, tk.Plural, q) {
+		if !shouldScanTyped(tk.Kind, tk.Group, tk.Plural, q) || (opts.skip != nil && opts.skip(tk.Kind, tk.Group)) {
 			continue
 		}
 		markKnown(tk.Kind, tk.Group, tk.Plural)
@@ -327,6 +328,12 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
+			if opts.visit != nil {
+				if m, err := meta.Accessor(obj); err == nil && (inScope == nil || inScope[m.GetNamespace()]) {
+					opts.visit(ScannedObject{Kind: tk.Kind, Group: tk.Group, Object: m})
+				}
+				continue
+			}
 			c, ok := fromObject(obj, tk.Kind)
 			if !ok || (inScope != nil && !inScope[c.Namespace]) {
 				continue
@@ -377,7 +384,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			return Result{}, err
 		}
 		kind := p.KindForGVR(gvr)
-		if kind == "" || !shouldScanCRD(kind, gvr.Group, gvr.Resource, q) {
+		if kind == "" || !shouldScanCRD(kind, gvr.Group, gvr.Resource, q) || (opts.skip != nil && opts.skip(kind, gvr.Group)) {
 			continue
 		}
 		markKnown(kind, gvr.Group, gvr.Resource)
@@ -627,6 +634,12 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		for _, u := range items {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
+			}
+			if opts.visit != nil {
+				if inScope == nil || inScope[u.GetNamespace()] {
+					opts.visit(ScannedObject{Kind: kind, Group: gvr.Group, Object: u})
+				}
+				continue
 			}
 			c := identityFromUnstructured(u, kind, gvr.Group)
 			c.Resource = gvr.Resource

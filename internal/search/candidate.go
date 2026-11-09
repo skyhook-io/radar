@@ -31,6 +31,7 @@ func fromObject(obj runtime.Object, kind string) (candidate, bool) {
 		Annotations: m.GetAnnotations(),
 	}
 	c.Images = imagesForTyped(obj)
+	c.IPs = ipsForTyped(obj)
 	c.Content = contentForTyped(obj, kind)
 	return c, true
 }

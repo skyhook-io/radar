@@ -21,7 +21,7 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// Compose FLAT (uncapped) then group: matching against the flat evidence —
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
-	flat := Compose(p, Filters{
+	flat, stats := ComposeWithStats(p, Filters{
 		SkipPodTemplateContext:  true,
 		Namespaces:              opts.Namespaces,
 		Limit:                   NoLimit,
@@ -32,12 +32,18 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 		AllowUnfilteredEvidence: opts.AllowUnfilteredEvidence,
 		OnEvidenceWithheld:      opts.OnEvidenceWithheld,
 	})
+	if opts.OnUnchecked != nil {
+		if gaps := UncheckedFor(stats.Unchecked, group, kind, namespace, name); len(gaps) > 0 {
+			opts.OnUnchecked(gaps)
+		}
+	}
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
 	// issues get coverage-gated incident_parent pointers — GroupIssues alone only
 	// carries the representative's DiagnosticContext, never the reverse pointer.
 	grouped = enrichDiagnosticContextAuthorized(grouped, flat, grouped, p, opts.CanReadClusterScoped)
 	matched := RelatedIssuesFrom(flat, grouped, opts, group, kind, namespace, name)
+	matched = enrichAdmissionWebhookCandidates(matched, p, podTemplateAccess{opts.CanReadClusterScoped, opts.CanReadRelated})
 	if !opts.SkipPodTemplateContext {
 		matched = enrichPodTemplateContext(matched, flat, p, podTemplateAccess{opts.CanReadClusterScoped, opts.CanReadRelated}, true,
 			Ref{Group: group, Kind: kind, Namespace: namespace, Name: name})

@@ -11,7 +11,9 @@ import { compareVersions } from '../utils/version'
 // an entry here with that flag and `flagShippedWithEndpoint: true`, and guard
 // its hook with useRadarFeature. TestFeatureFlagsHaveFrontendGates keeps the
 // two lists in step. `minimumVersion` can wait for the release to be cut:
-// until then the note asks for the latest Radar.
+// until then the note asks for the latest Radar. A behavior change on an
+// existing endpoint is gated the same way, except that the control relying on
+// it is disabled: an older Radar still answers the request, wrongly.
 export interface RadarFeatureSpec {
   /** Plural noun phrase; the upgrade note reads "<label> need Radar vX or newer." */
   label: string
@@ -24,16 +26,20 @@ export interface RadarFeatureSpec {
    * entries below, whose flags were added after their endpoints.
    */
   flagShippedWithEndpoint?: boolean
+  requireAffirmativeSupport?: boolean
 }
 
 export const RADAR_FEATURES = {
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
+  applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
   resourceIssueCoverage: { label: 'Resource-specific issue views', flag: 'resourceIssueCoverage', flagShippedWithEndpoint: true },
   podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
   policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
+  // Radars from v1.15.0 serve the route without advertising the flag.
+  rayClusterPods: { label: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0', flag: 'rayClusterPods' },
   upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },
   drainPlan: { label: 'Drain plans', minimumVersion: 'v1.14.0' },
   applications: { label: 'Applications', minimumVersion: 'v1.7.7' },
@@ -43,7 +49,25 @@ export const RADAR_FEATURES = {
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },
+  kueuePendingPosition: { label: 'Kueue queue positions', flag: 'kueuePendingPosition', flagShippedWithEndpoint: true },
+  kueueQueueWorkloads: { label: 'Workload lists on Kueue queues', flag: 'kueueQueueWorkloads', flagShippedWithEndpoint: true },
+  // One flag, two controls. An older Radar's rollback never runs, and its
+  // resume reports success while leaving automated.enabled: false in place.
+  argoRollback: { label: 'Argo CD rollbacks', flag: 'argoRollbackSync', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  argoAutoSyncEnable: { label: 'Auto-sync controls for Applications with automated.enabled: false', flag: 'argoRollbackSync', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  // Never blocks a control. An older Radar's sync drops the Application's
+  // sync options when the request omits them, and prunes when it omits prune,
+  // so useArgoSync sends both explicitly unless this is supported. Also tells
+  // the UI that Enable auto-sync on a never-suspended Application starts with
+  // prune off.
+  argoSyncInheritance: { label: "Syncs that keep the Application's sync options", flag: 'argoSyncInheritance', flagShippedWithEndpoint: true },
+  // Never blocks a control: tells the UI that Enable auto-sync on a
+  // never-suspended Application starts with selfHeal off; an older Radar
+  // turns it on.
+  argoEnableSelfHealOff: { label: 'Auto-sync that starts without self-heal', flag: 'argoEnableSelfHealOff', flagShippedWithEndpoint: true },
   helmSourceIdentity: { label: 'Helm source selection', flag: 'helmSourceIdentity', flagShippedWithEndpoint: true },
+  // Never blocks a control: on an older Radar the Helm view reads /helm/releases.
+  helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
@@ -87,6 +111,23 @@ export function radarFeatureSupport(
   currentVersion: string | undefined,
 ): RadarFeatureSupport {
   return radarSpecSupport(RADAR_FEATURES[feature], capabilities, currentVersion)
+}
+
+/**
+ * Whether a control backed by `feature` renders disabled with the upgrade
+ * note. A request can be probed, but a control's outcome can't, so a control
+ * also stays disabled when /api/capabilities failed, as CapabilitiesContext
+ * fails closed on the same error. While it loads, the control stays enabled.
+ */
+export function radarControlBlocked(support: RadarFeatureSupport, capabilitiesFailed: boolean): boolean {
+  return support === 'unsupported' || (support === 'unknown' && capabilitiesFailed)
+}
+
+export function radarControlBlockedReason(feature: RadarFeature, support: RadarFeatureSupport, capabilitiesFailed: boolean): string | undefined {
+  const spec: RadarFeatureSpec = RADAR_FEATURES[feature]
+  if (!spec.requireAffirmativeSupport) return undefined
+  if (capabilitiesFailed) return "Couldn't check this cluster's Radar support. Refresh to try again."
+  return support === 'unknown' ? "Checking this cluster's Radar…" : undefined
 }
 
 export function radarUpgradeRequirement(feature: RadarFeature, versions: RadarVersions): RadarUpgradeRequirement {

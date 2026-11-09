@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -233,15 +234,22 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 		username, groups = user.Username, user.Groups
 	}
 	helmNamespaces := namespaces
+	checked := true
+	var unread []string
 	if helmNamespaces == nil {
 		var ok bool
-		helmNamespaces, ok = s.resolveHelmNamespaces(r)
+		helmNamespaces, ok, checked, unread = s.resolveHelmStorageScope(r)
 		if !ok {
 			return nil, unchecked, false
 		}
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	// Namespaces left out because the caller can't read Helm's storage there
+	// were never read, and the Helm view still lists their releases.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
+	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 
@@ -313,7 +321,9 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	evidenceWithheld := map[string]bool{}
+	var unchecked []issuesapi.UncheckedSource
 	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked:          func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		Namespaces:           namespaces,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
@@ -335,8 +345,9 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	withheld := ResourceIssuesWithheld{Issues: len(evidenceWithheld)}
 	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
 	resp := ResourceIssuesResponse{
-		Issues:   related,
-		Coverage: resourceIssuesCoverage(kind, group, namespace),
+		Issues:    related,
+		Coverage:  resourceIssuesCoverage(kind, group, namespace),
+		Unchecked: unchecked,
 	}
 	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
 		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
@@ -361,6 +372,11 @@ type ResourceIssuesResponse struct {
 	Coverage   string                  `json:"coverage"`
 	Withheld   *ResourceIssuesWithheld `json:"withheld,omitempty"`
 	Visibility *k8s.VisibilitySummary  `json:"visibility,omitempty"`
+	// Unchecked lists checks Radar couldn't make that it attributes to this
+	// resource, such as a Kueue queue check that needs ClusterQueues the caller
+	// can't read; with it, an empty list is not "none". Its absence is not a
+	// completeness guarantee: read it with coverage, withheld and visibility.
+	Unchecked []issuesapi.UncheckedSource `json:"unchecked_sources,omitempty"`
 }
 
 // ResourceIssuesWithheld counts what the caller's access kept out of the

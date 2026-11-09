@@ -273,7 +273,7 @@
       }
     },
     "level": "neutral",
-    "text": "Upgrade blocked"
+    "text": "Upgrade block recorded"
   },
   {
     "name": "reconciled but status collection failed",

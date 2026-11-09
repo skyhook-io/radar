@@ -221,7 +221,7 @@ rules:
     verbs: ["get"]
   {{- end }}
 
-  {{- if and .Values.rbac.podExec (include "radar.userTokenMode" . | eq "false") }}
+  {{- if and .Values.rbac.podExec (not .Values.disableExec) (include "radar.userTokenMode" . | eq "false") }}
   # Pod exec (opt-in - enables terminal feature)
   - apiGroups: [""]
     resources:
@@ -471,6 +471,12 @@ rules:
   - apiGroups: ["kueue.x-k8s.io", "autoscaling.x-k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  # Kueue's visibility API: where a pending Workload sits in its LocalQueue.
+  # Without authentication Radar asks as itself; signed-in users are asked as
+  # themselves and need this through their own roles (Kueue aggregates it to view).
+  - apiGroups: ["visibility.kueue.x-k8s.io"]
+    resources: ["localqueues/pendingworkloads"]
+    verbs: ["get"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kserve }}
   - apiGroups: ["serving.kserve.io"]
@@ -562,6 +568,9 @@ rules:
   {{- if .Values.rbac.crdGroups.strimzi }}
   - apiGroups: ["strimzi.io", "kafka.strimzi.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["core.strimzi.io"]
+    resources: ["strimzipodsets"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.tekton }}

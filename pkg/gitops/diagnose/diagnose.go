@@ -177,15 +177,35 @@ func ParseArgoOperationError(msg string) ParsedFailure {
 	return out
 }
 
+// WithCreateNamespaceState adjusts a missing-namespace diagnosis for whether the
+// Application already enables the CreateNamespace sync option. When it does,
+// re-suggesting the option is a dead end, so the Cause drops that suggestion and
+// points at why the namespace is still missing instead. A no-op for any other
+// diagnosis, or when the option is not set. Call it right after
+// ParseArgoOperationError; pass the same createNamespaceSet to
+// WithoutLocalRemediation so the remote-destination guidance stays consistent.
+func WithCreateNamespaceState(p ParsedFailure, createNamespaceSet bool) ParsedFailure {
+	if p.RemediationKind != RemediationCreateNamespace || !createNamespaceSet {
+		return p
+	}
+	p.Cause = fmt.Sprintf("Namespace %q is missing on the destination, but the Application already sets CreateNamespace=true, so adding it again won't help. Argo only auto-creates the Application's destination namespace — the failing resource may target a different namespace, or a manifest may pin its own. Check which namespace the failing resource declares.", p.RemediationTarget)
+	return p
+}
+
 // WithoutLocalRemediation drops a structured remediation that acts on the
 // cluster Radar is connected to. For an Application deploying elsewhere the
 // fix belongs on the destination cluster, so it returns the next step to
-// state instead.
-func WithoutLocalRemediation(p ParsedFailure) (ParsedFailure, string) {
+// state instead. When createNamespaceSet is true the Application already enables
+// the option, so the returned action omits the dead-end "add CreateNamespace=true"
+// suggestion and points at why the namespace is still missing.
+func WithoutLocalRemediation(p ParsedFailure, createNamespaceSet bool) (ParsedFailure, string) {
 	if p.RemediationKind != RemediationCreateNamespace {
 		return p, ""
 	}
 	action := fmt.Sprintf("Create namespace %q on the destination cluster, or add the CreateNamespace=true sync option.", p.RemediationTarget)
+	if createNamespaceSet {
+		action = fmt.Sprintf("Namespace %q is missing on the destination cluster, but the Application already sets CreateNamespace=true. Create it on the destination, or find why it is still missing — the failing resource may target a namespace other than the destination, or a manifest may pin its own.", p.RemediationTarget)
+	}
 	p.RemediationKind, p.RemediationTarget, p.RemediationHint = "", "", ""
 	return p, action
 }

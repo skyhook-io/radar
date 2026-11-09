@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 type Severity string
@@ -41,6 +42,9 @@ const (
 	CategoryUnschedulable            Category = "unschedulable"
 	CategoryQuotaExceeded            Category = "quota_exceeded"
 	CategoryAdmissionWebhookBlocking Category = "admission_webhook_blocking"
+	// CategoryQueueAdmissionBlocked is a batch run a queueing controller
+	// (Kueue) will not admit as configured, or a queue that admits nothing.
+	CategoryQueueAdmissionBlocked Category = "queue_admission_blocked"
 
 	CategoryImagePullFailed     Category = "image_pull_failed"
 	CategoryContainerWaiting    Category = "container_waiting"
@@ -52,8 +56,13 @@ const (
 	CategoryReadinessFailed   Category = "readiness_failed"
 	CategoryWorkloadDegraded  Category = "workload_degraded"
 	CategoryHighRestart       Category = "high_restart"
+	CategoryPodEvicted        Category = "pod_evicted"
 	CategoryJobFailed         Category = "job_failed"
 	CategoryCronJobFailed     Category = "cronjob_failed"
+	// CategoryBatchRunStopped is a batch run its queueing controller stopped
+	// trying: too many requeues, or past its maximum execution time. It does
+	// not establish that the run's Pods ever ran.
+	CategoryBatchRunStopped Category = "batch_run_stopped"
 
 	CategoryMissingConfigRef         Category = "missing_config_ref"
 	CategoryInvalidConfiguration     Category = "invalid_configuration"
@@ -81,6 +90,7 @@ const (
 	CategoryHPALimitedOrFailed       Category = "hpa_limited_or_failed"
 	CategoryRBACForbidden            Category = "rbac_forbidden"
 	CategoryCertificateNotReady      Category = "certificate_not_ready"
+	CategoryCertificateRenewalFailed Category = "certificate_renewal_failed"
 	CategoryPodSecurityViolation     Category = "pod_security_violation"
 	CategoryTerminationStuck         Category = "termination_stuck"
 	CategoryNodeNotReady             Category = "node_not_ready"
@@ -125,6 +135,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryUnschedulable:            GroupScheduling,
 	CategoryQuotaExceeded:            GroupScheduling,
 	CategoryAdmissionWebhookBlocking: GroupScheduling,
+	CategoryQueueAdmissionBlocked:    GroupScheduling,
 	CategoryImagePullFailed:          GroupStartup,
 	CategoryContainerWaiting:         GroupStartup,
 	CategoryInitContainerFailed:      GroupStartup,
@@ -134,8 +145,10 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryReadinessFailed:          GroupRuntime,
 	CategoryWorkloadDegraded:         GroupRuntime,
 	CategoryHighRestart:              GroupRuntime,
+	CategoryPodEvicted:               GroupRuntime,
 	CategoryJobFailed:                GroupRuntime,
 	CategoryCronJobFailed:            GroupRuntime,
+	CategoryBatchRunStopped:          GroupRuntime,
 	CategoryMissingConfigRef:         GroupConfiguration,
 	CategoryInvalidConfiguration:     GroupConfiguration,
 	CategoryPDBBlocksEvictions:       GroupConfiguration,
@@ -162,6 +175,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryHPALimitedOrFailed:       GroupScaling,
 	CategoryRBACForbidden:            GroupSecurity,
 	CategoryCertificateNotReady:      GroupSecurity,
+	CategoryCertificateRenewalFailed: GroupSecurity,
 	CategoryPodSecurityViolation:     GroupSecurity,
 	CategoryTerminationStuck:         GroupControlPlane,
 	CategoryNodeNotReady:             GroupControlPlane,
@@ -273,7 +287,7 @@ type IncidentParent struct {
 	Ref        Ref        `json:"ref"` // parent subject, for display + deep-link
 	Category   Category   `json:"category,omitempty"`
 	Confidence Confidence `json:"confidence,omitempty"`
-	FactType   string     `json:"fact_type,omitempty"` // node_blast_radius | pvc_blast_radius | apiservice_hpa | secret_not_ready
+	FactType   string     `json:"fact_type,omitempty"` // the diagnostic fact type that establishes the link; an open vocabulary (e.g. pvc_blast_radius, kueue_queue)
 }
 
 type IssueRef struct {
@@ -667,8 +681,8 @@ type Issue struct {
 type HistoryGapReason string
 
 const (
-	// HistoryObservationStartedLate: this Radar process started observing
-	// after the window began, so earlier changes were never recorded by it.
+	// HistoryObservationStartedLate: Radar began observing the process or a
+	// dependent kind after the window began; earlier changes may be missing.
 	HistoryObservationStartedLate HistoryGapReason = "observation_started_late"
 	// HistoryEventsEvicted: Radar deleted recorded events from the window to
 	// stay within its history size or retention limit.
@@ -677,8 +691,9 @@ const (
 
 // HistoryCoverage reports that a change answer's window starts before the
 // history Radar holds, so an empty or short answer does not establish that
-// nothing changed. Present only when Incomplete. CompleteSince is when the
-// held history becomes complete; it is store-wide, so it is sent only to
+// nothing changed. Present only when Incomplete. CompleteSince is the
+// retained-history boundary, including a later dependent-kind watch when
+// applicable. It can include store-wide activity, so it is sent only to
 // callers who can read the whole cluster.
 type HistoryCoverage struct {
 	Incomplete    bool               `json:"incomplete"`
@@ -788,16 +803,25 @@ func (c *ClusterScopedChanges) Informative() bool {
 type UncheckedSource struct {
 	Source UncheckedSourceName `json:"source"`
 	Reason UncheckedReason     `json:"reason"`
-	// Kinds names the kinds within the source that went unchecked. Absent
+	// Kinds names the kinds within the source that couldn't be read or
+	// checked. Findings on other resources that depend on them (a run whose
+	// queue is one of them) may be missing too. Absent
 	// means the whole source, or that Radar can't tell which kinds.
 	Kinds []UncheckedKind `json:"kinds,omitempty"`
-	// Namespaces names the namespaces whose read failed when the source was
-	// read in the others, so issues outside them are complete. Absent means
-	// the gap is not limited to particular namespaces.
+	// Namespaces names the namespaces this entry's gap is limited to: the
+	// source was checked in the others, so issues outside them are complete,
+	// and wasn't checked in these (the read failed or was refused there, or
+	// Radar didn't read there because the caller can't). Absent means the gap
+	// is not limited to particular namespaces.
 	Namespaces []string `json:"namespaces,omitempty"`
+	// Subjects are resources whose own issues this gap may hide, when a
+	// check knows them. They supplement kind-wide inventory gaps when
+	// entries merge; they do not narrow those gaps. Never serialized.
+	Subjects []Ref `json:"-"`
 }
 
-// UncheckedKind is a resource kind whose issues went unchecked.
+// UncheckedKind is a resource kind that couldn't be read or checked as input
+// to an issue source.
 type UncheckedKind struct {
 	Group string `json:"group,omitempty"`
 	Kind  string `json:"kind"`
@@ -821,13 +845,18 @@ const (
 	// UncheckedSourceKarpenter is the Karpenter NodePool, NodeClass and
 	// NodeClaim checks.
 	UncheckedSourceKarpenter UncheckedSourceName = "karpenter"
+	// UncheckedSourceKueue is the Kueue checks: runs Kueue will not admit or
+	// stopped, and LocalQueues and ClusterQueues that admit nothing.
+	UncheckedSourceKueue UncheckedSourceName = "kueue"
 )
 
 type UncheckedReason string
 
 const (
-	// UncheckedReasonReadFailed: the read failed, for example an API server
-	// error, rejected credentials, or Radar's own request deadline.
+	// UncheckedReasonReadFailed: the read, or a permission check it depended
+	// on, failed, for example an API server error, rejected credentials,
+	// Radar's own request deadline, or an unanswered access check. Also used
+	// when one entry covers namespaces that failed for different reasons.
 	UncheckedReasonReadFailed UncheckedReason = "read_failed"
 	// UncheckedReasonSyncPending: Radar is still loading these kinds, for
 	// example right after it starts. A later request can succeed.
@@ -838,6 +867,10 @@ const (
 	// identity, such as a ServiceAccount that may not impersonate the
 	// caller. Granting the caller more access does not help.
 	UncheckedReasonCollectorAccessDenied UncheckedReason = "collector_access_denied"
+	// UncheckedReasonCallerAccessDenied: the check needs kinds the caller may
+	// not read, so Radar does not answer it for them. Radar's other answers
+	// are unaffected.
+	UncheckedReasonCallerAccessDenied UncheckedReason = "caller_access_denied"
 )
 
 type BindingType string
@@ -887,4 +920,36 @@ var CELBindings = []CELBinding{
 	{Name: "issue_timing_basis", Type: BindingString},
 	{Name: "operation_retry_count", Type: BindingInt},
 	{Name: "stuck", Type: BindingBool},
+}
+
+// RelatedFindingsGroup carries current findings from one bounded local inventory.
+// Absence or an empty list of groups means no enrichment was supplied, not that
+// associations or issues are absent. Omitted findings never establish recovery.
+type RelatedFindingsGroup struct {
+	// AssociatedVia is the association anchor, not the finding subject.
+	AssociatedVia Ref `json:"associatedVia"`
+	// Kinds is a nonempty finite set of resource kinds selected for assessment.
+	// Extent is not used; names, when present, lists the whole set.
+	Kinds resourceapi.KindSet `json:"kinds"`
+	// Checked counts authorized candidate resource snapshots, not findings or API calls.
+	Checked int `json:"checked"`
+	// Unknown counts checked snapshots the producer could not assess. A known
+	// inactive state is not itself unknown. Checked-Unknown is not a healthy count.
+	Unknown int `json:"unknown"`
+	// Findings retain their original subjects and IDs; omission is not recovery.
+	Findings []Issue `json:"findings,omitempty"`
+	// Gaps describe limitations reading the associated inventory; encoded as [] when empty.
+	Gaps []resourceapi.Gap `json:"gaps"`
+	// Truncated means findings were omitted from output, not that inventory reads failed.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// MarshalJSON keeps the required gaps array non-null for every producer.
+func (g RelatedFindingsGroup) MarshalJSON() ([]byte, error) {
+	type wire RelatedFindingsGroup
+	w := wire(g)
+	if w.Gaps == nil {
+		w.Gaps = []resourceapi.Gap{}
+	}
+	return json.Marshal(w)
 }

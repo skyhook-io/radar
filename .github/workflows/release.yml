@@ -65,11 +65,14 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
+      # A prerelease ships only its Docker image and Helm chart: GoReleaser still
+      # builds the binaries the Docker job needs, but publishes nothing (no
+      # GitHub release, no Homebrew or Scoop).
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
-          args: release --clean
+          args: ${{ steps.version.outputs.is_prerelease == 'true' && 'release --clean --skip=publish' || 'release --clean' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -100,7 +103,7 @@ jobs:
             echo "## CLI Release ${VERSION}"
             echo ""
             if [[ "$VERSION" == *-* ]]; then
-              echo "> **Pre-release** — not published to Homebrew/Scoop/Krew; the Helm chart is published as a prerelease (helm --devel)"
+              echo "> **Pre-release** — binaries built but not published (no GitHub release, Homebrew, Scoop or Krew); only the Docker image and the Helm chart (helm --devel) are published"
               echo ""
             fi
             echo "### Assets"

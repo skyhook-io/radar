@@ -412,6 +412,29 @@ func IsPodUnschedulable(pod *corev1.Pod) bool {
 	return false
 }
 
+// PodHasSchedulingGates reports whether a pod is deliberately held by one or more
+// scheduling gates. A non-empty spec.schedulingGates means a controller is blocking
+// scheduling on purpose (Kueue admission, topology assignment, a custom gate, …); it
+// is set at creation and can only be removed, and removing one of several does not
+// release the pod. The spec field is used rather than the PodScheduled=SchedulingGated
+// condition because it is authoritative and present before the scheduler writes any
+// condition.
+func PodHasSchedulingGates(pod *corev1.Pod) bool {
+	return pod != nil && len(pod.Spec.SchedulingGates) > 0
+}
+
+// SchedulingGateNames returns the names of the pod's scheduling gates, in order.
+func SchedulingGateNames(pod *corev1.Pod) []string {
+	if pod == nil || len(pod.Spec.SchedulingGates) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(pod.Spec.SchedulingGates))
+	for _, g := range pod.Spec.SchedulingGates {
+		names = append(names, g.Name)
+	}
+	return names
+}
+
 // PodReadinessGateFailure reports a declared gate that has not passed and still
 // blocks a running Pod after its containers became ready. A nil Pod has no failure.
 // Both readiness transitions get the probe path's five-minute grace. Missing transition times

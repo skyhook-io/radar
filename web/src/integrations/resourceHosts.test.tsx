@@ -8,7 +8,7 @@ import { kindToPluralWithGroup } from '../utils/navigation'
 import {
   decorateResourceDiagnose, renderResourceKindList, resourceKindListMode, resourceKindListTitle, ResourceDrawerNavigation,
   resourceDetailRedirect, resourceDetailSlots, resourceExpandedPath,
-  resourceLogs, resourceRendererOverrides,
+  resourceLogs, resourceRendererOverrides, resourceHosts,
 } from './resourceHosts'
 
 vi.mock('../api/client', () => ({
@@ -48,19 +48,25 @@ describe('application resource hosts', () => {
 
   it('retains every existing renderer override at a stable module reference', () => {
     expect(Object.keys(resourceRendererOverrides).sort()).toEqual([
-      'RayJobRenderer', 'JobRenderer', 'JobSetRenderer', 'RayServiceRenderer', 'RayClusterRenderer',
-      'KueueWorkloadRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
+      'CustomResourceDefinitionRenderer', 'RayJobRenderer', 'JobRenderer', 'JobSetRenderer', 'RayServiceRenderer', 'RayClusterRenderer',
+      'KueueWorkloadRenderer', 'LocalQueueRenderer', 'ClusterQueueRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
       'NodeRenderer', 'ServiceRenderer', 'WorkloadRenderer', 'CompositeRenderer', 'ServiceAccountRenderer',
       'RoleRenderer', 'RoleBindingRenderer', 'NamespaceRenderer', 'HPARenderer', 'PVCRenderer',
       'RolloutRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',
       'VeleroBSLRenderer', 'VeleroBackupRenderer', 'VeleroRestoreRenderer', 'CNPGClusterRenderer',
       'CNPGDatabaseRenderer', 'CNPGPublicationRenderer', 'CNPGSubscriptionRenderer', 'CNPGImageCatalogRenderer',
-      'FluxHelmReleaseRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer',
+      'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer',
     ].sort())
     const inherited = [{ id: 'local', label: 'Local', render: () => null }]
     expect(resourceDetailSlots({ kind: 'Pod', group: '', namespace: 'db', name: 'pg-1' }, inherited).extraTabs).toEqual(inherited)
     expect(resourceExpandedPath({ ...cluster, group: undefined })).toBeNull()
     expect(resourceDetailRedirect({ ...cluster, group: '' }, new URLSearchParams('tab=events'))).toBeNull()
+  })
+
+  it('owns the LocalQueue header badge and nothing for other Kueue kinds', () => {
+    expect(resourceDetailSlots({ kind: 'LocalQueue', group: 'kueue.x-k8s.io', namespace: 'team', name: 'q' }).renderStatusBadge).toBeTypeOf('function')
+    expect(resourceDetailSlots({ kind: 'ClusterQueue', group: 'kueue.x-k8s.io', namespace: '', name: 'q' }).renderStatusBadge).toBeUndefined()
+    expect(resourceDetailSlots({ kind: 'LocalQueue', group: undefined, namespace: 'team', name: 'q' }).renderStatusBadge).toBeUndefined()
   })
 
   it('keeps query, tab, context and drawer state when redirecting a generic detail link', () => {
@@ -139,4 +145,15 @@ describe('application resource hosts', () => {
     expect(render).toHaveBeenCalledOnce()
     expect(decorateResourceDiagnose(undefined)).toBeUndefined()
   })
+})
+
+
+it('registers one CRD renderer and one Schema tab for the exact group', () => {
+  const resource = { kind: 'customresourcedefinitions', namespace: '', name: 'widgets.example.io', group: 'apiextensions.k8s.io' }
+  const tabs = resourceDetailSlots(resource).extraTabs!
+  expect(tabs.map(tab => [tab.id, tab.label, tab.after])).toEqual([['schema', 'Schema', 'overview']])
+  expect(isValidElement(tabs[0].render())).toBe(true)
+  expect(resourceDetailSlots({ ...resource, group: 'other.io' })).toEqual({})
+  expect(resourceDetailSlots({ ...resource, kind: 'CustomResourceDefinition' }).extraTabs).toHaveLength(1)
+  expect(resourceHosts.filter(host => host.renderers?.CustomResourceDefinitionRenderer).map(host => host.id)).toEqual(['crd'])
 })

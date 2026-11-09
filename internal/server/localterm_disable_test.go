@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"runtime"
 
 	"github.com/go-chi/chi/v5"
 	"net/http"
@@ -257,13 +258,21 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
 			}
 			var response struct {
-				LocalTerminal bool `json:"localTerminal"`
+				LocalTerminal bool   `json:"localTerminal"`
+				LocalShell    string `json:"localShell"`
 			}
 			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
 				t.Fatalf("decode capabilities: %v", err)
 			}
 			if response.LocalTerminal != tt.want {
 				t.Fatalf("localTerminal = %v, want %v", response.LocalTerminal, tt.want)
+			}
+			wantShell := "posix"
+			if runtime.GOOS == "windows" {
+				wantShell = "powershell"
+			}
+			if response.LocalShell != wantShell {
+				t.Fatalf("localShell = %q, want %q", response.LocalShell, wantShell)
 			}
 		})
 	}

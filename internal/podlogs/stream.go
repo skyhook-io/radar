@@ -125,6 +125,14 @@ func (u UnavailableSources) Remove(key string, follow int) bool {
 	return true
 }
 
+// Drop forgets a source that is no longer selected; it reports whether a
+// warning was removed.
+func (u UnavailableSources) Drop(key string) bool {
+	failure, exists := u[key]
+	delete(u, key)
+	return exists && failure.reason != ""
+}
+
 func (u UnavailableSources) RemovePod(podName string) bool {
 	changed := false
 	for key, failure := range u {
