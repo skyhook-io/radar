@@ -18,8 +18,8 @@ func TestPlanChildEnv(t *testing.T) {
 		"RADAR_APPIMAGE_KEYS":               "GDK_BACKEND XDG_DATA_DIRS GTK_PATH GTK_THEME WEBKIT_INJECTED_BUNDLE_PATH",
 		"RADAR_APPIMAGE_ORIG_XDG_DATA_DIRS": "/usr/local/share:/usr/share",
 		"RADAR_APPIMAGE_ORIG_GTK_THEME":     "",
-		"RADAR_APPIMAGE_ORIG_GDK_BACKEND":   "wayland",
-		// Set for the bundled GTK.
+		// Set for the bundled GTK. GDK_BACKEND was not set before launch, so
+		// the GTK setup defaulted it to x11.
 		"GDK_BACKEND":                 "x11",
 		"XDG_DATA_DIRS":               "/tmp/.mount_x/usr/share:/usr/share:/usr/local/share:/usr/share",
 		"GTK_PATH":                    "/tmp/.mount_x/usr/lib/gtk-3.0",
@@ -40,11 +40,11 @@ func TestPlanChildEnv(t *testing.T) {
 	}
 
 	want := map[string]EnvChange{
-		"GDK_BACKEND":   {Key: "GDK_BACKEND", Child: "wayland", ChildSet: true, Image: "x11", ImageSet: true},
 		"XDG_DATA_DIRS": {Key: "XDG_DATA_DIRS", Child: "/usr/local/share:/usr/share", ChildSet: true, Image: image["XDG_DATA_DIRS"], ImageSet: true},
 		// Set to empty before launch: stays set to empty, not unset.
 		"GTK_THEME": {Key: "GTK_THEME", Child: "", ChildSet: true, Image: "Adwaita:dark", ImageSet: true},
 		// Not set before launch: unset for children.
+		"GDK_BACKEND":                       {Key: "GDK_BACKEND", Image: "x11", ImageSet: true},
 		"GTK_PATH":                          {Key: "GTK_PATH", Image: image["GTK_PATH"], ImageSet: true},
 		"WEBKIT_INJECTED_BUNDLE_PATH":       {Key: "WEBKIT_INJECTED_BUNDLE_PATH", Image: image["WEBKIT_INJECTED_BUNDLE_PATH"], ImageSet: true},
 		"APPIMAGE":                          {Key: "APPIMAGE", Image: image["APPIMAGE"], ImageSet: true},
@@ -54,7 +54,6 @@ func TestPlanChildEnv(t *testing.T) {
 		"RADAR_APPIMAGE_KEYS":               {Key: "RADAR_APPIMAGE_KEYS", Image: image["RADAR_APPIMAGE_KEYS"], ImageSet: true},
 		"RADAR_APPIMAGE_ORIG_XDG_DATA_DIRS": {Key: "RADAR_APPIMAGE_ORIG_XDG_DATA_DIRS", Image: image["RADAR_APPIMAGE_ORIG_XDG_DATA_DIRS"], ImageSet: true},
 		"RADAR_APPIMAGE_ORIG_GTK_THEME":     {Key: "RADAR_APPIMAGE_ORIG_GTK_THEME", Image: "", ImageSet: true},
-		"RADAR_APPIMAGE_ORIG_GDK_BACKEND":   {Key: "RADAR_APPIMAGE_ORIG_GDK_BACKEND", Image: "wayland", ImageSet: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		for k, w := range want {
@@ -66,6 +65,21 @@ func TestPlanChildEnv(t *testing.T) {
 			if _, ok := want[k]; !ok {
 				t.Errorf("unexpected change %+v", g)
 			}
+		}
+	}
+}
+
+func TestPlanChildEnvKeepsUnchangedValue(t *testing.T) {
+	// The user chose a backend; the GTK setup kept it, so children already
+	// inherit the user's value and only the AppRun record is removed.
+	changes := planChildEnv(lookupFrom(map[string]string{
+		"RADAR_APPIMAGE_KEYS":             "GDK_BACKEND",
+		"RADAR_APPIMAGE_ORIG_GDK_BACKEND": "wayland",
+		"GDK_BACKEND":                     "wayland",
+	}))
+	for _, c := range changes {
+		if c.Key == "GDK_BACKEND" {
+			t.Errorf("GDK_BACKEND is the user's value already; got change %+v", c)
 		}
 	}
 }

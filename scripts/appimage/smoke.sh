@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Launches a Radar Desktop AppImage on a headless X server and checks that the
+# Launches a Radar Desktop AppImage on a headless display and checks that the
 # app starts: its local API answers and the window's webview loaded the UI.
 #
-# Usage: scripts/appimage/smoke.sh <AppImage> <output dir>
+# Usage: scripts/appimage/smoke.sh <AppImage> <output dir> [x11|wayland]
+#   x11      (default) an X server (Xvfb), GDK_BACKEND not set, so the
+#            AppImage uses its default backend, X11
+#   wayland  a Wayland compositor (weston, headless, kiosk shell) without
+#            Xwayland and GDK_BACKEND=wayland: the AppImage must use the
+#            backend the user chose, and processes it starts must get it too
 #
-# Needs Xvfb, xdotool, ImageMagick (import), curl and procps; as root also
-# openssl, python3 and update-ca-certificates (Debian/Ubuntu). Uses a fresh
+# Needs curl, procps and ImageMagick; for x11 Xvfb, xdotool and import, for
+# wayland weston and weston-screenshooter; as root also openssl, python3 and
+# update-ca-certificates (Debian/Ubuntu). Uses a fresh
 # HOME, so no kubeconfig: Radar starts disconnected, which is enough to load
 # the UI. Also opens a link through Radar with a stand-in xdg-open to check
 # that processes Radar starts get the launch environment and folder, not the
@@ -16,9 +22,14 @@
 # HTTPS server whose certificate is added to the system's trusted ones.
 set -euo pipefail
 
-usage="usage: scripts/appimage/smoke.sh <AppImage> <output dir>"
+usage="usage: scripts/appimage/smoke.sh <AppImage> <output dir> [x11|wayland]"
 appimage="${1:?$usage}"
 out="${2:?$usage}"
+session="${3:-x11}"
+case "$session" in
+  x11 | wayland) ;;
+  *) echo "$usage" >&2; exit 2 ;;
+esac
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 appimage="$(cd "$(dirname "$appimage")" && pwd)/$(basename "$appimage")"
@@ -36,6 +47,7 @@ launch_dir="$("${run_as[@]}" mktemp -d)"
 # Values the AppImage's GTK setup overrides; started processes must get these back.
 user_data_dirs="/usr/local/share:/usr/share:/opt/radar-smoke/share"
 display=":99"
+wayland_socket="wayland-smoke"
 
 # Stand-in xdg-open: records the environment and folder it was started with.
 tools="$(mktemp -d)"
@@ -46,20 +58,15 @@ EOF
 chmod 0755 "$tools"
 chmod 0755 "$tools/xdg-open"
 
-Xvfb "$display" -screen 0 1400x900x24 >"$out/xvfb.log" 2>&1 &
-xvfb_pid=$!
+display_pid=""
 radar_pid=""
 https_pid=""
 cleanup() {
   [[ -n "$radar_pid" ]] && kill "$radar_pid" 2>/dev/null || true
   [[ -n "$https_pid" ]] && kill "$https_pid" 2>/dev/null || true
-  kill "$xvfb_pid" 2>/dev/null || true
+  [[ -n "$display_pid" ]] && kill "$display_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
-for _ in $(seq 1 20); do
-  DISPLAY="$display" xdotool getdisplaygeometry >/dev/null 2>&1 && break
-  sleep 0.5
-done
 
 fail() {
   echo "smoke: FAIL: $*" >&2
@@ -67,6 +74,44 @@ fail() {
   tail -n 40 "$out/radar.log" >&2 || true
   exit 1
 }
+
+# wayland_screenshot <file>: captures the compositor's output. The kiosk shell
+# shows Radar's window over the whole output, so this is Radar's window.
+wayland_screenshot() {
+  local shot_dir
+  shot_dir="$("${run_as[@]}" mktemp -d)"
+  (cd "$shot_dir" && "${run_as[@]}" env XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$wayland_socket" \
+    weston-screenshooter >>"$out/screenshooter.log" 2>&1) || return 1
+  local shots=("$shot_dir"/*.png)
+  [[ -f "${shots[0]}" ]] && cp "${shots[0]}" "$1"
+}
+
+if [[ "$session" == x11 ]]; then
+  Xvfb "$display" -screen 0 1400x900x24 >"$out/xvfb.log" 2>&1 &
+  display_pid=$!
+  for _ in $(seq 1 20); do
+    DISPLAY="$display" xdotool getdisplaygeometry >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+  session_env=(DISPLAY="$display" XDG_SESSION_TYPE=x11)
+else
+  # No --xwayland: an app that asks for X11 cannot start here.
+  "${run_as[@]}" env XDG_RUNTIME_DIR="$runtime_dir" weston --backend=headless --renderer=pixman \
+    --shell=kiosk-shell.so --width=1400 --height=900 --socket="$wayland_socket" --debug \
+    >"$out/weston.log" 2>&1 &
+  display_pid=$!
+  for _ in $(seq 1 40); do
+    [[ -S "$runtime_dir/$wayland_socket" ]] && break
+    sleep 0.5
+  done
+  [[ -S "$runtime_dir/$wayland_socket" ]] || { cat "$out/weston.log" >&2; fail "weston did not start"; }
+  # The window check below counts colours; it means nothing if the empty
+  # output already passes it.
+  wayland_screenshot "$out/empty-output.png" || fail "could not capture weston's output"
+  empty_colours="$(convert "$out/empty-output.png" -format %k info:)"
+  [[ "$empty_colours" -lt 100 ]] || fail "weston's empty output already has $empty_colours colours; the window check would prove nothing"
+  session_env=(WAYLAND_DISPLAY="$wayland_socket" XDG_SESSION_TYPE=wayland GDK_BACKEND=wayland)
+fi
 
 # The webview's HTTPS requests go through the bundled GIO TLS module. The UI
 # itself is local HTTP, so check the module and its libraries load on a
@@ -117,7 +162,7 @@ fi
 # FUSE is usually unavailable in CI containers; the AppImage extracts itself.
 # A test run sends no version check or usage report.
 (cd "$launch_dir" && exec "${run_as[@]}" env -i HOME="$home" PATH="$tools:/usr/local/bin:/usr/bin:/bin" \
-  XDG_RUNTIME_DIR="$runtime_dir" DISPLAY="$display" XDG_SESSION_TYPE=x11 LANG=C.UTF-8 APPIMAGE_EXTRACT_AND_RUN=1 \
+  XDG_RUNTIME_DIR="$runtime_dir" "${session_env[@]}" LANG=C.UTF-8 APPIMAGE_EXTRACT_AND_RUN=1 \
   XDG_DATA_DIRS="$user_data_dirs" GTK_THEME= \
   RADAR_DISABLE_VERSION_CHECK=1 RADAR_USAGE_REPORTING=off \
   "$appimage" >"$out/radar.log" 2>&1) &
@@ -179,12 +224,21 @@ grep -qx "XDG_DATA_DIRS=$user_data_dirs" "$out/xdg-open-env.txt" ||
   fail "xdg-open did not get the launch XDG_DATA_DIRS back: $(grep '^XDG_DATA_DIRS=' "$out/xdg-open-env.txt")"
 grep -qx "GTK_THEME=" "$out/xdg-open-env.txt" ||
   fail "xdg-open did not get the launch GTK_THEME (set, empty) back: $(grep '^GTK_THEME' "$out/xdg-open-env.txt" || echo unset)"
+if [[ "$session" == wayland ]]; then
+  grep -qx "GDK_BACKEND=wayland" "$out/xdg-open-env.txt" ||
+    fail "xdg-open did not get the launch GDK_BACKEND (wayland): $(grep '^GDK_BACKEND' "$out/xdg-open-env.txt" || echo unset)"
+fi
 echo "smoke: a link opens with the launch environment and folder"
 
-window="$(DISPLAY="$display" xdotool search --onlyvisible --pid "$radar_pid" 2>/dev/null | head -n 1 || true)"
-[[ -n "$window" ]] || fail "Radar has no visible window"
-sleep 5
-DISPLAY="$display" import -window "$window" "$out/window.png" || fail "could not capture Radar's window"
+if [[ "$session" == x11 ]]; then
+  window="$(DISPLAY="$display" xdotool search --onlyvisible --pid "$radar_pid" 2>/dev/null | head -n 1 || true)"
+  [[ -n "$window" ]] || fail "Radar has no visible window"
+  sleep 5
+  DISPLAY="$display" import -window "$window" "$out/window.png" || fail "could not capture Radar's window"
+else
+  sleep 5
+  wayland_screenshot "$out/window.png" || fail "could not capture Radar's window"
+fi
 # A painted UI has hundreds of colours (text antialiasing, icons); a blank or
 # single-colour window has a handful.
 colours="$(convert "$out/window.png" -format %k info:)"

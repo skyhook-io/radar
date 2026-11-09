@@ -2,9 +2,12 @@
 #
 # Vendored from https://github.com/linuxdeploy/linuxdeploy-plugin-gtk
 # at commit 7a3fbc31a9e5075073ff8790f26effbac5f84453 (linuxdeploy-plugin-gtk.sh).
-# Unmodified below this header. scripts/build-appimage.sh runs it through
-# linuxdeploy's --plugin gtk. To update, replace the body with the upstream
-# file at a newer commit and update the commit above.
+# One line differs from upstream below this header: the GDK_BACKEND line in the
+# AppRun hook keeps a backend the user set and defaults to x11, where upstream
+# always sets x11 (so the app could not start on Wayland without Xwayland).
+# scripts/build-appimage.sh runs it through linuxdeploy's --plugin gtk. To
+# update, replace the body with the upstream file at a newer commit, apply the
+# same GDK_BACKEND change, and update the commit above.
 #
 # Copyright 2018-2019 TheAssassin and the linuxdeploy contributors
 #
@@ -266,7 +269,7 @@ APPIMAGE_GTK_THEME="${APPIMAGE_GTK_THEME:-"Adwaita:$GTK_THEME_VARIANT"}" # Allow
 export APPDIR="${APPDIR:-"$(dirname "$(realpath "$0")")"}" # Workaround to run extracted AppImage
 export GTK_DATA_PREFIX="$APPDIR"
 export GTK_THEME="$APPIMAGE_GTK_THEME" # Custom themes are broken
-export GDK_BACKEND=x11 # Crash with Wayland backend on Wayland
+export GDK_BACKEND="${GDK_BACKEND:-x11}" # Changed from upstream (see the header): keep the user's choice, x11 by default
 export XDG_DATA_DIRS="$APPDIR/usr/share:/usr/share:$XDG_DATA_DIRS" # g_get_system_data_dirs() from GLib
 EOF
 

@@ -106,11 +106,26 @@ jobs:
               if ldconfig -p | grep -q libwebkit2gtk; then echo "WebKitGTK is installed; the test would not prove the bundle works" >&2; exit 1; fi
               scripts/appimage/smoke.sh radar-desktop_smoke_linux_amd64.AppImage smoke-out'
 
+      # A user who chose Wayland (GDK_BACKEND=wayland) gets it, and the app
+      # starts on a compositor that cannot run X11 apps.
+      - name: Launch on a Wayland session without Xwayland
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w \
+            ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
+            bash -c 'export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends weston imagemagick curl procps fonts-dejavu-core libegl1 libgl1 libgles2 libfontconfig1 openssl python3 ca-certificates >/dev/null
+              if ldconfig -p | grep -q libwebkit2gtk; then echo "WebKitGTK is installed; the test would not prove the bundle works" >&2; exit 1; fi
+              if command -v Xwayland >/dev/null; then echo "Xwayland is installed; the test would not prove the app uses Wayland" >&2; exit 1; fi
+              scripts/appimage/smoke.sh radar-desktop_smoke_linux_amd64.AppImage smoke-out-wayland wayland'
+
       - name: Upload log and screenshot
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: appimage-smoke
-          path: smoke-out/
+          path: |
+            smoke-out/
+            smoke-out-wayland/
           retention-days: 7
           if-no-files-found: ignore
